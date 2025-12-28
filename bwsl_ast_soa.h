@@ -114,7 +114,8 @@ struct VariableDeclData {
     ArenaString type;
     NodeRef initializer;
     bool isConst;
-    u8 _pad[3];
+    StorageClass storageClass;
+    u8 _pad[2];
 };
 
 // Function call data (with ArenaArray overhead)
@@ -879,13 +880,15 @@ namespace ASTFactory {
     }
 
     inline NodeRef MakeVariableDecl(AST* ast, const ArenaString& name, const ArenaString& type,
-                                    NodeRef initializer, bool isConst, u32 line = 0, u32 col = 0) {
+                                    NodeRef initializer, bool isConst, u32 line = 0, u32 col = 0,
+                                    StorageClass storageClass = StorageClass::Default) {
         u32 index = ast->variableDecls.count;
         VariableDeclData data;
         data.name = name;
         data.type = type;
         data.initializer = initializer;
         data.isConst = isConst;
+        data.storageClass = storageClass;
         ast->variableDecls.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {

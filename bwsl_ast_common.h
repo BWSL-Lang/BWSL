@@ -110,6 +110,11 @@ enum class ResourceType : u8 {
     SAMPLER
 };
 
+enum class StorageClass : u8 {
+    Default = 0,
+    Shared = 1,
+};
+
 enum class BinaryOpType : u8 {
     ADD,
     SUBTRACT,

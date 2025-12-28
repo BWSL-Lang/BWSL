@@ -392,6 +392,7 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             if (memcmp(str, "shader", 6) == 0) return TokenType::SHADER;
             if (memcmp(str, "import", 6) == 0) return TokenType::IMPORT;
             if (memcmp(str, "return", 6) == 0) return TokenType::RETURN;
+            if (memcmp(str, "shared", 6) == 0) return TokenType::SHARED;
             if (memcmp(str, "inputs", 6) == 0) return TokenType::INPUTS;
             if (memcmp(str, "float2", 6) == 0) return TokenType::FLOAT2;
             if (memcmp(str, "float3", 6) == 0) return TokenType::FLOAT3;

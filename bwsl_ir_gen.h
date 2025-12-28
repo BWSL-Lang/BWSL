@@ -116,9 +116,18 @@ struct IRProgram {
     // Flags: bit 0 = is pointer, bits 1-7 = depth into struct (0=buffer, 1=field, 2=array element, etc.)
     alignas(64) u32* registerStorageInfo;       // Storage buffer info or 0 if not a storage ptr
     static constexpr u32 STORAGE_IS_PTR = 0x1;
+    static constexpr u32 STORAGE_IS_SHARED = 0x2;
     static constexpr u32 STORAGE_BINDING_SHIFT = 16;
     static constexpr u32 STORAGE_DEPTH_SHIFT = 1;
     static constexpr u32 STORAGE_DEPTH_MASK = 0x7F << 1;
+
+    // Shared (workgroup) variable declarations
+    alignas(64) u32* sharedNameHashes;
+    alignas(64) u16* sharedTypes;
+    alignas(64) u32* sharedArraySizes;
+    alignas(64) u16* sharedRegisters;
+    u32 sharedVarCount;
+    u32 sharedVarCapacity;
 
     enum StructureType : u32 {
     STRUCT_NONE          = 0,

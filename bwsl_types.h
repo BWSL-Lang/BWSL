@@ -270,6 +270,7 @@ inline bool IsArray(const TypeInfo& info) {
         TYPE_INFO(CoreType::INVALID, 0, false),  // SLOT
         TYPE_INFO(CoreType::INVALID, 0, false),  // ELSE
         TYPE_INFO(CoreType::INVALID, 0, false),  // CONST
+        TYPE_INFO(CoreType::INVALID, 0, false),  // SHARED
         TYPE_INFO(CoreType::INVALID, 0, false),  // EXTEND
         TYPE_INFO(CoreType::INVALID, 0, false),  // EXTENDS
         TYPE_INFO(CoreType::INVALID, 0, false),  // RETURN
@@ -657,4 +658,3 @@ inline std::string HandleModuleType(const std::string& typeName) {
 
 
 }
-

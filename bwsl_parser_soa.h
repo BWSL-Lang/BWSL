@@ -252,7 +252,7 @@ private:
     NodeRef ParseWhereClause();
     NodeRef ParseArrayInitializer();
     NodeRef ParseInlineArrayConstruction();
-    NodeRef ParseArrayDeclaration(CoreType elementType);
+    NodeRef ParseArrayDeclaration(CoreType elementType, StorageClass storageClass = StorageClass::Default);
     TypeInfo ResolveType(const std::string& typeName);
     TypeInfo GetTypeInfoFromSymbol(Symbol* sym);
     TypeInfo ParseArrayType();

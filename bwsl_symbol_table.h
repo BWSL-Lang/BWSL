@@ -53,6 +53,7 @@ struct VariableData {
     TypeInfo typeInfo;
     bool isConst;
     bool isEval;
+    StorageClass storageClass;
     LiteralValue evalValue;
     NodeRef constExpr;
 };

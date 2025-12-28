@@ -261,6 +261,7 @@ struct SPIRVBuilder {
     // Interface setup
     void DeclareInputOutput();
     void DeclareResources();
+    void DeclareSharedVariables();
     u32 CreateInterfaceVariable(CoreType type, spv::StorageClass storage, 
                                 u32 location, spv::BuiltIn builtin);
     

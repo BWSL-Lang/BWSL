@@ -139,6 +139,7 @@ public:
         [SHADER] = 6,
         [IMPORT] = 6,
         [RETURN] = 6,
+        [SHARED] = 6,
         [FLOAT2] = 6,
         [FLOAT3] = 6,
         [FLOAT4] = 6,
@@ -269,6 +270,7 @@ inline const char* TokenTypeName(TokenType type) {
         case FLOAT3: return "FLOAT3";
         case FLOAT4: return "FLOAT4";
         case CONST: return "CONST";
+        case SHARED: return "SHARED";
         case VERTEX: return "VERTEX";
         case SHADER: return "SHADER";
         case IMPORT: return "IMPORT";

@@ -3,6 +3,8 @@
 #include "bwsl_eval_soa.h"
 #include "bwsl_utils.h"
 #include <cstring>
+#include <climits>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -1243,6 +1245,7 @@ NodeRef Parser::ParseStatement() {
         } else if (stream->GetType(next) == TokenType::LEFT_PAREN) {
             Advance(); // consume the identifier
             NodeRef identifierNode = ASTFactory::MakeIdentifier(ast, std::string(stream->GetValue(previous)), line, col);
+            Consume(TokenType::LEFT_PAREN, "Expected '(' after function name");
             NodeRef call = ParseFunctionCall(identifierNode);
             if (call.IsValid()) Consume(TokenType::SEMICOLON, "Expected ';' after function call");
             return call;
@@ -1266,33 +1269,93 @@ NodeRef Parser::ParseStatement() {
     }
 
     // Variable declaration
-    if (MatchMask(TokenMasks::CORE_TYPES)) {
+    StorageClass storageClass = StorageClass::Default;
+    bool hasStorageClass = false;
+    if (Match(TokenType::SHARED)) {
+        storageClass = StorageClass::Shared;
+        hasStorageClass = true;
+    }
+
+    if (hasStorageClass || MatchMask(TokenMasks::CORE_TYPES)) {
+        if (hasStorageClass && !MatchMask(TokenMasks::CORE_TYPES)) {
+            Error("Expected type after 'shared'");
+            return NodeRef::Null();
+        }
+
         TokenType varType = static_cast<TokenType>(stream->GetType(previous));
         std::string typeStr(stream->GetValue(previous));
 
         if (Check(TokenType::LEFT_BRACKET)) {
             Advance();
-            return ParseArrayDeclaration(TokenTypeToReturnType(varType));
+            return ParseArrayDeclaration(TokenTypeToReturnType(varType), storageClass);
         }
 
         Consume(TokenType::IDENTIFIER, "Expected variable name");
         std::string varName(stream->GetValue(previous));
+
+        bool isArray = false;
+        u32 arraySize = 0;
+        if (Match(TokenType::LEFT_BRACKET)) {
+            Consume(TokenType::NUMBER, "Expected array size");
+            std::string_view sizeStr = PreviousValue();
+            int size = 0;
+
+#ifdef BWSL_WASM
+            char* endPtr = nullptr;
+            long parsed = std::strtol(sizeStr.data(), &endPtr, 10);
+            if (endPtr == sizeStr.data() || parsed <= 0 || parsed > INT_MAX) {
+                Error("Invalid or out-of-range array size");
+                return NodeRef::Null();
+            }
+            size = static_cast<int>(parsed);
+#else
+            size = std::stoi(std::string(sizeStr));
+#endif
+
+            if (size <= 0 || static_cast<u32>(size) > MAX_ARRAY_SIZE) {
+                Error("Invalid array size. Max 256k elements");
+                return NodeRef::Null();
+            }
+            Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
+            isArray = true;
+            arraySize = static_cast<u32>(size);
+        }
 
         NodeRef initializer = NodeRef::Null();
         if (Match(TokenType::ASSIGN)) {
             initializer = ParseExpression();
         }
 
+        if (storageClass == StorageClass::Shared && isArray && initializer.IsValid()) {
+            Error("Shared arrays cannot have initializers");
+            return NodeRef::Null();
+        }
+
         Consume(TokenType::SEMICOLON, "Expected ';'");
 
+        ArenaString typeName = isArray ? ArenaString::MakeHashOnly("array")
+                                       : ArenaString::MakeHashOnly(typeStr);
         NodeRef varDecl = ASTFactory::MakeVariableDecl(ast,
             ArenaString::MakeHashOnly(varName),
-            ArenaString::MakeHashOnly(typeStr),
-            initializer, false, line, col);
+            typeName,
+            initializer, false, line, col, storageClass);
 
-        Symbol* sym = SymbolTable::AddSymbol(&symbolTable, ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous)), SymbolKind::VARIABLE);
+        Symbol* sym = SymbolTable::AddSymbol(&symbolTable, ArenaString::MakeHashOnly(varName), SymbolKind::VARIABLE);
         if (sym) {
-            symbolTable.variables[sym->index].typeInfo = GetTypeInfoFromToken(varType);
+            VariableData& varData = symbolTable.variables[sym->index];
+            if (isArray) {
+                TypeInfo arrayInfo{};
+                arrayInfo.coreType = TokenTypeToReturnType(varType);
+                arrayInfo.componentCount = GetTypeInfoFromToken(varType).componentCount;
+                arrayInfo.arrayDimensions = 1;
+                arrayInfo.customTypeHash = 0;
+                arrayInfo.arrayLength = arraySize;
+                arrayInfo.arrayStride = static_cast<u32>(arrayInfo.componentCount) * 4u;
+                varData.typeInfo = arrayInfo;
+            } else {
+                varData.typeInfo = GetTypeInfoFromToken(varType);
+            }
+            varData.storageClass = storageClass;
         }
 
         return varDecl;
@@ -2990,7 +3053,7 @@ NodeRef Parser::ParseSwitch() {
 // Array declaration and construction
 //==============================================================================
 
-NodeRef Parser::ParseArrayDeclaration(CoreType elementType) {
+NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storageClass) {
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     u32 line = loc.line;
     u32 col = loc.column;
@@ -3048,13 +3111,15 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType) {
     NodeRef varDecl = ASTFactory::MakeVariableDecl(ast,
         ArenaString::MakeHashOnly(varName),
         ArenaString::MakeHashOnly("array"),
-        initializer, false, line, col);
+        initializer, false, line, col, storageClass);
 
     // Add to symbol table
     Symbol* sym = SymbolTable::AddSymbol(&symbolTable, ArenaString::MakeHashOnly(varName), SymbolKind::VARIABLE);
 
     if (sym) {
-        symbolTable.variables[sym->index].typeInfo = arrayInfo;
+        VariableData& varData = symbolTable.variables[sym->index];
+        varData.typeInfo = arrayInfo;
+        varData.storageClass = storageClass;
     }
 
     return varDecl;

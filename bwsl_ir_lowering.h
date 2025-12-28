@@ -9,6 +9,7 @@
 #include "bwsl_custom_type_registry.h"
 #include "bwsl_ir_analysis.h"  // For OutputSlot constants
 #include <vector>
+#include <cstring>
 
 namespace BWSL::IR {
 
@@ -18,6 +19,7 @@ static constexpr u32 MAX_REGISTERS = 4096;
 using BWSL::MakeOverloadMask;
 using BWSL::MakeOverloadMaskFromTypeHash;
 using BWSL::OverloadMaskMatches;
+using BWSL::IsArray;
 using BWSL::OverloadTypeMask;
 
 // =============================================================================
@@ -224,6 +226,14 @@ struct IRLowering {
         program.structTypeCount = 0;
         program.structTypeCapacity = structCapacity;
         program.structFieldCapacity = fieldCapacity;
+
+        u32 sharedCapacity = 16;
+        program.sharedNameHashes = (u32*)pool->Allocate(sharedCapacity * sizeof(u32), 64);
+        program.sharedTypes = (u16*)pool->Allocate(sharedCapacity * sizeof(u16), 64);
+        program.sharedArraySizes = (u32*)pool->Allocate(sharedCapacity * sizeof(u32), 64);
+        program.sharedRegisters = (u16*)pool->Allocate(sharedCapacity * sizeof(u16), 64);
+        program.sharedVarCount = 0;
+        program.sharedVarCapacity = sharedCapacity;
 
         // PHI fields (will be populated by SSA if needed)
         program.phiBlockIndices = nullptr;
@@ -1182,14 +1192,62 @@ struct IRLowering {
     void LowerVariableDecl(NodeRef ref) {
         const VariableDeclData& varDecl = ast->GetVariableDecl(ref);
 
+        Symbol* sym = SymbolTable::LookupByHash(const_cast<SymbolTableData*>(symbols), varDecl.name.nameHash);
+        const VariableData* varData = (sym && sym->kind == SymbolKind::VARIABLE) ? &symbols->variables[sym->index] : nullptr;
+        bool isShared = varData && varData->storageClass == StorageClass::Shared;
+        bool isArray = varData && IsArray(varData->typeInfo);
+
         // Allocate register for the variable
         u16 varReg = AllocateRegister();
 
         // Store mapping from variable name hash to register
         variableRegisters[varDecl.name.nameHash] = varReg;
 
-        // Track type from type name hash
+        // Track type from type name hash or symbol table
         CoreType coreType = LookupCoreType(varDecl.type.nameHash);
+        if (varData && varData->typeInfo.coreType != CoreType::INVALID) {
+            coreType = varData->typeInfo.coreType;
+        }
+
+        if (isShared) {
+            if (currentStage != ShaderStage::Compute) {
+                fprintf(stderr, "Error: shared variables are only allowed in compute shaders\n");
+            }
+            if (!isArray) {
+                fprintf(stderr, "Error: shared variables must be declared as arrays\n");
+            }
+
+            SetRegisterType(varReg, coreType);
+
+            if (program.sharedVarCount >= program.sharedVarCapacity) {
+                u32 newCapacity = program.sharedVarCapacity * 2;
+                u32* newNameHashes = (u32*)pool->Allocate(newCapacity * sizeof(u32), 64);
+                u16* newTypes = (u16*)pool->Allocate(newCapacity * sizeof(u16), 64);
+                u32* newArraySizes = (u32*)pool->Allocate(newCapacity * sizeof(u32), 64);
+                u16* newRegisters = (u16*)pool->Allocate(newCapacity * sizeof(u16), 64);
+                memcpy(newNameHashes, program.sharedNameHashes, program.sharedVarCapacity * sizeof(u32));
+                memcpy(newTypes, program.sharedTypes, program.sharedVarCapacity * sizeof(u16));
+                memcpy(newArraySizes, program.sharedArraySizes, program.sharedVarCapacity * sizeof(u32));
+                memcpy(newRegisters, program.sharedRegisters, program.sharedVarCapacity * sizeof(u16));
+                program.sharedNameHashes = newNameHashes;
+                program.sharedTypes = newTypes;
+                program.sharedArraySizes = newArraySizes;
+                program.sharedRegisters = newRegisters;
+                program.sharedVarCapacity = newCapacity;
+            }
+
+            u32 sharedIndex = program.sharedVarCount++;
+            program.sharedNameHashes[sharedIndex] = varDecl.name.nameHash;
+            program.sharedTypes[sharedIndex] = static_cast<u16>(coreType);
+            program.sharedArraySizes[sharedIndex] = isArray ? varData->typeInfo.arrayLength : 0;
+            program.sharedRegisters[sharedIndex] = varReg;
+
+            program.registerStorageInfo[varReg] =
+                (sharedIndex << IR::IRProgram::STORAGE_BINDING_SHIFT) |
+                IR::IRProgram::STORAGE_IS_PTR |
+                IR::IRProgram::STORAGE_IS_SHARED;
+            return;
+        }
 
         // Check if this is a struct type
         if (coreType == CoreType::INVALID || coreType == CoreType::CUSTOM) {
@@ -1740,8 +1798,11 @@ struct IRLowering {
                             // original vector (4+idx) or from value vector (idx)
                             // SPIR-V OpVectorShuffle: result = shuffle(vec0, vec1, indices...)
                             // Index < component_count selects from vec0, >= selects from vec1
-                            u32 numComponents = (varType == CoreType::FLOAT4) ? 4 :
-                                               (varType == CoreType::FLOAT3) ? 3 : 2;
+                            u32 numComponents = GetVectorDimension(varType);
+                            if (numComponents < 2) {
+                                builder.EmitInstruction(OP_STORE_REG, objReg, valueReg);
+                                return;
+                            }
 
                             // Encode shuffle indices in metadata
                             // For each position: if swizzleIndices[i][j] != 255, take from value
@@ -2259,10 +2320,12 @@ void LowerIfStatement(NodeRef ref) {
             u32 srcInfo = program.registerStorageInfo[baseReg];
             u32 binding = (srcInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
             u32 depth = ((srcInfo & IR::IRProgram::STORAGE_DEPTH_MASK) >> IR::IRProgram::STORAGE_DEPTH_SHIFT) + 1;
+            u32 sharedFlag = srcInfo & IR::IRProgram::STORAGE_IS_SHARED;
             program.registerStorageInfo[ptrReg] =
                 (binding << IR::IRProgram::STORAGE_BINDING_SHIFT) |
                 (depth << IR::IRProgram::STORAGE_DEPTH_SHIFT) |
-                IR::IRProgram::STORAGE_IS_PTR;
+                IR::IRProgram::STORAGE_IS_PTR |
+                sharedFlag;
 
             // Now load the value from the element pointer
             builder.EmitInstruction(OP_STORAGE_LOAD, dest, ptrReg);
@@ -2334,10 +2397,12 @@ void LowerIfStatement(NodeRef ref) {
                         u32 srcInfo = program.registerStorageInfo[objectReg];
                         u32 binding = (srcInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
                         u32 depth = ((srcInfo & IR::IRProgram::STORAGE_DEPTH_MASK) >> IR::IRProgram::STORAGE_DEPTH_SHIFT) + 1;
+                        u32 sharedFlag = srcInfo & IR::IRProgram::STORAGE_IS_SHARED;
                         program.registerStorageInfo[dest] =
                             (binding << IR::IRProgram::STORAGE_BINDING_SHIFT) |
                             (depth << IR::IRProgram::STORAGE_DEPTH_SHIFT) |
-                            IR::IRProgram::STORAGE_IS_PTR;
+                            IR::IRProgram::STORAGE_IS_PTR |
+                            sharedFlag;
                     } else {
                         // Regular struct field access - emit OP_STRUCT_EXTRACT
                         builder.EmitInstruction(OP_STRUCT_EXTRACT, dest, objectReg, fieldIndex);
@@ -2367,6 +2432,50 @@ void LowerIfStatement(NodeRef ref) {
                 CoreType scalarType = GetScalarComponentType(vectorType);
                 SetRegisterType(dest, scalarType);
                 return dest;
+            }
+
+            // Check for multi-component swizzle (rgb, xyz, etc.)
+            struct SwizzlePattern {
+                const char* name;
+                u8 indices[4];
+                u8 count;
+            };
+            static const SwizzlePattern swizzlePatterns[] = {
+                // 2-component swizzles
+                {"xy", {0, 1, 0, 0}, 2}, {"xz", {0, 2, 0, 0}, 2}, {"xw", {0, 3, 0, 0}, 2},
+                {"yx", {1, 0, 0, 0}, 2}, {"yz", {1, 2, 0, 0}, 2}, {"yw", {1, 3, 0, 0}, 2},
+                {"zx", {2, 0, 0, 0}, 2}, {"zy", {2, 1, 0, 0}, 2}, {"zw", {2, 3, 0, 0}, 2},
+                {"wx", {3, 0, 0, 0}, 2}, {"wy", {3, 1, 0, 0}, 2}, {"wz", {3, 2, 0, 0}, 2},
+                {"xx", {0, 0, 0, 0}, 2}, {"yy", {1, 1, 0, 0}, 2}, {"zz", {2, 2, 0, 0}, 2}, {"ww", {3, 3, 0, 0}, 2},
+                // 3-component swizzles
+                {"xyz", {0, 1, 2, 0}, 3}, {"xzy", {0, 2, 1, 0}, 3}, {"yxz", {1, 0, 2, 0}, 3},
+                {"yzx", {1, 2, 0, 0}, 3}, {"zxy", {2, 0, 1, 0}, 3}, {"zyx", {2, 1, 0, 0}, 3},
+                {"xyw", {0, 1, 3, 0}, 3}, {"xzw", {0, 2, 3, 0}, 3}, {"yzw", {1, 2, 3, 0}, 3},
+                // 4-component swizzles
+                {"xyzw", {0, 1, 2, 3}, 4}, {"wzyx", {3, 2, 1, 0}, 4},
+                // Color aliases
+                {"rg", {0, 1, 0, 0}, 2}, {"rb", {0, 2, 0, 0}, 2}, {"ra", {0, 3, 0, 0}, 2},
+                {"gr", {1, 0, 0, 0}, 2}, {"gb", {1, 2, 0, 0}, 2}, {"ga", {1, 3, 0, 0}, 2},
+                {"br", {2, 0, 0, 0}, 2}, {"bg", {2, 1, 0, 0}, 2}, {"ba", {2, 3, 0, 0}, 2},
+                {"rgb", {0, 1, 2, 0}, 3}, {"bgr", {2, 1, 0, 0}, 3},
+                {"rgba", {0, 1, 2, 3}, 4}, {"bgra", {2, 1, 0, 3}, 4},
+            };
+
+            for (const auto& pattern : swizzlePatterns) {
+                if (access.member.nameHash == Utils::HashStr(pattern.name)) {
+                    u16 dest = AllocateRegister();
+                    u32 shuffleMask = 0;
+                    for (u32 i = 0; i < pattern.count; i++) {
+                        shuffleMask |= (pattern.indices[i] & 0xF) << (i * 4);
+                    }
+                    builder.EmitInstruction(OP_VEC_SHUFFLE, dest, objectReg, objectReg);
+                    program.metadata[builder.currentInstruction - 1] = shuffleMask;
+
+                    CoreType vectorType = GetRegisterType(objectReg);
+                    CoreType scalarType = GetScalarComponentType(vectorType);
+                    SetRegisterType(dest, GetVectorType(scalarType, pattern.count));
+                    return dest;
+                }
             }
 
             // Not a simple component access, fall through to return object
@@ -2721,9 +2830,10 @@ void LowerIfStatement(NodeRef ref) {
                         builder.EmitInstruction(OP_VEC_SHUFFLE, dest, objReg, objReg);
                         program.metadata[builder.currentInstruction - 1] = shuffleMask;
 
-                        // Set result type based on component count
-                        CoreType resultType = (pattern.count == 4) ? CoreType::FLOAT4 :
-                                             (pattern.count == 3) ? CoreType::FLOAT3 : CoreType::FLOAT2;
+                        // Set result type based on component count and source scalar type
+                        CoreType vectorType = GetRegisterType(objReg);
+                        CoreType scalarType = GetScalarComponentType(vectorType);
+                        CoreType resultType = GetVectorType(scalarType, pattern.count);
                         SetRegisterType(dest, resultType);
                         return dest;
                     }

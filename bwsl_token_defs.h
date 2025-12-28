@@ -113,6 +113,7 @@ enum TokenType : uint8_t {
     SLOT,
     ELSE,
     CONST,
+    SHARED,
     EXTEND,
     EXTENDS,
     RETURN,

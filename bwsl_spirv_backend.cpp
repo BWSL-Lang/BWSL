@@ -2628,6 +2628,23 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                     actualCount = requiredComponents;
                 }
 
+                if (actualCount < requiredComponents) {
+                    u32 zeroId = 0;
+                    if (desiredScalarType == CoreType::FLOAT) {
+                        zeroId = GetFloatConstantId(0.0f);
+                    } else if (desiredScalarType == CoreType::INT) {
+                        zeroId = GetIntConstantId(0, false);
+                    } else if (desiredScalarType == CoreType::UINT) {
+                        zeroId = GetIntConstantId(0, true);
+                    } else if (desiredScalarType == CoreType::BOOL) {
+                        zeroId = GetBoolConstantId(false);
+                    }
+
+                    while (actualCount < requiredComponents) {
+                        scalarIds[actualCount++] = zeroId;
+                    }
+                }
+
                 u32 wordCount = 3 + actualCount;
                 if (currentFunctionSize + wordCount > currentFunctionCapacity) {
                     GrowCurrentFunction();
@@ -3122,6 +3139,50 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             break;
         }
 
+        case IR::OP_ARRAY_STORE: {
+            // Store element to array: array[index] = value
+            // dest: base array register
+            // operand 0: index register
+            // operand 1: value register
+            u16 base_reg = ir->destinations[ir_idx];
+            u16 index_reg = ir->GetOperand(ir_idx, 0);
+            u16 value_reg = ir->GetOperand(ir_idx, 1);
+
+            bool isStoragePtr = ir->registerStorageInfo &&
+                base_reg < ir->registerCount &&
+                (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_PTR);
+
+            if (isStoragePtr) {
+                spv::StorageClass storageClass = spv::StorageClassStorageBuffer;
+                if (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_SHARED) {
+                    storageClass = spv::StorageClassWorkgroup;
+                }
+
+                CoreType elemType = CoreType::FLOAT;
+                if (ir->registerTypes && value_reg < ir->registerCount) {
+                    CoreType regType = static_cast<CoreType>(ir->registerTypes[value_reg]);
+                    if (regType != CoreType::VOID && regType != CoreType::INVALID) {
+                        elemType = regType;
+                    }
+                } else if (ir->registerTypes && base_reg < ir->registerCount) {
+                    CoreType regType = static_cast<CoreType>(ir->registerTypes[base_reg]);
+                    if (regType != CoreType::VOID && regType != CoreType::INVALID) {
+                        elemType = regType;
+                    }
+                }
+
+                u32 elem_ptr_type = GetPointerTypeId(GetTypeId(elemType), storageClass);
+                u32 base_id = GetSpirvId(base_reg);
+                u32 index_id = GetSpirvId(index_reg);
+                u32 value_id = GetSpirvId(value_reg);
+
+                u32 ptr_id = AllocateId();
+                Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, index_id);
+                Emit(spv::OpStore, ptr_id, value_id);
+            }
+            break;
+        }
+
         // ========== Storage Buffer Access Chain Operations ==========
         // These ops maintain pointer semantics for proper SPIR-V OpAccessChain generation
 
@@ -3186,7 +3247,13 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 fieldTypeId = GetTypeId(elemType);
             }
 
-            u32 field_ptr_type = GetPointerTypeId(fieldTypeId, spv::StorageClassStorageBuffer);
+            spv::StorageClass storageClass = spv::StorageClassStorageBuffer;
+            if (ir->registerStorageInfo && base_reg < ir->registerCount) {
+                if (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_SHARED) {
+                    storageClass = spv::StorageClassWorkgroup;
+                }
+            }
+            u32 field_ptr_type = GetPointerTypeId(fieldTypeId, storageClass);
 
             // Emit OpAccessChain: result = base[field_idx]
             // For storage buffer structs, we access the field directly (no wrapper)
@@ -3223,8 +3290,15 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 }
             }
 
+            spv::StorageClass storageClass = spv::StorageClassStorageBuffer;
+            if (ir->registerStorageInfo && base_reg < ir->registerCount) {
+                if (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_SHARED) {
+                    storageClass = spv::StorageClassWorkgroup;
+                }
+            }
+
             // Get pointer type for the element
-            u32 elem_ptr_type = GetPointerTypeId(GetTypeId(elemType), spv::StorageClassStorageBuffer);
+            u32 elem_ptr_type = GetPointerTypeId(GetTypeId(elemType), storageClass);
 
             // Emit OpAccessChain with the dynamic index
             Emit(spv::OpAccessChain, elem_ptr_type, dest, base_id, index_id);
@@ -3754,6 +3828,7 @@ void SPIRVBuilder::EmitFunction() {
     // 1. Declare interface variables
     DeclareInputOutput();
     DeclareResources();
+    DeclareSharedVariables();
     
     // 2. Emit entry point (now that we know all interface variables)
     EmitEntryPoint();
@@ -4177,6 +4252,45 @@ void SPIRVBuilder::DeclareInputOutput() {
             inputIds[inputCount] = localInvocationIndexVarId;
             inputLocations[inputCount] = 0xFF;
             inputCount++;
+        }
+    }
+}
+
+void SPIRVBuilder::DeclareSharedVariables() {
+    if (!ir || ir->sharedVarCount == 0) return;
+
+    for (u32 i = 0; i < ir->sharedVarCount; i++) {
+        CoreType elemType = static_cast<CoreType>(ir->sharedTypes[i]);
+        u32 elemTypeId = GetTypeId(elemType);
+        if (elemTypeId == 0) {
+            continue;
+        }
+
+        u32 varTypeId = elemTypeId;
+        u32 arraySize = ir->sharedArraySizes[i];
+        if (arraySize > 0) {
+            u32 arrayTypeId = AllocateId();
+            u32 lengthConstId = GetIntConstantId(arraySize, true);
+            u32 arrayOps[] = {arrayTypeId, elemTypeId, lengthConstId};
+            EmitToSection(&typesConstants, spv::OpTypeArray, arrayOps, 3);
+            varTypeId = arrayTypeId;
+        }
+
+        u32 ptrTypeId = GetPointerTypeId(varTypeId, spv::StorageClassWorkgroup);
+        u32 varId = AllocateId();
+        u32 varOps[] = {ptrTypeId, varId, static_cast<u32>(spv::StorageClassWorkgroup)};
+        EmitToSection(&globals, spv::OpVariable, varOps, 3);
+
+        if (emitDebugNames) {
+            std::string name = ReverseLookup::GetString(ir->sharedNameHashes[i]);
+            if (!name.empty()) {
+                EmitName(varId, name.c_str());
+            }
+        }
+
+        u16 reg = ir->sharedRegisters[i];
+        if (reg < idCapacity) {
+            spirvIds[reg] = varId;
         }
     }
 }
