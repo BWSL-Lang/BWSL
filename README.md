@@ -2,6 +2,16 @@
 
 BWSL (Brawl Shading Language) is a shader language and compiler that generates SPIR-V and cross-compiles to Metal, HLSL, GLSL, and GLSL ES (WebGL).
 
+## Getting Started
+
+```bash
+# Clone with submodules
+git clone --recurse-submodules https://github.com/apresthus/BWSL.git
+
+# Or if already cloned without submodules:
+git submodule update --init --recursive
+```
+
 ## Building
 
 ### Prerequisites
@@ -154,10 +164,11 @@ bwsl/
 │   ├── bwslc.cpp           # CLI compiler
 │   ├── bwsl_wasm.cpp       # WASM entry point
 │   └── spirv_cross_wrapper.cpp
-├── vendor/
-│   ├── SPIRV-Cross/        # Cross-compilation
-│   ├── SPIRV-Tools/        # Validation
-│   └── simde/              # Portable SIMD
+├── vendor/                  # Git submodules
+│   ├── SPIRV-Cross/        # Shader cross-compilation
+│   ├── SPIRV-Tools/        # SPIR-V validation
+│   ├── SPIRV-Headers/      # SPIR-V definitions
+│   └── simde/              # Portable SIMD intrinsics
 ├── modules/                 # Standard library modules
 ├── tests/                   # Regression tests
 └── *.cpp, *.h              # Compiler source
