@@ -1,0 +1,12 @@
+// Test module with functions that will be shadowed
+module TestMath {
+    // Module function - should be callable as TestMath::scale
+    scale :: (x: float) -> float {
+        return x * 10.0;  // Module version multiplies by 10
+    }
+
+    // Another module function for reference
+    offset :: (x: float) -> float {
+        return x + 100.0;
+    }
+}

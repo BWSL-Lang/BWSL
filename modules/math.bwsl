@@ -1,0 +1,235 @@
+module Math {
+
+    // ============================================
+    // Constants
+    // ============================================
+    const float PI = 3.14159265358979323846;
+    const float TAU = 6.28318530717958647692;
+    const float E = 2.71828182845904523536;
+    const float PHI = 1.61803398874989484820;
+    const float INV_PI = 0.31830988618379067154;
+    const float INV_TAU = 0.15915494309189533577;
+    const float EPSILON = 1e-6;
+    const float SQRT_2 = 1.41421356237309504880;
+    const float INV_SQRT_2 = 0.70710678118654752440;
+
+    // ============================================
+    // Range Mapping
+    // ============================================
+    inverse_lerp :: (float a, float b, float value) -> float {
+        return (value - a) / (b - a);
+    }
+
+    remap :: (float value, float in_min, float in_max, float out_min, float out_max) -> float {
+        float t = (value - in_min) / (in_max - in_min);
+        return out_min + t * (out_max - out_min);
+    }
+
+    // ============================================ 
+    // Safe Operations
+    // ============================================
+    safe_divide :: (float a, float b) -> float {
+        if (abs(b) > EPSILON) {
+            return a / b;
+        }
+        return 0.0;
+    }
+
+    safe_normalize :: (float3 v) -> float3 {
+        float len_sq = dot(v, v);
+        if (len_sq > EPSILON * EPSILON) {
+            return v * rsqrt(len_sq);
+        }
+        return float3(0.0, 1.0, 0.0);
+    }
+
+    safe_normalize_with_fallback :: (float3 v, float3 fallback) -> float3 {
+        float len_sq = dot(v, v);
+        if (len_sq > EPSILON * EPSILON) {
+            return v * rsqrt(len_sq);
+        }
+        return fallback;
+    }
+
+    safe_normalize :: (float2 v) -> float2 {
+        float len_sq = dot(v, v);
+        if (len_sq > EPSILON * EPSILON) {
+            return v * rsqrt(len_sq);
+        }
+        return float2(1.0, 0.0);
+    }
+
+    safe_normalize_with_fallback :: (float2 v, float2 fallback) -> float2 {
+        float len_sq = dot(v, v);
+        if (len_sq > EPSILON * EPSILON) {
+            return v * rsqrt(len_sq);
+        }
+        return fallback;
+    }
+
+    // ============================================
+    // Power Shortcuts
+    // ============================================
+    square :: (float x) -> float {
+        return x * x;
+    }
+
+    square :: (float2 x) -> float2 {
+        return x * x;
+    }
+
+    square :: (float3 x) -> float3 {
+        return x * x;
+    }
+
+    cube :: (float x) -> float {
+        return x * x * x;
+    }
+
+    cube :: (float3 x) -> float3 {
+        return x * x * x;
+    }
+
+    // ============================================
+    // 2D Transformations
+    // ============================================
+    rotate_2d :: (float2 p, float angle) -> float2 {
+        float c = cos(angle);
+        float s = sin(angle);
+        return float2(p.x * c - p.y * s, p.x * s + p.y * c);
+    }
+
+    // ============================================
+    // Step Functions
+    // ============================================
+    linear_step :: (float edge0, float edge1, float x) -> float {
+        return saturate((x - edge0) / (edge1 - edge0));
+    }
+
+    // Perlin's improved smoothstep (quintic, zero 1st and 2nd derivatives at edges)
+    smootherstep :: (float edge0, float edge1, float x) -> float {
+        float t = saturate((x - edge0) / (edge1 - edge0));
+        return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+    }
+
+    // ============================================
+    // Easing Functions - Quadratic
+    // ============================================
+    ease_in_quad :: (float t) -> float {
+        return t * t;
+    }
+
+    ease_out_quad :: (float t) -> float {
+        return t * (2.0 - t);
+    }
+
+    ease_in_out_quad :: (float t) -> float {
+        if (t < 0.5) {
+            return 2.0 * t * t;
+        }
+        return 1.0 - 2.0 * (1.0 - t) * (1.0 - t);
+    }
+
+    // ============================================
+    // Easing Functions - Cubic
+    // ============================================
+    ease_in_cubic :: (float t) -> float {
+        return t * t * t;
+    }
+
+    ease_out_cubic :: (float t) -> float {
+        float u = 1.0 - t;
+        return 1.0 - u * u * u;
+    }
+
+    ease_in_out_cubic :: (float t) -> float {
+        if (t < 0.5) {
+            return 4.0 * t * t * t;
+        }
+        return 1.0 - 4.0 * (1.0 - t) * (1.0 - t) * (1.0 - t);
+    }
+
+    // ============================================
+    // Easing Functions - Quartic
+    // ============================================
+    ease_in_quart :: (float t) -> float {
+        return t * t * t * t;
+    }
+
+    ease_out_quart :: (float t) -> float {
+        float u = 1.0 - t;
+        return 1.0 - u * u * u * u;
+    }
+
+    ease_in_out_quart :: (float t) -> float {
+        if (t < 0.5) {
+            return 8.0 * t * t * t * t;
+        }
+        return 1.0 - 8.0 * (1.0 - t) * (1.0 - t) * (1.0 - t) * (1.0 - t);
+    }
+
+    // ============================================
+    // Easing Functions - Exponential
+    // ============================================
+    ease_in_expo :: (float t) -> float {
+        if (t <= 0.0) {
+            return 0.0;
+        }
+        return exp2(10.0 * (t - 1.0));
+    }
+
+    ease_out_expo :: (float t) -> float {
+        if (t >= 1.0) {
+            return 1.0;
+        }
+        return 1.0 - exp2(-10.0 * t);
+    }
+
+    // ============================================
+    // Easing Functions - Elastic
+    // ============================================
+    ease_out_elastic :: (float t) -> float {
+        if (t <= 0.0) {
+            return 0.0;
+        }
+        if (t >= 1.0) {
+            return 1.0;
+        }
+        return exp2(-10.0 * t) * sin((t * 10.0 - 0.75) * TAU / 3.0) + 1.0;
+    }
+
+    ease_out_bounce :: (float t) -> float {
+        const float n1 = 7.5625;
+        const float d1 = 2.75;
+        
+        if (t < 1.0 / d1) {
+            return n1 * t * t;
+        } else if (t < 2.0 / d1) {
+            float t2 = t - 1.5 / d1;
+            return n1 * t2 * t2 + 0.75;
+        } else if (t < 2.5 / d1) {
+            float t2 = t - 2.25 / d1;
+            return n1 * t2 * t2 + 0.9375;
+        } else {
+            float t2 = t - 2.625 / d1;
+            return n1 * t2 * t2 + 0.984375;
+        }
+    }
+
+    // ============================================
+    // Periodic / Wave Functions
+    // ============================================
+    
+    // Triangle wave, period 1, range [0, 1]
+    triangle_wave :: (float x) -> float {
+        return abs(fract(x) * 2.0 - 1.0);
+    }
+
+    // Attempt at a cheap sin approximation for [0, TAU], reasonable for visuals
+    fast_sin :: (float x) -> float {
+        float t = fract(x * INV_TAU);
+        float t2 = t * (1.0 - t);
+        return t2 * (t2 * 32.0 - 8.0);
+    }
+
+}

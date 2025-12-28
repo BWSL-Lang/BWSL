@@ -1,0 +1,40 @@
+# Build directory
+build/
+
+# Debug symbol bundles
+*.dSYM/
+
+# Object files
+*.o
+
+# Generated shader files
+*.spv
+*.metal
+*.hlsl
+*.glsl
+*.gles
+
+# Generated JSON files (IR dumps, internals)
+*.internals.json
+
+# macOS
+.DS_Store
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.bak
+
+# Test output files (keep .bwsl and .rcfg source files)
+tests/*.spv
+tests/*.metal
+tests/*.hlsl
+tests/*.glsl
+tests/*.gles
+tests/*.json

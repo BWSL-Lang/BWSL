@@ -1,0 +1,353 @@
+// Random Number Generation Module for BWSL
+// GPU-friendly hash-based random number generation
+//
+// For animation/time-based randomness, pass time or frame count as part of the seed.
+
+module Random {
+
+    // ============================================
+    // Constants
+    // ============================================
+    const uint GOLDEN_RATIO = 0x9E3779B9u;
+    const uint PCG_MULT = 0x5851F42Du;
+    const uint PCG_INC = 0x14057B7Eu;
+    const float INV_UINT_MAX = 2.3283064365386963e-10;  // 1.0 / (2^32 - 1)
+
+    // ============================================
+    // Core Hash Functions
+    // ============================================
+
+    // PCG-style hash - fast, good quality
+    // Based on PCG (Permuted Congruential Generator)
+    pcg_hash :: (uint seed) -> uint {
+        uint state = seed * PCG_MULT + PCG_INC;
+        uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+        return (word >> 22u) ^ word;
+    }
+
+    // Wang hash - simple and fast, good for spatial hashing
+    wang_hash :: (uint seed) -> uint {
+        uint x = seed;
+        x = (x ^ 61u) ^ (x >> 16u);
+        x = x * 9u;
+        x = x ^ (x >> 4u);
+        x = x * 0x27D4EB2Du;
+        x = x ^ (x >> 15u);
+        return x;
+    }
+
+    // xxHash-inspired single round - very fast
+    xxhash :: (uint seed) -> uint {
+        uint h = seed + 0x165667B1u;
+        h = h * 0x85EBCA77u;
+        h = h ^ (h >> 13u);
+        h = h * 0xC2B2AE3Du;
+        h = h ^ (h >> 16u);
+        return h;
+    }
+
+    // Combine two seeds into one (for multi-dimensional seeding)
+    hash_combine :: (uint a, uint b) -> uint {
+        return a ^ (b + GOLDEN_RATIO + (a << 6u) + (a >> 2u));
+    }
+
+    // Hash a 2D coordinate to a single uint
+    hash2d :: (uint x, uint y) -> uint {
+        return pcg_hash(hash_combine(x, y));
+    }
+
+    // Hash a 3D coordinate to a single uint
+    hash3d :: (uint x, uint y, uint z) -> uint {
+        return pcg_hash(hash_combine(hash_combine(x, y), z));
+    }
+
+    // ============================================
+    // Float Conversion (uint -> [0,1) range)
+    // ============================================
+
+    // Convert uint hash to float in [0, 1)
+    uint_to_float :: (uint h) -> float {
+        return float(h) * INV_UINT_MAX;
+    }
+
+    // Convert uint hash to float in [lo, hi)
+    uint_to_float_range :: (uint h, float lo, float hi) -> float {
+        return lo + (hi - lo) * uint_to_float(h);
+    }
+
+    // ============================================
+    // Random Float Generation
+    // ============================================
+
+    // Generate random float [0, 1) from seed
+    rand :: (uint seed) -> float {
+        return uint_to_float(pcg_hash(seed));
+    }
+
+    // Generate random float in [lo, hi) from seed
+    rand_range :: (uint seed, float lo, float hi) -> float {
+        return uint_to_float_range(pcg_hash(seed), lo, hi);
+    }
+
+    // Generate random float [0, 1) from 2D position (good for textures/UV)
+    rand2d :: (float2 uv, uint seed) -> float {
+        uint2 p = uint2(uint(uv.x * 65536.0), uint(uv.y * 65536.0));
+        return uint_to_float(hash3d(p.x, p.y, seed));
+    }
+
+    // Generate random float [0, 1) from 3D position
+    rand3d :: (float3 pos, uint seed) -> float {
+        uint3 p = uint3(uint(pos.x * 65536.0), uint(pos.y * 65536.0), uint(pos.z * 65536.0));
+        return uint_to_float(hash_combine(hash3d(p.x, p.y, p.z), seed));
+    }
+
+    // ============================================
+    // Random Vector Generation
+    // ============================================
+
+    // Generate random float2 in [0, 1) x [0, 1)
+    rand_float2 :: (uint seed) -> float2 {
+        uint h1 = pcg_hash(seed);
+        uint h2 = pcg_hash(h1);
+        return float2(uint_to_float(h1), uint_to_float(h2));
+    }
+
+    // Generate random float3 in [0, 1) x [0, 1) x [0, 1)
+    rand_float3 :: (uint seed) -> float3 {
+        uint h1 = pcg_hash(seed);
+        uint h2 = pcg_hash(h1);
+        uint h3 = pcg_hash(h2);
+        return float3(uint_to_float(h1), uint_to_float(h2), uint_to_float(h3));
+    }
+
+    // Generate random float4 in [0, 1)^4
+    rand_float4 :: (uint seed) -> float4 {
+        uint h1 = pcg_hash(seed);
+        uint h2 = pcg_hash(h1);
+        uint h3 = pcg_hash(h2);
+        uint h4 = pcg_hash(h3);
+        return float4(uint_to_float(h1), uint_to_float(h2), uint_to_float(h3), uint_to_float(h4));
+    }
+
+    // ============================================
+    // Geometric Random Distributions
+    // ============================================
+
+    // Random point uniformly distributed in unit circle
+    rand_in_circle :: (uint seed) -> float2 {
+        uint h1 = pcg_hash(seed);
+        uint h2 = pcg_hash(h1);
+
+        float angle = uint_to_float(h1) * 6.28318530718;  // TAU
+        float r = sqrt(uint_to_float(h2));  // sqrt for uniform area distribution
+
+        return float2(r * cos(angle), r * sin(angle));
+    }
+
+    // Random point on unit circle (edge only)
+    rand_on_circle :: (uint seed) -> float2 {
+        float angle = uint_to_float(pcg_hash(seed)) * 6.28318530718;
+        return float2(cos(angle), sin(angle));
+    }
+
+    // Random point uniformly distributed in unit sphere
+    rand_in_sphere :: (uint seed) -> float3 {
+        uint h1 = pcg_hash(seed);
+        uint h2 = pcg_hash(h1);
+        uint h3 = pcg_hash(h2);
+
+        float theta = uint_to_float(h1) * 6.28318530718;  // TAU
+        float phi = acos(2.0 * uint_to_float(h2) - 1.0);   // Uniform on sphere surface
+        float r = pow(uint_to_float(h3), 0.333333333);     // Cube root for uniform volume
+
+        float sin_phi = sin(phi);
+        return float3(
+            r * sin_phi * cos(theta),
+            r * sin_phi * sin(theta),
+            r * cos(phi)
+        );
+    }
+
+    // Random direction on unit sphere surface (for random directions)
+    rand_direction :: (uint seed) -> float3 {
+        uint h1 = pcg_hash(seed);
+        uint h2 = pcg_hash(h1);
+
+        float theta = uint_to_float(h1) * 6.28318530718;
+        float phi = acos(2.0 * uint_to_float(h2) - 1.0);
+
+        float sin_phi = sin(phi);
+        return float3(
+            sin_phi * cos(theta),
+            sin_phi * sin(theta),
+            cos(phi)
+        );
+    }
+
+    // Random direction in hemisphere around normal
+    rand_hemisphere :: (uint seed, float3 normal) -> float3 {
+        float3 dir = rand_direction(seed);
+        // Flip if pointing away from normal
+        if (dot(dir, normal) < 0.0) {
+            return -dir;
+        }
+        return dir;
+    }
+
+    // Cosine-weighted hemisphere sampling (for diffuse lighting)
+    rand_cosine_hemisphere :: (uint seed, float3 normal) -> float3 {
+        uint h1 = pcg_hash(seed);
+        uint h2 = pcg_hash(h1);
+
+        float r1 = uint_to_float(h1);
+        float r2 = uint_to_float(h2);
+
+        float phi = 6.28318530718 * r1;
+        float cos_theta = sqrt(r2);
+        float sin_theta = sqrt(1.0 - r2);
+
+        // Build orthonormal basis
+        float3 up = abs(normal.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
+        float3 tangent = normalize(cross(up, normal));
+        float3 bitangent = cross(normal, tangent);
+
+        return tangent * cos(phi) * sin_theta +
+               bitangent * sin(phi) * sin_theta +
+               normal * cos_theta;
+    }
+
+    // ============================================
+    // Probability Functions
+    // ============================================
+
+    // Returns true with probability p (0.0 to 1.0)
+    chance :: (uint seed, float p) -> bool {
+        return rand(seed) < p;
+    }
+
+    // Returns index [0, count) with uniform probability
+    rand_index :: (uint seed, uint count) -> uint {
+        return pcg_hash(seed) % count;
+    }
+
+    // ============================================
+    // Noise-like Functions (coherent random)
+    // ============================================
+
+    // Value noise - returns smooth random in [0, 1] from 2D position
+    // Good for procedural textures
+    value_noise :: (float2 p) -> float {
+        float2 i = floor(p);
+        float2 f = fract(p);
+
+        // Smooth interpolation
+        float2 u = f * f * (3.0 - 2.0 * f);
+
+        // Hash corners
+        uint2 pi = uint2(uint(i.x), uint(i.y));
+        float a = rand(hash2d(pi.x, pi.y));
+        float b = rand(hash2d(pi.x + 1u, pi.y));
+        float c = rand(hash2d(pi.x, pi.y + 1u));
+        float d = rand(hash2d(pi.x + 1u, pi.y + 1u));
+
+        // Bilinear interpolation
+        return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+    }
+
+    // Value noise 3D (use distinct name to avoid overload resolution issues across modules)
+    value_noise3d :: (float3 p) -> float {
+        float3 i = floor(p);
+        float3 f = fract(p);
+
+        // Smooth interpolation
+        float3 u = f * f * (3.0 - 2.0 * f);
+
+        uint3 pi = uint3(uint(i.x), uint(i.y), uint(i.z));
+
+        // Hash 8 corners and trilinear interpolate
+        float c000 = rand(hash3d(pi.x, pi.y, pi.z));
+        float c100 = rand(hash3d(pi.x + 1u, pi.y, pi.z));
+        float c010 = rand(hash3d(pi.x, pi.y + 1u, pi.z));
+        float c110 = rand(hash3d(pi.x + 1u, pi.y + 1u, pi.z));
+        float c001 = rand(hash3d(pi.x, pi.y, pi.z + 1u));
+        float c101 = rand(hash3d(pi.x + 1u, pi.y, pi.z + 1u));
+        float c011 = rand(hash3d(pi.x, pi.y + 1u, pi.z + 1u));
+        float c111 = rand(hash3d(pi.x + 1u, pi.y + 1u, pi.z + 1u));
+
+        float x00 = lerp(c000, c100, u.x);
+        float x10 = lerp(c010, c110, u.x);
+        float x01 = lerp(c001, c101, u.x);
+        float x11 = lerp(c011, c111, u.x);
+
+        float y0 = lerp(x00, x10, u.y);
+        float y1 = lerp(x01, x11, u.y);
+
+        return lerp(y0, y1, u.z);
+    }
+
+    // Fractal Brownian Motion (fBm) - layered noise for natural textures
+    fbm :: (float2 p, uint octaves) -> float {
+        float value = 0.0;
+        float amplitude = 0.5;
+        float2 pos = p;
+
+        foreach (i in 0..octaves) {
+            value += amplitude * value_noise(pos);
+            pos = pos * 2.0;
+            amplitude = amplitude * 0.5;
+        }
+
+        return value;
+    }
+
+    // 3D fBm (use distinct name to avoid overload resolution issues across modules)
+    fbm3d :: (float3 p, uint octaves) -> float {
+        float value = 0.0;
+        float amplitude = 0.5;
+        float3 pos = p;
+
+        foreach (i in 0..octaves) {
+            value += amplitude * value_noise3d(pos);
+            pos = pos * 2.0;
+            amplitude = amplitude * 0.5;
+        }
+
+        return value;
+    }
+
+    // ============================================
+    // Utility: Sequence Generation
+    // ============================================
+
+    // Get Nth value in a random sequence (for particle systems, etc.)
+    // Each call with same base_seed and different index gives different but deterministic value
+    sequence :: (uint base_seed, uint index) -> float {
+        return rand(hash_combine(base_seed, index));
+    }
+
+    // Get Nth float3 in a sequence
+    sequence_float3 :: (uint base_seed, uint index) -> float3 {
+        return rand_float3(hash_combine(base_seed, index));
+    }
+
+    // ============================================
+    // Blue Noise Approximation
+    // ============================================
+
+    // Interleaved gradient noise - good for dithering, less banding than white noise
+    // From Jimenez 2014 "Next Generation Post Processing in Call of Duty"
+    interleaved_gradient :: (float2 screen_pos) -> float {
+        float3 magic = float3(0.06711056, 0.00583715, 52.9829189);
+        return fract(magic.z * fract(dot(screen_pos, magic.xy)));
+    }
+
+    // R2 sequence - low discrepancy quasi-random for better distribution
+    // Good for sampling patterns
+    r2_sequence :: (uint index) -> float2 {
+        const float g = 1.32471795724;  // Plastic constant
+        const float a1 = 1.0 / g;
+        const float a2 = 1.0 / (g * g);
+        return fract(float2(0.5) + float(index) * float2(a1, a2));
+    }
+
+}

@@ -1,0 +1,23 @@
+
+module PostFX{
+
+// Gamma correction
+ gammaCorrect :: (float3 color) -> float3 {
+    return pow(color, 2.2);
+}
+
+ inverseGammaCorrect :: (float3 color) -> float3 {
+    return pow(color, 1.0 / 2.2);
+}
+
+// ACES Tone Mapping
+ ACESFilm :: (float3 x) -> float3 {
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+}

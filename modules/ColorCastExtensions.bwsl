@@ -1,0 +1,13 @@
+    module ColorCastExtensions extends Cast {
+    import PostFX
+
+        extend (float3 x) :: ACESTonemapped -> float3 {
+            return ACESFilm(x);
+        }
+
+        extend (float3 x) :: ACESTonemapped -> float4 {
+            return float4(ACESFilm(x),1.0);
+        }
+
+    }
+

@@ -1,0 +1,378 @@
+module Noise {
+
+    // ============================================
+    // Constants
+    // ============================================
+    const float3 HASH_SCALE3 = float3(0.1031, 0.1030, 0.0973);
+    const float4 HASH_SCALE4 = float4(0.1031, 0.1030, 0.0973, 0.1099);
+
+    // ============================================
+    // Hash Functions (PCG-style, good distribution)
+    // ============================================
+    
+    // float -> float
+    hash11 :: (float p) -> float {
+        float3 p3 = fract(float3(p, p, p) * HASH_SCALE3);
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
+    }
+
+    // float2 -> float
+    hash21 :: (float2 p) -> float {
+        float3 p3 = fract(float3(p.x, p.y, p.x) * HASH_SCALE3);
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
+    }
+
+    // float3 -> float
+    hash31 :: (float3 p) -> float {
+        float3 p3 = fract(p * HASH_SCALE3);
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
+    }
+
+    // float2 -> float2
+    hash22 :: (float2 p) -> float2 {
+        float3 p3 = fract(float3(p.x, p.y, p.x) * HASH_SCALE3);
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.xx + p3.yz) * p3.zy);
+    }
+
+    // float3 -> float3
+    hash33 :: (float3 p) -> float3 {
+        float3 p3 = fract(p * HASH_SCALE3);
+        p3 += dot(p3, p3.yxz + 33.33);
+        return fract((p3.xxy + p3.yxx) * p3.zyx);
+    }
+
+    // float2 -> float3 (useful for colored noise)
+    hash23 :: (float2 p) -> float3 {
+        float3 p3 = fract(float3(p.x, p.y, p.x) * HASH_SCALE3);
+        p3 += dot(p3, p3.yxz + 33.33);
+        return fract((p3.xxy + p3.yzz) * p3.zyx);
+    }
+
+    // ============================================
+    // Value Noise
+    // ============================================
+    
+    value_noise_2d :: (float2 p) -> float {
+        float2 i = floor(p);
+        float2 f = fract(p);
+        
+        // Hermite interpolation (same as smoothstep)
+        float2 u = f * f * (3.0 - 2.0 * f);
+        
+        // Four corners
+        float a = hash21(i + float2(0.0, 0.0));
+        float b = hash21(i + float2(1.0, 0.0));
+        float c = hash21(i + float2(0.0, 1.0));
+        float d = hash21(i + float2(1.0, 1.0));
+        
+        // Bilinear interpolation
+        return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+    }
+
+    value_noise_3d :: (float3 p) -> float {
+        float3 i = floor(p);
+        float3 f = fract(p);
+        
+        float3 u = f * f * (3.0 - 2.0 * f);
+        
+        // Eight corners
+        float a = hash31(i + float3(0.0, 0.0, 0.0));
+        float b = hash31(i + float3(1.0, 0.0, 0.0));
+        float c = hash31(i + float3(0.0, 1.0, 0.0));
+        float d = hash31(i + float3(1.0, 1.0, 0.0));
+        float e = hash31(i + float3(0.0, 0.0, 1.0));
+        float f_ = hash31(i + float3(1.0, 0.0, 1.0));
+        float g = hash31(i + float3(0.0, 1.0, 1.0));
+        float h = hash31(i + float3(1.0, 1.0, 1.0));
+        
+        // Trilinear interpolation
+        float z0 = lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+        float z1 = lerp(lerp(e, f_, u.x), lerp(g, h, u.x), u.y);
+        return lerp(z0, z1, u.z);
+    }
+
+    // ============================================
+    // Gradient Noise (Perlin-style)
+    // ============================================
+    
+    gradient_noise_2d :: (float2 p) -> float {
+        float2 i = floor(p);
+        float2 f = fract(p);
+        
+        // Quintic interpolation (smoother than Hermite)
+        float2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+        
+        // Gradients at corners
+        float2 ga = hash22(i + float2(0.0, 0.0)) * 2.0 - 1.0;
+        float2 gb = hash22(i + float2(1.0, 0.0)) * 2.0 - 1.0;
+        float2 gc = hash22(i + float2(0.0, 1.0)) * 2.0 - 1.0;
+        float2 gd = hash22(i + float2(1.0, 1.0)) * 2.0 - 1.0;
+        
+        // Vectors to corners
+        float2 pa = f - float2(0.0, 0.0);
+        float2 pb = f - float2(1.0, 0.0);
+        float2 pc = f - float2(0.0, 1.0);
+        float2 pd = f - float2(1.0, 1.0);
+        
+        // Dot products
+        float va = dot(ga, pa);
+        float vb = dot(gb, pb);
+        float vc = dot(gc, pc);
+        float vd = dot(gd, pd);
+        
+        // Bilinear interpolation
+        return lerp(lerp(va, vb, u.x), lerp(vc, vd, u.x), u.y);
+    }
+
+    gradient_noise_3d :: (float3 p) -> float {
+        float3 i = floor(p);
+        float3 f = fract(p);
+        
+        float3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+        
+        // Gradients at 8 corners
+        float3 g000 = hash33(i + float3(0.0, 0.0, 0.0)) * 2.0 - 1.0;
+        float3 g100 = hash33(i + float3(1.0, 0.0, 0.0)) * 2.0 - 1.0;
+        float3 g010 = hash33(i + float3(0.0, 1.0, 0.0)) * 2.0 - 1.0;
+        float3 g110 = hash33(i + float3(1.0, 1.0, 0.0)) * 2.0 - 1.0;
+        float3 g001 = hash33(i + float3(0.0, 0.0, 1.0)) * 2.0 - 1.0;
+        float3 g101 = hash33(i + float3(1.0, 0.0, 1.0)) * 2.0 - 1.0;
+        float3 g011 = hash33(i + float3(0.0, 1.0, 1.0)) * 2.0 - 1.0;
+        float3 g111 = hash33(i + float3(1.0, 1.0, 1.0)) * 2.0 - 1.0;
+        
+        // Dot products
+        float v000 = dot(g000, f - float3(0.0, 0.0, 0.0));
+        float v100 = dot(g100, f - float3(1.0, 0.0, 0.0));
+        float v010 = dot(g010, f - float3(0.0, 1.0, 0.0));
+        float v110 = dot(g110, f - float3(1.0, 1.0, 0.0));
+        float v001 = dot(g001, f - float3(0.0, 0.0, 1.0));
+        float v101 = dot(g101, f - float3(1.0, 0.0, 1.0));
+        float v011 = dot(g011, f - float3(0.0, 1.0, 1.0));
+        float v111 = dot(g111, f - float3(1.0, 1.0, 1.0));
+        
+        // Trilinear interpolation
+        float z0 = lerp(lerp(v000, v100, u.x), lerp(v010, v110, u.x), u.y);
+        float z1 = lerp(lerp(v001, v101, u.x), lerp(v011, v111, u.x), u.y);
+        return lerp(z0, z1, u.z);
+    }
+
+    // ============================================
+    // Worley / Cellular Noise
+    // ============================================
+    
+    // Returns (F1, F2) - distance to closest and second closest points
+    worley_2d :: (float2 p) -> float2 {
+        float2 i = floor(p);
+        float2 f = fract(p);
+        
+        float d1 = 8.0;  // Distance to closest
+        float d2 = 8.0;  // Distance to second closest
+        
+        // Search 3x3 neighborhood
+        for (int y = -1; y <= 1; y++) {
+            for (int x = -1; x <= 1; x++) {
+                float2 neighbor = float2(float(x), float(y));
+                float2 point = hash22(i + neighbor);
+                float2 diff = neighbor + point - f;
+                float dist = dot(diff, diff);
+                
+                if (dist < d1) {
+                    d2 = d1;
+                    d1 = dist;
+                } else if (dist < d2) {
+                    d2 = dist;
+                }
+            }
+        }
+        
+        return float2(sqrt(d1), sqrt(d2));
+    }
+
+    // Simple F1 only version (faster)
+    worley_2d_f1 :: (float2 p) -> float {
+        float2 i = floor(p);
+        float2 f = fract(p);
+        
+        float d1 = 8.0;
+        
+        for (int y = -1; y <= 1; y++) {
+            for (int x = -1; x <= 1; x++) {
+                float2 neighbor = float2(float(x), float(y));
+                float2 point = hash22(i + neighbor);
+                float2 diff = neighbor + point - f;
+                d1 = min(d1, dot(diff, diff));
+            }
+        }
+        
+        return sqrt(d1);
+    }
+
+    worley_3d :: (float3 p) -> float2 {
+        float3 i = floor(p);
+        float3 f = fract(p);
+        
+        float d1 = 8.0;
+        float d2 = 8.0;
+        
+        for (int z = -1; z <= 1; z++) {
+            for (int y = -1; y <= 1; y++) {
+                for (int x = -1; x <= 1; x++) {
+                    float3 neighbor = float3(float(x), float(y), float(z));
+                    float3 point = hash33(i + neighbor);
+                    float3 diff = neighbor + point - f;
+                    float dist = dot(diff, diff);
+                    
+                    if (dist < d1) {
+                        d2 = d1;
+                        d1 = dist;
+                    } else if (dist < d2) {
+                        d2 = dist;
+                    }
+                }
+            }
+        }
+        
+        return float2(sqrt(d1), sqrt(d2));
+    }
+
+    // ============================================
+    // Fractional Brownian Motion (FBM)
+    // ============================================
+    
+    fbm_2d :: (float2 p, int octaves, float lacunarity = 2.0, float gain = 0.5) -> float {
+        float value = 0.0;
+        float amplitude = 0.5;
+        float frequency = 1.0;
+        
+        for (int i = 0; i < octaves; i++) {
+            value += amplitude * gradient_noise_2d(p * frequency);
+            frequency *= lacunarity;
+            amplitude *= gain;
+        }
+        
+        return value;
+    }
+
+    fbm_3d :: (float3 p, int octaves, float lacunarity = 2.0, float gain = 0.5) -> float {
+        float value = 0.0;
+        float amplitude = 0.5;
+        float frequency = 1.0;
+        
+        for (int i = 0; i < octaves; i++) {
+            value += amplitude * gradient_noise_3d(p * frequency);
+            frequency *= lacunarity;
+            amplitude *= gain;
+        }
+        
+        return value;
+    }
+
+    // Ridged multifractal - great for mountains, lightning
+    ridged_fbm_2d :: (float2 p, int octaves, float lacunarity = 2.0, float gain = 0.5) -> float {
+        float value = 0.0;
+        float amplitude = 0.5;
+        float frequency = 1.0;
+        float prev = 1.0;
+        
+        for (int i = 0; i < octaves; i++) {
+            float n = 1.0 - abs(gradient_noise_2d(p * frequency));
+            n = n * n;
+            value += n * amplitude * prev;
+            prev = n;
+            frequency *= lacunarity;
+            amplitude *= gain;
+        }
+        
+        return value;
+    }
+
+    ridged_fbm_3d :: (float3 p, int octaves, float lacunarity = 2.0, float gain = 0.5) -> float {
+        float value = 0.0;
+        float amplitude = 0.5;
+        float frequency = 1.0;
+        float prev = 1.0;
+        
+        for (int i = 0; i < octaves; i++) {
+            float n = 1.0 - abs(gradient_noise_3d(p * frequency));
+            n = n * n;
+            value += n * amplitude * prev;
+            prev = n;
+            frequency *= lacunarity;
+            amplitude *= gain;
+        }
+        
+        return value;
+    }
+
+    // ============================================
+    // Domain Warping
+    // ============================================
+    
+    // Warp coordinates using noise (creates organic distortions)
+    domain_warp_2d :: (float2 p, float strength = 1.0) -> float2 {
+        float2 offset = float2(
+            gradient_noise_2d(p + float2(0.0, 0.0)),
+            gradient_noise_2d(p + float2(5.2, 1.3))
+        );
+        return p + offset * strength;
+    }
+
+    domain_warp_3d :: (float3 p, float strength = 1.0) -> float3 {
+        float3 offset = float3(
+            gradient_noise_3d(p + float3(0.0, 0.0, 0.0)),
+            gradient_noise_3d(p + float3(5.2, 1.3, 2.8)),
+            gradient_noise_3d(p + float3(2.1, 7.5, 4.6))
+        );
+        return p + offset * strength;
+    }
+
+    // Double domain warp for more complex patterns
+    domain_warp_fbm_2d :: (float2 p, int octaves = 4, float warp_strength = 0.5) -> float {
+        float2 q = float2(
+            fbm_2d(p + float2(0.0, 0.0), octaves),
+            fbm_2d(p + float2(5.2, 1.3), octaves)
+        );
+        
+        float2 r = float2(
+            fbm_2d(p + 4.0 * q + float2(1.7, 9.2), octaves),
+            fbm_2d(p + 4.0 * q + float2(8.3, 2.8), octaves)
+        );
+        
+        return fbm_2d(p + warp_strength * r, octaves);
+    }
+
+    // ============================================
+    // Utility / Derived Noise
+    // ============================================
+    
+    // Turbulence (absolute value of FBM layers)
+    turbulence_2d :: (float2 p, int octaves) -> float {
+        float value = 0.0;
+        float amplitude = 0.5;
+        float frequency = 1.0;
+        
+        for (int i = 0; i < octaves; i++) {
+            value += amplitude * abs(gradient_noise_2d(p * frequency));
+            frequency *= 2.0;
+            amplitude *= 0.5;
+        }
+        
+        return value;
+    }
+
+    // Billowy noise (for clouds)
+    billowy_2d :: (float2 p, int octaves) -> float {
+        return 1.0 - turbulence_2d(p, octaves);
+    }
+
+    // Swiss cheese / voronoi edge noise
+    voronoi_edge_2d :: (float2 p) -> float {
+        float2 w = worley_2d(p);
+        return w.y - w.x;
+    }
+
+}

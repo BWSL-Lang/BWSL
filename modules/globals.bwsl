@@ -1,0 +1,286 @@
+// ============================================
+// Global Shader Types and Constants
+// ============================================
+module Globals {
+
+import Math
+
+// ============================================
+// Constants
+// ============================================
+const int MAX_LIGHTS = 16;
+const int MAX_CASCADES = 4;
+const int MAX_BONES = 128;
+
+// ============================================
+// Light Types Enum
+// ============================================
+enum LightType : int {
+    Point = 0,
+    Directional = 1,
+    Line = 2,
+    Spot = 3,
+    Probe = 4,
+    Area = 5
+}
+
+// ============================================
+// Vertex Attribute Flags (Bitmask Enum)
+// ============================================
+enum VertexAttribute : uint {
+    Position    = 0b00000001,
+    Normal      = 0b00000010,
+    TexCoord    = 0b00000100,
+    Color       = 0b00001000,
+    Tangent     = 0b00010000,
+    Bitangent   = 0b00100000,
+    BoneIndices = 0b01000000,
+    BoneWeights = 0b10000000,
+    
+    // Check if a specific attribute is present
+    eval has :: (self, VertexAttribute flag) -> bool {
+        return (self & flag) != 0;
+    }
+    
+    // Count how many attributes are set
+    eval count :: (self) -> int {
+        int c = 0;
+        eval if (self & Position) { c++; }
+        eval if (self & Normal) { c++; }
+        eval if (self & TexCoord) { c++; }
+        eval if (self & Color) { c++; }
+        eval if (self & Tangent) { c++; }
+        eval if (self & Bitangent) { c++; }
+        eval if (self & BoneIndices) { c++; }
+        eval if (self & BoneWeights) { c++; }
+        return c;
+    }
+    
+    // Check if skinning data is available
+    eval hasSkinning :: (self) -> bool {
+        return (self & BoneIndices) != 0 && (self & BoneWeights) != 0;
+    }
+    
+    // Check if tangent space is complete
+    eval hasTangentSpace :: (self) -> bool {
+        return (self & Normal) != 0 && (self & Tangent) != 0 && (self & Bitangent) != 0;
+    }
+}
+
+// ============================================
+// Core Structures
+// ============================================
+
+struct CameraUniforms {
+    mat4 viewMatrix;
+    mat4 projectionMatrix;
+    float4 cameraPosition;
+};
+
+struct MeshDescriptor {
+    VertexAttribute attributeFlags;
+    uint _padding[3];
+    uint numVertices;
+    uint numIndices;
+    uint indexOffset;
+    uint positionOffset;
+    uint normalOffset;
+    uint texCoordOffset;
+    uint colorOffset;
+    uint tangentOffset;
+    uint bitangentOffset;
+    uint boneIndicesOffset;
+    uint boneWeightsOffset;
+};
+
+struct AttributeOffsetInfo {
+    uint baseOffset;
+    uint stride;
+    uint elementCount;
+    uint present;
+};
+
+struct DrawMetadata {
+    uint _pipelineState[2];
+    uint sectionId;
+    uint transformIndex;
+    uint materialIndex;
+    uint _padding;
+};
+
+// ============================================
+// Material Structure
+// ============================================
+struct BWEMaterial {
+    float4 albedo;
+    float roughness;
+    float metallic;
+    float specular;
+    float ambientOcclusion;
+    float3 emissiveColor;
+    float emissiveIntensity;
+    float transparency;
+    float refractionIndex;
+    float anisotropy;
+    float subsurfaceScattering;
+    float2 albedoTextureTiling;
+    float2 albedoTextureOffset;
+    float padding[2];
+};
+
+// ============================================
+// Light Data (Structure of Arrays)
+// ============================================
+struct LightSourcesSoA {
+    float3 positions[MAX_LIGHTS];
+    float3 directions[MAX_LIGHTS];
+    float3 colors[MAX_LIGHTS];
+    float intensities[MAX_LIGHTS];
+    float constantAttenuations[MAX_LIGHTS];
+    float linearAttenuations[MAX_LIGHTS];
+    float quadraticAttenuations[MAX_LIGHTS];
+    float innerCutoffs[MAX_LIGHTS];
+    float outerCutoffs[MAX_LIGHTS];
+    float lengths[MAX_LIGHTS];
+    float radii[MAX_LIGHTS];
+    int types[MAX_LIGHTS];
+    int version;
+};
+
+// ============================================
+// Shadow Structures
+// ============================================
+struct CascadeData {
+    mat4 viewProjMatrix;
+    float splitDistance;
+    float padding[3];
+};
+
+struct ShadowData {
+    CascadeData cascades[MAX_CASCADES];
+    float4 lightDirection;
+    uint numCascades;
+    uint shadowMapSize;
+    float cascadeSplitLambda;
+    float shadowBias;
+    float shadowSlopeBias;
+    float shadowFilterRadius;
+    float padding[2];
+};
+
+// ============================================
+// Utility Functions
+// ============================================
+
+hasAttribute :: (MeshDescriptor desc, VertexAttribute attr) -> bool {
+    // Simplified - direct bitwise check instead of method call
+    return (desc.attributeFlags & attr) != 0;
+}
+
+// ============================================
+// Vertex Decompression Functions
+// ============================================
+
+decompressPosition_10_10_10 :: (uint packed) -> float3 {
+    uint x = packed & 0x3FF;
+    uint y = (packed >> 10) & 0x3FF;
+    uint z = (packed >> 20) & 0x3FF;
+    
+    float3 pos;
+    pos.x = (float(x) / 1023.0) * 2.0 - 1.0;
+    pos.y = (float(y) / 1023.0) * 2.0 - 1.0;
+    pos.z = (float(z) / 1023.0) * 2.0 - 1.0;
+    
+    return pos;
+}
+
+decompressOctahedral16 :: (uint packed) -> float3 {
+    float2 oct;
+    oct.x = float(packed & 0xFF) / 255.0 * 2.0 - 1.0;
+    oct.y = float((packed >> 8) & 0xFF) / 255.0 * 2.0 - 1.0;
+    
+    float3 n = float3(oct.xy, 1.0 - abs(oct.x) - abs(oct.y));
+    if (n.z < 0.0) {
+        n.xy = (1.0 - abs(n.yx)) * select(float2(-1.0), float2(1.0), n.xy >= 0.0);
+    }
+    return normalize(n);
+}
+
+decompressUV16_16 :: (uint packed) -> float2 {
+    return float2(
+        float(packed & 0xFFFF) / 65535.0,
+        float((packed >> 16) & 0xFFFF) / 65535.0
+    );
+}
+
+decompressColor8888 :: (uint packed) -> float4 {
+    return float4(
+        float(packed & 0xFF) / 255.0,
+        float((packed >> 8) & 0xFF) / 255.0,
+        float((packed >> 16) & 0xFF) / 255.0,
+        float((packed >> 24) & 0xFF) / 255.0
+    );
+}
+
+decompressBoneIndices8888 :: (uint packed) -> int4 {
+    return int4(
+        int(packed & 0xFF),
+        int((packed >> 8) & 0xFF),
+        int((packed >> 16) & 0xFF),
+        int((packed >> 24) & 0xFF)
+    );
+}
+
+decompressBoneWeights8888 :: (uint packed) -> float4 {
+    return float4(
+        float(packed & 0xFF) / 255.0,
+        float((packed >> 8) & 0xFF) / 255.0,
+        float((packed >> 16) & 0xFF) / 255.0,
+        float((packed >> 24) & 0xFF) / 255.0
+    );
+}
+
+// ============================================
+// Color Space Conversion
+// ============================================
+
+gammaCorrect :: (float3 color) -> float3 {
+    return pow(color, 2.2);
+}
+
+inverseGammaCorrect :: (float3 color) -> float3 {
+    return pow(color, 1.0 / 2.2);
+}
+
+linearToSRGB :: (float3 color) -> float3 {
+    return pow(color, 1.0 / 2.2);
+}
+
+sRGBToLinear :: (float3 color) -> float3 {
+    return pow(color, 2.2);
+}
+
+// ============================================
+// Tone Mapping
+// ============================================
+
+ACESFilm :: (float3 x) -> float3 {
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+reinhardToneMap :: (float3 color) -> float3 {
+    return color / (color + float3(1.0));
+}
+
+reinhardExtendedToneMap :: (float3 color, float maxWhite) -> float3 {
+    float3 numerator = color * (1.0 + (color / (maxWhite * maxWhite)));
+    return numerator / (1.0 + color);
+}
+
+}
+

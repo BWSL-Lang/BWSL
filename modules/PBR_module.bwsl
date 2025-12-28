@@ -1,0 +1,150 @@
+module PBR {
+    
+import Math
+
+struct PBRMaterial {
+    float3 albedo;
+    float roughness;
+    float metallic;
+    float ao;
+};
+
+
+// Fresnel-Schlick Approximation
+ fresnelSchlick :: (float cosTheta, float3 F0) -> float3 {
+
+    return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+
+}
+
+// UE4 Optimized Fresnel
+ fresnelSchlickUE4 :: (float VdotH, float3 F0) -> float3 {
+
+    return F0 + (1.0 - F0) * pow(2.0, (-5.55473 * VdotH - 6.98316) * VdotH);
+
+}
+
+// GGX/Trowbridge-Reitz Normal Distribution Function
+ distributionGGX :: (float NdotH, float roughness) -> float {
+
+    float alpha = roughness * roughness;
+    float alphaSqr = alpha * alpha;
+    float denom = NdotH * NdotH * (alphaSqr - 1.0) + 1.0;
+    return alphaSqr / (Math::PI * denom * denom);
+
+}
+
+// Smith's Geometry Function (Schlick-GGX)
+ geometrySchlickGGX :: (float NdotV, float roughness) -> float {
+
+    float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    return NdotV / (NdotV * (1.0 - k) + k);
+
+}
+
+geometrySmith :: (float NdotV, float NdotL, float roughness) -> float {
+
+    float ggx1 = geometrySchlickGGX(NdotV, roughness);
+    float ggx2 = geometrySchlickGGX(NdotL, roughness);
+    return ggx1 * ggx2;
+
+}
+
+
+// --------------------------- Direct Lighting --------------------------------
+
+// Complete Cook-Torrance Specular BRDF
+cookTorranceSpecular :: (float3 N, float3 V, float3 L, float3 F, float roughness) -> float3 {
+
+    float3 H = normalize(V + L);
+    float NdotH = max(dot(N, H), 0.0);
+    float NdotV = max(dot(N, V), 0.0);
+    float NdotL = max(dot(N, L), 0.0);
+    
+    float D = distributionGGX(NdotH, roughness);
+    float G = geometrySmith(NdotV, NdotL, roughness);
+    
+    float3 numerator = D * F * G;
+    float denominator = 4.0 * NdotV * NdotL + 0.001; // Prevent divide by zero
+    
+    return numerator / denominator;
+
+}
+
+// Lambertian Diffuse
+lambertianDiffuse :: (float3 albedo) -> float3 {
+
+    return albedo / Math::PI;
+
+}
+
+// Complete Direct Lighting Calculation
+calculateDirectLighting :: (PBRMaterial mat, float3 N, float3 V, float3 L, float3 radiance) -> float3 {
+
+    float NdotL = max(dot(N, L), 0.0);
+    float3 H = normalize(V + L);
+    float VdotH = max(dot(V, H), 0.0);
+    
+    // Calculate Fresnel at interface
+    float3 F0 = lerp(float3(0.04), mat.albedo, mat.metallic);
+    float3 F = fresnelSchlickUE4(VdotH, F0);
+    
+    // Energy conservation: metals don't have diffuse reflection
+    float3 kD = (1.0 - F) * (1.0 - mat.metallic);
+    
+    // Diffuse component
+    float3 diffuse = kD * lambertianDiffuse(mat.albedo);
+    
+    // Specular component
+    float3 specular = cookTorranceSpecular(N, V, L, F, mat.roughness);
+    
+    // Combine and apply radiance
+    return (diffuse + specular) * radiance * NdotL;
+
+}
+
+// --------------------------- Image Based Lighting (IBL) -------------------------
+
+// IBL Diffuse (Irradiance)
+calculateIBLDiffuse :: (samplerCube irradianceMap, float3 N, float3 albedo, float metallic) -> float3 {
+
+    float3 irradiance = textureCube(irradianceMap, N).rgb;
+    return irradiance * albedo * (1.0 - metallic);
+
+}
+
+// IBL Specular (Pre-filtered Environment + BRDF LUT)
+calculateIBLSpecular :: (samplerCube prefilterMap, sampler2D brdfLUT, float3 N, float3 V, float3 albedo, float roughness, float metallic) -> float3 {
+
+    float3 R = reflect(-V, N);
+    float NdotV = max(dot(N, V), 0.0);
+    
+    // Sample pre-filtered environment map at appropriate mip level
+    float3 prefilteredColor = textureCubeLod(prefilterMap, R, roughness * 4.0).rgb; // Todo: add textureCubeLod
+    
+    // Sample BRDF integration map
+    float2 brdf = sample(brdfLUT, float2(NdotV, roughness)).rg;
+    
+    // Calculate F0 (surface reflection at zero incidence)
+    float3 F0 = lerp(float3(0.04), albedo, metallic);
+    
+    // Fresnel for IBL
+    float3 F = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);
+    
+    // Combine prefiltered color with BRDF terms
+    return prefilteredColor * (F * brdf.x + brdf.y);
+
+}
+
+// Complete IBL Calculation
+ calculateIBL :: (samplerCube irradianceMap, samplerCube prefilterMap, sampler2D brdfLUT, PBRMaterial mat, float3 N, float3 V) -> float3 {
+
+    float3 diffuse = calculateIBLDiffuse(irradianceMap, N, mat.albedo, mat.metallic);
+    float3 specular = calculateIBLSpecular(prefilterMap, brdfLUT, N, V, mat.albedo, mat.roughness, mat.metallic);
+    
+    // Apply ambient occlusion
+    return (diffuse + specular) * mat.ao;
+
+}
+    
+}
