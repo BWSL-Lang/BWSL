@@ -118,6 +118,7 @@ public:
         [ENUM] = 4,
         [SELF] = 4,
         [LOOP] = 4,
+        [NODE] = 4,
         [SKIP] = 4,
         [EVAL] = 4,
         [CASE] = 4,
@@ -146,6 +147,7 @@ public:
         [BUFFER] = 6,
         [EXTEND] = 6,
         [SWITCH] = 6,
+        [INPUTS] = 6,
         // Seven character keywords
         [CBUFFER] = 7,
         [SAMPLER] = 7,
@@ -154,19 +156,25 @@ public:
         [FOREACH] = 7,
         [DISCARD] = 7,
         [DEFAULT] = 7,
+        [OUTPUTS] = 7,
         // Eight character keywords
         [PIPELINE] = 8,
         [FRAGMENT] = 8,
+        [READONLY] = 8,
         // Nine character keywords
         [TEXTURE2D] = 9,
         [TEXTURE3D] = 9,
         [RESOURCES] = 9,
+        [READWRITE] = 9,
+        [WRITEONLY] = 9,
         // Ten character keywords
         [ATTRIBUTES] = 10,
         [PASS_BLOCK] = 10,
         [CONSTRAINT] = 10,
         // Eleven character keywords
         [TEXTURECUBE] = 11,
+        // Thirteen character keywords
+        [COMPUTE_GRAPH] = 13,
         // Fourteen character keywords
         [TEXTURE2DARRAY] = 14,
         // Fifteen character keywords
@@ -271,6 +279,13 @@ inline const char* TokenTypeName(TokenType type) {
         case CBUFFER: return "CBUFFER";
         case SAMPLER: return "SAMPLER";
         case COMPUTE: return "COMPUTE";
+        case COMPUTE_GRAPH: return "COMPUTE_GRAPH";
+        case NODE: return "NODE";
+        case INPUTS: return "INPUTS";
+        case OUTPUTS: return "OUTPUTS";
+        case READONLY: return "READONLY";
+        case READWRITE: return "READWRITE";
+        case WRITEONLY: return "WRITEONLY";
         case PIPELINE: return "PIPELINE";
         case FRAGMENT: return "FRAGMENT";
         case TEXTURE2D: return "TEXTURE2D";

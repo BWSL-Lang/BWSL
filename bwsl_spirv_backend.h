@@ -53,6 +53,9 @@ struct SPIRVBuilder {
     u32 workgroupIdVarId = 0;
     u32 numWorkgroupsVarId = 0;
     u32 localInvocationIndexVarId = 0;
+    u32 workgroupSizeX = 1;
+    u32 workgroupSizeY = 1;
+    u32 workgroupSizeZ = 1;
 
     // ============= Constant Pools (parallel to IR) =============
     alignas(64) u32* floatConstantIds;  // SPIR-V IDs for float constants
@@ -182,6 +185,11 @@ struct SPIRVBuilder {
     
     void Initialize(BWSL_Arena* arena, IR::IRProgram* ir, ShaderStage stage,
                     const SymbolTableData* symbols = nullptr, CFG* cfg = nullptr);
+    void SetComputeWorkgroupSize(u32 x, u32 y, u32 z) {
+        workgroupSizeX = x;
+        workgroupSizeY = y;
+        workgroupSizeZ = z;
+    }
     
     // ID allocation
     u32 AllocateId() { return nextId++; }

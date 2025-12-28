@@ -79,6 +79,90 @@ namespace {
         }
         return {};
     }
+
+    void BuildParamMasks(const ArenaArray<std::pair<ArenaString, ArenaString>>& params,
+        std::vector<OverloadTypeMask>& outMasks) {
+        outMasks.clear();
+        outMasks.reserve(params.count);
+        for (u32 i = 0; i < params.count; i++) {
+            const auto& param = params[i];
+            outMasks.push_back(MakeOverloadMaskFromTypeHash(param.second.nameHash));
+        }
+    }
+
+    bool HasDuplicateFunctionSignature(SymbolTableData* table, const ArenaString& name,
+        const std::vector<OverloadTypeMask>& paramMasks, NamespaceKind ns, u32 moduleIndex,
+        u64 signatureKey) {
+        u32 scopeStart = table->scopeStartIndices[table->currentScope];
+        for (u32 i = scopeStart; i < table->symbols.count; i++) {
+            Symbol& existing = table->symbols[i];
+            if (existing.kind != SymbolKind::FUNCTION) continue;
+            if (existing.name.nameHash != name.nameHash) continue;
+            if (existing.namespaceKind != ns) continue;
+            if (ns == NamespaceKind::MODULE && existing.moduleIndex != moduleIndex) continue;
+
+            const FunctionData& funcData = table->functions[existing.index];
+            if (funcData.signatureKey != signatureKey) continue;
+            if (funcData.paramTypeMasks.count != paramMasks.size()) continue;
+
+            bool matches = true;
+            for (u32 j = 0; j < funcData.paramTypeMasks.count; j++) {
+                if (funcData.paramTypeMasks[j] != paramMasks[j]) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool HasDuplicateFunctionInList(AST* ast, const ArenaArray<NodeRef>& functions,
+        const FunctionDeclData& decl, const std::vector<OverloadTypeMask>& paramMasks,
+        u64 signatureKey) {
+        for (u32 i = 0; i < functions.count; i++) {
+            NodeRef fnRef = functions[i];
+            if (fnRef.Type() != ASTNodeType::FUNCTION) continue;
+            const FunctionDeclData& existing = ast->GetFunction(fnRef);
+            if (existing.name.nameHash != decl.name.nameHash) continue;
+
+            std::vector<OverloadTypeMask> existingMasks;
+            BuildParamMasks(existing.parameters, existingMasks);
+            u64 existingKey = HashOverloadSignature(existingMasks.data(),
+                static_cast<u32>(existingMasks.size()));
+            if (existingKey != signatureKey) continue;
+            if (existingMasks.size() != paramMasks.size()) continue;
+
+            bool matches = true;
+            for (size_t j = 0; j < existingMasks.size(); j++) {
+                if (existingMasks[j] != paramMasks[j]) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void FillFunctionData(SymbolTableData* table, BWSL_Arena* arena, const FunctionDeclData& decl,
+        NodeRef functionRef, const std::vector<OverloadTypeMask>& paramMasks, u64 signatureKey,
+        u32 symbolIndex) {
+        FunctionData& funcData = table->functions[symbolIndex];
+        funcData.returnType = decl.returnType;
+        funcData.parameters.Init(arena, decl.parameters.count);
+        funcData.paramTypeMasks.Init(arena, static_cast<u32>(paramMasks.size()));
+        for (u32 i = 0; i < decl.parameters.count; i++) {
+            funcData.parameters.Push(arena, decl.parameters[i]);
+            funcData.paramTypeMasks.Push(arena, paramMasks[i]);
+        }
+        funcData.signatureKey = signatureKey;
+        funcData.astNodeIndex = functionRef.packed;
+    }
 }
 
 // Token management
@@ -281,6 +365,15 @@ NodeRef Parser::ParsePipeline() {
             ParseImports(pipeline);
         } else if (Match(TokenType::ATTRIBUTES)) {
             ParseAttributes(pipeline);
+        } else if (Match(TokenType::COMPUTE_GRAPH)) {
+            if (!ast->GetPipeline(pipeline).computeGraph.IsNull()) {
+                Error("Only one compute_graph block is allowed per pipeline");
+                continue;
+            }
+            NodeRef graph = ParseComputeGraph();
+            if (graph.IsValid()) {
+                ast->GetPipeline(pipeline).computeGraph = graph;
+            }
         } else if (Match(TokenType::CONST)) {
             if (!MatchMask(TokenMasks::CORE_TYPES)) {
                 Error("Expected type after 'const'");
@@ -377,7 +470,7 @@ NodeRef Parser::ParsePipeline() {
                 ast->GetPipeline(pipeline).functions.Push(arena, function);
             }
         } else {
-            ErrorAtCurrent("Expected 'import', 'attributes', 'enum', 'eval', 'module', 'struct', or 'pass'");
+            ErrorAtCurrent("Expected 'import', 'attributes', 'compute_graph', 'enum', 'eval', 'module', 'struct', or 'pass'");
             Advance();
         }
         
@@ -594,6 +687,9 @@ NodeRef Parser::ParsePass() {
 void Parser::ParsePassBody(NodeRef pass) {
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
         if (Match(TokenType::USE)) {
+            if (!ast->GetPass(pass).computeShader.IsNull()) {
+                Error("Compute passes cannot use attributes");
+            }
             ParseUseAttributes(pass);
         } else if (Match(TokenType::CONST)) {
             SourceLocation loc = getLocation(stream->GetOffset(previous));
@@ -668,6 +764,11 @@ void Parser::ParsePassBody(NodeRef pass) {
                 }
             }
         } else if (Match(TokenType::VERTEX)) {
+            if (!ast->GetPass(pass).computeShader.IsNull()) {
+                Error("Compute passes cannot include vertex/fragment stages");
+                Advance();
+                continue;
+            }
             if (Match(TokenType::ASSIGN)) {
                 // Shader stage inheritance: vertex = "PassName".vertex
                 NodeRef inheritedStage = ParseShaderStageInheritance(ASTNodeType::VERTEX_STAGE);
@@ -676,6 +777,11 @@ void Parser::ParsePassBody(NodeRef pass) {
                 ast->GetPass(pass).vertexShader = ParseShaderStage(ASTNodeType::VERTEX_STAGE);
             }
         } else if (Match(TokenType::FRAGMENT)) {
+            if (!ast->GetPass(pass).computeShader.IsNull()) {
+                Error("Compute passes cannot include vertex/fragment stages");
+                Advance();
+                continue;
+            }
             if (Match(TokenType::ASSIGN)) {
                 if (Match(TokenType::NULL_TOKEN)) {
                     ast->GetPass(pass).fragmentShader = NodeRef::Null();
@@ -687,6 +793,22 @@ void Parser::ParsePassBody(NodeRef pass) {
             } else {
                 ast->GetPass(pass).fragmentShader = ParseShaderStage(ASTNodeType::FRAGMENT_STAGE);
             }
+        } else if (Match(TokenType::COMPUTE)) {
+            if (!ast->GetPass(pass).vertexShader.IsNull() || !ast->GetPass(pass).fragmentShader.IsNull()) {
+                Error("Compute passes cannot include vertex/fragment stages");
+                Advance();
+                continue;
+            }
+            if (ast->GetPass(pass).usedAttributes.count > 0) {
+                Error("Compute passes cannot use attributes");
+            }
+            if (!ast->GetPass(pass).computeShader.IsNull()) {
+                Error("Only one compute block is allowed per pass");
+            }
+            NodeRef computeStage = ParseComputeStage();
+            if (computeStage.IsValid()) {
+                ast->GetPass(pass).computeShader = computeStage;
+            }
         } else if (IsFunctionDeclStart()) {
             // Pass-scoped function declaration: name :: (...) -> type { }
             NodeRef function = ParseFunction();
@@ -694,7 +816,7 @@ void Parser::ParsePassBody(NodeRef pass) {
                 ast->GetPass(pass).functions.Push(arena, function);
             }
         } else {
-            ErrorAtCurrent("Expected 'use', 'vertex', 'fragment', or function declaration in pass body");
+            ErrorAtCurrent("Expected 'use', 'vertex', 'fragment', 'compute', or function declaration in pass body");
             Advance();
         }
     }
@@ -721,8 +843,145 @@ void Parser::ParseUseAttributes(NodeRef pass) {
 }
 
 //==============================================================================
+// Compute graph parsing
+//==============================================================================
+
+NodeRef Parser::ParseComputeGraph() {
+    SourceLocation loc = getLocation(stream->GetOffset(previous));
+    NodeRef graph = ASTFactory::MakeComputeGraph(ast, loc.line, loc.column);
+
+    Consume(TokenType::LEFT_BRACE, "Expected '{' after compute_graph");
+
+    while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        if (Match(TokenType::NODE)) {
+            ComputeGraphNode node = ParseComputeGraphNode();
+            ast->GetComputeGraph(graph).nodes.Push(arena, node);
+        } else {
+            ErrorAtCurrent("Expected 'node' in compute_graph");
+            Advance();
+        }
+    }
+
+    Consume(TokenType::RIGHT_BRACE, "Expected '}' after compute_graph");
+    return graph;
+}
+
+ComputeGraphNode Parser::ParseComputeGraphNode() {
+    Consume(TokenType::STRING, "Expected node name in quotes");
+    ArenaString passName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
+
+    ComputeGraphNode node;
+    node.passName = passName;
+    node.inputs.Init(arena, 4);
+    node.outputs.Init(arena, 4);
+
+    Consume(TokenType::LEFT_BRACE, "Expected '{' after node name");
+
+    while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        if (Match(TokenType::INPUTS)) {
+            ParseComputeGraphInputs(node);
+        } else if (Match(TokenType::OUTPUTS)) {
+            ParseComputeGraphOutputs(node);
+        } else {
+            ErrorAtCurrent("Expected 'inputs' or 'outputs' in node");
+            Advance();
+        }
+    }
+
+    Consume(TokenType::RIGHT_BRACE, "Expected '}' after node body");
+    return node;
+}
+
+void Parser::ParseComputeGraphInputs(ComputeGraphNode& node) {
+    Consume(TokenType::LEFT_BRACE, "Expected '{' after inputs");
+
+    while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        Consume(TokenType::IDENTIFIER, "Expected resource name in inputs");
+        ArenaString name = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
+
+        GraphResourceRef ref;
+        ref.name = name;
+        ref.access = ResourceAccessMode::ReadOnly;
+
+        if (Match(TokenType::READONLY)) {
+            ref.access = ResourceAccessMode::ReadOnly;
+        } else if (Match(TokenType::READWRITE)) {
+            ref.access = ResourceAccessMode::ReadWrite;
+        } else if (Match(TokenType::WRITEONLY)) {
+            ref.access = ResourceAccessMode::WriteOnly;
+        }
+
+        node.inputs.Push(arena, ref);
+
+        if (Match(TokenType::COMMA)) {
+            continue;
+        }
+    }
+
+    Consume(TokenType::RIGHT_BRACE, "Expected '}' after inputs");
+}
+
+void Parser::ParseComputeGraphOutputs(ComputeGraphNode& node) {
+    Consume(TokenType::LEFT_BRACE, "Expected '{' after outputs");
+
+    while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        Consume(TokenType::IDENTIFIER, "Expected resource name in outputs");
+        ArenaString name = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
+        node.outputs.Push(arena, name);
+
+        if (Match(TokenType::COMMA)) {
+            continue;
+        }
+    }
+
+    Consume(TokenType::RIGHT_BRACE, "Expected '}' after outputs");
+}
+
+//==============================================================================
 // Shader stage parsing
 //==============================================================================
+
+NodeRef Parser::ParseComputeStage() {
+    Consume(TokenType::STRING, "Expected compute block name in quotes");
+    ArenaString computeName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
+
+    Consume(TokenType::LEFT_BRACKET, "Expected '[' after compute block name");
+
+    auto parseSize = [&](const char* message) -> u32 {
+        Consume(TokenType::NUMBER, message);
+        std::string_view num = stream->GetValue(previous);
+        if (num.find('.') != std::string_view::npos || num.find('e') != std::string_view::npos ||
+            num.find('E') != std::string_view::npos) {
+            Error("Workgroup size must be an integer literal");
+            return 1;
+        }
+        return static_cast<u32>(std::stoul(std::string(num), nullptr, 0));
+    };
+
+    u32 sizeX = parseSize("Expected workgroup size X");
+    Consume(TokenType::COMMA, "Expected ',' after workgroup size X");
+    u32 sizeY = parseSize("Expected workgroup size Y");
+    Consume(TokenType::COMMA, "Expected ',' after workgroup size Y");
+    u32 sizeZ = parseSize("Expected workgroup size Z");
+    Consume(TokenType::RIGHT_BRACKET, "Expected ']' after workgroup size");
+
+    if (sizeX == 0 || sizeY == 0 || sizeZ == 0) {
+        Error("Workgroup size components must be greater than 0");
+    }
+    if (sizeX * sizeY * sizeZ > 1024u) {
+        Error("Workgroup size exceeds maximum (1024 invocations)");
+    }
+
+    NodeRef stage = ParseShaderStage(ASTNodeType::COMPUTE_STAGE);
+    if (stage.IsValid()) {
+        ShaderStageData& stageData = ast->GetShaderStage(stage);
+        stageData.name = computeName;
+        stageData.workgroupSizeX = sizeX;
+        stageData.workgroupSizeY = sizeY;
+        stageData.workgroupSizeZ = sizeZ;
+    }
+    return stage;
+}
 
 NodeRef Parser::ParseShaderStage(ASTNodeType stageType) {
     ShaderStage oldStage = currentShaderStage;
@@ -1995,22 +2254,26 @@ NodeRef Parser::ParseFunction() {
         return NodeRef::Null();
     }
 
+    const FunctionDeclData& decl = ast->GetFunction(function);
+    std::vector<OverloadTypeMask> paramMasks;
+    BuildParamMasks(decl.parameters, paramMasks);
+    u64 signatureKey = HashOverloadSignature(paramMasks.data(), static_cast<u32>(paramMasks.size()));
+
     // Only add unqualified function symbol when NOT in module scope
     // Module functions get their qualified name added by AddModuleFunction() after parsing
     if (!symbolTable.inModuleScope) {
-        Symbol* sym = SymbolTable::AddSymbol(&symbolTable, ArenaString::MakeHashOnly(functionName), SymbolKind::FUNCTION);
+        if (HasDuplicateFunctionSignature(&symbolTable, decl.name, paramMasks, NamespaceKind::GLOBAL,
+                INVALID_INDEX, signatureKey)) {
+            Error("Function overload already declared");
+            return NodeRef::Null();
+        }
 
+        Symbol* sym = SymbolTable::AddSymbol(&symbolTable, decl.name, SymbolKind::FUNCTION);
         if (!sym) {
             Error("Function already declared");
             return NodeRef::Null();
         }
-
-        FunctionData& funcData = symbolTable.functions[sym->index];
-        funcData.returnType = ast->GetFunction(function).returnType;
-        funcData.parameters.Init(arena, ast->GetFunction(function).parameters.count);
-        for (u32 i = 0; i < ast->GetFunction(function).parameters.count; i++) {
-            funcData.parameters.Push(arena, ast->GetFunction(function).parameters[i]);
-        }
+        FillFunctionData(&symbolTable, arena, decl, function, paramMasks, signatureKey, sym->index);
     }
 
     SymbolTable::EnterScope(&symbolTable);
@@ -2199,8 +2462,12 @@ NodeRef Parser::ParseEvalStatement() {
         // It's an eval function
         NodeRef func = ParseFunction();
         if (func.IsValid()) {
+            const FunctionDeclData& decl = ast->GetFunction(func);
+            std::vector<OverloadTypeMask> paramMasks;
+            BuildParamMasks(decl.parameters, paramMasks);
             // Mark as eval in symbol table
-            Symbol* sym = SymbolTable::LookupAny(&symbolTable, ast->GetFunction(func).name);
+            Symbol* sym = SymbolTable::LookupFunctionOverload(&symbolTable, decl.name,
+                paramMasks.data(), static_cast<u32>(paramMasks.size()));
             if (sym && sym->kind == SymbolKind::FUNCTION) {
                 symbolTable.functions[sym->index].isEval = true;
 
@@ -3051,7 +3318,18 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
             if (funcCall.flags & FunctionCallFlags::IS_INTRINSIC) {
                 return TypeInfo{CoreType::FLOAT, 1, 0, 0, 0, 0, 0};
             } else {
-                Symbol* sym = SymbolTable::LookupAny(&symbolTable, funcCall.name);
+                std::vector<OverloadTypeMask> argMasks;
+                argMasks.reserve(funcCall.arguments.count);
+                for (u32 i = 0; i < funcCall.arguments.count; i++) {
+                    TypeInfo argType = GetExpressionType(funcCall.arguments[i]);
+                    OverloadTypeMask mask = MakeOverloadMask(argType);
+                    if (mask == 0) {
+                        return TypeInfo{CoreType::INVALID, 0, 0, 0, 0, 0, 0};
+                    }
+                    argMasks.push_back(mask);
+                }
+                Symbol* sym = SymbolTable::LookupFunctionOverload(&symbolTable, funcCall.name,
+                    argMasks.data(), static_cast<u32>(argMasks.size()));
                 if (sym && sym->kind == SymbolKind::FUNCTION) {
                     FunctionData& funcData = symbolTable.functions[sym->index];
                     return TypeInfo{funcData.returnType, 1, 0, 0, 0, 0, 0};
@@ -3188,7 +3466,10 @@ NodeRef Parser::ParseEnum() {
         for (u32 i = 0; i < ast->GetEnumDecl(enumNode).methods.count; i++) {
             NodeRef methodRef = ast->GetEnumDecl(enumNode).methods[i];
             const FunctionDeclData& method = ast->GetFunction(methodRef);
-            Symbol* methodSym = SymbolTable::LookupAny(&symbolTable, method.name);
+            std::vector<OverloadTypeMask> paramMasks;
+            BuildParamMasks(method.parameters, paramMasks);
+            Symbol* methodSym = SymbolTable::LookupFunctionOverload(&symbolTable, method.name,
+                paramMasks.data(), static_cast<u32>(paramMasks.size()));
             if (methodSym && methodSym->kind == SymbolKind::FUNCTION) {
                 enumData.methodIndices.Push(arena, methodSym->index);
             }
@@ -3292,16 +3573,23 @@ NodeRef Parser::ParseEnumMethod() {
         return NodeRef::Null();
     }
 
+    const FunctionDeclData& decl = ast->GetFunction(method);
+    std::vector<OverloadTypeMask> paramMasks;
+    BuildParamMasks(decl.parameters, paramMasks);
+    u64 signatureKey = HashOverloadSignature(paramMasks.data(), static_cast<u32>(paramMasks.size()));
+
     // Add method to symbol table
-    Symbol* sym = SymbolTable::AddSymbol(&symbolTable, ArenaString::MakeHashOnly(methodName), SymbolKind::FUNCTION);
-    if (sym) {
-        FunctionData& funcData = symbolTable.functions[sym->index];
-        funcData.returnType = ast->GetFunction(method).returnType;
-        funcData.parameters.Init(arena, ast->GetFunction(method).parameters.count);
-        for (u32 i = 0; i < ast->GetFunction(method).parameters.count; i++) {
-            funcData.parameters.Push(arena, ast->GetFunction(method).parameters[i]);
-        }
+    if (HasDuplicateFunctionSignature(&symbolTable, decl.name, paramMasks, NamespaceKind::GLOBAL,
+            INVALID_INDEX, signatureKey)) {
+        Error("Function overload already declared");
+        return NodeRef::Null();
     }
+    Symbol* sym = SymbolTable::AddSymbol(&symbolTable, decl.name, SymbolKind::FUNCTION);
+    if (!sym) {
+        Error("Function already declared");
+        return NodeRef::Null();
+    }
+    FillFunctionData(&symbolTable, arena, decl, method, paramMasks, signatureKey, sym->index);
 
     // Parse method body
     Consume(TokenType::LEFT_BRACE, "Expected '{' before method body");
@@ -3663,11 +3951,28 @@ NodeRef Parser::ParseModule() {
             // Module function
             NodeRef func = ParseFunction();
             if (func.IsValid()) {
+                const FunctionDeclData& decl = ast->GetFunction(func);
+                std::vector<OverloadTypeMask> paramMasks;
+                BuildParamMasks(decl.parameters, paramMasks);
+                u64 signatureKey = HashOverloadSignature(paramMasks.data(),
+                    static_cast<u32>(paramMasks.size()));
+
+                if (HasDuplicateFunctionInList(ast, ast->GetModule(module).functions,
+                        decl, paramMasks, signatureKey)) {
+                    Error("Function overload already declared");
+                    continue;
+                }
+
                 ast->GetModule(module).functions.Push(arena, func);
 
                 // Add to symbol table with module prefix
-                SymbolTable::AddModuleFunction(&symbolTable,
-                    ast->GetFunction(func).name, moduleNameArena);
+                Symbol* sym = SymbolTable::AddModuleFunction(&symbolTable,
+                    decl.name, moduleNameArena);
+                if (!sym) {
+                    Error("Function already declared");
+                    continue;
+                }
+                FillFunctionData(&symbolTable, arena, decl, func, paramMasks, signatureKey, sym->index);
             }
         } else if (Match(TokenType::STRUCT)) {
             // Module struct

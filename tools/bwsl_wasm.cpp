@@ -59,6 +59,7 @@ namespace spirv_cross_wrapper {
 #include "../bwsl_arena.h"
 #include "../bwsl_mem_pool.h"
 #include "../bwsl_render_config.h"
+#include "../bwsl_compute_graph.h"
 
 // Unity build: include all implementation files
 #include "../bwsl_lexer.cpp"
@@ -70,6 +71,7 @@ namespace spirv_cross_wrapper {
 #include "../bwsl_cfg.cpp"
 #include "../bwsl_ssa.cpp"
 #include "../bwsl_spirv_backend.cpp"
+#include "../bwsl_compute_graph.cpp"
 #include "../bwsl_custom_type_registry.cpp"
 
 using namespace BWSL;
@@ -85,6 +87,25 @@ static const char* PixelFormatToString(PixelFormat format) {
         case PixelFormat::Depth32Float: return "Depth32Float";
         case PixelFormat::RG16Float: return "RG16Float";
         default: return "RGBA8Unorm";
+    }
+}
+
+static const char* AccessModeToString(ResourceAccessMode mode) {
+    switch (mode) {
+        case ResourceAccessMode::ReadOnly: return "readonly";
+        case ResourceAccessMode::ReadWrite: return "readwrite";
+        case ResourceAccessMode::WriteOnly: return "writeonly";
+        default: return "readonly";
+    }
+}
+
+static const char* BarrierTypeToString(BarrierType type) {
+    switch (type) {
+        case BarrierType::BufferWriteToRead: return "BufferWriteToRead";
+        case BarrierType::BufferWriteToVertex: return "BufferWriteToVertex";
+        case BarrierType::ImageWriteToSample: return "ImageWriteToSample";
+        case BarrierType::ImageWriteToStorage: return "ImageWriteToStorage";
+        default: return "None";
     }
 }
 
@@ -366,6 +387,7 @@ struct ShaderOutput {
     bool success = false;
     std::string vertexGlsl;
     std::string fragmentGlsl;
+    std::string computeGlsl;
     std::string error;
 
     // JSON metadata for vertex shader
@@ -397,18 +419,28 @@ static ShaderOutput CompileShaderStage(
 
     // Get shader body
     NodeRef shaderBody;
+    const ShaderStageData* shaderStageData = nullptr;
     if (stage == ShaderStage::Vertex) {
         if (pass.vertexShader.IsNull()) {
             output.error = "No vertex shader in pass";
             return output;
         }
-        shaderBody = context.ast.GetShaderStage(pass.vertexShader).body;
+        shaderStageData = &context.ast.GetShaderStage(pass.vertexShader);
+        shaderBody = shaderStageData->body;
     } else if (stage == ShaderStage::Fragment) {
         if (pass.fragmentShader.IsNull()) {
             output.error = "No fragment shader in pass";
             return output;
         }
-        shaderBody = context.ast.GetShaderStage(pass.fragmentShader).body;
+        shaderStageData = &context.ast.GetShaderStage(pass.fragmentShader);
+        shaderBody = shaderStageData->body;
+    } else if (stage == ShaderStage::Compute) {
+        if (pass.computeShader.IsNull()) {
+            output.error = "No compute shader in pass";
+            return output;
+        }
+        shaderStageData = &context.ast.GetShaderStage(pass.computeShader);
+        shaderBody = shaderStageData->body;
     } else {
         output.error = "Unsupported shader stage";
         return output;
@@ -473,6 +505,11 @@ static ShaderOutput CompileShaderStage(
     SPIRVBuilder builder;
     builder.Initialize(&spirvArena, &lowering.program, stage,
                        const_cast<SymbolTableData*>(&parser.symbolTable), cfgPtr);
+    if (stage == ShaderStage::Compute && shaderStageData) {
+        builder.SetComputeWorkgroupSize(shaderStageData->workgroupSizeX,
+                                        shaderStageData->workgroupSizeY,
+                                        shaderStageData->workgroupSizeZ);
+    }
 
     // Use interleaved vertex inputs for WebGL compatibility
     SPIRVBuilder::VertexPullingConfig vpConfig;
@@ -500,22 +537,27 @@ static ShaderOutput CompileShaderStage(
 #ifdef USE_SPIRV_CROSS_LIB
     std::vector<uint32_t> spirvData(spirv.begin(), spirv.end());
 
-    // Build varying name map for clean output names
-    // Map location -> "v_" + original BWSL name (e.g., "v_position", "v_normal")
-    std::unordered_map<uint32_t, std::string> varyingNames;
-    if (varyingContext) {
-        for (u32 i = 0; i < varyingContext->count; i++) {
-            const auto& varying = varyingContext->varyings[i];
-            if (varying.name[0] != '\0') {
-                // Use "v_" prefix for clean varying names
-                varyingNames[varying.slot] = std::string("v_") + varying.name;
+    std::string glslSource;
+    if (stage == ShaderStage::Vertex || stage == ShaderStage::Fragment) {
+        // Build varying name map for clean output names
+        // Map location -> "v_" + original BWSL name (e.g., "v_position", "v_normal")
+        std::unordered_map<uint32_t, std::string> varyingNames;
+        if (varyingContext) {
+            for (u32 i = 0; i < varyingContext->count; i++) {
+                const auto& varying = varyingContext->varyings[i];
+                if (varying.name[0] != '\0') {
+                    // Use "v_" prefix for clean varying names
+                    varyingNames[varying.slot] = std::string("v_") + varying.name;
+                }
             }
         }
-    }
 
-    bool isVertex = (stage == ShaderStage::Vertex);
-    std::string glslSource = spirv_cross_wrapper::CompileToGLSLWithVaryings(
-        spirvData, 300, true, varyingNames, isVertex);
+        bool isVertex = (stage == ShaderStage::Vertex);
+        glslSource = spirv_cross_wrapper::CompileToGLSLWithVaryings(
+            spirvData, 300, true, varyingNames, isVertex);
+    } else if (stage == ShaderStage::Compute) {
+        glslSource = spirv_cross_wrapper::CompileToGLSL(spirvData, 310, true);
+    }
 
     if (glslSource.empty() || glslSource.find("error:") == 0) {
         output.error = glslSource.empty() ? "GLSL ES cross-compilation failed" : glslSource;
@@ -524,8 +566,10 @@ static ShaderOutput CompileShaderStage(
 
     if (stage == ShaderStage::Vertex) {
         output.vertexGlsl = glslSource;
-    } else {
+    } else if (stage == ShaderStage::Fragment) {
         output.fragmentGlsl = glslSource;
+    } else if (stage == ShaderStage::Compute) {
+        output.computeGlsl = glslSource;
     }
 #else
     output.error = "SPIRV-Cross not available (USE_SPIRV_CROSS_LIB not defined)";
@@ -592,6 +636,14 @@ static std::string CompileToJson(const char* bwslSource, const char* rcfgSource,
 
     const PipelineData& pipeline = context.ast.pipelines[0];
     const char* sourceBase = lexer.GetSourceBase();
+    const ComputeGraphData* graphData = nullptr;
+    ComputeGraphCompileResult graphResult = CompileComputeGraph(context.ast, pipeline, renderConfig, sourceBase);
+    if (!graphResult.success) {
+        return "{\"success\":false,\"errors\":[\"" + EscapeJsonString(graphResult.error) + "\"]}";
+    }
+    if (!pipeline.computeGraph.IsNull()) {
+        graphData = &context.ast.GetComputeGraph(pipeline.computeGraph);
+    }
 
     // Build result JSON
     std::ostringstream json;
@@ -609,27 +661,43 @@ static std::string CompileToJson(const char* bwslSource, const char* rcfgSource,
             passName = "pass" + std::to_string(passIdx);
         }
 
+        bool isComputePass = !pass.computeShader.IsNull();
+
         // Create varying context for vertex->fragment data flow
         PassVaryingContext passVaryings;
 
-        // Compile vertex shader
-        ShaderOutput vertResult = CompileShaderStage(
-            context, parser, pass, ShaderStage::Vertex,
-            renderConfig, context.root, &passVaryings, sourceBase, emitInternals
-        );
+        ShaderOutput vertResult;
+        ShaderOutput fragResult;
+        ShaderOutput compResult;
 
-        if (!vertResult.success) {
-            return "{\"success\":false,\"errors\":[\"Vertex shader: " + EscapeJsonString(vertResult.error) + "\"]}";
-        }
+        if (isComputePass) {
+            compResult = CompileShaderStage(
+                context, parser, pass, ShaderStage::Compute,
+                renderConfig, context.root, nullptr, sourceBase, emitInternals
+            );
+            if (!compResult.success) {
+                return "{\"success\":false,\"errors\":[\"Compute shader: " + EscapeJsonString(compResult.error) + "\"]}";
+            }
+        } else {
+            // Compile vertex shader
+            vertResult = CompileShaderStage(
+                context, parser, pass, ShaderStage::Vertex,
+                renderConfig, context.root, &passVaryings, sourceBase, emitInternals
+            );
 
-        // Compile fragment shader
-        ShaderOutput fragResult = CompileShaderStage(
-            context, parser, pass, ShaderStage::Fragment,
-            renderConfig, context.root, &passVaryings, sourceBase, emitInternals
-        );
+            if (!vertResult.success) {
+                return "{\"success\":false,\"errors\":[\"Vertex shader: " + EscapeJsonString(vertResult.error) + "\"]}";
+            }
 
-        if (!fragResult.success) {
-            return "{\"success\":false,\"errors\":[\"Fragment shader: " + EscapeJsonString(fragResult.error) + "\"]}";
+            // Compile fragment shader
+            fragResult = CompileShaderStage(
+                context, parser, pass, ShaderStage::Fragment,
+                renderConfig, context.root, &passVaryings, sourceBase, emitInternals
+            );
+
+            if (!fragResult.success) {
+                return "{\"success\":false,\"errors\":[\"Fragment shader: " + EscapeJsonString(fragResult.error) + "\"]}";
+            }
         }
 
         // Add to JSON
@@ -637,65 +705,72 @@ static std::string CompileToJson(const char* bwslSource, const char* rcfgSource,
         firstPass = false;
 
         json << "\"" << passName << "\":{";
-        json << "\"vertex\":\"" << EscapeJsonString(vertResult.vertexGlsl) << "\",";
-        json << "\"fragment\":\"" << EscapeJsonString(fragResult.fragmentGlsl) << "\",";
+        if (isComputePass) {
+            const ShaderStageData& computeStage = context.ast.GetShaderStage(pass.computeShader);
+            json << "\"compute\":\"" << EscapeJsonString(compResult.computeGlsl) << "\",";
+            json << "\"workgroupSize\":[" << computeStage.workgroupSizeX << ","
+                 << computeStage.workgroupSizeY << "," << computeStage.workgroupSizeZ << "]";
+        } else {
+            json << "\"vertex\":\"" << EscapeJsonString(vertResult.vertexGlsl) << "\",";
+            json << "\"fragment\":\"" << EscapeJsonString(fragResult.fragmentGlsl) << "\",";
 
-        // Add attributes metadata
-        json << "\"attributes\":{";
-        for (u32 i = 0; i < pass.usedAttributes.count; i++) {
-            std::string attrName = pass.usedAttributes[i].ToString(sourceBase);
-            if (i > 0) json << ",";
-            json << "\"" << attrName << "\":" << i;
-        }
-        json << "},";
-
-        // Add vertex uniforms metadata
-        json << "\"vertexUniforms\":{";
-        bool firstUniform = true;
-        for (const auto& ub : renderConfig.uniformBuffers) {
-            if (static_cast<int>(ub.stages) & 1) {  // Vertex stage
-                if (!firstUniform) json << ",";
-                json << "\"" << ub.name << "\":" << ub.bindingIndex;
-                firstUniform = false;
+            // Add attributes metadata
+            json << "\"attributes\":{";
+            for (u32 i = 0; i < pass.usedAttributes.count; i++) {
+                std::string attrName = pass.usedAttributes[i].ToString(sourceBase);
+                if (i > 0) json << ",";
+                json << "\"" << attrName << "\":" << i;
             }
-        }
-        json << "},";
+            json << "},";
 
-        // Add fragment uniforms metadata
-        json << "\"fragmentUniforms\":{";
-        firstUniform = true;
-        for (const auto& ub : renderConfig.uniformBuffers) {
-            if (static_cast<int>(ub.stages) & 2) {  // Fragment stage
-                if (!firstUniform) json << ",";
-                json << "\"" << ub.name << "\":" << ub.bindingIndex;
-                firstUniform = false;
+            // Add vertex uniforms metadata
+            json << "\"vertexUniforms\":{";
+            bool firstUniform = true;
+            for (const auto& ub : renderConfig.uniformBuffers) {
+                if (static_cast<int>(ub.stages) & 1) {  // Vertex stage
+                    if (!firstUniform) json << ",";
+                    json << "\"" << ub.name << "\":" << ub.bindingIndex;
+                    firstUniform = false;
+                }
             }
-        }
-        json << "},";
+            json << "},";
 
-        // Add samplers metadata
-        json << "\"samplers\":{";
-        bool firstSampler = true;
-        for (const auto& tex : renderConfig.textures) {
-            if (static_cast<int>(tex.stages) & 2) {  // Fragment stage
-                if (!firstSampler) json << ",";
-                json << "\"" << tex.name << "\":" << tex.bindingIndex;
-                firstSampler = false;
+            // Add fragment uniforms metadata
+            json << "\"fragmentUniforms\":{";
+            firstUniform = true;
+            for (const auto& ub : renderConfig.uniformBuffers) {
+                if (static_cast<int>(ub.stages) & 2) {  // Fragment stage
+                    if (!firstUniform) json << ",";
+                    json << "\"" << ub.name << "\":" << ub.bindingIndex;
+                    firstUniform = false;
+                }
             }
-        }
-        json << "},";
+            json << "},";
 
-        // Add varyings metadata (vertex output -> fragment input mappings)
-        json << "\"varyings\":{";
-        bool firstVarying = true;
-        for (u32 i = 0; i < passVaryings.count; i++) {
-            const auto& varying = passVaryings.varyings[i];
-            if (varying.name[0] == '\0') continue;  // Skip if name wasn't stored
-            if (!firstVarying) json << ",";
-            json << "\"" << varying.name << "\":" << varying.slot;
-            firstVarying = false;
+            // Add samplers metadata
+            json << "\"samplers\":{";
+            bool firstSampler = true;
+            for (const auto& tex : renderConfig.textures) {
+                if (static_cast<int>(tex.stages) & 2) {  // Fragment stage
+                    if (!firstSampler) json << ",";
+                    json << "\"" << tex.name << "\":" << tex.bindingIndex;
+                    firstSampler = false;
+                }
+            }
+            json << "},";
+
+            // Add varyings metadata (vertex output -> fragment input mappings)
+            json << "\"varyings\":{";
+            bool firstVarying = true;
+            for (u32 i = 0; i < passVaryings.count; i++) {
+                const auto& varying = passVaryings.varyings[i];
+                if (varying.name[0] == '\0') continue;  // Skip if name wasn't stored
+                if (!firstVarying) json << ",";
+                json << "\"" << varying.name << "\":" << varying.slot;
+                firstVarying = false;
+            }
+            json << "}";
         }
-        json << "}";
 
         json << "}";
     }
@@ -731,6 +806,11 @@ static std::string CompileToJson(const char* bwslSource, const char* rcfgSource,
             default: typeStr = "geometry"; break;
         }
         json << ",\"type\":\"" << typeStr << "\"";
+
+        if (p.type == PassType::Compute) {
+            json << ",\"dispatch\":[" << p.dispatch.groupCountX << ","
+                 << p.dispatch.groupCountY << "," << p.dispatch.groupCountZ << "]";
+        }
 
         // Color attachment
         if (!p.descriptor.colorAttachments.empty()) {
@@ -799,6 +879,54 @@ static std::string CompileToJson(const char* bwslSource, const char* rcfgSource,
 
     json << "}";
 
+    if (graphData) {
+        json << ",\"computeGraph\":{";
+        json << "\"executionOrder\":[";
+        for (size_t i = 0; i < graphResult.graph.executionOrder.size(); i++) {
+            if (i > 0) json << ",";
+            json << "\"" << graphResult.graph.executionOrder[i].ToString(sourceBase) << "\"";
+        }
+        json << "],";
+
+        json << "\"barriers\":[";
+        for (size_t i = 0; i < graphResult.graph.barriers.size(); i++) {
+            if (i > 0) json << ",";
+            const auto& barrier = graphResult.graph.barriers[i];
+            json << "{\"before\":\"" << barrier.beforeNode.ToString(sourceBase) << "\",";
+            json << "\"after\":\"" << barrier.afterNode.ToString(sourceBase) << "\",";
+            json << "\"type\":\"" << BarrierTypeToString(barrier.type) << "\",";
+            json << "\"resource\":\"" << barrier.resourceName.ToString(sourceBase) << "\"}";
+        }
+        json << "],";
+
+        json << "\"nodes\":{";
+        for (u32 i = 0; i < graphData->nodes.count; i++) {
+            if (i > 0) json << ",";
+            const ComputeGraphNode& node = graphData->nodes[i];
+            json << "\"" << node.passName.ToString(sourceBase) << "\":{";
+
+            json << "\"inputs\":[";
+            for (u32 in = 0; in < node.inputs.count; in++) {
+                if (in > 0) json << ",";
+                const auto& input = node.inputs[in];
+                json << "{\"name\":\"" << input.name.ToString(sourceBase) << "\",";
+                json << "\"access\":\"" << AccessModeToString(input.access) << "\"}";
+            }
+            json << "],";
+
+            json << "\"outputs\":[";
+            for (u32 out = 0; out < node.outputs.count; out++) {
+                if (out > 0) json << ",";
+                json << "\"" << node.outputs[out].ToString(sourceBase) << "\"";
+            }
+            json << "]";
+
+            json << "}";
+        }
+        json << "}";
+        json << "}";
+    }
+
     // Add internals if requested (must iterate passes again to get the data)
     if (emitInternals) {
         json << ",\"internals\":[";
@@ -814,29 +942,44 @@ static std::string CompileToJson(const char* bwslSource, const char* rcfgSource,
 
             // Recompile with internals capture (we need the IR/SPIR-V dumps)
             PassVaryingContext passVaryings;
+            bool isComputePass = !pass.computeShader.IsNull();
 
-            ShaderOutput vertResult = CompileShaderStage(
-                context, parser, pass, ShaderStage::Vertex,
-                renderConfig, context.root, &passVaryings, sourceBase, true
-            );
-            if (vertResult.success) {
-                if (!firstInternal) json << ",";
-                firstInternal = false;
-                json << "{\"pass\":\"" << passName << "\",\"stage\":\"vertex\",";
-                json << "\"ir\":\"" << EscapeJsonString(vertResult.irDump) << "\",";
-                json << "\"spirv_dis\":\"" << EscapeJsonString(vertResult.spirvDis) << "\"}";
-            }
+            if (isComputePass) {
+                ShaderOutput compResult = CompileShaderStage(
+                    context, parser, pass, ShaderStage::Compute,
+                    renderConfig, context.root, nullptr, sourceBase, true
+                );
+                if (compResult.success) {
+                    if (!firstInternal) json << ",";
+                    firstInternal = false;
+                    json << "{\"pass\":\"" << passName << "\",\"stage\":\"compute\",";
+                    json << "\"ir\":\"" << EscapeJsonString(compResult.irDump) << "\",";
+                    json << "\"spirv_dis\":\"" << EscapeJsonString(compResult.spirvDis) << "\"}";
+                }
+            } else {
+                ShaderOutput vertResult = CompileShaderStage(
+                    context, parser, pass, ShaderStage::Vertex,
+                    renderConfig, context.root, &passVaryings, sourceBase, true
+                );
+                if (vertResult.success) {
+                    if (!firstInternal) json << ",";
+                    firstInternal = false;
+                    json << "{\"pass\":\"" << passName << "\",\"stage\":\"vertex\",";
+                    json << "\"ir\":\"" << EscapeJsonString(vertResult.irDump) << "\",";
+                    json << "\"spirv_dis\":\"" << EscapeJsonString(vertResult.spirvDis) << "\"}";
+                }
 
-            ShaderOutput fragResult = CompileShaderStage(
-                context, parser, pass, ShaderStage::Fragment,
-                renderConfig, context.root, &passVaryings, sourceBase, true
-            );
-            if (fragResult.success) {
-                if (!firstInternal) json << ",";
-                firstInternal = false;
-                json << "{\"pass\":\"" << passName << "\",\"stage\":\"fragment\",";
-                json << "\"ir\":\"" << EscapeJsonString(fragResult.irDump) << "\",";
-                json << "\"spirv_dis\":\"" << EscapeJsonString(fragResult.spirvDis) << "\"}";
+                ShaderOutput fragResult = CompileShaderStage(
+                    context, parser, pass, ShaderStage::Fragment,
+                    renderConfig, context.root, &passVaryings, sourceBase, true
+                );
+                if (fragResult.success) {
+                    if (!firstInternal) json << ",";
+                    firstInternal = false;
+                    json << "{\"pass\":\"" << passName << "\",\"stage\":\"fragment\",";
+                    json << "\"ir\":\"" << EscapeJsonString(fragResult.irDump) << "\",";
+                    json << "\"spirv_dis\":\"" << EscapeJsonString(fragResult.spirvDis) << "\"}";
+                }
             }
         }
         json << "]";

@@ -119,7 +119,7 @@ const version = bwsl.ccall('getVersion', 'string', [], []);
 const result = bwsl.ccall('compile', 'string', ['string', 'string'], [
     shaderSource,  // BWSL source code
     configSource   // Render config (optional, can be empty string)
-]);
+]);        
 
 const output = JSON.parse(result);
 if (output.success) {

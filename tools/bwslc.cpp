@@ -8,7 +8,7 @@
 //   -o <dir>       Output directory (default: current directory)
 //   -modules <dir> Add module search path (can be specified multiple times)
 //   -pass <name>   Compile specific pass (default: all passes)
-//   -stage <name>  Compile specific stage: vertex, fragment (default: both)
+//   -stage <name>  Compile specific stage: vertex, fragment, compute (default: all)
 //   -format <fmt>  Output format: spv, metal, hlsl, all (default: all)
 //   -v             Verbose output
 //   -h, --help     Show help
@@ -47,6 +47,7 @@ namespace spirv_cross_wrapper {
 #include "../bwsl_arena.h"
 #include "../bwsl_mem_pool.h"
 #include "../bwsl_render_config.h"
+#include "../bwsl_compute_graph.h"
 
 // Unity build: include all implementation files
 #include "../bwsl_lexer.cpp"
@@ -58,6 +59,7 @@ namespace spirv_cross_wrapper {
 #include "../bwsl_cfg.cpp"
 #include "../bwsl_ssa.cpp"
 #include "../bwsl_spirv_backend.cpp"
+#include "../bwsl_compute_graph.cpp"
 #include "../bwsl_custom_type_registry.cpp"
 
 // Note: SPIRV-Cross is compiled separately (spirv_cross_wrapper.cpp) to avoid
@@ -88,7 +90,7 @@ struct CompilerConfig {
     RenderConfig renderConfig;             // the render config to use
     RenderConfigParser::GeometryConfig geometryConfig;  // Geometry configuration (instancing, etc.)
     std::string passFilter;                // Empty = all passes
-    std::string stageFilter;               // Empty = both stages
+    std::string stageFilter;               // Empty = all stages
     bool outputSpirv = true;               // SPIR-V always generated
     bool outputMetal = false;              // Metal output (requires -metal flag)
     bool outputHlsl  = false;              // HLSL output (requires -hlsl flag)
@@ -182,7 +184,7 @@ void PrintUsage(const char* programName) {
     printf("  -modules <dir> Add module search path (can be used multiple times)\n");
     printf("  -config <file> Add render config path\n");
     printf("  -pass <name>   Compile specific pass (default: all passes)\n");
-    printf("  -stage <name>  Compile specific stage: vertex, fragment (default: both)\n");
+    printf("  -stage <name>  Compile specific stage: vertex, fragment, compute (default: all)\n");
     printf("\n");
     printf("Output format flags (SPIR-V is always generated):\n");
     printf("  -metal         Generate Metal Shading Language output\n");
@@ -951,18 +953,28 @@ CompileResult CompileShaderStage(
 
     // Get shader body
     NodeRef shaderBody;
+    const ShaderStageData* shaderStageData = nullptr;
     if (stage == ShaderStage::Vertex) {
         if (pass.vertexShader.IsNull()) {
             result.error = "No vertex shader in pass";
             return result;
         }
-        shaderBody = context.ast.GetShaderStage(pass.vertexShader).body;
+        shaderStageData = &context.ast.GetShaderStage(pass.vertexShader);
+        shaderBody = shaderStageData->body;
     } else if (stage == ShaderStage::Fragment) {
         if (pass.fragmentShader.IsNull()) {
             result.error = "No fragment shader in pass";
             return result;
         }
-        shaderBody = context.ast.GetShaderStage(pass.fragmentShader).body;
+        shaderStageData = &context.ast.GetShaderStage(pass.fragmentShader);
+        shaderBody = shaderStageData->body;
+    } else if (stage == ShaderStage::Compute) {
+        if (pass.computeShader.IsNull()) {
+            result.error = "No compute shader in pass";
+            return result;
+        }
+        shaderStageData = &context.ast.GetShaderStage(pass.computeShader);
+        shaderBody = shaderStageData->body;
     } else {
         result.error = "Unsupported shader stage";
         return result;
@@ -1071,6 +1083,11 @@ CompileResult CompileShaderStage(
     SPIRVBuilder builder;
     builder.Initialize(&spirvArena, &lowering.program, stage,
                        const_cast<SymbolTableData*>(&parser.symbolTable), cfgPtr);
+    if (stage == ShaderStage::Compute && shaderStageData) {
+        builder.SetComputeWorkgroupSize(shaderStageData->workgroupSizeX,
+                                        shaderStageData->workgroupSizeY,
+                                        shaderStageData->workgroupSizeZ);
+    }
 
     // Configure vertex input mode
     // WebGL/GLES uses traditional interleaved inputs (in vec3 position;)
@@ -1310,6 +1327,13 @@ int main(int argc, char* argv[]) {
 
     // Get source base for string lookups
     const char* sourceBase = lexer.GetSourceBase();
+
+    ComputeGraphCompileResult graphResult = CompileComputeGraph(
+        context.ast, pipeline, config.renderConfig, sourceBase);
+    if (!graphResult.success) {
+        fprintf(stderr, "Error: %s\n", graphResult.error.c_str());
+        return 1;
+    }
 
     // Helper to get string from ArenaString
     // Note: pass/pipeline names are stored as hash-only in the AST,
@@ -1729,6 +1753,161 @@ int main(int argc, char* argv[]) {
                         std::string internalsJson = "{\n";
                         internalsJson += "  \"pass\": \"" + EscapeJsonString(passName) + "\",\n";
                         internalsJson += "  \"stage\": \"fragment\",\n";
+                        internalsJson += "  \"ir\": \"" + EscapeJsonString(result.irDump) + "\",\n";
+                        internalsJson += "  \"spirv_dis\": \"" + EscapeJsonString(spirvDis) + "\"\n";
+                        internalsJson += "}\n";
+
+                        std::string internalsPath = outBase + ".internals.json";
+                        if (WriteTextFile(internalsPath, internalsJson)) {
+                            printf("    -> %s\n", internalsPath.c_str());
+                        }
+                    }
+
+                    // Update total time to include validation and cross-compilation
+                    shaderTime.totalMs = shaderTime.irLoweringMs + shaderTime.cfgSsaMs + shaderTime.spirvGenMs +
+                                         shaderTime.validationMs + shaderTime.metalCrossMs + shaderTime.hlslCrossMs +
+                                         shaderTime.glslCrossMs + shaderTime.glslEsCrossMs;
+
+                    compiledCount++;
+                } else {
+                    fprintf(stderr, "    Error: Could not write SPIR-V file\n");
+                    errorCount++;
+                }
+            }
+        }
+
+        // Compile compute shader
+        if ((config.stageFilter.empty() || config.stageFilter == "compute") &&
+            !pass.computeShader.IsNull()) {
+
+            printf("  Compute shader:\n");
+            fflush(stdout);
+            CompileResult result = CompileShaderStage(context, parser, pass,
+                                                       ShaderStage::Compute, config.verbose, config.dumpIr, config.debugNames,
+                                                       config.outputGlsl || config.outputGlslEs, false, context.root,
+                                                       pipeline.passes[passIdx], nullptr, config.outputInternals);
+
+            if (!result.success) {
+                fprintf(stderr, "    Error: %s\n", result.error.c_str());
+                errorCount++;
+            } else {
+                // Record timing for this shader
+                timing.shaderTimings.push_back({passName + "_comp", result.timing});
+                ShaderTiming& shaderTime = timing.shaderTimings.back().second;
+                std::string outBase = config.outputDir + "/" + baseName + "_" + passName + "_comp";
+
+                // Always write SPIR-V (to temp if not requested as output)
+                std::string spvPath = config.outputSpirv ? (outBase + ".spv") : "/tmp/bwslc_temp.spv";
+                if (WriteBinaryFile(spvPath, result.spirv)) {
+                    if (config.outputSpirv) {
+                        printf("    -> %s\n", spvPath.c_str());
+                    }
+
+                    // Validate SPIR-V (unless skipped)
+                    if (!config.skipValidation) {
+                        auto valStart = Clock::now();
+                        std::string validationError = ValidateSpirv(spvPath);
+                        auto valEnd = Clock::now();
+                        shaderTime.validationMs = std::chrono::duration<double, std::milli>(valEnd - valStart).count();
+
+                        if (!validationError.empty()) {
+                            fprintf(stderr, "    Error: SPIR-V validation failed:\n");
+                            fprintf(stderr, "      %s\n", validationError.c_str());
+                            errorCount++;
+                            continue;  // Skip cross-compilation for invalid SPIR-V
+                        }
+                    }
+
+                    // Cross-compile to Metal
+                    if (config.outputMetal) {
+                        auto metalStart = Clock::now();
+#ifdef USE_SPIRV_CROSS_LIB
+                        std::string metalSource = CrossCompileToMetal(result.spirv);
+#else
+                        std::string metalSource = CrossCompileToMetal(spvPath);
+#endif
+                        auto metalEnd = Clock::now();
+                        shaderTime.metalCrossMs = std::chrono::duration<double, std::milli>(metalEnd - metalStart).count();
+
+                        if (!metalSource.empty() && metalSource.find("error") == std::string::npos) {
+                            std::string metalPath = outBase + ".metal";
+                            if (WriteTextFile(metalPath, metalSource)) {
+                                printf("    -> %s\n", metalPath.c_str());
+                            }
+                        } else {
+                            fprintf(stderr, "    Warning: Metal cross-compilation failed\n");
+                        }
+                    }
+
+                    // Cross-compile to HLSL
+                    if (config.outputHlsl) {
+                        auto hlslStart = Clock::now();
+#ifdef USE_SPIRV_CROSS_LIB
+                        std::string hlslSource = CrossCompileToHLSL(result.spirv, result.hasWaveOps);
+#else
+                        std::string hlslSource = CrossCompileToHLSL(spvPath, result.hasWaveOps);
+#endif
+                        auto hlslEnd = Clock::now();
+                        shaderTime.hlslCrossMs = std::chrono::duration<double, std::milli>(hlslEnd - hlslStart).count();
+
+                        if (!hlslSource.empty() && hlslSource.find("error") == std::string::npos) {
+                            std::string hlslPath = outBase + ".hlsl";
+                            if (WriteTextFile(hlslPath, hlslSource)) {
+                                printf("    -> %s\n", hlslPath.c_str());
+                            }
+                        } else {
+                            fprintf(stderr, "    Warning: HLSL cross-compilation failed\n");
+                        }
+                    }
+
+                    // Cross-compile to GLSL
+                    if (config.outputGlsl) {
+                        auto glslStart = Clock::now();
+#ifdef USE_SPIRV_CROSS_LIB
+                        std::string glslSource = CrossCompileToGLSL(result.spirv);
+#else
+                        std::string glslSource = CrossCompileToGLSL(spvPath);
+#endif
+                        auto glslEnd = Clock::now();
+                        shaderTime.glslCrossMs = std::chrono::duration<double, std::milli>(glslEnd - glslStart).count();
+
+                        if (!glslSource.empty() && glslSource.find("error") == std::string::npos) {
+                            std::string glslPath = outBase + ".glsl";
+                            if (WriteTextFile(glslPath, glslSource)) {
+                                printf("    -> %s\n", glslPath.c_str());
+                            }
+                        } else {
+                            fprintf(stderr, "    Warning: GLSL cross-compilation failed\n");
+                        }
+                    }
+
+                    // Cross-compile to GLSL ES (WebGL 2.0 / OpenGL ES 3.0)
+                    if (config.outputGlslEs) {
+                        auto glslEsStart = Clock::now();
+#ifdef USE_SPIRV_CROSS_LIB
+                        std::string glslEsSource = CrossCompileToGLSL(result.spirv, 300, true);  // GLSL ES 300
+#else
+                        std::string glslEsSource = CrossCompileToGLSLCLI(spvPath, 300);
+#endif
+                        auto glslEsEnd = Clock::now();
+                        shaderTime.glslEsCrossMs = std::chrono::duration<double, std::milli>(glslEsEnd - glslEsStart).count();
+
+                        if (!glslEsSource.empty() && glslEsSource.find("error") == std::string::npos) {
+                            std::string glslEsPath = outBase + ".gles";
+                            if (WriteTextFile(glslEsPath, glslEsSource)) {
+                                printf("    -> %s\n", glslEsPath.c_str());
+                            }
+                        } else {
+                            fprintf(stderr, "    Warning: GLSL ES cross-compilation failed\n");
+                        }
+                    }
+
+                    // Output internals JSON (SPIR-V disassembly + BWSL IR dump)
+                    if (config.outputInternals && !result.irDump.empty()) {
+                        std::string spirvDis = GetSpirvDisassembly(spvPath);
+                        std::string internalsJson = "{\n";
+                        internalsJson += "  \"pass\": \"" + EscapeJsonString(passName) + "\",\n";
+                        internalsJson += "  \"stage\": \"compute\",\n";
                         internalsJson += "  \"ir\": \"" + EscapeJsonString(result.irDump) + "\",\n";
                         internalsJson += "  \"spirv_dis\": \"" + EscapeJsonString(spirvDis) + "\"\n";
                         internalsJson += "}\n";

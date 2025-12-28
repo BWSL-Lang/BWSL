@@ -231,10 +231,17 @@ struct RenderConfig {
     std::vector<SamplerBinding> samplers;
     std::vector<StorageBufferBinding> storageBuffers;
 
+    struct ComputeDispatchConfig {
+        u32 groupCountX = 1;
+        u32 groupCountY = 1;
+        u32 groupCountZ = 1;
+    };
+
     struct PassData {
         std::string name;
         PassType type = PassType::Standard;
         RenderPassDescriptor descriptor;
+        ComputeDispatchConfig dispatch;
     };
     std::vector<PassData> passes;
 };
@@ -643,6 +650,17 @@ inline ParseResult Parse(const std::string& content) {
                 binding.bindingIndex = it->second.bindingIndex;
                 binding.stages = it->second.stages;
                 currentPass->descriptor.resourceBindings.push_back(binding);
+            }
+            else if (tokens[0] == "dispatch") {
+                if (tokens.size() != 4) {
+                    result.success = false;
+                    result.error = "Line " + std::to_string(lineNum) + ": dispatch requires 3 arguments: dispatch X Y Z";
+                    return result;
+                }
+
+                currentPass->dispatch.groupCountX = std::stoi(tokens[1]);
+                currentPass->dispatch.groupCountY = std::stoi(tokens[2]);
+                currentPass->dispatch.groupCountZ = std::stoi(tokens[3]);
             }
             else if (tokens[0] == "type") {
                 if (tokens.size() < 2) {

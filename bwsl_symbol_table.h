@@ -56,9 +56,59 @@ struct VariableData {
     LiteralValue evalValue;
     NodeRef constExpr;
 };
+using OverloadTypeMask = u64;
+static constexpr OverloadTypeMask OVERLOAD_CUSTOM_MASK = (1ULL << 63);
+
+inline OverloadTypeMask MakeOverloadMask(CoreType type, u32 customHash = 0) {
+    if (type == CoreType::CUSTOM) {
+        return OVERLOAD_CUSTOM_MASK | static_cast<OverloadTypeMask>(customHash);
+    }
+    if (type == CoreType::INVALID || type == CoreType::VOID) {
+        return 0;
+    }
+    return 1ULL << static_cast<u32>(type);
+}
+
+inline OverloadTypeMask MakeOverloadMask(const TypeInfo& info) {
+    return MakeOverloadMask(info.coreType, info.customTypeHash);
+}
+
+inline OverloadTypeMask MakeOverloadMaskFromTypeHash(u32 typeHash) {
+    for (u32 i = 0; i < TypeHashes::HASH_TABLE_SIZE; i++) {
+        if (TypeHashes::HASH_TABLE[i].hash == typeHash) {
+            return MakeOverloadMask(TypeHashes::HASH_TABLE[i].info);
+        }
+    }
+    return OVERLOAD_CUSTOM_MASK | static_cast<OverloadTypeMask>(typeHash);
+}
+
+inline bool OverloadMaskMatches(OverloadTypeMask paramMask, OverloadTypeMask argMask) {
+    if ((paramMask & OVERLOAD_CUSTOM_MASK) || (argMask & OVERLOAD_CUSTOM_MASK)) {
+        return paramMask == argMask;
+    }
+    return (paramMask & argMask) != 0;
+}
+
+inline u64 HashOverloadSignature(const OverloadTypeMask* masks, u32 count) {
+    u64 hash = 1469598103934665603ULL;
+    auto mix = [&hash](u64 value) {
+        for (u32 i = 0; i < 8; i++) {
+            hash ^= static_cast<u8>(value & 0xFF);
+            hash *= 1099511628211ULL;
+            value >>= 8;
+        }
+    };
+    mix(static_cast<u64>(count));
+    for (u32 i = 0; i < count; i++) {
+        mix(masks[i]);
+    }
+    return hash;
+}
 struct FunctionData {
     CoreType returnType;
     ArenaArray<std::pair<ArenaString, ArenaString>> parameters;
+    ArenaArray<OverloadTypeMask> paramTypeMasks;
+    u64 signatureKey;
     bool isEval;           
     u32 astNodeIndex;      // For eval functions, store AST location
 };
@@ -623,6 +673,9 @@ namespace SymbolTable {
             if (existing.name.nameHash == name.nameHash &&
             existing.namespaceKind == ns &&
             existing.moduleIndex == moduleIndex) {
+            if (existing.kind == SymbolKind::FUNCTION && kind == SymbolKind::FUNCTION) {
+                continue;
+            }
             return nullptr;  // Already exists
             }
             }
@@ -725,6 +778,52 @@ namespace SymbolTable {
 
             return nullptr;
 
+    }
+
+    inline Symbol* LookupFunctionOverloadInNamespace(SymbolTableData* table, const ArenaString& name,
+        const OverloadTypeMask* argMasks, u32 argCount, NamespaceKind ns, u32 moduleIndex) {
+            for (int i = table->symbols.count - 1; i >= 0; i--) {
+                Symbol& sym = table->symbols[i];
+                if (sym.kind != SymbolKind::FUNCTION) continue;
+                if (sym.name.nameHash != name.nameHash) continue;
+                if (sym.namespaceKind != ns) continue;
+                if (ns == NamespaceKind::MODULE && sym.moduleIndex != moduleIndex) continue;
+
+                const FunctionData& funcData = table->functions[sym.index];
+                if (funcData.paramTypeMasks.count != argCount) continue;
+                bool matches = true;
+                for (u32 j = 0; j < argCount; j++) {
+                    if (!OverloadMaskMatches(funcData.paramTypeMasks[j], argMasks[j])) {
+                        matches = false;
+                        break;
+                    }
+                }
+                if (matches) {
+                    return &sym;
+                }
+            }
+            return nullptr;
+    }
+
+    inline Symbol* LookupFunctionOverload(SymbolTableData* table, const ArenaString& name,
+        const OverloadTypeMask* argMasks, u32 argCount) {
+            NamespaceKind currentNs = table->inModuleScope ?  NamespaceKind::MODULE : NamespaceKind::GLOBAL;
+            u32 currentModule   = table->inModuleScope ? table->currentModuleIndex : INVALID_INDEX;
+
+            Symbol* sym = LookupFunctionOverloadInNamespace(table, name, argMasks, argCount,
+                currentNs, currentModule);
+            if (sym) return sym;
+
+            if (currentNs != NamespaceKind::MODULE) {
+                for (u32 i = 0; i < table->importedModules.count; i++) {
+                    u32 modIdx = table->importedModules[i];
+                    sym = LookupFunctionOverloadInNamespace(table, name, argMasks, argCount,
+                        NamespaceKind::MODULE, modIdx);
+                    if (sym) return sym;
+                }
+            }
+
+            return nullptr;
     }
     
     inline void SetCurrentPass(SymbolTableData* table, const ArenaString& passName) {

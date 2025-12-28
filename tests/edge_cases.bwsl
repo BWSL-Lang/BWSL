@@ -62,15 +62,13 @@ pipeline EdgeCases {
             float onePow = pow(one, 100.0); // 1.0
 
             // Self operations
-            float self = 5.0;
-            float selfSub = self - self;    // 0.0
-            float selfDiv = self / self;    // 1.0
+            float selfValue = 5.0;
+            float selfSub = selfValue - selfValue;    // 0.0
+            float selfDiv = selfValue / selfValue;    // 1.0
 
-            // Immediate use after declaration
-            float imm = 3.0 * (float y = 2.0);  // if this syntax works
-            // If not, standard pattern:
+            // Immediate use after declaration (inline declaration not supported)
             float y2 = 2.0;
-            float imm2 = 3.0 * y2;
+            float imm = 3.0 * y2;
 
             // Long variable names
             float thisIsAVeryLongVariableNameThatShouldStillWork = 1.0;

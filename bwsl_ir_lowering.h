@@ -8,12 +8,17 @@
 #include <unordered_map>
 #include "bwsl_custom_type_registry.h"
 #include "bwsl_ir_analysis.h"  // For OutputSlot constants
+#include <vector>
 
 namespace BWSL::IR {
 
 // Maximum number of registers supported for a single shader pass
 // Increased to 4096 to handle deep function inlining
 static constexpr u32 MAX_REGISTERS = 4096;
+using BWSL::MakeOverloadMask;
+using BWSL::MakeOverloadMaskFromTypeHash;
+using BWSL::OverloadMaskMatches;
+using BWSL::OverloadTypeMask;
 
 // =============================================================================
 // PassVaryingContext - Tracks vertex outputs for fragment input resolution
@@ -2550,7 +2555,7 @@ void LowerIfStatement(NodeRef ref) {
                             return 0;
                         }
                         builder.EmitInstruction(OP_LOAD_INPUT, dest, BuiltinInputSlot::GLOBAL_INVOCATION_ID);
-                        SetRegisterType(dest, CoreType::UINT);
+                        SetRegisterType(dest, CoreType::UINT3);
                         return dest;
 
                     case BuiltinHash::LOCAL_ID:
@@ -2559,7 +2564,7 @@ void LowerIfStatement(NodeRef ref) {
                             return 0;
                         }
                         builder.EmitInstruction(OP_LOAD_INPUT, dest, BuiltinInputSlot::LOCAL_INVOCATION_ID);
-                        SetRegisterType(dest, CoreType::UINT);
+                        SetRegisterType(dest, CoreType::UINT3);
                         return dest;
 
                     case BuiltinHash::WORKGROUP_ID:
@@ -2568,7 +2573,7 @@ void LowerIfStatement(NodeRef ref) {
                             return 0;
                         }
                         builder.EmitInstruction(OP_LOAD_INPUT, dest, BuiltinInputSlot::WORKGROUP_ID);
-                        SetRegisterType(dest, CoreType::UINT);
+                        SetRegisterType(dest, CoreType::UINT3);
                         return dest;
 
                     case BuiltinHash::NUM_WORKGROUPS:
@@ -2577,7 +2582,7 @@ void LowerIfStatement(NodeRef ref) {
                             return 0;
                         }
                         builder.EmitInstruction(OP_LOAD_INPUT, dest, BuiltinInputSlot::NUM_WORKGROUPS);
-                        SetRegisterType(dest, CoreType::UINT);
+                        SetRegisterType(dest, CoreType::UINT3);
                         return dest;
 
                     case BuiltinHash::LOCAL_INDEX:
@@ -3049,6 +3054,21 @@ void LowerIfStatement(NodeRef ref) {
                     builder.EmitInstruction(OP_COS, cosDest, args[0]);
                     return sinDest;
                 }
+                case Intrinsic::BARRIER:
+                case Intrinsic::MEMORY_BARRIER:
+                case Intrinsic::STORAGE_BARRIER: {
+                    if (currentStage != ShaderStage::Compute) {
+                        fprintf(stderr, "Error: barrier intrinsics are only available in compute shaders\n");
+                        return 0;
+                    }
+                    op = IntrinsicToOpcode(intrinsic);
+                    if (op != OP_NOP) {
+                        builder.EmitInstruction(op, dest, args[0], args[1], args[2]);
+                        SetRegisterType(dest, CoreType::VOID);
+                        return dest;
+                    }
+                    break;
+                }
                 // Texture operations need special handling:
                 // args[0] = texture (may be encoded with 0x2000 marker)
                 // args[1] = coordinates
@@ -3243,6 +3263,27 @@ void LowerIfStatement(NodeRef ref) {
         // Check if this is a module-qualified call (e.g., Globals::decompressPosition)
         NodeRef funcRef;
         u32 foundModuleIndex = 0xFFFFFFFF;  // Track which module we found the function in
+        std::vector<OverloadTypeMask> argMasks;
+        argMasks.reserve(argCount);
+        for (u32 i = 0; i < argCount; i++) {
+            CoreType argType = GetRegisterType(args[i]);
+            u32 customHash = 0;
+            if (argType == CoreType::CUSTOM) {
+                customHash = program.registerStructTypes[args[i]];
+            }
+            argMasks.push_back(MakeOverloadMask(argType, customHash));
+        }
+
+        auto matchesSignature = [&](const FunctionDeclData& fn) -> bool {
+            if (fn.parameters.count != argCount) return false;
+            for (u32 i = 0; i < argCount; i++) {
+                OverloadTypeMask paramMask = MakeOverloadMaskFromTypeHash(fn.parameters[i].second.nameHash);
+                if (!OverloadMaskMatches(paramMask, argMasks[i])) {
+                    return false;
+                }
+            }
+            return true;
+        };
 
         if (call.moduleIndex != 0xFFFFFFFF && call.moduleIndex < ast->modules.count) {
             // Module-qualified call - search in the module's function list
@@ -3252,7 +3293,7 @@ void LowerIfStatement(NodeRef ref) {
                 NodeRef fnRef = module.functions[i];
                 if (fnRef.Type() == ASTNodeType::FUNCTION) {
                     const FunctionDeclData& fn = ast->GetFunction(fnRef);
-                    if (fn.name.nameHash == call.name.nameHash) {
+                    if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn)) {
                         funcRef = fnRef;
                         foundModuleIndex = call.moduleIndex;
                         break;
@@ -3272,6 +3313,9 @@ void LowerIfStatement(NodeRef ref) {
                         // Check both plain name and qualified hash match
                         if (fn.name.nameHash == call.name.nameHash ||
                             fn.name.nameHash == call.moduleQualifiedHash) {
+                            if (!matchesSignature(fn)) {
+                                continue;
+                            }
                             funcRef = fnRef;
                             foundModuleIndex = m;
                             break;
@@ -3289,7 +3333,7 @@ void LowerIfStatement(NodeRef ref) {
                 NodeRef fnRef = module.functions[i];
                 if (fnRef.Type() == ASTNodeType::FUNCTION) {
                     const FunctionDeclData& fn = ast->GetFunction(fnRef);
-                    if (fn.name.nameHash == call.name.nameHash) {
+                    if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn)) {
                         funcRef = fnRef;
                         foundModuleIndex = inlineModuleIndex;
                         break;
@@ -3305,7 +3349,7 @@ void LowerIfStatement(NodeRef ref) {
                 NodeRef fnRef = pass.functions[i];
                 if (fnRef.Type() == ASTNodeType::FUNCTION) {
                     const FunctionDeclData& fn = ast->GetFunction(fnRef);
-                    if (fn.name.nameHash == call.name.nameHash) {
+                    if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn)) {
                         funcRef = fnRef;
                         break;
                     }
@@ -3320,7 +3364,7 @@ void LowerIfStatement(NodeRef ref) {
                 NodeRef fnRef = pipeline.functions[i];
                 if (fnRef.Type() == ASTNodeType::FUNCTION) {
                     const FunctionDeclData& fn = ast->GetFunction(fnRef);
-                    if (fn.name.nameHash == call.name.nameHash) {
+                    if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn)) {
                         funcRef = fnRef;
                         break;
                     }
@@ -3857,6 +3901,11 @@ OpCode IntrinsicToOpcode(StdLib::Intrinsic intrinsic) {
         case Intrinsic::GATHER:       return OP_TEX_GATHER;
         case Intrinsic::LOAD:         return OP_TEX_FETCH;
         case Intrinsic::STORE:        return OP_IMG_STORE;
+
+        // Synchronization
+        case Intrinsic::BARRIER:         return OP_BARRIER;
+        case Intrinsic::MEMORY_BARRIER:  return OP_MEM_FENCE;
+        case Intrinsic::STORAGE_BARRIER: return OP_MEM_FENCE;
         
         // Wave/SIMD operations
         case Intrinsic::WAVE_ACTIVE_SUM:      return OP_WAVE_SUM;

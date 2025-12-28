@@ -88,6 +88,11 @@ enum class Intrinsic : u16 {
     GATHER,
     LOAD,
     STORE,
+
+    // Synchronization
+    BARRIER,
+    MEMORY_BARRIER,
+    STORAGE_BARRIER,
     
     // Wave/SIMD
     WAVE_ACTIVE_SUM,
@@ -212,6 +217,11 @@ constexpr BackendNames BACKEND_NAMES[] = {
     {"gather", ".Gather", "textureGather"},             // GATHER
     {"read", ".Load", "texelFetch"},                    // LOAD
     {"write", nullptr, "imageStore"},                   // STORE (custom HLSL)
+
+    // Synchronization
+    {"barrier", "barrier", "barrier"},                  // BARRIER
+    {"memoryBarrier", "memoryBarrier", "memoryBarrier"}, // MEMORY_BARRIER
+    {"storageBarrier", "storageBarrier", "storageBarrier"}, // STORAGE_BARRIER
     
     // Wave/SIMD
     {"simd_sum", "WaveActiveSum", "subgroupAdd"},       // WAVE_ACTIVE_SUM
@@ -380,6 +390,11 @@ constexpr IntrinsicData INTRINSICS[] = {
     TEXTURE_INTRINSIC(GATHER, "gather", 3, 4, 0),            // SpvOpImageGather
     TEXTURE_INTRINSIC(LOAD, "load", 3, 4, 0),                // SpvOpImageFetch
     INTRINSIC_FIXED(STORE, "store", mask(CoreType::VOID), mask(CoreType::CUSTOM), mask(CoreType::INT2), mask(CoreType::FLOAT4), 0, IntrinsicFlags::TEXTURE_OP | IntrinsicFlags::CUSTOM_HLSL, SPV_MAP(spv::OpImageWrite, SPV_EXT_NONE)),
+
+    // Synchronization
+    INTRINSIC_FIXED(BARRIER, "barrier", mask(CoreType::VOID), 0, 0, 0, 0, 0, SPV_MAP(spv::OpControlBarrier, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(MEMORY_BARRIER, "memoryBarrier", mask(CoreType::VOID), 0, 0, 0, 0, 0, SPV_MAP(spv::OpMemoryBarrier, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(STORAGE_BARRIER, "storageBarrier", mask(CoreType::VOID), 0, 0, 0, 0, 0, SPV_MAP(spv::OpMemoryBarrier, SPV_EXT_NONE)),
     
     // Wave/SIMD (Subgroup operations - require SPIR-V 1.3+ and VK_KHR_shader_subgroup_*)
     // SPIR-V opcode values for GroupNonUniform ops (SPIR-V 1.3+):

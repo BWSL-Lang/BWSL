@@ -92,6 +92,10 @@ struct ShaderStageData {
     ArenaString inheritsFrom;   // Pass name to inherit from (if isInherited)
     bool isInherited;           // True if this stage inherits from another pass
     u8 _pad[3];
+    ArenaString name;           // Compute block name (if compute stage)
+    u32 workgroupSizeX;
+    u32 workgroupSizeY;
+    u32 workgroupSizeZ;
 };
 
 // 4 bytes + ArenaArray (12 bytes) = 16 bytes typical
@@ -226,6 +230,28 @@ struct PassData {
     NodeRef computeShader;
 };
 
+enum class ResourceAccessMode : u8 {
+    ReadOnly,
+    ReadWrite,
+    WriteOnly
+};
+
+struct GraphResourceRef {
+    ArenaString name;
+    ResourceAccessMode access;
+    u8 _pad[3];
+};
+
+struct ComputeGraphNode {
+    ArenaString passName;
+    ArenaArray<GraphResourceRef> inputs;
+    ArenaArray<ArenaString> outputs;
+};
+
+struct ComputeGraphData {
+    ArenaArray<ComputeGraphNode> nodes;
+};
+
 // Module - 20 bytes + ArenaArrays
 struct ModuleNodeData {
     ArenaString name;
@@ -308,6 +334,7 @@ struct PipelineData {
     ArenaArray<NodeRef> passes;
     ArenaArray<NodeRef> functions;
     ArenaArray<NodeRef> enums;
+    NodeRef computeGraph;
 };
 
 //==============================================================================
@@ -353,6 +380,7 @@ struct AST {
     ArenaArray<SwitchCaseData> switchCases;
     ArenaArray<SwitchData> switches;
     ArenaArray<PipelineData> pipelines;
+    ArenaArray<ComputeGraphData> computeGraphs;
 
     // Return statements reuse AssignmentData (target unused, value is the return expr)
     // If statements reuse BlockData (first statement is condition, rest is body)
@@ -398,6 +426,7 @@ struct AST {
         switchCases.Init(arena, 8);         // Switch case arms
         switches.Init(arena, 4);            // Less common
         pipelines.Init(arena, 1);           // Usually just one
+        computeGraphs.Init(arena, 1);       // Optional
     }
 
     //==========================================================================
@@ -514,6 +543,9 @@ struct AST {
 
     PipelineData& GetPipeline(NodeRef ref) { return pipelines[ref.Index()]; }
     const PipelineData& GetPipeline(NodeRef ref) const { return pipelines[ref.Index()]; }
+
+    ComputeGraphData& GetComputeGraph(NodeRef ref) { return computeGraphs[ref.Index()]; }
+    const ComputeGraphData& GetComputeGraph(NodeRef ref) const { return computeGraphs[ref.Index()]; }
 };
 
 // FunctionCallFlags is defined in bwsl_ast_common.h
@@ -872,6 +904,12 @@ namespace ASTFactory {
         u32 index = ast->shaderStages.count;
         ShaderStageData data;
         data.body = body;
+        data.inheritsFrom = ArenaString::MakeHashOnly(0u);
+        data.isInherited = false;
+        data.name = ArenaString::MakeHashOnly(0u);
+        data.workgroupSizeX = 1;
+        data.workgroupSizeY = 1;
+        data.workgroupSizeZ = 1;
         ast->shaderStages.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {
@@ -944,6 +982,7 @@ namespace ASTFactory {
         data.passes.Init(ast->arena, 8);
         data.functions.Init(ast->arena, 16);
         data.enums.Init(ast->arena, 8);
+        data.computeGraph = NodeRef::Null();
         ast->pipelines.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {
@@ -956,6 +995,24 @@ namespace ASTFactory {
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
         return NodeRef(ASTNodeType::PIPELINE, index);
+    }
+
+    inline NodeRef MakeComputeGraph(AST* ast, u32 line = 0, u32 col = 0) {
+        u32 index = ast->computeGraphs.count;
+        ComputeGraphData data;
+        data.nodes.Init(ast->arena, 4);
+        ast->computeGraphs.Push(ast->arena, data);
+
+        if (ast->nodeCount >= ast->nodeCapacity) {
+            u32 newCapacity = ast->nodeCapacity * 2;
+            u32* newPositions = (u32*)ast->arena->Allocate(sizeof(u32) * newCapacity, 64);
+            memcpy(newPositions, ast->positions, ast->nodeCount * sizeof(u32));
+            ast->positions = newPositions;
+            ast->nodeCapacity = newCapacity;
+        }
+        ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
+
+        return NodeRef(ASTNodeType::COMPUTE_GRAPH, index);
     }
 
     inline NodeRef MakeFunction(AST* ast, const std::string& name, CoreType returnType, u32 line = 0, u32 col = 0) {

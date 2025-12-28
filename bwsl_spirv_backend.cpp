@@ -236,6 +236,9 @@ void SPIRVBuilder::Initialize(BWSL_Arena* arena, IR::IRProgram* ir, ShaderStage 
     this->stage = stage;
     this->symbols = symbols;
     this->cfg = cfg;
+    workgroupSizeX = 1;
+    workgroupSizeY = 1;
+    workgroupSizeZ = 1;
     
     // Analyze IR to determine capabilities, resources, and I/O requirements
     AnalyzeIR(&analysis, ir);
@@ -502,7 +505,13 @@ void SPIRVBuilder::EmitEntryPoint() {
         case ShaderStage::Compute:
             // LocalSize - workgroup size (default 1,1,1 - should be configurable)
             {
-                u32 execModeOps[] = {entryPointId, spv::ExecutionModeLocalSize, 1, 1, 1};
+                u32 execModeOps[] = {
+                    entryPointId,
+                    spv::ExecutionModeLocalSize,
+                    workgroupSizeX,
+                    workgroupSizeY,
+                    workgroupSizeZ
+                };
                 EmitToSection(&executionModes, spv::OpExecutionMode, execModeOps, 5);
             }
             break;
@@ -1669,7 +1678,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
         // ========== Integer Comparison (Unsigned) ==========
         case IR::OP_ULT:
-        case IR::OP_ULE: {
+        case IR::OP_ULE:
+        case IR::OP_UGT:
+        case IR::OP_UGE: {
             u32 op1 = GetSpirvId(ir->GetOperand(ir_idx, 0));
             u32 op2 = GetSpirvId(ir->GetOperand(ir_idx, 1));
             u32 bool_type = GetTypeId(CoreType::BOOL);
@@ -1678,6 +1689,8 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             switch (op) {
                 case IR::OP_ULT: cmp_op = spv::OpULessThan; break;
                 case IR::OP_ULE: cmp_op = spv::OpULessThanEqual; break;
+                case IR::OP_UGT: cmp_op = spv::OpUGreaterThan; break;
+                case IR::OP_UGE: cmp_op = spv::OpUGreaterThanEqual; break;
                 default: cmp_op = spv::OpNop; break;
             }
 
@@ -2307,6 +2320,41 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 u32 uint_type = GetTypeId(CoreType::UINT);
                 if (instanceIdVarId != 0) {
                     Emit(spv::OpLoad, uint_type, dest, instanceIdVarId);
+                }
+                break;
+            }
+            if (input_slot == BuiltinInputSlot::GLOBAL_INVOCATION_ID) {
+                u32 uint3_type = GetTypeId(CoreType::UINT3);
+                if (globalInvocationIdVarId != 0) {
+                    Emit(spv::OpLoad, uint3_type, dest, globalInvocationIdVarId);
+                }
+                break;
+            }
+            if (input_slot == BuiltinInputSlot::LOCAL_INVOCATION_ID) {
+                u32 uint3_type = GetTypeId(CoreType::UINT3);
+                if (localInvocationIdVarId != 0) {
+                    Emit(spv::OpLoad, uint3_type, dest, localInvocationIdVarId);
+                }
+                break;
+            }
+            if (input_slot == BuiltinInputSlot::WORKGROUP_ID) {
+                u32 uint3_type = GetTypeId(CoreType::UINT3);
+                if (workgroupIdVarId != 0) {
+                    Emit(spv::OpLoad, uint3_type, dest, workgroupIdVarId);
+                }
+                break;
+            }
+            if (input_slot == BuiltinInputSlot::NUM_WORKGROUPS) {
+                u32 uint3_type = GetTypeId(CoreType::UINT3);
+                if (numWorkgroupsVarId != 0) {
+                    Emit(spv::OpLoad, uint3_type, dest, numWorkgroupsVarId);
+                }
+                break;
+            }
+            if (input_slot == BuiltinInputSlot::LOCAL_INVOCATION_INDEX) {
+                u32 uint_type = GetTypeId(CoreType::UINT);
+                if (localInvocationIndexVarId != 0) {
+                    Emit(spv::OpLoad, uint_type, dest, localInvocationIndexVarId);
                 }
                 break;
             }
@@ -3323,6 +3371,25 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             break;
         }
 
+        case IR::OP_BARRIER: {
+            u32 scope = GetIntConstantId(static_cast<u32>(spv::ScopeWorkgroup), true);
+            u32 semantics = GetIntConstantId(static_cast<u32>(
+                spv::MemorySemanticsAcquireReleaseMask |
+                spv::MemorySemanticsWorkgroupMemoryMask), true);
+            Emit(spv::OpControlBarrier, scope, scope, semantics);
+            break;
+        }
+
+        case IR::OP_MEM_FENCE: {
+            u32 scope = GetIntConstantId(static_cast<u32>(spv::ScopeWorkgroup), true);
+            u32 semantics = GetIntConstantId(static_cast<u32>(
+                spv::MemorySemanticsAcquireReleaseMask |
+                spv::MemorySemanticsUniformMemoryMask |
+                spv::MemorySemanticsWorkgroupMemoryMask), true);
+            Emit(spv::OpMemoryBarrier, scope, semantics);
+            break;
+        }
+
         case IR::OP_TEX_SAMPLE:
         case IR::OP_TEX_SAMPLE_LOD:
         case IR::OP_TEX_SAMPLE_BIAS:
@@ -4068,7 +4135,7 @@ void SPIRVBuilder::DeclareInputOutput() {
         // Declare all compute built-ins and store their variable IDs for later use
 
         // GlobalInvocationId (uint3) - most commonly used
-        {
+        if (analysis.UsesGlobalId()) {
             globalInvocationIdVarId = CreateInterfaceVariable(CoreType::UINT3, spv::StorageClassInput,
                                                                0, spv::BuiltInGlobalInvocationId);
             inputIds[inputCount] = globalInvocationIdVarId;
@@ -4077,7 +4144,7 @@ void SPIRVBuilder::DeclareInputOutput() {
         }
 
         // LocalInvocationId (uint3)
-        {
+        if (analysis.UsesLocalId()) {
             localInvocationIdVarId = CreateInterfaceVariable(CoreType::UINT3, spv::StorageClassInput,
                                                               0, spv::BuiltInLocalInvocationId);
             inputIds[inputCount] = localInvocationIdVarId;
@@ -4086,7 +4153,7 @@ void SPIRVBuilder::DeclareInputOutput() {
         }
 
         // WorkgroupId (uint3)
-        {
+        if (analysis.UsesWorkgroupId()) {
             workgroupIdVarId = CreateInterfaceVariable(CoreType::UINT3, spv::StorageClassInput,
                                                         0, spv::BuiltInWorkgroupId);
             inputIds[inputCount] = workgroupIdVarId;
@@ -4095,7 +4162,7 @@ void SPIRVBuilder::DeclareInputOutput() {
         }
 
         // NumWorkgroups (uint3)
-        {
+        if (analysis.UsesNumWorkgroups()) {
             numWorkgroupsVarId = CreateInterfaceVariable(CoreType::UINT3, spv::StorageClassInput,
                                                           0, spv::BuiltInNumWorkgroups);
             inputIds[inputCount] = numWorkgroupsVarId;
@@ -4104,7 +4171,7 @@ void SPIRVBuilder::DeclareInputOutput() {
         }
 
         // LocalInvocationIndex (uint) - single scalar, not uint3
-        {
+        if (analysis.UsesLocalIndex()) {
             localInvocationIndexVarId = CreateInterfaceVariable(CoreType::UINT, spv::StorageClassInput,
                                                                  0, spv::BuiltInLocalInvocationIndex);
             inputIds[inputCount] = localInvocationIndexVarId;

@@ -353,6 +353,7 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             
         case 4:
             if (memcmp(str, "pass", 4) == 0) return TokenType::PASS;
+            if (memcmp(str, "node", 4) == 0) return TokenType::NODE;
             if (memcmp(str, "true", 4) == 0) return TokenType::TRUE;
             if (memcmp(str, "bool", 4) == 0) return TokenType::BOOL;
             if (memcmp(str, "mat2", 4) == 0) return TokenType::MAT2;
@@ -391,6 +392,7 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             if (memcmp(str, "shader", 6) == 0) return TokenType::SHADER;
             if (memcmp(str, "import", 6) == 0) return TokenType::IMPORT;
             if (memcmp(str, "return", 6) == 0) return TokenType::RETURN;
+            if (memcmp(str, "inputs", 6) == 0) return TokenType::INPUTS;
             if (memcmp(str, "float2", 6) == 0) return TokenType::FLOAT2;
             if (memcmp(str, "float3", 6) == 0) return TokenType::FLOAT3;
             if (memcmp(str, "float4", 6) == 0) return TokenType::FLOAT4;
@@ -405,6 +407,7 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             if (memcmp(str, "cbuffer", 7) == 0) return TokenType::CBUFFER;
             if (memcmp(str, "sampler", 7) == 0) return TokenType::SAMPLER;
             if (memcmp(str, "compute", 7) == 0) return TokenType::COMPUTE;
+            if (memcmp(str, "outputs", 7) == 0) return TokenType::OUTPUTS;
             if (memcmp(str, "extends", 7) == 0) return TokenType::EXTENDS;
             if (memcmp(str, "foreach", 7) == 0) return TokenType::FOREACH;
             if (memcmp(str, "default", 7) == 0) return TokenType::DEFAULT;
@@ -414,12 +417,15 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
         case 8:
             if (memcmp(str, "pipeline", 8) == 0) return TokenType::PIPELINE;
             if (memcmp(str, "fragment", 8) == 0) return TokenType::FRAGMENT;
+            if (memcmp(str, "readonly", 8) == 0) return TokenType::READONLY;
             break;
             
         case 9:
             if (memcmp(str, "texture2D", 9) == 0) return TokenType::TEXTURE2D;
             if (memcmp(str, "texture3D", 9) == 0) return TokenType::TEXTURE3D;
             if (memcmp(str, "resources", 9) == 0) return TokenType::RESOURCES;
+            if (memcmp(str, "readwrite", 9) == 0) return TokenType::READWRITE;
+            if (memcmp(str, "writeonly", 9) == 0) return TokenType::WRITEONLY;
             break;
             
         case 10:
@@ -432,6 +438,10 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             if (memcmp(str, "textureCube", 11) == 0) return TokenType::TEXTURECUBE;
             break;
             
+        case 13:
+            if (memcmp(str, "compute_graph", 13) == 0) return TokenType::COMPUTE_GRAPH;
+            break;
+
         case 14:
             if (memcmp(str, "texture2DArray", 14) == 0) return TokenType::TEXTURE2DARRAY;
             break;

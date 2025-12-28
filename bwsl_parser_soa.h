@@ -167,6 +167,8 @@ struct Parser {
         return NodeRef::Null();
     }
 
+    TypeInfo GetExpressionType(NodeRef expr);
+
 private:
     //----------------- Token management ---------------------------//
     void Advance();
@@ -196,6 +198,11 @@ private:
     void ParseUseAttributes(NodeRef pass);
     void ParseFunctionsBlockBody(NodeRef block);
     void ParseFunctionParameters(NodeRef function);
+    NodeRef ParseComputeStage();
+    NodeRef ParseComputeGraph();
+    ComputeGraphNode ParseComputeGraphNode();
+    void ParseComputeGraphInputs(ComputeGraphNode& node);
+    void ParseComputeGraphOutputs(ComputeGraphNode& node);
 
     NodeRef ParsePass();
     NodeRef ParseAttributeDecl();
@@ -246,7 +253,6 @@ private:
     NodeRef ParseArrayInitializer();
     NodeRef ParseInlineArrayConstruction();
     NodeRef ParseArrayDeclaration(CoreType elementType);
-    TypeInfo GetExpressionType(NodeRef expr);
     TypeInfo ResolveType(const std::string& typeName);
     TypeInfo GetTypeInfoFromSymbol(Symbol* sym);
     TypeInfo ParseArrayType();

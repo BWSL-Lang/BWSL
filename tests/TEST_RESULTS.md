@@ -2,17 +2,11 @@
 
 Run: `./tests/run_tests.sh`
 
-Summary: 28 passed, 4 failed, 2 skipped.
+Summary: 31 passed, 1 failed, 2 skipped.
 
 ## High (missing or rejected core features)
 
-- compute_basic: `compute` stage not accepted in pass body; parse errors cascade.
-- compute_workgroups: `compute` stage not accepted in pass body.
-- functions_overloading: function redefinition reported; overloading not supported.
-
-## Medium (keyword/identifier restriction)
-
-- edge_cases: `self` rejected as a variable name (reserved keyword).
+- compute_workgroups: `shared` storage syntax not supported in compute blocks.
 
 ## Low (not executed)
 
@@ -24,7 +18,10 @@ Summary: 28 passed, 4 failed, 2 skipped.
 - constants_folding
 - control_if_else
 - control_ternary
+- compute_basic
+- edge_cases
 - functions_basic
+- functions_overloading
 - functions_scoping
 - intrinsics_bit
 - intrinsics_exp_trig

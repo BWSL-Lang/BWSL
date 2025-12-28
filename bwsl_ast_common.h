@@ -96,6 +96,7 @@ enum class ASTNodeType : u8 {
     BREAK_STATEMENT,
     SKIP_STATEMENT,
     DISCARD_STATEMENT,
+    COMPUTE_GRAPH,
     INVALID = 0xFF
 };
 

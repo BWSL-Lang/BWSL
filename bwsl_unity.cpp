@@ -15,8 +15,8 @@
 #include "bwsl_cfg.cpp"
 #include "bwsl_ssa.cpp"
 #include "bwsl_spirv_backend.cpp"
+#include "bwsl_compute_graph.cpp"
 #include "bwsl_custom_type_registry.cpp"
 
 // Platform-specific middleware (Objective-C++ for Metal)
 #include "middleware/bwsl_metal_middleware.mm"
-

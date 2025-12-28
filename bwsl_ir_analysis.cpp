@@ -62,8 +62,15 @@ void AnalyzeIR(IRAnalysis* analysis, const IR::IRProgram* ir) {
                     analysis->usedBuiltinInputMask |= IRAnalysis::BUILTIN_INSTANCE_ID;
                 } else if (inputSlot == BuiltinInputSlot::GLOBAL_INVOCATION_ID) {
                     analysis->usedBuiltinInputMask |= IRAnalysis::GLOBAL_ID;
-                }
-                 else if (inputSlot < 16) {
+                } else if (inputSlot == BuiltinInputSlot::LOCAL_INVOCATION_ID) {
+                    analysis->usedBuiltinInputMask |= IRAnalysis::LOCAL_ID;
+                } else if (inputSlot == BuiltinInputSlot::WORKGROUP_ID) {
+                    analysis->usedBuiltinInputMask |= IRAnalysis::WORKGROUP_ID;
+                } else if (inputSlot == BuiltinInputSlot::NUM_WORKGROUPS) {
+                    analysis->usedBuiltinInputMask |= IRAnalysis::NUM_WORKGROUPS;
+                } else if (inputSlot == BuiltinInputSlot::LOCAL_INVOCATION_INDEX) {
+                    analysis->usedBuiltinInputMask |= IRAnalysis::LOCAL_INDEX;
+                } else if (inputSlot < 16) {
                     // Fragment varyings (slots 0-15)
                     analysis->usedInputMask |= (1 << inputSlot);
                     // Capture type from destination register
@@ -245,4 +252,3 @@ void AnalyzeIR(IRAnalysis* analysis, const IR::IRProgram* ir) {
 }
 
 } // namespace BWSL
-

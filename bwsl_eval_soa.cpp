@@ -149,7 +149,15 @@ bool CompileTimeEvaluatorSoA::CanEvaluateNode(EvalStateSoA* state, NodeRef node)
             const FunctionCallData& func = state->ast->GetFunctionCall(node);
             if (!(func.flags & FunctionCallFlags::IS_INTRINSIC)) {
                 // Check for user-defined eval functions
-                Symbol* sym = SymbolTable::LookupAny(&state->parser->symbolTable, func.name);
+                u32 argCount = func.arguments.count;
+                if (argCount > 16) return false;
+                OverloadTypeMask argMasks[16];
+                for (u32 i = 0; i < argCount; i++) {
+                    TypeInfo argType = state->parser->GetExpressionType(func.arguments[i]);
+                    argMasks[i] = MakeOverloadMask(argType);
+                }
+                Symbol* sym = SymbolTable::LookupFunctionOverload(&state->parser->symbolTable,
+                    func.name, argMasks, argCount);
                 if (!sym || sym->kind != SymbolKind::FUNCTION) return false;
                 if (!state->parser->symbolTable.functions[sym->index].isEval) return false;
             }
