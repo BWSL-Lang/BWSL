@@ -1,0 +1,77 @@
+// Test: SSA (Static Single Assignment) basic cases
+// Tests: variable reassignment, phi node generation
+
+pipeline SSABasic {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Simple variable reassignment
+            float x = 1.0;
+            x = 2.0;
+            x = 3.0;
+            float final_x = x;  // Should be 3.0
+
+            // Reassignment with self-reference
+            float y = 1.0;
+            y = y + 1.0;        // y = 2.0
+            y = y * 2.0;        // y = 4.0
+            y = y - 1.0;        // y = 3.0
+            float final_y = y;
+
+            // Multiple variables with dependencies
+            float a = 1.0;
+            float b = 2.0;
+            a = a + b;          // a = 3.0
+            b = a + b;          // b = 5.0
+            a = a + b;          // a = 8.0
+            float final_a = a;
+            float final_b = b;
+
+            // Vector reassignment
+            float3 v = float3(1.0, 2.0, 3.0);
+            v = v + float3(1.0);
+            v = v * 2.0;
+            float3 final_v = v;
+
+            // Component-wise reassignment
+            float3 color = float3(0.0);
+            color.r = 1.0;
+            color.g = 0.5;
+            color.b = 0.25;
+            float3 final_color = color;
+
+            // Reassignment in sequence
+            float seq = 0.0;
+            seq = seq + 0.1;
+            seq = seq + 0.2;
+            seq = seq + 0.3;
+            seq = seq + 0.4;
+            float final_seq = seq;  // 1.0
+
+            // Integer reassignment
+            int count = 0;
+            count = count + 1;
+            count = count + 1;
+            count = count + 1;
+            int final_count = count;  // 3
+
+            // Using compound assignment (generates similar SSA)
+            float compound = 1.0;
+            compound += 2.0;
+            compound *= 3.0;
+            compound -= 1.0;
+            float final_compound = compound;  // (1+2)*3-1 = 8
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

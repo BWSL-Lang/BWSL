@@ -1,0 +1,57 @@
+// Test: Bit manipulation intrinsics
+// Tests: count_bits, first_bit_high, first_bit_low, reverse_bits
+
+pipeline IntrinsicsBit {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // count_bits (popcount) - count set bits
+            int bits_0 = count_bits(0);           // 0
+            int bits_1 = count_bits(1);           // 1 (0b0001)
+            int bits_5 = count_bits(5);           // 2 (0b0101)
+            int bits_7 = count_bits(7);           // 3 (0b0111)
+            int bits_15 = count_bits(15);         // 4 (0b1111)
+            int bits_255 = count_bits(255);       // 8
+
+            // first_bit_high - find highest set bit (from MSB)
+            int high_1 = first_bit_high(1);       // 31 (or 0 depending on impl)
+            int high_2 = first_bit_high(2);       // 30
+            int high_8 = first_bit_high(8);       // 28
+            int high_128 = first_bit_high(128);   // 24
+
+            // first_bit_low - find lowest set bit (from LSB)
+            int low_1 = first_bit_low(1);         // 0
+            int low_2 = first_bit_low(2);         // 1
+            int low_4 = first_bit_low(4);         // 2
+            int low_8 = first_bit_low(8);         // 3
+            int low_6 = first_bit_low(6);         // 1 (0b110)
+
+            // reverse_bits - reverse bit order
+            int rev = reverse_bits(1);            // Very large number (MSB set)
+
+            // Unsigned integer bit operations
+            uint ubits_0 = count_bits(0u);
+            uint ubits_ff = count_bits(0xFFu);    // 8
+
+            // Bit operations in expressions
+            int mask = 0xFF;
+            int count = count_bits(mask);
+            bool hasBits = count > 0;
+
+            // Vector bit operations (if supported)
+            int2 iv2 = int2(3, 7);
+            // int2 bits_v2 = count_bits(iv2);  // If vector overload exists
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

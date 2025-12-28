@@ -1,0 +1,113 @@
+// Test: SSA with loops
+// Tests: phi nodes at loop headers, loop variable updates
+
+pipeline SSALoops {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Simple loop with accumulator
+            float sum = 0.0;
+            for (int i = 0; i < 10; i++) {
+                sum = sum + 1.0;
+            }
+            float final_sum = sum;  // 10.0
+
+            // Loop with multiple accumulators
+            float acc1 = 0.0;
+            float acc2 = 1.0;
+            for (int i = 0; i < 5; i++) {
+                acc1 = acc1 + float(i);
+                acc2 = acc2 * 2.0;
+            }
+            // acc1 = 0+1+2+3+4 = 10
+            // acc2 = 1*2*2*2*2*2 = 32
+
+            // Loop modifying vector
+            float3 v = float3(0.0);
+            for (int i = 0; i < 4; i++) {
+                v = v + float3(1.0, 2.0, 3.0);
+            }
+            float3 final_v = v;  // (4, 8, 12)
+
+            // Nested loops
+            float nested_sum = 0.0;
+            for (int i = 0; i < 3; i++) {
+                for (int j = 0; j < 3; j++) {
+                    nested_sum = nested_sum + 1.0;
+                }
+            }
+            float final_nested = nested_sum;  // 9.0
+
+            // Loop with conditional inside
+            float cond_sum = 0.0;
+            for (int i = 0; i < 10; i++) {
+                if (i % 2 == 0) {
+                    cond_sum = cond_sum + 1.0;
+                } else {
+                    cond_sum = cond_sum + 0.5;
+                }
+            }
+            // cond_sum = 5*1.0 + 5*0.5 = 7.5
+
+            // Loop with break
+            float break_sum = 0.0;
+            for (int i = 0; i < 100; i++) {
+                if (i >= 5) {
+                    break;
+                }
+                break_sum = break_sum + 1.0;
+            }
+            float final_break = break_sum;  // 5.0
+
+            // Loop with skip (continue)
+            float skip_sum = 0.0;
+            for (int i = 0; i < 10; i++) {
+                if (i % 2 == 0) {
+                    skip;
+                }
+                skip_sum = skip_sum + 1.0;
+            }
+            float final_skip = skip_sum;  // 5.0 (odd numbers only)
+
+            // Variable used before and after loop
+            float before_after = 1.0;
+            before_after = before_after * 2.0;  // 2.0
+            for (int i = 0; i < 3; i++) {
+                before_after = before_after + 1.0;
+            }
+            // before_after = 5.0
+            before_after = before_after * 2.0;  // 10.0
+            float final_ba = before_after;
+
+            // Multiple variables in loop with dependencies
+            float x = 0.0;
+            float y = 1.0;
+            for (int i = 0; i < 5; i++) {
+                float temp = x;
+                x = y;
+                y = temp + y;  // Fibonacci-like
+            }
+            // x=1, y=1 -> x=1, y=2 -> x=2, y=3 -> x=3, y=5 -> x=5, y=8
+            float final_x = x;  // 5
+            float final_y = y;  // 8
+
+            // Range loop accumulator
+            float range_sum = 0.0;
+            for (i in 0..5) {
+                range_sum = range_sum + float(i);
+            }
+            float final_range = range_sum;  // 0+1+2+3+4 = 10
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

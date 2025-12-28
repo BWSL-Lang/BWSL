@@ -1,0 +1,90 @@
+// Test: Module definition and usage
+// Tests: module declaration, constants, functions, struct
+
+module TestMath {
+    // Module constants
+    const float PI = 3.14159265359;
+    const float TAU = 6.28318530718;
+    const float E = 2.71828182845;
+    const float EPSILON = 0.000001;
+
+    // Simple functions
+    square :: (float x) -> float {
+        return x * x;
+    }
+
+    cube :: (float x) -> float {
+        return x * x * x;
+    }
+
+    // Function using module constant
+    circleArea :: (float radius) -> float {
+        return PI * radius * radius;
+    }
+
+    // Function with multiple parameters
+    lerp :: (float a, float b, float t) -> float {
+        return a + (b - a) * t;
+    }
+
+    // Function calling other module function
+    smoothSquare :: (float x) -> float {
+        float sq = square(x);
+        return sq * sq;  // x^4
+    }
+
+    // Vector functions
+    safeNormalize :: (float3 v) -> float3 {
+        float len = length(v);
+        if (len < EPSILON) {
+            return float3(0.0, 1.0, 0.0);
+        }
+        return v / len;
+    }
+}
+
+pipeline ModulesBasic {
+    attributes {
+        position: float3
+    }
+
+    import TestMath
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Use module constants
+            float pi = TestMath::PI;
+            float tau = TestMath::TAU;
+
+            // Use module functions
+            float sq = TestMath::square(3.0);        // 9.0
+            float cb = TestMath::cube(2.0);          // 8.0
+            float area = TestMath::circleArea(1.0);  // PI
+
+            // Use function with multiple params
+            float interp = TestMath::lerp(0.0, 10.0, 0.5);  // 5.0
+
+            // Use function that calls other functions
+            float smooth = TestMath::smoothSquare(2.0);  // 16.0
+
+            // Use vector function
+            float3 v = float3(3.0, 0.0, 4.0);
+            float3 n = TestMath::safeNormalize(v);
+
+            // Use in expressions
+            float angle = pi / 4.0;
+            float sinAngle = sin(angle);
+            float result = TestMath::square(sinAngle);
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            // Module accessible in fragment too
+            float piVal = TestMath::PI;
+            output.color = float4(piVal / 4.0, 0.5, 0.5, 1.0);
+        }
+    }
+}

@@ -257,6 +257,12 @@ struct IRLowering {
         return &program;
     }
 
+    void LowerPassConstants(const PassData& pass) {
+        for (u32 i = 0; i < pass.consts.count; i++) {
+            LowerVariableDecl(pass.consts[i]);
+        }
+    }
+
     void LowerPass(NodeRef passRef) {
         const PassData& pass = ast->GetPass(passRef);
         currentPass = passRef;  // Track current pass for pass-scoped function lookup
@@ -269,17 +275,20 @@ struct IRLowering {
         // Phase 1: Lower vertex shader (collects output.xxx usages)
         if (!pass.vertexShader.IsNull()) {
             currentStage = ShaderStage::Vertex;
+            LowerPassConstants(pass);
             LowerShaderStage(pass.vertexShader);
         }
 
         // Phase 2: Lower fragment shader (uses collected varyings for input resolution)
         if (!pass.fragmentShader.IsNull()) {
             currentStage = ShaderStage::Fragment;
+            LowerPassConstants(pass);
             LowerShaderStage(pass.fragmentShader);
         }
 
         if (!pass.computeShader.IsNull()) {
             currentStage = ShaderStage::Compute;
+            LowerPassConstants(pass);
             LowerShaderStage(pass.computeShader);
         }
 
@@ -1139,12 +1148,15 @@ struct IRLowering {
         // Look up in symbol table
         Symbol* sym = SymbolTable::LookupByHash(const_cast<SymbolTableData*>(symbols), ident.name.nameHash);
         if (sym && sym->kind == SymbolKind::VARIABLE) {
+            const VariableData& varData = symbols->variables[sym->index];
+            if (varData.isConst && varData.constExpr.IsValid()) {
+                return LowerExpression(varData.constExpr);
+            }
             // Allocate and cache
             u16 reg = AllocateRegister();
             variableRegisters[ident.name.nameHash] = reg;
 
             // Set register type from symbol's variable data
-            const VariableData& varData = symbols->variables[sym->index];
             SetRegisterType(reg, varData.typeInfo.coreType);
 
             return reg;
@@ -1787,6 +1799,7 @@ void LowerIfStatement(NodeRef ref) {
     // False target (else block or merge point if no else)
     u32 falseTarget = builder.currentInstruction;
 
+    bool needMergePad = true;
     if (block.statements.count > 2) {
         // Check if else block is another if statement (else-if chain)
         // We need to mark the instruction BEFORE the else for proper nesting
@@ -1801,7 +1814,7 @@ void LowerIfStatement(NodeRef ref) {
             // The inner if's merge is at currentInstruction
             // We need our merge to be at a DIFFERENT instruction
             // Emit a NOP that will become our distinct merge point
-            builder.EmitInstruction(OP_NOP, 0, 0, 0);
+            needMergePad = true;
         }
     } else if (loopDepth > 0) {
         // SPIR-V structured control flow rule: A selection merge block cannot
@@ -1809,19 +1822,14 @@ void LowerIfStatement(NodeRef ref) {
         // and the if-statement has no else clause, the merge point would
         // naturally fall into the continue block. Emit a NOP to create a
         // distinct merge block that will then branch to the continue target.
-        //
-        // The NOP instruction becomes the merge block. Both false branch target
-        // (falseTarget, already set above) and mergePoint should refer to this NOP.
-        // Since falseTarget was already set to currentInstruction before the NOP,
-        // we emit the NOP and set mergePoint to falseTarget (the NOP instruction).
-        builder.EmitInstruction(OP_NOP, 0, 0, 0);
+        needMergePad = true;
     }
 
-    // For if-statements without else inside a loop, both falseTarget and mergePoint
-    // should refer to the same NOP instruction. For other cases, mergePoint is
-    // the current instruction after all blocks.
-    u32 mergePoint = (block.statements.count <= 2 && loopDepth > 0) ?
-                     falseTarget : builder.currentInstruction;
+    // Set merge point to current instruction (NOP location if we emit one)
+    u32 mergePoint = builder.currentInstruction;
+    if (needMergePad) {
+        builder.EmitInstruction(OP_NOP, 0, 0, 0);
+    }
 
     // Patch branch: metadata = (falseTarget << 16) | trueTarget
     program.metadata[branchIdx] = (falseTarget << 16) | (trueTarget & 0xFFFF);
@@ -2032,6 +2040,55 @@ void LowerIfStatement(NodeRef ref) {
         // This handles cases like: vec4 - vec3 -> truncate vec4 to vec3, then subtract
         u32 leftDim = GetVectorDimension(leftType);
         u32 rightDim = GetVectorDimension(rightType);
+
+        // Handle vector-scalar ops by splatting the scalar to a matching vector.
+        if ((leftDim > 1 && rightDim == 1) || (rightDim > 1 && leftDim == 1)) {
+            bool leftIsVector = (leftDim > 1);
+            CoreType vectorType = leftIsVector ? leftType : rightType;
+            CoreType scalarType = leftIsVector ? rightType : leftType;
+            CoreType vectorScalarType = CoreType::INVALID;
+            switch (vectorType) {
+                case CoreType::FLOAT2:
+                case CoreType::FLOAT3:
+                case CoreType::FLOAT4:
+                    vectorScalarType = CoreType::FLOAT;
+                    break;
+                case CoreType::INT2:
+                case CoreType::INT3:
+                case CoreType::INT4:
+                    vectorScalarType = CoreType::INT;
+                    break;
+                case CoreType::UINT2:
+                case CoreType::UINT3:
+                case CoreType::UINT4:
+                    vectorScalarType = CoreType::UINT;
+                    break;
+                default:
+                    break;
+            }
+
+            if (vectorScalarType != CoreType::INVALID && scalarType == vectorScalarType) {
+                u16 scalarReg = leftIsVector ? right : left;
+                u16 splat = AllocateRegister();
+                builder.EmitInstruction(OP_VEC_CONSTRUCT, splat, scalarReg, scalarReg, scalarReg, scalarReg);
+                program.metadata[builder.currentInstruction - 1] = GetVectorDimension(vectorType);
+                SetRegisterType(splat, vectorType);
+
+                if (leftIsVector) {
+                    right = splat;
+                    rightType = vectorType;
+                    rightMask = mask(rightType);
+                } else {
+                    left = splat;
+                    leftType = vectorType;
+                    leftMask = mask(leftType);
+                }
+
+                leftDim = GetVectorDimension(leftType);
+                rightDim = GetVectorDimension(rightType);
+                resultType = leftType;
+            }
+        }
 
         if (leftDim > 1 && rightDim > 1 && leftDim != rightDim) {
             u32 targetDim = (leftDim < rightDim) ? leftDim : rightDim;
@@ -2687,8 +2744,10 @@ void LowerIfStatement(NodeRef ref) {
 
         // Collect argument registers
         // Initialize to 0x3FFF sentinel (unused operand slot marker, skipped by SSA)
-        u16 args[4] = {0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF};
-        u32 argCount = call.arguments.count < 4 ? call.arguments.count : 4;
+        // Support up to 16 arguments for mat4 construction
+        u16 args[16] = {0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF,
+                        0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF};
+        u32 argCount = call.arguments.count < 16 ? call.arguments.count : 16;
         for (u32 i = 0; i < argCount; i++) {
             args[i] = LowerExpression(call.arguments[i]);
         }
@@ -3063,6 +3122,9 @@ void LowerIfStatement(NodeRef ref) {
                 if (isScalarConversion) {
                     // Scalar type conversion - emit appropriate conversion opcode
                     CoreType srcType = GetRegisterType(args[0]);
+                    if (srcType == constructedType) {
+                        return args[0];
+                    }
                     OpCode convOp = OP_NOP;
 
                     if (constructedType == CoreType::FLOAT) {
@@ -3079,10 +3141,26 @@ void LowerIfStatement(NodeRef ref) {
                         }
                         else convOp = OP_I2F;  // Default to I2F
                     } else if (constructedType == CoreType::INT) {
+                        if (srcType == CoreType::BOOL) {
+                            // Bool to int: use select(0, 1, bool)
+                            u16 zero = EmitConstantInt(0);
+                            u16 one = EmitConstantInt(1);
+                            builder.EmitInstruction(OP_SELECT, dest, zero, one, args[0]);
+                            SetRegisterType(dest, CoreType::INT);
+                            return dest;
+                        }
                         if (srcType == CoreType::FLOAT) convOp = OP_F2I;
                         else if (srcType == CoreType::UINT) convOp = OP_U2I;
                         else convOp = OP_F2I;
                     } else if (constructedType == CoreType::UINT) {
+                        if (srcType == CoreType::BOOL) {
+                            // Bool to uint: use select(0, 1, bool)
+                            u16 zero = EmitConstantUint(0);
+                            u16 one = EmitConstantUint(1);
+                            builder.EmitInstruction(OP_SELECT, dest, zero, one, args[0]);
+                            SetRegisterType(dest, CoreType::UINT);
+                            return dest;
+                        }
                         if (srcType == CoreType::FLOAT) convOp = OP_F2U;
                         else if (srcType == CoreType::INT) convOp = OP_I2U;
                         else convOp = OP_F2U;
@@ -3092,6 +3170,38 @@ void LowerIfStatement(NodeRef ref) {
                         builder.EmitInstruction(convOp, dest, args[0]);
                         SetRegisterType(dest, constructedType);
                     }
+                } else if (constructedType == CoreType::MAT2 || constructedType == CoreType::MAT3 || constructedType == CoreType::MAT4) {
+                    // Matrix type constructor - need to build column vectors first
+                    // mat2 = 2 columns of vec2 (4 floats)
+                    // mat3 = 3 columns of vec3 (9 floats)
+                    // mat4 = 4 columns of vec4 (16 floats)
+                    u32 numColumns = (constructedType == CoreType::MAT2) ? 2 : (constructedType == CoreType::MAT3) ? 3 : 4;
+                    u32 numRows = numColumns;
+                    CoreType columnType = (numColumns == 2) ? CoreType::FLOAT2 : (numColumns == 3) ? CoreType::FLOAT3 : CoreType::FLOAT4;
+
+                    u16 columnRegs[4];
+                    for (u32 col = 0; col < numColumns; col++) {
+                        columnRegs[col] = AllocateRegister();
+                        SetRegisterType(columnRegs[col], columnType);
+
+                        // Get the scalars for this column
+                        u16 s0 = (col * numRows + 0 < argCount) ? args[col * numRows + 0] : 0xFFFF;
+                        u16 s1 = (col * numRows + 1 < argCount) ? args[col * numRows + 1] : 0xFFFF;
+                        u16 s2 = (numRows >= 3 && col * numRows + 2 < argCount) ? args[col * numRows + 2] : 0xFFFF;
+                        u16 s3 = (numRows >= 4 && col * numRows + 3 < argCount) ? args[col * numRows + 3] : 0xFFFF;
+
+                        builder.EmitInstruction(OP_VEC_CONSTRUCT, columnRegs[col], s0, s1, s2, s3);
+                        program.metadata[builder.currentInstruction - 1] = numRows;
+                    }
+
+                    // Now construct the matrix from column vectors
+                    u16 c0 = columnRegs[0];
+                    u16 c1 = columnRegs[1];
+                    u16 c2 = (numColumns >= 3) ? columnRegs[2] : 0xFFFF;
+                    u16 c3 = (numColumns >= 4) ? columnRegs[3] : 0xFFFF;
+                    builder.EmitInstruction(OP_MAT_CONSTRUCT, dest, c0, c1, c2, c3);
+                    program.metadata[builder.currentInstruction - 1] = numColumns;
+                    SetRegisterType(dest, constructedType);
                 } else {
                     // Vector type constructor - emit OP_VEC_CONSTRUCT with up to 4 operands
                     // Use 0xFFFF as sentinel for unused operands

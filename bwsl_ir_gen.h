@@ -662,11 +662,60 @@ void EliminateDeadCode(IRProgram* prog) {
             }
         }
     }
+
+    // Preserve merge/continue targets for structured control flow.
+    if (prog->structureInfo) {
+        for (u32 i = 0; i < prog->instructionCount; i++) {
+            u32 info = prog->structureInfo[i];
+            if (info == 0) continue;
+            u32 mergeInst = info & IRProgram::STRUCT_TARGET_MASK;
+            if (mergeInst < prog->instructionCount && !used[mergeInst]) {
+                used[mergeInst] = true;
+                workQueue[queueTail++] = mergeInst;
+            }
+            if ((info & IRProgram::STRUCT_TYPE_MASK) == IRProgram::STRUCT_LOOP_HEADER && prog->continueInfo) {
+                u32 contInst = prog->continueInfo[i];
+                if (contInst != 0xFFFFFFFF && contInst < prog->instructionCount && !used[contInst]) {
+                    used[contInst] = true;
+                    workQueue[queueTail++] = contInst;
+                }
+            }
+        }
+    }
+
+    // Re-run queue for any newly marked instructions.
+    while (queueHead < queueTail) {
+        u32 idx = workQueue[queueHead++];
+        for (u32 j = 0; j < 4; j++) {
+            u16 op = prog->GetOperand(idx, j);
+            if ((op & 0xC000) == 0 && op < prog->registerCount) {
+                u32 producer = registerWriters[op];
+                if (producer != 0xFFFFFFFF && !used[producer]) {
+                    used[producer] = true;
+                    workQueue[queueTail++] = producer;
+                }
+            }
+        }
+    }
         
-        // Compact arrays in parallel
-        u32 writeIdx = 0;
+        // Build instruction index remapping table
+        u32* indexRemap = (u32*)alloca(prog->instructionCount * sizeof(u32));
+        memset(indexRemap, 0xFF, prog->instructionCount * sizeof(u32));  // 0xFFFFFFFF = eliminated
+
+        u32 newIdx = 0;
         for (u32 i = 0; i < prog->instructionCount; i++) {
             if (used[i]) {
+                indexRemap[i] = newIdx++;
+            }
+        }
+
+        // Compact arrays in parallel and update control flow metadata
+        u32 writeIdx = 0;
+        u32 oldCount = prog->instructionCount;
+        for (u32 i = 0; i < oldCount; i++) {
+            if (!used[i]) continue;
+
+            if (writeIdx != i) {
                 prog->opcodes[writeIdx] = prog->opcodes[i];
                 prog->types[writeIdx] = prog->types[i];
                 prog->flags[writeIdx] = prog->flags[i];
@@ -675,9 +724,50 @@ void EliminateDeadCode(IRProgram* prog) {
                 prog->operands[writeIdx * 4 + 1] = prog->operands[i * 4 + 1];
                 prog->operands[writeIdx * 4 + 2] = prog->operands[i * 4 + 2];
                 prog->operands[writeIdx * 4 + 3] = prog->operands[i * 4 + 3];
-                prog->metadata[writeIdx] = prog->metadata[i];
-                writeIdx++;
             }
+
+            u16 op = prog->opcodes[writeIdx];
+            u32 meta = prog->metadata[i];
+            if (op == OP_JUMP) {
+                u32 newTarget = (meta < oldCount) ? indexRemap[meta] : meta;
+                prog->metadata[writeIdx] = (newTarget != 0xFFFFFFFF) ? newTarget : writeIdx + 1;
+            } else if (op == OP_BRANCH) {
+                u32 oldFalse = meta >> 16;
+                u32 oldTrue = meta & 0xFFFF;
+                u32 newFalse = (oldFalse < oldCount) ? indexRemap[oldFalse] : oldFalse;
+                u32 newTrue = (oldTrue < oldCount) ? indexRemap[oldTrue] : oldTrue;
+                if (newFalse == 0xFFFFFFFF) newFalse = writeIdx + 1;
+                if (newTrue == 0xFFFFFFFF) newTrue = writeIdx + 1;
+                prog->metadata[writeIdx] = (newFalse << 16) | (newTrue & 0xFFFF);
+            } else {
+                prog->metadata[writeIdx] = meta;
+            }
+
+            if (prog->structureInfo) {
+                u32 info = prog->structureInfo[i];
+                if (info != 0) {
+                    u32 type = info & IRProgram::STRUCT_TYPE_MASK;
+                    u32 mergeInst = info & IRProgram::STRUCT_TARGET_MASK;
+                    if (mergeInst < oldCount) {
+                        u32 newMerge = indexRemap[mergeInst];
+                        if (newMerge == 0xFFFFFFFF) newMerge = writeIdx + 1;
+                        info = type | (newMerge & IRProgram::STRUCT_TARGET_MASK);
+                    }
+                }
+                prog->structureInfo[writeIdx] = info;
+            }
+
+            if (prog->continueInfo) {
+                u32 contInst = prog->continueInfo[i];
+                if (contInst != 0xFFFFFFFF && contInst < oldCount) {
+                    u32 newCont = indexRemap[contInst];
+                    if (newCont == 0xFFFFFFFF) newCont = writeIdx + 1;
+                    contInst = newCont;
+                }
+                prog->continueInfo[writeIdx] = contInst;
+            }
+
+            writeIdx++;
         }
         prog->instructionCount = writeIdx;
     }
@@ -891,8 +981,9 @@ void EliminateDeadCode(IRProgram* prog) {
         
         // Compact the instruction array, updating jump/branch targets in metadata
         u32 writeIdx = 0;
+        u32 oldCount = prog->instructionCount;
         bool anyEliminated = false;
-        for (u32 i = 0; i < prog->instructionCount; i++) {
+        for (u32 i = 0; i < oldCount; i++) {
             if (!eliminate[i]) {
                 if (writeIdx != i) {
                     prog->opcodes[writeIdx] = prog->opcodes[i];
@@ -909,14 +1000,14 @@ void EliminateDeadCode(IRProgram* prog) {
                     u16 op = prog->opcodes[writeIdx];
                     if (op == OP_JUMP) {
                         // JUMP: metadata is target instruction index
-                        u32 newTarget = (meta < prog->instructionCount) ? indexRemap[meta] : meta;
+                        u32 newTarget = (meta < oldCount) ? indexRemap[meta] : meta;
                         prog->metadata[writeIdx] = (newTarget != 0xFFFFFFFF) ? newTarget : writeIdx + 1;
                     } else if (op == OP_BRANCH) {
                         // BRANCH: metadata = (falseTarget << 16) | trueTarget
                         u32 oldFalse = meta >> 16;
                         u32 oldTrue = meta & 0xFFFF;
-                        u32 newFalse = (oldFalse < prog->instructionCount) ? indexRemap[oldFalse] : oldFalse;
-                        u32 newTrue = (oldTrue < prog->instructionCount) ? indexRemap[oldTrue] : oldTrue;
+                        u32 newFalse = (oldFalse < oldCount) ? indexRemap[oldFalse] : oldFalse;
+                        u32 newTrue = (oldTrue < oldCount) ? indexRemap[oldTrue] : oldTrue;
                         // If target was eliminated, point to next instruction as fallback
                         if (newFalse == 0xFFFFFFFF) newFalse = writeIdx + 1;
                         if (newTrue == 0xFFFFFFFF) newTrue = writeIdx + 1;
@@ -929,17 +1020,41 @@ void EliminateDeadCode(IRProgram* prog) {
                     u16 op = prog->opcodes[writeIdx];
                     u32 meta = prog->metadata[writeIdx];
                     if (op == OP_JUMP) {
-                        u32 newTarget = (meta < prog->instructionCount) ? indexRemap[meta] : meta;
+                        u32 newTarget = (meta < oldCount) ? indexRemap[meta] : meta;
                         prog->metadata[writeIdx] = (newTarget != 0xFFFFFFFF) ? newTarget : writeIdx + 1;
                     } else if (op == OP_BRANCH) {
                         u32 oldFalse = meta >> 16;
                         u32 oldTrue = meta & 0xFFFF;
-                        u32 newFalse = (oldFalse < prog->instructionCount) ? indexRemap[oldFalse] : oldFalse;
-                        u32 newTrue = (oldTrue < prog->instructionCount) ? indexRemap[oldTrue] : oldTrue;
+                        u32 newFalse = (oldFalse < oldCount) ? indexRemap[oldFalse] : oldFalse;
+                        u32 newTrue = (oldTrue < oldCount) ? indexRemap[oldTrue] : oldTrue;
                         if (newFalse == 0xFFFFFFFF) newFalse = writeIdx + 1;
                         if (newTrue == 0xFFFFFFFF) newTrue = writeIdx + 1;
                         prog->metadata[writeIdx] = (newFalse << 16) | (newTrue & 0xFFFF);
                     }
+                }
+
+                if (prog->structureInfo) {
+                    u32 info = prog->structureInfo[i];
+                    if (info != 0) {
+                        u32 type = info & IRProgram::STRUCT_TYPE_MASK;
+                        u32 mergeInst = info & IRProgram::STRUCT_TARGET_MASK;
+                        if (mergeInst < oldCount) {
+                            u32 newMerge = indexRemap[mergeInst];
+                            if (newMerge == 0xFFFFFFFF) newMerge = writeIdx + 1;
+                            info = type | (newMerge & IRProgram::STRUCT_TARGET_MASK);
+                        }
+                    }
+                    prog->structureInfo[writeIdx] = info;
+                }
+
+                if (prog->continueInfo) {
+                    u32 contInst = prog->continueInfo[i];
+                    if (contInst != 0xFFFFFFFF && contInst < oldCount) {
+                        u32 newCont = indexRemap[contInst];
+                        if (newCont == 0xFFFFFFFF) newCont = writeIdx + 1;
+                        contInst = newCont;
+                    }
+                    prog->continueInfo[writeIdx] = contInst;
                 }
                 writeIdx++;
             } else {
@@ -998,5 +1113,3 @@ void EliminateDeadCode(IRProgram* prog) {
 
 }
 }
-
-

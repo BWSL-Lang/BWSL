@@ -1,0 +1,108 @@
+// Test: Various edge cases
+// Tests: boundary conditions, unusual patterns
+
+pipeline EdgeCases {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Empty blocks
+            if (true) {
+            }
+
+            // Single statement if
+            float x = 0.0;
+            if (true) {
+                x = 1.0;
+            }
+
+            // Chained assignments
+            float a = 0.0;
+            float b = 0.0;
+            float c = 0.0;
+            a = b = c = 5.0;
+
+            // Deeply nested expressions
+            float deep = ((((1.0 + 2.0) * 3.0) - 4.0) / 5.0);
+
+            // Long expression chains
+            float chain = 1.0 + 2.0 + 3.0 + 4.0 + 5.0 + 6.0 + 7.0 + 8.0 + 9.0 + 10.0;
+
+            // Mixed operators without parens (precedence test)
+            float prec1 = 2.0 + 3.0 * 4.0;      // 14.0 (not 20.0)
+            float prec2 = 10.0 - 4.0 / 2.0;    // 8.0 (not 3.0)
+            float prec3 = 1.0 + 2.0 * 3.0 + 4.0;  // 11.0
+
+            // Comparison chains via logical
+            float val = 5.0;
+            bool inRange = val > 0.0 && val < 10.0;
+
+            // Negative literals
+            float neg = -1.0;
+            float neg2 = -0.0;
+            int negInt = -42;
+
+            // Very small/large numbers
+            float tiny = 1e-10;
+            float huge = 1e10;
+            float veryTiny = 0.0000001;
+
+            // Zero operations
+            float zero = 0.0;
+            float zeroMul = zero * 1000.0;  // 0.0
+            float zeroAdd = zero + 0.0;     // 0.0
+
+            // One operations
+            float one = 1.0;
+            float oneMul = one * 5.0;       // 5.0
+            float onePow = pow(one, 100.0); // 1.0
+
+            // Self operations
+            float self = 5.0;
+            float selfSub = self - self;    // 0.0
+            float selfDiv = self / self;    // 1.0
+
+            // Immediate use after declaration
+            float imm = 3.0 * (float y = 2.0);  // if this syntax works
+            // If not, standard pattern:
+            float y2 = 2.0;
+            float imm2 = 3.0 * y2;
+
+            // Long variable names
+            float thisIsAVeryLongVariableNameThatShouldStillWork = 1.0;
+            float result = thisIsAVeryLongVariableNameThatShouldStillWork + 1.0;
+
+            // Underscore in names
+            float my_variable = 1.0;
+            float _leadingUnderscore = 2.0;
+            float trailing_ = 3.0;
+
+            // Many variables in scope
+            float v1 = 1.0;
+            float v2 = 2.0;
+            float v3 = 3.0;
+            float v4 = 4.0;
+            float v5 = 5.0;
+            float v6 = 6.0;
+            float v7 = 7.0;
+            float v8 = 8.0;
+            float allSum = v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8;
+
+            // Complex swizzle patterns
+            float4 vec4 = float4(1.0, 2.0, 3.0, 4.0);
+            float4 shuffled = vec4.wzyx;
+            float2 doubled = vec4.xx;
+            float sum4 = vec4.x + vec4.y + vec4.z + vec4.w;
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

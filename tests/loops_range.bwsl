@@ -1,0 +1,83 @@
+// Test: Range-based for loops
+// Tests: exclusive range (..), inclusive range (..=), step (by)
+
+pipeline LoopsRange {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Exclusive range: 0..10 means 0 to 9
+            float sum1 = 0.0;
+            for (i in 0..10) {
+                sum1 += float(i);
+            }
+            // sum1 = 0+1+2+3+4+5+6+7+8+9 = 45
+
+            // Inclusive range: 0..=9 means 0 to 9
+            float sum2 = 0.0;
+            for (i in 0..=9) {
+                sum2 += float(i);
+            }
+            // sum2 = 45
+
+            // Inclusive range: 1..=10 means 1 to 10
+            float sum3 = 0.0;
+            for (i in 1..=10) {
+                sum3 += float(i);
+            }
+            // sum3 = 55
+
+            // Range with step (by keyword)
+            float sum4 = 0.0;
+            for (i in 0..10 by 2) {
+                sum4 += float(i);
+            }
+            // sum4 = 0+2+4+6+8 = 20
+
+            // Range with larger step
+            float sum5 = 0.0;
+            for (i in 0..100 by 10) {
+                sum5 += float(i);
+            }
+            // sum5 = 0+10+20+30+40+50+60+70+80+90 = 450
+
+            // Nested range loops
+            float sum6 = 0.0;
+            for (i in 0..4) {
+                for (j in 0..4) {
+                    sum6 += 1.0;
+                }
+            }
+            // sum6 = 16
+
+            // Range starting from non-zero
+            float sum7 = 0.0;
+            for (i in 5..10) {
+                sum7 += float(i);
+            }
+            // sum7 = 5+6+7+8+9 = 35
+
+            // Small range
+            float sum8 = 0.0;
+            for (i in 0..3) {
+                sum8 += 1.0;
+            }
+            // sum8 = 3
+
+            // Using range variable
+            for (i in 0..4) {
+                float val = float(i) * 0.25;  // 0.0, 0.25, 0.5, 0.75
+            }
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

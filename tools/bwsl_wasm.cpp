@@ -423,6 +423,10 @@ static ShaderOutput CompileShaderStage(
     lowering.currentPipeline = pipelineRef;
     lowering.currentPassVaryings = varyingContext;
 
+    for (u32 i = 0; i < pass.consts.count; i++) {
+        lowering.LowerStatement(pass.consts[i]);
+    }
+
     const BlockData& block = context.ast.GetBlock(shaderBody);
     for (u32 i = 0; i < block.statements.count; i++) {
         lowering.LowerStatement(block.statements[i]);

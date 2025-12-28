@@ -219,6 +219,7 @@ struct ConstraintDeclData {
 struct PassData {
     ArenaString name;
     ArenaArray<ArenaString> usedAttributes;
+    ArenaArray<NodeRef> consts;     // Pass-scoped constants
     ArenaArray<NodeRef> functions;  // Pass-scoped functions
     NodeRef vertexShader;
     NodeRef fragmentShader;
@@ -914,6 +915,7 @@ namespace ASTFactory {
         PassData data;
         data.name = ArenaString::MakeHashOnly(name);
         data.usedAttributes.Init(ast->arena, 8);
+        data.consts.Init(ast->arena, 4);
         data.functions.Init(ast->arena, 8);  // Pass-scoped functions
         data.vertexShader = NodeRef::Null();
         data.fragmentShader = NodeRef::Null();

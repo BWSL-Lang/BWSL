@@ -193,7 +193,11 @@ bool Parser::IsFunctionDeclStart() {
 }
 
 bool Parser::CheckMask(TokenMask mask) {
-    return (mask & (1ULL << static_cast<size_t>(stream->GetType(current)))) != 0;
+    size_t type = static_cast<size_t>(stream->GetType(current));
+    if (type >= 64) {
+        return false;
+    }
+    return (mask & (1ULL << type)) != 0;
 }
 
 bool Parser::MatchMask(TokenMask mask) {
@@ -277,6 +281,72 @@ NodeRef Parser::ParsePipeline() {
             ParseImports(pipeline);
         } else if (Match(TokenType::ATTRIBUTES)) {
             ParseAttributes(pipeline);
+        } else if (Match(TokenType::CONST)) {
+            if (!MatchMask(TokenMasks::CORE_TYPES)) {
+                Error("Expected type after 'const'");
+                Advance();
+                continue;
+            }
+
+            TokenType varType = static_cast<TokenType>(stream->GetType(previous));
+            Consume(TokenType::IDENTIFIER, "Expected constant name");
+            std::string constName(stream->GetValue(previous));
+
+            Consume(TokenType::ASSIGN, "const variables must be initialized");
+
+            NodeRef value = ParseExpression();
+            if (!value.IsValid()) {
+                Error("Expected initializer expression for const");
+                Advance();
+                continue;
+            }
+
+            Consume(TokenType::SEMICOLON, "Expected ';'");
+
+            ArenaString constNameStr = ArenaString::MakeHashOnly(constName);
+            Symbol* sym = SymbolTable::AddSymbol(&symbolTable, constNameStr, SymbolKind::VARIABLE);
+            if (!sym) {
+                Error("Variable already declared in this scope");
+                continue;
+            }
+
+            VariableData& varData = symbolTable.variables[sym->index];
+            varData.typeInfo = GetTypeInfoFromToken(varType);
+            varData.isConst = true;
+            varData.isEval = false;
+            varData.constExpr = value;
+
+            EvalStateSoA evalState;
+            CompileTimeEvaluatorSoA::Init(&evalState, this, ast, &context->evalCache, ast->arena);
+            LiteralValue constValue;
+            if (CompileTimeEvaluatorSoA::CanEvaluateNode(&evalState, value) &&
+                CompileTimeEvaluatorSoA::EvaluateNode(&evalState, value, &constValue)) {
+                bool typeOk = false;
+                switch (varData.typeInfo.coreType) {
+                    case CoreType::INT:
+                        typeOk = (constValue.type == LiteralValue::INT);
+                        break;
+                    case CoreType::UINT:
+                        typeOk = (constValue.type == LiteralValue::UINT);
+                        break;
+                    case CoreType::FLOAT:
+                        if (constValue.type == LiteralValue::INT) {
+                            constValue.floatValue = static_cast<float>(constValue.intValue);
+                            constValue.type = LiteralValue::FLOAT;
+                        }
+                        typeOk = (constValue.type == LiteralValue::FLOAT);
+                        break;
+                    case CoreType::BOOL:
+                        typeOk = (constValue.type == LiteralValue::BOOL);
+                        break;
+                    default:
+                        break;
+                }
+                if (typeOk) {
+                    varData.isEval = true;
+                    varData.evalValue = constValue;
+                }
+            }
         } else if (Match(TokenType::PASS)) {
             NodeRef pass = ParsePass();
             if (pass.IsValid()) {
@@ -525,6 +595,78 @@ void Parser::ParsePassBody(NodeRef pass) {
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
         if (Match(TokenType::USE)) {
             ParseUseAttributes(pass);
+        } else if (Match(TokenType::CONST)) {
+            SourceLocation loc = getLocation(stream->GetOffset(previous));
+            if (!MatchMask(TokenMasks::CORE_TYPES)) {
+                Error("Expected type after 'const'");
+                Advance();
+                continue;
+            }
+
+            TokenType varType = static_cast<TokenType>(stream->GetType(previous));
+            std::string typeStr(stream->GetValue(previous));
+            Consume(TokenType::IDENTIFIER, "Expected constant name");
+            std::string constName(stream->GetValue(previous));
+
+            Consume(TokenType::ASSIGN, "const variables must be initialized");
+
+            NodeRef value = ParseExpression();
+            if (!value.IsValid()) {
+                Error("Expected initializer expression for const");
+                Advance();
+                continue;
+            }
+
+            Consume(TokenType::SEMICOLON, "Expected ';'");
+
+            ArenaString constNameStr = ArenaString::MakeHashOnly(constName);
+            NodeRef varDecl = ASTFactory::MakeVariableDecl(ast, constNameStr,
+                ArenaString::MakeHashOnly(typeStr),
+                value, true, loc.line, loc.column);
+            ast->GetPass(pass).consts.Push(arena, varDecl);
+            Symbol* sym = SymbolTable::AddSymbol(&symbolTable, constNameStr, SymbolKind::VARIABLE);
+            if (!sym) {
+                Error("Variable already declared in this scope");
+                continue;
+            }
+
+            VariableData& varData = symbolTable.variables[sym->index];
+            varData.typeInfo = GetTypeInfoFromToken(varType);
+            varData.isConst = true;
+            varData.isEval = false;
+            varData.constExpr = value;
+
+            EvalStateSoA evalState;
+            CompileTimeEvaluatorSoA::Init(&evalState, this, ast, &context->evalCache, ast->arena);
+            LiteralValue constValue;
+            if (CompileTimeEvaluatorSoA::CanEvaluateNode(&evalState, value) &&
+                CompileTimeEvaluatorSoA::EvaluateNode(&evalState, value, &constValue)) {
+                bool typeOk = false;
+                switch (varData.typeInfo.coreType) {
+                    case CoreType::INT:
+                        typeOk = (constValue.type == LiteralValue::INT);
+                        break;
+                    case CoreType::UINT:
+                        typeOk = (constValue.type == LiteralValue::UINT);
+                        break;
+                    case CoreType::FLOAT:
+                        if (constValue.type == LiteralValue::INT) {
+                            constValue.floatValue = static_cast<float>(constValue.intValue);
+                            constValue.type = LiteralValue::FLOAT;
+                        }
+                        typeOk = (constValue.type == LiteralValue::FLOAT);
+                        break;
+                    case CoreType::BOOL:
+                        typeOk = (constValue.type == LiteralValue::BOOL);
+                        break;
+                    default:
+                        break;
+                }
+                if (typeOk) {
+                    varData.isEval = true;
+                    varData.evalValue = constValue;
+                }
+            }
         } else if (Match(TokenType::VERTEX)) {
             if (Match(TokenType::ASSIGN)) {
                 // Shader stage inheritance: vertex = "PassName".vertex
@@ -704,6 +846,22 @@ NodeRef Parser::ParseStatement() {
     }
 
     if (Match(TokenType::SKIP)) {
+        if (Match(TokenType::IF)) {
+            Consume(TokenType::LEFT_PAREN, "Expected '(' after 'skip if'");
+            NodeRef condition = ParseExpression();
+            Consume(TokenType::RIGHT_PAREN, "Expected ')' after condition");
+            Consume(TokenType::SEMICOLON, "Expected ';' after skip if");
+
+            NodeRef ifNode = ASTFactory::MakeIfStatement(ast, line, col);
+            ast->GetBlock(ifNode).statements.Push(arena, condition);
+
+            NodeRef body = ASTFactory::MakeBlock(ast, line, col);
+            ast->GetBlock(body).statements.Push(arena, NodeRef(ASTNodeType::SKIP_STATEMENT, 0));
+            ast->GetBlock(ifNode).statements.Push(arena, body);
+
+            return ifNode;
+        }
+
         Consume(TokenType::SEMICOLON, "Expected ';' after skip");
         return NodeRef(ASTNodeType::SKIP_STATEMENT, 0);  // No data needed
     }
@@ -720,6 +878,7 @@ NodeRef Parser::ParseStatement() {
         }
 
         TokenType varType = static_cast<TokenType>(stream->GetType(previous));
+        std::string typeStr(stream->GetValue(previous));
         Consume(TokenType::IDENTIFIER, "Expected variable name");
         std::string varName = std::string(stream->GetValue(previous));
 
@@ -735,7 +894,7 @@ NodeRef Parser::ParseStatement() {
 
         ArenaString varNameStr = ArenaString::MakeHashOnly(varName);
         NodeRef varDecl = ASTFactory::MakeVariableDecl(ast, varNameStr,
-            ArenaString::MakeHashOnly(TokenTypeName(varType)),
+            ArenaString::MakeHashOnly(typeStr),
             value, true, line, col);
 
         Symbol* sym = SymbolTable::AddSymbol(&symbolTable, varNameStr, SymbolKind::VARIABLE);
@@ -1084,6 +1243,12 @@ NodeRef Parser::ParseUnary() {
         NodeRef operand = ParseUnary();
         if (!operand.IsValid()) return NodeRef::Null();
         return ASTFactory::MakeUnaryOp(ast, UnaryOpType::NOT, operand, loc.line, loc.column);
+    }
+
+    if (Match(TokenType::PLUS)) {
+        NodeRef operand = ParseUnary();
+        if (!operand.IsValid()) return NodeRef::Null();
+        return operand;  // Unary plus is a no-op
     }
 
     if (Match(TokenType::MINUS)) {

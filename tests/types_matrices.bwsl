@@ -1,0 +1,82 @@
+// Test: Matrix types and operations
+// Tests: mat2, mat3, mat4 declarations and construction
+
+pipeline TypesMatrices {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // 2x2 matrix - identity
+            mat2 m2_identity = mat2(
+                1.0, 0.0,
+                0.0, 1.0
+            );
+
+            // 2x2 matrix - arbitrary values
+            mat2 m2_vals = mat2(
+                1.0, 2.0,
+                3.0, 4.0
+            );
+
+            // 3x3 matrix - identity
+            mat3 m3_identity = mat3(
+                1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0
+            );
+
+            // 3x3 matrix - rotation around Z axis
+            float angle = 0.5;
+            float c = cos(angle);
+            float s = sin(angle);
+            mat3 m3_rot = mat3(
+                c, -s, 0.0,
+                s,  c, 0.0,
+                0.0, 0.0, 1.0
+            );
+
+            // 4x4 matrix - identity
+            mat4 m4_identity = mat4(
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0
+            );
+
+            // 4x4 translation matrix
+            float3 translation = float3(1.0, 2.0, 3.0);
+            mat4 m4_translate = mat4(
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                translation.x, translation.y, translation.z, 1.0
+            );
+
+            // 4x4 scale matrix
+            float3 scale = float3(2.0, 2.0, 2.0);
+            mat4 m4_scale = mat4(
+                scale.x, 0.0, 0.0, 0.0,
+                0.0, scale.y, 0.0, 0.0,
+                0.0, 0.0, scale.z, 0.0,
+                0.0, 0.0, 0.0, 1.0
+            );
+
+            // Matrix-vector multiplication
+            float4 pos = float4(attributes.position, 1.0);
+            float4 transformed = m4_identity * pos;
+
+            // Matrix-matrix multiplication
+            mat4 combined = m4_translate * m4_scale;
+
+            output.position = combined * pos;
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

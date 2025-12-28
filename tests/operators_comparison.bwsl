@@ -1,0 +1,60 @@
+// Test: Comparison operators
+// Tests: <, >, <=, >=, ==, != on scalars
+
+pipeline OperatorsComparison {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Integer comparisons
+            int a = 5;
+            int b = 10;
+            int c = 5;
+
+            bool lt = a < b;      // true
+            bool gt = a > b;      // false
+            bool le = a <= c;     // true
+            bool ge = b >= a;     // true
+            bool eq = a == c;     // true
+            bool ne = a != b;     // true
+
+            // Float comparisons
+            float fa = 3.14;
+            float fb = 2.71;
+            float fc = 3.14;
+
+            bool flt = fa < fb;   // false
+            bool fgt = fa > fb;   // true
+            bool fle = fa <= fc;  // true
+            bool fge = fa >= fc;  // true
+            bool feq = fa == fc;  // true
+            bool fne = fa != fb;  // true
+
+            // Unsigned integer comparisons
+            uint ua = 100u;
+            uint ub = 50u;
+
+            bool ult = ua < ub;   // false
+            bool ugt = ua > ub;   // true
+
+            // Comparison with zero
+            float x = 0.5;
+            bool positive = x > 0.0;
+            bool negative = x < 0.0;
+            bool zero = x == 0.0;
+
+            // Chain comparisons via logical operators (tested in logical test)
+            bool inRange = (x >= 0.0) && (x <= 1.0);
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

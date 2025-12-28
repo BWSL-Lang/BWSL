@@ -1,0 +1,64 @@
+// Test: Unary operators
+// Tests: !, -, +, ++, --
+
+pipeline OperatorsUnary {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Unary negation - float
+            float f = 5.0;
+            float neg_f = -f;         // -5.0
+            float pos_f = +f;         // 5.0
+            float double_neg = -(-f); // 5.0
+
+            // Unary negation - int
+            int i = 10;
+            int neg_i = -i;           // -10
+
+            // Unary negation - vectors
+            float3 v = float3(1.0, 2.0, 3.0);
+            float3 neg_v = -v;        // (-1.0, -2.0, -3.0)
+
+            // Increment/decrement - prefix
+            int counter = 0;
+            int pre_inc = ++counter;  // counter = 1, pre_inc = 1
+            int pre_dec = --counter;  // counter = 0, pre_dec = 0
+
+            // Increment/decrement - postfix
+            int x = 5;
+            int post_inc = x++;       // post_inc = 5, x = 6
+            int post_dec = x--;       // post_dec = 6, x = 5
+
+            // Increment in expressions
+            int a = 0;
+            int b = 0;
+            int sum1 = ++a + ++b;     // a=1, b=1, sum1=2
+
+            int c = 0;
+            int d = 0;
+            int sum2 = c++ + d++;     // c=1, d=1, sum2=0
+
+            // Multiple increments
+            int loop_var = 0;
+            loop_var++;
+            loop_var++;
+            loop_var++;  // loop_var = 3
+
+            // Negation in expressions
+            float3 normal = float3(0.0, 1.0, 0.0);
+            float3 flipped = -normal;
+            float3 restored = -flipped;  // back to original
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

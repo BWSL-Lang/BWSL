@@ -1,0 +1,86 @@
+// Test: Special loop constructs
+// Tests: loop(n), loop until, eval for, eval loop
+
+pipeline LoopsSpecial {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Simple loop with count
+            float sum1 = 0.0;
+            loop (8) {
+                sum1 += 1.0;
+            }
+            // sum1 = 8.0
+
+            // Loop until (post-condition loop)
+            float sum2 = 0.0;
+            int counter = 0;
+            loop {
+                sum2 += 1.0;
+                counter++;
+            } until (counter >= 5);
+            // sum2 = 5.0
+
+            // Eval for - compile-time unrolled
+            float sum3 = 0.0;
+            eval for (i in 0..4) {
+                sum3 += float(i);
+            }
+            // Unrolls to: sum3 += 0.0; sum3 += 1.0; sum3 += 2.0; sum3 += 3.0;
+            // sum3 = 6.0
+
+            // Eval loop - compile-time unrolled
+            float sum4 = 0.0;
+            eval loop (4) {
+                sum4 += 1.0;
+            }
+            // Unrolls to 4 statements
+            // sum4 = 4.0
+
+            // Eval for with array-like access pattern
+            float values_0 = 1.0;
+            float values_1 = 2.0;
+            float values_2 = 3.0;
+            float values_3 = 4.0;
+            float total = 0.0;
+            // This would be unrolled at compile time
+            eval for (i in 0..4) {
+                total += float(i + 1);
+            }
+
+            // Nested loop with early exit
+            float found = 0.0;
+            for (int i = 0; i < 5; i++) {
+                for (int j = 0; j < 5; j++) {
+                    if (i == 2 && j == 3) {
+                        found = 1.0;
+                        break;
+                    }
+                }
+                if (found > 0.0) {
+                    break;
+                }
+            }
+
+            // Loop modifying vector components
+            float3 v = float3(0.0);
+            loop (3) {
+                v.x += 0.1;
+                v.y += 0.2;
+                v.z += 0.3;
+            }
+            // v = (0.3, 0.6, 0.9)
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

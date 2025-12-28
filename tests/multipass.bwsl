@@ -1,0 +1,92 @@
+// Test: Multi-pass rendering
+// Tests: multiple passes in pipeline, different attribute usage per pass
+
+pipeline MultiPass {
+    attributes {
+        position: float3
+        normal: float3
+        texcoord: float2
+    }
+
+    // Pipeline-level helper
+    lambert :: (float3 N, float3 L) -> float {
+        return max(dot(N, L), 0.0);
+    }
+
+    pass "GBuffer" {
+        use attributes { position, normal, texcoord }
+
+        // Pass-local helper
+        packNormal :: (float3 n) -> float3 {
+            return n * 0.5 + 0.5;
+        }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.worldPos = attributes.position;
+            output.normal = attributes.normal;
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float3 N = normalize(input.normal);
+            float3 packedN = packNormal(N);
+
+            // Write to multiple render targets would go here
+            // For now, just output normal visualization
+            output.color = float4(packedN, 1.0);
+        }
+    }
+
+    pass "Lighting" {
+        use attributes { position, texcoord }
+
+        vertex {
+            // Fullscreen quad - position already in clip space
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+
+            // Would sample G-buffer here
+            // Simulating with procedural values
+            float3 N = normalize(float3(0.0, 1.0, 0.0));
+            float3 L = normalize(float3(1.0, 1.0, 1.0));
+
+            float diffuse = lambert(N, L);
+
+            output.color = float4(float3(diffuse), 1.0);
+        }
+    }
+
+    pass "PostFX" {
+        use attributes { position, texcoord }
+
+        // Another pass-local function
+        vignette :: (float2 uv, float strength) -> float {
+            float2 centered = uv * 2.0 - 1.0;
+            float dist = dot(centered, centered);
+            return 1.0 - dist * strength;
+        }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+
+            // Would sample lit scene here
+            float3 sceneColor = float3(0.5, 0.6, 0.7);
+
+            // Apply vignette
+            float vig = vignette(uv, 0.3);
+            float3 finalColor = sceneColor * vig;
+
+            output.color = float4(finalColor, 1.0);
+        }
+    }
+}

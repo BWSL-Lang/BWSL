@@ -1,0 +1,89 @@
+// Test: Type conversions
+// Tests: explicit casts between types
+
+pipeline TypeConversions {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Float to int
+            float f1 = 3.7;
+            int i1 = int(f1);         // 3 (truncates)
+
+            float f2 = -2.3;
+            int i2 = int(f2);         // -2
+
+            // Int to float
+            int i3 = 42;
+            float f3 = float(i3);     // 42.0
+
+            // Int to uint
+            int i4 = 100;
+            uint u1 = uint(i4);       // 100u
+
+            // Uint to int
+            uint u2 = 200u;
+            int i5 = int(u2);         // 200
+
+            // Uint to float
+            uint u3 = 50u;
+            float f4 = float(u3);     // 50.0
+
+            // Float to uint
+            float f5 = 25.9;
+            uint u4 = uint(f5);       // 25u
+
+            // Bool conversions
+            bool b1 = true;
+            int i_bool = int(b1);     // 1
+            float f_bool = float(b1); // 1.0
+
+            bool b2 = false;
+            int i_bool2 = int(b2);    // 0
+
+            // Vector type widening
+            float2 v2 = float2(1.0, 2.0);
+            float3 v3_from_v2 = float3(v2, 3.0);      // (1, 2, 3)
+            float4 v4_from_v2 = float4(v2, 3.0, 4.0); // (1, 2, 3, 4)
+
+            float3 v3 = float3(1.0, 2.0, 3.0);
+            float4 v4_from_v3 = float4(v3, 1.0);      // (1, 2, 3, 1)
+
+            // Vector narrowing via swizzle
+            float4 v4 = float4(1.0, 2.0, 3.0, 4.0);
+            float3 v3_narrow = v4.xyz;     // (1, 2, 3)
+            float2 v2_narrow = v4.xy;      // (1, 2)
+
+            // Integer vector conversions
+            int3 iv3 = int3(1, 2, 3);
+            float3 fv3 = float3(iv3);      // (1.0, 2.0, 3.0)
+
+            float3 fv3b = float3(1.5, 2.7, 3.2);
+            int3 iv3b = int3(fv3b);        // (1, 2, 3)
+
+            // Uint vectors
+            uint3 uv3 = uint3(10u, 20u, 30u);
+            float3 fv3c = float3(uv3);     // (10.0, 20.0, 30.0)
+            int3 iv3c = int3(uv3);         // (10, 20, 30)
+
+            // Mixed in expressions
+            int a = 5;
+            float b = 2.5;
+            float result = float(a) + b;   // 7.5
+
+            uint c = 10u;
+            int d = 3;
+            int result2 = int(c) - d;      // 7
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

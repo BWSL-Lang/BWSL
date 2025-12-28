@@ -1,0 +1,47 @@
+// Test: Ternary/conditional operator and select intrinsic
+// Tests: ternary expressions, select() function
+
+pipeline ControlTernary {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float x = 0.7;
+
+            // Using select intrinsic (conditional select)
+            float result1 = select(0.0, 1.0, x > 0.5);
+
+            // Select with vectors
+            float3 colorA = float3(1.0, 0.0, 0.0);
+            float3 colorB = float3(0.0, 0.0, 1.0);
+            float3 selected = select(colorA, colorB, x > 0.5);
+
+            // Nested select
+            float result2 = select(
+                select(0.0, 0.5, x > 0.25),
+                1.0,
+                x > 0.75
+            );
+
+            // Select for interpolation
+            float t = x;
+            float edge0 = 0.3;
+            float edge1 = 0.7;
+            float clamped = select(0.0, select(1.0, (t - edge0) / (edge1 - edge0), t < edge1), t > edge0);
+
+            // Select with comparison results
+            bool isPositive = x > 0.0;
+            float sign_val = select(-1.0, 1.0, isPositive);
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

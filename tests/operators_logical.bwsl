@@ -1,0 +1,65 @@
+// Test: Logical operators
+// Tests: &&, ||, !
+
+pipeline OperatorsLogical {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            bool t = true;
+            bool f = false;
+
+            // Logical NOT
+            bool not_t = !t;      // false
+            bool not_f = !f;      // true
+            bool double_not = !!t; // true
+
+            // Logical AND
+            bool and_tt = t && t;  // true
+            bool and_tf = t && f;  // false
+            bool and_ft = f && t;  // false
+            bool and_ff = f && f;  // false
+
+            // Logical OR
+            bool or_tt = t || t;   // true
+            bool or_tf = t || f;   // true
+            bool or_ft = f || t;   // true
+            bool or_ff = f || f;   // false
+
+            // Combined expressions
+            bool complex1 = (t && f) || t;         // true
+            bool complex2 = t && (f || t);         // true
+            bool complex3 = !t || f;               // false
+            bool complex4 = !(t && f);             // true (De Morgan)
+            bool complex5 = !t && !f;              // false
+
+            // Short-circuit evaluation test
+            float x = 0.5;
+            bool inRange = (x >= 0.0) && (x <= 1.0);
+            bool outOfRange = (x < 0.0) || (x > 1.0);
+
+            // Nested conditions
+            bool isVisible = true;
+            float intensity = 0.8;
+            bool shouldRender = isVisible && (intensity > 0.0);
+
+            // Multiple conditions
+            bool a = true;
+            bool b = false;
+            bool c = true;
+            bool multiAnd = a && b && c;   // false
+            bool multiOr = a || b || c;    // true
+            bool mixed = (a && b) || (a && c);  // true
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

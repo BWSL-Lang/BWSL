@@ -1,0 +1,103 @@
+// Test: Vector swizzling
+// Tests: component access, swizzle patterns, write swizzles
+
+pipeline VectorsSwizzle {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float4 color = float4(1.0, 0.5, 0.3, 0.8);
+
+            // Single component access (xyzw notation)
+            float x = color.x;    // 1.0
+            float y = color.y;    // 0.5
+            float z = color.z;    // 0.3
+            float w = color.w;    // 0.8
+
+            // Single component access (rgba notation)
+            float r = color.r;    // 1.0
+            float g = color.g;    // 0.5
+            float b = color.b;    // 0.3
+            float a = color.a;    // 0.8
+
+            // Two-component swizzles
+            float2 xy = color.xy;     // (1.0, 0.5)
+            float2 rg = color.rg;     // (1.0, 0.5)
+            float2 zw = color.zw;     // (0.3, 0.8)
+            float2 yx = color.yx;     // (0.5, 1.0) - reversed
+
+            // Three-component swizzles
+            float3 xyz = color.xyz;   // (1.0, 0.5, 0.3)
+            float3 rgb = color.rgb;   // (1.0, 0.5, 0.3)
+            float3 bgr = color.bgr;   // (0.3, 0.5, 1.0) - reversed
+            float3 zyx = color.zyx;   // (0.3, 0.5, 1.0)
+
+            // Four-component swizzles (rearranging)
+            float4 wzyx = color.wzyx;     // (0.8, 0.3, 0.5, 1.0)
+            float4 rgba = color.rgba;     // same as original
+            float4 argb = color.argb;     // (0.8, 1.0, 0.5, 0.3)
+
+            // Repeated components
+            float3 rrr = color.rrr;       // (1.0, 1.0, 1.0)
+            float4 xxxx = color.xxxx;     // (1.0, 1.0, 1.0, 1.0)
+            float2 yy = color.yy;         // (0.5, 0.5)
+            float4 rrra = color.rrra;     // (1.0, 1.0, 1.0, 0.8)
+
+            // Mixed repeated
+            float4 rgrg = color.rgrg;     // (1.0, 0.5, 1.0, 0.5)
+            float3 xxy = color.xxy;       // (1.0, 1.0, 0.5)
+
+            // Swizzle from float3
+            float3 pos = float3(1.0, 2.0, 3.0);
+            float2 pos_xy = pos.xy;       // (1.0, 2.0)
+            float2 pos_xz = pos.xz;       // (1.0, 3.0)
+            float2 pos_yz = pos.yz;       // (2.0, 3.0)
+
+            // Swizzle from float2
+            float2 uv = float2(0.5, 0.75);
+            float u = uv.x;               // 0.5
+            float v = uv.y;               // 0.75
+            float2 vu = uv.yx;            // (0.75, 0.5)
+
+            // Write swizzle (assign to components)
+            float4 result = float4(0.0);
+            result.r = 1.0;
+            result.g = 0.5;
+            result.b = 0.25;
+            result.a = 1.0;
+
+            // Multi-component write swizzle
+            float3 dest = float3(0.0);
+            dest.xy = float2(1.0, 2.0);
+            // dest = (1.0, 2.0, 0.0)
+
+            // Using swizzle in expressions
+            float3 normal = float3(0.0, 1.0, 0.0);
+            float2 normal_xz = normal.xz;
+            float len_xz = length(normal_xz);
+
+            // Swizzle with operations
+            float3 v1 = float3(1.0, 2.0, 3.0);
+            float3 v2 = float3(4.0, 5.0, 6.0);
+            float3 mixed = float3(v1.x, v2.y, v1.z);  // (1.0, 5.0, 3.0)
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            // Swizzle in fragment shader
+            float4 texColor = float4(1.0, 0.5, 0.3, 1.0);
+
+            // Common pattern: premultiplied alpha
+            float3 rgb = texColor.rgb;
+            float alpha = texColor.a;
+            float3 premultiplied = rgb * alpha;
+
+            output.color = float4(premultiplied, alpha);
+        }
+    }
+}

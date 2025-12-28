@@ -1,0 +1,82 @@
+// Test: Assignment operators
+// Tests: =, +=, -=, *=, /=
+
+pipeline OperatorsAssignment {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Basic assignment
+            float a = 10.0;
+            float b = a;          // copy value
+
+            // Add-assign
+            float sum = 0.0;
+            sum += 10.0;          // 10.0
+            sum += 5.0;           // 15.0
+            sum += -3.0;          // 12.0
+
+            // Subtract-assign
+            float diff = 100.0;
+            diff -= 30.0;         // 70.0
+            diff -= 20.0;         // 50.0
+
+            // Multiply-assign
+            float prod = 2.0;
+            prod *= 3.0;          // 6.0
+            prod *= 2.0;          // 12.0
+
+            // Divide-assign
+            float quot = 100.0;
+            quot /= 2.0;          // 50.0
+            quot /= 5.0;          // 10.0
+
+            // Vector compound assignment
+            float3 v = float3(1.0, 2.0, 3.0);
+            v += float3(1.0, 1.0, 1.0);   // (2.0, 3.0, 4.0)
+            v -= float3(0.5, 0.5, 0.5);   // (1.5, 2.5, 3.5)
+            v *= 2.0;                      // (3.0, 5.0, 7.0)
+            v /= 2.0;                      // (1.5, 2.5, 3.5)
+
+            // Scalar-vector compound assignment
+            float3 pos = float3(0.0, 0.0, 0.0);
+            float3 velocity = float3(1.0, 0.5, 0.0);
+            float dt = 0.016;
+            pos += velocity * dt;         // Update position
+
+            // Integer compound assignment
+            int count = 0;
+            count += 5;
+            count -= 2;
+            count *= 3;           // (0+5-2)*3 = 9
+            count /= 3;           // 3
+
+            // Chain of assignments
+            float x = 0.0;
+            float y = 0.0;
+            float z = 0.0;
+            x += 1.0;
+            y = x;
+            y += 1.0;
+            z = y;
+            z += 1.0;             // x=1, y=2, z=3
+
+            // Compound in loop-like pattern
+            float accumulator = 0.0;
+            accumulator += 0.1;
+            accumulator += 0.2;
+            accumulator += 0.3;
+            accumulator += 0.4;   // 1.0
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

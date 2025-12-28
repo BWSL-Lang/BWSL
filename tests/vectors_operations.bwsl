@@ -1,0 +1,99 @@
+// Test: Vector math operations and intrinsics
+// Tests: dot, cross, normalize, length, distance, reflect, refract
+
+pipeline VectorsOperations {
+    attributes {
+        position: float3
+        normal: float3
+    }
+
+    pass "Main" {
+        use attributes { position, normal }
+
+        vertex {
+            float3 a = float3(1.0, 0.0, 0.0);
+            float3 b = float3(0.0, 1.0, 0.0);
+            float3 c = float3(1.0, 1.0, 1.0);
+
+            // Dot product
+            float dot_ab = dot(a, b);     // 0.0 (perpendicular)
+            float dot_aa = dot(a, a);     // 1.0
+            float dot_cc = dot(c, c);     // 3.0
+
+            // Cross product
+            float3 cross_ab = cross(a, b);  // (0, 0, 1)
+            float3 cross_ba = cross(b, a);  // (0, 0, -1)
+
+            // Length (magnitude)
+            float len_a = length(a);      // 1.0
+            float len_c = length(c);      // sqrt(3) ≈ 1.732
+
+            // Normalize
+            float3 norm_c = normalize(c);  // (0.577, 0.577, 0.577)
+            float3 norm_a = normalize(a);  // (1, 0, 0)
+
+            // Distance
+            float3 p1 = float3(0.0, 0.0, 0.0);
+            float3 p2 = float3(1.0, 0.0, 0.0);
+            float dist = distance(p1, p2);  // 1.0
+
+            float3 p3 = float3(3.0, 4.0, 0.0);
+            float dist2 = distance(p1, p3);  // 5.0
+
+            // Reflect
+            float3 incident = float3(1.0, -1.0, 0.0);
+            float3 normal_up = float3(0.0, 1.0, 0.0);
+            float3 reflected = reflect(incident, normal_up);  // (1, 1, 0)
+
+            // Refract
+            float3 I = normalize(float3(1.0, -1.0, 0.0));
+            float3 N = float3(0.0, 1.0, 0.0);
+            float eta = 1.0 / 1.5;  // air to glass
+            float3 refracted = refract(I, N, eta);
+
+            // Faceforward
+            float3 Nref = float3(0.0, 1.0, 0.0);
+            float3 I2 = float3(0.0, -1.0, 0.0);
+            float3 Ng = float3(0.0, 1.0, 0.0);
+            float3 faced = faceforward(Ng, I2, Nref);
+
+            // Vector length squared (via dot)
+            float lenSq = dot(c, c);  // More efficient than length(c)^2
+
+            // Angle between vectors (via dot and length)
+            float cosAngle = dot(normalize(a), normalize(b));  // 0.0
+
+            // Project vector onto another
+            float3 v = float3(1.0, 1.0, 0.0);
+            float3 onto = float3(1.0, 0.0, 0.0);
+            float projLen = dot(v, normalize(onto));
+            float3 projected = normalize(onto) * projLen;
+
+            // Float2 operations
+            float2 v2a = float2(3.0, 4.0);
+            float len2 = length(v2a);     // 5.0
+            float2 norm2 = normalize(v2a);
+            float dot2 = dot(v2a, float2(1.0, 0.0));  // 3.0
+
+            // Float4 operations
+            float4 v4 = float4(1.0, 2.0, 3.0, 4.0);
+            float len4 = length(v4);
+            float4 norm4 = normalize(v4);
+            float dot4 = dot(v4, v4);
+
+            output.position = float4(attributes.position, 1.0);
+            output.normal = attributes.normal;
+        }
+
+        fragment {
+            // Normalize interpolated normal
+            float3 N = normalize(input.normal);
+
+            // Simple lighting calculation
+            float3 L = normalize(float3(1.0, 1.0, 1.0));
+            float NdotL = max(dot(N, L), 0.0);
+
+            output.color = float4(float3(NdotL), 1.0);
+        }
+    }
+}

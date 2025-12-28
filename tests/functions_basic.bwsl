@@ -1,0 +1,129 @@
+// Test: Function declarations and calls
+// Tests: function syntax, return values, parameters
+
+pipeline FunctionsBasic {
+    attributes {
+        position: float3
+        normal: float3
+    }
+
+    // Pipeline-scoped functions (available to all passes)
+
+    // Simple function with no parameters
+    pi :: () -> float {
+        return 3.14159265359;
+    }
+
+    // Function with single parameter
+    square :: (float x) -> float {
+        return x * x;
+    }
+
+    // Function with multiple parameters
+    add :: (float a, float b) -> float {
+        return a + b;
+    }
+
+    // Function returning vector
+    makeColor :: (float r, float g, float b) -> float3 {
+        return float3(r, g, b);
+    }
+
+    // Function with vector parameter
+    brightness :: (float3 color) -> float {
+        return (color.r + color.g + color.b) / 3.0;
+    }
+
+    // Function with multiple statements
+    clampedDot :: (float3 a, float3 b) -> float {
+        float d = dot(a, b);
+        if (d < 0.0) {
+            return 0.0;
+        }
+        return d;
+    }
+
+    // Function calling other functions
+    squaredSum :: (float a, float b) -> float {
+        float sum = add(a, b);
+        return square(sum);
+    }
+
+    // Function with local variables
+    calculateIntensity :: (float3 normal, float3 lightDir) -> float {
+        float3 N = normalize(normal);
+        float3 L = normalize(lightDir);
+        float NdotL = dot(N, L);
+        float intensity = max(NdotL, 0.0);
+        return intensity;
+    }
+
+    // Function with early return
+    safeNormalize :: (float3 v) -> float3 {
+        float len = length(v);
+        if (len < 0.0001) {
+            return float3(0.0, 1.0, 0.0);
+        }
+        return v / len;
+    }
+
+    // Recursive-friendly function (Fresnel)
+    fresnelSchlick :: (float cosTheta, float3 F0) -> float3 {
+        float t = 1.0 - cosTheta;
+        float t2 = t * t;
+        float t5 = t2 * t2 * t;
+        return F0 + (float3(1.0) - F0) * t5;
+    }
+
+    pass "Main" {
+        use attributes { position, normal }
+
+        // Pass-scoped function (only available in this pass)
+        localHelper :: (float x) -> float {
+            return x * 2.0;
+        }
+
+        vertex {
+            // Call pipeline functions
+            float piVal = pi();
+            float sq = square(3.0);          // 9.0
+            float sum = add(2.0, 3.0);       // 5.0
+            float sqSum = squaredSum(2.0, 3.0);  // 25.0
+
+            // Call pass-local function
+            float doubled = localHelper(5.0);  // 10.0
+
+            // Use function with vector return
+            float3 color = makeColor(1.0, 0.5, 0.25);
+            float bright = brightness(color);
+
+            // Use function in expression
+            float result = square(add(1.0, 2.0)) + pi();
+
+            // Use complex functions
+            float3 N = attributes.normal;
+            float3 L = float3(1.0, 1.0, 1.0);
+            float intensity = calculateIntensity(N, L);
+
+            output.position = float4(attributes.position, 1.0);
+            output.normal = attributes.normal;
+        }
+
+        fragment {
+            float3 N = normalize(input.normal);
+            float3 L = normalize(float3(1.0, 1.0, 1.0));
+            float3 V = float3(0.0, 0.0, 1.0);
+
+            float NdotL = clampedDot(N, L);
+
+            // Fresnel
+            float3 H = normalize(L + V);
+            float VdotH = max(dot(V, H), 0.0);
+            float3 F0 = float3(0.04);
+            float3 F = fresnelSchlick(VdotH, F0);
+
+            float3 color = float3(NdotL) * (float3(1.0) - F) + F;
+            output.color = float4(color, 1.0);
+        }
+    }
+}

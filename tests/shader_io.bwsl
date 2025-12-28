@@ -1,0 +1,59 @@
+// Test: Shader I/O
+// Tests: input/output objects, vertex to fragment interpolation
+
+pipeline ShaderIO {
+    attributes {
+        position: float3
+        normal: float3
+        texcoord: float2
+        color: float4
+    }
+
+    pass "Main" {
+        use attributes { position, normal, texcoord, color }
+
+        vertex {
+            // Access vertex built-ins
+            uint vid = input.vertex_id;
+            uint iid = input.instance_id;
+
+            // Standard vertex transform
+            float4 worldPos = float4(attributes.position, 1.0);
+
+            // Required output
+            output.position = worldPos;
+
+            // Interpolated outputs to fragment
+            output.worldPos = attributes.position;
+            output.normal = attributes.normal;
+            output.texcoord = attributes.texcoord;
+            output.vertexColor = attributes.color;
+
+            // Computed outputs
+            output.viewDir = normalize(float3(0.0, 0.0, 5.0) - attributes.position);
+
+            // Using vertex_id
+            output.vertexIndex = float(vid);
+        }
+
+        fragment {
+            // Access interpolated values from vertex shader
+            float3 worldPos = input.worldPos;
+            float3 normal = normalize(input.normal);
+            float2 uv = input.texcoord;
+            float4 vColor = input.vertexColor;
+            float3 viewDir = normalize(input.viewDir);
+            float idx = input.vertexIndex;
+
+            // Simple lighting calculation
+            float3 lightDir = normalize(float3(1.0, 1.0, 1.0));
+            float NdotL = max(dot(normal, lightDir), 0.0);
+
+            // Combine lighting with vertex color
+            float3 litColor = vColor.rgb * NdotL;
+
+            // Required fragment output
+            output.color = float4(litColor, vColor.a);
+        }
+    }
+}

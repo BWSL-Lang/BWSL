@@ -1047,8 +1047,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
             // Check if source is a constant (float 0x8000, int 0x4000, bool 0xC000)
             bool srcIsConstant = (src_reg & 0xC000) != 0;
+            bool needsPreallocDef = (dest_reg < idCapacity && hasPreAllocatedId[dest_reg]);
 
-            if (srcIsConstant && dest_reg < idCapacity) {
+            if ((srcIsConstant || needsPreallocDef) && dest_reg < idCapacity) {
                 // For constants, we must emit OpCopyObject to create a properly defined ID.
                 // This is critical for phi nodes: the phi may be emitted before this block,
                 // so the destination register needs an actual instruction defining it.
@@ -1068,6 +1069,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 }
                 u32 type_id = GetTypeId(destType);
                 Emit(spv::OpCopyObject, type_id, dest, src_id);
+                if (needsPreallocDef) {
+                    hasPreAllocatedId[dest_reg] = false;
+                }
             } else if (dest_reg < idCapacity) {
                 // For register-to-register copy, just alias the SPIR-V ID
                 spirvIds[dest_reg] = src_id;
@@ -1081,8 +1085,13 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             // The constant index/value is typically in operand[0]
             u16 const_ref = ir->GetOperand(ir_idx, 0);
             u32 const_id = GetSpirvId(const_ref);
-            // Map dest register to constant ID
-            if (dest_reg < idCapacity) {
+            if (dest_reg < idCapacity && hasPreAllocatedId[dest_reg]) {
+                // Define the pre-allocated ID so forward-referenced PHIs stay valid.
+                u32 type_id = GetResultType(dest_reg, const_ref);
+                Emit(spv::OpCopyObject, type_id, dest, const_id);
+                hasPreAllocatedId[dest_reg] = false;
+            } else if (dest_reg < idCapacity) {
+                // Map dest register to constant ID
                 spirvIds[dest_reg] = const_id;
             }
             break;
@@ -1440,9 +1449,18 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
         case IR::OP_NOT: {
             u16 dest_reg = ir->destinations[ir_idx];
-            u32 operand = GetSpirvId(ir->GetOperand(ir_idx, 0));
-            u32 result_type = GetResultType(dest_reg, ir->GetOperand(ir_idx, 0));
-            Emit(spv::OpNot, result_type, dest, operand);
+            u16 op_reg = ir->GetOperand(ir_idx, 0);
+            u32 operand = GetSpirvId(op_reg);
+            u32 result_type = GetResultType(dest_reg, op_reg);
+            CoreType op_type = static_cast<CoreType>(ir->registerTypes[op_reg & 0x3FFF]);
+
+            // Booleans require OpLogicalNot, integers use OpNot (bitwise)
+            if (op_type == CoreType::BOOL || op_type == CoreType::BOOL2 ||
+                op_type == CoreType::BOOL3 || op_type == CoreType::BOOL4) {
+                Emit(spv::OpLogicalNot, result_type, dest, operand);
+            } else {
+                Emit(spv::OpNot, result_type, dest, operand);
+            }
             break;
         }
 
@@ -1500,6 +1518,26 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             u32 shift = GetSpirvId(ir->GetOperand(ir_idx, 1));
             u32 result_type = GetResultType(dest_reg, ir->GetOperand(ir_idx, 0));
             Emit(spv::OpShiftRightArithmetic, result_type, dest, base, shift);
+            break;
+        }
+
+        case IR::OP_POPCNT: {
+            // Bit count (popcount)
+            u16 dest_reg = ir->destinations[ir_idx];
+            u16 op_reg = ir->GetOperand(ir_idx, 0);
+            u32 operand = GetSpirvId(op_reg);
+            u32 result_type = GetResultType(dest_reg, op_reg);
+            Emit(spv::OpBitCount, result_type, dest, operand);
+            break;
+        }
+
+        case IR::OP_REVERSE_BITS: {
+            // Bit reverse
+            u16 dest_reg = ir->destinations[ir_idx];
+            u16 op_reg = ir->GetOperand(ir_idx, 0);
+            u32 operand = GetSpirvId(op_reg);
+            u32 result_type = GetResultType(dest_reg, op_reg);
+            Emit(spv::OpBitReverse, result_type, dest, operand);
             break;
         }
         
@@ -1650,14 +1688,15 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         // ========== Select (Ternary) ==========
         case IR::OP_SELECT: {
             // OpSelect: result = condition ? true_val : false_val
-            // IR convention: SELECT(condition, true_val, false_val)
+            // BWSL select(a, b, cond) = if cond then b else a
+            // IR convention: SELECT(false_val, true_val, condition)
             // SPIR-V OpSelect: OpSelect result_type result condition true_val false_val
             u16 dest_reg = ir->destinations[ir_idx];
-            u16 true_val_reg = ir->GetOperand(ir_idx, 1);
-            u16 false_val_reg = ir->GetOperand(ir_idx, 2);
-            u32 condition = GetSpirvId(ir->GetOperand(ir_idx, 0));  // First arg is condition
-            u32 true_val = GetSpirvId(true_val_reg);                // Second arg is true value
-            u32 false_val = GetSpirvId(false_val_reg);              // Third arg is false value
+            u16 false_val_reg = ir->GetOperand(ir_idx, 0);  // First arg is false value
+            u16 true_val_reg = ir->GetOperand(ir_idx, 1);   // Second arg is true value
+            u32 condition = GetSpirvId(ir->GetOperand(ir_idx, 2));  // Third arg is condition
+            u32 true_val = GetSpirvId(true_val_reg);
+            u32 false_val = GetSpirvId(false_val_reg);
 
             // Result type must match the value types (NOT the condition type)
             // Get type from true_val operand, not from destination (which may be incorrectly typed as bool)
@@ -1778,7 +1817,11 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         case IR::OP_FABS:
         case IR::OP_IABS:  // Integer abs (SAbs in GLSL.std.450)
         case IR::OP_SIGN:
-        case IR::OP_NORMALIZE: {
+        case IR::OP_NORMALIZE:
+        case IR::OP_CLZ:
+        case IR::OP_CTZ:
+        case IR::OP_DEGREES:
+        case IR::OP_RADIANS: {
             u16 dest_reg = ir->destinations[ir_idx];
             u32 result_type = GetResultType(dest_reg, ir->GetOperand(ir_idx, 0));
             u32 operand = GetSpirvId(ir->GetOperand(ir_idx, 0));
@@ -2076,11 +2119,100 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         case IR::OP_FMA:
         case IR::OP_REFRACT: {
             u16 dest_reg = ir->destinations[ir_idx];
-            u32 result_type = GetResultType(dest_reg, ir->GetOperand(ir_idx, 0));
-            u32 op1 = GetSpirvId(ir->GetOperand(ir_idx, 0));
-            u32 op2 = GetSpirvId(ir->GetOperand(ir_idx, 1));
-            u32 op3 = GetSpirvId(ir->GetOperand(ir_idx, 2));
+            u16 op1_reg = ir->GetOperand(ir_idx, 0);
+            u16 op2_reg = ir->GetOperand(ir_idx, 1);
+            u16 op3_reg = ir->GetOperand(ir_idx, 2);
+            u32 result_type = GetResultType(dest_reg, op1_reg);
+            u32 op1 = GetSpirvId(op1_reg);
+            u32 op2 = GetSpirvId(op2_reg);
+            u32 op3 = GetSpirvId(op3_reg);
             u32 glsl_op = IR_TO_GLSL_STD_450_TABLE[static_cast<u32>(op)];
+
+            // For GLSL.std.450 ops (except Refract), operands must match result type.
+            // Splat scalar operands to vector when needed.
+            bool op1_is_scalar = (op1_reg & 0xE000) != 0;
+            bool op2_is_scalar = (op2_reg & 0xE000) != 0;
+            bool op3_is_scalar = (op3_reg & 0xE000) != 0;
+            CoreType op1_type = CoreType::FLOAT;
+            CoreType op2_type = CoreType::FLOAT;
+            CoreType op3_type = CoreType::FLOAT;
+
+            if (ir->registerTypes) {
+                if (!op1_is_scalar && op1_reg < ir->registerCount) {
+                    op1_type = static_cast<CoreType>(ir->registerTypes[op1_reg]);
+                    op1_is_scalar = (op1_type == CoreType::FLOAT || op1_type == CoreType::INT || op1_type == CoreType::UINT);
+                }
+                if (!op2_is_scalar && op2_reg < ir->registerCount) {
+                    op2_type = static_cast<CoreType>(ir->registerTypes[op2_reg]);
+                    op2_is_scalar = (op2_type == CoreType::FLOAT || op2_type == CoreType::INT || op2_type == CoreType::UINT);
+                }
+                if (!op3_is_scalar && op3_reg < ir->registerCount) {
+                    op3_type = static_cast<CoreType>(ir->registerTypes[op3_reg]);
+                    op3_is_scalar = (op3_type == CoreType::FLOAT || op3_type == CoreType::INT || op3_type == CoreType::UINT);
+                }
+            }
+
+            CoreType vectorType = CoreType::FLOAT;
+            if (!op1_is_scalar && op1_type != CoreType::VOID && op1_type != CoreType::INVALID) {
+                vectorType = op1_type;
+            } else if (!op2_is_scalar && op2_type != CoreType::VOID && op2_type != CoreType::INVALID) {
+                vectorType = op2_type;
+            } else if (!op3_is_scalar && op3_type != CoreType::VOID && op3_type != CoreType::INVALID) {
+                vectorType = op3_type;
+            }
+
+            u32 numComponents = 1;
+            if (vectorType == CoreType::FLOAT2 || vectorType == CoreType::INT2 || vectorType == CoreType::UINT2) {
+                numComponents = 2;
+            } else if (vectorType == CoreType::FLOAT3 || vectorType == CoreType::INT3 || vectorType == CoreType::UINT3) {
+                numComponents = 3;
+            } else if (vectorType == CoreType::FLOAT4 || vectorType == CoreType::INT4 || vectorType == CoreType::UINT4) {
+                numComponents = 4;
+            }
+
+            if (numComponents > 1 && op != IR::OP_REFRACT) {
+                u32 vec_type = GetTypeId(vectorType);
+                result_type = vec_type;
+                if (op1_is_scalar) {
+                    if (currentFunctionSize + 3 + numComponents > currentFunctionCapacity) {
+                        GrowCurrentFunction();
+                    }
+                    u32 splatted = AllocateId();
+                    currentFunction[currentFunctionSize++] = ((3 + numComponents) << 16) | spv::OpCompositeConstruct;
+                    currentFunction[currentFunctionSize++] = vec_type;
+                    currentFunction[currentFunctionSize++] = splatted;
+                    for (u32 i = 0; i < numComponents; i++) {
+                        currentFunction[currentFunctionSize++] = op1;
+                    }
+                    op1 = splatted;
+                }
+                if (op2_is_scalar) {
+                    if (currentFunctionSize + 3 + numComponents > currentFunctionCapacity) {
+                        GrowCurrentFunction();
+                    }
+                    u32 splatted = AllocateId();
+                    currentFunction[currentFunctionSize++] = ((3 + numComponents) << 16) | spv::OpCompositeConstruct;
+                    currentFunction[currentFunctionSize++] = vec_type;
+                    currentFunction[currentFunctionSize++] = splatted;
+                    for (u32 i = 0; i < numComponents; i++) {
+                        currentFunction[currentFunctionSize++] = op2;
+                    }
+                    op2 = splatted;
+                }
+                if (op3_is_scalar) {
+                    if (currentFunctionSize + 3 + numComponents > currentFunctionCapacity) {
+                        GrowCurrentFunction();
+                    }
+                    u32 splatted = AllocateId();
+                    currentFunction[currentFunctionSize++] = ((3 + numComponents) << 16) | spv::OpCompositeConstruct;
+                    currentFunction[currentFunctionSize++] = vec_type;
+                    currentFunction[currentFunctionSize++] = splatted;
+                    for (u32 i = 0; i < numComponents; i++) {
+                        currentFunction[currentFunctionSize++] = op3;
+                    }
+                    op3 = splatted;
+                }
+            }
 
             if (currentFunctionSize + 8 > currentFunctionCapacity) {
                 GrowCurrentFunction();
@@ -2314,6 +2446,58 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                     default: break;
                 }
 
+                CoreType desiredScalarType = GetScalarComponentType(resultType);
+                auto convertScalar = [&](u32 value_id, CoreType srcType) -> u32 {
+                    if (srcType == desiredScalarType) return value_id;
+                    u32 dest_type_id = GetTypeId(desiredScalarType);
+                    u32 converted = AllocateId();
+
+                    if (srcType == CoreType::BOOL) {
+                        u32 zero_id = 0;
+                        u32 one_id = 0;
+                        if (desiredScalarType == CoreType::FLOAT) {
+                            zero_id = GetFloatConstantId(0.0f);
+                            one_id = GetFloatConstantId(1.0f);
+                        } else if (desiredScalarType == CoreType::INT) {
+                            zero_id = GetIntConstantId(0, false);
+                            one_id = GetIntConstantId(1, false);
+                        } else if (desiredScalarType == CoreType::UINT) {
+                            zero_id = GetIntConstantId(0, true);
+                            one_id = GetIntConstantId(1, true);
+                        }
+                        Emit(spv::OpSelect, dest_type_id, converted, value_id, one_id, zero_id);
+                        return converted;
+                    }
+
+                    if (srcType == CoreType::INT && desiredScalarType == CoreType::FLOAT) {
+                        Emit(spv::OpConvertSToF, dest_type_id, converted, value_id);
+                        return converted;
+                    }
+                    if (srcType == CoreType::UINT && desiredScalarType == CoreType::FLOAT) {
+                        Emit(spv::OpConvertUToF, dest_type_id, converted, value_id);
+                        return converted;
+                    }
+                    if (srcType == CoreType::FLOAT && desiredScalarType == CoreType::INT) {
+                        Emit(spv::OpConvertFToS, dest_type_id, converted, value_id);
+                        return converted;
+                    }
+                    if (srcType == CoreType::FLOAT && desiredScalarType == CoreType::UINT) {
+                        Emit(spv::OpConvertFToU, dest_type_id, converted, value_id);
+                        return converted;
+                    }
+                    if (srcType == CoreType::INT && desiredScalarType == CoreType::UINT) {
+                        Emit(spv::OpBitcast, dest_type_id, converted, value_id);
+                        return converted;
+                    }
+                    if (srcType == CoreType::UINT && desiredScalarType == CoreType::INT) {
+                        Emit(spv::OpBitcast, dest_type_id, converted, value_id);
+                        return converted;
+                    }
+
+                    Emit(spv::OpBitcast, dest_type_id, converted, value_id);
+                    return converted;
+                };
+
                 // If result is scalar (requiredComponents == 1), just copy the value
                 // OpCompositeConstruct requires at least 2 constituents
                 if (requiredComponents == 1 && inputCount == 1) {
@@ -2334,7 +2518,15 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
                     // Check the type of this operand
                     CoreType opType = CoreType::FLOAT;
-                    if (ir->registerTypes && op_reg < ir->registerCount) {
+                    if ((op_reg & 0xC000) == 0xC000) {
+                        opType = CoreType::BOOL;
+                    } else if (op_reg & 0x8000) {
+                        opType = CoreType::FLOAT;
+                    } else if (op_reg & 0x4000) {
+                        opType = CoreType::INT;
+                    } else if (op_reg & 0x2000) {
+                        opType = CoreType::UINT;
+                    } else if (ir->registerTypes && op_reg < ir->registerCount) {
                         opType = static_cast<CoreType>(ir->registerTypes[op_reg]);
                     }
 
@@ -2350,15 +2542,16 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                         default: break;
                     }
 
+                    CoreType opScalarType = GetScalarComponentType(opType);
                     if (opComponents == 1) {
                         // Scalar - use directly
-                        scalarIds[scalarCount++] = inputIds[c];
+                        scalarIds[scalarCount++] = convertScalar(inputIds[c], opScalarType);
                     } else {
                         // Vector - extract each component (but only as many as we still need)
-                        u32 float_type = GetTypeId(CoreType::FLOAT);
                         u32 componentsToExtract = (opComponents < (requiredComponents - scalarCount))
                                                    ? opComponents
                                                    : (requiredComponents - scalarCount);
+                        u32 op_scalar_type_id = GetTypeId(opScalarType);
                         for (u32 comp = 0; comp < componentsToExtract; comp++) {
                             u32 extracted = AllocateId();
                             // OpCompositeExtract: result_type result_id composite index...
@@ -2366,11 +2559,11 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                                 GrowCurrentFunction();
                             }
                             currentFunction[currentFunctionSize++] = (5 << 16) | spv::OpCompositeExtract;
-                            currentFunction[currentFunctionSize++] = float_type;
+                            currentFunction[currentFunctionSize++] = op_scalar_type_id;
                             currentFunction[currentFunctionSize++] = extracted;
                             currentFunction[currentFunctionSize++] = inputIds[c];
                             currentFunction[currentFunctionSize++] = comp;
-                            scalarIds[scalarCount++] = extracted;
+                            scalarIds[scalarCount++] = convertScalar(extracted, opScalarType);
                         }
                     }
                 }
@@ -2400,7 +2593,46 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             }
             break;
         }
-        
+
+        case IR::OP_MAT_CONSTRUCT: {
+            // Build a matrix from column vectors (generated by IR lowering)
+            // IR lowering now generates OP_VEC_CONSTRUCT for each column, then OP_MAT_CONSTRUCT
+            // The operands are column vector registers, metadata contains column count
+            u16 dest_reg = ir->destinations[ir_idx];
+            CoreType resultType = CoreType::MAT4;
+            if (ir->registerTypes && dest_reg < ir->registerCount) {
+                resultType = static_cast<CoreType>(ir->registerTypes[dest_reg]);
+            }
+
+            u32 result_type_id = GetTypeId(resultType);
+
+            // Determine number of columns from metadata
+            u32 numColumns = ir->metadata[ir_idx];
+            if (numColumns == 0) {
+                numColumns = (resultType == CoreType::MAT2) ? 2 : (resultType == CoreType::MAT3) ? 3 : 4;
+            }
+
+            // Collect column vector IDs
+            u32 columnIds[4];
+            for (u32 col = 0; col < numColumns; col++) {
+                u16 op_reg = ir->GetOperand(ir_idx, col);
+                columnIds[col] = GetSpirvId(op_reg);
+            }
+
+            // Build matrix from column vectors
+            u32 matWordCount = 3 + numColumns;
+            if (currentFunctionSize + matWordCount > currentFunctionCapacity) {
+                GrowCurrentFunction();
+            }
+            currentFunction[currentFunctionSize++] = (matWordCount << 16) | spv::OpCompositeConstruct;
+            currentFunction[currentFunctionSize++] = result_type_id;
+            currentFunction[currentFunctionSize++] = dest;
+            for (u32 col = 0; col < numColumns; col++) {
+                currentFunction[currentFunctionSize++] = columnIds[col];
+            }
+            break;
+        }
+
         case IR::OP_VEC_EXTRACT: {
             // Extract a single component from a vector
             // operand 0: source vector register
@@ -2991,7 +3223,18 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 // SPIR-V requires boolean condition for OpBranchConditional
                 // If condition is not bool, convert it to bool via != 0 comparison
                 CoreType condType = CoreType::BOOL;
-                if (!(cond_reg & 0xC000) && cond_reg < ir->registerCount && ir->registerTypes) {
+                if (cond_reg & 0xC000) {
+                    // Constant-encoded condition
+                    if ((cond_reg & 0xC000) == 0xC000) {
+                        condType = CoreType::BOOL;
+                    } else if (cond_reg & 0x8000) {
+                        condType = CoreType::FLOAT;
+                    } else if (cond_reg & 0x4000) {
+                        condType = CoreType::INT;
+                    } else if (cond_reg & 0x2000) {
+                        condType = CoreType::UINT;
+                    }
+                } else if (cond_reg < ir->registerCount && ir->registerTypes) {
                     condType = static_cast<CoreType>(ir->registerTypes[cond_reg]);
                 }
 
@@ -3197,7 +3440,18 @@ void SPIRVBuilder::EmitBranch(u32 ir_idx) {
         // Pre-convert condition to bool if needed (before merge instruction)
         u16 cond_reg = ir->GetOperand(ir_idx, 0);
         CoreType condType = CoreType::BOOL;
-        if (!(cond_reg & 0xC000) && cond_reg < ir->registerCount && ir->registerTypes) {
+        if (cond_reg & 0xC000) {
+            // Constant-encoded condition
+            if ((cond_reg & 0xC000) == 0xC000) {
+                condType = CoreType::BOOL;
+            } else if (cond_reg & 0x8000) {
+                condType = CoreType::FLOAT;
+            } else if (cond_reg & 0x4000) {
+                condType = CoreType::INT;
+            } else if (cond_reg & 0x2000) {
+                condType = CoreType::UINT;
+            }
+        } else if (cond_reg < ir->registerCount && ir->registerTypes) {
             condType = static_cast<CoreType>(ir->registerTypes[cond_reg]);
         }
 

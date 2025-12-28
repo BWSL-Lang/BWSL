@@ -1,0 +1,111 @@
+// Test: Variable and function scoping
+// Tests: block scope, shadowing, pipeline vs pass scope
+
+pipeline FunctionsScoping {
+    attributes {
+        position: float3
+    }
+
+    // Pipeline-level constant
+    const float PI = 3.14159265359;
+
+    // Pipeline-level function
+    pipelineFunc :: () -> float {
+        return PI;
+    }
+
+    pass "Pass1" {
+        use attributes { position }
+
+        // Pass-level function
+        passFunc :: (float x) -> float {
+            return x * PI;
+        }
+
+        vertex {
+            // Block scoping test
+            float x = 1.0;
+            {
+                float y = 2.0;
+                float z = x + y;  // x visible from outer scope
+                // y is only visible in this block
+            }
+            // y is no longer visible here
+            float result = x;  // x still visible
+
+            // Variable shadowing
+            float value = 10.0;
+            {
+                float value = 20.0;  // shadows outer value
+                float inner = value;  // 20.0
+            }
+            float outer = value;  // 10.0 (original)
+
+            // Nested block scoping
+            float a = 1.0;
+            {
+                float b = 2.0;
+                {
+                    float c = 3.0;
+                    float sum = a + b + c;  // all visible
+                }
+                // c not visible
+                float sum2 = a + b;
+            }
+            // only a visible
+
+            // Loop variable scoping
+            for (int i = 0; i < 5; i++) {
+                float loopVar = float(i);
+                // loopVar scoped to loop body
+            }
+            // i and loopVar not visible here
+
+            // If block scoping
+            bool condition = true;
+            if (condition) {
+                float ifVar = 5.0;
+                float computed = ifVar * 2.0;
+            }
+            // ifVar not visible
+
+            // Function calls respect scope
+            float piVal = pipelineFunc();   // pipeline function
+            float scaled = passFunc(2.0);    // pass function
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            // Can access pipeline functions
+            float piVal = pipelineFunc();
+            // Can access pass functions
+            float scaled = passFunc(1.0);
+
+            output.color = float4(scaled / PI, piVal / 10.0, 0.5, 1.0);
+        }
+    }
+
+    pass "Pass2" {
+        use attributes { position }
+
+        // Different pass-local function with same name is allowed
+        passFunc :: (float x) -> float {
+            return x * 2.0;  // different implementation
+        }
+
+        vertex {
+            // This passFunc is different from Pass1's
+            float result = passFunc(5.0);  // 10.0, not 5*PI
+
+            // Pipeline function still accessible
+            float pi = pipelineFunc();
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

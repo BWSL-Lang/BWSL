@@ -1,0 +1,100 @@
+// Test: Function overloading
+// Tests: same function name with different parameter types
+
+pipeline FunctionsOverloading {
+    attributes {
+        position: float3
+    }
+
+    // Overloaded square function for different types
+    square :: (float x) -> float {
+        return x * x;
+    }
+
+    square :: (float2 v) -> float2 {
+        return v * v;
+    }
+
+    square :: (float3 v) -> float3 {
+        return v * v;
+    }
+
+    square :: (float4 v) -> float4 {
+        return v * v;
+    }
+
+    // Overloaded lerp-like function
+    blend :: (float a, float b, float t) -> float {
+        return a + (b - a) * t;
+    }
+
+    blend :: (float3 a, float3 b, float t) -> float3 {
+        return a + (b - a) * t;
+    }
+
+    blend :: (float4 a, float4 b, float t) -> float4 {
+        return a + (b - a) * t;
+    }
+
+    // Different parameter counts
+    sum :: (float a) -> float {
+        return a;
+    }
+
+    sum :: (float a, float b) -> float {
+        return a + b;
+    }
+
+    sum :: (float a, float b, float c) -> float {
+        return a + b + c;
+    }
+
+    // Integer vs float overloads
+    double :: (int x) -> int {
+        return x * 2;
+    }
+
+    double :: (float x) -> float {
+        return x * 2.0;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Test scalar overload
+            float f = 3.0;
+            float f_sq = square(f);           // 9.0
+
+            // Test vector overloads
+            float2 v2 = float2(2.0, 3.0);
+            float2 v2_sq = square(v2);        // (4.0, 9.0)
+
+            float3 v3 = float3(1.0, 2.0, 3.0);
+            float3 v3_sq = square(v3);        // (1.0, 4.0, 9.0)
+
+            float4 v4 = float4(1.0, 2.0, 3.0, 4.0);
+            float4 v4_sq = square(v4);        // (1.0, 4.0, 9.0, 16.0)
+
+            // Test blend overloads
+            float blend_f = blend(0.0, 10.0, 0.5);     // 5.0
+            float3 blend_v3 = blend(float3(0.0), float3(1.0), 0.5);  // (0.5, 0.5, 0.5)
+            float4 blend_v4 = blend(float4(0.0), float4(1.0), 0.25); // (0.25, ...)
+
+            // Test different parameter counts
+            float s1 = sum(5.0);              // 5.0
+            float s2 = sum(2.0, 3.0);         // 5.0
+            float s3 = sum(1.0, 2.0, 3.0);    // 6.0
+
+            // Test type-based overloads
+            int di = double(5);               // 10
+            float df = double(2.5);           // 5.0
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

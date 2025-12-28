@@ -1,0 +1,31 @@
+// Test: Basic compute shader
+// Tests: compute block syntax, built-in inputs
+
+pipeline ComputeBasic {
+
+    pass "Compute" {
+        compute "Main" [64, 1, 1] {
+            // Access compute built-ins
+            uint3 globalId = input.global_id;
+            uint3 localId = input.local_id;
+            uint3 workgroupId = input.workgroup_id;
+            uint3 numWorkgroups = input.num_workgroups;
+            uint localIndex = input.local_index;
+
+            // Use global ID as array index
+            uint idx = globalId.x;
+
+            // Bounds check pattern
+            if (idx >= 1024u) {
+                return;
+            }
+
+            // Simple computation
+            float value = float(idx) / 1024.0;
+            float squared = value * value;
+
+            // Would write to buffer here
+            // resources.outputBuffer[idx] = squared;
+        }
+    }
+}

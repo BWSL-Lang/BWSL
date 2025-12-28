@@ -54,6 +54,7 @@ struct VariableData {
     bool isConst;
     bool isEval;
     LiteralValue evalValue;
+    NodeRef constExpr;
 };
 struct FunctionData {
     CoreType returnType;

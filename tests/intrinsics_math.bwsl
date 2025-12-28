@@ -1,0 +1,99 @@
+// Test: Math intrinsics
+// Tests: abs, ceil, floor, round, fract, clamp, saturate, min, max, sign, step, smoothstep, lerp, mod
+
+pipeline IntrinsicsMath {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // abs - absolute value
+            float abs_neg = abs(-5.0);        // 5.0
+            float abs_pos = abs(3.0);         // 3.0
+            float3 abs_vec = abs(float3(-1.0, 2.0, -3.0));  // (1.0, 2.0, 3.0)
+            int abs_int = abs(-10);           // 10
+
+            // ceil - round up
+            float ceil_pos = ceil(2.3);       // 3.0
+            float ceil_neg = ceil(-2.3);      // -2.0
+            float3 ceil_vec = ceil(float3(1.1, 2.5, 3.9));  // (2.0, 3.0, 4.0)
+
+            // floor - round down
+            float floor_pos = floor(2.7);     // 2.0
+            float floor_neg = floor(-2.3);    // -3.0
+            float3 floor_vec = floor(float3(1.9, 2.1, 3.5));  // (1.0, 2.0, 3.0)
+
+            // round - round to nearest
+            float round_low = round(2.3);     // 2.0
+            float round_high = round(2.7);    // 3.0
+            float round_half = round(2.5);    // 3.0 (or 2.0 depending on rounding mode)
+            float3 round_vec = round(float3(1.4, 2.5, 3.6));
+
+            // fract - fractional part
+            float fract_pos = fract(3.7);     // 0.7
+            float fract_neg = fract(-0.3);    // 0.7 (1.0 - 0.3)
+            float3 fract_vec = fract(float3(1.25, 2.5, 3.75));  // (0.25, 0.5, 0.75)
+
+            // clamp - clamp between min and max
+            float clamp_low = clamp(-5.0, 0.0, 1.0);   // 0.0
+            float clamp_mid = clamp(0.5, 0.0, 1.0);    // 0.5
+            float clamp_high = clamp(5.0, 0.0, 1.0);   // 1.0
+            float3 clamp_vec = clamp(float3(-1.0, 0.5, 2.0), float3(0.0), float3(1.0));
+
+            // saturate - clamp to [0, 1]
+            float sat_low = saturate(-0.5);   // 0.0
+            float sat_mid = saturate(0.5);    // 0.5
+            float sat_high = saturate(1.5);   // 1.0
+            float3 sat_vec = saturate(float3(-1.0, 0.5, 2.0));  // (0.0, 0.5, 1.0)
+
+            // min - minimum value
+            float min_ab = min(3.0, 5.0);     // 3.0
+            float min_ba = min(5.0, 3.0);     // 3.0
+            float3 min_vec = min(float3(1.0, 5.0, 3.0), float3(2.0, 2.0, 2.0));
+            int min_int = min(10, 5);         // 5
+
+            // max - maximum value
+            float max_ab = max(3.0, 5.0);     // 5.0
+            float3 max_vec = max(float3(1.0, 5.0, 3.0), float3(2.0, 2.0, 2.0));
+            int max_int = max(10, 5);         // 10
+
+            // sign - sign of value (-1, 0, or 1)
+            float sign_neg = sign(-5.0);      // -1.0
+            float sign_zero = sign(0.0);      // 0.0
+            float sign_pos = sign(5.0);       // 1.0
+            float3 sign_vec = sign(float3(-1.0, 0.0, 1.0));  // (-1.0, 0.0, 1.0)
+
+            // step - step function (0 if x < edge, 1 otherwise)
+            float step_below = step(0.5, 0.3);  // 0.0
+            float step_above = step(0.5, 0.7);  // 1.0
+            float step_equal = step(0.5, 0.5);  // 1.0
+            float3 step_vec = step(0.5, float3(0.3, 0.5, 0.7));
+
+            // smoothstep - smooth Hermite interpolation
+            float ss_low = smoothstep(0.0, 1.0, -0.5);   // 0.0
+            float ss_mid = smoothstep(0.0, 1.0, 0.5);    // 0.5
+            float ss_high = smoothstep(0.0, 1.0, 1.5);   // 1.0
+            float3 ss_vec = smoothstep(0.0, 1.0, float3(0.25, 0.5, 0.75));
+
+            // lerp - linear interpolation
+            float lerp_0 = lerp(0.0, 10.0, 0.0);    // 0.0
+            float lerp_half = lerp(0.0, 10.0, 0.5); // 5.0
+            float lerp_1 = lerp(0.0, 10.0, 1.0);    // 10.0
+            float3 lerp_vec = lerp(float3(0.0), float3(1.0), 0.5);  // (0.5, 0.5, 0.5)
+
+            // mod - floating-point modulo
+            float mod_1 = mod(5.0, 3.0);      // 2.0
+            float mod_2 = mod(7.5, 2.0);      // 1.5
+            float3 mod_vec = mod(float3(5.0, 7.0, 9.0), float3(3.0));
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

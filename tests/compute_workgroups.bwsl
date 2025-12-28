@@ -1,0 +1,63 @@
+// Test: Compute shader workgroup patterns
+// Tests: different workgroup sizes, shared memory, barriers
+
+pipeline ComputeWorkgroups {
+
+    pass "Compute1D" {
+        compute "Process1D" [256, 1, 1] {
+            uint idx = input.global_id.x;
+
+            // 1D processing pattern
+            float data = float(idx);
+            float processed = sin(data * 0.01);
+        }
+    }
+
+    pass "Compute2D" {
+        compute "Process2D" [16, 16, 1] {
+            uint2 coord = input.global_id.xy;
+            uint2 localCoord = input.local_id.xy;
+            uint2 tileCoord = input.workgroup_id.xy;
+
+            // 2D processing pattern (image processing)
+            float2 uv = float2(coord) / float2(256u, 256u);
+
+            // Tile-based access
+            uint2 globalPos = tileCoord * 16u + localCoord;
+        }
+    }
+
+    pass "Compute3D" {
+        compute "Process3D" [8, 8, 8] {
+            uint3 coord = input.global_id;
+
+            // 3D processing pattern (volume processing)
+            float3 uvw = float3(coord) / float3(64u);
+
+            // Volume index
+            uint volumeIdx = coord.x + coord.y * 64u + coord.z * 64u * 64u;
+        }
+    }
+
+    pass "ComputeShared" {
+        compute "WithShared" [256, 1, 1] {
+            // Shared memory declaration
+            shared float cache[256];
+
+            uint idx = input.global_id.x;
+            uint localIdx = input.local_index;
+
+            // Load into shared memory
+            cache[localIdx] = float(idx);
+
+            // Barrier to ensure all loads complete
+            barrier();
+
+            // Read from shared memory
+            float myValue = cache[localIdx];
+            float neighborValue = cache[(localIdx + 1u) % 256u];
+
+            float result = myValue + neighborValue;
+        }
+    }
+}

@@ -564,6 +564,26 @@ private:
         IR::IRLowering lowering;
         lowering.Initialize(&irPool, &shaderSet.cachedParser->symbolTable, &ast);
         lowering.currentStage = stage;
+
+        const PassData* owningPass = nullptr;
+        if (ast.pipelines.count > 0) {
+            const PipelineData& pipeline = ast.pipelines[0];
+            for (u32 i = 0; i < pipeline.passes.count; i++) {
+                const PassData& pass = ast.GetPass(pipeline.passes[i]);
+                if (pass.vertexShader == stageRef ||
+                    pass.fragmentShader == stageRef ||
+                    pass.computeShader == stageRef) {
+                    owningPass = &pass;
+                    break;
+                }
+            }
+        }
+
+        if (owningPass) {
+            for (u32 i = 0; i < owningPass->consts.count; i++) {
+                lowering.LowerStatement(owningPass->consts[i]);
+            }
+        }
         
         // Lower the shader body
         const BlockData& block = ast.GetBlock(shaderStage.body);
@@ -665,4 +685,3 @@ private:
 };
 
 } // namespace BWSL
-

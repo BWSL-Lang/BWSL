@@ -1,0 +1,69 @@
+// Test: Arithmetic operators
+// Tests: +, -, *, /, % on scalars and vectors
+
+pipeline OperatorsArithmetic {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Integer arithmetic
+            int a = 10;
+            int b = 3;
+            int add_i = a + b;        // 13
+            int sub_i = a - b;        // 7
+            int mul_i = a * b;        // 30
+            int div_i = a / b;        // 3
+            int mod_i = a % b;        // 1
+
+            // Unsigned integer arithmetic
+            uint ua = 10u;
+            uint ub = 3u;
+            uint add_u = ua + ub;
+            uint sub_u = ua - ub;
+            uint mul_u = ua * ub;
+            uint div_u = ua / ub;
+            uint mod_u = ua % ub;
+
+            // Float arithmetic
+            float fa = 10.0;
+            float fb = 3.0;
+            float add_f = fa + fb;    // 13.0
+            float sub_f = fa - fb;    // 7.0
+            float mul_f = fa * fb;    // 30.0
+            float div_f = fa / fb;    // 3.333...
+
+            // Vector arithmetic - component-wise
+            float3 v1 = float3(1.0, 2.0, 3.0);
+            float3 v2 = float3(4.0, 5.0, 6.0);
+            float3 add_v = v1 + v2;   // (5.0, 7.0, 9.0)
+            float3 sub_v = v2 - v1;   // (3.0, 3.0, 3.0)
+            float3 mul_v = v1 * v2;   // (4.0, 10.0, 18.0)
+            float3 div_v = v2 / v1;   // (4.0, 2.5, 2.0)
+
+            // Scalar-vector operations (broadcast)
+            float3 scaled = v1 * 2.0;     // (2.0, 4.0, 6.0)
+            float3 offset = v1 + 1.0;     // (2.0, 3.0, 4.0)
+            float3 scaled2 = 2.0 * v1;    // (2.0, 4.0, 6.0) - commutative
+
+            // Compound expressions
+            float3 compound = (v1 + v2) * 0.5;
+            float3 complex = v1 * 2.0 + v2 * 0.5 - float3(1.0);
+
+            // Integer vector arithmetic
+            int3 iv1 = int3(1, 2, 3);
+            int3 iv2 = int3(4, 5, 6);
+            int3 iv_add = iv1 + iv2;
+            int3 iv_mul = iv1 * iv2;
+
+            output.position = float4(attributes.position + add_v * 0.001, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

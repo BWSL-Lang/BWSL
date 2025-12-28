@@ -1,0 +1,76 @@
+// Test: Constant folding
+// Tests: compile-time constant evaluation
+
+pipeline ConstantsFolding {
+    attributes {
+        position: float3
+    }
+
+    // Pipeline-level constants
+    const float PI = 3.14159265359;
+    const float TAU = 2.0 * PI;           // Constant expression
+    const float HALF_PI = PI / 2.0;
+    const float INV_PI = 1.0 / PI;
+
+    const int MAX_LIGHTS = 8;
+    const int LIGHT_STRIDE = 4;
+    const int LIGHT_BUFFER_SIZE = MAX_LIGHTS * LIGHT_STRIDE;  // 32
+
+    const float3 UP = float3(0.0, 1.0, 0.0);
+    const float3 RIGHT = float3(1.0, 0.0, 0.0);
+    const float3 FORWARD = float3(0.0, 0.0, 1.0);
+
+    pass "Main" {
+        use attributes { position }
+
+        // Pass-level constants
+        const float AMBIENT = 0.1;
+        const float3 AMBIENT_COLOR = float3(AMBIENT);
+
+        vertex {
+            // Local constants
+            const float LOCAL_SCALE = 2.0;
+            const float DOUBLE_SCALE = LOCAL_SCALE * 2.0;
+
+            // Use constants in expressions
+            float angle = PI / 4.0;        // Should fold to ~0.785
+            float doubled = TAU;            // Should be ~6.28
+
+            // Arithmetic on constants
+            float area = PI * 4.0;          // PI * r^2 where r=2
+            float circumference = TAU * 2.0;
+
+            // Integer constant expressions
+            int bufSize = LIGHT_BUFFER_SIZE;  // 32
+            int halfBuf = LIGHT_BUFFER_SIZE / 2;  // 16
+
+            // Vector constant usage
+            float3 normal = UP;
+            float upDot = dot(normal, UP);  // 1.0
+
+            // Constants in complex expressions
+            float3 pos = attributes.position;
+            float3 scaled = pos * LOCAL_SCALE;
+            float3 final = scaled + UP * AMBIENT;
+
+            // Chained constant expressions
+            const float A = 1.0;
+            const float B = A + 1.0;        // 2.0
+            const float C = B * 2.0;        // 4.0
+            const float D = C + A;          // 5.0
+            float result = D;               // Should be 5.0
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            // Use pass-level constant
+            float3 ambient = AMBIENT_COLOR;
+
+            // Pipeline constant accessible here too
+            float piVal = PI;
+
+            output.color = float4(ambient + float3(piVal / 10.0), 1.0);
+        }
+    }
+}

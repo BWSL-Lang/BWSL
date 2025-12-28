@@ -1,0 +1,103 @@
+// Test: Exponential and trigonometric intrinsics
+// Tests: exp, exp2, log, log2, pow, sqrt, rsqrt, sin, cos, tan, asin, acos, atan, atan2, radians, degrees
+
+pipeline IntrinsicsExpTrig {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Exponential functions
+            float exp_0 = exp(0.0);           // 1.0
+            float exp_1 = exp(1.0);           // e ≈ 2.718
+            float exp_2 = exp(2.0);           // e^2 ≈ 7.389
+
+            float exp2_0 = exp2(0.0);         // 1.0
+            float exp2_1 = exp2(1.0);         // 2.0
+            float exp2_3 = exp2(3.0);         // 8.0
+
+            // Logarithmic functions
+            float log_1 = log(1.0);           // 0.0
+            float log_e = log(2.718281828);   // 1.0
+            float log_10 = log(10.0);         // ~2.303
+
+            float log2_1 = log2(1.0);         // 0.0
+            float log2_2 = log2(2.0);         // 1.0
+            float log2_8 = log2(8.0);         // 3.0
+
+            // Power function
+            float pow_2_3 = pow(2.0, 3.0);    // 8.0
+            float pow_3_2 = pow(3.0, 2.0);    // 9.0
+            float pow_4_05 = pow(4.0, 0.5);   // 2.0 (sqrt)
+            float3 pow_vec = pow(float3(2.0, 3.0, 4.0), float3(2.0));  // (4, 9, 16)
+
+            // Square root
+            float sqrt_4 = sqrt(4.0);         // 2.0
+            float sqrt_9 = sqrt(9.0);         // 3.0
+            float sqrt_2 = sqrt(2.0);         // ~1.414
+            float3 sqrt_vec = sqrt(float3(1.0, 4.0, 9.0));  // (1, 2, 3)
+
+            // Inverse square root
+            float rsqrt_4 = rsqrt(4.0);       // 0.5
+            float rsqrt_1 = rsqrt(1.0);       // 1.0
+            float3 rsqrt_vec = rsqrt(float3(1.0, 4.0, 16.0));  // (1, 0.5, 0.25)
+
+            // Trigonometric functions
+            float pi = 3.14159265359;
+
+            float sin_0 = sin(0.0);           // 0.0
+            float sin_pi2 = sin(pi / 2.0);    // 1.0
+            float sin_pi = sin(pi);           // ~0.0
+            float3 sin_vec = sin(float3(0.0, pi / 2.0, pi));
+
+            float cos_0 = cos(0.0);           // 1.0
+            float cos_pi2 = cos(pi / 2.0);    // ~0.0
+            float cos_pi = cos(pi);           // -1.0
+            float3 cos_vec = cos(float3(0.0, pi / 2.0, pi));
+
+            float tan_0 = tan(0.0);           // 0.0
+            float tan_pi4 = tan(pi / 4.0);    // 1.0
+
+            // Inverse trigonometric functions
+            float asin_0 = asin(0.0);         // 0.0
+            float asin_1 = asin(1.0);         // pi/2
+            float asin_half = asin(0.5);      // pi/6
+
+            float acos_1 = acos(1.0);         // 0.0
+            float acos_0 = acos(0.0);         // pi/2
+            float acos_neg1 = acos(-1.0);     // pi
+
+            float atan_0 = atan(0.0);         // 0.0
+            float atan_1 = atan(1.0);         // pi/4
+            float atan_inf = atan(1000.0);    // ~pi/2
+
+            // atan2 - two-argument arctangent
+            float atan2_11 = atan2(1.0, 1.0);     // pi/4
+            float atan2_10 = atan2(1.0, 0.0);     // pi/2
+            float atan2_01 = atan2(0.0, 1.0);     // 0.0
+            float atan2_neg = atan2(-1.0, -1.0);  // -3*pi/4
+
+            // Angle conversion
+            float deg_90 = degrees(pi / 2.0);     // 90.0
+            float deg_180 = degrees(pi);          // 180.0
+            float deg_360 = degrees(2.0 * pi);    // 360.0
+
+            float rad_90 = radians(90.0);         // pi/2
+            float rad_180 = radians(180.0);       // pi
+            float rad_360 = radians(360.0);       // 2*pi
+
+            // Combined expressions
+            float angle = radians(45.0);
+            float sin_cos_check = sin(angle) * sin(angle) + cos(angle) * cos(angle);  // ~1.0
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

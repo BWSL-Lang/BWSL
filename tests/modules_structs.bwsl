@@ -1,0 +1,88 @@
+// Test: Module structs
+// Tests: struct definition in modules, struct usage
+
+module Materials {
+    // Struct definition
+    struct PBRMaterial {
+        float3 albedo;
+        float roughness;
+        float metallic;
+        float ao;
+    };
+
+    struct Light {
+        float3 position;
+        float3 color;
+        float intensity;
+        float radius;
+    };
+
+    // Function using struct
+    getBaseColor :: (PBRMaterial mat) -> float3 {
+        return mat.albedo * mat.ao;
+    }
+
+    // Function returning struct
+    createDefaultMaterial :: () -> PBRMaterial {
+        PBRMaterial mat;
+        mat.albedo = float3(1.0, 1.0, 1.0);
+        mat.roughness = 0.5;
+        mat.metallic = 0.0;
+        mat.ao = 1.0;
+        return mat;
+    }
+
+    // Function with struct parameter
+    calculateAttenuation :: (Light light, float3 worldPos) -> float {
+        float3 toLight = light.position - worldPos;
+        float dist = length(toLight);
+        float atten = 1.0 / (1.0 + dist * dist / (light.radius * light.radius));
+        return atten * light.intensity;
+    }
+}
+
+pipeline ModulesStructs {
+    attributes {
+        position: float3
+        normal: float3
+    }
+
+    import Materials
+
+    pass "Main" {
+        use attributes { position, normal }
+
+        vertex {
+            // Create struct instance
+            Materials::PBRMaterial mat;
+            mat.albedo = float3(0.8, 0.2, 0.1);
+            mat.roughness = 0.3;
+            mat.metallic = 0.9;
+            mat.ao = 1.0;
+
+            // Use function with struct
+            float3 baseColor = Materials::getBaseColor(mat);
+
+            // Create light
+            Materials::Light light;
+            light.position = float3(5.0, 5.0, 5.0);
+            light.color = float3(1.0, 1.0, 1.0);
+            light.intensity = 2.0;
+            light.radius = 10.0;
+
+            // Use light struct in function
+            float3 worldPos = attributes.position;
+            float atten = Materials::calculateAttenuation(light, worldPos);
+
+            // Get default material
+            Materials::PBRMaterial defaultMat = Materials::createDefaultMaterial();
+
+            output.position = float4(attributes.position, 1.0);
+            output.normal = attributes.normal;
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

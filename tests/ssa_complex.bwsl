@@ -1,0 +1,131 @@
+// Test: SSA complex cases
+// Tests: multiple join points, loops with conditionals, complex control flow graphs
+
+pipeline SSAComplex {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float cond = 0.5;
+
+            // Diamond CFG pattern with modifications
+            float diamond = 0.0;
+            diamond = 1.0;
+            if (cond > 0.5) {
+                diamond = diamond + 10.0;
+            } else {
+                diamond = diamond + 20.0;
+            }
+            diamond = diamond * 2.0;
+            float final_diamond = diamond;
+
+            // Multiple diamonds in sequence
+            float multi = 0.0;
+            if (cond > 0.3) {
+                multi = 1.0;
+            } else {
+                multi = 2.0;
+            }
+            // First join point
+            multi = multi + 10.0;
+            if (cond > 0.7) {
+                multi = multi + 100.0;
+            } else {
+                multi = multi + 200.0;
+            }
+            // Second join point
+            float final_multi = multi;
+
+            // Loop containing if
+            float loop_if = 0.0;
+            for (int i = 0; i < 5; i++) {
+                if (i % 2 == 0) {
+                    loop_if = loop_if + 1.0;
+                } else {
+                    loop_if = loop_if + 0.1;
+                }
+            }
+            // loop_if = 1 + 0.1 + 1 + 0.1 + 1 = 3.2
+
+            // If containing loop
+            float if_loop = 0.0;
+            if (cond > 0.3) {
+                for (int i = 0; i < 3; i++) {
+                    if_loop = if_loop + 1.0;
+                }
+            } else {
+                if_loop = -1.0;
+            }
+            float final_if_loop = if_loop;  // Either 3.0 or -1.0
+
+            // Nested loops with shared variable
+            float nested = 0.0;
+            for (int i = 0; i < 2; i++) {
+                nested = nested + 1.0;  // +1 per outer iteration
+                for (int j = 0; j < 3; j++) {
+                    nested = nested + 0.1;  // +0.3 per outer iteration
+                }
+            }
+            // nested = 2 * (1.0 + 0.3) = 2.6
+
+            // Complex: loop with break inside if
+            float complex1 = 0.0;
+            for (int i = 0; i < 10; i++) {
+                complex1 = complex1 + 1.0;
+                if (complex1 > 5.0) {
+                    break;
+                }
+            }
+            // complex1 = 6.0 (loop breaks when complex1 becomes 6)
+
+            // Multiple variables through complex flow
+            float a = 1.0;
+            float b = 2.0;
+            float c = 3.0;
+            for (int i = 0; i < 3; i++) {
+                if (i == 0) {
+                    a = a + 10.0;
+                } else if (i == 1) {
+                    b = b + 10.0;
+                } else {
+                    c = c + 10.0;
+                }
+            }
+            float sum_abc = a + b + c;  // 11 + 12 + 13 = 36
+
+            // Early exit pattern
+            float early = 0.0;
+            for (int i = 0; i < 10; i++) {
+                if (i == 3) {
+                    early = 100.0;
+                    break;
+                }
+                early = early + 1.0;
+            }
+            // early = 3.0 (0+1+2) then becomes 100.0
+
+            // Value carried through multiple branches
+            float carried = 0.0;
+            if (cond > 0.2) {
+                carried = 1.0;
+                if (cond > 0.4) {
+                    carried = 2.0;
+                    if (cond > 0.6) {
+                        carried = 3.0;
+                    }
+                }
+            }
+            float final_carried = carried;
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

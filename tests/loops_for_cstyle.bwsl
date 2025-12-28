@@ -1,0 +1,101 @@
+// Test: C-style for loops
+// Tests: basic for, nested for, break, skip (continue)
+
+pipeline LoopsForCStyle {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Basic for loop
+            float sum1 = 0.0;
+            for (int i = 0; i < 10; i++) {
+                sum1 += 1.0;
+            }
+            // sum1 = 10.0
+
+            // For loop with different step
+            float sum2 = 0.0;
+            for (int i = 0; i < 10; i += 2) {
+                sum2 += 1.0;
+            }
+            // sum2 = 5.0 (0, 2, 4, 6, 8)
+
+            // For loop counting down
+            float sum3 = 0.0;
+            for (int i = 10; i > 0; i--) {
+                sum3 += float(i);
+            }
+            // sum3 = 55.0 (10+9+8+...+1)
+
+            // Nested for loops
+            float sum4 = 0.0;
+            for (int i = 0; i < 4; i++) {
+                for (int j = 0; j < 4; j++) {
+                    sum4 += 1.0;
+                }
+            }
+            // sum4 = 16.0
+
+            // For loop with float counter
+            float sum5 = 0.0;
+            for (float f = 0.0; f < 1.0; f += 0.1) {
+                sum5 += f;
+            }
+
+            // For loop building a result
+            float3 accumulated = float3(0.0);
+            for (int i = 0; i < 5; i++) {
+                accumulated += float3(float(i) * 0.1);
+            }
+
+            // For loop with break
+            float sum6 = 0.0;
+            for (int i = 0; i < 100; i++) {
+                if (i >= 5) {
+                    break;
+                }
+                sum6 += 1.0;
+            }
+            // sum6 = 5.0
+
+            // For loop with skip (continue)
+            float sum7 = 0.0;
+            for (int i = 0; i < 10; i++) {
+                if (i % 2 == 0) {
+                    skip;
+                }
+                sum7 += 1.0;
+            }
+            // sum7 = 5.0 (only odd numbers: 1,3,5,7,9)
+
+            // For loop with skip if
+            float sum8 = 0.0;
+            for (int i = 0; i < 10; i++) {
+                skip if (i % 2 == 0);
+                sum8 += 1.0;
+            }
+            // sum8 = 5.0
+
+            // Triple nested
+            float sum9 = 0.0;
+            for (int x = 0; x < 2; x++) {
+                for (int y = 0; y < 2; y++) {
+                    for (int z = 0; z < 2; z++) {
+                        sum9 += 1.0;
+                    }
+                }
+            }
+            // sum9 = 8.0
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

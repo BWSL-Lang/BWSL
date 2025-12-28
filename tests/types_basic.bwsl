@@ -1,0 +1,68 @@
+// Test: Basic scalar and vector types
+// Tests: type declarations, literals, constructors
+
+pipeline TypesBasic {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Scalar types
+            bool b1 = true;
+            bool b2 = false;
+
+            int i1 = 0;
+            int i2 = 42;
+            int i3 = -100;
+            int i4 = 2147483647;  // Max int32
+
+            uint u1 = 0u;
+            uint u2 = 42u;
+            uint u3 = 4294967295u;  // Max uint32
+
+            float f1 = 0.0;
+            float f2 = 1.0;
+            float f3 = -3.14159;
+            float f4 = 1e-6;
+            float f5 = 1.5e10;
+
+            // Float vectors - various constructor forms
+            float2 v2a = float2(1.0, 2.0);
+            float2 v2b = float2(0.0);  // Scalar broadcast
+
+            float3 v3a = float3(1.0, 2.0, 3.0);
+            float3 v3b = float3(0.0);  // Scalar broadcast
+            float3 v3c = float3(v2a, 3.0);  // From float2 + scalar
+
+            float4 v4a = float4(1.0, 2.0, 3.0, 4.0);
+            float4 v4b = float4(1.0);  // Scalar broadcast
+            float4 v4c = float4(v3a, 1.0);  // From float3 + scalar
+            float4 v4d = float4(v2a, v2b);  // From two float2
+            float4 v4e = float4(v2a, 3.0, 4.0);  // From float2 + two scalars
+
+            // Integer vectors
+            int2 i2v = int2(1, 2);
+            int3 i3v = int3(1, 2, 3);
+            int4 i4v = int4(1, 2, 3, 4);
+
+            // Unsigned integer vectors
+            uint2 u2v = uint2(1u, 2u);
+            uint3 u3v = uint3(1u, 2u, 3u);
+            uint4 u4v = uint4(1u, 2u, 3u, 4u);
+
+            // Const declarations
+            const float PI = 3.14159265359;
+            const float3 UP = float3(0.0, 1.0, 0.0);
+            const int MAX_LIGHTS = 8;
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}
