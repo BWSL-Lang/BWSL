@@ -382,6 +382,7 @@ const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_STORE_REG:     return "STORE_REG";
         case IR::OP_LOAD_ATTR:     return "LOAD_ATTR";
         case IR::OP_STORE_OUTPUT:  return "STORE_OUTPUT";
+        case IR::OP_LOAD_OUTPUT:   return "LOAD_OUTPUT";
         case IR::OP_LOAD_UNIFORM:  return "LOAD_UNIFORM";
         case IR::OP_LOAD_BUFFER:   return "LOAD_BUFFER";
         case IR::OP_STORE_BUFFER:  return "STORE_BUFFER";
@@ -671,6 +672,9 @@ void DumpIR(const IRProgram& prog) {
             case IR::OP_LOAD_ATTR:
                 printf(" attr[%u]", op0);
                 break;
+            case IR::OP_LOAD_OUTPUT:
+                printf(" output[%u]", op0);
+                break;
             case IR::OP_STORE_OUTPUT:
                 printf(" output[%u] = %s", op0, FormatOperand(prog, op1).c_str());
                 break;
@@ -823,6 +827,10 @@ std::string DumpIRToString(const IRProgram& prog) {
                 break;
             case IR::OP_LOAD_ATTR:
                 snprintf(buf, sizeof(buf), " attr[%u]", op0);
+                out += buf;
+                break;
+            case IR::OP_LOAD_OUTPUT:
+                snprintf(buf, sizeof(buf), " output[%u]", op0);
                 out += buf;
                 break;
             case IR::OP_STORE_OUTPUT:

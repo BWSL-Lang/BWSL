@@ -1788,6 +1788,103 @@ struct IRLowering {
         } else if (target.Type() == ASTNodeType::MEMBER_ACCESS) {
             const MemberAccessData& access = ast->GetMemberAccess(target);
 
+            if (access.object.Type() == ASTNodeType::MEMBER_ACCESS) {
+                const MemberAccessData& baseAccess = ast->GetMemberAccess(access.object);
+                if (baseAccess.object.Type() == ASTNodeType::IDENTIFIER) {
+                    const IdentifierData& baseObj = ast->GetIdentifier(baseAccess.object);
+                    if (baseObj.identifierKind == SpecialIdentifier::OUTPUT) {
+                        u32 outputNameHash = baseAccess.member.nameHash;
+                        CoreType outputType = ResolveOutputTypeForLoad(outputNameHash);
+
+                        const char* nameStr = nullptr;
+                        char nameBuf[32] = {0};
+                        if (sourceBase && !baseAccess.member.isHashOnly()) {
+                            auto sv = baseAccess.member.view(sourceBase);
+                            size_t len = sv.length() < 31 ? sv.length() : 31;
+                            memcpy(nameBuf, sv.data(), len);
+                            nameBuf[len] = '\0';
+                            nameStr = nameBuf;
+                        }
+                        u32 slot = ResolveOutputSlotForStore(outputNameHash, outputType, nameStr);
+
+                        u16 outputReg = AllocateRegister();
+                        SetRegisterType(outputReg, outputType);
+                        builder.EmitInstruction(OP_LOAD_OUTPUT, outputReg, slot);
+                        program.metadata[builder.currentInstruction - 1] = outputNameHash;
+
+                        u32 memberHash = access.member.nameHash;
+                        u32 componentIndex = 0xFFFFFFFF;
+                        if (memberHash == Utils::HashStr("x") || memberHash == Utils::HashStr("r")) componentIndex = 0;
+                        else if (memberHash == Utils::HashStr("y") || memberHash == Utils::HashStr("g")) componentIndex = 1;
+                        else if (memberHash == Utils::HashStr("z") || memberHash == Utils::HashStr("b")) componentIndex = 2;
+                        else if (memberHash == Utils::HashStr("w") || memberHash == Utils::HashStr("a")) componentIndex = 3;
+
+                        if (componentIndex != 0xFFFFFFFF) {
+                            u32 numComponents = GetVectorDimension(outputType);
+                            if (numComponents < 2) {
+                                builder.EmitInstruction(OP_STORE_OUTPUT, valueReg, slot);
+                                program.metadata[builder.currentInstruction - 1] = outputNameHash;
+                                return;
+                            }
+
+                            u16 newVecReg = AllocateRegister();
+                            SetRegisterType(newVecReg, outputType);
+                            builder.EmitInstruction(OP_VEC_INSERT, newVecReg, outputReg, componentIndex, valueReg);
+                            builder.EmitInstruction(OP_STORE_OUTPUT, newVecReg, slot);
+                            program.metadata[builder.currentInstruction - 1] = outputNameHash;
+                            return;
+                        }
+
+                        const char* swizzlePatterns[] = {
+                            "xy", "xz", "xw", "yz", "yw", "zw",
+                            "xyz", "xyw", "xzw", "yzw",
+                            "xyzw",
+                            "rg", "rb", "ra", "gb", "ga", "ba",
+                            "rgb", "rga", "rba", "gba",
+                            "rgba"
+                        };
+                        const u8 swizzleIndices[][4] = {
+                            {0, 1, 255, 255}, {0, 255, 1, 255}, {0, 255, 255, 1}, {255, 0, 1, 255}, {255, 0, 255, 1}, {255, 255, 0, 1},
+                            {0, 1, 2, 255}, {0, 1, 255, 2}, {0, 255, 1, 2}, {255, 0, 1, 2},
+                            {0, 1, 2, 3},
+                            {0, 1, 255, 255}, {0, 255, 1, 255}, {0, 255, 255, 1}, {255, 0, 1, 255}, {255, 0, 255, 1}, {255, 255, 0, 1},
+                            {0, 1, 2, 255}, {0, 1, 255, 2}, {0, 255, 1, 2}, {255, 0, 1, 2},
+                            {0, 1, 2, 3}
+                        };
+
+                        for (u32 i = 0; i < sizeof(swizzlePatterns)/sizeof(swizzlePatterns[0]); i++) {
+                            if (memberHash == Utils::HashStr(swizzlePatterns[i])) {
+                                u32 numComponents = GetVectorDimension(outputType);
+                                if (numComponents < 2) {
+                                    builder.EmitInstruction(OP_STORE_OUTPUT, valueReg, slot);
+                                    program.metadata[builder.currentInstruction - 1] = outputNameHash;
+                                    return;
+                                }
+
+                                u16 newVecReg = AllocateRegister();
+                                SetRegisterType(newVecReg, outputType);
+
+                                u32 shuffleMask = 0;
+                                for (u32 j = 0; j < numComponents; j++) {
+                                    u8 srcIdx = (j < 4) ? swizzleIndices[i][j] : 255;
+                                    if (srcIdx != 255) {
+                                        shuffleMask |= ((srcIdx + numComponents) & 0xF) << (j * 4);
+                                    } else {
+                                        shuffleMask |= (j & 0xF) << (j * 4);
+                                    }
+                                }
+
+                                builder.EmitInstruction(OP_VEC_SHUFFLE, newVecReg, outputReg, valueReg);
+                                program.metadata[builder.currentInstruction - 1] = shuffleMask;
+                                builder.EmitInstruction(OP_STORE_OUTPUT, newVecReg, slot);
+                                program.metadata[builder.currentInstruction - 1] = outputNameHash;
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+
             // Check if object is 'output'
             if (access.object.Type() == ASTNodeType::IDENTIFIER) {
                 const IdentifierData& obj = ast->GetIdentifier(access.object);
@@ -1795,29 +1892,17 @@ struct IRLowering {
                     u32 nameHash = access.member.nameHash;
                     CoreType valueType = GetRegisterType(valueReg);
 
-                    // Determine the output slot
-                    u32 slot;
-                    if (IsBuiltinOutput(nameHash)) {
-                        // Builtins have fixed slots (position, color, depth)
-                        slot = GetBuiltinOutputSlot(nameHash);
-                    } else if (currentPassVaryings && currentStage == ShaderStage::Vertex) {
-                        // User varying: register in context and get sequential slot
-                        // Extract name string for GLES output
-                        const char* nameStr = nullptr;
-                        char nameBuf[32] = {0};
-                        if (sourceBase && !access.member.isHashOnly()) {
-                            auto sv = access.member.view(sourceBase);
-                            size_t len = sv.length() < 31 ? sv.length() : 31;
-                            memcpy(nameBuf, sv.data(), len);
-                            nameBuf[len] = '\0';
-                            nameStr = nameBuf;
-                        }
-                        u32 varyingIndex = currentPassVaryings->AddOrGetSlot(nameHash, valueType, nameStr);
-                        slot = OutputSlot::VARYING0 + varyingIndex;
-                    } else {
-                        // Fallback for fragment shader outputs or no context
-                        slot = OutputSlot::VARYING0;
+                    // Extract name string for GLES output
+                    const char* nameStr = nullptr;
+                    char nameBuf[32] = {0};
+                    if (sourceBase && !access.member.isHashOnly()) {
+                        auto sv = access.member.view(sourceBase);
+                        size_t len = sv.length() < 31 ? sv.length() : 31;
+                        memcpy(nameBuf, sv.data(), len);
+                        nameBuf[len] = '\0';
+                        nameStr = nameBuf;
                     }
+                    u32 slot = ResolveOutputSlotForStore(nameHash, valueType, nameStr);
 
                     // Emit OP_STORE_OUTPUT with slot in operand
                     builder.EmitInstruction(OP_STORE_OUTPUT, valueReg, slot);
@@ -2731,6 +2816,17 @@ void LowerIfStatement(NodeRef ref) {
                     attrType = GetInputTypeFromAttribute(access.member.nameHash);
                 }
                 SetRegisterType(dest, attrType);
+                return dest;
+            }
+
+            case SpecialIdentifier::OUTPUT: {
+                u16 dest = AllocateRegister();
+                u32 nameHash = access.member.nameHash;
+                u32 slot = ResolveOutputSlotForLoad(nameHash);
+                CoreType outputType = ResolveOutputTypeForLoad(nameHash);
+                builder.EmitInstruction(OP_LOAD_OUTPUT, dest, slot);
+                program.metadata[builder.currentInstruction - 1] = nameHash;
+                SetRegisterType(dest, outputType);
                 return dest;
             }
 
@@ -3927,6 +4023,53 @@ void LowerIfStatement(NodeRef ref) {
         if (nameHash == HASH_COLOR) return OutputSlot::COLOR;
         if (nameHash == HASH_DEPTH) return OutputSlot::DEPTH;
         return OutputSlot::VARYING0;  // Fallback
+    }
+
+    CoreType GetBuiltinOutputType(u32 nameHash) {
+        static const u32 HASH_POSITION = Utils::HashStr("position");
+        static const u32 HASH_COLOR = Utils::HashStr("color");
+        static const u32 HASH_DEPTH = Utils::HashStr("depth");
+        if (nameHash == HASH_POSITION || nameHash == HASH_COLOR) return CoreType::FLOAT4;
+        if (nameHash == HASH_DEPTH) return CoreType::FLOAT;
+        return CoreType::INVALID;
+    }
+
+    u32 ResolveOutputSlotForStore(u32 nameHash, CoreType valueType, const char* nameStr) {
+        if (IsBuiltinOutput(nameHash)) {
+            return GetBuiltinOutputSlot(nameHash);
+        }
+        if (currentPassVaryings && currentStage == ShaderStage::Vertex) {
+            u32 varyingIndex = currentPassVaryings->AddOrGetSlot(nameHash, valueType, nameStr);
+            return OutputSlot::VARYING0 + varyingIndex;
+        }
+        return OutputSlot::VARYING0;
+    }
+
+    u32 ResolveOutputSlotForLoad(u32 nameHash) {
+        if (IsBuiltinOutput(nameHash)) {
+            return GetBuiltinOutputSlot(nameHash);
+        }
+        if (currentPassVaryings && currentStage == ShaderStage::Vertex) {
+            s32 varyingIndex = currentPassVaryings->GetSlot(nameHash);
+            if (varyingIndex >= 0) {
+                return OutputSlot::VARYING0 + (u32)varyingIndex;
+            }
+        }
+        return OutputSlot::VARYING0;
+    }
+
+    CoreType ResolveOutputTypeForLoad(u32 nameHash) {
+        CoreType builtinType = GetBuiltinOutputType(nameHash);
+        if (builtinType != CoreType::INVALID) {
+            return builtinType;
+        }
+        if (currentPassVaryings && currentStage == ShaderStage::Vertex) {
+            s32 varyingIndex = currentPassVaryings->GetSlot(nameHash);
+            if (varyingIndex >= 0) {
+                return currentPassVaryings->GetType((u32)varyingIndex);
+            }
+        }
+        return CoreType::FLOAT4;
     }
 
     u32 GetAttributeIndex(u32 nameHash) {

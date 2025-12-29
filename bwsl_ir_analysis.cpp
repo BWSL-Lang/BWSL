@@ -106,6 +106,17 @@ void AnalyzeIR(IRAnalysis* analysis, const IR::IRProgram* ir) {
                 }
                 break;
             }
+            case IR::OP_LOAD_OUTPUT: {
+                u32 slot = ir->GetOperand(i, 0);
+                if (slot < 32) {
+                    analysis->usedOutputMask |= (1 << slot);
+                    u16 destReg = ir->destinations[i];
+                    if (destReg < ir->registerCount && ir->registerTypes) {
+                        analysis->outputTypes[slot] = ir->registerTypes[destReg];
+                    }
+                }
+                break;
+            }
             
             // ========== Uniform/Buffer Loading ==========
             case IR::OP_LOAD_UNIFORM: {

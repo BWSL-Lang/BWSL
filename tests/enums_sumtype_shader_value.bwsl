@@ -44,9 +44,8 @@ pipeline EnumsSumTypeShaderValue {
 
             float staticBoost = select(0.0, 1.0, static0) + select(0.0, 1.0, static2);
 
-            float4 outPos = float4(attributes.position, 1.0);
-            outPos.x = s0 + s1 + s2 + staticBoost;
-            output.position = outPos;
+            output.position = float4(attributes.position, 1.0);
+            output.position.x = output.position.x + s0 + s1 + s2 + staticBoost;
         }
     }
 }

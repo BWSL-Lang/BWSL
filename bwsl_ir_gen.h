@@ -212,6 +212,7 @@ enum OpCode : u16 {
     OP_STORE_REG     = 0x12,
     OP_LOAD_ATTR     = 0x13,  // Load vertex attribute
     OP_STORE_OUTPUT  = 0x14,  // Store to shader output
+    OP_LOAD_OUTPUT   = 0x7F,  // Load from shader output
     OP_LOAD_UNIFORM  = 0x15,  // Load from uniform buffer
     OP_LOAD_BUFFER   = 0x16,  // Load from storage buffer
     OP_STORE_BUFFER  = 0x17,  // Store to storage buffer
@@ -436,7 +437,7 @@ enum OpCode : u16 {
 
 // Helper to categorize opcodes
 inline bool IsMemoryOp(OpCode op) {
-    return (op >= 0x10 && op <= 0x1B) || (op >= 0xB8 && op <= 0xB9);
+    return (op >= 0x10 && op <= 0x1B) || (op >= 0xB8 && op <= 0xB9) || op == OP_LOAD_OUTPUT;
 }
 
 inline bool IsFloatOp(OpCode op) {

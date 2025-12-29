@@ -29,6 +29,7 @@ static constexpr spv::Op IR_TO_SPV_OP_TABLE[256] = {
     [IR::OP_STORE_REG]     = spv::OpStore,
     [IR::OP_LOAD_ATTR]     = spv::OpLoad,
     [IR::OP_STORE_OUTPUT]  = spv::OpStore,
+    [IR::OP_LOAD_OUTPUT]   = spv::OpLoad,
     [IR::OP_LOAD_UNIFORM]  = spv::OpLoad,
     [IR::OP_LOAD_BUFFER]   = spv::OpLoad,
     [IR::OP_STORE_BUFFER]  = spv::OpStore,
@@ -2546,6 +2547,37 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
                 // Load the value
                 Emit(spv::OpLoad, load_type_id, dest, member_ptr_id);
+            }
+            break;
+        }
+
+        case IR::OP_LOAD_OUTPUT: {
+            u32 slot = ir->GetOperand(ir_idx, 0);
+            u16 dest_reg = ir->destinations[ir_idx];
+            u32 dest = GetSpirvId(dest_reg);
+
+            CoreType outputType = CoreType::FLOAT4;
+            if (ir->registerTypes && dest_reg < ir->registerCount) {
+                CoreType regType = static_cast<CoreType>(ir->registerTypes[dest_reg]);
+                if (regType != CoreType::VOID && regType != CoreType::INVALID) {
+                    outputType = regType;
+                }
+            }
+            if (outputType == CoreType::INVALID || outputType == CoreType::VOID) {
+                outputType = GetFallbackOutputType(slot);
+            }
+            u32 load_type_id = GetTypeId(outputType);
+
+            u32 ptr_id = 0;
+            for (u32 i = 0; i < outputCount; i++) {
+                if (outputLocations[i] == slot ||
+                    (outputLocations[i] == 0xFF && slot == OutputSlot::POSITION)) {
+                    ptr_id = outputIds[i];
+                    break;
+                }
+            }
+            if (ptr_id != 0 && load_type_id != 0) {
+                Emit(spv::OpLoad, load_type_id, dest, ptr_id);
             }
             break;
         }

@@ -129,6 +129,7 @@ void SSAConstructor::IdentifyVariables() {
             case IR::OP_LOAD_ATTR:
             case IR::OP_LOAD_INPUT:
             case IR::OP_LOAD_CONST:
+            case IR::OP_LOAD_OUTPUT:
                 // operand[0] is an index/slot, not a register - no register operands
                 continue;  // Skip this instruction entirely for use tracking
             case IR::OP_STORE_OUTPUT:
