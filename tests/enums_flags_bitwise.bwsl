@@ -1,0 +1,38 @@
+// Test: Flag enums with explicit values and bitwise ops
+// Tests: underlying type, bitwise and/or/xor, comparisons
+
+pipeline EnumsFlagsBitwise {
+    attributes {
+        position: float3
+    }
+
+    enum Channels : uint {
+        Red   = 0b0001,
+        Green = 0b0010,
+        Blue  = 0b0100,
+        Alpha = 0b1000
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            Channels mask = Channels::Red | Channels::Blue;
+            Channels extended = mask | Channels::Green;
+            Channels toggled = extended ^ Channels::Blue;
+            Channels onlyBlue = toggled & Channels::Blue;
+
+            bool hasRed = (mask & Channels::Red) != 0;
+            bool hasAlpha = (mask & Channels::Alpha) != 0;
+            bool hasBlue = (onlyBlue & Channels::Blue) != 0;
+
+            float bump = select(0.0, 1.0, hasRed) +
+                         select(0.0, 1.0, hasAlpha) +
+                         select(0.0, 1.0, hasBlue);
+
+            float4 outPos = float4(attributes.position, 1.0);
+            outPos.x = outPos.x + bump;
+            output.position = outPos;
+        }
+    }
+}

@@ -1,0 +1,52 @@
+// Test: Enum sum types with mixed payloads and defaults
+// Tests: vector bindings, default arm, method calls on enum values
+
+pipeline EnumsSumTypeShaderValue {
+    attributes {
+        position: float3
+    }
+
+    enum ShaderValue {
+        Constant(float4),
+        Sampled(float2),
+        Computed,
+
+        isStatic :: () -> bool {
+            Constant(_): true
+            default: false
+        }
+
+        luma :: () -> float {
+            Constant(c): dot(c.rgb, float3(0.2126, 0.7152, 0.0722))
+            Sampled(uv): uv.x + uv.y
+            Computed: 0.0
+        }
+    }
+
+    scoreValue :: (ShaderValue v) -> float {
+        return v.luma();
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            ShaderValue v0 = ShaderValue::Constant(float4(1.0, 0.5, 0.25, 0.75));
+            ShaderValue v1 = ShaderValue::Sampled(float2(0.3, 0.7));
+            ShaderValue v2 = ShaderValue::Computed();
+
+            float s0 = scoreValue(v0);
+            float s1 = scoreValue(v1);
+            float s2 = scoreValue(v2);
+
+            bool static0 = v0.isStatic();
+            bool static2 = v2.isStatic();
+
+            float staticBoost = select(0.0, 1.0, static0) + select(0.0, 1.0, static2);
+
+            float4 outPos = float4(attributes.position, 1.0);
+            outPos.x = s0 + s1 + s2 + staticBoost;
+            output.position = outPos;
+        }
+    }
+}

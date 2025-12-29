@@ -1260,14 +1260,13 @@ struct IRLowering {
         // Store mapping from variable name hash to register
         variableRegisters[varDecl.name.nameHash] = varReg;
 
-        // Track type from type name hash or symbol table
-        CoreType coreType = CoreType::INVALID;
+        // Track type from the declaration first to avoid symbol-table collisions for locals.
         u32 customTypeHash = 0;
-        if (varData && varData->typeInfo.coreType != CoreType::INVALID) {
+        CoreType coreType = ResolveCoreTypeFromHash(varDecl.type.nameHash, &customTypeHash);
+        if ((coreType == CoreType::INVALID || coreType == CoreType::VOID) &&
+            varData && varData->typeInfo.coreType != CoreType::INVALID) {
             coreType = varData->typeInfo.coreType;
             customTypeHash = varData->typeInfo.customTypeHash;
-        } else {
-            coreType = ResolveCoreTypeFromHash(varDecl.type.nameHash, &customTypeHash);
         }
 
         if (isShared) {
@@ -1425,6 +1424,8 @@ struct IRLowering {
         switch (type) {
             case CoreType::FLOAT:
                 return builder.EmitConstant(0.0f);
+            case CoreType::BOOL:
+                return builder.EmitConstantBool(false);
             case CoreType::FLOAT2:
             case CoreType::FLOAT3:
             case CoreType::FLOAT4: {
@@ -3081,15 +3082,9 @@ void LowerIfStatement(NodeRef ref) {
 
         // Check for enum method call (e.g., shape.distance(p))
         if (call.flags & FunctionCallFlags::IS_METHOD_CALL) {
-            fprintf(stderr, "DEBUG: IS_METHOD_CALL detected\n");
-            fflush(stderr);
             // Get the receiver object
             if (!call.moduleObject.IsNull()) {
-                fprintf(stderr, "DEBUG: Lowering receiver expression\n");
-                fflush(stderr);
                 u16 receiverReg = LowerExpression(call.moduleObject);
-                fprintf(stderr, "DEBUG: receiverReg=%u\n", (unsigned)receiverReg);
-                fflush(stderr);
                 u32 receiverStructHash = program.registerStructTypes[receiverReg];
 
                 if (receiverStructHash != 0) {
@@ -3129,6 +3124,7 @@ void LowerIfStatement(NodeRef ref) {
                         if (!methodRef.IsNull()) {
                             // Get method body (should be a PatternMatch for eval methods)
                             const FunctionDeclData& method = ast->GetFunction(methodRef);
+                            auto savedNodeRegisters = nodeRegisters;
 
                             // Extract the enum tag for dispatch
                             u16 tagReg = AllocateRegister();
@@ -3147,88 +3143,153 @@ void LowerIfStatement(NodeRef ref) {
                             // For simplicity, generate a chain of comparisons + select
                             if (method.body.Type() == ASTNodeType::PATTERN_MATCH) {
                                 const PatternMatchData& pm = ast->GetPatternMatch(method.body);
+                                auto savedVarRegs = variableRegisters;
+                                u32 selfHash = Utils::HashStr("self");
+                                variableRegisters[selfHash] = selfReg;
+
+                                // Bind method parameters that are not 'self' once for all arms
+                                u32 argIdx = 0;
+                                for (u32 p = 0; p < method.parameters.count && argIdx < 4; p++) {
+                                    const auto& param = method.parameters[p];
+                                    if (param.second.nameHash != Utils::HashStr("self") &&
+                                        param.first.nameHash != 0) {
+                                        variableRegisters[param.first.nameHash] = args[argIdx++];
+                                    }
+                                }
+                                auto baseVarRegs = variableRegisters;
+
+                                auto scalarCountFor = [](CoreType type) -> u32 {
+                                    switch (type) {
+                                        case CoreType::FLOAT2:
+                                        case CoreType::INT2:
+                                        case CoreType::UINT2:
+                                        case CoreType::BOOL2:
+                                            return 2;
+                                        case CoreType::FLOAT3:
+                                        case CoreType::INT3:
+                                        case CoreType::UINT3:
+                                        case CoreType::BOOL3:
+                                            return 3;
+                                        case CoreType::FLOAT4:
+                                        case CoreType::INT4:
+                                        case CoreType::UINT4:
+                                        case CoreType::BOOL4:
+                                            return 4;
+                                        default:
+                                            return 1;
+                                    }
+                                };
 
                                 // For each arm, check if tag == variantIndex, evaluate body, select
                                 u16 resultReg = AllocateRegister();
                                 SetRegisterType(resultReg, method.returnType);
 
-                                // Initialize result with first variant or zero
-                                builder.EmitInstruction(OP_LOAD_CONST, resultReg, builder.EmitConstant(0.0f));
+                                u16 initValue = EmitZeroConstant(method.returnType);
+                                builder.EmitInstruction(OP_STORE_REG, resultReg, initValue);
+
+                                u16 matchedReg = builder.EmitConstantBool(false);
+                                u32 underscoreHash = Utils::HashStr("_");
 
                                 for (u32 armIdx = 0; armIdx < pm.arms.count; armIdx++) {
                                     NodeRef armRef = pm.arms[armIdx];
-                                    if (armRef.Type() == ASTNodeType::PATTERN_MATCH_ARM) {
-                                        const PatternMatchData& arm = ast->GetPatternMatch(armRef);
+                                    if (armRef.Type() != ASTNodeType::PATTERN_MATCH_ARM) {
+                                        continue;
+                                    }
+                                    const PatternMatchData& arm = ast->GetPatternMatch(armRef);
 
-                                        // Find variant index for this arm
-                                        u32 variantIdx = 0xFFFFFFFF;
+                                    u16 condReg = 0xFFFF;
+                                    u32 variantIdx = 0xFFFFFFFF;
+                                    if (!arm.isDefault) {
                                         for (u32 v = 0; v < enumData.variants.count; v++) {
                                             if (enumData.variants[v].name.nameHash == arm.variantHash) {
                                                 variantIdx = v;
                                                 break;
                                             }
                                         }
+                                        if (variantIdx == 0xFFFFFFFF) {
+                                            continue;
+                                        }
+                                        u16 expectedTag = EmitConstantInt(variantIdx);
+                                        condReg = AllocateRegister();
+                                        builder.EmitInstruction(OP_IEQ, condReg, tagReg, expectedTag);
+                                        SetRegisterType(condReg, CoreType::BOOL);
 
-                                        if (variantIdx != 0xFFFFFFFF) {
-                                            // Compare tag with variant index
-                                            u16 expectedTag = EmitConstantInt(variantIdx);
-                                            u16 condReg = AllocateRegister();
-                                            builder.EmitInstruction(OP_IEQ, condReg, tagReg, expectedTag);
-                                            SetRegisterType(condReg, CoreType::BOOL);
+                                        u16 newMatched = AllocateRegister();
+                                        builder.EmitInstruction(OP_OR, newMatched, matchedReg, condReg);
+                                        SetRegisterType(newMatched, CoreType::BOOL);
+                                        matchedReg = newMatched;
+                                    } else {
+                                        u16 notMatched = AllocateRegister();
+                                        builder.EmitInstruction(OP_NOT, notMatched, matchedReg);
+                                        SetRegisterType(notMatched, CoreType::BOOL);
+                                        condReg = notMatched;
+                                    }
 
-                                            // Set up bindings: extract enum fields into local variables
-                                            // The bindings map binding names to field indices
-                                            for (u32 b = 0; b < arm.bindings.count; b++) {
-                                                const auto& binding = arm.bindings[b];
-                                                // Extract field from enum
+                                    variableRegisters = baseVarRegs;
+
+                                    if (variantIdx != 0xFFFFFFFF) {
+                                        const EnumData::Variant& variant = enumData.variants[variantIdx];
+                                        u32 payloadIndex = 0;
+                                        u32 bindingIdx = 0;
+
+                                        for (u32 t = 0; t < variant.associatedTypes.count; t++) {
+                                            CoreType assocType = variant.associatedTypes[t];
+                                            u32 componentCount = scalarCountFor(assocType);
+                                            if (bindingIdx >= arm.bindings.count) {
+                                                payloadIndex += componentCount;
+                                                continue;
+                                            }
+
+                                            const auto& binding = arm.bindings[bindingIdx++];
+                                            if (binding.first.nameHash == underscoreHash) {
+                                                payloadIndex += componentCount;
+                                                continue;
+                                            }
+
+                                            if (componentCount == 1) {
                                                 u16 fieldReg = AllocateRegister();
-                                                u16 fieldIdx = EmitConstantInt(b);
+                                                u16 fieldIdx = EmitConstantInt(payloadIndex);
                                                 builder.EmitInstruction(OP_ENUM_FIELD, fieldReg, selfReg, fieldIdx);
-                                                SetRegisterType(fieldReg, CoreType::FLOAT);  // Assume float for now
-
-                                                // Register binding for use in body evaluation
+                                                SetRegisterType(fieldReg, assocType);
                                                 variableRegisters[binding.first.nameHash] = fieldReg;
-                                            }
-
-                                            // Also bind method parameters
-                                            // parameters are pairs of (name, type) as ArenaStrings
-                                            // Note: Use separate argIdx since 'self' is in parameters but not in args
-                                            // 'self' parameter has empty name and type="self", so check type hash
-                                            u32 argIdx = 0;
-                                            for (u32 p = 0; p < method.parameters.count && argIdx < 4; p++) {
-                                                const auto& param = method.parameters[p];
-                                                // param.first is the name, param.second is the type
-                                                // Skip 'self' parameter (which has type "self")
-                                                if (param.second.nameHash != Utils::HashStr("self")) {
-                                                    variableRegisters[param.first.nameHash] = args[argIdx++];
+                                            } else {
+                                                u16 components[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+                                                CoreType scalarType = GetScalarComponentType(assocType);
+                                                for (u32 c = 0; c < componentCount && c < 4; c++) {
+                                                    u16 compReg = AllocateRegister();
+                                                    u16 compIdx = EmitConstantInt(payloadIndex + c);
+                                                    builder.EmitInstruction(OP_ENUM_FIELD, compReg, selfReg, compIdx);
+                                                    SetRegisterType(compReg, scalarType);
+                                                    components[c] = compReg;
                                                 }
+
+                                                u16 vecReg = AllocateRegister();
+                                                builder.EmitInstruction(OP_VEC_CONSTRUCT, vecReg,
+                                                                        components[0], components[1],
+                                                                        components[2], components[3]);
+                                                program.metadata[builder.currentInstruction - 1] = componentCount;
+                                                SetRegisterType(vecReg, assocType);
+                                                variableRegisters[binding.first.nameHash] = vecReg;
                                             }
 
-                                            // Save variableRegisters state to avoid local vars leaking
-                                            // from inlined method body (e.g., Box case's float3 d shadowing
-                                            // the caller's float d)
-                                            auto savedVarRegs = variableRegisters;
-
-                                            // Evaluate the arm body
-                                            u16 armResult = 0;
-                                            if (!arm.body.IsNull()) {
-                                                armResult = LowerExpression(arm.body);
-                                            }
-
-                                            // Restore variableRegisters to prevent local variable leakage
-                                            variableRegisters = savedVarRegs;
-
-                                            // Select: result = cond ? armResult : result
-                                            // BWSL convention: select(false_val, true_val, condition)
-                                            u16 newResult = AllocateRegister();
-                                            builder.EmitInstruction(OP_SELECT, newResult, resultReg, armResult, condReg);
-                                            SetRegisterType(newResult, method.returnType);
-                                            resultReg = newResult;
+                                            payloadIndex += componentCount;
                                         }
                                     }
+
+                                    u16 armResult = 0;
+                                    if (!arm.body.IsNull()) {
+                                        armResult = LowerExpression(arm.body);
+                                    }
+
+                                    u16 newResult = AllocateRegister();
+                                    builder.EmitInstruction(OP_SELECT, newResult, resultReg, armResult, condReg);
+                                    SetRegisterType(newResult, method.returnType);
+                                    resultReg = newResult;
                                 }
 
-                                // Copy final result to dest
+                                variableRegisters = savedVarRegs;
+                                nodeRegisters = savedNodeRegisters;
+
                                 builder.EmitInstruction(OP_STORE_REG, dest, resultReg);
                                 SetRegisterType(dest, method.returnType);
                                 return dest;
@@ -3240,14 +3301,15 @@ void LowerIfStatement(NodeRef ref) {
                                 auto savedVarRegs = variableRegisters;
 
                                 // Bind method parameters to argument registers
-                                // param.first = type name (ArenaString), param.second = param name (ArenaString)
+                                // param.first = name, param.second = type
                                 u32 argIdx = 0;
                                 for (u32 p = 0; p < method.parameters.count && argIdx < 4; p++) {
                                     const auto& param = method.parameters[p];
-                                    // Skip 'self' parameter (param.second is the parameter name)
-                                    if (param.second.nameHash != Utils::HashStr("self")) {
+                                    // Skip 'self' parameter (type is "self")
+                                    if (param.second.nameHash != Utils::HashStr("self") &&
+                                        param.first.nameHash != 0) {
                                         // Map parameter name to argument register
-                                        variableRegisters[param.second.nameHash] = args[argIdx++];
+                                        variableRegisters[param.first.nameHash] = args[argIdx++];
                                     }
                                 }
 
@@ -3261,21 +3323,16 @@ void LowerIfStatement(NodeRef ref) {
                                     // No body - return zero
                                     builder.EmitInstruction(OP_LOAD_CONST, dest, builder.EmitConstant(0.0f));
                                     SetRegisterType(dest, method.returnType);
+                                    nodeRegisters = savedNodeRegisters;
                                     return dest;
                                 }
-
-                                fprintf(stderr, "DEBUG: Non-pattern method body type=%u, index=%u\n",
-                                        (unsigned)method.body.Type(), method.body.Index());
-                                fflush(stderr);
 
                                 // Evaluate the method body
                                 u16 bodyResult = LowerExpression(method.body);
 
-                                fprintf(stderr, "DEBUG: LowerExpression returned %u\n", (unsigned)bodyResult);
-                                fflush(stderr);
-
                                 // Restore variableRegisters
                                 variableRegisters = savedVarRegs;
+                                nodeRegisters = savedNodeRegisters;
 
                                 // Store result
                                 builder.EmitInstruction(OP_STORE_REG, dest, bodyResult);

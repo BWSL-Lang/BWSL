@@ -1838,10 +1838,14 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             CoreType valType = CoreType::FLOAT;
             if (ir->registerTypes && true_val_reg < ir->registerCount) {
                 valType = static_cast<CoreType>(ir->registerTypes[true_val_reg]);
+            } else if ((true_val_reg & 0xC000) == 0xC000) {
+                valType = CoreType::BOOL;   // Bool constant (0xC000 prefix)
             } else if (true_val_reg & 0x8000) {
                 valType = CoreType::FLOAT;  // Float constant
             } else if (true_val_reg & 0x4000) {
                 valType = CoreType::INT;    // Int constant
+            } else if (true_val_reg & 0x2000) {
+                valType = CoreType::UINT;   // Uint constant
             }
             u32 result_type = GetTypeId(valType);
 
