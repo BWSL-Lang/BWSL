@@ -1,0 +1,35 @@
+// Test: Inlined return of struct type
+// Tests: struct member assignment, return guard, struct type propagation
+
+pipeline InlineReturnStruct {
+    attributes {
+        position: float3
+    }
+
+    struct Payload {
+        float2 uv;
+        float value;
+    };
+
+    buildPayload :: (float v) -> Payload {
+        Payload p;
+        p.uv = float2(v, v + 1.0);
+        if (v > 0.5) {
+            p.value = v;
+            return p;
+        }
+        p.value = v * 2.0;
+        return p;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            Payload payload = buildPayload(attributes.position.x);
+            output.position = float4(attributes.position, 1.0);
+            output.position.x = payload.value;
+            output.position.y = payload.uv.x;
+        }
+    }
+}

@@ -149,6 +149,10 @@ void SSAConstructor::IdentifyVariables() {
 
         // Check operands for uses
         for (u32 opIdx = firstRegOperand; opIdx < 4; opIdx++) {
+            if ((op == IR::OP_VEC_INSERT || op == IR::OP_VEC_EXTRACT || op == IR::OP_ENUM_FIELD ||
+                 op == IR::OP_STRUCT_INSERT || op == IR::OP_STRUCT_EXTRACT) && opIdx == 1) {
+                continue;
+            }
             u16 operand = ir->GetOperand(i, opIdx);
             if (operand == 0 || operand == 0xFFFF) continue;
             if (operand & 0xE000) continue;  // Skip constants (0x8000=float, 0x4000=int, 0x2000=uint)
@@ -522,6 +526,8 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             op == IR::OP_VEC_EXTRACT ||                     // Vector extract
             op == IR::OP_VEC_INSERT ||                      // Vector component insert
             op == IR::OP_VEC_SHUFFLE ||                     // Vector shuffle/swizzle
+            op == IR::OP_STRUCT_EXTRACT ||                  // Struct extract
+            op == IR::OP_STRUCT_INSERT ||                   // Struct insert
             op == IR::OP_SELECT ||                          // Ternary select
             op == IR::OP_BRANCH ||                          // Branch condition
             op == IR::OP_ENUM_TAG ||                        // Enum tag extraction
@@ -538,7 +544,8 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                 // Special case: VEC_INSERT and VEC_EXTRACT use operand 1 as a literal
                 // component index (0, 1, 2, 3), NOT a variable reference. Skip it.
                 // ENUM_FIELD also uses operand 1 as a literal field index.
-                if ((op == IR::OP_VEC_INSERT || op == IR::OP_VEC_EXTRACT || op == IR::OP_ENUM_FIELD) && opIdx == 1) {
+                if ((op == IR::OP_VEC_INSERT || op == IR::OP_VEC_EXTRACT || op == IR::OP_ENUM_FIELD ||
+                     op == IR::OP_STRUCT_INSERT || op == IR::OP_STRUCT_EXTRACT) && opIdx == 1) {
                     continue;
                 }
 
@@ -740,4 +747,3 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
 
 }  // namespace SSA
 }  // namespace BWSL
-

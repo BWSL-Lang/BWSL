@@ -6,6 +6,7 @@
 #include "bwsl_mem_pool.h"
 #include "bwsl_defs.h"
 #include <unordered_map>
+#include <unordered_set>
 #include "bwsl_custom_type_registry.h"
 #include "bwsl_ir_analysis.h"  // For OutputSlot constants
 #include <vector>
@@ -100,6 +101,7 @@ struct IRLowering {
 
     // Map variable name hash to register
     std::unordered_map<u32, u16> variableRegisters;
+    std::unordered_set<u32> initializedVariables;
 
     // Array base registers (var hash -> base reg)
     std::unordered_map<u32, u32> arrayBaseRegisters;
@@ -153,6 +155,7 @@ struct IRLowering {
         symbols = symTable;
         ast = astData;
         sourceBase = srcBase;
+        initializedVariables.clear();
         builder.pool = pool;
         builder.program = &program;
         builder.currentInstruction = 0;
@@ -1324,6 +1327,7 @@ struct IRLowering {
         if (!varDecl.initializer.IsNull()) {
             u16 initReg = LowerExpression(varDecl.initializer);
             builder.EmitInstruction(OP_STORE_REG, varReg, initReg);
+            initializedVariables.insert(varDecl.name.nameHash);
         } else if (coreType == CoreType::CUSTOM) {
             // For struct types without initializer, emit a construct with zero/undef values
             // This gives the struct an initial value that can be modified with OpCompositeInsert
@@ -1356,6 +1360,7 @@ struct IRLowering {
                         builder.EmitInstruction(OP_STRUCT_CONSTRUCT, varReg,
                                                 fieldRegs[0], fieldRegs[1], fieldRegs[2], fieldRegs[3]);
                         program.metadata[program.instructionCount - 1] = structTypeHash;
+                        initializedVariables.insert(varDecl.name.nameHash);
                         break;
                     }
                 }
@@ -1367,6 +1372,7 @@ struct IRLowering {
             u32 componentCount = (coreType == CoreType::FLOAT2) ? 2 : (coreType == CoreType::FLOAT3) ? 3 : 4;
             builder.EmitInstruction(OP_VEC_CONSTRUCT, varReg, zero, zero, zero, zero);
             program.metadata[program.instructionCount - 1] = componentCount;
+            initializedVariables.insert(varDecl.name.nameHash);
         }
     }
 
@@ -1777,6 +1783,7 @@ struct IRLowering {
             const IdentifierData& ident = ast->GetIdentifier(target);
             u16 varReg = GetOrAllocateVariable(ident.name.nameHash);
             builder.EmitInstruction(OP_STORE_REG, varReg, valueReg);
+            initializedVariables.insert(ident.name.nameHash);
         } else if (target.Type() == ASTNodeType::MEMBER_ACCESS) {
             const MemberAccessData& access = ast->GetMemberAccess(target);
 
@@ -1828,6 +1835,12 @@ struct IRLowering {
                     }
 
                     if (structTypeHash != 0) {
+                        if (initializedVariables.find(obj.name.nameHash) == initializedVariables.end()) {
+                            u16 zeroStruct = EmitZeroStruct(structTypeHash);
+                            builder.EmitInstruction(OP_STORE_REG, objReg, zeroStruct);
+                            initializedVariables.insert(obj.name.nameHash);
+                        }
+
                         // Find the field index
                         u32 fieldIndex = 0xFFFFFFFF;
                         auto structIt = structTypeMap.find(structTypeHash);
