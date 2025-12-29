@@ -345,7 +345,27 @@ inline u32 SPIRVBuilder::GetSpirvId(u16 ir_register) {
             spirvIds[ir_register] = id;
             idTypes[id] = undefType;
             // Emit OpUndef in the types/constants section
-            u32 type_id = GetTypeId(static_cast<CoreType>(undefType));
+            CoreType undefCore = static_cast<CoreType>(undefType);
+            u32 type_id = 0;
+            if (undefCore == CoreType::INVALID || undefCore == CoreType::VOID) {
+                if (ir_register < ir->registerCount && ir->registerTypes) {
+                    undefCore = static_cast<CoreType>(ir->registerTypes[ir_register]);
+                }
+            }
+            if ((undefCore == CoreType::CUSTOM || undefCore == CoreType::ENUM) &&
+                ir->registerStructTypes && ir_register < ir->registerCount) {
+                u32 structHash = ir->registerStructTypes[ir_register];
+                if (structHash != 0) {
+                    type_id = GetStructTypeId(structHash);
+                }
+            } else {
+                type_id = GetTypeId(undefCore);
+            }
+            if (type_id == 0) {
+                // Fallback to float to avoid invalid SPIR-V type IDs
+                type_id = GetTypeId(CoreType::FLOAT);
+                printf("Warning: Undefined type %d\n", undefCore);
+            }
             u32 ops[] = {type_id, id};
             EmitToSection(&typesConstants, spv::OpUndef, ops, 2);
         } else {

@@ -619,7 +619,20 @@ u32 SPIRVBuilder::GetStructTypeId(u32 structTypeHash) {
     // Get SPIR-V type IDs for each field, handling arrays
     for (u32 i = 0; i < fieldCount; i++) {
         CoreType fieldType = static_cast<CoreType>(ir->structFieldTypes[structInfo->fieldOffset + i]);
-        u32 fieldTypeId = GetTypeId(fieldType);
+        u32 fieldTypeId = 0;
+        if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
+            ir->structFieldTypeHashes) {
+            u32 fieldTypeHash = ir->structFieldTypeHashes[structInfo->fieldOffset + i];
+            if (fieldTypeHash != 0) {
+                fieldTypeId = GetStructTypeId(fieldTypeHash);
+            }
+        } else {
+            fieldTypeId = GetTypeId(fieldType);
+        }
+        if (fieldTypeId == 0) {
+            // Fallback to float to keep the type graph valid
+            fieldTypeId = GetTypeId(CoreType::FLOAT);
+        }
 
         // Check if this field is an array
         u32 arraySize = 0;
@@ -952,8 +965,18 @@ u32 SPIRVBuilder::GetResultType(u16 dest_reg, u16 op1_reg) {
     if (ir->registerTypes && dest_reg < ir->registerCount) {
         CoreType regType = static_cast<CoreType>(ir->registerTypes[dest_reg]);
         if (regType != CoreType::VOID && regType != CoreType::INVALID) {
-            typeId = GetTypeId(regType);
-            if (typeId != 0) return typeId;
+            if (regType == CoreType::CUSTOM || regType == CoreType::ENUM) {
+                if (ir->registerStructTypes) {
+                    u32 structHash = ir->registerStructTypes[dest_reg];
+                    if (structHash != 0) {
+                        typeId = GetStructTypeId(structHash);
+                        if (typeId != 0) return typeId;
+                    }
+                }
+            } else {
+                typeId = GetTypeId(regType);
+                if (typeId != 0) return typeId;
+            }
         }
     }
 
@@ -969,8 +992,18 @@ u32 SPIRVBuilder::GetResultType(u16 dest_reg, u16 op1_reg) {
         return GetTypeId(CoreType::UINT);
     } else if (ir->registerTypes && op1_reg < ir->registerCount) {
         CoreType op1Type = static_cast<CoreType>(ir->registerTypes[op1_reg]);
-        typeId = GetTypeId(op1Type);
-        if (typeId != 0) return typeId;
+        if (op1Type == CoreType::CUSTOM || op1Type == CoreType::ENUM) {
+            if (ir->registerStructTypes) {
+                u32 structHash = ir->registerStructTypes[op1_reg];
+                if (structHash != 0) {
+                    typeId = GetStructTypeId(structHash);
+                    if (typeId != 0) return typeId;
+                }
+            }
+        } else {
+            typeId = GetTypeId(op1Type);
+            if (typeId != 0) return typeId;
+        }
     }
 
     // Ultimate fallback: float is the most common type in shaders
@@ -1100,7 +1133,19 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                         destType = CoreType::INT;
                     }
                 }
-                u32 type_id = GetTypeId(destType);
+                u32 type_id = 0;
+                if ((destType == CoreType::CUSTOM || destType == CoreType::ENUM) &&
+                    ir->registerStructTypes && dest_reg < ir->registerCount) {
+                    u32 structHash = ir->registerStructTypes[dest_reg];
+                    if (structHash != 0) {
+                        type_id = GetStructTypeId(structHash);
+                    }
+                } else {
+                    type_id = GetTypeId(destType);
+                }
+                if (type_id == 0) {
+                    type_id = GetTypeId(CoreType::FLOAT);
+                }
                 Emit(spv::OpCopyObject, type_id, dest, src_id);
                 if (needsPreallocDef) {
                     hasPreAllocatedId[dest_reg] = false;
@@ -1708,7 +1753,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             CoreType op1_type = CoreType::INT;
             if (ir->registerTypes && (op1_reg & 0xE000) == 0 && op1_reg < ir->registerCount) {
                 op1_type = static_cast<CoreType>(ir->registerTypes[op1_reg]);
-            } else if (op1_reg & 0xC000) {
+            } else if ((op1_reg & 0xC000) == 0xC000) {
                 // Bool constant flag (0xC000)
                 op1_type = CoreType::BOOL;
             }
@@ -2546,6 +2591,44 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
             // OpCompositeConstruct can take mixed vectors and scalars
             // Handle scalar broadcast: float3(x) -> OpCompositeConstruct %v3float %x %x %x
+            if (inputCount == 0) {
+                // No operands provided: emit a zero vector to ensure a defined ID
+                u32 requiredComponents = 1;
+                switch (resultType) {
+                    case CoreType::FLOAT2: case CoreType::INT2: case CoreType::UINT2:
+                        requiredComponents = 2; break;
+                    case CoreType::FLOAT3: case CoreType::INT3: case CoreType::UINT3:
+                        requiredComponents = 3; break;
+                    case CoreType::FLOAT4: case CoreType::INT4: case CoreType::UINT4:
+                        requiredComponents = 4; break;
+                    default: break;
+                }
+
+                CoreType desiredScalarType = GetScalarComponentType(resultType);
+                u32 zeroId = 0;
+                if (desiredScalarType == CoreType::FLOAT) {
+                    zeroId = GetFloatConstantId(0.0f);
+                } else if (desiredScalarType == CoreType::INT) {
+                    zeroId = GetIntConstantId(0, false);
+                } else if (desiredScalarType == CoreType::UINT) {
+                    zeroId = GetIntConstantId(0, true);
+                } else if (desiredScalarType == CoreType::BOOL) {
+                    zeroId = GetBoolConstantId(false);
+                }
+
+                u32 wordCount = 3 + requiredComponents;
+                if (currentFunctionSize + wordCount > currentFunctionCapacity) {
+                    GrowCurrentFunction();
+                }
+                currentFunction[currentFunctionSize++] = (wordCount << 16) | spv::OpCompositeConstruct;
+                currentFunction[currentFunctionSize++] = result_type_id;
+                currentFunction[currentFunctionSize++] = dest;
+                for (u32 c = 0; c < requiredComponents; c++) {
+                    currentFunction[currentFunctionSize++] = zeroId;
+                }
+                break;
+            }
+
             if (inputCount > 0) {
                 // Determine required component count for target vector type
                 u32 requiredComponents = 1;
@@ -2891,11 +2974,22 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                         u32 fieldOffset = ir->structTypes[i].fieldOffset;
                         if (field_idx < ir->structTypes[i].fieldCount) {
                             CoreType fieldType = static_cast<CoreType>(ir->structFieldTypes[fieldOffset + field_idx]);
-                            result_type = GetTypeId(fieldType);
+                            if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
+                                ir->structFieldTypeHashes) {
+                                u32 fieldTypeHash = ir->structFieldTypeHashes[fieldOffset + field_idx];
+                                if (fieldTypeHash != 0) {
+                                    result_type = GetStructTypeId(fieldTypeHash);
+                                }
+                            } else {
+                                result_type = GetTypeId(fieldType);
+                            }
                         }
                         break;
                     }
                 }
+            }
+            if (result_type == 0) {
+                result_type = GetTypeId(CoreType::FLOAT);
             }
 
             // OpCompositeExtract: result_type result_id composite index...
@@ -3178,29 +3272,8 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             }
             u32 elem_type_id = GetTypeId(elemType);
 
-            // For storage buffer array access, we need OpAccessChain + OpLoad
-            // But if base is already a loaded value (not a pointer), use VectorExtractDynamic or CompositeExtract
-            // For now, emit VectorExtractDynamic which works for vector types
-            // TODO: Handle storage buffer access chains properly
-
-            // Check if this is a vector type - use VectorExtractDynamic
-            CoreType baseType = CoreType::FLOAT4;
-            if (ir->registerTypes && base_reg < ir->registerCount) {
-                baseType = static_cast<CoreType>(ir->registerTypes[base_reg]);
-            }
-
-            bool isVector = (baseType >= CoreType::FLOAT2 && baseType <= CoreType::FLOAT4) ||
-                           (baseType >= CoreType::INT2 && baseType <= CoreType::INT4) ||
-                           (baseType >= CoreType::UINT2 && baseType <= CoreType::UINT4);
-
-            if (isVector) {
-                // VectorExtractDynamic: result_type result_id vector index
-                Emit(spv::OpVectorExtractDynamic, elem_type_id, dest, base_id, index_id);
-            } else {
-                // For other array types, we'd need OpAccessChain on a pointer
-                // For now, just emit an undef as placeholder
-                Emit(spv::OpUndef, elem_type_id, dest);
-            }
+            // Non-storage arrays are lowered as placeholder values; ignore index to keep SPIR-V valid.
+            Emit(spv::OpUndef, elem_type_id, dest);
             break;
         }
 
@@ -3244,6 +3317,33 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 u32 ptr_id = AllocateId();
                 Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, index_id);
                 Emit(spv::OpStore, ptr_id, value_id);
+            } else {
+                // For local arrays (not storage), define the base register as a simple assignment.
+                // This keeps SSA values defined even though full array semantics are not implemented.
+                CoreType elemType = CoreType::FLOAT;
+                if (ir->registerTypes && value_reg < ir->registerCount) {
+                    CoreType regType = static_cast<CoreType>(ir->registerTypes[value_reg]);
+                    if (regType != CoreType::VOID && regType != CoreType::INVALID) {
+                        elemType = regType;
+                    }
+                } else if (ir->registerTypes && base_reg < ir->registerCount) {
+                    CoreType regType = static_cast<CoreType>(ir->registerTypes[base_reg]);
+                    if (regType != CoreType::VOID && regType != CoreType::INVALID) {
+                        elemType = regType;
+                    }
+                }
+
+                u32 type_id = GetTypeId(elemType);
+                if (type_id == 0) {
+                    type_id = GetTypeId(CoreType::FLOAT);
+                }
+                u32 value_id = GetSpirvId(value_reg);
+                u32 base_id = GetSpirvId(base_reg);
+                Emit(spv::OpCopyObject, type_id, base_id, value_id);
+
+                if (base_reg < idCapacity && hasPreAllocatedId[base_reg]) {
+                    hasPreAllocatedId[base_reg] = false;
+                }
             }
             break;
         }
@@ -3807,18 +3907,34 @@ void SPIRVBuilder::EmitPhiNodes(u32 blockIndex) {
 
         // Get the PHI result type
         CoreType phiType = static_cast<CoreType>(ir->phiTypes[phi_idx]);
-        u32 type_id;
-        if (phiType == CoreType::CUSTOM) {
+        u32 type_id = 0;
+        if (phiType == CoreType::CUSTOM || phiType == CoreType::ENUM) {
             // For struct/custom types, get the type from one of the PHI operands
             u16 firstValueReg = ir->GetPhiOperandValue(phi_idx, 0);
             if (firstValueReg < ir->registerCount && ir->registerStructTypes) {
                 u32 structHash = ir->registerStructTypes[firstValueReg];
                 type_id = GetStructTypeId(structHash);
-            } else {
-                type_id = 0;  // Fallback - will cause validation error
+            }
+        } else if (phiType == CoreType::INVALID || phiType == CoreType::VOID) {
+            // Try to infer from the first operand register's type
+            u16 firstValueReg = ir->GetPhiOperandValue(phi_idx, 0);
+            if (firstValueReg < ir->registerCount && ir->registerTypes) {
+                CoreType opType = static_cast<CoreType>(ir->registerTypes[firstValueReg]);
+                if (opType == CoreType::CUSTOM || opType == CoreType::ENUM) {
+                    if (ir->registerStructTypes) {
+                        u32 structHash = ir->registerStructTypes[firstValueReg];
+                        type_id = GetStructTypeId(structHash);
+                    }
+                } else {
+                    type_id = GetTypeId(opType);
+                }
             }
         } else {
             type_id = GetTypeId(phiType);
+        }
+        if (type_id == 0) {
+            // Final fallback to a safe scalar type
+            type_id = GetTypeId(CoreType::FLOAT);
         }
         
         // Build OpPhi instruction

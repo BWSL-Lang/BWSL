@@ -1446,9 +1446,24 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
     Symbol* varSym = SymbolTable::AddSymbol(&symbolTable,
         ArenaString::MakeHashOnly(varName), SymbolKind::VARIABLE);
     if (varSym) {
-        symbolTable.variables[varSym->index].typeInfo.coreType = CoreType::CUSTOM;
-        if (typeSym && typeSym->kind == SymbolKind::CUSTOM_TYPE) {
-            symbolTable.variables[varSym->index].typeInfo.customTypeHash = typeSym->index;
+        if (typeSym && (typeSym->kind == SymbolKind::ENUM || typeSym->kind == SymbolKind::ENUM_SYMBOL)) {
+            EnumData& enumData = symbolTable.enums[typeSym->index];
+            if (enumData.flags & EnumData::IS_SUM_TYPE) {
+                symbolTable.variables[varSym->index].typeInfo.coreType = CoreType::CUSTOM;
+                symbolTable.variables[varSym->index].typeInfo.customTypeHash = enumData.name.nameHash;
+            } else {
+                CoreType baseType = enumData.underlyingType;
+                if (baseType == CoreType::INVALID) {
+                    baseType = CoreType::INT;
+                }
+                symbolTable.variables[varSym->index].typeInfo.coreType = baseType;
+                symbolTable.variables[varSym->index].typeInfo.customTypeHash = 0;
+            }
+        } else {
+            symbolTable.variables[varSym->index].typeInfo.coreType = CoreType::CUSTOM;
+            if (typeSym && typeSym->kind == SymbolKind::CUSTOM_TYPE) {
+                symbolTable.variables[varSym->index].typeInfo.customTypeHash = typeSym->name.nameHash;
+            }
         }
     }
 
@@ -1627,6 +1642,34 @@ NodeRef Parser::ParsePostfix() {
                 Consume(TokenType::IDENTIFIER, "Expected identifier after '::'");
                 std::string memberName(stream->GetValue(previous));
                 ArenaString memberArena = ArenaString::MakeHashOnly(memberName);
+
+                // Check for local enum access: EnumType::Variant
+                Symbol* enumSym = SymbolTable::LookupByHash(&symbolTable, moduleName.nameHash);
+                if (enumSym && (enumSym->kind == SymbolKind::ENUM || enumSym->kind == SymbolKind::ENUM_SYMBOL)) {
+                    EnumData& enumData = symbolTable.enums[enumSym->index];
+                    if (!(enumData.flags & EnumData::IS_SUM_TYPE)) {
+                        u32 variantHash = memberArena.nameHash;
+                        bool found = false;
+                        u32 variantValue = 0;
+                        for (u32 i = 0; i < enumData.variants.count; i++) {
+                            if (enumData.variants[i].name.nameHash == variantHash) {
+                                variantValue = enumData.variants[i].value;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            Error("Unknown enum variant '" + memberName + "'");
+                            return NodeRef::Null();
+                        }
+
+                        CoreType baseType = enumData.underlyingType;
+                        if (baseType == CoreType::UINT) {
+                            return ASTFactory::MakeLiteralUint(ast, variantValue, loc.line, loc.column);
+                        }
+                        return ASTFactory::MakeLiteralInt(ast, static_cast<int64_t>(variantValue), loc.line, loc.column);
+                    }
+                }
 
                 // Look up in symbol table for module constants
                 u32 moduleHash = moduleName.nameHash;
@@ -2309,7 +2352,12 @@ NodeRef Parser::ParseFunction() {
         } else {
             customReturnTypeName = returnTypeName;
         }
-        ast->GetFunction(function).returnType = CoreType::CUSTOM;
+        TypeInfo resolved = ResolveType(customReturnTypeName);
+        if (resolved.coreType != CoreType::INVALID) {
+            ast->GetFunction(function).returnType = resolved.coreType;
+        } else {
+            ast->GetFunction(function).returnType = CoreType::CUSTOM;
+        }
     } else if (MatchMask(TokenMasks::CORE_TYPES)) {
         ast->GetFunction(function).returnType = TokenTypeToReturnType(static_cast<TokenType>(stream->GetType(previous)));
     } else {
@@ -3816,14 +3864,30 @@ NodeRef Parser::ParseStruct() {
     structData.isIndexable = false;
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
-        // Parse field type
-        if (!MatchMask(TokenMasks::ALL)) {
+        // Parse field type (core or custom/module-qualified)
+        TypeInfo fieldType = TYPE_INFO(CoreType::INVALID, 0, false);
+        std::string fieldTypeName;
+        if (MatchMask(TokenMasks::CORE_TYPES)) {
+            fieldType = GetTypeInfoFromToken(PreviousTokenType());
+            fieldTypeName = std::string(stream->GetValue(previous));
+        } else if (Match(TokenType::IDENTIFIER)) {
+            fieldTypeName = std::string(stream->GetValue(previous));
+            if (Match(TokenType::DOUBLE_COLON)) {
+                Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
+                fieldTypeName += "::" + std::string(stream->GetValue(previous));
+            }
+            fieldType = ResolveType(fieldTypeName);
+        } else {
             Error("Expected field type");
             Synchronize();
             continue;
         }
 
-        TypeInfo fieldType = GetTypeInfoFromToken(PreviousTokenType());
+        if (fieldType.coreType == CoreType::INVALID) {
+            Error("Unknown field type '" + fieldTypeName + "'");
+            Synchronize();
+            continue;
+        }
 
         Consume(TokenType::IDENTIFIER, "Expected field name");
         std::string fieldNameStr(stream->GetValue(previous));
@@ -4368,6 +4432,18 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
             typeCache.Insert(typeHash, result);
             return result;
         }
+        if (sym && (sym->kind == SymbolKind::ENUM || sym->kind == SymbolKind::ENUM_SYMBOL)) {
+            EnumData& enumData = symbolTable.enums[sym->index];
+            if (enumData.flags & EnumData::IS_SUM_TYPE) {
+                result = TypeInfo{CoreType::CUSTOM, 1, 0, 0, enumData.name.nameHash, 0, 0};
+            } else {
+                CoreType baseType = enumData.underlyingType;
+                if (baseType == CoreType::INVALID) baseType = CoreType::INT;
+                result = TYPE_INFO(baseType, 1, false);
+            }
+            typeCache.Insert(typeHash, result);
+            return result;
+        }
 
         // Try implicit module qualification if in module scope
         if (symbolTable.inModuleScope && symbolTable.currentModuleIndex != INVALID_INDEX) {
@@ -4391,6 +4467,18 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
         Symbol* sym = SymbolTable::LookupByHash(&symbolTable, typeHash);
         if (sym && sym->kind == SymbolKind::CUSTOM_TYPE) {
             result = GetTypeInfoFromSymbol(sym);
+            typeCache.Insert(typeHash, result);
+            return result;
+        }
+        if (sym && (sym->kind == SymbolKind::ENUM || sym->kind == SymbolKind::ENUM_SYMBOL)) {
+            EnumData& enumData = symbolTable.enums[sym->index];
+            if (enumData.flags & EnumData::IS_SUM_TYPE) {
+                result = TypeInfo{CoreType::CUSTOM, 1, 0, 0, enumData.name.nameHash, 0, 0};
+            } else {
+                CoreType baseType = enumData.underlyingType;
+                if (baseType == CoreType::INVALID) baseType = CoreType::INT;
+                result = TYPE_INFO(baseType, 1, false);
+            }
             typeCache.Insert(typeHash, result);
             return result;
         }

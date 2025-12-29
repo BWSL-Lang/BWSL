@@ -216,9 +216,11 @@ struct IRLowering {
         program.structTypes = (IRProgram::StructTypeInfo*)pool->Allocate(structCapacity * sizeof(IRProgram::StructTypeInfo), 64);
         program.structFieldTypes = (u16*)pool->Allocate(fieldCapacity * sizeof(u16), 64);
         program.structFieldNameHashes = (u32*)pool->Allocate(fieldCapacity * sizeof(u32), 64);
+        program.structFieldTypeHashes = (u32*)pool->Allocate(fieldCapacity * sizeof(u32), 64);
         program.structFieldByteOffsets = (u32*)pool->Allocate(fieldCapacity * sizeof(u32), 64);
         program.structFieldArraySizes = (u32*)pool->Allocate(fieldCapacity * sizeof(u32), 64);
         memset(program.structFieldArraySizes, 0, fieldCapacity * sizeof(u32));
+        memset(program.structFieldTypeHashes, 0, fieldCapacity * sizeof(u32));
         program.registerStructTypes = (u32*)pool->Allocate(MAX_REGISTERS * sizeof(u32), 64);
         memset(program.registerStructTypes, 0, MAX_REGISTERS * sizeof(u32));
         program.registerStorageInfo = (u32*)pool->Allocate(MAX_REGISTERS * sizeof(u32), 64);
@@ -1204,9 +1206,13 @@ struct IRLowering {
         variableRegisters[varDecl.name.nameHash] = varReg;
 
         // Track type from type name hash or symbol table
-        CoreType coreType = LookupCoreType(varDecl.type.nameHash);
+        CoreType coreType = CoreType::INVALID;
+        u32 customTypeHash = 0;
         if (varData && varData->typeInfo.coreType != CoreType::INVALID) {
             coreType = varData->typeInfo.coreType;
+            customTypeHash = varData->typeInfo.customTypeHash;
+        } else {
+            coreType = ResolveCoreTypeFromHash(varDecl.type.nameHash, &customTypeHash);
         }
 
         if (isShared) {
@@ -1249,10 +1255,10 @@ struct IRLowering {
             return;
         }
 
-        // Check if this is a struct type
-        if (coreType == CoreType::INVALID || coreType == CoreType::CUSTOM) {
-            // Look up struct type in symbol table
-            u32 structTypeHash = LookupOrRegisterStructType(varDecl.type.nameHash);
+        // Check if this is a struct or enum sum type
+        if (coreType == CoreType::CUSTOM || coreType == CoreType::INVALID) {
+            u32 lookupHash = (customTypeHash != 0) ? customTypeHash : varDecl.type.nameHash;
+            u32 structTypeHash = LookupOrRegisterStructType(lookupHash);
             if (structTypeHash != 0) {
                 coreType = CoreType::CUSTOM;
                 variableStructTypes[varDecl.name.nameHash] = structTypeHash;
@@ -1281,8 +1287,17 @@ struct IRLowering {
                         u16 fieldRegs[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
                         for (u32 f = 0; f < fieldCount && f < 4; f++) {
                             CoreType fieldType = static_cast<CoreType>(program.structFieldTypes[fieldOffset + f]);
-                            // Emit zero constant for this field type
-                            fieldRegs[f] = EmitZeroConstant(fieldType);
+                            u32 fieldTypeHash = 0;
+                            if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
+                                program.structFieldTypeHashes) {
+                                fieldTypeHash = program.structFieldTypeHashes[fieldOffset + f];
+                            }
+                            // Emit zero constant (or zero struct) for this field type
+                            if (fieldTypeHash != 0) {
+                                fieldRegs[f] = EmitZeroStruct(fieldTypeHash);
+                            } else {
+                                fieldRegs[f] = EmitZeroConstant(fieldType);
+                            }
                         }
 
                         // Emit struct construct
@@ -1301,6 +1316,50 @@ struct IRLowering {
             builder.EmitInstruction(OP_VEC_CONSTRUCT, varReg, zero, zero, zero, zero);
             program.metadata[program.instructionCount - 1] = componentCount;
         }
+    }
+
+    u16 EmitZeroStruct(u32 structTypeHash) {
+        if (structTypeHash == 0) {
+            return EmitZeroConstant(CoreType::FLOAT);
+        }
+
+        // Find struct info
+        const IRProgram::StructTypeInfo* structInfo = nullptr;
+        for (u32 i = 0; i < program.structTypeCount; i++) {
+            if (program.structTypes[i].nameHash == structTypeHash) {
+                structInfo = &program.structTypes[i];
+                break;
+            }
+        }
+        if (!structInfo || structInfo->fieldCount == 0) {
+            return EmitZeroConstant(CoreType::FLOAT);
+        }
+
+        u16 destReg = AllocateRegister();
+        SetRegisterType(destReg, CoreType::CUSTOM);
+        if (destReg < MAX_REGISTERS) {
+            program.registerStructTypes[destReg] = structTypeHash;
+        }
+
+        u16 fieldRegs[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+        for (u32 f = 0; f < structInfo->fieldCount && f < 4; f++) {
+            CoreType fieldType = static_cast<CoreType>(program.structFieldTypes[structInfo->fieldOffset + f]);
+            u32 fieldTypeHash = 0;
+            if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
+                program.structFieldTypeHashes) {
+                fieldTypeHash = program.structFieldTypeHashes[structInfo->fieldOffset + f];
+            }
+            if (fieldTypeHash != 0) {
+                fieldRegs[f] = EmitZeroStruct(fieldTypeHash);
+            } else {
+                fieldRegs[f] = EmitZeroConstant(fieldType);
+            }
+        }
+
+        builder.EmitInstruction(OP_STRUCT_CONSTRUCT, destReg,
+                                fieldRegs[0], fieldRegs[1], fieldRegs[2], fieldRegs[3]);
+        program.metadata[program.instructionCount - 1] = structTypeHash;
+        return destReg;
     }
 
     // Emit a zero constant for a given type
@@ -1340,7 +1399,11 @@ struct IRLowering {
         if (!typeSym || typeSym->kind != SymbolKind::CUSTOM_TYPE) {
             // Check if it's an enum type (ENUM for module enums, ENUM_SYMBOL for pipeline-local enums)
             if (typeSym && (typeSym->kind == SymbolKind::ENUM || typeSym->kind == SymbolKind::ENUM_SYMBOL)) {
-                return RegisterEnumAsStructType(typeNameHash, typeSym->index);
+                const EnumData& enumData = symbols->enums[typeSym->index];
+                if (enumData.flags & EnumData::IS_SUM_TYPE) {
+                    return RegisterEnumAsStructType(typeNameHash, typeSym->index);
+                }
+                return 0;
             }
 
             // Try looking up via global custom type registry
@@ -1384,6 +1447,8 @@ struct IRLowering {
             const StructData::Field& field = structData.fields[i];
             program.structFieldTypes[fieldOffset + i] = static_cast<u16>(field.type.coreType);
             program.structFieldNameHashes[fieldOffset + i] = field.name.nameHash;
+            program.structFieldTypeHashes[fieldOffset + i] =
+                (field.type.coreType == CoreType::CUSTOM) ? field.type.customTypeHash : 0;
             program.structFieldArraySizes[fieldOffset + i] = field.arraySize;
 
             // std140 alignment rules - for arrays, account for array length
@@ -1431,6 +1496,8 @@ struct IRLowering {
             const StructData::Field& field = structData->fields[i];
             program.structFieldTypes[fieldOffset + i] = static_cast<u16>(field.type.coreType);
             program.structFieldNameHashes[fieldOffset + i] = field.name.nameHash;
+            program.structFieldTypeHashes[fieldOffset + i] =
+                (field.type.coreType == CoreType::CUSTOM) ? field.type.customTypeHash : 0;
             program.structFieldArraySizes[fieldOffset + i] = field.arraySize;
 
             u32 fieldSize = GetTypeSize(field.type.coreType);
@@ -1528,6 +1595,7 @@ struct IRLowering {
         u32 currentOffset = 0;
         program.structFieldTypes[fieldOffset] = static_cast<u16>(CoreType::INT);
         program.structFieldNameHashes[fieldOffset] = Utils::HashStr("tag");
+        program.structFieldTypeHashes[fieldOffset] = 0;
         program.structFieldArraySizes[fieldOffset] = 0;
         program.structFieldByteOffsets[fieldOffset] = currentOffset;
         currentOffset += 4;  // int is 4 bytes
@@ -1540,6 +1608,7 @@ struct IRLowering {
             char fieldName[16];
             snprintf(fieldName, sizeof(fieldName), "f%u", i);
             program.structFieldNameHashes[fIdx] = Utils::HashStr(fieldName);
+            program.structFieldTypeHashes[fIdx] = 0;
             program.structFieldArraySizes[fIdx] = 0;
             // std140 alignment for float is 4
             currentOffset = (currentOffset + 3) & ~3;
@@ -1836,6 +1905,19 @@ struct IRLowering {
             const ArrayAccessData& arrAccess = ast->GetArrayAccess(target);
             u16 baseReg = LowerExpression(arrAccess.array);
             u16 indexReg = LowerExpression(arrAccess.index);
+            if (baseReg < MAX_REGISTERS) {
+                CoreType baseType = static_cast<CoreType>(program.registerTypes[baseReg]);
+                if (baseType == CoreType::INVALID || baseType == CoreType::VOID) {
+                    CoreType valueType = GetRegisterType(valueReg);
+                    if (valueType != CoreType::INVALID && valueType != CoreType::VOID) {
+                        SetRegisterType(baseReg, valueType);
+                        if ((valueType == CoreType::CUSTOM || valueType == CoreType::ENUM) &&
+                            baseReg < MAX_REGISTERS && valueReg < MAX_REGISTERS) {
+                            program.registerStructTypes[baseReg] = program.registerStructTypes[valueReg];
+                        }
+                    }
+                }
+            }
             builder.EmitInstruction(OP_ARRAY_STORE, baseReg, indexReg, valueReg);
         }
     }
@@ -1923,6 +2005,14 @@ void LowerIfStatement(NodeRef ref) {
                 CoreType valueType = GetRegisterType(valueReg);
                 if (valueType != CoreType::INVALID) {
                     SetRegisterType(inlineReturnReg, valueType);
+                }
+                if ((valueType == CoreType::CUSTOM || valueType == CoreType::ENUM) &&
+                    inlineReturnReg < MAX_REGISTERS &&
+                    valueReg < MAX_REGISTERS) {
+                    u32 structHash = program.registerStructTypes[valueReg];
+                    if (structHash != 0) {
+                        program.registerStructTypes[inlineReturnReg] = structHash;
+                    }
                 }
                 // Note: In a full implementation, we'd emit a jump to the function exit
                 // For simple single-return functions, this is sufficient
@@ -2745,10 +2835,12 @@ void LowerIfStatement(NodeRef ref) {
                     // Find the field index and type
                     u32 fieldIndex = 0xFFFFFFFF;
                     CoreType fieldType = CoreType::FLOAT;
+                    u32 fieldOffset = 0;
                     auto structIt = structTypeMap.find(structTypeHash);
                     if (structIt != structTypeMap.end()) {
                         u32 structIdx = structIt->second;
                         const IRProgram::StructTypeInfo& info = program.structTypes[structIdx];
+                        fieldOffset = info.fieldOffset;
                         for (u32 i = 0; i < info.fieldCount; i++) {
                             if (program.structFieldNameHashes[info.fieldOffset + i] == access.member.nameHash) {
                                 fieldIndex = i;
@@ -2765,6 +2857,13 @@ void LowerIfStatement(NodeRef ref) {
                         // Store full struct type hash in metadata (field index is in operand 1)
                         program.metadata[builder.currentInstruction - 1] = structTypeHash;
                         SetRegisterType(dest, fieldType);
+                        if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
+                            program.structFieldTypeHashes) {
+                            u32 fieldTypeHash = program.structFieldTypeHashes[fieldOffset + fieldIndex];
+                            if (fieldTypeHash != 0 && dest < MAX_REGISTERS) {
+                                program.registerStructTypes[dest] = fieldTypeHash;
+                            }
+                        }
                         return dest;
                     }
                 }
@@ -3355,6 +3454,13 @@ void LowerIfStatement(NodeRef ref) {
                     if (resultType != CoreType::INVALID) {
                         SetRegisterType(dest, resultType);
                     }
+                    if ((resultType == CoreType::CUSTOM || resultType == CoreType::ENUM) &&
+                        dest < MAX_REGISTERS && inlinedResult < MAX_REGISTERS) {
+                        u32 structHash = program.registerStructTypes[inlinedResult];
+                        if (structHash != 0) {
+                            program.registerStructTypes[dest] = structHash;
+                        }
+                    }
                 } else {
                     // Fallback: emit OP_CALL (will produce OpUndef in SPIR-V)
                     builder.EmitInstruction(OP_CALL, dest, call.name.nameHash);
@@ -3387,7 +3493,7 @@ void LowerIfStatement(NodeRef ref) {
         auto matchesSignature = [&](const FunctionDeclData& fn) -> bool {
             if (fn.parameters.count != argCount) return false;
             for (u32 i = 0; i < argCount; i++) {
-                OverloadTypeMask paramMask = MakeOverloadMaskFromTypeHash(fn.parameters[i].second.nameHash);
+                OverloadTypeMask paramMask = MakeOverloadMaskFromResolvedTypeHash(fn.parameters[i].second.nameHash);
                 if (!OverloadMaskMatches(paramMask, argMasks[i])) {
                     return false;
                 }
@@ -3517,9 +3623,16 @@ void LowerIfStatement(NodeRef ref) {
 
             // Also set the type for the parameter based on the type name
             // The second element of the pair is the type name (e.g., "uint", "float3")
-            CoreType paramType = LookupCoreType(param.second.nameHash);
+            u32 paramTypeHash = 0;
+            CoreType paramType = ResolveCoreTypeFromHash(param.second.nameHash, &paramTypeHash);
             if (paramType != CoreType::INVALID && paramType != CoreType::VOID) {
                 SetRegisterType(args[i], paramType);
+                if ((paramType == CoreType::CUSTOM || paramType == CoreType::ENUM) && paramTypeHash != 0) {
+                    u32 structHash = LookupOrRegisterStructType(paramTypeHash);
+                    if (structHash != 0) {
+                        program.registerStructTypes[args[i]] = structHash;
+                    }
+                }
             }
         }
 
@@ -3944,6 +4057,55 @@ void LowerIfStatement(NodeRef ref) {
             }
         }
         return CoreType::INVALID;
+    }
+
+    CoreType ResolveCoreTypeFromHash(u32 typeHash, u32* outCustomHash = nullptr) {
+        if (outCustomHash) {
+            *outCustomHash = 0;
+        }
+
+        CoreType coreType = LookupCoreType(typeHash);
+        if (coreType != CoreType::INVALID && coreType != CoreType::VOID) {
+            return coreType;
+        }
+
+        Symbol* sym = SymbolTable::LookupByHash(const_cast<SymbolTableData*>(symbols), typeHash);
+        if (sym && (sym->kind == SymbolKind::ENUM || sym->kind == SymbolKind::ENUM_SYMBOL)) {
+            const EnumData& enumData = symbols->enums[sym->index];
+            if (enumData.flags & EnumData::IS_SUM_TYPE) {
+                if (outCustomHash) {
+                    *outCustomHash = enumData.name.nameHash;
+                }
+                return CoreType::CUSTOM;
+            }
+
+            CoreType baseType = enumData.underlyingType;
+            if (baseType == CoreType::INVALID) {
+                baseType = CoreType::INT;
+            }
+            return baseType;
+        }
+
+        if (sym && sym->kind == SymbolKind::CUSTOM_TYPE) {
+            if (outCustomHash) {
+                *outCustomHash = sym->name.nameHash;
+            }
+            return CoreType::CUSTOM;
+        }
+
+        return CoreType::INVALID;
+    }
+
+    OverloadTypeMask MakeOverloadMaskFromResolvedTypeHash(u32 typeHash) {
+        u32 customHash = 0;
+        CoreType coreType = ResolveCoreTypeFromHash(typeHash, &customHash);
+        if (coreType == CoreType::CUSTOM && customHash != 0) {
+            return MakeOverloadMask(coreType, customHash);
+        }
+        if (coreType != CoreType::INVALID && coreType != CoreType::VOID) {
+            return MakeOverloadMask(coreType);
+        }
+        return MakeOverloadMaskFromTypeHash(typeHash);
     }
     
 OpCode IntrinsicToOpcode(StdLib::Intrinsic intrinsic) {
