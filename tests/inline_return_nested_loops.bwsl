@@ -1,0 +1,27 @@
+// Test: Inlined return inside nested loops should exit both loops
+// Tests: return flag is combined into nested loop conditions
+
+pipeline InlineReturnNestedLoops {
+    attributes {
+        position: float3
+    }
+
+    chooseNested :: (int limit) -> int {
+        for (int i = 0; i < limit; i = i + 1) {
+            for (int j = 0; j < limit; j = j + 1) {
+                return 5;
+            }
+        }
+        return 8;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int v = chooseNested(2);
+            output.position = float4(attributes.position, 1.0);
+            output.position.x = float(v);
+        }
+    }
+}

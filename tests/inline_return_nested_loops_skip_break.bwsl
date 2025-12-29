@@ -1,0 +1,37 @@
+// Test: Inlined return with nested loops using skip and break
+// Tests: return guard coexists with skip/break control flow
+
+pipeline InlineReturnNestedLoopsSkipBreak {
+    attributes {
+        position: float3
+    }
+
+    chooseNested :: (int limit) -> int {
+        for (int i = 0; i < limit; i = i + 1) {
+            if (i == 0) {
+                skip;
+            }
+            for (int j = 0; j < limit; j = j + 1) {
+                if (j == 0) {
+                    skip;
+                }
+                if (j == limit - 1) {
+                    break;
+                }
+                return 5;
+            }
+            break;
+        }
+        return 8;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int v = chooseNested(3);
+            output.position = float4(attributes.position, 1.0);
+            output.position.x = float(v);
+        }
+    }
+}

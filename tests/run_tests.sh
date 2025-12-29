@@ -51,7 +51,7 @@ for test_file in "$SCRIPT_DIR"/*.bwsl; do
 
     # Run compiler
     compile_flags=""
-    if [ "$test_name" = "inline_return_jump" ] || [ "$test_name" = "inline_return_loop" ]; then
+    if [ "$test_name" = "inline_return_jump" ] || [ "$test_name" = "inline_return_loop" ] || [ "$test_name" = "inline_return_nested_loops" ] || [ "$test_name" = "inline_return_nested_loops_skip_break" ] || [ "$test_name" = "inline_return_outer_skip_break" ] || [ "$test_name" = "inline_return_nested_if" ]; then
         compile_flags="-internals"
     fi
 
@@ -62,7 +62,7 @@ for test_file in "$SCRIPT_DIR"/*.bwsl; do
         echo -e "[${GREEN}PASS${NC}] $test_name"
         ((PASSED++))
 
-        if [ "$test_name" = "inline_return_jump" ]; then
+        if [ "$test_name" = "inline_return_jump" ] || [ "$test_name" = "inline_return_nested_if" ]; then
             check_file="$OUTPUT_DIR/${test_name}_pass0_vert.internals.json"
             python3 - "$check_file" <<'PY'
 import json
@@ -88,7 +88,7 @@ PY
                 ((PASSED--))
             fi
         fi
-        if [ "$test_name" = "inline_return_loop" ]; then
+        if [ "$test_name" = "inline_return_loop" ] || [ "$test_name" = "inline_return_nested_loops" ] || [ "$test_name" = "inline_return_nested_loops_skip_break" ] || [ "$test_name" = "inline_return_outer_skip_break" ]; then
             check_file="$OUTPUT_DIR/${test_name}_pass0_vert.internals.json"
             python3 - "$check_file" <<'PY'
 import json

@@ -1,0 +1,31 @@
+// Test: Inlined return with skip/break in the outer loop only
+// Tests: return guard coexists with outer-loop skip/break control flow
+
+pipeline InlineReturnOuterSkipBreak {
+    attributes {
+        position: float3
+    }
+
+    chooseOuter :: (int limit) -> int {
+        for (int i = 0; i < limit; i = i + 1) {
+            if (i == 0) {
+                skip;
+            }
+            if (i == limit - 1) {
+                break;
+            }
+            return 4;
+        }
+        return 6;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int v = chooseOuter(3);
+            output.position = float4(attributes.position, 1.0);
+            output.position.x = float(v);
+        }
+    }
+}

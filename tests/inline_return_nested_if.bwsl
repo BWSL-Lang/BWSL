@@ -1,0 +1,27 @@
+// Test: Inlined return inside nested if statements
+// Tests: return guard skips fallthrough after nested conditionals
+
+pipeline InlineReturnNestedIf {
+    attributes {
+        position: float3
+    }
+
+    chooseNestedIf :: (int value) -> int {
+        if (value > 0) {
+            if (value > 1) {
+                return 3;
+            }
+        }
+        return 5;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int v = chooseNestedIf(2);
+            output.position = float4(attributes.position, 1.0);
+            output.position.x = float(v);
+        }
+    }
+}
