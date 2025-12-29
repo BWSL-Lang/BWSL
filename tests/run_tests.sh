@@ -51,7 +51,7 @@ for test_file in "$SCRIPT_DIR"/*.bwsl; do
 
     # Run compiler
     compile_flags=""
-    if [ "$test_name" = "inline_return_jump" ]; then
+    if [ "$test_name" = "inline_return_jump" ] || [ "$test_name" = "inline_return_loop" ]; then
         compile_flags="-internals"
     fi
 
@@ -84,6 +84,28 @@ PY
             if [ $? -ne 0 ]; then
                 echo -e "[${RED}FAIL${NC}] $test_name"
                 echo "       Error: inline return jump check failed"
+                ((FAILED++))
+                ((PASSED--))
+            fi
+        fi
+        if [ "$test_name" = "inline_return_loop" ]; then
+            check_file="$OUTPUT_DIR/${test_name}_pass0_vert.internals.json"
+            python3 - "$check_file" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+spirv = data.get("spirv_dis", "")
+if "OpLogicalAnd" not in spirv:
+    print("Missing return guard logical AND in SPIR-V")
+    sys.exit(1)
+PY
+            if [ $? -ne 0 ]; then
+                echo -e "[${RED}FAIL${NC}] $test_name"
+                echo "       Error: inline return loop guard check failed"
                 ((FAILED++))
                 ((PASSED--))
             fi

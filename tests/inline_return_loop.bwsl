@@ -1,0 +1,25 @@
+// Test: Inlined loop return should exit loop without incrementing
+// Tests: return flag guard exits the loop after return inside an inline
+
+pipeline InlineReturnLoop {
+    attributes {
+        position: float3
+    }
+
+    chooseLoop :: (int limit) -> int {
+        for (int i = 0; i < limit; i = i + 1) {
+            return 7;
+        }
+        return 9;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int v = chooseLoop(4);
+            output.position = float4(attributes.position, 1.0);
+            output.position.x = float(v);
+        }
+    }
+}

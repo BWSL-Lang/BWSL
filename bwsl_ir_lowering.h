@@ -489,10 +489,17 @@ struct IRLowering {
         u32 loopHeader = builder.currentInstruction;
 
         // Condition check
+        bool needsReturnGuard = (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF);
+        bool hasBranch = (!forLoop.condition.IsNull() || needsReturnGuard);
         u32 branchIdx = 0;
         u32 bodyStart = 0;
-        if (!forLoop.condition.IsNull()) {
-            u16 condReg = LowerExpression(forLoop.condition);
+        if (hasBranch) {
+            u16 condReg = !forLoop.condition.IsNull()
+                ? LowerExpression(forLoop.condition)
+                : builder.EmitConstantBool(true);
+            if (needsReturnGuard) {
+                condReg = CombineLoopCondition(condReg);
+            }
             branchIdx = builder.currentInstruction;
             builder.EmitInstruction(OP_BRANCH, 0, condReg);
             bodyStart = builder.currentInstruction;  // True target = body
@@ -507,16 +514,6 @@ struct IRLowering {
             LowerStatement(forLoop.body);
         }
         loopDepth--;
-
-        bool hasReturnCheck = false;
-        u32 returnCheckIdx = 0;
-        u32 returnCheckFalseTarget = 0;
-        if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
-            hasReturnCheck = true;
-            returnCheckIdx = builder.currentInstruction;
-            builder.EmitInstruction(OP_BRANCH, 0, inlineReturnFlagReg);
-            returnCheckFalseTarget = builder.currentInstruction;
-        }
 
         // Continue target = start of increment
         u32 continueTarget = builder.currentInstruction;
@@ -545,15 +542,9 @@ struct IRLowering {
         // Patch break/skip jumps
         PopLoopContext(continueTarget, loopEnd);
 
-        if (hasReturnCheck) {
-            program.metadata[returnCheckIdx] = (returnCheckFalseTarget << 16) | (loopEnd & 0xFFFF);
-            program.structureInfo[returnCheckIdx] = IRProgram::PackStructure(
-                IRProgram::STRUCT_IF_HEADER, loopEnd);
-        }
-
         // Patch branch: metadata = (falseTarget << 16) | trueTarget
         // True = continue into body, False = exit loop
-        if (!forLoop.condition.IsNull()) {
+        if (hasBranch) {
             program.metadata[branchIdx] = (loopEnd << 16) | (bodyStart & 0xFFFF);
 
             // Annotate loop structure
@@ -623,6 +614,9 @@ struct IRLowering {
             cmpOp = forLoop.inclusive ? OP_ILE : OP_ILT;
         }
         builder.EmitInstruction(cmpOp, condReg, iterReg, endReg);
+        if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
+            condReg = CombineLoopCondition(condReg);
+        }
 
         u32 branchIdx = builder.currentInstruction;
         builder.EmitInstruction(OP_BRANCH, 0, condReg);
@@ -636,16 +630,6 @@ struct IRLowering {
             LowerStatement(forLoop.body);
         }
         loopDepth--;
-
-        bool hasReturnCheck = false;
-        u32 returnCheckIdx = 0;
-        u32 returnCheckFalseTarget = 0;
-        if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
-            hasReturnCheck = true;
-            returnCheckIdx = builder.currentInstruction;
-            builder.EmitInstruction(OP_BRANCH, 0, inlineReturnFlagReg);
-            returnCheckFalseTarget = builder.currentInstruction;
-        }
 
         // Continue target = start of increment
         u32 continueTarget = builder.currentInstruction;
@@ -678,12 +662,6 @@ struct IRLowering {
 
         // Patch break/skip jumps
         PopLoopContext(continueTarget, loopEnd);
-
-        if (hasReturnCheck) {
-            program.metadata[returnCheckIdx] = (returnCheckFalseTarget << 16) | (loopEnd & 0xFFFF);
-            program.structureInfo[returnCheckIdx] = IRProgram::PackStructure(
-                IRProgram::STRUCT_IF_HEADER, loopEnd);
-        }
 
         // Patch branch: metadata = (falseTarget << 16) | trueTarget
         program.metadata[branchIdx] = (loopEnd << 16) | (bodyStart & 0xFFFF);
@@ -723,6 +701,9 @@ struct IRLowering {
         u16 condReg = AllocateRegister();
         SetRegisterType(condReg, CoreType::BOOL);  // Comparison result is BOOL
         builder.EmitInstruction(OP_ILT, condReg, indexReg, lengthReg);
+        if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
+            condReg = CombineLoopCondition(condReg);
+        }
 
         u32 branchIdx = builder.currentInstruction;
         builder.EmitInstruction(OP_BRANCH, 0, condReg);
@@ -739,16 +720,6 @@ struct IRLowering {
             LowerStatement(forLoop.body);
         }
         loopDepth--;
-
-        bool hasReturnCheck = false;
-        u32 returnCheckIdx = 0;
-        u32 returnCheckFalseTarget = 0;
-        if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
-            hasReturnCheck = true;
-            returnCheckIdx = builder.currentInstruction;
-            builder.EmitInstruction(OP_BRANCH, 0, inlineReturnFlagReg);
-            returnCheckFalseTarget = builder.currentInstruction;
-        }
 
         // Continue target = start of increment
         u32 continueTarget = builder.currentInstruction;
@@ -775,12 +746,6 @@ struct IRLowering {
         // Patch break/skip jumps
         PopLoopContext(continueTarget, loopEnd);
 
-        if (hasReturnCheck) {
-            program.metadata[returnCheckIdx] = (returnCheckFalseTarget << 16) | (loopEnd & 0xFFFF);
-            program.structureInfo[returnCheckIdx] = IRProgram::PackStructure(
-                IRProgram::STRUCT_IF_HEADER, loopEnd);
-        }
-
         // Patch branch: metadata = (falseTarget << 16) | trueTarget
         program.metadata[branchIdx] = (loopEnd << 16) | (bodyStart & 0xFFFF);
 
@@ -806,6 +771,9 @@ struct IRLowering {
             u16 condReg = AllocateRegister();
             SetRegisterType(condReg, CoreType::BOOL);  // Comparison result is BOOL
             builder.EmitInstruction(OP_ILT, condReg, iterReg, countReg);
+            if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
+                condReg = CombineLoopCondition(condReg);
+            }
 
             u32 branchIdx = builder.currentInstruction;
             builder.EmitInstruction(OP_BRANCH, 0, condReg);
@@ -817,16 +785,6 @@ struct IRLowering {
             PushLoopContext();
             if (!loop.body.IsNull()) {
                 LowerStatement(loop.body);
-            }
-
-            bool hasReturnCheck = false;
-            u32 returnCheckIdx = 0;
-            u32 returnCheckFalseTarget = 0;
-            if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
-                hasReturnCheck = true;
-                returnCheckIdx = builder.currentInstruction;
-                builder.EmitInstruction(OP_BRANCH, 0, inlineReturnFlagReg);
-                returnCheckFalseTarget = builder.currentInstruction;
             }
 
             // Check until condition if present (early exit)
@@ -863,12 +821,6 @@ struct IRLowering {
             // Patch break/skip jumps
             PopLoopContext(continueTarget, loopEnd);
 
-            if (hasReturnCheck) {
-                program.metadata[returnCheckIdx] = (returnCheckFalseTarget << 16) | (loopEnd & 0xFFFF);
-                program.structureInfo[returnCheckIdx] = IRProgram::PackStructure(
-                    IRProgram::STRUCT_IF_HEADER, loopEnd);
-            }
-
             // Patch main loop branch: metadata = (falseTarget << 16) | trueTarget
             program.metadata[branchIdx] = (loopEnd << 16) | (bodyStart & 0xFFFF);
 
@@ -887,7 +839,10 @@ struct IRLowering {
             
             // For infinite loops, we need a dummy branch at the header for SPIR-V structure
             // Use a constant true condition
-            u16 trueReg = EmitConstantInt(1);
+            u16 trueReg = builder.EmitConstantBool(true);
+            if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
+                trueReg = CombineLoopCondition(trueReg);
+            }
             u32 branchIdx = builder.currentInstruction;
             builder.EmitInstruction(OP_BRANCH, 0, trueReg);
             
@@ -898,16 +853,6 @@ struct IRLowering {
             PushLoopContext();
             if (!loop.body.IsNull()) {
                 LowerStatement(loop.body);
-            }
-
-            bool hasReturnCheck = false;
-            u32 returnCheckIdx = 0;
-            u32 returnCheckFalseTarget = 0;
-            if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
-                hasReturnCheck = true;
-                returnCheckIdx = builder.currentInstruction;
-                builder.EmitInstruction(OP_BRANCH, 0, inlineReturnFlagReg);
-                returnCheckFalseTarget = builder.currentInstruction;
             }
 
             u32 untilBranchIdx = 0;
@@ -940,12 +885,6 @@ struct IRLowering {
 
             // Patch break/skip jumps
             PopLoopContext(continueTarget, loopEnd);
-
-            if (hasReturnCheck) {
-                program.metadata[returnCheckIdx] = (returnCheckFalseTarget << 16) | (loopEnd & 0xFFFF);
-                program.structureInfo[returnCheckIdx] = IRProgram::PackStructure(
-                    IRProgram::STRUCT_IF_HEADER, loopEnd);
-            }
 
             // Patch header branch: always enters body (true=body, false=exit for structure)
             program.metadata[branchIdx] = (loopEnd << 16) | (bodyStart & 0xFFFF);
@@ -3817,6 +3756,45 @@ void LowerIfStatement(NodeRef ref) {
     //==========================================================================
     // Helper functions
     //==========================================================================
+
+    u16 EnsureBoolCondition(u16 condReg) {
+        CoreType condType = GetRegisterType(condReg);
+        if (condType == CoreType::BOOL) {
+            return condReg;
+        }
+
+        u16 boolReg = AllocateRegister();
+        SetRegisterType(boolReg, CoreType::BOOL);
+
+        if (mask(condType) & TypeMasks::FLOAT_TYPES) {
+            u16 zero = builder.EmitConstant(0.0f);
+            builder.EmitInstruction(OP_FNE, boolReg, condReg, zero);
+        } else if (mask(condType) & TypeMasks::UINT_TYPES) {
+            u16 zero = EmitConstantUint(0);
+            builder.EmitInstruction(OP_INE, boolReg, condReg, zero);
+        } else {
+            u16 zero = EmitConstantInt(0);
+            builder.EmitInstruction(OP_INE, boolReg, condReg, zero);
+        }
+
+        return boolReg;
+    }
+
+    u16 CombineLoopCondition(u16 condReg) {
+        if (inlineDepth == 0 || inlineReturnFlagReg == 0xFFFF) {
+            return condReg;
+        }
+
+        u16 boolCond = EnsureBoolCondition(condReg);
+        u16 notReturn = AllocateRegister();
+        builder.EmitInstruction(OP_NOT, notReturn, inlineReturnFlagReg);
+        SetRegisterType(notReturn, CoreType::BOOL);
+
+        u16 combined = AllocateRegister();
+        builder.EmitInstruction(OP_AND, combined, boolCond, notReturn);
+        SetRegisterType(combined, CoreType::BOOL);
+        return combined;
+    }
 
     u16 AllocateRegister() {
         u16 reg = builder.nextRegister++;
