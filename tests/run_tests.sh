@@ -50,12 +50,44 @@ for test_file in "$SCRIPT_DIR"/*.bwsl; do
     fi
 
     # Run compiler
-    output=$("$BWSLC" "$test_file" -o "$OUTPUT_DIR" 2>&1)
+    compile_flags=""
+    if [ "$test_name" = "inline_return_jump" ]; then
+        compile_flags="-internals"
+    fi
+
+    output=$("$BWSLC" "$test_file" -o "$OUTPUT_DIR" $compile_flags 2>&1)
     exit_code=$?
 
     if [ $exit_code -eq 0 ]; then
         echo -e "[${GREEN}PASS${NC}] $test_name"
         ((PASSED++))
+
+        if [ "$test_name" = "inline_return_jump" ]; then
+            check_file="$OUTPUT_DIR/${test_name}_pass0_vert.internals.json"
+            python3 - "$check_file" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+ir = data.get("ir", "")
+branch_count = sum(1 for line in ir.splitlines() if " BRANCH " in line)
+if " JUMP " in ir:
+    print("Unexpected inline return jump in IR")
+    sys.exit(1)
+if branch_count < 2:
+    print(f"Expected return guard branch, found {branch_count}")
+    sys.exit(1)
+PY
+            if [ $? -ne 0 ]; then
+                echo -e "[${RED}FAIL${NC}] $test_name"
+                echo "       Error: inline return jump check failed"
+                ((FAILED++))
+                ((PASSED--))
+            fi
+        fi
     else
         echo -e "[${RED}FAIL${NC}] $test_name"
         echo "       Error: $output"

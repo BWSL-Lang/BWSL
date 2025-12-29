@@ -112,6 +112,9 @@ struct IRLowering {
 
     // Inlining state
     u16 inlineReturnReg = 0xFFFF;  // Register to store return value during inlining
+    u16 inlineReturnFlagReg = 0xFFFF;  // Bool register for early-return tracking
+    u32 inlineReturnCounter = 0;   // Counts returns seen during current inlining
+    u32 inlineReturnGuardDepth = 0; // Suppress nested return guards
     u32 inlineDepth = 0;           // Current inlining depth (for recursion detection)
     u32 inlineModuleIndex = 0xFFFFFFFF;  // Module index during inlining (for unqualified calls)
     static constexpr u32 MAX_INLINE_DEPTH = 8;
@@ -324,8 +327,18 @@ struct IRLowering {
 
     void LowerBlock(NodeRef blockRef) {
         const BlockData& block = ast->GetBlock(blockRef);
+        bool guardInlineReturns = (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF);
+        bool returnSeen = false;
         for (u32 i = 0; i < block.statements.count; i++) {
-            LowerStatement(block.statements[i]);
+            u32 returnCountBefore = inlineReturnCounter;
+            if (guardInlineReturns && returnSeen) {
+                LowerStatementWithReturnGuard(block.statements[i]);
+            } else {
+                LowerStatement(block.statements[i]);
+            }
+            if (guardInlineReturns && inlineReturnCounter != returnCountBefore) {
+                returnSeen = true;
+            }
         }
     }
 
@@ -384,6 +397,26 @@ struct IRLowering {
                 LowerExpression(ref);
                 break;
         }
+    }
+
+    void LowerStatementWithReturnGuard(NodeRef ref) {
+        if (inlineReturnFlagReg == 0xFFFF) {
+            LowerStatement(ref);
+            return;
+        }
+
+        u32 branchIdx = builder.currentInstruction;
+        builder.EmitInstruction(OP_BRANCH, 0, inlineReturnFlagReg, 0, 0);
+
+        u32 falseTarget = builder.currentInstruction;
+        LowerStatement(ref);
+
+        u32 mergePoint = builder.currentInstruction;
+        builder.EmitInstruction(OP_NOP, 0, 0);
+
+        program.metadata[branchIdx] = (falseTarget << 16) | (mergePoint & 0xFFFF);
+        program.structureInfo[branchIdx] = IRProgram::PackStructure(
+            IRProgram::STRUCT_IF_HEADER, mergePoint);
     }
 
     void LowerBreak() {
@@ -475,6 +508,16 @@ struct IRLowering {
         }
         loopDepth--;
 
+        bool hasReturnCheck = false;
+        u32 returnCheckIdx = 0;
+        u32 returnCheckFalseTarget = 0;
+        if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
+            hasReturnCheck = true;
+            returnCheckIdx = builder.currentInstruction;
+            builder.EmitInstruction(OP_BRANCH, 0, inlineReturnFlagReg);
+            returnCheckFalseTarget = builder.currentInstruction;
+        }
+
         // Continue target = start of increment
         u32 continueTarget = builder.currentInstruction;
 
@@ -501,6 +544,12 @@ struct IRLowering {
 
         // Patch break/skip jumps
         PopLoopContext(continueTarget, loopEnd);
+
+        if (hasReturnCheck) {
+            program.metadata[returnCheckIdx] = (returnCheckFalseTarget << 16) | (loopEnd & 0xFFFF);
+            program.structureInfo[returnCheckIdx] = IRProgram::PackStructure(
+                IRProgram::STRUCT_IF_HEADER, loopEnd);
+        }
 
         // Patch branch: metadata = (falseTarget << 16) | trueTarget
         // True = continue into body, False = exit loop
@@ -588,6 +637,16 @@ struct IRLowering {
         }
         loopDepth--;
 
+        bool hasReturnCheck = false;
+        u32 returnCheckIdx = 0;
+        u32 returnCheckFalseTarget = 0;
+        if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
+            hasReturnCheck = true;
+            returnCheckIdx = builder.currentInstruction;
+            builder.EmitInstruction(OP_BRANCH, 0, inlineReturnFlagReg);
+            returnCheckFalseTarget = builder.currentInstruction;
+        }
+
         // Continue target = start of increment
         u32 continueTarget = builder.currentInstruction;
 
@@ -619,6 +678,12 @@ struct IRLowering {
 
         // Patch break/skip jumps
         PopLoopContext(continueTarget, loopEnd);
+
+        if (hasReturnCheck) {
+            program.metadata[returnCheckIdx] = (returnCheckFalseTarget << 16) | (loopEnd & 0xFFFF);
+            program.structureInfo[returnCheckIdx] = IRProgram::PackStructure(
+                IRProgram::STRUCT_IF_HEADER, loopEnd);
+        }
 
         // Patch branch: metadata = (falseTarget << 16) | trueTarget
         program.metadata[branchIdx] = (loopEnd << 16) | (bodyStart & 0xFFFF);
@@ -675,6 +740,16 @@ struct IRLowering {
         }
         loopDepth--;
 
+        bool hasReturnCheck = false;
+        u32 returnCheckIdx = 0;
+        u32 returnCheckFalseTarget = 0;
+        if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
+            hasReturnCheck = true;
+            returnCheckIdx = builder.currentInstruction;
+            builder.EmitInstruction(OP_BRANCH, 0, inlineReturnFlagReg);
+            returnCheckFalseTarget = builder.currentInstruction;
+        }
+
         // Continue target = start of increment
         u32 continueTarget = builder.currentInstruction;
 
@@ -699,6 +774,12 @@ struct IRLowering {
 
         // Patch break/skip jumps
         PopLoopContext(continueTarget, loopEnd);
+
+        if (hasReturnCheck) {
+            program.metadata[returnCheckIdx] = (returnCheckFalseTarget << 16) | (loopEnd & 0xFFFF);
+            program.structureInfo[returnCheckIdx] = IRProgram::PackStructure(
+                IRProgram::STRUCT_IF_HEADER, loopEnd);
+        }
 
         // Patch branch: metadata = (falseTarget << 16) | trueTarget
         program.metadata[branchIdx] = (loopEnd << 16) | (bodyStart & 0xFFFF);
@@ -738,6 +819,16 @@ struct IRLowering {
                 LowerStatement(loop.body);
             }
 
+            bool hasReturnCheck = false;
+            u32 returnCheckIdx = 0;
+            u32 returnCheckFalseTarget = 0;
+            if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
+                hasReturnCheck = true;
+                returnCheckIdx = builder.currentInstruction;
+                builder.EmitInstruction(OP_BRANCH, 0, inlineReturnFlagReg);
+                returnCheckFalseTarget = builder.currentInstruction;
+            }
+
             // Check until condition if present (early exit)
             u32 untilBranchIdx = 0;
             if (!loop.untilCondition.IsNull()) {
@@ -772,6 +863,12 @@ struct IRLowering {
             // Patch break/skip jumps
             PopLoopContext(continueTarget, loopEnd);
 
+            if (hasReturnCheck) {
+                program.metadata[returnCheckIdx] = (returnCheckFalseTarget << 16) | (loopEnd & 0xFFFF);
+                program.structureInfo[returnCheckIdx] = IRProgram::PackStructure(
+                    IRProgram::STRUCT_IF_HEADER, loopEnd);
+            }
+
             // Patch main loop branch: metadata = (falseTarget << 16) | trueTarget
             program.metadata[branchIdx] = (loopEnd << 16) | (bodyStart & 0xFFFF);
 
@@ -801,6 +898,16 @@ struct IRLowering {
             PushLoopContext();
             if (!loop.body.IsNull()) {
                 LowerStatement(loop.body);
+            }
+
+            bool hasReturnCheck = false;
+            u32 returnCheckIdx = 0;
+            u32 returnCheckFalseTarget = 0;
+            if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
+                hasReturnCheck = true;
+                returnCheckIdx = builder.currentInstruction;
+                builder.EmitInstruction(OP_BRANCH, 0, inlineReturnFlagReg);
+                returnCheckFalseTarget = builder.currentInstruction;
             }
 
             u32 untilBranchIdx = 0;
@@ -833,6 +940,12 @@ struct IRLowering {
 
             // Patch break/skip jumps
             PopLoopContext(continueTarget, loopEnd);
+
+            if (hasReturnCheck) {
+                program.metadata[returnCheckIdx] = (returnCheckFalseTarget << 16) | (loopEnd & 0xFFFF);
+                program.structureInfo[returnCheckIdx] = IRProgram::PackStructure(
+                    IRProgram::STRUCT_IF_HEADER, loopEnd);
+            }
 
             // Patch header branch: always enters body (true=body, false=exit for structure)
             program.metadata[branchIdx] = (loopEnd << 16) | (bodyStart & 0xFFFF);
@@ -1995,11 +2108,12 @@ void LowerIfStatement(NodeRef ref) {
     void LowerReturn(NodeRef ref) {
         // Return reuses AssignmentData (target unused, value is return expr)
         const AssignmentData& ret = ast->GetAssignment(ref);
+        bool inlineReturn = (inlineDepth > 0 && inlineReturnReg != 0xFFFF && inlineReturnFlagReg != 0xFFFF);
         if (!ret.value.IsNull()) {
             u16 valueReg = LowerExpression(ret.value);
 
             // If we're inlining a function, store to the return register instead of emitting OP_RET
-            if (inlineDepth > 0 && inlineReturnReg != 0xFFFF) {
+            if (inlineReturn) {
                 builder.EmitInstruction(OP_STORE_REG, inlineReturnReg, valueReg);
                 // Copy the type info to the return register
                 CoreType valueType = GetRegisterType(valueReg);
@@ -2014,16 +2128,20 @@ void LowerIfStatement(NodeRef ref) {
                         program.registerStructTypes[inlineReturnReg] = structHash;
                     }
                 }
-                // Note: In a full implementation, we'd emit a jump to the function exit
-                // For simple single-return functions, this is sufficient
+                u16 trueConst = builder.EmitConstantBool(true);
+                builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg, trueConst);
+                inlineReturnCounter++;
             } else {
                 builder.EmitInstruction(OP_RET, valueReg, 0);
             }
         } else {
-            if (inlineDepth == 0) {
+            if (inlineReturn) {
+                u16 trueConst = builder.EmitConstantBool(true);
+                builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg, trueConst);
+                inlineReturnCounter++;
+            } else {
                 builder.EmitInstruction(OP_RET, 0, 0);
             }
-            // For void returns during inlining, we just continue (no-op)
         }
     }
 
@@ -3641,17 +3759,20 @@ void LowerIfStatement(NodeRef ref) {
 
         // Save the current return register and module index for nested inlining
         u16 savedReturnReg = inlineReturnReg;
+        u16 savedReturnFlagReg = inlineReturnFlagReg;
+        u32 savedReturnCounter = inlineReturnCounter;
         u32 savedModuleIndex = inlineModuleIndex;
         inlineReturnReg = returnReg;
+        inlineReturnFlagReg = AllocateRegister();
+        SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
+        builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg, builder.EmitConstantBool(false));
+        inlineReturnCounter = 0;
         inlineModuleIndex = foundModuleIndex;  // Set module context for nested unqualified calls
         inlineDepth++;
 
         // Lower the function body
         if (func.body.Type() == ASTNodeType::BLOCK) {
-            const BlockData& block = ast->GetBlock(func.body);
-            for (u32 i = 0; i < block.statements.count; i++) {
-                LowerStatement(block.statements[i]);
-            }
+            LowerBlock(func.body);
         } else {
             // Single expression body
             u16 exprResult = LowerExpression(func.body);
@@ -3661,6 +3782,8 @@ void LowerIfStatement(NodeRef ref) {
         // Restore state
         inlineDepth--;
         inlineReturnReg = savedReturnReg;
+        inlineReturnFlagReg = savedReturnFlagReg;
+        inlineReturnCounter = savedReturnCounter;
         inlineModuleIndex = savedModuleIndex;
         variableRegisters = savedVariableRegisters;
         nodeRegisters = savedNodeRegisters;
