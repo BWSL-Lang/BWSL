@@ -1,0 +1,25 @@
+// Test: Inlined return inside counted loop
+// Tests: return guard combines with counted loop header condition
+
+pipeline InlineReturnCountLoop {
+    attributes {
+        position: float3
+    }
+
+    chooseCount :: (int limit) -> int {
+        loop (limit) {
+            return 3;
+        }
+        return 4;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int v = chooseCount(5);
+            output.position = float4(attributes.position, 1.0);
+            output.position.x = float(v);
+        }
+    }
+}

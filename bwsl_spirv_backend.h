@@ -201,6 +201,7 @@ struct SPIRVBuilder {
     u32 GetVectorTypeId(CoreType base, u32 components);
     u32 GetPointerTypeId(u32 type_id, spv::StorageClass storage);
     u32 GetResultType(u16 dest_reg, u16 op1_reg); // Helper for arithmetic result types
+    CoreType GetOperandType(u16 reg);
     u32 GetFunctionTypeId(u32 return_type, u32* param_types, u32 param_count);
 
     // Struct type management

@@ -1,0 +1,25 @@
+// Test: Inlined return inside range loop
+// Tests: return guard combines with range loop header condition
+
+pipeline InlineReturnRangeLoop {
+    attributes {
+        position: float3
+    }
+
+    chooseRange :: (int limit) -> int {
+        for (i in 0..limit) {
+            return 1;
+        }
+        return 2;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int v = chooseRange(3);
+            output.position = float4(attributes.position, 1.0);
+            output.position.x = float(v);
+        }
+    }
+}

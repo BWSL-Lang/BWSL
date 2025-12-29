@@ -1,0 +1,29 @@
+// Test: Inlined return inside loop-until construct
+// Tests: return guard combines with loop-until header condition
+
+pipeline InlineReturnLoopUntil {
+    attributes {
+        position: float3
+    }
+
+    chooseUntil :: (int limit) -> int {
+        int i = 0;
+        loop {
+            if (i == limit) {
+                return 7;
+            }
+            i = i + 1;
+        } until (i > limit + 2);
+        return 9;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int v = chooseUntil(2);
+            output.position = float4(attributes.position, 1.0);
+            output.position.x = float(v);
+        }
+    }
+}

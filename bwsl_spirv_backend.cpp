@@ -1010,6 +1010,18 @@ u32 SPIRVBuilder::GetResultType(u16 dest_reg, u16 op1_reg) {
     return GetTypeId(CoreType::FLOAT);
 }
 
+CoreType SPIRVBuilder::GetOperandType(u16 reg) {
+    if ((reg & 0xC000) == 0xC000) return CoreType::BOOL;  // Bool constant
+    if (reg & 0x8000) return CoreType::FLOAT;             // Float constant
+    if (reg & 0x4000) return CoreType::INT;               // Int constant
+    if (reg & 0x2000) return CoreType::UINT;              // Uint constant
+
+    if (ir->registerTypes && reg < ir->registerCount) {
+        return static_cast<CoreType>(ir->registerTypes[reg]);
+    }
+    return CoreType::FLOAT;
+}
+
 CoreType GetScalarComponentType(CoreType vecType) {
     switch (vecType) {
         case CoreType::FLOAT:
@@ -1475,7 +1487,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             u16 op2_reg = ir->GetOperand(ir_idx, 1);
             u32 result_type = GetResultType(dest_reg, op1_reg);
 
-            CoreType op1_type = static_cast<CoreType>(ir->registerTypes[op1_reg & 0x3FFF]);
+            CoreType op1_type = GetOperandType(op1_reg);
 
             // Booleans require OpLogicalAnd, integers use OpBitwiseAnd
             if (op1_type == CoreType::BOOL) {
@@ -1496,7 +1508,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             u16 op1_reg = ir->GetOperand(ir_idx, 0);
             u16 op2_reg = ir->GetOperand(ir_idx, 1);
             u32 result_type = GetResultType(dest_reg, op1_reg);
-            CoreType op1_type = static_cast<CoreType>(ir->registerTypes[op1_reg & 0x3FFF]);
+            CoreType op1_type = GetOperandType(op1_reg);
 
             // Booleans require OpLogicalOr, integers use OpBitwiseOr
             if (op1_type == CoreType::BOOL) {
@@ -1530,7 +1542,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             u16 op_reg = ir->GetOperand(ir_idx, 0);
             u32 operand = GetSpirvId(op_reg);
             u32 result_type = GetResultType(dest_reg, op_reg);
-            CoreType op_type = static_cast<CoreType>(ir->registerTypes[op_reg & 0x3FFF]);
+            CoreType op_type = GetOperandType(op_reg);
 
             // Booleans require OpLogicalNot, integers use OpNot (bitwise)
             if (op_type == CoreType::BOOL || op_type == CoreType::BOOL2 ||

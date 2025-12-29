@@ -1,0 +1,31 @@
+// Test: Inlined return of enum type
+// Tests: return guard and enum type propagation
+
+pipeline InlineReturnEnum {
+    attributes {
+        position: float3
+    }
+
+    enum Mode {
+        Low,
+        High
+    }
+
+    chooseMode :: (float v) -> Mode {
+        if (v > 0.0) {
+            return Mode::High;
+        }
+        return Mode::Low;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            Mode mode = chooseMode(1.0);
+            float x = select(0.0, 1.0, mode == Mode::High);
+            output.position = float4(attributes.position, 1.0);
+            output.position.x = x;
+        }
+    }
+}
