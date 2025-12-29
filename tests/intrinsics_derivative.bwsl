@@ -1,0 +1,108 @@
+// Test: Derivative and fragment intrinsics
+// Tests: ddx, ddy, fwidth, derivatives for procedural texturing
+
+pipeline IntrinsicsDerivative {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.texcoord = attributes.texcoord;
+            output.worldPos = attributes.position;
+        }
+
+        fragment {
+            float2 uv = input.texcoord;
+            float3 worldPos = input.worldPos;
+
+            // ddx - partial derivative in screen x
+            float dudx = ddx(uv.x);
+            float dvdx = ddx(uv.y);
+            float2 duvdx = ddx(uv);
+
+            // ddy - partial derivative in screen y
+            float dudy = ddy(uv.x);
+            float dvdy = ddy(uv.y);
+            float2 duvdy = ddy(uv);
+
+            // fwidth - sum of absolute derivatives
+            float fwidthU = fwidth(uv.x);
+            float fwidthV = fwidth(uv.y);
+            float2 fwidthUV = fwidth(uv);
+
+            // Anti-aliased procedural grid pattern
+            float2 gridUV = uv * 10.0;  // 10x10 grid
+            float2 gridFrac = fract(gridUV);
+
+            // Calculate line width based on derivatives
+            float2 gridDerivatives = fwidth(gridUV);
+            float lineWidth = 0.1;
+
+            // Smooth line using derivatives for anti-aliasing
+            float2 distToEdge = abs(gridFrac - 0.5);
+            float2 antiAliasedLine = smoothstep(
+                float2(0.5 - lineWidth) - gridDerivatives,
+                float2(0.5 - lineWidth) + gridDerivatives,
+                distToEdge
+            );
+            float gridPattern = max(antiAliasedLine.x, antiAliasedLine.y);
+
+            // Procedural checkerboard with anti-aliasing
+            float2 checker = floor(gridUV);
+            float checkerPattern = mod(checker.x + checker.y, 2.0);
+
+            // Anti-aliased edge using derivatives
+            float2 edgeDist = 0.5 - abs(gridFrac - 0.5);
+            float2 edgeAA = gridDerivatives;
+            float2 antiAliased = smoothstep(-edgeAA, edgeAA, edgeDist);
+
+            // Derivatives of 3D position for normal calculation
+            float3 dPosdx = ddx(worldPos);
+            float3 dPosdy = ddy(worldPos);
+            float3 flatNormal = normalize(cross(dPosdx, dPosdy));
+
+            // Screen-space derivatives for LOD calculation
+            float2 texDdx = ddx(uv);
+            float2 texDdy = ddy(uv);
+            float maxDeriv = max(length(texDdx), length(texDdy));
+            float mipLevel = log2(maxDeriv * 1024.0);  // Assuming 1024 texture size
+
+            // Derivative-based edge detection
+            float luminance = (worldPos.x + worldPos.y + worldPos.z) / 3.0;
+            float lumDdx = ddx(luminance);
+            float lumDdy = ddy(luminance);
+            float edgeStrength = sqrt(lumDdx * lumDdx + lumDdy * lumDdy);
+
+            // Sobel-like filter using derivatives
+            float sobelMagnitude = length(float2(lumDdx, lumDdy));
+
+            // Triplanar mapping derivative calculation
+            float3 blendWeights = abs(flatNormal);
+            blendWeights = blendWeights / (blendWeights.x + blendWeights.y + blendWeights.z);
+
+            // Anti-aliased step function
+            float threshold = 0.5;
+            float inputVal = uv.x;
+            float inputDeriv = fwidth(inputVal);
+            float antiAliasedStep = smoothstep(threshold - inputDeriv, threshold + inputDeriv, inputVal);
+
+            // Derivatives for bump mapping
+            float height = sin(uv.x * 20.0) * cos(uv.y * 20.0);
+            float dhdx = ddx(height);
+            float dhdy = ddy(height);
+            float3 bumpNormal = normalize(float3(-dhdx, -dhdy, 1.0));
+
+            // Combine for final color
+            float3 baseColor = float3(0.5, 0.5, 0.5);
+            float3 gridColor = lerp(baseColor, float3(0.2, 0.2, 0.2), gridPattern);
+            float3 finalColor = lerp(gridColor, float3(1.0, 1.0, 1.0), edgeStrength * 10.0);
+
+            output.color = float4(finalColor, 1.0);
+        }
+    }
+}

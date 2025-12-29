@@ -1,0 +1,144 @@
+// Test: Loop-until constructs
+// Tests: loop { } until, loop (N), break/continue in loops
+
+pipeline LoopsUntil {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Fixed iteration loop
+            float counter = 0.0;
+            loop (5) {
+                counter = counter + 1.0;
+            }
+            // counter = 5.0
+
+            // Loop until condition
+            float value = 100.0;
+            int iterations = 0;
+            loop {
+                value = value / 2.0;
+                iterations = iterations + 1;
+            } until (value <= 1.0);
+            // iterations = 7
+
+            // Loop with break
+            float sum = 0.0;
+            loop (100) {
+                sum = sum + 1.0;
+                if (sum >= 10.0) {
+                    break;
+                }
+            }
+            // sum = 10.0
+
+            // Loop with continue
+            float oddSum = 0.0;
+            int k = 0;
+            loop (10) {
+                k = k + 1;
+                if (k % 2 == 0) {
+                    continue;
+                }
+                oddSum = oddSum + float(k);
+            }
+            // oddSum = 1 + 3 + 5 + 7 + 9 = 25
+
+            // Nested fixed loops
+            float nested = 0.0;
+            loop (3) {
+                loop (4) {
+                    nested = nested + 1.0;
+                }
+            }
+            // nested = 12.0
+
+            // Loop until with complex condition
+            float x = 1.0;
+            float y = 10.0;
+            loop {
+                x = x + 1.0;
+            } until (x >= y || x >= 5.0);
+            // x = 5.0
+
+            // Loop modifying variable affecting condition
+            float accumulated = 1.0;
+            float factor = 2.0;
+            loop {
+                accumulated = accumulated * factor;
+                factor = factor * 2.0;
+            } until (factor >= 100.0);
+            // factor goes: 2 -> 4 -> 8 -> 16 -> 32 -> 64 -> 128
+
+            // Loop with early exit pattern
+            float result = 0.0;
+            bool found = false;
+            int searchIdx = 0;
+            loop {
+                if (searchIdx == 7) {
+                    result = float(searchIdx);
+                    found = true;
+                    break;
+                }
+                searchIdx = searchIdx + 1;
+            } until (searchIdx >= 10);
+            // result = 7.0
+
+            // Convergence loop
+            float approx = 0.5;
+            float target = 0.7;
+            int steps = 0;
+            loop {
+                approx = approx + (target - approx) * 0.5;
+                steps = steps + 1;
+            } until (abs(approx - target) < 0.01 || steps >= 100);
+
+            // Ray marching pattern
+            float3 rayOrigin = float3(0.0, 0.0, 0.0);
+            float3 rayDir = float3(0.0, 0.0, 1.0);
+            float t = 0.0;
+            int marchSteps = 0;
+            loop {
+                float3 pos = rayOrigin + rayDir * t;
+                float dist = length(pos) - 1.0;  // Sphere SDF
+                t = t + dist;
+                marchSteps = marchSteps + 1;
+            } until (t > 100.0 || marchSteps >= 64);
+
+            // Hash iteration pattern
+            uint hashValue = 12345u;
+            loop (8) {
+                hashValue = hashValue ^ (hashValue << 13u);
+                hashValue = hashValue ^ (hashValue >> 17u);
+                hashValue = hashValue ^ (hashValue << 5u);
+            }
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            // Loop in fragment for iterative calculations
+            float intensity = 1.0;
+            loop (3) {
+                intensity = intensity * 0.9;
+            }
+            // intensity = 0.729
+
+            // Blur kernel accumulation pattern
+            float3 colorSum = float3(0.0);
+            float weightSum = 0.0;
+            loop (9) {
+                float weight = 1.0;  // Simplified
+                colorSum = colorSum + float3(1.0) * weight;
+                weightSum = weightSum + weight;
+            }
+            float3 blurred = colorSum / weightSum;
+
+            output.color = float4(intensity, intensity, intensity, 1.0);
+        }
+    }
+}

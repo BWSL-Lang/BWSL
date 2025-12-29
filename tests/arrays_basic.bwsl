@@ -1,0 +1,132 @@
+// Test: Array declarations and operations
+// Tests: array declaration, indexing, loops over arrays
+
+pipeline ArraysBasic {
+    attributes {
+        position: float3
+    }
+
+    // Function using array parameter
+    sumArray4 :: (float[4] arr) -> float {
+        float sum = 0.0;
+        for (int i = 0; i < 4; i++) {
+            sum = sum + arr[i];
+        }
+        return sum;
+    }
+
+    // Function returning value from array
+    getElement :: (float[4] arr, int index) -> float {
+        return arr[index];
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Basic array declaration
+            float[4] floatArray;
+            floatArray[0] = 1.0;
+            floatArray[1] = 2.0;
+            floatArray[2] = 3.0;
+            floatArray[3] = 4.0;
+
+            // Integer array
+            int[4] intArray;
+            intArray[0] = 10;
+            intArray[1] = 20;
+            intArray[2] = 30;
+            intArray[3] = 40;
+
+            // Vector array
+            float3[3] vectorArray;
+            vectorArray[0] = float3(1.0, 0.0, 0.0);
+            vectorArray[1] = float3(0.0, 1.0, 0.0);
+            vectorArray[2] = float3(0.0, 0.0, 1.0);
+
+            // Access by index
+            float first = floatArray[0];
+            float last = floatArray[3];
+            float3 secondVec = vectorArray[1];
+
+            // Access with variable index
+            int idx = 2;
+            float atIdx = floatArray[idx];
+            float3 vecAtIdx = vectorArray[idx];
+
+            // Modify array elements
+            floatArray[0] = floatArray[0] * 2.0;
+            intArray[1] = intArray[1] + 5;
+
+            // Loop over array
+            float arraySum = 0.0;
+            for (int i = 0; i < 4; i++) {
+                arraySum = arraySum + floatArray[i];
+            }
+
+            // Nested loop with array
+            float dotSum = 0.0;
+            for (int i = 0; i < 3; i++) {
+                for (int j = 0; j < 3; j++) {
+                    dotSum = dotSum + dot(vectorArray[i], vectorArray[j]);
+                }
+            }
+            // dotSum = 3.0 (only i==j contributes 1.0 each)
+
+            // Array in expressions
+            float combined = floatArray[0] + floatArray[1] * floatArray[2];
+
+            // Array element swizzle
+            float3 v0 = vectorArray[0];
+            float2 v0_xy = v0.xy;
+
+            // Using function with array
+            float[4] testArr;
+            testArr[0] = 1.0;
+            testArr[1] = 2.0;
+            testArr[2] = 3.0;
+            testArr[3] = 4.0;
+            float total = sumArray4(testArr);  // 10.0
+
+            // Computed index
+            int baseIdx = 1;
+            float element = floatArray[baseIdx + 1];  // floatArray[2]
+
+            // Conditional array access
+            float conditionalVal = 0.0;
+            if (idx < 4) {
+                conditionalVal = floatArray[idx];
+            }
+
+            // Array of matrices
+            mat4[2] matrixArray;
+            matrixArray[0] = mat4(1.0);  // Identity
+            matrixArray[1] = mat4(2.0);  // Scaled identity
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            // Array in fragment shader
+            float[4] weights;
+            weights[0] = 0.1;
+            weights[1] = 0.2;
+            weights[2] = 0.3;
+            weights[3] = 0.4;
+
+            float3[4] colors;
+            colors[0] = float3(1.0, 0.0, 0.0);
+            colors[1] = float3(0.0, 1.0, 0.0);
+            colors[2] = float3(0.0, 0.0, 1.0);
+            colors[3] = float3(1.0, 1.0, 1.0);
+
+            // Weighted blend
+            float3 blended = float3(0.0);
+            for (int i = 0; i < 4; i++) {
+                blended = blended + colors[i] * weights[i];
+            }
+
+            output.color = float4(blended, 1.0);
+        }
+    }
+}

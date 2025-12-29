@@ -1,0 +1,135 @@
+// Test: Foreach loop constructs
+// Tests: foreach with ranges, multi-dimensional foreach
+
+pipeline LoopsForeach {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Basic foreach with range
+            float sum = 0.0;
+            foreach (i in 0..10) {
+                sum = sum + float(i);
+            }
+            // sum = 0 + 1 + 2 + ... + 9 = 45
+
+            // Foreach with starting offset
+            float offsetSum = 0.0;
+            foreach (i in 5..10) {
+                offsetSum = offsetSum + float(i);
+            }
+            // offsetSum = 5 + 6 + 7 + 8 + 9 = 35
+
+            // 2D foreach (image processing pattern)
+            int width = 4;
+            int height = 4;
+            float pixelSum = 0.0;
+            foreach (x in 0..width, y in 0..height) {
+                pixelSum = pixelSum + 1.0;
+            }
+            // pixelSum = 16.0
+
+            // 2D foreach with coordinate usage
+            float3 centroid = float3(0.0);
+            int count = 0;
+            foreach (x in 0..3, y in 0..3) {
+                centroid = centroid + float3(float(x), float(y), 0.0);
+                count = count + 1;
+            }
+            centroid = centroid / float(count);
+            // centroid = (1.0, 1.0, 0.0)
+
+            // Foreach for array iteration simulation
+            float[4] values;
+            values[0] = 1.0;
+            values[1] = 2.0;
+            values[2] = 3.0;
+            values[3] = 4.0;
+
+            float arraySum = 0.0;
+            foreach (i in 0..4) {
+                arraySum = arraySum + values[i];
+            }
+            // arraySum = 10.0
+
+            // Foreach with break
+            float firstLarge = 0.0;
+            foreach (i in 0..10) {
+                if (float(i) > 5.0) {
+                    firstLarge = float(i);
+                    break;
+                }
+            }
+            // firstLarge = 6.0
+
+            // Foreach with continue
+            float evenSum = 0.0;
+            foreach (i in 0..10) {
+                if (i % 2 != 0) {
+                    continue;
+                }
+                evenSum = evenSum + float(i);
+            }
+            // evenSum = 0 + 2 + 4 + 6 + 8 = 20
+
+            // Nested foreach loops
+            float3x3 matrix = float3x3(0.0);
+            foreach (row in 0..3) {
+                foreach (col in 0..3) {
+                    if (row == col) {
+                        // Would set diagonal to 1.0
+                        float val = 1.0;
+                    }
+                }
+            }
+
+            // Foreach for kernel operations
+            float3 accumColor = float3(0.0);
+            float totalWeight = 0.0;
+            int kernelSize = 3;
+            foreach (dx in 0..kernelSize, dy in 0..kernelSize) {
+                float weight = 1.0;
+                float3 sampleColor = float3(1.0, 0.5, 0.25);
+                accumColor = accumColor + sampleColor * weight;
+                totalWeight = totalWeight + weight;
+            }
+            float3 averageColor = accumColor / totalWeight;
+
+            // 3D foreach (volume processing pattern)
+            float volumeSum = 0.0;
+            foreach (x in 0..2, y in 0..2, z in 0..2) {
+                volumeSum = volumeSum + float(x + y + z);
+            }
+            // 8 iterations with varying sums
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            // Foreach in fragment for filter operations
+            float3 blurSum = float3(0.0);
+            float weights = 0.0;
+
+            // 3x3 blur kernel simulation
+            foreach (i in 0..3, j in 0..3) {
+                float w = 1.0;  // Uniform weights
+                blurSum = blurSum + float3(1.0) * w;
+                weights = weights + w;
+            }
+
+            float3 blurred = blurSum / weights;
+
+            // Foreach for tone mapping iterations
+            float3 color = float3(0.5, 0.6, 0.7);
+            foreach (i in 0..3) {
+                color = color * 0.9 + float3(0.05);
+            }
+
+            output.color = float4(blurred, 1.0);
+        }
+    }
+}

@@ -1,0 +1,132 @@
+// Test: Geometric intrinsic functions
+// Tests: cross, reflect, refract, faceforward, distance, normalize, length
+
+pipeline IntrinsicsGeometric {
+    attributes {
+        position: float3
+        normal: float3
+    }
+
+    pass "Main" {
+        use attributes { position, normal }
+
+        vertex {
+            // normalize - make unit vector
+            float3 dir = float3(3.0, 4.0, 0.0);
+            float3 unitDir = normalize(dir);  // (0.6, 0.8, 0.0)
+
+            float3 N = normalize(attributes.normal);
+
+            // Normalize different vector sizes
+            float2 dir2D = float2(1.0, 1.0);
+            float2 unitDir2D = normalize(dir2D);  // (0.707, 0.707)
+
+            float4 dir4D = float4(1.0, 1.0, 1.0, 1.0);
+            float4 unitDir4D = normalize(dir4D);  // (0.5, 0.5, 0.5, 0.5)
+
+            // length - vector magnitude
+            float len = length(dir);  // 5.0
+            float len2D = length(dir2D);  // sqrt(2) ≈ 1.414
+            float len4D = length(dir4D);  // 2.0
+
+            // distance - distance between points
+            float3 p1 = float3(0.0, 0.0, 0.0);
+            float3 p2 = float3(3.0, 4.0, 0.0);
+            float dist = distance(p1, p2);  // 5.0
+
+            float2 p1_2D = float2(0.0, 0.0);
+            float2 p2_2D = float2(1.0, 1.0);
+            float dist2D = distance(p1_2D, p2_2D);  // sqrt(2)
+
+            // dot product
+            float3 a = float3(1.0, 0.0, 0.0);
+            float3 b = float3(0.0, 1.0, 0.0);
+            float dotAB = dot(a, b);  // 0.0
+
+            float3 c = float3(1.0, 2.0, 3.0);
+            float3 d = float3(4.0, 5.0, 6.0);
+            float dotCD = dot(c, d);  // 4 + 10 + 18 = 32
+
+            // cross product (3D only)
+            float3 xAxis = float3(1.0, 0.0, 0.0);
+            float3 yAxis = float3(0.0, 1.0, 0.0);
+            float3 zAxis = cross(xAxis, yAxis);  // (0, 0, 1)
+
+            float3 crossBA = cross(yAxis, xAxis);  // (0, 0, -1)
+
+            // Cross product for normal calculation
+            float3 v1 = float3(1.0, 0.0, 0.0);
+            float3 v2 = float3(0.0, 1.0, 0.0);
+            float3 faceNormal = normalize(cross(v1, v2));
+
+            // reflect - reflect vector about normal
+            float3 incident = float3(1.0, -1.0, 0.0);
+            float3 surfaceN = float3(0.0, 1.0, 0.0);
+            float3 reflected = reflect(incident, surfaceN);  // (1, 1, 0)
+
+            // Reflection for lighting
+            float3 lightDir = normalize(float3(1.0, 1.0, 1.0));
+            float3 reflectedLight = reflect(-lightDir, N);
+
+            // refract - refract vector through surface
+            float3 I = normalize(float3(1.0, -1.0, 0.0));
+            float eta = 1.0 / 1.5;  // Air to glass
+            float3 refracted = refract(I, surfaceN, eta);
+
+            // Different refraction indices
+            float3 refractWater = refract(I, surfaceN, 1.0 / 1.33);
+            float3 refractDiamond = refract(I, surfaceN, 1.0 / 2.42);
+
+            // faceforward - flip normal to face viewer
+            float3 viewDir = float3(0.0, 0.0, 1.0);
+            float3 geomNormal = float3(0.0, 0.0, -1.0);  // Backfacing
+            float3 shadingNormal = faceforward(geomNormal, I, geomNormal);
+
+            // Using faceforward for two-sided lighting
+            float3 frontFacingN = faceforward(N, -viewDir, N);
+
+            // Combine geometric operations
+            float3 eyeVec = normalize(float3(0.0, 0.0, 5.0) - attributes.position);
+            float3 halfVec = normalize(lightDir + eyeVec);
+            float NdotH = max(dot(N, halfVec), 0.0);
+
+            // Fresnel approximation using geometric ops
+            float NdotV = max(dot(N, eyeVec), 0.0);
+            float fresnel = pow(1.0 - NdotV, 5.0);
+
+            // Geometric attenuation
+            float distToLight = distance(attributes.position, float3(10.0, 10.0, 10.0));
+            float attenuation = 1.0 / (1.0 + distToLight * distToLight * 0.01);
+
+            output.position = float4(attributes.position, 1.0);
+            output.normal = N;
+            output.reflectDir = reflectedLight;
+        }
+
+        fragment {
+            float3 N = normalize(input.normal);
+            float3 R = normalize(input.reflectDir);
+
+            // Fragment geometric operations
+            float3 viewDir = normalize(float3(0.0, 0.0, 1.0));
+            float NdotV = dot(N, viewDir);
+
+            // Rim lighting using geometric
+            float rim = 1.0 - max(NdotV, 0.0);
+            float rimPower = pow(rim, 4.0);
+
+            // Reflect environment sampling direction
+            float3 envDir = reflect(-viewDir, N);
+
+            // Distance-based fog
+            float3 fragPos = float3(0.0, 0.0, 0.0);  // Simplified
+            float fogDist = length(fragPos);
+            float fogFactor = exp(-fogDist * 0.1);
+
+            float3 color = float3(0.8, 0.8, 0.8);
+            float3 rimColor = float3(1.0, 1.0, 1.0) * rimPower;
+
+            output.color = float4(color + rimColor, 1.0);
+        }
+    }
+}

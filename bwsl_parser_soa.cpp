@@ -2403,6 +2403,16 @@ void Parser::ParseFunctionParameters(NodeRef function) {
             Advance();
             paramType = std::string(stream->GetValue(previous));
 
+            // Check for array type suffix: type[size]
+            if (Match(TokenType::LEFT_BRACKET)) {
+                if (Match(TokenType::NUMBER)) {
+                    paramType += "[" + std::string(stream->GetValue(previous)) + "]";
+                } else {
+                    Error("Expected array size");
+                }
+                Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
+            }
+
             // Expect parameter name after type
             if (Check(TokenType::IDENTIFIER)) {
                 Advance();
@@ -2456,6 +2466,24 @@ void Parser::ParseFunctionParameters(NodeRef function) {
                 } else {
                     Error("Expected parameter type after ':'");
                     return;
+                }
+            } else if (Check(TokenType::LEFT_BRACKET)) {
+                // CustomType[size] name - array of custom type
+                paramType = identifierStr;
+                Match(TokenType::LEFT_BRACKET);
+                if (Match(TokenType::NUMBER)) {
+                    paramType += "[" + std::string(stream->GetValue(previous)) + "]";
+                } else {
+                    Error("Expected array size");
+                }
+                Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
+
+                // Now expect parameter name
+                if (Check(TokenType::IDENTIFIER)) {
+                    Advance();
+                    paramName = std::string(stream->GetValue(previous));
+                } else {
+                    paramName = "";
                 }
             } else if (Check(TokenType::IDENTIFIER)) {
                 // CustomType name - identifier followed by another identifier

@@ -1,0 +1,157 @@
+// Test: Custom struct types
+// Tests: struct declaration, instantiation, member access, struct in functions
+
+pipeline StructsCustom {
+    attributes {
+        position: float3
+        normal: float3
+    }
+
+    // Custom struct declarations
+    struct Material {
+        float3 albedo;
+        float roughness;
+        float metallic;
+        float ao;
+    };
+
+    struct Light {
+        float3 position;
+        float3 color;
+        float intensity;
+        float radius;
+    };
+
+    struct Transform {
+        float3 position;
+        float3 rotation;
+        float3 scale;
+    };
+
+    struct Vertex {
+        float3 pos;
+        float3 norm;
+        float2 uv;
+    };
+
+    // Nested struct
+    struct SceneObject {
+        Transform transform;
+        Material material;
+    };
+
+    // Function returning struct
+    createMaterial :: (float3 color, float rough, float metal) -> Material {
+        Material mat;
+        mat.albedo = color;
+        mat.roughness = rough;
+        mat.metallic = metal;
+        mat.ao = 1.0;
+        return mat;
+    }
+
+    // Function taking struct parameter
+    getMaterialBrightness :: (Material mat) -> float {
+        return (mat.albedo.r + mat.albedo.g + mat.albedo.b) / 3.0;
+    }
+
+    // Function modifying struct
+    applyAO :: (Material mat, float aoValue) -> Material {
+        mat.ao = aoValue;
+        return mat;
+    }
+
+    // Function with multiple struct parameters
+    calculateLighting :: (Material mat, Light light, float3 worldPos) -> float3 {
+        float3 lightVec = light.position - worldPos;
+        float distance = length(lightVec);
+        float attenuation = 1.0 / (1.0 + distance * distance / (light.radius * light.radius));
+        return mat.albedo * light.color * light.intensity * attenuation;
+    }
+
+    pass "Main" {
+        use attributes { position, normal }
+
+        vertex {
+            // Create struct instances
+            Material defaultMat;
+            defaultMat.albedo = float3(1.0, 0.5, 0.2);
+            defaultMat.roughness = 0.5;
+            defaultMat.metallic = 0.0;
+            defaultMat.ao = 1.0;
+
+            // Create using function
+            Material redMetal = createMaterial(float3(1.0, 0.0, 0.0), 0.2, 1.0);
+
+            // Access struct members
+            float3 color = defaultMat.albedo;
+            float rough = defaultMat.roughness;
+
+            // Modify struct members
+            defaultMat.roughness = 0.8;
+            defaultMat.albedo.r = 0.5;
+
+            // Create light
+            Light mainLight;
+            mainLight.position = float3(10.0, 10.0, 10.0);
+            mainLight.color = float3(1.0, 1.0, 1.0);
+            mainLight.intensity = 1.0;
+            mainLight.radius = 100.0;
+
+            // Create transform
+            Transform objTransform;
+            objTransform.position = attributes.position;
+            objTransform.rotation = float3(0.0, 0.0, 0.0);
+            objTransform.scale = float3(1.0, 1.0, 1.0);
+
+            // Nested struct
+            SceneObject obj;
+            obj.transform = objTransform;
+            obj.material = defaultMat;
+
+            // Access nested members
+            float3 objPos = obj.transform.position;
+            float3 objColor = obj.material.albedo;
+
+            // Use struct in function
+            float brightness = getMaterialBrightness(defaultMat);
+
+            // Struct assignment
+            Material matCopy = defaultMat;
+            matCopy.roughness = 0.1;
+
+            // Verify original unchanged
+            float originalRough = defaultMat.roughness;  // Still 0.8
+
+            // Apply function that returns modified struct
+            Material withAO = applyAO(defaultMat, 0.5);
+
+            output.position = float4(attributes.position, 1.0);
+            output.normal = attributes.normal;
+            output.material_albedo = defaultMat.albedo;
+            output.material_params = float2(defaultMat.roughness, defaultMat.metallic);
+        }
+
+        fragment {
+            // Reconstruct material from interpolated values
+            Material mat;
+            mat.albedo = input.material_albedo;
+            mat.roughness = input.material_params.x;
+            mat.metallic = input.material_params.y;
+            mat.ao = 1.0;
+
+            // Create light for fragment
+            Light light;
+            light.position = float3(5.0, 5.0, 5.0);
+            light.color = float3(1.0, 0.9, 0.8);
+            light.intensity = 2.0;
+            light.radius = 50.0;
+
+            // Calculate lighting
+            float3 worldPos = float3(0.0, 0.0, 0.0);
+            float3 litColor = calculateLighting(mat, light, worldPos);
+
+            output.color = float4(litColor * mat.ao, 1.0);
+        }
+    }
+}

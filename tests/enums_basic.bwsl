@@ -1,0 +1,164 @@
+// Test: Enum types and usage
+// Tests: enum declaration, enum values, enum in switch/if
+
+pipeline EnumsBasic {
+    attributes {
+        position: float3
+    }
+
+    // Basic enum
+    enum BlendMode {
+        Normal,
+        Add,
+        Multiply,
+        Screen,
+        Overlay
+    }
+
+    // Enum with explicit values
+    enum Priority {
+        Low = 0,
+        Medium = 5,
+        High = 10,
+        Critical = 100
+    }
+
+    // Enum for shader state
+    enum LightType {
+        Directional,
+        Point,
+        Spot,
+        Area
+    }
+
+    // Enum for material types
+    enum MaterialType {
+        Diffuse,
+        Metal,
+        Glass,
+        Emissive,
+        Subsurface
+    }
+
+    // Function using enum parameter
+    getLightAttenuation :: (LightType type, float distance) -> float {
+        if (type == LightType::Directional) {
+            return 1.0;  // No attenuation for directional
+        }
+        if (type == LightType::Point) {
+            return 1.0 / (distance * distance);
+        }
+        if (type == LightType::Spot) {
+            return 1.0 / (distance * distance);  // Simplified
+        }
+        return 1.0;
+    }
+
+    // Function returning enum
+    classifyMaterial :: (float metallic, float transparency) -> MaterialType {
+        if (transparency > 0.5) {
+            return MaterialType::Glass;
+        }
+        if (metallic > 0.5) {
+            return MaterialType::Metal;
+        }
+        return MaterialType::Diffuse;
+    }
+
+    // Function with enum comparison
+    isEmissive :: (MaterialType type) -> bool {
+        return type == MaterialType::Emissive;
+    }
+
+    // Blend function using enum
+    blendColors :: (float3 base, float3 blend, BlendMode mode) -> float3 {
+        if (mode == BlendMode::Normal) {
+            return blend;
+        }
+        if (mode == BlendMode::Add) {
+            return base + blend;
+        }
+        if (mode == BlendMode::Multiply) {
+            return base * blend;
+        }
+        if (mode == BlendMode::Screen) {
+            return float3(1.0) - (float3(1.0) - base) * (float3(1.0) - blend);
+        }
+        return blend;  // Default
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Declare enum variables
+            BlendMode currentMode = BlendMode::Normal;
+            LightType lightType = LightType::Point;
+            MaterialType matType = MaterialType::Metal;
+            Priority prio = Priority::High;
+
+            // Enum comparison
+            bool isPoint = lightType == LightType::Point;
+            bool isNotSpot = lightType != LightType::Spot;
+
+            // Use enum in conditionals
+            float attenuation = 1.0;
+            if (lightType == LightType::Directional) {
+                attenuation = 1.0;
+            } else if (lightType == LightType::Point) {
+                attenuation = 0.5;
+            } else if (lightType == LightType::Spot) {
+                attenuation = 0.3;
+            }
+
+            // Call function with enum
+            float lightAtten = getLightAttenuation(lightType, 10.0);
+
+            // Get enum from function
+            MaterialType classified = classifyMaterial(0.8, 0.1);
+            bool emissiveCheck = isEmissive(classified);
+
+            // Enum reassignment
+            currentMode = BlendMode::Multiply;
+
+            // Multiple enum comparisons
+            bool isBasicLight = lightType == LightType::Directional ||
+                               lightType == LightType::Point;
+
+            // Use enum with blend function
+            float3 baseColor = float3(0.5, 0.5, 0.5);
+            float3 blendColor = float3(1.0, 0.0, 0.0);
+            float3 result1 = blendColors(baseColor, blendColor, BlendMode::Add);
+            float3 result2 = blendColors(baseColor, blendColor, BlendMode::Multiply);
+
+            // Priority enum usage
+            bool isUrgent = prio == Priority::High || prio == Priority::Critical;
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            // Enum usage in fragment shader
+            MaterialType surfaceType = MaterialType::Diffuse;
+            BlendMode blendMode = BlendMode::Screen;
+
+            float3 baseColor = float3(0.8, 0.6, 0.4);
+            float3 lightColor = float3(1.0, 1.0, 0.9);
+
+            // Material-based shading
+            float3 finalColor = baseColor;
+            if (surfaceType == MaterialType::Metal) {
+                finalColor = baseColor * 0.8 + lightColor * 0.2;
+            } else if (surfaceType == MaterialType::Glass) {
+                finalColor = lightColor * 0.9;
+            } else if (surfaceType == MaterialType::Emissive) {
+                finalColor = baseColor * 2.0;
+            }
+
+            // Apply blend
+            float3 blended = blendColors(finalColor, lightColor, blendMode);
+
+            output.color = float4(blended, 1.0);
+        }
+    }
+}

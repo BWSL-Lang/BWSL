@@ -1,0 +1,155 @@
+// Test: Complex expressions
+// Tests: nested expressions, operator precedence, mixed types
+
+pipeline ExpressionsComplex {
+    attributes {
+        position: float3
+        normal: float3
+    }
+
+    // Function for nested calls
+    square :: (float x) -> float {
+        return x * x;
+    }
+
+    cube :: (float x) -> float {
+        return x * x * x;
+    }
+
+    add3 :: (float a, float b, float c) -> float {
+        return a + b + c;
+    }
+
+    pass "Main" {
+        use attributes { position, normal }
+
+        vertex {
+            // Deeply nested arithmetic
+            float a = 1.0;
+            float b = 2.0;
+            float c = 3.0;
+            float d = 4.0;
+
+            float nested1 = ((a + b) * (c - d)) / ((a - b) + (c * d));
+            float nested2 = (((a + b) + c) + d) * (((a * b) * c) * d);
+            float nested3 = a + (b * (c + (d * (a + b))));
+
+            // Operator precedence chains
+            float prec1 = a + b * c - d / a + b;  // 1 + 6 - 4 + 2 = 5
+            float prec2 = a * b + c * d - a / b;  // 2 + 12 - 0.5 = 13.5
+            float prec3 = -a + b * -c + d;        // -1 + -6 + 4 = -3
+
+            // Comparison in expressions
+            bool comp1 = a < b && c > d;          // true && false = false
+            bool comp2 = a <= b || c >= d;        // true || false = true
+            bool comp3 = (a < b) == (c < d);      // true == false = false
+            bool comp4 = !(a > b) && (c != d);    // true && true = true
+
+            // Ternary nesting
+            float tern1 = a > b ? c : d;          // 4.0
+            float tern2 = a < b ? (c > d ? a : b) : c;  // c > d ? a : b = b = 2.0
+            float tern3 = (a > 0.0 ? b : c) * (d > 0.0 ? a : b);  // 2 * 1 = 2
+
+            // Mixed vector/scalar expressions
+            float3 v1 = float3(1.0, 2.0, 3.0);
+            float3 v2 = float3(4.0, 5.0, 6.0);
+            float s = 2.0;
+
+            float3 mixed1 = (v1 + v2) * s;        // (5, 7, 9) * 2 = (10, 14, 18)
+            float3 mixed2 = v1 * s + v2 / s;      // (2, 4, 6) + (2, 2.5, 3) = (4, 6.5, 9)
+            float3 mixed3 = (v1 - float3(s)) * (v2 + float3(s));
+
+            // Swizzle in expressions
+            float4 color = float4(1.0, 0.5, 0.25, 1.0);
+            float3 expr1 = color.rgb * color.a + float3(0.1);
+            float2 expr2 = color.xy + color.zw;
+            float expr3 = color.x * color.y + color.z * color.w;
+
+            // Nested function calls
+            float fn1 = square(square(2.0));      // 16.0
+            float fn2 = cube(square(2.0));        // 64.0
+            float fn3 = add3(square(2.0), cube(2.0), square(3.0));  // 4 + 8 + 9 = 21
+
+            // Function calls in expressions
+            float fn4 = square(a + b) * cube(c - d);
+            float fn5 = add3(a * b, b * c, c * d) + square(add3(a, b, c));
+
+            // Intrinsic chains
+            float intr1 = sin(cos(a));
+            float intr2 = pow(abs(sin(b * 3.14159)), 2.0);
+            float intr3 = clamp(floor(a * 10.0) / 10.0, 0.0, 1.0);
+
+            // Vector intrinsic chains
+            float3 vintr1 = normalize(cross(v1, v2));
+            float vintr2 = length(normalize(v1) + normalize(v2));
+            float3 vintr3 = reflect(normalize(v1), normalize(cross(v1, v2)));
+
+            // Matrix expressions
+            float4x4 m1 = float4x4(1.0);
+            float4x4 m2 = float4x4(2.0);
+            float4 vec4 = float4(1.0, 2.0, 3.0, 1.0);
+
+            float4 matExpr1 = m1 * vec4;
+            float4 matExpr2 = (m1 * m2) * vec4;
+            float4x4 matExpr3 = m1 * m2 * m1;
+
+            // Complex conditional expressions
+            float x = 0.5;
+            float result1 = x > 0.0 ? (x < 1.0 ? x : 1.0) : 0.0;  // Clamp to [0,1]
+            float result2 = abs(x) < 0.001 ? 0.0 : (x > 0.0 ? 1.0 : -1.0);  // Sign with epsilon
+
+            // Compound assignment expressions
+            float acc = 1.0;
+            acc = acc + 2.0;
+            acc = acc * 3.0;
+            acc = acc - 4.0;
+            // acc = ((1 + 2) * 3) - 4 = 5
+
+            // Expression with type conversions
+            int i = 5;
+            float fromInt = float(i) * 2.5;       // 12.5
+            int toInt = int(fromInt / 3.0);       // 4
+            uint u = uint(abs(i - 10));           // 5u
+
+            // Complex boolean expressions
+            bool b1 = (a > 0.0 && b > 0.0) || (c < 0.0 && d < 0.0);
+            bool b2 = !((a < b) && (c < d)) || (a == b);
+            bool b3 = (a + b > c) == (d - c < a);
+
+            // Long expression chains
+            float chain = a + b + c + d + a + b + c + d + a + b;
+            float mulChain = a * b * c * d * a * b;
+            float mixedChain = a + b * c + d * a - b + c / d;
+
+            output.position = float4(attributes.position, 1.0);
+            output.normal = attributes.normal;
+        }
+
+        fragment {
+            float3 N = normalize(input.normal);
+
+            // Complex lighting expression
+            float3 L = normalize(float3(1.0, 1.0, 1.0));
+            float3 V = float3(0.0, 0.0, 1.0);
+            float3 H = normalize(L + V);
+
+            // Full Blinn-Phong in one expression
+            float3 ambient = float3(0.1);
+            float3 diffuse = float3(0.8) * max(dot(N, L), 0.0);
+            float3 specular = float3(1.0) * pow(max(dot(N, H), 0.0), 32.0);
+            float3 blinnPhong = ambient + diffuse + specular;
+
+            // Fresnel in expression
+            float fresnel = 0.04 + (1.0 - 0.04) * pow(1.0 - max(dot(N, V), 0.0), 5.0);
+
+            // Tone mapping expression
+            float3 hdrColor = blinnPhong * 2.0;
+            float3 toneMapped = hdrColor / (hdrColor + float3(1.0));
+
+            // Gamma correction
+            float3 gammaCorrected = pow(toneMapped, float3(1.0 / 2.2));
+
+            output.color = float4(gammaCorrected, 1.0);
+        }
+    }
+}

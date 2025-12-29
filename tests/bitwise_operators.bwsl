@@ -1,0 +1,134 @@
+// Test: Bitwise operators
+// Tests: AND, OR, XOR, NOT, shifts
+
+pipeline BitwiseOperators {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Bitwise AND
+            uint a = 0xFF00u;
+            uint b = 0x0FF0u;
+            uint andResult = a & b;  // 0x0F00
+
+            // Bitwise OR
+            uint orResult = a | b;   // 0xFFF0
+
+            // Bitwise XOR
+            uint xorResult = a ^ b;  // 0xF0F0
+
+            // Bitwise NOT
+            uint notResult = ~a;     // 0xFFFFFF00 (32-bit)
+
+            // Left shift
+            uint shifted = 1u << 4u;       // 16
+            uint shiftVar = 0xFu << 8u;    // 0xF00
+
+            // Right shift
+            uint rightShift = 256u >> 4u;  // 16
+            uint rightVar = 0xF000u >> 8u; // 0xF0
+
+            // Signed shifts
+            int signedVal = 16;
+            int leftSigned = signedVal << 2;   // 64
+            int rightSigned = signedVal >> 2;  // 4
+
+            // Combining operations
+            uint mask = 0xFFu;
+            uint value = 0x12345678u;
+            uint masked = value & mask;           // 0x78
+            uint extracted = (value >> 8u) & mask; // 0x56
+
+            // Setting bits
+            uint flags = 0u;
+            flags = flags | (1u << 0u);  // Set bit 0
+            flags = flags | (1u << 2u);  // Set bit 2
+            flags = flags | (1u << 4u);  // Set bit 4
+            // flags = 0b10101 = 21
+
+            // Clearing bits
+            uint allSet = 0xFFFFFFFFu;
+            uint cleared = allSet & ~(1u << 3u);  // Clear bit 3
+
+            // Toggle bits
+            uint toggled = flags ^ (1u << 2u);  // Toggle bit 2
+
+            // Check if bit is set
+            bool bit0Set = (flags & (1u << 0u)) != 0u;
+            bool bit1Set = (flags & (1u << 1u)) != 0u;
+
+            // Pack bytes into uint
+            uint byte0 = 0x12u;
+            uint byte1 = 0x34u;
+            uint byte2 = 0x56u;
+            uint byte3 = 0x78u;
+            uint packed = byte0 | (byte1 << 8u) | (byte2 << 16u) | (byte3 << 24u);
+            // packed = 0x78563412
+
+            // Unpack bytes from uint
+            uint source = 0xAABBCCDDu;
+            uint unpack0 = source & 0xFFu;
+            uint unpack1 = (source >> 8u) & 0xFFu;
+            uint unpack2 = (source >> 16u) & 0xFFu;
+            uint unpack3 = (source >> 24u) & 0xFFu;
+
+            // Integer operations
+            int ia = 0x0F0F;
+            int ib = 0x00FF;
+            int iand = ia & ib;  // 0x000F
+            int ior = ia | ib;   // 0x0FFF
+            int ixor = ia ^ ib;  // 0x0FF0
+
+            // Bitwise in expressions
+            uint complex = ((a & b) | (a ^ b)) & 0xFFFFu;
+
+            // Sign extension (arithmetic right shift)
+            int negative = -16;
+            int arithShift = negative >> 2;  // -4 (preserves sign)
+
+            // Power of 2 check pattern
+            uint testPow2 = 16u;
+            bool isPow2 = (testPow2 & (testPow2 - 1u)) == 0u;
+
+            // Fast modulo by power of 2
+            uint val = 37u;
+            uint mod8 = val & 7u;  // Same as val % 8
+
+            // Fast multiply/divide by power of 2
+            uint fastMul4 = val << 2u;  // val * 4
+            uint fastDiv4 = val >> 2u;  // val / 4
+
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            // Bitwise operations for color packing
+            uint r = 255u;
+            uint g = 128u;
+            uint b = 64u;
+            uint a = 255u;
+
+            uint packedColor = r | (g << 8u) | (b << 16u) | (a << 24u);
+
+            // Unpack color
+            float4 unpackedColor;
+            unpackedColor.r = float(packedColor & 0xFFu) / 255.0;
+            unpackedColor.g = float((packedColor >> 8u) & 0xFFu) / 255.0;
+            unpackedColor.b = float((packedColor >> 16u) & 0xFFu) / 255.0;
+            unpackedColor.a = float((packedColor >> 24u) & 0xFFu) / 255.0;
+
+            // Hash function using bitwise
+            uint hash = 2166136261u;
+            uint data = 12345u;
+            hash = hash ^ data;
+            hash = hash * 16777619u;
+            hash = hash ^ (hash >> 16u);
+
+            output.color = unpackedColor;
+        }
+    }
+}

@@ -138,6 +138,15 @@ static constexpr spv::Op IR_TO_SPV_OP_TABLE[256] = {
     [IR::OP_BARRIER]         = spv::OpControlBarrier,
     [IR::OP_MEM_FENCE]       = spv::OpMemoryBarrier,
 
+    // ========== Derivatives (Fragment only) ==========
+    [IR::OP_DDX]             = spv::OpDPdx,
+    [IR::OP_DDY]             = spv::OpDPdy,
+    [IR::OP_DDX_FINE]        = spv::OpDPdxFine,
+    [IR::OP_DDY_FINE]        = spv::OpDPdyFine,
+    [IR::OP_DDX_COARSE]      = spv::OpDPdxCoarse,
+    [IR::OP_DDY_COARSE]      = spv::OpDPdyCoarse,
+    [IR::OP_FWIDTH]          = spv::OpFwidth,
+
     // ========== Wave/SIMD/Subgroup Operations (SPIR-V 1.3+) ==========
     // Using raw opcode values since these are not in SPIR-V 1.2 header
     [IR::OP_WAVE_MIN]        = static_cast<spv::Op>(358), // OpGroupNonUniformSMin
@@ -1009,11 +1018,26 @@ spv::Op SPIRVBuilder::IRToSpvOp(IR::OpCode op) {
 void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     IR::OpCode op = static_cast<IR::OpCode>(ir->opcodes[ir_idx]);
     spv::Op spv_op = IRToSpvOp(op);
-    
-    
+
+
     u32 dest = GetSpirvId(ir->destinations[ir_idx]);
-    u32 type_id = GetTypeId(static_cast<CoreType>(ir->types[ir_idx]));
-    
+
+    // Get type ID - special handling for CUSTOM and ENUM types which need struct lookup
+    CoreType instType = static_cast<CoreType>(ir->types[ir_idx]);
+    u32 type_id = 0;
+    if (instType == CoreType::CUSTOM || instType == CoreType::ENUM) {
+        // Look up struct type from register's struct type hash
+        u16 dest_reg = ir->destinations[ir_idx];
+        if (dest_reg < 512 && ir->registerStructTypes) {
+            u32 structHash = ir->registerStructTypes[dest_reg];
+            if (structHash != 0) {
+                type_id = GetStructTypeId(structHash);
+            }
+        }
+    } else {
+        type_id = GetTypeId(instType);
+    }
+
     switch(op) {
         // ========== No-ops and pass-through ==========
         case IR::OP_NOP: {
@@ -1492,6 +1516,23 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             break;
         }
 
+        // ========== Derivatives (Fragment only) ==========
+        case IR::OP_DDX:
+        case IR::OP_DDY:
+        case IR::OP_DDX_FINE:
+        case IR::OP_DDY_FINE:
+        case IR::OP_DDX_COARSE:
+        case IR::OP_DDY_COARSE:
+        case IR::OP_FWIDTH: {
+            u16 dest_reg = ir->destinations[ir_idx];
+            u16 op_reg = ir->GetOperand(ir_idx, 0);
+            u32 operand = GetSpirvId(op_reg);
+            u32 result_type = GetResultType(dest_reg, op_reg);
+            spv::Op spv_op = IR_TO_SPV_OP_TABLE[static_cast<u32>(op)];
+            Emit(spv_op, result_type, dest, operand);
+            break;
+        }
+
         // ========== Shift Operations ==========
         case IR::OP_SHL: {
             u16 dest_reg = ir->destinations[ir_idx];
@@ -1657,19 +1698,43 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         case IR::OP_ILE:
         case IR::OP_IGT:
         case IR::OP_IGE: {
-            u32 op1 = GetSpirvId(ir->GetOperand(ir_idx, 0));
-            u32 op2 = GetSpirvId(ir->GetOperand(ir_idx, 1));
+            u16 op1_reg = ir->GetOperand(ir_idx, 0);
+            u16 op2_reg = ir->GetOperand(ir_idx, 1);
+            u32 op1 = GetSpirvId(op1_reg);
+            u32 op2 = GetSpirvId(op2_reg);
             u32 bool_type = GetTypeId(CoreType::BOOL);
 
+            // Check if operands are booleans - use OpLogicalEqual/OpLogicalNotEqual
+            CoreType op1_type = CoreType::INT;
+            if (ir->registerTypes && (op1_reg & 0xE000) == 0 && op1_reg < ir->registerCount) {
+                op1_type = static_cast<CoreType>(ir->registerTypes[op1_reg]);
+            } else if (op1_reg & 0xC000) {
+                // Bool constant flag (0xC000)
+                op1_type = CoreType::BOOL;
+            }
+
             spv::Op cmp_op;
-            switch (op) {
-                case IR::OP_IEQ: cmp_op = spv::OpIEqual; break;
-                case IR::OP_INE: cmp_op = spv::OpINotEqual; break;
-                case IR::OP_ILT: cmp_op = spv::OpSLessThan; break;
-                case IR::OP_ILE: cmp_op = spv::OpSLessThanEqual; break;
-                case IR::OP_IGT: cmp_op = spv::OpSGreaterThan; break;
-                case IR::OP_IGE: cmp_op = spv::OpSGreaterThanEqual; break;
-                default: cmp_op = spv::OpNop; break;
+            if (op1_type == CoreType::BOOL) {
+                // Use logical operations for booleans
+                switch (op) {
+                    case IR::OP_IEQ: cmp_op = spv::OpLogicalEqual; break;
+                    case IR::OP_INE: cmp_op = spv::OpLogicalNotEqual; break;
+                    default:
+                        // Less than/greater than don't make sense for booleans
+                        // Fall back to integer comparison (will fail validation if wrong)
+                        cmp_op = spv::OpIEqual;
+                        break;
+                }
+            } else {
+                switch (op) {
+                    case IR::OP_IEQ: cmp_op = spv::OpIEqual; break;
+                    case IR::OP_INE: cmp_op = spv::OpINotEqual; break;
+                    case IR::OP_ILT: cmp_op = spv::OpSLessThan; break;
+                    case IR::OP_ILE: cmp_op = spv::OpSLessThanEqual; break;
+                    case IR::OP_IGT: cmp_op = spv::OpSGreaterThan; break;
+                    case IR::OP_IGE: cmp_op = spv::OpSGreaterThanEqual; break;
+                    default: cmp_op = spv::OpNop; break;
+                }
             }
 
             Emit(cmp_op, bool_type, dest, op1, op2);
