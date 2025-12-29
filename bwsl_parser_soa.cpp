@@ -165,6 +165,87 @@ namespace {
         funcData.signatureKey = signatureKey;
         funcData.astNodeIndex = functionRef.packed;
     }
+
+    // Check if any parameter type is a constraint (making this a generic function)
+    // Returns true if at least one parameter uses a constraint type
+    // Also fills outConstraintInfo with constraint masks for each parameter
+    bool CheckForConstrainedParams(
+        SymbolTableData* table,
+        const ArenaArray<std::pair<ArenaString, ArenaString>>& params,
+        std::vector<TypeMask>& outConstraintMasks,
+        std::vector<bool>& outIsConstrained
+    ) {
+        bool hasAnyConstrained = false;
+        outConstraintMasks.clear();
+        outIsConstrained.clear();
+        outConstraintMasks.reserve(params.count);
+        outIsConstrained.reserve(params.count);
+
+        for (u32 i = 0; i < params.count; i++) {
+            const ArenaString& typeName = params[i].second;
+            TypeMask mask = SymbolTable::LookupConstraint(table, typeName);
+
+            outConstraintMasks.push_back(mask);
+            outIsConstrained.push_back(mask != 0);
+
+            if (mask != 0) {
+                hasAnyConstrained = true;
+            }
+        }
+
+        return hasAnyConstrained;
+    }
+
+    // Fill GenericFunctionData from parsed function declaration
+    void FillGenericFunctionData(
+        SymbolTableData* table,
+        BWSL_Arena* arena,
+        const FunctionDeclData& decl,
+        NodeRef functionRef,
+        const std::vector<TypeMask>& constraintMasks,
+        const std::vector<bool>& isConstrained,
+        const ArenaString& returnTypeName,
+        TypeMask returnConstraint,
+        s8 returnMatchesParam
+    ) {
+        GenericFunctionData gfn;
+        gfn.name = decl.name;
+        gfn.nameHash = decl.name.nameHash;
+        gfn.astNodeIndex = functionRef.packed;
+        gfn.isEval = false;
+
+        // Initialize parameters array
+        gfn.parameters.Init(arena, decl.parameters.count);
+        for (u32 i = 0; i < decl.parameters.count; i++) {
+            GenericParamInfo info;
+            info.name = decl.parameters[i].first;
+            info.typeName = decl.parameters[i].second;
+            info.constraintMask = constraintMasks[i];
+            info.isConstrained = isConstrained[i];
+            gfn.parameters.Push(arena, info);
+        }
+
+        // Set return type info
+        gfn.returnTypeName = returnTypeName;
+        gfn.returnConstraint = returnConstraint;
+        gfn.returnMatchesParam = returnMatchesParam;
+
+        SymbolTable::AddGenericFunction(table, gfn);
+    }
+
+    // Find which parameter index a return type constraint matches (for -> T style returns)
+    s8 FindMatchingParamForReturn(
+        const ArenaArray<std::pair<ArenaString, ArenaString>>& params,
+        const ArenaString& returnTypeName,
+        const std::vector<bool>& isConstrained
+    ) {
+        for (u32 i = 0; i < params.count; i++) {
+            if (isConstrained[i] && params[i].second.nameHash == returnTypeName.nameHash) {
+                return static_cast<s8>(i);
+            }
+        }
+        return -1;  // Not matching any parameter
+    }
 }
 
 // Token management
@@ -466,13 +547,19 @@ NodeRef Parser::ParsePipeline() {
             NodeRef structNode = ParseStruct();
             (void)structNode; // Struct is registered in symbol table
             Match(TokenType::SEMICOLON); // Optional trailing semicolon
+        } else if (Check(TokenType::CONSTRAINT)) {
+            // Type constraint definition
+            NodeRef constraintNode = ParseConstraint();
+            if (constraintNode.IsValid()) {
+                ast->GetPipeline(pipeline).constraints.Push(arena, constraintNode);
+            }
         } else if (Check(TokenType::IDENTIFIER) && stream->GetType(PeekNext()) == TokenType::DOUBLE_COLON) {
             NodeRef function = ParseFunction();
             if (function.IsValid()) {
                 ast->GetPipeline(pipeline).functions.Push(arena, function);
             }
         } else {
-            ErrorAtCurrent("Expected 'import', 'attributes', 'compute_graph', 'enum', 'eval', 'module', 'struct', or 'pass'");
+            ErrorAtCurrent("Expected 'import', 'attributes', 'compute_graph', 'constraint', 'enum', 'eval', 'module', 'struct', or 'pass'");
             Advance();
         }
         
@@ -2366,25 +2453,57 @@ NodeRef Parser::ParseFunction() {
     }
 
     const FunctionDeclData& decl = ast->GetFunction(function);
-    std::vector<OverloadTypeMask> paramMasks;
-    BuildParamMasks(decl.parameters, paramMasks);
-    u64 signatureKey = HashOverloadSignature(paramMasks.data(), static_cast<u32>(paramMasks.size()));
 
-    // Only add unqualified function symbol when NOT in module scope
-    // Module functions get their qualified name added by AddModuleFunction() after parsing
-    if (!symbolTable.inModuleScope) {
-        if (HasDuplicateFunctionSignature(&symbolTable, decl.name, paramMasks, NamespaceKind::GLOBAL,
-                INVALID_INDEX, signatureKey)) {
-            Error("Function overload already declared");
-            return NodeRef::Null();
-        }
+    // Check if any parameter uses a constraint type (making this a generic function)
+    std::vector<TypeMask> constraintMasks;
+    std::vector<bool> isConstrained;
+    bool isGenericFunction = CheckForConstrainedParams(&symbolTable, decl.parameters,
+                                                        constraintMasks, isConstrained);
 
-        Symbol* sym = SymbolTable::AddSymbol(&symbolTable, decl.name, SymbolKind::FUNCTION);
-        if (!sym) {
-            Error("Function already declared");
-            return NodeRef::Null();
+    // Check if return type is also a constraint
+    ArenaString returnTypeName = customReturnTypeName.empty()
+        ? ArenaString::MakeHashOnly("")
+        : ArenaString::MakeHashOnly(customReturnTypeName);
+    TypeMask returnConstraint = 0;
+    s8 returnMatchesParam = -1;
+
+    if (!customReturnTypeName.empty()) {
+        returnConstraint = SymbolTable::LookupConstraint(&symbolTable, returnTypeName);
+        if (returnConstraint != 0) {
+            // Return type is a constraint - check if it matches a parameter's constraint
+            returnMatchesParam = FindMatchingParamForReturn(decl.parameters, returnTypeName, isConstrained);
+            isGenericFunction = true;
         }
-        FillFunctionData(&symbolTable, arena, decl, function, paramMasks, signatureKey, sym->index);
+    }
+
+    if (isGenericFunction) {
+        // Register as a generic function template
+        // Generic functions are not added as regular symbols - they're templates
+        FillGenericFunctionData(&symbolTable, arena, decl, function,
+                                constraintMasks, isConstrained,
+                                returnTypeName, returnConstraint, returnMatchesParam);
+    } else {
+        // Regular function - add to symbol table as before
+        std::vector<OverloadTypeMask> paramMasks;
+        BuildParamMasks(decl.parameters, paramMasks);
+        u64 signatureKey = HashOverloadSignature(paramMasks.data(), static_cast<u32>(paramMasks.size()));
+
+        // Only add unqualified function symbol when NOT in module scope
+        // Module functions get their qualified name added by AddModuleFunction() after parsing
+        if (!symbolTable.inModuleScope) {
+            if (HasDuplicateFunctionSignature(&symbolTable, decl.name, paramMasks, NamespaceKind::GLOBAL,
+                    INVALID_INDEX, signatureKey)) {
+                Error("Function overload already declared");
+                return NodeRef::Null();
+            }
+
+            Symbol* sym = SymbolTable::AddSymbol(&symbolTable, decl.name, SymbolKind::FUNCTION);
+            if (!sym) {
+                Error("Function already declared");
+                return NodeRef::Null();
+            }
+            FillFunctionData(&symbolTable, arena, decl, function, paramMasks, signatureKey, sym->index);
+        }
     }
 
     SymbolTable::EnterScope(&symbolTable);
@@ -4105,31 +4224,43 @@ NodeRef Parser::ParseModule() {
                 }
             }
         } else if (Check(TokenType::IDENTIFIER) && stream->GetType(PeekNext()) == TokenType::DOUBLE_COLON) {
-            // Module function
+            // Module function (may be generic or regular)
             NodeRef func = ParseFunction();
             if (func.IsValid()) {
                 const FunctionDeclData& decl = ast->GetFunction(func);
-                std::vector<OverloadTypeMask> paramMasks;
-                BuildParamMasks(decl.parameters, paramMasks);
-                u64 signatureKey = HashOverloadSignature(paramMasks.data(),
-                    static_cast<u32>(paramMasks.size()));
 
-                if (HasDuplicateFunctionInList(ast, ast->GetModule(module).functions,
-                        decl, paramMasks, signatureKey)) {
-                    Error("Function overload already declared");
-                    continue;
+                // Check if this is a generic function (already registered in ParseFunction)
+                // by looking for it in genericFunctions array
+                GenericFunctionData* gfn = SymbolTable::FindGenericFunction(&symbolTable, decl.name.nameHash);
+                if (gfn != nullptr) {
+                    // Generic function - already registered, just add to module's function list
+                    ast->GetModule(module).functions.Push(arena, func);
+                    // Note: Generic functions don't get AddModuleFunction symbol entry
+                    // They'll be instantiated on demand during IR lowering
+                } else {
+                    // Regular function
+                    std::vector<OverloadTypeMask> paramMasks;
+                    BuildParamMasks(decl.parameters, paramMasks);
+                    u64 signatureKey = HashOverloadSignature(paramMasks.data(),
+                        static_cast<u32>(paramMasks.size()));
+
+                    if (HasDuplicateFunctionInList(ast, ast->GetModule(module).functions,
+                            decl, paramMasks, signatureKey)) {
+                        Error("Function overload already declared");
+                        continue;
+                    }
+
+                    ast->GetModule(module).functions.Push(arena, func);
+
+                    // Add to symbol table with module prefix
+                    Symbol* sym = SymbolTable::AddModuleFunction(&symbolTable,
+                        decl.name, moduleNameArena);
+                    if (!sym) {
+                        Error("Function already declared");
+                        continue;
+                    }
+                    FillFunctionData(&symbolTable, arena, decl, func, paramMasks, signatureKey, sym->index);
                 }
-
-                ast->GetModule(module).functions.Push(arena, func);
-
-                // Add to symbol table with module prefix
-                Symbol* sym = SymbolTable::AddModuleFunction(&symbolTable,
-                    decl.name, moduleNameArena);
-                if (!sym) {
-                    Error("Function already declared");
-                    continue;
-                }
-                FillFunctionData(&symbolTable, arena, decl, func, paramMasks, signatureKey, sym->index);
             }
         } else if (Match(TokenType::STRUCT)) {
             // Module struct
@@ -4257,6 +4388,8 @@ NodeRef Parser::ParseConstraint() {
             return NodeRef::Null();
     }
 
+    Consume(TokenType::SEMICOLON, "Expected ';' after constraint definition");
+
     return ASTFactory::MakeConstraint(ast, name, allowedTypes, loc.line, loc.column);
 }
 
@@ -4269,7 +4402,7 @@ TypeMask Parser::ParseConstraintTypeExpression() {
         return 0;
     }
 
-    while (Match(TokenType::OR)) {
+    while (Match(TokenType::BITWISE_OR)) {
         TypeMask nextType = ParseConstraintType();
         if (nextType == 0) {
             Error("Expected type after '|' in constraint expression");

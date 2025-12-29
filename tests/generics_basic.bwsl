@@ -1,0 +1,79 @@
+// Test: Generic functions with type constraints
+// Tests: constraint definitions, generic function syntax, type resolution, specialization
+
+pipeline GenericsBasic {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    // Define type constraints
+    constraint FloatVectors = float2 | float3 | float4;
+    constraint AllFloats = float | float2 | float3 | float4;
+    constraint Scalars = float | int;
+
+    // Basic generic function - constrained parameter, concrete return
+    lengthSquared :: (FloatVectors v) -> float {
+        return dot(v, v);
+    }
+
+    // Generic function - constrained return matches parameter type
+    genericAdd :: (FloatVectors a, FloatVectors b) -> FloatVectors {
+        return a + b;
+    }
+
+    // Generic function with mixed parameter types
+    scale :: (FloatVectors v, float s) -> FloatVectors {
+        return v * s;
+    }
+
+    // Generic function with AllFloats constraint
+    doubleValue :: (AllFloats x) -> AllFloats {
+        return x + x;
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            // Call generic function with float2
+            float len2_2d = lengthSquared(attributes.texcoord);
+
+            // Call generic function with float3
+            float len2_3d = lengthSquared(attributes.position);
+
+            // Call generic function with float4
+            float4 pos4 = float4(attributes.position, 1.0);
+            float len2_4d = lengthSquared(pos4);
+
+            // Call genericAdd with different types
+            float2 sum2 = genericAdd(attributes.texcoord, float2(1.0, 2.0));
+            float3 sum3 = genericAdd(attributes.position, float3(1.0, 2.0, 3.0));
+            float4 sum4 = genericAdd(pos4, float4(0.1, 0.2, 0.3, 0.4));
+
+            // Call scale with different vector types
+            float2 scaled2 = scale(attributes.texcoord, 2.0);
+            float3 scaled3 = scale(attributes.position, 0.5);
+            float4 scaled4 = scale(pos4, 1.5);
+
+            // Call doubleValue with different types
+            float doubled_f = doubleValue(3.14);
+            float2 doubled_f2 = doubleValue(attributes.texcoord);
+            float3 doubled_f3 = doubleValue(attributes.position);
+            float4 doubled_f4 = doubleValue(pos4);
+
+            output.position = float4(scaled3, 1.0);
+            output.texcoord = scaled2;
+        }
+
+        fragment {
+            // Use generic functions in fragment shader too
+            float2 uv = input.texcoord;
+            float2 doubled = doubleValue(uv);
+            float2 added = genericAdd(uv, doubled);
+            float len = lengthSquared(added);
+
+            output.color = float4(added, len, 1.0);
+        }
+    }
+}

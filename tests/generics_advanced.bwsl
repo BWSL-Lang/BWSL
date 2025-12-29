@@ -1,0 +1,79 @@
+// Test: Advanced generic functions
+// Tests: nested generic calls, chained operations, multiple constraints
+
+pipeline GenericsAdvanced {
+    attributes {
+        position: float3
+        normal: float3
+        color: float4
+    }
+
+    // Type constraints
+    constraint FloatVectors = float2 | float3 | float4;
+    constraint Vec3Or4 = float3 | float4;
+
+    // Basic generic blend (like lerp but user-defined)
+    genericBlend :: (FloatVectors a, FloatVectors b, float t) -> FloatVectors {
+        return a + (b - a) * t;
+    }
+
+    // Generic clamp wrapper
+    genericClampVec :: (FloatVectors v, FloatVectors minVal, FloatVectors maxVal) -> FloatVectors {
+        return max(min(v, maxVal), minVal);
+    }
+
+    // Generic normalize wrapper
+    safeNormalize :: (Vec3Or4 v) -> Vec3Or4 {
+        float len = length(v);
+        if (len < 0.0001) {
+            return v;
+        }
+        return v / len;
+    }
+
+    // Function that calls generic functions
+    customSmoother :: (FloatVectors edge0, FloatVectors edge1, FloatVectors x) -> FloatVectors {
+        FloatVectors t = genericClampVec((x - edge0) / (edge1 - edge0),
+                                          edge0 * 0.0,
+                                          edge0 * 0.0 + 1.0);
+        return t * t * (3.0 - 2.0 * t);
+    }
+
+    pass "Main" {
+        use attributes { position, normal, color }
+
+        vertex {
+            // Test blend with different vector sizes
+            float2 blended2 = genericBlend(float2(0.0), float2(1.0), 0.5);
+            float3 blended3 = genericBlend(float3(0.0, 0.0, 0.0), attributes.position, 0.75);
+            float4 blended4 = genericBlend(float4(0.0), attributes.color, 0.25);
+
+            // Test clamp
+            float3 clamped = genericClampVec(attributes.position,
+                                             float3(-1.0, -1.0, -1.0),
+                                             float3(1.0, 1.0, 1.0));
+
+            // Test safe normalize
+            float3 normN = safeNormalize(attributes.normal);
+            float4 normC = safeNormalize(attributes.color);
+
+            // Nested generic calls
+            float3 result = genericBlend(clamped, normN, 0.5);
+
+            output.position = float4(result, 1.0);
+            output.normal = normN;
+            output.color = blended4;
+        }
+
+        fragment {
+            float3 N = safeNormalize(input.normal);
+            float3 lightDir = float3(1.0, 1.0, 1.0);
+            float3 L = safeNormalize(float3(lightDir.x, lightDir.y, lightDir.z));
+
+            float NdotL = dot(N, L);
+            float3 diffuse = genericBlend(float3(0.1), float3(1.0), max(NdotL, 0.0));
+
+            output.color = float4(diffuse, 1.0);
+        }
+    }
+}

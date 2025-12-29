@@ -240,87 +240,79 @@ struct ConstraintData {
     TypeMask allowedTypes;
 };
 
-    struct TypeParameter {
-        ArenaString name;
-        u32 typeHash;
-        u16 typeLength; // but actually mostly padding to align the struct, it is almost never needed.
-    };
+// Information about a generic function parameter
+struct GenericParamInfo {
+    ArenaString name;           // Parameter name (e.g., "a", "b")
+    ArenaString typeName;       // Type name as written (e.g., "FloatVectors", "float", "T")
+    TypeMask constraintMask;    // 0 if concrete type, non-zero if constraint
+    bool isConstrained;         // true = uses constraint, false = concrete type
+};
 
-
+// Generic function template - specializations become normal FunctionData
 struct GenericFunctionData {
     ArenaString name;
-    CoreType returnType;
-    ArenaArray<TypeParameter> parameters;
-    
-    
-    static constexpr u32 MAX_TYPE_PARAMS = 8;
-    alignas(16) TypeMask typeConstraintMasks[MAX_TYPE_PARAMS];
-    u8 typeParamCount;
-    
-    // Monomorphization cache
-    static constexpr u32 MAX_SPECIALIZATIONS = 32;
-    alignas(64) u32 specializationHashes[MAX_SPECIALIZATIONS];
-    alignas(64) u32 specializationASTIndices[MAX_SPECIALIZATIONS];
-    
-    // Packed metadata: isEval (1 bit) | specializationCount (5 bits) | astNodeIndex (26 bits)
-    // Layout: [isEval:1][specializationCount:5][astNodeIndex:26]
-    u32 packedMetadata;
-    
-    // Bit positions and masks
-    static constexpr u32 AST_INDEX_BITS = 26;
-    static constexpr u32 SPECIALIZATION_BITS = 5;
-    static constexpr u32 EVAL_BIT = 31;
-    
-    static constexpr u32 AST_INDEX_MASK = (1u << AST_INDEX_BITS) - 1;
-    static constexpr u32 SPECIALIZATION_MASK = ((1u << SPECIALIZATION_BITS) - 1) << AST_INDEX_BITS;
-    static constexpr u32 EVAL_MASK = 1u << EVAL_BIT;
-    
-    static constexpr u32 MAX_AST_INDEX = (1u << AST_INDEX_BITS) - 1;  // 67,108,863
-    static constexpr u32 MAX_SPECIALIZATION_COUNT = (1u << SPECIALIZATION_BITS) - 1;  // 31
-    
-    inline u32 GetASTIndex() const {
-        return packedMetadata & AST_INDEX_MASK;
+    u32 nameHash;
+    u32 astNodeIndex;           // Points to the template AST (function declaration)
+
+    // Parameters with their constraint info
+    ArenaArray<GenericParamInfo> parameters;
+
+    // Return type handling
+    ArenaString returnTypeName; // Type name as written
+    TypeMask returnConstraint;  // 0 if concrete, non-zero if constrained
+    s8 returnMatchesParam;      // -1 = concrete/own constraint, 0+ = matches param N's type
+
+    bool isEval;
+
+    // Check if a type satisfies a constraint mask
+    static inline bool TypeSatisfiesConstraint(CoreType type, TypeMask constraintMask) {
+        if (constraintMask == 0) return false;
+        return (constraintMask & (1u << static_cast<u32>(type))) != 0;
     }
-    
-    inline void SetASTIndex(u32 index) {
-        assert(index <= MAX_AST_INDEX && "AST index out of range");
-        packedMetadata = (packedMetadata & ~AST_INDEX_MASK) | (index & AST_INDEX_MASK);
-    }
-    
-    inline u32 GetSpecializationCount() const {
-        return (packedMetadata & SPECIALIZATION_MASK) >> AST_INDEX_BITS;
-    }
-    
-    inline void SetSpecializationCount(u32 count) {
-        assert(count <= MAX_SPECIALIZATION_COUNT && "Specialization count out of range");
-        packedMetadata = (packedMetadata & ~SPECIALIZATION_MASK) | 
-                        ((count << AST_INDEX_BITS) & SPECIALIZATION_MASK);
-    }
-    
-    inline void IncrementSpecializationCount() {
-        u32 count = GetSpecializationCount();
-        assert(count < MAX_SPECIALIZATION_COUNT && "Specialization count overflow");
-        SetSpecializationCount(count + 1);
-    }
-    
-    inline bool IsEval() const {
-        return (packedMetadata & EVAL_MASK) != 0;
-    }
-    
-    inline void SetEval(bool eval) {
-        if (eval) {
-            packedMetadata |= EVAL_MASK;
-        } else {
-            packedMetadata &= ~EVAL_MASK;
+};
+
+// Lightweight registry mapping (generic + concrete types) -> specialized function index
+// Specializations are stored as normal FunctionData entries
+struct SpecializationRegistry {
+    static constexpr u32 MAX_ENTRIES = 512;
+
+    // Parallel arrays for cache-friendly lookup
+    u32 genericNameHashes[MAX_ENTRIES];
+    u64 specializationHashes[MAX_ENTRIES];
+    u32 functionIndices[MAX_ENTRIES];  // Points into normal FunctionData array
+    u32 count = 0;
+
+    // Hash concrete type arguments for a specialization
+    // Each constrained parameter contributes its concrete type to the hash
+    static inline u64 HashSpecialization(const CoreType* types, const bool* isConstrained, u32 paramCount) {
+        u64 hash = 0xcbf29ce484222325ULL;  // FNV offset basis
+        for (u32 i = 0; i < paramCount; i++) {
+            if (isConstrained[i]) {
+                hash ^= static_cast<u64>(types[i]);
+                hash *= 0x100000001b3ULL;
+            }
         }
+        return hash;
     }
-    
-    inline void SetMetadata(u32 astIndex, u32 specCount, bool eval) {
-        assert(astIndex <= MAX_AST_INDEX);
-        assert(specCount <= MAX_SPECIALIZATION_COUNT);
-        packedMetadata = (astIndex & AST_INDEX_MASK) |
-                        ((specCount << AST_INDEX_BITS) & SPECIALIZATION_MASK) |
-                        (eval ? EVAL_MASK : 0);
+
+    // Find existing specialization, returns function index or UINT32_MAX
+    inline u32 Find(u32 nameHash, u64 specHash) const {
+        for (u32 i = 0; i < count; i++) {
+            if (genericNameHashes[i] == nameHash && specializationHashes[i] == specHash) {
+                return functionIndices[i];
+            }
+        }
+        return UINT32_MAX;
+    }
+
+    // Register new specialization, returns true on success
+    inline bool Register(u32 nameHash, u64 specHash, u32 funcIndex) {
+        if (count >= MAX_ENTRIES) return false;
+        genericNameHashes[count] = nameHash;
+        specializationHashes[count] = specHash;
+        functionIndices[count] = funcIndex;
+        count++;
+        return true;
     }
 };
 struct SymbolTableData {
@@ -377,10 +369,14 @@ struct SymbolTableData {
     bool inModuleScope;
 
     // --------------------------- Eval -------------------------------------//
-    
+
     ArenaArray<LiteralValue> evalConstants;
     ArenaArray<u32> evalFunctionIndices;  // AST node indices for eval functions
-   
+
+    // --------------------------- Generics ----------------------------------//
+
+    SpecializationRegistry specializationRegistry;
+
 };
 
 
@@ -409,6 +405,7 @@ namespace SymbolTable {
         table->symbols.Init(arena, 64);
         table->variables.Init(arena, 32);
         table->functions.Init(arena, 32);
+        table->genericFunctions.Init(arena, 16);
         table->attributes.Init(arena, 16);
         table->resources.Init(arena, 32);
         table->structs.Init(arena, 16);
@@ -419,6 +416,7 @@ namespace SymbolTable {
         table->bufferGroups.Init(arena, 16);
         table->evalConstants.Init(arena, 16);      // Initialize eval constants array
         table->evalFunctionIndices.Init(arena, 8); // Initialize eval function indices
+        table->specializationRegistry.count = 0;   // Initialize specialization registry
         table->currentScope = 0;
         table->renderConfig = nullptr;
         table->importedModules.Init(arena, 8);
@@ -1119,27 +1117,34 @@ namespace SymbolTable {
         }
         
         ConstraintData constraintData;
-        constraintData.name = finalName; 
+        constraintData.name = finalName;
         constraintData.allowedTypes = allowedTypes;
-        
+
+        u32 constraintIndex = table->constraints.count;
         table->constraints.Push(table->arena, constraintData);
+
+        // Register in symbol table for lookup
+        Symbol* sym = AddSymbol(table, finalName, SymbolKind::CONSTRAINT);
+        if (sym) {
+            sym->index = constraintIndex;
+        }
 
         return AddConstraintResult::SUCCESS; 
     }
 
     inline TypeMask LookupConstraint(SymbolTableData* table, const ArenaString& name) {
         u32 nameHash = name.nameHash;
-        
+
         // Try direct lookup first (works for both qualified and local names)
         Symbol* sym = LookupByHash(table, nameHash);
         if (sym && sym->kind == SymbolKind::CONSTRAINT) {
             return table->constraints[sym->index].allowedTypes;
         }
-        
+
         // If not found and we're NOT using qualified syntax,
         // try looking in imported modules
         // Without access to source strings here, skip qualified lookup by text
-       
+
             for (u32 i = 0; i < table->importedModules.count; i++) {
                 u32 moduleIdx = table->importedModules[i];
                 // Compose a synthetic qualified hash using the same scheme as AddConstraint
@@ -1154,8 +1159,95 @@ namespace SymbolTable {
                     return table->constraints[sym->index].allowedTypes;
                 }
             }
-        
+
         return 0;  // Not found
+    }
+
+    //---------------------------- Generic Functions ----------------------------------//
+
+    // Check if a type name refers to a constraint (returns mask) or concrete type (returns 0)
+    inline TypeMask GetConstraintMaskForTypeName(SymbolTableData* table, const ArenaString& typeName) {
+        // First check if it's a known constraint
+        TypeMask mask = LookupConstraint(table, typeName);
+        if (mask != 0) return mask;
+
+        // Check if it's a single uppercase letter (T, U, V, etc.) - pure generic
+        // For now, we don't support pure generics without constraints
+        // They would need body analysis to infer constraints
+
+        return 0;  // Concrete type
+    }
+
+    // Add a generic function to the symbol table
+    inline u32 AddGenericFunction(SymbolTableData* table, const GenericFunctionData& data) {
+        u32 index = table->genericFunctions.count;
+        table->genericFunctions.Push(table->arena, data);
+        return index;
+    }
+
+    // Find a generic function by name hash
+    inline GenericFunctionData* FindGenericFunction(SymbolTableData* table, u32 nameHash) {
+        for (u32 i = 0; i < table->genericFunctions.count; i++) {
+            if (table->genericFunctions[i].nameHash == nameHash) {
+                return &table->genericFunctions[i];
+            }
+        }
+        return nullptr;
+    }
+
+    // Find a generic function that matches the given argument types
+    // Returns the generic function data if found and all constraints are satisfied
+    inline GenericFunctionData* FindMatchingGenericFunction(
+        SymbolTableData* table,
+        u32 nameHash,
+        const CoreType* argTypes,
+        u32 argCount
+    ) {
+        for (u32 i = 0; i < table->genericFunctions.count; i++) {
+            GenericFunctionData& gfn = table->genericFunctions[i];
+            if (gfn.nameHash != nameHash) continue;
+            if (gfn.parameters.count != argCount) continue;
+
+            // Check if all constrained parameters are satisfied
+            bool allSatisfied = true;
+            for (u32 j = 0; j < argCount; j++) {
+                if (gfn.parameters[j].isConstrained) {
+                    if (!GenericFunctionData::TypeSatisfiesConstraint(
+                            argTypes[j], gfn.parameters[j].constraintMask)) {
+                        allSatisfied = false;
+                        break;
+                    }
+                }
+            }
+
+            if (allSatisfied) {
+                return &gfn;
+            }
+        }
+        return nullptr;
+    }
+
+    // Build mangled name for a specialization: "funcname$type1$type2"
+    inline std::string MangleSpecializationName(
+        const ArenaString& baseName,
+        const CoreType* types,
+        const bool* isConstrained,
+        u32 paramCount
+    ) {
+        std::string result;
+        result.reserve(64);
+
+        // We only have the hash, so use that for the base
+        result.append("gfn_").append(std::to_string(baseName.nameHash));
+
+        for (u32 i = 0; i < paramCount; i++) {
+            if (isConstrained[i]) {
+                result.append("$");
+                result.append(std::to_string(static_cast<u32>(types[i])));
+            }
+        }
+
+        return result;
     }
 }
 

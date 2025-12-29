@@ -3811,6 +3811,11 @@ void LowerIfStatement(NodeRef ref) {
             }
         }
 
+        // If regular function not found, try generic function resolution
+        if (funcRef.IsNull()) {
+            funcRef = TryResolveGenericFunction(call, args, argCount);
+        }
+
         if (funcRef.IsNull()) {
             return 0xFFFF; // Function not found
         }
@@ -3899,6 +3904,151 @@ void LowerIfStatement(NodeRef ref) {
         }
 
         return returnReg;
+    }
+
+    // Get type name hash for a CoreType using TypeHashes constants
+    static u32 GetCoreTypeNameHash(CoreType type) {
+        switch (type) {
+            case CoreType::FLOAT: return TypeHashes::FLOAT;
+            case CoreType::FLOAT2: return TypeHashes::FLOAT2;
+            case CoreType::FLOAT3: return TypeHashes::FLOAT3;
+            case CoreType::FLOAT4: return TypeHashes::FLOAT4;
+            case CoreType::INT: return TypeHashes::INT;
+            case CoreType::INT2: return TypeHashes::INT2;
+            case CoreType::INT3: return TypeHashes::INT3;
+            case CoreType::INT4: return TypeHashes::INT4;
+            case CoreType::UINT: return TypeHashes::UINT;
+            case CoreType::UINT2: return TypeHashes::UINT2;
+            case CoreType::UINT3: return TypeHashes::UINT3;
+            case CoreType::UINT4: return TypeHashes::UINT4;
+            case CoreType::BOOL: return TypeHashes::BOOL;
+            case CoreType::MAT2: return TypeHashes::MAT2;
+            case CoreType::MAT3: return TypeHashes::MAT3;
+            case CoreType::MAT4: return TypeHashes::MAT4;
+            default: return 0;
+        }
+    }
+
+    // Try to resolve a generic function call by finding or instantiating a specialization
+    NodeRef TryResolveGenericFunction(const FunctionCallData& call, u16* args, u32 argCount) {
+        // Get argument types for constraint checking
+        CoreType argTypes[16];
+        bool isConstrained[16];
+        if (argCount > 16) return NodeRef::Null();
+
+        for (u32 i = 0; i < argCount; i++) {
+            argTypes[i] = GetRegisterType(args[i]);
+            isConstrained[i] = false;  // Will be set based on generic function
+        }
+
+        // Find a matching generic function (symbols is const, need to cast for lookup)
+        SymbolTableData* mutableSymbols = const_cast<SymbolTableData*>(symbols);
+        GenericFunctionData* gfn = SymbolTable::FindMatchingGenericFunction(
+            mutableSymbols, call.name.nameHash, argTypes, argCount);
+
+        if (!gfn) {
+            return NodeRef::Null();  // No matching generic function
+        }
+
+        // Build isConstrained array from the generic function's parameter info
+        for (u32 i = 0; i < argCount && i < gfn->parameters.count; i++) {
+            isConstrained[i] = gfn->parameters[i].isConstrained;
+        }
+
+        // Compute specialization hash
+        u64 specHash = SpecializationRegistry::HashSpecialization(argTypes, isConstrained, argCount);
+
+        // Check if specialization already exists
+        u32 existingFunc = mutableSymbols->specializationRegistry.Find(gfn->nameHash, specHash);
+        if (existingFunc != UINT32_MAX) {
+            // Return the existing specialized function's AST node
+            // Look it up in the functions array
+            for (u32 i = 0; i < ast->functions.count; i++) {
+                NodeRef fnRef(ASTNodeType::FUNCTION, i);
+                if (ast->GetFunction(fnRef).name.nameHash == existingFunc) {
+                    return fnRef;
+                }
+            }
+        }
+
+        // Need to instantiate a new specialization
+        // Build type substitutions
+        ASTClone::TypeSubstitution substitutions[16];
+        u32 subCount = 0;
+
+        for (u32 i = 0; i < gfn->parameters.count && i < argCount; i++) {
+            if (gfn->parameters[i].isConstrained) {
+                // Check if we already have this constraint in substitutions
+                bool found = false;
+                for (u32 j = 0; j < subCount; j++) {
+                    if (substitutions[j].constraintHash == gfn->parameters[i].typeName.nameHash) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    // Create ArenaString with the type's hash (hash-only, no source backing)
+                    ArenaString typeStr;
+                    typeStr.nameHash = GetCoreTypeNameHash(argTypes[i]);
+                    typeStr.sourceOffset = 0;
+                    typeStr.nameLength = 0;
+
+                    substitutions[subCount].constraintHash = gfn->parameters[i].typeName.nameHash;
+                    substitutions[subCount].concreteType = typeStr;
+                    substitutions[subCount].coreType = argTypes[i];
+                    subCount++;
+                }
+            }
+        }
+
+        // Build mangled name
+        std::string mangledName = SymbolTable::MangleSpecializationName(
+            gfn->name, argTypes, isConstrained, argCount);
+
+        // Clone the generic function with type substitutions
+        NodeRef srcFuncRef(ASTNodeType::FUNCTION, 0);
+        // Find the source function by AST index
+        for (u32 i = 0; i < ast->functions.count; i++) {
+            if (NodeRef(ASTNodeType::FUNCTION, i).packed == gfn->astNodeIndex) {
+                srcFuncRef = NodeRef(ASTNodeType::FUNCTION, i);
+                break;
+            }
+        }
+
+        if (srcFuncRef.IsNull()) {
+            return NodeRef::Null();
+        }
+
+        NodeRef specializedFunc = ASTClone::CloneFunction(
+            ast, ast->arena, srcFuncRef, substitutions, subCount, mangledName);
+
+        if (specializedFunc.IsNull()) {
+            return NodeRef::Null();
+        }
+
+        // Determine return type for the specialized function
+        CoreType returnType = ast->GetFunction(srcFuncRef).returnType;
+        if (gfn->returnMatchesParam >= 0 && gfn->returnMatchesParam < static_cast<s8>(argCount)) {
+            // Return type matches a parameter's type
+            returnType = argTypes[gfn->returnMatchesParam];
+        } else if (gfn->returnConstraint != 0) {
+            // Return type is a constraint - use the first matching substitution
+            for (u32 i = 0; i < subCount; i++) {
+                if (substitutions[i].constraintHash == gfn->returnTypeName.nameHash) {
+                    returnType = substitutions[i].coreType;
+                    break;
+                }
+            }
+        }
+
+        // Update the specialized function's return type
+        ast->GetFunction(specializedFunc).returnType = returnType;
+
+        // Register the specialization
+        mutableSymbols->specializationRegistry.Register(gfn->nameHash, specHash,
+            ast->GetFunction(specializedFunc).name.nameHash);
+
+        return specializedFunc;
     }
 
     u16 LowerTextureSample(NodeRef ref) {

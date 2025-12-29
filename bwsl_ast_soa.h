@@ -335,6 +335,7 @@ struct PipelineData {
     ArenaArray<NodeRef> passes;
     ArenaArray<NodeRef> functions;
     ArenaArray<NodeRef> enums;
+    ArenaArray<NodeRef> constraints;
     NodeRef computeGraph;
 };
 
@@ -1337,5 +1338,336 @@ namespace ASTFactory {
     }
 
 } // namespace ASTFactory
+
+//==============================================================================
+// AST Cloning for Generic Function Instantiation
+//==============================================================================
+
+namespace ASTClone {
+
+    // Type substitution map: maps constraint type hash -> concrete type name
+    struct TypeSubstitution {
+        u32 constraintHash;     // Hash of constraint type name (e.g., "FloatVectors")
+        ArenaString concreteType; // Concrete type name (e.g., "float3")
+        CoreType coreType;      // CoreType for the concrete type
+    };
+
+    struct CloneContext {
+        AST* ast;
+        BWSL_Arena* arena;
+        const TypeSubstitution* substitutions;
+        u32 substitutionCount;
+
+        // Check if a type name should be substituted
+        inline const TypeSubstitution* FindSubstitution(u32 typeHash) const {
+            for (u32 i = 0; i < substitutionCount; i++) {
+                if (substitutions[i].constraintHash == typeHash) {
+                    return &substitutions[i];
+                }
+            }
+            return nullptr;
+        }
+
+        // Substitute type if needed, returns original if no substitution found
+        inline ArenaString SubstituteType(const ArenaString& typeName) const {
+            const TypeSubstitution* sub = FindSubstitution(typeName.nameHash);
+            return sub ? sub->concreteType : typeName;
+        }
+    };
+
+    // Forward declaration
+    NodeRef CloneNode(CloneContext& ctx, NodeRef node);
+
+    // Clone a block and all its statements
+    inline NodeRef CloneBlock(CloneContext& ctx, NodeRef blockRef) {
+        if (blockRef.IsNull()) return NodeRef::Null();
+
+        const BlockData& src = ctx.ast->GetBlock(blockRef);
+        u32 line = ctx.ast->GetLine(blockRef);
+        u32 col = ctx.ast->GetColumn(blockRef);
+
+        NodeRef newBlock = ASTFactory::MakeBlock(ctx.ast, line, col);
+        BlockData& dst = ctx.ast->GetBlock(newBlock);
+
+        for (u32 i = 0; i < src.statements.count; i++) {
+            NodeRef cloned = CloneNode(ctx, src.statements[i]);
+            if (cloned.IsValid()) {
+                dst.statements.Push(ctx.arena, cloned);
+            }
+        }
+
+        return newBlock;
+    }
+
+    // Clone a function call
+    inline NodeRef CloneFunctionCall(CloneContext& ctx, NodeRef callRef) {
+        const FunctionCallData& src = ctx.ast->GetFunctionCall(callRef);
+        u32 line = ctx.ast->GetLine(callRef);
+        u32 col = ctx.ast->GetColumn(callRef);
+
+        NodeRef newCall = ASTFactory::MakeFunctionCall(ctx.ast, src.name, line, col);
+        FunctionCallData& dst = ctx.ast->GetFunctionCall(newCall);
+
+        dst.intrinsicIndex = src.intrinsicIndex;
+        dst.flags = src.flags;
+        dst.moduleIndex = src.moduleIndex;
+        dst.moduleQualifiedHash = src.moduleQualifiedHash;
+        dst.moduleObject = src.moduleObject.IsValid() ? CloneNode(ctx, src.moduleObject) : NodeRef::Null();
+
+        for (u32 i = 0; i < src.arguments.count; i++) {
+            NodeRef clonedArg = CloneNode(ctx, src.arguments[i]);
+            dst.arguments.Push(ctx.arena, clonedArg);
+        }
+
+        return newCall;
+    }
+
+    // Clone a variable declaration with type substitution
+    inline NodeRef CloneVariableDecl(CloneContext& ctx, NodeRef varRef) {
+        const VariableDeclData& src = ctx.ast->GetVariableDecl(varRef);
+        u32 line = ctx.ast->GetLine(varRef);
+        u32 col = ctx.ast->GetColumn(varRef);
+
+        // Substitute type if it's a constrained type
+        ArenaString newType = ctx.SubstituteType(src.type);
+
+        // Clone initializer first
+        NodeRef clonedInit = src.initializer.IsValid() ? CloneNode(ctx, src.initializer) : NodeRef::Null();
+
+        NodeRef newVar = ASTFactory::MakeVariableDecl(ctx.ast, src.name, newType, clonedInit, src.isConst, line, col, src.storageClass);
+
+        return newVar;
+    }
+
+    // Clone a binary operation
+    inline NodeRef CloneBinaryOp(CloneContext& ctx, NodeRef binRef) {
+        const BinaryOpData& src = ctx.ast->GetBinaryOp(binRef);
+        u32 line = ctx.ast->GetLine(binRef);
+        u32 col = ctx.ast->GetColumn(binRef);
+
+        NodeRef left = CloneNode(ctx, src.left);
+        NodeRef right = CloneNode(ctx, src.right);
+
+        return ASTFactory::MakeBinaryOp(ctx.ast, src.op, left, right, line, col);
+    }
+
+    // Clone a unary operation
+    inline NodeRef CloneUnaryOp(CloneContext& ctx, NodeRef unaryRef) {
+        const UnaryOpData& src = ctx.ast->GetUnaryOp(unaryRef);
+        u32 line = ctx.ast->GetLine(unaryRef);
+        u32 col = ctx.ast->GetColumn(unaryRef);
+
+        NodeRef operand = CloneNode(ctx, src.operand);
+
+        return ASTFactory::MakeUnaryOp(ctx.ast, src.op, operand, line, col);
+    }
+
+    // Clone an assignment
+    inline NodeRef CloneAssignment(CloneContext& ctx, NodeRef assignRef) {
+        const AssignmentData& src = ctx.ast->GetAssignment(assignRef);
+        u32 line = ctx.ast->GetLine(assignRef);
+        u32 col = ctx.ast->GetColumn(assignRef);
+
+        NodeRef target = CloneNode(ctx, src.target);
+        NodeRef value = CloneNode(ctx, src.value);
+
+        return ASTFactory::MakeAssignment(ctx.ast, target, value, line, col);
+    }
+
+    // Clone a return statement (returns reuse AssignmentData with null target)
+    inline NodeRef CloneReturn(CloneContext& ctx, NodeRef retRef) {
+        const AssignmentData& src = ctx.ast->GetAssignment(retRef);
+        u32 line = ctx.ast->GetLine(retRef);
+        u32 col = ctx.ast->GetColumn(retRef);
+
+        NodeRef value = src.value.IsValid() ? CloneNode(ctx, src.value) : NodeRef::Null();
+
+        return ASTFactory::MakeReturn(ctx.ast, value, line, col);
+    }
+
+    // Clone an if statement (if statements reuse BlockData: [condition, thenBranch, elseBranch?])
+    inline NodeRef CloneIfStatement(CloneContext& ctx, NodeRef ifRef) {
+        const BlockData& src = ctx.ast->GetBlock(ifRef);
+        u32 line = ctx.ast->GetLine(ifRef);
+        u32 col = ctx.ast->GetColumn(ifRef);
+
+        NodeRef newIf = ASTFactory::MakeIfStatement(ctx.ast, line, col);
+        BlockData& dst = ctx.ast->GetBlock(newIf);
+
+        // Clone all statements (condition, then branch, optional else branch)
+        for (u32 i = 0; i < src.statements.count; i++) {
+            NodeRef cloned = CloneNode(ctx, src.statements[i]);
+            if (cloned.IsValid()) {
+                dst.statements.Push(ctx.arena, cloned);
+            }
+        }
+
+        return newIf;
+    }
+
+    // Clone a member access
+    inline NodeRef CloneMemberAccess(CloneContext& ctx, NodeRef memberRef) {
+        const MemberAccessData& src = ctx.ast->GetMemberAccess(memberRef);
+        u32 line = ctx.ast->GetLine(memberRef);
+        u32 col = ctx.ast->GetColumn(memberRef);
+
+        NodeRef object = CloneNode(ctx, src.object);
+
+        NodeRef newMember = ASTFactory::MakeMemberAccess(ctx.ast, object, src.member, line, col);
+        MemberAccessData& dst = ctx.ast->GetMemberAccess(newMember);
+        dst.qualifiedNameHash = src.qualifiedNameHash;
+        dst.isModuleQualified = src.isModuleQualified;
+
+        return newMember;
+    }
+
+    // Clone an array access
+    inline NodeRef CloneArrayAccess(CloneContext& ctx, NodeRef arrayRef) {
+        const ArrayAccessData& src = ctx.ast->GetArrayAccess(arrayRef);
+        u32 line = ctx.ast->GetLine(arrayRef);
+        u32 col = ctx.ast->GetColumn(arrayRef);
+
+        NodeRef array = CloneNode(ctx, src.array);
+        NodeRef index = CloneNode(ctx, src.index);
+
+        return ASTFactory::MakeArrayAccess(ctx.ast, array, index, line, col);
+    }
+
+    // Clone a ternary expression
+    inline NodeRef CloneTernary(CloneContext& ctx, NodeRef ternRef) {
+        const TernaryExprData& src = ctx.ast->GetTernaryExpression(ternRef);
+        u32 line = ctx.ast->GetLine(ternRef);
+        u32 col = ctx.ast->GetColumn(ternRef);
+
+        NodeRef condition = CloneNode(ctx, src.condition);
+        NodeRef trueExpr = CloneNode(ctx, src.trueExpr);
+        NodeRef falseExpr = CloneNode(ctx, src.falseExpr);
+
+        return ASTFactory::MakeTernaryExpr(ctx.ast, condition, trueExpr, falseExpr, line, col);
+    }
+
+    // Main recursive clone function
+    inline NodeRef CloneNode(CloneContext& ctx, NodeRef node) {
+        if (node.IsNull()) return NodeRef::Null();
+
+        switch (node.Type()) {
+            case ASTNodeType::IDENTIFIER: {
+                const IdentifierData& src = ctx.ast->GetIdentifier(node);
+                u32 line = ctx.ast->GetLine(node);
+                u32 col = ctx.ast->GetColumn(node);
+                return ASTFactory::MakeIdentifier(ctx.ast, src.name, line, col);
+            }
+
+            case ASTNodeType::LITERAL: {
+                const LiteralData& src = ctx.ast->GetLiteral(node);
+                u32 line = ctx.ast->GetLine(node);
+                u32 col = ctx.ast->GetColumn(node);
+                // Clone based on literal type
+                switch (src.value.type) {
+                    case LiteralValue::FLOAT:
+                        return ASTFactory::MakeLiteralFloat(ctx.ast, src.value.floatValue, line, col);
+                    case LiteralValue::INT:
+                        return ASTFactory::MakeLiteralInt(ctx.ast, src.value.intValue, line, col);
+                    case LiteralValue::UINT:
+                        return ASTFactory::MakeLiteralUint(ctx.ast, src.value.uintValue, line, col);
+                    case LiteralValue::BOOL:
+                        return ASTFactory::MakeLiteralBool(ctx.ast, src.value.boolValue, line, col);
+                    default:
+                        return NodeRef::Null();
+                }
+            }
+
+            case ASTNodeType::BINARY_OP:
+                return CloneBinaryOp(ctx, node);
+
+            case ASTNodeType::UNARY_OP:
+                return CloneUnaryOp(ctx, node);
+
+            case ASTNodeType::TERNARY_EXPRESSION:
+                return CloneTernary(ctx, node);
+
+            case ASTNodeType::MEMBER_ACCESS:
+                return CloneMemberAccess(ctx, node);
+
+            case ASTNodeType::ARRAY_ACCESS:
+                return CloneArrayAccess(ctx, node);
+
+            case ASTNodeType::ASSIGNMENT:
+                return CloneAssignment(ctx, node);
+
+            case ASTNodeType::BLOCK:
+                return CloneBlock(ctx, node);
+
+            case ASTNodeType::VARIABLE_DECL:
+                return CloneVariableDecl(ctx, node);
+
+            case ASTNodeType::FUNCTION_CALL:
+                return CloneFunctionCall(ctx, node);
+
+            case ASTNodeType::RETURN:
+                return CloneReturn(ctx, node);
+
+            case ASTNodeType::IF_STATEMENT:
+                return CloneIfStatement(ctx, node);
+
+            // For other node types, we can add as needed
+            // For now, return null for unhandled types
+            default:
+                // TODO: Add more node types as needed
+                return NodeRef::Null();
+        }
+    }
+
+    // Clone a function declaration with type substitution
+    // This is the main entry point for generic function instantiation
+    inline NodeRef CloneFunction(
+        AST* ast,
+        BWSL_Arena* arena,
+        NodeRef srcFuncRef,
+        const TypeSubstitution* substitutions,
+        u32 substitutionCount,
+        const std::string& mangledName
+    ) {
+        const FunctionDeclData& src = ast->GetFunction(srcFuncRef);
+        u32 line = ast->GetLine(srcFuncRef);
+        u32 col = ast->GetColumn(srcFuncRef);
+
+        // Create clone context
+        CloneContext ctx;
+        ctx.ast = ast;
+        ctx.arena = arena;
+        ctx.substitutions = substitutions;
+        ctx.substitutionCount = substitutionCount;
+
+        // Determine return type - substitute if needed
+        CoreType returnType = src.returnType;
+        for (u32 i = 0; i < substitutionCount; i++) {
+            // If return type was a constraint, use the concrete type
+            // This is a simplification - we might need to check the original return type name
+            // For now, we leave the return type as-is since we set it during instantiation
+        }
+
+        // Create new function
+        NodeRef newFunc = ASTFactory::MakeFunction(ast, mangledName, returnType, line, col);
+        FunctionDeclData& dst = ast->GetFunction(newFunc);
+
+        dst.isEval = src.isEval;
+
+        // Clone parameters with type substitution
+        for (u32 i = 0; i < src.parameters.count; i++) {
+            ArenaString paramName = src.parameters[i].first;
+            ArenaString paramType = ctx.SubstituteType(src.parameters[i].second);
+            dst.parameters.Push(arena, std::make_pair(paramName, paramType));
+        }
+
+        // Clone body
+        if (src.body.IsValid()) {
+            dst.body = CloneNode(ctx, src.body);
+        }
+
+        return newFunc;
+    }
+
+} // namespace ASTClone
 
 } // namespace BWSL
