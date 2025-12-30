@@ -302,6 +302,20 @@ struct PatternMatchData {
     u8 _pad[2];
 };
 
+// Type pattern match for generic functions - compile-time branch selection
+struct TypePatternMatchData {
+    ArenaArray<NodeRef> arms;    // Array of TYPE_PATTERN_ARM nodes
+    NodeRef defaultArm;          // Optional default case
+};
+
+// Individual arm in a type pattern match
+struct TypePatternArmData {
+    CoreType matchType;          // float2, float3, float4, etc.
+    NodeRef body;                // Expression or block
+    bool isDefault;
+    u8 _pad[2];
+};
+
 // Case arm for switch - supports multiple values
 struct SwitchCaseData {
     ArenaArray<NodeRef> values;  // Multiple case values (empty for default)
@@ -379,6 +393,8 @@ struct AST {
     ArenaArray<ArrayTypeData> arrayTypes;
     ArenaArray<EnumDeclData> enumDecls;
     ArenaArray<PatternMatchData> patternMatches;
+    ArenaArray<TypePatternMatchData> typePatternMatches;
+    ArenaArray<TypePatternArmData> typePatternArms;
     ArenaArray<SwitchCaseData> switchCases;
     ArenaArray<SwitchData> switches;
     ArenaArray<PipelineData> pipelines;
@@ -425,6 +441,8 @@ struct AST {
         arrayTypes.Init(arena, 4);          // Less common
         enumDecls.Init(arena, 4);           // Less common
         patternMatches.Init(arena, 4);      // Less common
+        typePatternMatches.Init(arena, 4);  // Generic type patterns
+        typePatternArms.Init(arena, 8);     // Type pattern arms
         switchCases.Init(arena, 8);         // Switch case arms
         switches.Init(arena, 4);            // Less common
         pipelines.Init(arena, 1);           // Usually just one
@@ -536,6 +554,12 @@ struct AST {
 
     PatternMatchData& GetPatternMatch(NodeRef ref) { return patternMatches[ref.Index()]; }
     const PatternMatchData& GetPatternMatch(NodeRef ref) const { return patternMatches[ref.Index()]; }
+
+    TypePatternMatchData& GetTypePatternMatch(NodeRef ref) { return typePatternMatches[ref.Index()]; }
+    const TypePatternMatchData& GetTypePatternMatch(NodeRef ref) const { return typePatternMatches[ref.Index()]; }
+
+    TypePatternArmData& GetTypePatternArm(NodeRef ref) { return typePatternArms[ref.Index()]; }
+    const TypePatternArmData& GetTypePatternArm(NodeRef ref) const { return typePatternArms[ref.Index()]; }
 
     SwitchCaseData& GetSwitchCase(NodeRef ref) { return switchCases[ref.Index()]; }
     const SwitchCaseData& GetSwitchCase(NodeRef ref) const { return switchCases[ref.Index()]; }
@@ -1275,6 +1299,45 @@ namespace ASTFactory {
         return NodeRef(ASTNodeType::PATTERN_MATCH_ARM, index);
     }
 
+    inline NodeRef MakeTypePatternMatch(AST* ast, u32 line = 0, u32 col = 0) {
+        u32 index = ast->typePatternMatches.count;
+        TypePatternMatchData data;
+        data.arms.Init(ast->arena, 4);
+        data.defaultArm = NodeRef::Null();
+        ast->typePatternMatches.Push(ast->arena, data);
+
+        if (ast->nodeCount >= ast->nodeCapacity) {
+            u32 newCapacity = ast->nodeCapacity * 2;
+            u32* newPositions = (u32*)ast->arena->Allocate(sizeof(u32) * newCapacity, 64);
+            memcpy(newPositions, ast->positions, ast->nodeCount * sizeof(u32));
+            ast->positions = newPositions;
+            ast->nodeCapacity = newCapacity;
+        }
+        ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
+
+        return NodeRef(ASTNodeType::TYPE_PATTERN_MATCH, index);
+    }
+
+    inline NodeRef MakeTypePatternArm(AST* ast, CoreType matchType, bool isDefault, NodeRef body, u32 line = 0, u32 col = 0) {
+        u32 index = ast->typePatternArms.count;
+        TypePatternArmData data;
+        data.matchType = matchType;
+        data.body = body;
+        data.isDefault = isDefault;
+        ast->typePatternArms.Push(ast->arena, data);
+
+        if (ast->nodeCount >= ast->nodeCapacity) {
+            u32 newCapacity = ast->nodeCapacity * 2;
+            u32* newPositions = (u32*)ast->arena->Allocate(sizeof(u32) * newCapacity, 64);
+            memcpy(newPositions, ast->positions, ast->nodeCount * sizeof(u32));
+            ast->positions = newPositions;
+            ast->nodeCapacity = newCapacity;
+        }
+        ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
+
+        return NodeRef(ASTNodeType::TYPE_PATTERN_ARM, index);
+    }
+
     inline NodeRef MakeModule(AST* ast, const std::string& name, u32 line = 0, u32 col = 0) {
         u32 index = ast->modules.count;
         ModuleNodeData data;
@@ -1609,6 +1672,49 @@ namespace ASTClone {
 
             case ASTNodeType::IF_STATEMENT:
                 return CloneIfStatement(ctx, node);
+
+            case ASTNodeType::TYPE_PATTERN_MATCH: {
+                // Compile-time type pattern matching for generics
+                // Find which arm matches the concrete type and clone only that body
+                const TypePatternMatchData& pm = ctx.ast->GetTypePatternMatch(node);
+
+                NodeRef matchingArm = NodeRef::Null();
+                NodeRef defaultArm = pm.defaultArm;
+
+                // Find which arm matches based on substituted types
+                for (u32 i = 0; i < pm.arms.count; i++) {
+                    NodeRef armRef = pm.arms[i];
+                    const TypePatternArmData& arm = ctx.ast->GetTypePatternArm(armRef);
+
+                    if (arm.isDefault) {
+                        defaultArm = armRef;
+                        continue;
+                    }
+
+                    // Check if this arm's type matches any of the substituted concrete types
+                    for (u32 s = 0; s < ctx.substitutionCount; s++) {
+                        if (ctx.substitutions[s].coreType == arm.matchType) {
+                            matchingArm = armRef;
+                            break;
+                        }
+                    }
+
+                    if (matchingArm.IsValid()) break;
+                }
+
+                // Use matching arm, or default if no match
+                if (matchingArm.IsNull() && defaultArm.IsValid()) {
+                    matchingArm = defaultArm;
+                }
+
+                if (matchingArm.IsValid()) {
+                    const TypePatternArmData& arm = ctx.ast->GetTypePatternArm(matchingArm);
+                    return CloneNode(ctx, arm.body);
+                }
+
+                // No matching arm - this shouldn't happen if exhaustiveness is validated
+                return NodeRef::Null();
+            }
 
             // For other node types, we can add as needed
             // For now, return null for unhandled types

@@ -1,0 +1,63 @@
+// Test: Generic type pattern matching
+// Tests: compile-time type dispatch, default arms, blocks vs expressions
+
+pipeline GenericsTypePattern {
+    attributes {
+        position: float3
+    }
+
+    constraint FloatVectors = float2 | float3 | float4;
+
+    // Basic type pattern - expression per arm
+    vecProcess :: (FloatVectors v) -> FloatVectors {
+        float2: v * 2.0
+        float3: cross(v, float3(0.0, 1.0, 0.0))
+        float4: v.wzyx
+    }
+
+    // Type pattern with block body
+    vecNormalize :: (FloatVectors v) -> FloatVectors {
+        float2: {
+            float len = length(v);
+            if (len < 0.0001) {
+                return float2(0.0, 1.0);
+            }
+            return v / len;
+        }
+        float3: normalize(v)
+        float4: normalize(v)
+    }
+
+    // Type pattern with default arm
+    vecScale :: (FloatVectors v, float s) -> FloatVectors {
+        float4: v * s * 0.5
+        default: v * s
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float2 v2 = float2(1.0, 2.0);
+            float3 v3 = attributes.position;
+            float4 v4 = float4(v3, 1.0);
+
+            // Call vecProcess with different types
+            float2 p2 = vecProcess(v2);
+            float3 p3 = vecProcess(v3);
+            float4 p4 = vecProcess(v4);
+
+            // Call vecNormalize
+            float2 n2 = vecNormalize(v2);
+            float3 n3 = vecNormalize(v3);
+            float4 n4 = vecNormalize(v4);
+
+            // Call vecScale - float2 and float3 use default, float4 uses special case
+            float2 s2 = vecScale(v2, 2.0);
+            float3 s3 = vecScale(v3, 2.0);
+            float4 s4 = vecScale(v4, 2.0);
+
+            output.position = float4(p3 + n3 + s3, 1.0);
+        }
+    }
+}

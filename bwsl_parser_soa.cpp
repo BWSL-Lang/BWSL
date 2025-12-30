@@ -2546,8 +2546,31 @@ NodeRef Parser::ParseFunction() {
 
         Consume(TokenType::RIGHT_BRACE, "Expected '}' after function body");
     } else {
-        // Regular function with statements
-        ast->GetFunction(function).body = ParseBlock();
+        // Check if this is a type pattern match body (for generic functions)
+        // Syntax: type: expression  (e.g., float2: v * 2.0)
+        bool isTypePatternBody = false;
+        if (isGenericFunction) {
+            // Look ahead: if we see CORE_TYPE followed by COLON, it's a type pattern
+            if (CheckMask(TokenMasks::CORE_TYPES)) {
+                TokenRef nextTok = PeekNext();
+                if (stream->GetType(nextTok) == static_cast<u8>(TokenType::COLON)) {
+                    isTypePatternBody = true;
+                }
+            } else if (Check(TokenType::DEFAULT)) {
+                TokenRef nextTok = PeekNext();
+                if (stream->GetType(nextTok) == static_cast<u8>(TokenType::COLON)) {
+                    isTypePatternBody = true;
+                }
+            }
+        }
+
+        if (isTypePatternBody) {
+            ast->GetFunction(function).body = ParseTypePatternMatch();
+            Consume(TokenType::RIGHT_BRACE, "Expected '}' after type pattern match");
+        } else {
+            // Regular function with statements
+            ast->GetFunction(function).body = ParseBlock();
+        }
     }
 
     SymbolTable::ExitScope(&symbolTable);
@@ -3956,6 +3979,58 @@ NodeRef Parser::ParsePatternMatch(NodeRef scrutinee) {
     }
 
     Consume(TokenType::RIGHT_BRACE, "Expected '}' after pattern match");
+
+    return matchNode;
+}
+
+//==============================================================================
+// Type pattern matching for generics
+//==============================================================================
+
+NodeRef Parser::ParseTypePatternMatch() {
+    // Type pattern match body for generic functions:
+    //   float2: v * 2.0
+    //   float3: cross(v, float3(0.0, 1.0, 0.0))
+    //   float4: v.wzyx
+    //   default: v  // optional
+
+    SourceLocation loc = getLocation(stream->GetOffset(current));
+    u32 line = loc.line;
+    u32 col = loc.column;
+
+    NodeRef matchNode = ASTFactory::MakeTypePatternMatch(ast, line, col);
+
+    while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        bool isDefault = false;
+        CoreType armType = CoreType::VOID;
+
+        if (Match(TokenType::DEFAULT)) {
+            isDefault = true;
+        } else if (MatchMask(TokenMasks::CORE_TYPES)) {
+            TokenType typeToken = PreviousTokenType();
+            TypeInfo typeInfo = GetTypeInfoFromToken(typeToken);
+            armType = typeInfo.coreType;
+        } else {
+            // Not a valid arm start - we're done
+            break;
+        }
+
+        Consume(TokenType::COLON, "Expected ':' after type in type pattern");
+
+        NodeRef body;
+        if (Match(TokenType::LEFT_BRACE)) {
+            body = ParseBlock();
+        } else {
+            body = ParseExpression();
+        }
+
+        NodeRef arm = ASTFactory::MakeTypePatternArm(ast, armType, isDefault, body, line, col);
+
+        if (isDefault) {
+            ast->GetTypePatternMatch(matchNode).defaultArm = arm;
+        }
+        ast->GetTypePatternMatch(matchNode).arms.Push(arena, arm);
+    }
 
     return matchNode;
 }

@@ -97,6 +97,8 @@ enum class ASTNodeType : u8 {
     SKIP_STATEMENT,
     DISCARD_STATEMENT,
     COMPUTE_GRAPH,
+    TYPE_PATTERN_MATCH,
+    TYPE_PATTERN_ARM,
     INVALID = 0xFF
 };
 

@@ -244,6 +244,7 @@ private:
     NodeRef ParseEnumVariant();
     NodeRef ParseEnumMethod();
     NodeRef ParsePatternMatch(NodeRef scrutinee);
+    NodeRef ParseTypePatternMatch();
     NodeRef ParseConstraint();
     TypeMask ParseConstraintTypeExpression();
     TypeMask ParseConstraintType();
