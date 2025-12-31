@@ -1,0 +1,429 @@
+ pipeline GeometricMorph {
+  attributes {
+    position: float3
+    normal: float3
+    texcoord: float2
+  }
+
+  pass "MainPass" {
+    use attributes { position, texcoord }
+
+    vertex {
+      uint particleId = input.instance_id;
+      float id = float(particleId);
+      float totalParticles = 10000.0;
+      float t = id / totalParticles;
+
+      // Hash functions for randomness
+      float hash1 = fract(sin(id * 127.1) * 43758.5453);
+      float hash2 = fract(sin(id * 269.5) * 18367.2931);
+      float hash3 = fract(sin(id * 419.2) * 58201.1847);
+
+      float pi = 3.14159265;
+      float tau = 6.28318530;
+
+      // Shape cycle timing
+      float shapeDuration = 3.0;
+      float transitionTime = 1.2;
+      float totalCycle = shapeDuration * 6.0;
+      float cycleTime = fract(resources.time / totalCycle) * totalCycle;
+
+      // Determine current and next shape (0-5: sphere, cube, torus, pyramid, helix, BWSL)
+      int currentShape = int(cycleTime / shapeDuration);
+      int nextShape = (currentShape + 1) % 6;
+      float shapeProgress = fract(cycleTime / shapeDuration);
+      float morphT = smoothstep(1.0 - transitionTime / shapeDuration, 1.0, shapeProgress);
+
+      // === SHAPE DEFINITIONS === (scaled down for tighter concentration)
+      float scale = 0.6;
+
+      // Sphere - fibonacci lattice for even distribution
+      float phi = (1.0 + sqrt(5.0)) / 2.0;
+      float sphereTheta = tau * id / phi;
+      float sphereY = 1.0 - (2.0 * t);
+      float sphereRadius = sqrt(1.0 - sphereY * sphereY);
+      float3 spherePos = float3(
+        cos(sphereTheta) * sphereRadius,
+        sphereY,
+        sin(sphereTheta) * sphereRadius
+      ) * scale;
+
+      // Cube - distribute on surface
+      float cubeFace = floor(t * 6.0);
+      float faceT = fract(t * 6.0);
+      float cubeU = fract(faceT * sqrt(totalParticles / 6.0)) * 2.0 - 1.0;
+      float cubeV = floor(faceT * sqrt(totalParticles / 6.0)) / sqrt(totalParticles / 6.0) * 2.0 - 1.0;
+      float3 cubePos;
+      if (cubeFace < 1.0) { cubePos = float3(1.0, cubeU, cubeV); }
+      else if (cubeFace < 2.0) { cubePos = float3(-1.0, cubeU, cubeV); }
+      else if (cubeFace < 3.0) { cubePos = float3(cubeU, 1.0, cubeV); }
+      else if (cubeFace < 4.0) { cubePos = float3(cubeU, -1.0, cubeV); }
+      else if (cubeFace < 5.0) { cubePos = float3(cubeU, cubeV, 1.0); }
+      else { cubePos = float3(cubeU, cubeV, -1.0); }
+      cubePos *= scale;
+
+      // Torus - major radius 0.5, minor radius 0.2
+      float torusMajor = 0.5 * scale;
+      float torusMinor = 0.2 * scale;
+      float torusU = t * tau * 40.0;
+      float torusV = t * tau * 250.0;
+      float3 torusPos = float3(
+        (torusMajor + torusMinor * cos(torusV)) * cos(torusU),
+        torusMinor * sin(torusV),
+        (torusMajor + torusMinor * cos(torusV)) * sin(torusU)
+      );
+
+      // Pyramid - 4 triangular faces + base
+      float pyramidSection = floor(t * 5.0);
+      float sectionT = fract(t * 5.0);
+      float pyramidU = sqrt(sectionT) * (hash1 * 2.0 - 1.0);
+      float pyramidV = sqrt(sectionT) * hash2;
+      float3 pyramidApex = float3(0.0, 0.8, 0.0) * scale;
+      float3 pyramidPos;
+      float baseY = -0.4 * scale;
+      float baseSize = 0.6 * scale;
+      if (pyramidSection < 1.0) {
+        float3 base1 = float3(baseSize, baseY, baseSize);
+        float3 base2 = float3(-baseSize, baseY, baseSize);
+        pyramidPos = lerp(pyramidApex, lerp(base1, base2, pyramidU * 0.5 + 0.5), pyramidV);
+      } else if (pyramidSection < 2.0) {
+        float3 base1 = float3(-baseSize, baseY, baseSize);
+        float3 base2 = float3(-baseSize, baseY, -baseSize);
+        pyramidPos = lerp(pyramidApex, lerp(base1, base2, pyramidU * 0.5 + 0.5), pyramidV);
+      } else if (pyramidSection < 3.0) {
+        float3 base1 = float3(-baseSize, baseY, -baseSize);
+        float3 base2 = float3(baseSize, baseY, -baseSize);
+        pyramidPos = lerp(pyramidApex, lerp(base1, base2, pyramidU * 0.5 + 0.5), pyramidV);
+      } else if (pyramidSection < 4.0) {
+        float3 base1 = float3(baseSize, baseY, -baseSize);
+        float3 base2 = float3(baseSize, baseY, baseSize);
+        pyramidPos = lerp(pyramidApex, lerp(base1, base2, pyramidU * 0.5 + 0.5), pyramidV);
+      } else {
+        pyramidPos = float3(pyramidU * baseSize, baseY, (hash2 * 2.0 - 1.0) * baseSize);
+      }
+
+      // Double Helix (DNA-like)
+      float helixT = t * tau * 5.0;
+      float helixY = (t * 2.0 - 1.0) * scale;
+      float helixRadius = 0.35 * scale;
+      float helixStrand = step(0.5, hash1);
+      float helixOffset = helixStrand * pi;
+      float3 helixPos = float3(
+        cos(helixT + helixOffset) * helixRadius,
+        helixY,
+        sin(helixT + helixOffset) * helixRadius
+      );
+      // Add connecting bars
+      if (hash2 > 0.92) {
+        float barT = fract(t * 50.0);
+        float barAngle = floor(t * 50.0) * tau / 50.0 * 5.0;
+        float barY = (floor(t * 50.0) / 50.0 * 2.0 - 1.0) * scale;
+        helixPos = float3(
+          cos(barAngle) * helixRadius * (barT * 2.0 - 1.0),
+          barY,
+          sin(barAngle) * helixRadius * (barT * 2.0 - 1.0)
+        );
+      }
+
+      // === BWSL TEXT ===
+      float textScale = 0.55;
+      float letterWidth = 0.22;
+      float letterHeight = 0.4;
+      float letterSpacing = 0.28;
+      float strokeWidth = 0.025;
+
+      // Which letter (0=B, 1=W, 2=S, 3=L)
+      float letterIdx = floor(t * 4.0);
+      float letterT = fract(t * 4.0);
+      float letterX = (letterIdx - 1.5) * letterSpacing * textScale;
+
+      // Add thickness variation using hash
+      float depthOffset = (hash3 - 0.5) * strokeWidth * textScale;
+
+      float3 textPos = float3(0.0);
+      float hw = letterWidth * 0.5 * textScale;
+      float hh = letterHeight * 0.5 * textScale;
+
+      if (letterIdx < 1.0) {
+        // === B ===
+        float strokeCount = 6.0;
+        float strokeIdx = floor(letterT * strokeCount);
+        float st = fract(letterT * strokeCount);
+
+        if (strokeIdx < 1.0) {
+          // Left vertical stem
+          textPos = float3(letterX - hw, lerp(-hh, hh, st), depthOffset);
+        } else if (strokeIdx < 2.0) {
+          // Top horizontal
+          textPos = float3(letterX + lerp(-hw, hw * 0.7, st), hh, depthOffset);
+        } else if (strokeIdx < 3.0) {
+          // Upper right curve (top bump)
+          float angle = lerp(1.57, -1.57, st);
+          float bumpRadius = hh * 0.5;
+          textPos = float3(letterX + hw * 0.7 + cos(angle) * bumpRadius * 0.5, hh * 0.5 + sin(angle) * bumpRadius, depthOffset);
+        } else if (strokeIdx < 4.0) {
+          // Middle horizontal
+          textPos = float3(letterX + lerp(-hw, hw * 0.7, st), 0.0, depthOffset);
+        } else if (strokeIdx < 5.0) {
+          // Lower right curve (bottom bump)
+          float angle = lerp(1.57, -1.57, st);
+          float bumpRadius = hh * 0.5;
+          textPos = float3(letterX + hw * 0.7 + cos(angle) * bumpRadius * 0.5, -hh * 0.5 + sin(angle) * bumpRadius, depthOffset);
+        } else {
+          // Bottom horizontal
+          textPos = float3(letterX + lerp(-hw, hw * 0.7, st), -hh, depthOffset);
+        }
+      } else if (letterIdx < 2.0) {
+        // === W ===
+        float strokeCount = 4.0;
+        float strokeIdx = floor(letterT * strokeCount);
+        float st = fract(letterT * strokeCount);
+
+        float ww = hw * 1.2;
+        if (strokeIdx < 1.0) {
+          // First diagonal down
+          textPos = float3(letterX + lerp(-ww, -ww * 0.5, st), lerp(hh, -hh, st), depthOffset);
+        } else if (strokeIdx < 2.0) {
+          // First diagonal up (to middle peak)
+          textPos = float3(letterX + lerp(-ww * 0.5, 0.0, st), lerp(-hh, hh * 0.3, st), depthOffset);
+        } else if (strokeIdx < 3.0) {
+          // Second diagonal down
+          textPos = float3(letterX + lerp(0.0, ww * 0.5, st), lerp(hh * 0.3, -hh, st), depthOffset);
+        } else {
+          // Second diagonal up
+          textPos = float3(letterX + lerp(ww * 0.5, ww, st), lerp(-hh, hh, st), depthOffset);
+        }
+      } else if (letterIdx < 3.0) {
+        // === S ===
+        float strokeCount = 3.0;
+        float strokeIdx = floor(letterT * strokeCount);
+        float st = fract(letterT * strokeCount);
+
+        if (strokeIdx < 1.0) {
+          // Top curve
+          float angle = lerp(0.3, 3.14159, st);
+          textPos = float3(letterX + cos(angle) * hw * 0.7, hh * 0.5 + sin(angle) * hh * 0.35, depthOffset);
+        } else if (strokeIdx < 2.0) {
+          // Middle connector (slight diagonal)
+          textPos = float3(letterX + lerp(hw * 0.3, -hw * 0.3, st), lerp(hh * 0.15, -hh * 0.15, st), depthOffset);
+        } else {
+          // Bottom curve
+          float angle = lerp(0.3, 3.14159, st);
+          textPos = float3(letterX - cos(angle) * hw * 0.7, -hh * 0.5 - sin(angle) * hh * 0.35, depthOffset);
+        }
+      } else {
+        // === L ===
+        float strokeCount = 2.0;
+        float strokeIdx = floor(letterT * strokeCount);
+        float st = fract(letterT * strokeCount);
+
+        if (strokeIdx < 1.0) {
+          // Vertical stem
+          textPos = float3(letterX - hw * 0.5, lerp(hh, -hh, st), depthOffset);
+        } else {
+          // Bottom horizontal
+          textPos = float3(letterX + lerp(-hw * 0.5, hw, st), -hh, depthOffset);
+        }
+      }
+
+      // Get positions for current and next shape
+      float3 pos1;
+      float3 pos2;
+
+      if (currentShape == 0) { pos1 = spherePos; }
+      else if (currentShape == 1) { pos1 = cubePos; }
+      else if (currentShape == 2) { pos1 = torusPos; }
+      else if (currentShape == 3) { pos1 = pyramidPos; }
+      else if (currentShape == 4) { pos1 = helixPos; }
+      else { pos1 = textPos; }
+
+      if (nextShape == 0) { pos2 = spherePos; }
+      else if (nextShape == 1) { pos2 = cubePos; }
+      else if (nextShape == 2) { pos2 = torusPos; }
+      else if (nextShape == 3) { pos2 = pyramidPos; }
+      else if (nextShape == 4) { pos2 = helixPos; }
+      else { pos2 = textPos; }
+
+      // Smooth morphing with easing
+      float easeT = morphT * morphT * (3.0 - 2.0 * morphT);
+
+      // Add some swirl during transition
+      float transitionSwirl = sin(morphT * pi) * 0.3;
+      float swirlAngle = transitionSwirl * tau * hash1;
+      float3 swirlOffset = float3(
+        sin(swirlAngle) * transitionSwirl * 0.2,
+        cos(swirlAngle * 2.0) * transitionSwirl * 0.15,
+        cos(swirlAngle) * transitionSwirl * 0.2
+      );
+
+      float3 morphedPos = lerp(pos1, pos2, easeT) + swirlOffset;
+
+      // Global rotation
+      float rotSpeed = 0.4;
+      float rotAngle = resources.time * rotSpeed;
+      float3 rotatedPos = float3(
+        morphedPos.x * cos(rotAngle) - morphedPos.z * sin(rotAngle),
+        morphedPos.y,
+        morphedPos.x * sin(rotAngle) + morphedPos.z * cos(rotAngle)
+      );
+
+      // Subtle floating motion
+      float floatOffset = sin(resources.time * 0.5 + hash1 * tau) * 0.03;
+      rotatedPos.y += floatOffset;
+
+      // Billboard setup
+      float3 toCamera = normalize(resources.cameraPosition - rotatedPos);
+      float3 up = float3(0.0, 1.0, 0.0);
+      float3 right = normalize(cross(up, toCamera));
+      float3 billboardUp = cross(toCamera, right);
+
+      // Particle size with variation - slightly larger for visibility
+      float baseSize = 0.018;
+      float sizeVar = 0.8 + hash3 * 0.4;
+      float transitionPulse = 1.0 + sin(morphT * pi) * 0.2;
+      float particleSize = baseSize * sizeVar * transitionPulse;
+
+      float3 vertexOffset = right * attributes.position.x * particleSize
+                         + billboardUp * attributes.position.y * particleSize;
+      float3 worldPos = rotatedPos + vertexOffset;
+
+      output.position = resources.projectionMatrix * resources.viewMatrix * float4(worldPos, 1.0);
+      output.uv = attributes.texcoord;
+      output.morphProgress = morphT;
+      output.shapeId = float(currentShape) + morphT;
+      output.particleId = hash1;
+    }
+
+    fragment {
+      float2 centered = input.uv - 0.5;
+      float dist = length(centered);
+
+      // Soft circular particle
+      float alpha = 1.0 - smoothstep(0.25, 0.5, dist);
+
+      // Color palette for each shape
+      // Sphere: cyan, Cube: magenta, Torus: yellow, Pyramid: orange, Helix: green, BWSL: electric blue/white
+      float3 sphereColor = float3(0.2, 0.8, 1.0);
+      float3 cubeColor = float3(1.0, 0.3, 0.8);
+      float3 torusColor = float3(1.0, 0.9, 0.2);
+      float3 pyramidColor = float3(1.0, 0.5, 0.1);
+      float3 helixColor = float3(0.3, 1.0, 0.5);
+      float3 textColor = float3(0.6, 0.8, 1.0);
+
+      float shapeBlend = fract(input.shapeId);
+      int shape1 = int(input.shapeId) % 6;
+      int shape2 = (shape1 + 1) % 6;
+
+      float3 color1;
+      float3 color2;
+
+      if (shape1 == 0) { color1 = sphereColor; }
+      else if (shape1 == 1) { color1 = cubeColor; }
+      else if (shape1 == 2) { color1 = torusColor; }
+      else if (shape1 == 3) { color1 = pyramidColor; }
+      else if (shape1 == 4) { color1 = helixColor; }
+      else { color1 = textColor; }
+
+      if (shape2 == 0) { color2 = sphereColor; }
+      else if (shape2 == 1) { color2 = cubeColor; }
+      else if (shape2 == 2) { color2 = torusColor; }
+      else if (shape2 == 3) { color2 = pyramidColor; }
+      else if (shape2 == 4) { color2 = helixColor; }
+      else { color2 = textColor; }
+
+      float3 baseColor = lerp(color1, color2, shapeBlend);
+
+      // Add shimmer during transitions
+      float shimmer = sin(resources.time * 20.0 + input.particleId * 50.0) * 0.5 + 0.5;
+      float transitionGlow = sin(input.morphProgress * 3.14159) * 0.5;
+      baseColor += float3(1.0) * shimmer * transitionGlow * 0.3;
+
+      // Core glow
+      float glow = exp(-dist * 5.0);
+      baseColor += glow * 0.5;
+
+      // Brightness variation
+      float brightness = 0.9 + input.particleId * 0.3;
+      baseColor *= brightness;
+
+      // HDR output
+      output.color = float4(baseColor * alpha * 1.8, alpha);
+    }
+  }
+
+  pass "PostFX" {
+    use attributes { position, texcoord }
+
+    vertex {
+      output.position = float4(attributes.position, 1.0);
+      output.uv = attributes.texcoord;
+    }
+
+    fragment {
+      float2 uv = input.uv;
+      float2 texelSize = 1.0 / float2(1920.0, 1080.0);
+
+      float4 scene = sample(resources.sceneColor, uv);
+
+      // Two-pass bloom approximation
+      float3 bloom = float3(0.0);
+
+      // Wide bloom
+      for (int i = 0; i < 16; i++) {
+        float angle = float(i) * 0.392699; // tau / 16
+        float2 offset = float2(cos(angle), sin(angle)) * texelSize * 8.0;
+        float3 s = sample(resources.sceneColor, uv + offset).rgb;
+        float brightness = dot(s, float3(0.299, 0.587, 0.114));
+        bloom += s * smoothstep(0.2, 0.8, brightness);
+      }
+      bloom /= 16.0;
+
+      // Tight bloom for core glow
+      float3 tightBloom = float3(0.0);
+      for (int j = 0; j < 9; j++) {
+        int x = (j % 3) - 1;
+        int y = (j / 3) - 1;
+        float2 offset = float2(float(x), float(y)) * texelSize * 2.0;
+        float3 s = sample(resources.sceneColor, uv + offset).rgb;
+        tightBloom += s;
+      }
+      tightBloom /= 9.0;
+
+      float3 color = scene.rgb + bloom * 0.35 + tightBloom * 0.1;
+
+      // ACES tonemapping
+      float a = 2.51;
+      float b = 0.03;
+      float c = 2.43;
+      float d = 0.59;
+      float e = 0.14;
+      color = saturate((color * (a * color + b)) / (color * (c * color + d) + e));
+
+      // Subtle chromatic aberration at edges
+      float2 centerOffset = uv - 0.5;
+      float aberrationStrength = dot(centerOffset, centerOffset) * 0.02;
+      float3 aberrated;
+      aberrated.r = sample(resources.sceneColor, uv + centerOffset * aberrationStrength).r;
+      aberrated.g = scene.r;
+      aberrated.b = sample(resources.sceneColor, uv - centerOffset * aberrationStrength).b;
+      color = lerp(color, aberrated * 0.5 + color * 0.5, 0.3);
+
+      // Vignette
+      float vignette = 1.0 - dot(centerOffset, centerOffset) * 0.5;
+      vignette = smoothstep(0.0, 1.0, vignette);
+
+      // Dark gradient background
+      float3 bgTop = float3(0.02, 0.02, 0.05);
+      float3 bgBottom = float3(0.05, 0.02, 0.03);
+      float3 bgColor = lerp(bgBottom, bgTop, uv.y);
+
+      color = lerp(bgColor, color, saturate(scene.a + bloom.r * 0.5)) * vignette;
+
+      // Subtle film grain
+      float grain = fract(sin(dot(uv * resources.time, float2(12.9898, 78.233))) * 43758.5453);
+      color += (grain - 0.5) * 0.015;
+
+      output.color = float4(color, 1.0);
+    }
+  }
+}

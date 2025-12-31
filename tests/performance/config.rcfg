@@ -1,0 +1,25 @@
+# Geometric Morph
+pipeline GeometricMorph
+
+# ============= TARGETS =============
+target SceneColor RGBA16Float viewport
+
+# ============= UNIFORMS =============
+uniform viewMatrix mat4 0 vertex
+uniform projectionMatrix mat4 1 vertex
+uniform time float 2 both
+uniform cameraPosition float3 3 vertex
+uniform sceneColor sampler2D 4 fragment
+
+# ============= PASSES =============
+# Main particles - 8000 morphing particles
+pass MainPass
+  type geometry
+  color SceneColor clear 0.0 0.0 0.0 0.0 store
+  depends none
+
+# Post-processing - bloom, tonemapping, chromatic aberration
+pass PostFX
+  type fullscreen
+  color @screen load store
+  depends MainPass

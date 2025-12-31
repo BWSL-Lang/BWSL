@@ -1,0 +1,10 @@
+{
+  "attributes": {
+    "position": 0,
+    "texcoord": 1
+  },
+  "uniforms": {
+  },
+  "samplers": {
+  }
+}

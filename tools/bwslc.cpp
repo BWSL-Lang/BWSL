@@ -22,6 +22,8 @@
 #include <sstream>
 #include <filesystem>
 #include <chrono>
+#include <future>
+#include <thread>
 
 // SPIRV-Cross for in-process cross-compilation (much faster than CLI)
 // Must be included as a separate compilation unit due to macro conflicts with defs.h
@@ -51,6 +53,7 @@ namespace spirv_cross_wrapper {
 
 // Unity build: include all implementation files
 #include "../bwsl_lexer.cpp"
+// #define BWSL_PARSER_TIMING  // Enable parser timing instrumentation (disabled for benchmarking)
 #include "../bwsl_parser_soa.cpp"
 #include "../bwsl_eval_soa.cpp"
 #include "../bwsl_module_cache.cpp"
@@ -59,6 +62,7 @@ namespace spirv_cross_wrapper {
 #include "../bwsl_cfg.cpp"
 #include "../bwsl_ssa.cpp"
 #include "../bwsl_spirv_backend.cpp"
+#include "../bwsl_gles_backend.cpp"
 #include "../bwsl_compute_graph.cpp"
 #include "../bwsl_custom_type_registry.cpp"
 
@@ -96,6 +100,7 @@ struct CompilerConfig {
     bool outputHlsl  = false;              // HLSL output (requires -hlsl flag)
     bool outputGlsl  = false;              // GLSL output (requires -glsl flag)
     bool outputGlslEs = false;             // GLSL ES output for WebGL/mobile (requires -gles flag)
+    bool useDirectGles = false;            // Use direct IR→GLES backend (bypass SPIRV-Cross)
     bool verbose     = false;
     bool dumpIr      = false;
     bool debugNames  = false;              // Emit debug names in SPIR-V for easier debugging
@@ -191,6 +196,7 @@ void PrintUsage(const char* programName) {
     printf("  -hlsl          Generate HLSL (High-Level Shader Language) output\n");
     printf("  -glsl          Generate GLSL output (version 450)\n");
     printf("  -gles          Generate GLSL ES output for WebGL 2.0 / OpenGL ES 3.0 (version 300 es)\n");
+    printf("  -gles-direct   Generate GLSL ES directly from IR (bypass SPIRV-Cross, faster)\n");
     printf("  -webgl         Alias for -gles\n");
     printf("  -all           Generate all outputs\n");
     printf("----------------------------------------\n");
@@ -360,6 +366,108 @@ std::string CrossCompileToHLSL(const std::string& spirvFile, bool useWaveOps = f
 
 std::string CrossCompileToGLSL(const std::string& spirvFile, int glslVersion = 450) {
     return CrossCompileToGLSLCLI(spirvFile, glslVersion);
+}
+#endif
+
+// ============= Parallel Cross-Compilation =============
+// Runs all enabled cross-compilation targets in parallel using std::async
+// This provides ~3-4x speedup when multiple targets are enabled
+
+#ifdef USE_SPIRV_CROSS_LIB
+struct CrossCompileResult {
+    std::string metal;
+    std::string hlsl;
+    std::string glsl;
+    std::string glslEs;
+    double metalMs = 0;
+    double hlslMs = 0;
+    double glslMs = 0;
+    double glslEsMs = 0;
+};
+
+CrossCompileResult ParallelCrossCompile(
+    const std::vector<u32>& spirv,
+    bool outputMetal,
+    bool outputHlsl,
+    bool outputGlsl,
+    bool outputGlslEs,
+    bool hasWaveOps = false)
+{
+    using Clock = std::chrono::high_resolution_clock;
+    CrossCompileResult result;
+
+    // Convert to uint32_t once (shared by all threads - read-only)
+    std::vector<uint32_t> spirvData(spirv.begin(), spirv.end());
+
+    // Launch all enabled targets in parallel
+    std::future<std::pair<std::string, double>> metalFuture;
+    std::future<std::pair<std::string, double>> hlslFuture;
+    std::future<std::pair<std::string, double>> glslFuture;
+    std::future<std::pair<std::string, double>> glslEsFuture;
+
+    if (outputMetal) {
+        metalFuture = std::async(std::launch::async, [&spirvData]() {
+            auto start = Clock::now();
+            std::string src = spirv_cross_wrapper::CompileToMSL(spirvData);
+            auto end = Clock::now();
+            double ms = std::chrono::duration<double, std::milli>(end - start).count();
+            return std::make_pair(std::move(src), ms);
+        });
+    }
+
+    if (outputHlsl) {
+        hlslFuture = std::async(std::launch::async, [&spirvData, hasWaveOps]() {
+            auto start = Clock::now();
+            std::string src = spirv_cross_wrapper::CompileToHLSL(spirvData, hasWaveOps ? 60 : 50);
+            auto end = Clock::now();
+            double ms = std::chrono::duration<double, std::milli>(end - start).count();
+            return std::make_pair(std::move(src), ms);
+        });
+    }
+
+    if (outputGlsl) {
+        glslFuture = std::async(std::launch::async, [&spirvData]() {
+            auto start = Clock::now();
+            std::string src = spirv_cross_wrapper::CompileToGLSL(spirvData, 450, false);
+            auto end = Clock::now();
+            double ms = std::chrono::duration<double, std::milli>(end - start).count();
+            return std::make_pair(std::move(src), ms);
+        });
+    }
+
+    if (outputGlslEs) {
+        glslEsFuture = std::async(std::launch::async, [&spirvData]() {
+            auto start = Clock::now();
+            std::string src = spirv_cross_wrapper::CompileToGLSL(spirvData, 300, true);
+            auto end = Clock::now();
+            double ms = std::chrono::duration<double, std::milli>(end - start).count();
+            return std::make_pair(std::move(src), ms);
+        });
+    }
+
+    // Collect results (blocks until each is ready)
+    if (outputMetal && metalFuture.valid()) {
+        auto [src, ms] = metalFuture.get();
+        result.metal = std::move(src);
+        result.metalMs = ms;
+    }
+    if (outputHlsl && hlslFuture.valid()) {
+        auto [src, ms] = hlslFuture.get();
+        result.hlsl = std::move(src);
+        result.hlslMs = ms;
+    }
+    if (outputGlsl && glslFuture.valid()) {
+        auto [src, ms] = glslFuture.get();
+        result.glsl = std::move(src);
+        result.glslMs = ms;
+    }
+    if (outputGlslEs && glslEsFuture.valid()) {
+        auto [src, ms] = glslEsFuture.get();
+        result.glslEs = std::move(src);
+        result.glslEsMs = ms;
+    }
+
+    return result;
 }
 #endif
 
@@ -919,6 +1027,7 @@ struct CompileResult {
     std::vector<u32> spirv;
     std::string metalSource;
     std::string hlslSource;
+    std::string directGlesSource;  // Direct GLES output (bypasses SPIRV-Cross)
     std::string error;
     std::string irDump;       // IR dump for -internals output
     bool hasWaveOps = false;
@@ -958,7 +1067,9 @@ CompileResult CompileShaderStage(
     NodeRef pipelineRef = NodeRef::Null(),
     NodeRef passRef = NodeRef::Null(),  // For pass-scoped function lookup
     PassVaryingContext* varyingContext = nullptr,  // Shared context for vertex->fragment varyings
-    bool captureIr = false  // Capture IR dump for -internals output
+    bool captureIr = false,  // Capture IR dump for -internals output
+    bool useDirectGles = false,  // Generate GLES directly from IR (bypass SPIRV-Cross)
+    const RenderConfig* renderConfig = nullptr  // For GLES backend
 ) {
     using Clock = std::chrono::high_resolution_clock;
     auto shaderStart = Clock::now();
@@ -1004,7 +1115,7 @@ CompileResult CompileShaderStage(
     IRMemoryPool irPool;
     IRLowering lowering;
     lowering.Initialize(&irPool, const_cast<SymbolTableData*>(&parser.symbolTable),
-                        const_cast<AST*>(&context.ast));
+                        const_cast<AST*>(&context.ast), parser.sourceBase());
     lowering.currentStage = stage;
     lowering.currentPipeline = pipelineRef;
     lowering.currentPass = passRef;  // For pass-scoped function lookup
@@ -1081,6 +1192,35 @@ CompileResult CompileShaderStage(
     // Capture IR for -internals output (after SSA conversion for final form)
     if (captureIr) {
         result.irDump = DumpIRToString(lowering.program);
+    }
+
+    // Direct GLES output (bypasses SPIRV-Cross)
+    if (useDirectGles) {
+        auto glesStart = Clock::now();
+
+        // Run IR analysis (needed for attribute/output types)
+        IRAnalysis glesAnalysis = {};
+        AnalyzeIR(&glesAnalysis, &lowering.program);
+
+        // Create GLES arena
+        Memory::BWEMemoryArena glesArena;
+        char glesMem[128 * 1024];
+        glesArena.Initialize(glesMem, sizeof(glesMem));
+
+        // Initialize and emit GLES
+        GLES::GLESBuilder glesBuilder;
+        glesBuilder.Initialize(&glesArena, parser.sourceBase(),
+                               &lowering.program, cfgPtr, stage,
+                               &pass, renderConfig, &glesAnalysis, varyingContext);
+        std::string_view glesOutput = glesBuilder.Emit();
+        result.directGlesSource = std::string(glesOutput);
+
+        auto glesEnd = Clock::now();
+        result.timing.glslEsCrossMs = std::chrono::duration<double, std::milli>(glesEnd - glesStart).count();
+
+        if (verbose) {
+            printf("    Generated GLES directly (%zu chars)\n", result.directGlesSource.size());
+        }
     }
 
     if (verbose) {
@@ -1168,6 +1308,9 @@ int main(int argc, char* argv[]) {
             config.outputGlsl = true;
         } else if (arg == "-gles" || arg == "-webgl") {
             config.outputGlslEs = true;
+        } else if (arg == "-gles-direct") {
+            config.outputGlslEs = true;
+            config.useDirectGles = true;
         } else if (arg == "-all") {
             config.outputMetal = true;
             config.outputHlsl = true;
@@ -1400,7 +1543,8 @@ int main(int argc, char* argv[]) {
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Vertex, config.verbose, config.dumpIr, config.debugNames,
                                                        config.outputGlsl || config.outputGlslEs, config.outputGlslEs, context.root,
-                                                       pipeline.passes[passIdx], &passVaryings, config.outputInternals);
+                                                       pipeline.passes[passIdx], &passVaryings, config.outputInternals,
+                                                       config.useDirectGles, &config.renderConfig);
 
             if (!result.success) {
                 fprintf(stderr, "    Error: %s\n", result.error.c_str());
@@ -1433,88 +1577,162 @@ int main(int argc, char* argv[]) {
                         }
                     }
 
-                    // Cross-compile to Metal
+                    // Cross-compile to all enabled targets in parallel
+#ifdef USE_SPIRV_CROSS_LIB
+                    {
+                        auto crossStart = Clock::now();
+                        CrossCompileResult crossResult = ParallelCrossCompile(
+                            result.spirv,
+                            config.outputMetal,
+                            config.outputHlsl,
+                            config.outputGlsl,
+                            config.outputGlslEs,
+                            result.hasWaveOps);
+                        auto crossEnd = Clock::now();
+                        (void)crossEnd; (void)crossStart; // Timing is per-target now
+
+                        // Handle Metal output
+                        if (config.outputMetal) {
+                            shaderTime.metalCrossMs = crossResult.metalMs;
+                            if (!crossResult.metal.empty() && crossResult.metal.find("error") == std::string::npos) {
+                                std::string metalPath = outBase + ".metal";
+                                if (WriteTextFile(metalPath, crossResult.metal)) {
+                                    printf("    -> %s\n", metalPath.c_str());
+                                }
+                            } else {
+                                fprintf(stderr, "    Warning: Metal cross-compilation failed\n");
+                            }
+                        }
+
+                        // Handle HLSL output
+                        if (config.outputHlsl) {
+                            shaderTime.hlslCrossMs = crossResult.hlslMs;
+                            if (!crossResult.hlsl.empty() && crossResult.hlsl.find("error") == std::string::npos) {
+                                std::string hlslPath = outBase + ".hlsl";
+                                if (WriteTextFile(hlslPath, crossResult.hlsl)) {
+                                    printf("    -> %s\n", hlslPath.c_str());
+                                }
+                            } else {
+                                fprintf(stderr, "    Warning: HLSL cross-compilation failed\n");
+                            }
+                        }
+
+                        // Handle GLSL output
+                        if (config.outputGlsl) {
+                            shaderTime.glslCrossMs = crossResult.glslMs;
+                            if (!crossResult.glsl.empty() && crossResult.glsl.find("error") == std::string::npos) {
+                                std::string glslPath = outBase + ".glsl";
+                                if (WriteTextFile(glslPath, crossResult.glsl)) {
+                                    printf("    -> %s\n", glslPath.c_str());
+                                }
+                            } else {
+                                fprintf(stderr, "    Warning: GLSL cross-compilation failed\n");
+                            }
+                        }
+
+                        // Handle GLSL ES output
+                        if (config.outputGlslEs) {
+                            // Use direct GLES output if available (bypasses SPIRV-Cross)
+                            std::string glesSource = config.useDirectGles
+                                ? result.directGlesSource
+                                : crossResult.glslEs;
+                            double glesMs = config.useDirectGles
+                                ? result.timing.glslEsCrossMs
+                                : crossResult.glslEsMs;
+
+                            shaderTime.glslEsCrossMs = glesMs;
+                            if (!glesSource.empty() && glesSource.find("error") == std::string::npos) {
+                                std::string glslEsPath = outBase + ".gles";
+                                if (WriteTextFile(glslEsPath, glesSource)) {
+                                    printf("    -> %s\n", glslEsPath.c_str());
+                                }
+
+                                // Generate JSON sidecar with attribute and uniform mappings for WebGL
+                                std::string json = "{\n  \"attributes\": {\n";
+                                for (u32 i = 0; i < pass.usedAttributes.count; i++) {
+                                    std::string attrName = pass.usedAttributes[i].ToString(sourceBase);
+                                    json += "    \"" + attrName + "\": " + std::to_string(i);
+                                    if (i < pass.usedAttributes.count - 1) json += ",";
+                                    json += "\n";
+                                }
+                                json += "  },\n  \"uniforms\": {\n";
+                                bool firstUniform = true;
+                                for (const auto& ub : config.renderConfig.uniformBuffers) {
+                                    if (static_cast<int>(ub.stages) & 1) {
+                                        if (!firstUniform) json += ",\n";
+                                        json += "    \"" + ub.name + "\": " + std::to_string(ub.bindingIndex);
+                                        firstUniform = false;
+                                    }
+                                }
+                                if (!firstUniform) json += "\n";
+                                json += "  },\n  \"samplers\": {\n";
+                                bool firstSampler = true;
+                                for (const auto& tex : config.renderConfig.textures) {
+                                    if (static_cast<int>(tex.stages) & 1) {
+                                        if (!firstSampler) json += ",\n";
+                                        json += "    \"" + tex.name + "\": " + std::to_string(tex.bindingIndex);
+                                        firstSampler = false;
+                                    }
+                                }
+                                if (!firstSampler) json += "\n";
+                                json += "  }";
+                                if (config.geometryConfig.type == RenderConfigParser::GeometryConfig::Type::Instanced) {
+                                    json += ",\n  \"geometry\": {\n";
+                                    json += "    \"type\": \"instanced\",\n";
+                                    json += "    \"instanceCount\": " + std::to_string(config.geometryConfig.instanceCount) + "\n";
+                                    json += "  }";
+                                }
+                                json += "\n}\n";
+                                std::string jsonPath = outBase + ".json";
+                                if (WriteTextFile(jsonPath, json)) {
+                                    printf("    -> %s\n", jsonPath.c_str());
+                                }
+                            } else {
+                                fprintf(stderr, "    Warning: GLSL ES cross-compilation failed\n");
+                            }
+                        }
+                    }
+#else
+                    // Fallback: Sequential CLI-based cross-compilation
                     if (config.outputMetal) {
                         auto metalStart = Clock::now();
-#ifdef USE_SPIRV_CROSS_LIB
-                        std::string metalSource = CrossCompileToMetal(result.spirv);
-#else
                         std::string metalSource = CrossCompileToMetal(spvPath);
-#endif
                         auto metalEnd = Clock::now();
                         shaderTime.metalCrossMs = std::chrono::duration<double, std::milli>(metalEnd - metalStart).count();
-
                         if (!metalSource.empty() && metalSource.find("error") == std::string::npos) {
                             std::string metalPath = outBase + ".metal";
-                            if (WriteTextFile(metalPath, metalSource)) {
-                                printf("    -> %s\n", metalPath.c_str());
-                            }
-                        } else {
-                            fprintf(stderr, "    Warning: Metal cross-compilation failed\n");
-                        }
+                            if (WriteTextFile(metalPath, metalSource)) printf("    -> %s\n", metalPath.c_str());
+                        } else fprintf(stderr, "    Warning: Metal cross-compilation failed\n");
                     }
-
-                    // Cross-compile to HLSL
                     if (config.outputHlsl) {
                         auto hlslStart = Clock::now();
-#ifdef USE_SPIRV_CROSS_LIB
-                        std::string hlslSource = CrossCompileToHLSL(result.spirv, result.hasWaveOps);
-#else
                         std::string hlslSource = CrossCompileToHLSL(spvPath, result.hasWaveOps);
-#endif
                         auto hlslEnd = Clock::now();
                         shaderTime.hlslCrossMs = std::chrono::duration<double, std::milli>(hlslEnd - hlslStart).count();
-
                         if (!hlslSource.empty() && hlslSource.find("error") == std::string::npos) {
                             std::string hlslPath = outBase + ".hlsl";
-                            if (WriteTextFile(hlslPath, hlslSource)) {
-                                printf("    -> %s\n", hlslPath.c_str());
-                            }
-                        } else {
-                            fprintf(stderr, "    Warning: HLSL cross-compilation failed\n");
-                        }
+                            if (WriteTextFile(hlslPath, hlslSource)) printf("    -> %s\n", hlslPath.c_str());
+                        } else fprintf(stderr, "    Warning: HLSL cross-compilation failed\n");
                     }
-
-                    // Cross-compile to GLSL
                     if (config.outputGlsl) {
                         auto glslStart = Clock::now();
-#ifdef USE_SPIRV_CROSS_LIB
-                        std::string glslSource = CrossCompileToGLSL(result.spirv);
-#else
                         std::string glslSource = CrossCompileToGLSL(spvPath);
-#endif
                         auto glslEnd = Clock::now();
                         shaderTime.glslCrossMs = std::chrono::duration<double, std::milli>(glslEnd - glslStart).count();
-
                         if (!glslSource.empty() && glslSource.find("error") == std::string::npos) {
                             std::string glslPath = outBase + ".glsl";
-                            if (WriteTextFile(glslPath, glslSource)) {
-                                printf("    -> %s\n", glslPath.c_str());
-                            }
-                        } else {
-                            fprintf(stderr, "    Warning: GLSL cross-compilation failed\n");
-                        }
+                            if (WriteTextFile(glslPath, glslSource)) printf("    -> %s\n", glslPath.c_str());
+                        } else fprintf(stderr, "    Warning: GLSL cross-compilation failed\n");
                     }
-
-                    // Cross-compile to GLSL ES (WebGL 2.0 / OpenGL ES 3.0)
                     if (config.outputGlslEs) {
                         auto glslEsStart = Clock::now();
-#ifdef USE_SPIRV_CROSS_LIB
-                        std::string glslEsSource = CrossCompileToGLSL(result.spirv, 300, true);  // GLSL ES 300
-#else
-                        std::string glslEsSource = CrossCompileToGLSLCLI(spvPath, 300);  // Note: CLI doesn't support ES easily
-#endif
+                        std::string glslEsSource = CrossCompileToGLSLCLI(spvPath, 300);
                         auto glslEsEnd = Clock::now();
                         shaderTime.glslEsCrossMs = std::chrono::duration<double, std::milli>(glslEsEnd - glslEsStart).count();
-
                         if (!glslEsSource.empty() && glslEsSource.find("error") == std::string::npos) {
                             std::string glslEsPath = outBase + ".gles";
-                            if (WriteTextFile(glslEsPath, glslEsSource)) {
-                                printf("    -> %s\n", glslEsPath.c_str());
-                            }
-
-                            // Generate JSON sidecar with attribute and uniform mappings for WebGL
-                            // Three.js binds by name, so we need name->binding mappings
+                            if (WriteTextFile(glslEsPath, glslEsSource)) printf("    -> %s\n", glslEsPath.c_str());
+                            // JSON sidecar for WebGL
                             std::string json = "{\n  \"attributes\": {\n";
                             for (u32 i = 0; i < pass.usedAttributes.count; i++) {
                                 std::string attrName = pass.usedAttributes[i].ToString(sourceBase);
@@ -1523,11 +1741,9 @@ int main(int argc, char* argv[]) {
                                 json += "\n";
                             }
                             json += "  },\n  \"uniforms\": {\n";
-                            // Add uniform buffer bindings from render config
                             bool firstUniform = true;
                             for (const auto& ub : config.renderConfig.uniformBuffers) {
-                                // Check if this uniform is used in vertex stage
-                                if (static_cast<int>(ub.stages) & 1) {  // 1 = vertex stage bit
+                                if (static_cast<int>(ub.stages) & 1) {
                                     if (!firstUniform) json += ",\n";
                                     json += "    \"" + ub.name + "\": " + std::to_string(ub.bindingIndex);
                                     firstUniform = false;
@@ -1535,11 +1751,9 @@ int main(int argc, char* argv[]) {
                             }
                             if (!firstUniform) json += "\n";
                             json += "  },\n  \"samplers\": {\n";
-                            // Add sampler2D bindings from render config
                             bool firstSampler = true;
                             for (const auto& tex : config.renderConfig.textures) {
-                                // Check if this texture is used in vertex stage
-                                if (static_cast<int>(tex.stages) & 1) {  // 1 = vertex stage bit
+                                if (static_cast<int>(tex.stages) & 1) {
                                     if (!firstSampler) json += ",\n";
                                     json += "    \"" + tex.name + "\": " + std::to_string(tex.bindingIndex);
                                     firstSampler = false;
@@ -1547,24 +1761,15 @@ int main(int argc, char* argv[]) {
                             }
                             if (!firstSampler) json += "\n";
                             json += "  }";
-
-                            // Add geometry configuration if instancing is enabled
                             if (config.geometryConfig.type == RenderConfigParser::GeometryConfig::Type::Instanced) {
-                                json += ",\n  \"geometry\": {\n";
-                                json += "    \"type\": \"instanced\",\n";
-                                json += "    \"instanceCount\": " + std::to_string(config.geometryConfig.instanceCount) + "\n";
-                                json += "  }";
+                                json += ",\n  \"geometry\": {\n    \"type\": \"instanced\",\n    \"instanceCount\": " + std::to_string(config.geometryConfig.instanceCount) + "\n  }";
                             }
                             json += "\n}\n";
-
                             std::string jsonPath = outBase + ".json";
-                            if (WriteTextFile(jsonPath, json)) {
-                                printf("    -> %s\n", jsonPath.c_str());
-                            }
-                        } else {
-                            fprintf(stderr, "    Warning: GLSL ES cross-compilation failed\n");
-                        }
+                            if (WriteTextFile(jsonPath, json)) printf("    -> %s\n", jsonPath.c_str());
+                        } else fprintf(stderr, "    Warning: GLSL ES cross-compilation failed\n");
                     }
+#endif
 
                     // Output internals JSON (SPIR-V disassembly + BWSL IR dump)
                     if (config.outputInternals && !result.irDump.empty()) {
@@ -1604,7 +1809,8 @@ int main(int argc, char* argv[]) {
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Fragment, config.verbose, config.dumpIr, config.debugNames,
                                                        config.outputGlsl || config.outputGlslEs, false, context.root,
-                                                       pipeline.passes[passIdx], &passVaryings, config.outputInternals);  // Use same varying context populated by vertex shader
+                                                       pipeline.passes[passIdx], &passVaryings, config.outputInternals,
+                                                       config.useDirectGles, &config.renderConfig);  // Use same varying context populated by vertex shader
 
             if (!result.success) {
                 fprintf(stderr, "    Error: %s\n", result.error.c_str());
@@ -1637,91 +1843,125 @@ int main(int argc, char* argv[]) {
                         }
                     }
 
-                    // Cross-compile to Metal
+                    // Cross-compile to all enabled targets in parallel
+#ifdef USE_SPIRV_CROSS_LIB
+                    {
+                        CrossCompileResult crossResult = ParallelCrossCompile(
+                            result.spirv,
+                            config.outputMetal,
+                            config.outputHlsl,
+                            config.outputGlsl,
+                            config.outputGlslEs,
+                            result.hasWaveOps);
+
+                        if (config.outputMetal) {
+                            shaderTime.metalCrossMs = crossResult.metalMs;
+                            if (!crossResult.metal.empty() && crossResult.metal.find("error") == std::string::npos) {
+                                std::string metalPath = outBase + ".metal";
+                                if (WriteTextFile(metalPath, crossResult.metal)) printf("    -> %s\n", metalPath.c_str());
+                            } else fprintf(stderr, "    Warning: Metal cross-compilation failed\n");
+                        }
+                        if (config.outputHlsl) {
+                            shaderTime.hlslCrossMs = crossResult.hlslMs;
+                            if (!crossResult.hlsl.empty() && crossResult.hlsl.find("error") == std::string::npos) {
+                                std::string hlslPath = outBase + ".hlsl";
+                                if (WriteTextFile(hlslPath, crossResult.hlsl)) printf("    -> %s\n", hlslPath.c_str());
+                            } else fprintf(stderr, "    Warning: HLSL cross-compilation failed\n");
+                        }
+                        if (config.outputGlsl) {
+                            shaderTime.glslCrossMs = crossResult.glslMs;
+                            if (!crossResult.glsl.empty() && crossResult.glsl.find("error") == std::string::npos) {
+                                std::string glslPath = outBase + ".glsl";
+                                if (WriteTextFile(glslPath, crossResult.glsl)) printf("    -> %s\n", glslPath.c_str());
+                            } else fprintf(stderr, "    Warning: GLSL cross-compilation failed\n");
+                        }
+                        if (config.outputGlslEs) {
+                            // Use direct GLES output if available (bypasses SPIRV-Cross)
+                            std::string glesSource = config.useDirectGles
+                                ? result.directGlesSource
+                                : crossResult.glslEs;
+                            double glesMs = config.useDirectGles
+                                ? result.timing.glslEsCrossMs
+                                : crossResult.glslEsMs;
+
+                            shaderTime.glslEsCrossMs = glesMs;
+                            if (!glesSource.empty() && glesSource.find("error") == std::string::npos) {
+                                std::string glslEsPath = outBase + ".gles";
+                                if (WriteTextFile(glslEsPath, glesSource)) printf("    -> %s\n", glslEsPath.c_str());
+                                // Generate JSON sidecar for fragment shader
+                                std::string json = "{\n  \"uniforms\": {\n";
+                                bool firstUniform = true;
+                                for (const auto& ub : config.renderConfig.uniformBuffers) {
+                                    if (static_cast<int>(ub.stages) & 2) {
+                                        if (!firstUniform) json += ",\n";
+                                        json += "    \"" + ub.name + "\": " + std::to_string(ub.bindingIndex);
+                                        firstUniform = false;
+                                    }
+                                }
+                                if (!firstUniform) json += "\n";
+                                json += "  },\n  \"samplers\": {\n";
+                                bool firstSampler = true;
+                                for (const auto& tex : config.renderConfig.textures) {
+                                    if (static_cast<int>(tex.stages) & 2) {
+                                        if (!firstSampler) json += ",\n";
+                                        json += "    \"" + tex.name + "\": " + std::to_string(tex.bindingIndex);
+                                        firstSampler = false;
+                                    }
+                                }
+                                if (!firstSampler) json += "\n";
+                                json += "  }";
+                                if (config.geometryConfig.type == RenderConfigParser::GeometryConfig::Type::Instanced) {
+                                    json += ",\n  \"geometry\": {\n    \"type\": \"instanced\",\n    \"instanceCount\": " + std::to_string(config.geometryConfig.instanceCount) + "\n  }";
+                                }
+                                json += "\n}\n";
+                                std::string jsonPath = outBase + ".json";
+                                if (WriteTextFile(jsonPath, json)) printf("    -> %s\n", jsonPath.c_str());
+                            } else fprintf(stderr, "    Warning: GLSL ES cross-compilation failed\n");
+                        }
+                    }
+#else
+                    // Fallback: Sequential CLI-based cross-compilation
                     if (config.outputMetal) {
                         auto metalStart = Clock::now();
-#ifdef USE_SPIRV_CROSS_LIB
-                        std::string metalSource = CrossCompileToMetal(result.spirv);
-#else
                         std::string metalSource = CrossCompileToMetal(spvPath);
-#endif
                         auto metalEnd = Clock::now();
                         shaderTime.metalCrossMs = std::chrono::duration<double, std::milli>(metalEnd - metalStart).count();
-
                         if (!metalSource.empty() && metalSource.find("error") == std::string::npos) {
                             std::string metalPath = outBase + ".metal";
-                            if (WriteTextFile(metalPath, metalSource)) {
-                                printf("    -> %s\n", metalPath.c_str());
-                            }
-                        } else {
-                            fprintf(stderr, "    Warning: Metal cross-compilation failed\n");
-                        }
+                            if (WriteTextFile(metalPath, metalSource)) printf("    -> %s\n", metalPath.c_str());
+                        } else fprintf(stderr, "    Warning: Metal cross-compilation failed\n");
                     }
-
-                    // Cross-compile to HLSL
                     if (config.outputHlsl) {
                         auto hlslStart = Clock::now();
-#ifdef USE_SPIRV_CROSS_LIB
-                        std::string hlslSource = CrossCompileToHLSL(result.spirv, result.hasWaveOps);
-#else
                         std::string hlslSource = CrossCompileToHLSL(spvPath, result.hasWaveOps);
-#endif
                         auto hlslEnd = Clock::now();
                         shaderTime.hlslCrossMs = std::chrono::duration<double, std::milli>(hlslEnd - hlslStart).count();
-
                         if (!hlslSource.empty() && hlslSource.find("error") == std::string::npos) {
                             std::string hlslPath = outBase + ".hlsl";
-                            if (WriteTextFile(hlslPath, hlslSource)) {
-                                printf("    -> %s\n", hlslPath.c_str());
-                            }
-                        } else {
-                            fprintf(stderr, "    Warning: HLSL cross-compilation failed\n");
-                        }
+                            if (WriteTextFile(hlslPath, hlslSource)) printf("    -> %s\n", hlslPath.c_str());
+                        } else fprintf(stderr, "    Warning: HLSL cross-compilation failed\n");
                     }
-
-                    // Cross-compile to GLSL
                     if (config.outputGlsl) {
                         auto glslStart = Clock::now();
-#ifdef USE_SPIRV_CROSS_LIB
-                        std::string glslSource = CrossCompileToGLSL(result.spirv);
-#else
                         std::string glslSource = CrossCompileToGLSL(spvPath);
-#endif
                         auto glslEnd = Clock::now();
                         shaderTime.glslCrossMs = std::chrono::duration<double, std::milli>(glslEnd - glslStart).count();
-
                         if (!glslSource.empty() && glslSource.find("error") == std::string::npos) {
                             std::string glslPath = outBase + ".glsl";
-                            if (WriteTextFile(glslPath, glslSource)) {
-                                printf("    -> %s\n", glslPath.c_str());
-                            }
-                        } else {
-                            fprintf(stderr, "    Warning: GLSL cross-compilation failed\n");
-                        }
+                            if (WriteTextFile(glslPath, glslSource)) printf("    -> %s\n", glslPath.c_str());
+                        } else fprintf(stderr, "    Warning: GLSL cross-compilation failed\n");
                     }
-
-                    // Cross-compile to GLSL ES (WebGL 2.0 / OpenGL ES 3.0)
                     if (config.outputGlslEs) {
                         auto glslEsStart = Clock::now();
-#ifdef USE_SPIRV_CROSS_LIB
-                        std::string glslEsSource = CrossCompileToGLSL(result.spirv, 300, true);  // GLSL ES 300
-#else
-                        std::string glslEsSource = CrossCompileToGLSLCLI(spvPath, 300);  // Note: CLI doesn't support ES easily
-#endif
+                        std::string glslEsSource = CrossCompileToGLSLCLI(spvPath, 300);
                         auto glslEsEnd = Clock::now();
                         shaderTime.glslEsCrossMs = std::chrono::duration<double, std::milli>(glslEsEnd - glslEsStart).count();
-
                         if (!glslEsSource.empty() && glslEsSource.find("error") == std::string::npos) {
                             std::string glslEsPath = outBase + ".gles";
-                            if (WriteTextFile(glslEsPath, glslEsSource)) {
-                                printf("    -> %s\n", glslEsPath.c_str());
-                            }
-
-                            // Generate JSON sidecar with fragment uniform mappings for WebGL
+                            if (WriteTextFile(glslEsPath, glslEsSource)) printf("    -> %s\n", glslEsPath.c_str());
                             std::string json = "{\n  \"uniforms\": {\n";
                             bool firstUniform = true;
                             for (const auto& ub : config.renderConfig.uniformBuffers) {
-                                // Check if this uniform is used in fragment stage (bit 1)
                                 if (static_cast<int>(ub.stages) & 2) {
                                     if (!firstUniform) json += ",\n";
                                     json += "    \"" + ub.name + "\": " + std::to_string(ub.bindingIndex);
@@ -1730,10 +1970,8 @@ int main(int argc, char* argv[]) {
                             }
                             if (!firstUniform) json += "\n";
                             json += "  },\n  \"samplers\": {\n";
-                            // Add sampler2D bindings from render config
                             bool firstSampler = true;
                             for (const auto& tex : config.renderConfig.textures) {
-                                // Check if this texture is used in fragment stage (bit 1)
                                 if (static_cast<int>(tex.stages) & 2) {
                                     if (!firstSampler) json += ",\n";
                                     json += "    \"" + tex.name + "\": " + std::to_string(tex.bindingIndex);
@@ -1742,24 +1980,15 @@ int main(int argc, char* argv[]) {
                             }
                             if (!firstSampler) json += "\n";
                             json += "  }";
-
-                            // Add geometry configuration if instancing is enabled
                             if (config.geometryConfig.type == RenderConfigParser::GeometryConfig::Type::Instanced) {
-                                json += ",\n  \"geometry\": {\n";
-                                json += "    \"type\": \"instanced\",\n";
-                                json += "    \"instanceCount\": " + std::to_string(config.geometryConfig.instanceCount) + "\n";
-                                json += "  }";
+                                json += ",\n  \"geometry\": {\n    \"type\": \"instanced\",\n    \"instanceCount\": " + std::to_string(config.geometryConfig.instanceCount) + "\n  }";
                             }
                             json += "\n}\n";
-
                             std::string jsonPath = outBase + ".json";
-                            if (WriteTextFile(jsonPath, json)) {
-                                printf("    -> %s\n", jsonPath.c_str());
-                            }
-                        } else {
-                            fprintf(stderr, "    Warning: GLSL ES cross-compilation failed\n");
-                        }
+                            if (WriteTextFile(jsonPath, json)) printf("    -> %s\n", jsonPath.c_str());
+                        } else fprintf(stderr, "    Warning: GLSL ES cross-compilation failed\n");
                     }
+#endif
 
                     // Output internals JSON (SPIR-V disassembly + BWSL IR dump)
                     if (config.outputInternals && !result.irDump.empty()) {
@@ -1799,7 +2028,8 @@ int main(int argc, char* argv[]) {
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Compute, config.verbose, config.dumpIr, config.debugNames,
                                                        config.outputGlsl || config.outputGlslEs, false, context.root,
-                                                       pipeline.passes[passIdx], nullptr, config.outputInternals);
+                                                       pipeline.passes[passIdx], nullptr, config.outputInternals,
+                                                       config.useDirectGles, &config.renderConfig);
 
             if (!result.success) {
                 fprintf(stderr, "    Error: %s\n", result.error.c_str());
@@ -1832,89 +2062,96 @@ int main(int argc, char* argv[]) {
                         }
                     }
 
-                    // Cross-compile to Metal
+                    // Cross-compile to all enabled targets in parallel
+#ifdef USE_SPIRV_CROSS_LIB
+                    {
+                        CrossCompileResult crossResult = ParallelCrossCompile(
+                            result.spirv,
+                            config.outputMetal,
+                            config.outputHlsl,
+                            config.outputGlsl,
+                            config.outputGlslEs,
+                            result.hasWaveOps);
+
+                        if (config.outputMetal) {
+                            shaderTime.metalCrossMs = crossResult.metalMs;
+                            if (!crossResult.metal.empty() && crossResult.metal.find("error") == std::string::npos) {
+                                std::string metalPath = outBase + ".metal";
+                                if (WriteTextFile(metalPath, crossResult.metal)) printf("    -> %s\n", metalPath.c_str());
+                            } else fprintf(stderr, "    Warning: Metal cross-compilation failed\n");
+                        }
+                        if (config.outputHlsl) {
+                            shaderTime.hlslCrossMs = crossResult.hlslMs;
+                            if (!crossResult.hlsl.empty() && crossResult.hlsl.find("error") == std::string::npos) {
+                                std::string hlslPath = outBase + ".hlsl";
+                                if (WriteTextFile(hlslPath, crossResult.hlsl)) printf("    -> %s\n", hlslPath.c_str());
+                            } else fprintf(stderr, "    Warning: HLSL cross-compilation failed\n");
+                        }
+                        if (config.outputGlsl) {
+                            shaderTime.glslCrossMs = crossResult.glslMs;
+                            if (!crossResult.glsl.empty() && crossResult.glsl.find("error") == std::string::npos) {
+                                std::string glslPath = outBase + ".glsl";
+                                if (WriteTextFile(glslPath, crossResult.glsl)) printf("    -> %s\n", glslPath.c_str());
+                            } else fprintf(stderr, "    Warning: GLSL cross-compilation failed\n");
+                        }
+                        if (config.outputGlslEs) {
+                            // Use direct GLES output if available (bypasses SPIRV-Cross)
+                            std::string glesSource = config.useDirectGles
+                                ? result.directGlesSource
+                                : crossResult.glslEs;
+                            double glesMs = config.useDirectGles
+                                ? result.timing.glslEsCrossMs
+                                : crossResult.glslEsMs;
+                            shaderTime.glslEsCrossMs = glesMs;
+                            if (!glesSource.empty() && glesSource.find("error") == std::string::npos) {
+                                std::string glslEsPath = outBase + ".gles";
+                                if (WriteTextFile(glslEsPath, glesSource)) printf("    -> %s\n", glslEsPath.c_str());
+                            } else fprintf(stderr, "    Warning: GLSL ES cross-compilation failed\n");
+                        }
+                    }
+#else
+                    // Fallback: Sequential CLI-based cross-compilation
                     if (config.outputMetal) {
                         auto metalStart = Clock::now();
-#ifdef USE_SPIRV_CROSS_LIB
-                        std::string metalSource = CrossCompileToMetal(result.spirv);
-#else
                         std::string metalSource = CrossCompileToMetal(spvPath);
-#endif
                         auto metalEnd = Clock::now();
                         shaderTime.metalCrossMs = std::chrono::duration<double, std::milli>(metalEnd - metalStart).count();
-
                         if (!metalSource.empty() && metalSource.find("error") == std::string::npos) {
                             std::string metalPath = outBase + ".metal";
-                            if (WriteTextFile(metalPath, metalSource)) {
-                                printf("    -> %s\n", metalPath.c_str());
-                            }
-                        } else {
-                            fprintf(stderr, "    Warning: Metal cross-compilation failed\n");
-                        }
+                            if (WriteTextFile(metalPath, metalSource)) printf("    -> %s\n", metalPath.c_str());
+                        } else fprintf(stderr, "    Warning: Metal cross-compilation failed\n");
                     }
-
-                    // Cross-compile to HLSL
                     if (config.outputHlsl) {
                         auto hlslStart = Clock::now();
-#ifdef USE_SPIRV_CROSS_LIB
-                        std::string hlslSource = CrossCompileToHLSL(result.spirv, result.hasWaveOps);
-#else
                         std::string hlslSource = CrossCompileToHLSL(spvPath, result.hasWaveOps);
-#endif
                         auto hlslEnd = Clock::now();
                         shaderTime.hlslCrossMs = std::chrono::duration<double, std::milli>(hlslEnd - hlslStart).count();
-
                         if (!hlslSource.empty() && hlslSource.find("error") == std::string::npos) {
                             std::string hlslPath = outBase + ".hlsl";
-                            if (WriteTextFile(hlslPath, hlslSource)) {
-                                printf("    -> %s\n", hlslPath.c_str());
-                            }
-                        } else {
-                            fprintf(stderr, "    Warning: HLSL cross-compilation failed\n");
-                        }
+                            if (WriteTextFile(hlslPath, hlslSource)) printf("    -> %s\n", hlslPath.c_str());
+                        } else fprintf(stderr, "    Warning: HLSL cross-compilation failed\n");
                     }
-
-                    // Cross-compile to GLSL
                     if (config.outputGlsl) {
                         auto glslStart = Clock::now();
-#ifdef USE_SPIRV_CROSS_LIB
-                        std::string glslSource = CrossCompileToGLSL(result.spirv);
-#else
                         std::string glslSource = CrossCompileToGLSL(spvPath);
-#endif
                         auto glslEnd = Clock::now();
                         shaderTime.glslCrossMs = std::chrono::duration<double, std::milli>(glslEnd - glslStart).count();
-
                         if (!glslSource.empty() && glslSource.find("error") == std::string::npos) {
                             std::string glslPath = outBase + ".glsl";
-                            if (WriteTextFile(glslPath, glslSource)) {
-                                printf("    -> %s\n", glslPath.c_str());
-                            }
-                        } else {
-                            fprintf(stderr, "    Warning: GLSL cross-compilation failed\n");
-                        }
+                            if (WriteTextFile(glslPath, glslSource)) printf("    -> %s\n", glslPath.c_str());
+                        } else fprintf(stderr, "    Warning: GLSL cross-compilation failed\n");
                     }
-
-                    // Cross-compile to GLSL ES (WebGL 2.0 / OpenGL ES 3.0)
                     if (config.outputGlslEs) {
                         auto glslEsStart = Clock::now();
-#ifdef USE_SPIRV_CROSS_LIB
-                        std::string glslEsSource = CrossCompileToGLSL(result.spirv, 300, true);  // GLSL ES 300
-#else
                         std::string glslEsSource = CrossCompileToGLSLCLI(spvPath, 300);
-#endif
                         auto glslEsEnd = Clock::now();
                         shaderTime.glslEsCrossMs = std::chrono::duration<double, std::milli>(glslEsEnd - glslEsStart).count();
-
                         if (!glslEsSource.empty() && glslEsSource.find("error") == std::string::npos) {
                             std::string glslEsPath = outBase + ".gles";
-                            if (WriteTextFile(glslEsPath, glslEsSource)) {
-                                printf("    -> %s\n", glslEsPath.c_str());
-                            }
-                        } else {
-                            fprintf(stderr, "    Warning: GLSL ES cross-compilation failed\n");
-                        }
+                            if (WriteTextFile(glslEsPath, glslEsSource)) printf("    -> %s\n", glslEsPath.c_str());
+                        } else fprintf(stderr, "    Warning: GLSL ES cross-compilation failed\n");
                     }
+#endif
 
                     // Output internals JSON (SPIR-V disassembly + BWSL IR dump)
                     if (config.outputInternals && !result.irDump.empty()) {
