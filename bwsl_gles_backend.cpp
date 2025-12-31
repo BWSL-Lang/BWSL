@@ -22,6 +22,19 @@ void GLESBuilder::CountUses() {
         }
     }
 
+    // Also count PHI operand uses - these are stored separately
+    if (ir->phiCount > 0 && ir->phiOperandValues) {
+        for (u32 phiIdx = 0; phiIdx < ir->phiCount; phiIdx++) {
+            u32 opCount = ir->GetPhiOperandCount(phiIdx);
+            for (u32 opIdx = 0; opIdx < opCount; opIdx++) {
+                u16 srcValue = ir->GetPhiOperandValue(phiIdx, opIdx);
+                if ((srcValue & 0xC000) == 0 && srcValue < regCount) {
+                    regInfo[srcValue].useCount++;
+                }
+            }
+        }
+    }
+
     // Second pass: determine which instructions can be inlined
     for (u32 i = 0; i < ir->instructionCount; i++) {
         u16 dest = ir->destinations[i];
@@ -198,22 +211,8 @@ void GLESBuilder::EmitMain() {
     out.Lit("void main() {\n");
     indent = 1;
 
-    // Emit temp variables for all registers with valid types
-    // SSA form means many registers have single use, but we need them all
-    // declared since GLSL doesn't support SSA directly
-    if (ir->registerTypes) {
-        for (u32 i = 0; i < regCount; i++) {
-            u16 regType = ir->registerTypes[i];
-            if (regType != 0 && regType != static_cast<u16>(CoreType::INVALID)) {
-                out.NL(indent);
-                EmitType(regType);
-                out.Chr(' ');
-                EmitReg(static_cast<u16>(i));
-                out.Lit(";");
-            }
-        }
-    }
-    out.NL(0);
+    // Variables are declared inline at first assignment (like SPIRV-Cross)
+    // No pre-declaration needed - we use EmitRegWithDecl to declare on first use
 
     // Use CFG-based block emission if available
     if (cfg && cfg->blockCount > 0) {
@@ -221,8 +220,51 @@ void GLESBuilder::EmitMain() {
         bool* emitted = static_cast<bool*>(arena->Allocate(cfg->blockCount * sizeof(bool)));
         for (u32 i = 0; i < cfg->blockCount; i++) emitted[i] = false;
 
+        // Debug: find which blocks contain STORE_OUTPUT instructions
+        #if 0  // Enable for debugging
+        u32 exitBlock = cfg->exitBlock;
+        for (u32 b = 0; b < cfg->blockCount; b++) {
+            u32 first = cfg->firstInst[b];
+            u32 last = cfg->lastInst[b];
+            for (u32 i = first; i <= last; i++) {
+                if (ir->opcodes[i] == IR::OP_STORE_OUTPUT) {
+                    printf("Block %u contains STORE_OUTPUT at inst %u (succs=%d, merge=%u)\n",
+                           b, i, cfg->successorCount[b],
+                           cfg->mergeBlocks ? cfg->mergeBlocks[b] : 0xFFFFFFFF);
+                }
+            }
+            // Check if this block leads to exit
+            u8 succCount = cfg->successorCount[b];
+            for (u8 s = 0; s < succCount && succCount < 3; s++) {
+                if (cfg->GetSuccessor(b, s) == exitBlock) {
+                    printf("Block %u (merge=%u) leads to exit block %u\n", b,
+                           cfg->mergeBlocks ? cfg->mergeBlocks[b] : 0xFFFFFFFF, exitBlock);
+                }
+            }
+        }
+        printf("Entry=%u, Exit=%u, BlockCount=%u\n", cfg->entryBlock, cfg->exitBlock, cfg->blockCount);
+        #endif
+
         // Emit starting from entry block
         EmitBlockRecursive(cfg->entryBlock, NO_BLOCK, emitted);
+
+        // Ensure exit block is emitted at the end (at top level)
+        // This is important because exit block may not have been emitted if it was
+        // skipped due to being inside nested control flow
+        if (cfg->exitBlock != NO_BLOCK && !emitted[cfg->exitBlock]) {
+            emitted[cfg->exitBlock] = true;
+            u32 first = cfg->firstInst[cfg->exitBlock];
+            u32 last = cfg->lastInst[cfg->exitBlock];
+            for (u32 i = first; i <= last; i++) {
+                u16 opcode = ir->opcodes[i];
+                // Skip control flow
+                if (opcode == IR::OP_BRANCH || opcode == IR::OP_JUMP ||
+                    opcode == IR::OP_RET || opcode == IR::OP_SWITCH || opcode == IR::OP_PHI) {
+                    continue;
+                }
+                EmitInstruction(i);
+            }
+        }
     } else {
         // Fallback: linear instruction emission
         for (u32 i = 0; i < ir->instructionCount; i++) {
@@ -234,13 +276,56 @@ void GLESBuilder::EmitMain() {
     out.Lit("}\n");
 }
 
+// Emit PHI assignments when transitioning from one block to another
+// PHI nodes in toBlock that have values from fromBlock need assignments
+void GLESBuilder::EmitPhiAssignments(u32 fromBlock, u32 toBlock) {
+    if (!ir->phiCount || !ir->phiBlockIndices) return;
+
+    for (u32 phiIdx = 0; phiIdx < ir->phiCount; phiIdx++) {
+        // Check if this PHI is in the target block
+        if (ir->phiBlockIndices[phiIdx] != toBlock) continue;
+
+        // Find the operand that comes from fromBlock
+        u32 opCount = ir->GetPhiOperandCount(phiIdx);
+        for (u32 opIdx = 0; opIdx < opCount; opIdx++) {
+            u32 srcBlock = ir->GetPhiOperandBlock(phiIdx, opIdx);
+            if (srcBlock == fromBlock) {
+                u16 srcValue = ir->GetPhiOperandValue(phiIdx, opIdx);
+                u16 destReg = ir->phiResultRegs[phiIdx];
+
+                out.NL(indent);
+                EmitRegWithDecl(destReg);
+                out.Lit(" = ");
+                EmitExpr(srcValue);
+                out.Chr(';');
+                break;
+            }
+        }
+    }
+}
+
 void GLESBuilder::EmitBlockRecursive(u32 blockIdx, u32 stopAt, bool* emitted) {
     // Don't emit past the stop point (merge block)
     if (blockIdx == stopAt || blockIdx == NO_BLOCK) return;
 
     // Don't emit already-emitted blocks
     if (emitted[blockIdx]) return;
+
+    // IMPORTANT: Don't emit exit block inside nested control flow
+    // The exit block should be emitted last, at the top level (indent==1)
+    // This prevents output stores from being placed inside if-else branches
+    if (blockIdx == cfg->exitBlock && indent > 1) {
+        return;  // Will be emitted later when we reach top level
+    }
+
     emitted[blockIdx] = true;
+
+    // Debug: track when exit block is emitted
+    #if 0
+    if (blockIdx == cfg->exitBlock) {
+        printf("Emitting exit block %u at indent=%u, stopAt=%u\n", blockIdx, indent, stopAt);
+    }
+    #endif
 
     // Emit all instructions in this block (except control flow terminators)
     u32 first = cfg->firstInst[blockIdx];
@@ -255,6 +340,11 @@ void GLESBuilder::EmitBlockRecursive(u32 blockIdx, u32 stopAt, bool* emitted) {
             continue;
         }
 
+        // Skip PHI - handled via EmitPhiAssignments
+        if (opcode == IR::OP_PHI) {
+            continue;
+        }
+
         EmitInstruction(i);
     }
 
@@ -265,14 +355,20 @@ void GLESBuilder::EmitBlockRecursive(u32 blockIdx, u32 stopAt, bool* emitted) {
     if (succCount == 0) {
         // No successors - end of function or return
         // Check if last instruction is RET
+        // Only emit return at top level (indent == 1 means we're at main() body level)
+        // Inside nested control structures, let control flow fall through naturally
         if (last < ir->instructionCount && ir->opcodes[last] == IR::OP_RET) {
-            out.NL(indent);
-            out.Lit("return;");
+            if (indent == 1 && stopAt == NO_BLOCK) {
+                out.NL(indent);
+                out.Lit("return;");
+            }
+            // If inside nested structure, don't emit return - let control fall through
         }
     }
     else if (succCount == 1) {
-        // Unconditional - just continue to next block
+        // Unconditional - emit PHI assignments then continue
         u32 nextBlock = cfg->GetSuccessor(blockIdx, 0);
+        EmitPhiAssignments(blockIdx, nextBlock);
         EmitBlockRecursive(nextBlock, stopAt, emitted);
     }
     else if (succCount == 2) {
@@ -296,8 +392,16 @@ void GLESBuilder::EmitBlockRecursive(u32 blockIdx, u32 stopAt, bool* emitted) {
         out.Lit(") {");
         indent++;
 
+        // Emit PHI assignments for then branch
+        EmitPhiAssignments(blockIdx, thenBlock);
         // Emit then block (stop at merge point)
         EmitBlockRecursive(thenBlock, mergeBlock, emitted);
+
+        // Emit PHI assignments to merge block from then branch if we didn't descend
+        if (mergeBlock != NO_BLOCK && thenBlock != mergeBlock) {
+            // Find the actual block that jumps to merge from the then path
+            // This is complex - for now emit at end of then branch
+        }
 
         indent--;
         out.NL(indent);
@@ -306,7 +410,16 @@ void GLESBuilder::EmitBlockRecursive(u32 blockIdx, u32 stopAt, bool* emitted) {
         if (elseBlock != mergeBlock && elseBlock != NO_BLOCK && !emitted[elseBlock]) {
             out.Lit("} else {");
             indent++;
+            // Emit PHI assignments for else branch
+            EmitPhiAssignments(blockIdx, elseBlock);
             EmitBlockRecursive(elseBlock, mergeBlock, emitted);
+            indent--;
+            out.NL(indent);
+        } else if (elseBlock == mergeBlock && mergeBlock != NO_BLOCK) {
+            // Else goes directly to merge - emit PHI assignments
+            out.Lit("} else {");
+            indent++;
+            EmitPhiAssignments(blockIdx, mergeBlock);
             indent--;
             out.NL(indent);
         }
@@ -314,14 +427,66 @@ void GLESBuilder::EmitBlockRecursive(u32 blockIdx, u32 stopAt, bool* emitted) {
         out.Lit("}");
 
         // Continue after merge block
-        if (mergeBlock != NO_BLOCK) {
+        if (mergeBlock != NO_BLOCK && !emitted[mergeBlock]) {
             EmitBlockRecursive(mergeBlock, stopAt, emitted);
         }
     }
     else if (cfg->IsSwitchBlock(blockIdx)) {
         // Switch statement - emit switch structure
+        // Find the switch instruction
+        u16 condReg = 0;
+        for (u32 i = first; i <= last; i++) {
+            if (ir->opcodes[i] == IR::OP_SWITCH) {
+                condReg = ir->GetOperand(i, 0);
+                break;
+            }
+        }
+
         out.NL(indent);
-        out.Lit("// TODO: switch statement");
+        out.Lit("switch (");
+        EmitExpr(condReg);
+        out.Lit(") {");
+
+        // Get switch data from metadata
+        u32 switchDataIdx = ir->metadata[last];
+        if (switchDataIdx < ir->switchCount) {
+            u32 caseCount = ir->GetSwitchCaseCount(switchDataIdx);
+            for (u32 c = 0; c < caseCount; c++) {
+                s32 caseVal = ir->GetSwitchCaseValue(switchDataIdx, c);
+                u32 caseTarget = ir->GetSwitchCaseTarget(switchDataIdx, c);
+
+                out.NL(indent);
+                out.Lit("case ");
+                out.Int(caseVal);
+                out.Lit(":");
+                indent++;
+                EmitPhiAssignments(blockIdx, caseTarget);
+                EmitBlockRecursive(caseTarget, mergeBlock, emitted);
+                out.NL(indent);
+                out.Lit("break;");
+                indent--;
+            }
+
+            u32 defaultTarget = ir->GetSwitchDefaultTarget(switchDataIdx);
+            if (defaultTarget != NO_BLOCK) {
+                out.NL(indent);
+                out.Lit("default:");
+                indent++;
+                EmitPhiAssignments(blockIdx, defaultTarget);
+                EmitBlockRecursive(defaultTarget, mergeBlock, emitted);
+                out.NL(indent);
+                out.Lit("break;");
+                indent--;
+            }
+        }
+
+        out.NL(indent);
+        out.Lit("}");
+
+        // Continue after merge block
+        if (mergeBlock != NO_BLOCK && !emitted[mergeBlock]) {
+            EmitBlockRecursive(mergeBlock, stopAt, emitted);
+        }
     }
 }
 
@@ -359,7 +524,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             // copies at predecessor block ends)
             u16 firstVal = Op(instIdx, 0);
             if (firstVal != 0x3FFF) {
-                EmitReg(dest);
+                EmitRegWithDecl(dest);
                 out.Lit(" = ");
                 EmitExpr(firstVal);
                 out.Lit(";");
@@ -375,7 +540,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_STORE_REG: {
             // Register-to-register copy/store
             u16 srcReg = Op(instIdx, 0);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(srcReg);
             out.Lit(";");
@@ -390,6 +555,11 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             u16 outputIdx = Op(instIdx, 0);
             u16 valueReg = dest;  // Value is in destination, not operand
 
+            #if 0
+            printf("STORE_OUTPUT: outputIdx=%u, valueReg=%u, varyings=%p, count=%u\n",
+                   outputIdx, valueReg, (void*)varyings, varyings ? varyings->count : 0);
+            #endif
+
             if (stage == ShaderStage::Fragment) {
                 out.Lit("fragColor = ");
             } else if (stage == ShaderStage::Vertex) {
@@ -398,6 +568,11 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
                 } else if (varyings && outputIdx <= varyings->count) {
                     out.Lit("v_");
                     out.Str(varyings->varyings[outputIdx - 1].name);
+                    out.Lit(" = ");
+                } else {
+                    // Fallback for unknown output
+                    out.Lit("output");
+                    out.Uint(outputIdx);
                     out.Lit(" = ");
                 }
             }
@@ -413,7 +588,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_LOAD_UNIFORM:
             // These are inlined when used, but if multi-use, emit assignment
             if (dest < regCount && regInfo[dest].useCount > 1) {
-                EmitReg(dest);
+                EmitRegWithDecl(dest);
                 out.Lit(" = ");
                 EmitExprForInst(instIdx);
                 out.Lit(";");
@@ -423,7 +598,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_LOAD_OUTPUT: {
             // Load from a previously written output (rare, for reading gl_Position etc.)
             u16 outputIdx = Op(instIdx, 0);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             if (stage == ShaderStage::Vertex && outputIdx == 0) {
                 out.Lit("gl_Position");
@@ -441,7 +616,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_LOAD_LOCAL:
         case IR::OP_STORE_LOCAL:
             // Thread-local storage - emit as local variable access
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = local");
             out.Uint(Op(instIdx, 0));
             out.Lit(";");
@@ -602,7 +777,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
         case IR::OP_SATURATE:
             // GLSL ES doesn't have saturate, use clamp(x, 0.0, 1.0)
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = clamp(");
             EmitExpr(Op(instIdx, 0));
             out.Lit(", 0.0, 1.0);");
@@ -659,7 +834,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
         case IR::OP_CLZ: {
             // GLSL ES 300: use findMSB and compute 31 - findMSB(x)
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = (");
             EmitExpr(Op(instIdx, 0));
             out.Lit(" == 0) ? 32 : (31 - findMSB(");
@@ -669,7 +844,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         }
         case IR::OP_CTZ: {
             // GLSL ES 300: use findLSB
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = (");
             EmitExpr(Op(instIdx, 0));
             out.Lit(" == 0) ? 32 : findLSB(");
@@ -683,37 +858,37 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         // ===== Type Conversion =====
         case IR::OP_F2I:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = int(");
             EmitExpr(Op(instIdx, 0));
             out.Lit(");");
             return;
         case IR::OP_I2F:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = float(");
             EmitExpr(Op(instIdx, 0));
             out.Lit(");");
             return;
         case IR::OP_F2U:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = uint(");
             EmitExpr(Op(instIdx, 0));
             out.Lit(");");
             return;
         case IR::OP_U2F:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = float(");
             EmitExpr(Op(instIdx, 0));
             out.Lit(");");
             return;
         case IR::OP_I2U:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = uint(");
             EmitExpr(Op(instIdx, 0));
             out.Lit(");");
             return;
         case IR::OP_U2I:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = int(");
             EmitExpr(Op(instIdx, 0));
             out.Lit(");");
@@ -723,28 +898,28 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             u16 srcType = ir->registerTypes[Op(instIdx, 0)];
             u16 dstType = ir->types[instIdx];
             if (srcType == static_cast<u16>(CoreType::FLOAT) && dstType == static_cast<u16>(CoreType::INT)) {
-                EmitReg(dest);
+                EmitRegWithDecl(dest);
                 out.Lit(" = floatBitsToInt(");
                 EmitExpr(Op(instIdx, 0));
                 out.Lit(");");
             } else if (srcType == static_cast<u16>(CoreType::FLOAT) && dstType == static_cast<u16>(CoreType::UINT)) {
-                EmitReg(dest);
+                EmitRegWithDecl(dest);
                 out.Lit(" = floatBitsToUint(");
                 EmitExpr(Op(instIdx, 0));
                 out.Lit(");");
             } else if (srcType == static_cast<u16>(CoreType::INT) && dstType == static_cast<u16>(CoreType::FLOAT)) {
-                EmitReg(dest);
+                EmitRegWithDecl(dest);
                 out.Lit(" = intBitsToFloat(");
                 EmitExpr(Op(instIdx, 0));
                 out.Lit(");");
             } else if (srcType == static_cast<u16>(CoreType::UINT) && dstType == static_cast<u16>(CoreType::FLOAT)) {
-                EmitReg(dest);
+                EmitRegWithDecl(dest);
                 out.Lit(" = uintBitsToFloat(");
                 EmitExpr(Op(instIdx, 0));
                 out.Lit(");");
             } else {
                 // Fallback - just copy
-                EmitReg(dest);
+                EmitRegWithDecl(dest);
                 out.Lit(" = ");
                 EmitExpr(Op(instIdx, 0));
                 out.Lit(";");
@@ -761,7 +936,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         case IR::OP_VEC_EXTRACT:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(Op(instIdx, 0));
             out.Chr('.');
@@ -779,12 +954,12 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             u16 vecReg = Op(instIdx, 0);
             u16 componentIdx = Op(instIdx, 1);
             u16 valueReg = Op(instIdx, 2);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(vecReg);
             out.Lit(";\n");
             out.NL(indent);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Chr('.');
             out.Chr(Str::SWIZZLE[componentIdx & 3]);
             out.Lit(" = ");
@@ -795,7 +970,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         // ===== Texture =====
         case IR::OP_TEX_SAMPLE:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = texture(");
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
@@ -804,7 +979,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         case IR::OP_TEX_SAMPLE_LOD:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = textureLod(");
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
@@ -816,7 +991,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         case IR::OP_TEX_SAMPLE_BIAS:
             // GLSL ES 300 has texture with bias
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = texture(");
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
@@ -827,7 +1002,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         case IR::OP_TEX_SAMPLE_GRAD:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = textureGrad(");
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
@@ -840,7 +1015,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         case IR::OP_TEX_FETCH:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = texelFetch(");
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
@@ -851,7 +1026,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         case IR::OP_TEX_SIZE:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = textureSize(");
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
@@ -860,7 +1035,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         case IR::OP_TEX_GATHER:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = textureGather(");
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
@@ -870,7 +1045,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         case IR::OP_LOAD_TEX_HANDLE:
             // Bindless textures - emit as sampler reference
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = sampler");
             out.Uint(Op(instIdx, 0));
             out.Lit(";");
@@ -902,7 +1077,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         // ===== Select (ternary) =====
         case IR::OP_SELECT:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(Op(instIdx, 0));  // condition
             out.Lit(" ? ");
@@ -916,7 +1091,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_MAT_MUL:
         case IR::OP_MAT_VEC_MUL:
         case IR::OP_VEC_MAT_MUL:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(Op(instIdx, 0));
             out.Lit(" * ");
@@ -937,7 +1112,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_MAT_CONSTRUCT: {
             // Build matrix from values
             u16 type = ir->types[instIdx];
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitType(type);
             out.Chr('(');
@@ -955,7 +1130,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         case IR::OP_MAT_SCALE:
             // Matrix * Scalar
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(Op(instIdx, 0));
             out.Lit(" * ");
@@ -966,7 +1141,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_MAT_IDENTITY: {
             // Identity matrix
             u16 type = ir->types[instIdx];
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitType(type);
             out.Lit("(1.0);");
@@ -976,7 +1151,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_MAT_ZERO: {
             // Zero matrix
             u16 type = ir->types[instIdx];
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitType(type);
             out.Lit("(0.0);");
@@ -986,7 +1161,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         // ===== Struct Operations =====
         case IR::OP_STRUCT_CONSTRUCT: {
             // Build struct from field values - emit as struct constructor
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = /* struct construct */;");
             return;
         }
@@ -995,7 +1170,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             // Extract field from struct
             u16 structReg = Op(instIdx, 0);
             u16 fieldIdx = Op(instIdx, 1);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(structReg);
             out.Lit(".field");
@@ -1009,12 +1184,12 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             u16 structReg = Op(instIdx, 0);
             u16 fieldIdx = Op(instIdx, 1);
             u16 valueReg = Op(instIdx, 2);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(structReg);
             out.Lit(";\n");
             out.NL(indent);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(".field");
             out.Uint(fieldIdx);
             out.Lit(" = ");
@@ -1031,7 +1206,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             // Get element address - emit as array indexing
             u16 arrayReg = Op(instIdx, 0);
             u16 indexReg = Op(instIdx, 1);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(arrayReg);
             out.Chr('[');
@@ -1044,7 +1219,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             // Load from array element
             u16 arrayReg = Op(instIdx, 0);
             u16 indexReg = Op(instIdx, 1);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(arrayReg);
             out.Chr('[');
@@ -1070,7 +1245,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_ARRAY_CONSTRUCT: {
             // Build array from elements
             u16 type = ir->types[instIdx];
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitType(type);
             out.Lit("[](");
@@ -1097,21 +1272,21 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         // ===== Enum Operations (emit as int) =====
         case IR::OP_ENUM_CONSTRUCT:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(Op(instIdx, 0));
             out.Lit(";");
             return;
 
         case IR::OP_ENUM_TAG:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(Op(instIdx, 0));
             out.Lit(";");
             return;
 
         case IR::OP_ENUM_FIELD:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(Op(instIdx, 0));
             out.Lit(";");
@@ -1228,6 +1403,7 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
     u16 opcode = ir->opcodes[instIdx];
 
     switch (opcode) {
+        // ===== Memory/Load Operations =====
         case IR::OP_LOAD_CONST: {
             u16 constReg = Op(instIdx, 0);
             EmitExpr(constReg);
@@ -1235,7 +1411,6 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
         }
 
         case IR::OP_LOAD_ATTR: {
-            // Load vertex attribute by index
             u16 attrIdx = Op(instIdx, 0);
             out.Lit("attr");
             out.Uint(attrIdx);
@@ -1243,43 +1418,19 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
         }
 
         case IR::OP_LOAD_INPUT: {
-            // Load shader input - could be varying or built-in
             u16 inputIdx = Op(instIdx, 0);
-
-            // Check for built-in inputs (slot >= 0x80)
             if (inputIdx >= 0x80) {
-                // Built-in inputs (vertex shader)
                 switch (inputIdx) {
-                    case 0x80:  // BuiltinInputSlot::VERTEX_ID
-                        out.Lit("gl_VertexID");
-                        return;
-                    case 0x81:  // BuiltinInputSlot::INSTANCE_ID
-                        out.Lit("gl_InstanceID");
-                        return;
-                    case 0x90:  // GLOBAL_INVOCATION_ID (compute)
-                        out.Lit("gl_GlobalInvocationID");
-                        return;
-                    case 0x91:  // LOCAL_INVOCATION_ID (compute)
-                        out.Lit("gl_LocalInvocationID");
-                        return;
-                    case 0x92:  // WORKGROUP_ID (compute)
-                        out.Lit("gl_WorkGroupID");
-                        return;
-                    case 0x93:  // NUM_WORKGROUPS (compute)
-                        out.Lit("gl_NumWorkGroups");
-                        return;
-                    case 0x94:  // LOCAL_INVOCATION_INDEX (compute)
-                        out.Lit("gl_LocalInvocationIndex");
-                        return;
-                    default:
-                        out.Lit("/* unknown builtin 0x");
-                        out.Uint(inputIdx);
-                        out.Lit(" */");
-                        return;
+                    case 0x80: out.Lit("gl_VertexID"); return;
+                    case 0x81: out.Lit("gl_InstanceID"); return;
+                    case 0x90: out.Lit("gl_GlobalInvocationID"); return;
+                    case 0x91: out.Lit("gl_LocalInvocationID"); return;
+                    case 0x92: out.Lit("gl_WorkGroupID"); return;
+                    case 0x93: out.Lit("gl_NumWorkGroups"); return;
+                    case 0x94: out.Lit("gl_LocalInvocationIndex"); return;
+                    default: out.Lit("gl_BuiltIn"); out.Uint(inputIdx); return;
                 }
             }
-
-            // Regular fragment input (varying)
             if (varyings && inputIdx < varyings->count) {
                 out.Lit("v_");
                 out.Str(varyings->varyings[inputIdx].name);
@@ -1291,9 +1442,7 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
         }
 
         case IR::OP_LOAD_UNIFORM: {
-            // Load from uniform buffer
             u16 uniformIdx = Op(instIdx, 0);
-            // If we have render config, use the actual uniform name
             if (renderConfig && uniformIdx < renderConfig->uniformBuffers.size()) {
                 const auto& ub = renderConfig->uniformBuffers[uniformIdx];
                 out.Lit("ub_");
@@ -1307,43 +1456,467 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
             return;
         }
 
-        case IR::OP_LOAD_REG: {
+        case IR::OP_LOAD_REG:
+        case IR::OP_STORE_REG:
+            EmitExpr(Op(instIdx, 0));
+            return;
+
+        // ===== Arithmetic (Float) =====
+        case IR::OP_FADD: case IR::OP_IADD:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" + "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_FSUB: case IR::OP_ISUB:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" - "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_FMUL: case IR::OP_IMUL:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" * "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_FDIV: case IR::OP_IDIV:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" / "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_IMOD:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" % "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_FMOD:
+            out.Lit("mod("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_FNEG: case IR::OP_INEG:
+            out.Lit("(-"); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_FABS: case IR::OP_IABS:
+            out.Lit("abs("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_FMIN: case IR::OP_IMIN: case IR::OP_UMIN:
+            out.Lit("min("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_FMAX: case IR::OP_IMAX: case IR::OP_UMAX:
+            out.Lit("max("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_FCLAMP: case IR::OP_ICLAMP: case IR::OP_UCLAMP:
+            out.Lit("clamp("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
+            return;
+        case IR::OP_FLOOR:
+            out.Lit("floor("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_CEIL:
+            out.Lit("ceil("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_ROUND:
+            out.Lit("round("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_TRUNC:
+            out.Lit("trunc("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_FRACT:
+            out.Lit("fract("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_FMA:
+            out.Lit("fma("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
+            return;
+
+        // ===== Math Functions =====
+        case IR::OP_SQRT:
+            out.Lit("sqrt("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_RSQRT:
+            out.Lit("inversesqrt("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_POW:
+            out.Lit("pow("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_EXP:
+            out.Lit("exp("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_EXP2:
+            out.Lit("exp2("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_LOG:
+            out.Lit("log("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_LOG2:
+            out.Lit("log2("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_SIN:
+            out.Lit("sin("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_COS:
+            out.Lit("cos("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_TAN:
+            out.Lit("tan("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_ASIN:
+            out.Lit("asin("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_ACOS:
+            out.Lit("acos("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_ATAN:
+            out.Lit("atan("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_ATAN2:
+            out.Lit("atan("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_SINH:
+            out.Lit("sinh("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_COSH:
+            out.Lit("cosh("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_SIGN:
+            out.Lit("sign("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+
+        // ===== Geometric =====
+        case IR::OP_DOT:
+            out.Lit("dot("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_CROSS:
+            out.Lit("cross("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_LENGTH:
+            out.Lit("length("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_NORMALIZE:
+            out.Lit("normalize("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_DISTANCE:
+            out.Lit("distance("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_REFLECT:
+            out.Lit("reflect("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_REFRACT:
+            out.Lit("refract("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
+            return;
+        case IR::OP_FACEFORWARD:
+            out.Lit("faceforward("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
+            return;
+
+        // ===== Interpolation =====
+        case IR::OP_LERP:
+            out.Lit("mix("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
+            return;
+        case IR::OP_SMOOTHSTEP:
+            out.Lit("smoothstep("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
+            return;
+        case IR::OP_STEP:
+            out.Lit("step("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_SATURATE:
+            out.Lit("clamp("); EmitExpr(Op(instIdx, 0)); out.Lit(", 0.0, 1.0)");
+            return;
+        case IR::OP_DEGREES:
+            out.Lit("degrees("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_RADIANS:
+            out.Lit("radians("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+
+        // ===== Comparison =====
+        case IR::OP_FEQ: case IR::OP_IEQ:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" == "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_FNE: case IR::OP_INE:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" != "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_FLT: case IR::OP_ILT: case IR::OP_ULT:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" < "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_FLE: case IR::OP_ILE: case IR::OP_ULE:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" <= "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_FGT: case IR::OP_IGT: case IR::OP_UGT:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" > "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_FGE: case IR::OP_IGE: case IR::OP_UGE:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" >= "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+
+        // ===== Bitwise =====
+        case IR::OP_AND:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" & "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_OR:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" | "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_XOR:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" ^ "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_NOT:
+            out.Lit("(~"); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_SHL:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" << "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_SHR: case IR::OP_ASR:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" >> "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_POPCNT:
+            out.Lit("bitCount("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_CLZ:
+            out.Lit("(("); EmitExpr(Op(instIdx, 0)); out.Lit(" == 0) ? 32 : (31 - findMSB("); EmitExpr(Op(instIdx, 0)); out.Lit(")))");
+            return;
+        case IR::OP_CTZ:
+            out.Lit("(("); EmitExpr(Op(instIdx, 0)); out.Lit(" == 0) ? 32 : findLSB("); EmitExpr(Op(instIdx, 0)); out.Lit("))");
+            return;
+        case IR::OP_REVERSE_BITS:
+            out.Lit("bitfieldReverse("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+
+        // ===== Type Conversion =====
+        case IR::OP_F2I:
+            out.Lit("int("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_I2F:
+            out.Lit("float("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_F2U:
+            out.Lit("uint("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_U2F:
+            out.Lit("float("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_I2U:
+            out.Lit("uint("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_U2I:
+            out.Lit("int("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_BITCAST: {
+            u16 srcType = ir->registerTypes ? ir->registerTypes[Op(instIdx, 0)] : 0;
+            u16 dstType = ir->types[instIdx];
+            if (srcType == static_cast<u16>(CoreType::FLOAT) && dstType == static_cast<u16>(CoreType::INT)) {
+                out.Lit("floatBitsToInt("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            } else if (srcType == static_cast<u16>(CoreType::FLOAT) && dstType == static_cast<u16>(CoreType::UINT)) {
+                out.Lit("floatBitsToUint("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            } else if (srcType == static_cast<u16>(CoreType::INT) && dstType == static_cast<u16>(CoreType::FLOAT)) {
+                out.Lit("intBitsToFloat("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            } else if (srcType == static_cast<u16>(CoreType::UINT) && dstType == static_cast<u16>(CoreType::FLOAT)) {
+                out.Lit("uintBitsToFloat("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            } else {
+                EmitExpr(Op(instIdx, 0));
+            }
+            return;
+        }
+
+        // ===== Vector Operations =====
+        case IR::OP_VEC_CONSTRUCT: {
+            u16 type = ir->types[instIdx];
+
+            // Count actual valid operands first
+            u32 validCount = 0;
+            for (u32 i = 0; i < 4; i++) {
+                u16 op = Op(instIdx, i);
+                if (IsValidOperand(op)) {
+                    validCount++;
+                } else {
+                    break;
+                }
+            }
+            if (validCount == 0) validCount = 1;
+
+            // Determine component count from type, or use validCount as fallback
+            u32 components = validCount;
+            if (type == static_cast<u16>(CoreType::FLOAT2) ||
+                type == static_cast<u16>(CoreType::INT2) ||
+                type == static_cast<u16>(CoreType::UINT2)) {
+                components = 2;
+            } else if (type == static_cast<u16>(CoreType::FLOAT3) ||
+                       type == static_cast<u16>(CoreType::INT3) ||
+                       type == static_cast<u16>(CoreType::UINT3)) {
+                components = 3;
+            } else if (type == static_cast<u16>(CoreType::FLOAT4) ||
+                       type == static_cast<u16>(CoreType::INT4) ||
+                       type == static_cast<u16>(CoreType::UINT4)) {
+                components = 4;
+            } else if (type == static_cast<u16>(CoreType::FLOAT) ||
+                       type == static_cast<u16>(CoreType::INT) ||
+                       type == static_cast<u16>(CoreType::UINT) ||
+                       type == static_cast<u16>(CoreType::BOOL)) {
+                components = 1;
+            }
+
+            // Use the smaller of declared type components and valid operands
+            if (components > validCount) {
+                components = validCount;
+            }
+
+            // Emit type
+            const char* typeNames[] = {"float", "vec2", "vec3", "vec4"};
+            out.Str(typeNames[components > 4 ? 3 : components - 1]);
+
+            out.Chr('(');
+            for (u32 i = 0; i < components && i < 4; i++) {
+                u16 op = Op(instIdx, i);
+                if (i > 0) out.Lit(", ");
+                EmitExpr(op);
+            }
+            out.Chr(')');
+            return;
+        }
+
+        case IR::OP_VEC_EXTRACT: {
+            EmitExpr(Op(instIdx, 0));
+            out.Chr('.');
+            out.Chr(Str::SWIZZLE[Op(instIdx, 1) & 3]);
+            return;
+        }
+
+        case IR::OP_VEC_SHUFFLE: {
+            EmitExpr(Op(instIdx, 0));
+            out.Chr('.');
+            u16 mask = Op(instIdx, 1);
+            u16 resultType = ir->types[instIdx];
+            u32 components = 1;
+            if (resultType >= static_cast<u16>(CoreType::FLOAT2) && resultType <= static_cast<u16>(CoreType::FLOAT4)) {
+                components = resultType - static_cast<u16>(CoreType::FLOAT2) + 2;
+            } else if (resultType >= static_cast<u16>(CoreType::INT2) && resultType <= static_cast<u16>(CoreType::INT4)) {
+                components = resultType - static_cast<u16>(CoreType::INT2) + 2;
+            }
+            for (u32 i = 0; i < components; i++) {
+                out.Chr(Str::SWIZZLE[(mask >> (i * 2)) & 0x3]);
+            }
+            return;
+        }
+
+        case IR::OP_VEC_INSERT: {
+            // This is tricky to inline - emit the vector and note modification needed
             EmitExpr(Op(instIdx, 0));
             return;
         }
 
-        // Binary ops inline
-        case IR::OP_FADD: case IR::OP_IADD:
+        // ===== Matrix Operations =====
+        case IR::OP_MAT_MUL: case IR::OP_MAT_VEC_MUL: case IR::OP_VEC_MAT_MUL:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" * "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_MAT_TRANSPOSE:
+            out.Lit("transpose("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_MAT_INVERSE:
+            out.Lit("inverse("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_MAT_DET:
+            out.Lit("determinant("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_MAT_SCALE:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" * "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_MAT_CONSTRUCT: {
+            u16 type = ir->types[instIdx];
+            EmitType(type);
             out.Chr('(');
-            EmitExpr(Op(instIdx, 0));
-            out.Lit(" + ");
-            EmitExpr(Op(instIdx, 1));
+            u32 cols = (type == static_cast<u16>(CoreType::MAT4)) ? 4 :
+                       (type == static_cast<u16>(CoreType::MAT3)) ? 3 : 2;
+            for (u32 i = 0; i < cols && i < 4; i++) {
+                if (i > 0) out.Lit(", ");
+                EmitExpr(Op(instIdx, i));
+            }
             out.Chr(')');
             return;
-        case IR::OP_FSUB: case IR::OP_ISUB:
-            out.Chr('(');
+        }
+        case IR::OP_MAT_IDENTITY: {
+            u16 type = ir->types[instIdx];
+            EmitType(type);
+            out.Lit("(1.0)");
+            return;
+        }
+        case IR::OP_MAT_ZERO: {
+            u16 type = ir->types[instIdx];
+            EmitType(type);
+            out.Lit("(0.0)");
+            return;
+        }
+
+        // ===== Texture Operations =====
+        case IR::OP_TEX_SAMPLE:
+            out.Lit("texture("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_TEX_SAMPLE_LOD:
+            out.Lit("textureLod("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
+            return;
+        case IR::OP_TEX_SAMPLE_BIAS:
+            out.Lit("texture("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
+            return;
+        case IR::OP_TEX_SAMPLE_GRAD:
+            out.Lit("textureGrad("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Lit(", "); EmitExpr(Op(instIdx, 3)); out.Chr(')');
+            return;
+        case IR::OP_TEX_FETCH:
+            out.Lit("texelFetch("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
+            return;
+        case IR::OP_TEX_SIZE:
+            out.Lit("textureSize("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_TEX_GATHER:
+            out.Lit("textureGather("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_LOAD_TEX_HANDLE:
+            out.Lit("u_");
+            if (renderConfig && Op(instIdx, 0) < renderConfig->textures.size()) {
+                out.Str(renderConfig->textures[Op(instIdx, 0)].name.c_str());
+            } else {
+                out.Lit("sampler");
+                out.Uint(Op(instIdx, 0));
+            }
+            return;
+
+        // ===== Derivatives =====
+        case IR::OP_DDX: case IR::OP_DDX_FINE: case IR::OP_DDX_COARSE:
+            out.Lit("dFdx("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_DDY: case IR::OP_DDY_FINE: case IR::OP_DDY_COARSE:
+            out.Lit("dFdy("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_FWIDTH:
+            out.Lit("fwidth("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+
+        // ===== Select (ternary) =====
+        case IR::OP_SELECT:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" ? "); EmitExpr(Op(instIdx, 1)); out.Lit(" : "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
+            return;
+
+        // ===== Array Operations =====
+        case IR::OP_ARRAY_ACCESS:
+        case IR::OP_ARRAY_LOAD:
             EmitExpr(Op(instIdx, 0));
-            out.Lit(" - ");
+            out.Chr('[');
             EmitExpr(Op(instIdx, 1));
+            out.Chr(']');
+            return;
+
+        case IR::OP_ARRAY_CONSTRUCT: {
+            u16 type = ir->types[instIdx];
+            EmitType(type);
+            out.Lit("[](");
+            for (u32 i = 0; i < 4; i++) {
+                u16 op = Op(instIdx, i);
+                if (op == 0x3FFF) break;
+                if (i > 0) out.Lit(", ");
+                EmitExpr(op);
+            }
             out.Chr(')');
             return;
-        case IR::OP_FMUL: case IR::OP_IMUL:
-            out.Chr('(');
+        }
+
+        // ===== Struct Operations =====
+        case IR::OP_STRUCT_EXTRACT:
             EmitExpr(Op(instIdx, 0));
-            out.Lit(" * ");
-            EmitExpr(Op(instIdx, 1));
-            out.Chr(')');
+            out.Lit(".field");
+            out.Uint(Op(instIdx, 1));
             return;
-        case IR::OP_FDIV: case IR::OP_IDIV:
-            out.Chr('(');
+
+        // ===== Enum Operations =====
+        case IR::OP_ENUM_CONSTRUCT:
+        case IR::OP_ENUM_TAG:
+        case IR::OP_ENUM_FIELD:
             EmitExpr(Op(instIdx, 0));
-            out.Lit(" / ");
-            EmitExpr(Op(instIdx, 1));
-            out.Chr(')');
             return;
 
         default:
-            // For complex expressions, just reference the temp
+            // For any unhandled opcode, reference the temp variable
+            // This ensures we don't produce invalid code
             EmitReg(ir->destinations[instIdx]);
             return;
     }
@@ -1383,7 +1956,7 @@ void GLESBuilder::EmitConstant(u32 instIdx) {
 
 void GLESBuilder::EmitSwizzle(u32 instIdx) {
     u16 dest = ir->destinations[instIdx];
-    EmitReg(dest);
+    EmitRegWithDecl(dest);
     out.Lit(" = ");
     EmitExpr(Op(instIdx, 0));
     out.Chr('.');
@@ -1406,18 +1979,43 @@ void GLESBuilder::EmitSwizzle(u32 instIdx) {
     out.Lit(";");
 }
 
+// Helper to check if an operand is a valid value reference
+bool GLESBuilder::IsValidOperand(u16 op) const {
+    if (op == 0x3FFF) return false;  // Explicit invalid marker
+
+    // Check constant references for valid indices
+    if (op & 0x8000) {
+        // Float constant - check index is in range
+        u16 idx = op & 0x7FFF;
+        return idx < ir->floatCount;
+    }
+    if ((op & 0xC000) == 0xC000) {
+        // Bool constant - check index is in range
+        u16 idx = op & 0x3FFF;
+        return idx < ir->boolCount;
+    }
+    if (op & 0x4000) {
+        // Int constant - check index is in range
+        u16 idx = op & 0x3FFF;
+        return idx < ir->intCount;
+    }
+
+    // Register reference - always valid (r0 is valid!)
+    return true;
+}
+
 void GLESBuilder::EmitVecConstruct(u32 instIdx) {
     u16 dest = ir->destinations[instIdx];
     u16 type = ir->types[instIdx];
 
-    EmitReg(dest);
+    EmitRegWithDecl(dest);
     out.Lit(" = ");
 
     // Count valid operands to determine component count
     u32 components = 0;
     for (u32 i = 0; i < 4; i++) {
         u16 op = Op(instIdx, i);
-        if (op != 0x3FFF && op != 0) {  // Not invalid marker
+        if (IsValidOperand(op)) {
             components++;
         } else {
             break;
@@ -1466,7 +2064,7 @@ void GLESBuilder::EmitVecConstruct(u32 instIdx) {
     for (u32 i = 0; i < components && i < 4; i++) {
         u16 op = Op(instIdx, i);
         // Skip invalid operands to avoid trailing commas
-        if (op == 0x3FFF) continue;
+        if (!IsValidOperand(op)) continue;
         if (!first) out.Lit(", ");
         first = false;
         EmitExpr(op);
@@ -1479,21 +2077,21 @@ void GLESBuilder::EmitVecConstruct(u32 instIdx) {
 // ============================================================================
 
 void GLESBuilder::EmitBinaryAssign(u32 instIdx, u16 dest, const char* op) {
-    EmitReg(dest);
+    EmitRegWithDecl(dest);
     out.Lit(" = ");
     EmitBinaryOp(instIdx, op);
     out.Lit(";");
 }
 
 void GLESBuilder::EmitUnaryAssign(u32 instIdx, u16 dest, const char* op) {
-    EmitReg(dest);
+    EmitRegWithDecl(dest);
     out.Lit(" = ");
     EmitUnaryOp(instIdx, op);
     out.Lit(";");
 }
 
 void GLESBuilder::EmitFuncAssign(u32 instIdx, u16 dest, const char* func, u32 arity) {
-    EmitReg(dest);
+    EmitRegWithDecl(dest);
     out.Lit(" = ");
     EmitFuncCall(instIdx, func, arity);
     out.Lit(";");
