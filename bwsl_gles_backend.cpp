@@ -198,31 +198,131 @@ void GLESBuilder::EmitMain() {
     out.Lit("void main() {\n");
     indent = 1;
 
-    // Emit temp variables for multi-use registers
-    for (u32 i = 0; i < regCount; i++) {
-        if (regInfo[i].useCount > 1 && !(regInfo[i].flags & REG_TRIVIAL)) {
-            u32 defInst = regInfo[i].defInst;
-            if (defInst < ir->instructionCount && ir->registerTypes) {
-                u16 regType = ir->registerTypes[i];
-                if (regType != 0) {  // Skip INVALID type
-                    out.NL(indent);
-                    EmitType(regType);
-                    out.Chr(' ');
-                    EmitReg(static_cast<u16>(i));
-                    out.Lit(";");
-                }
+    // Emit temp variables for all registers with valid types
+    // SSA form means many registers have single use, but we need them all
+    // declared since GLSL doesn't support SSA directly
+    if (ir->registerTypes) {
+        for (u32 i = 0; i < regCount; i++) {
+            u16 regType = ir->registerTypes[i];
+            if (regType != 0 && regType != static_cast<u16>(CoreType::INVALID)) {
+                out.NL(indent);
+                EmitType(regType);
+                out.Chr(' ');
+                EmitReg(static_cast<u16>(i));
+                out.Lit(";");
             }
         }
     }
     out.NL(0);
 
-    // Emit instructions
-    for (u32 i = 0; i < ir->instructionCount; i++) {
-        EmitInstruction(i);
+    // Use CFG-based block emission if available
+    if (cfg && cfg->blockCount > 0) {
+        // Track which blocks have been emitted
+        bool* emitted = static_cast<bool*>(arena->Allocate(cfg->blockCount * sizeof(bool)));
+        for (u32 i = 0; i < cfg->blockCount; i++) emitted[i] = false;
+
+        // Emit starting from entry block
+        EmitBlockRecursive(cfg->entryBlock, NO_BLOCK, emitted);
+    } else {
+        // Fallback: linear instruction emission
+        for (u32 i = 0; i < ir->instructionCount; i++) {
+            EmitInstruction(i);
+        }
     }
 
     out.NL(0);
     out.Lit("}\n");
+}
+
+void GLESBuilder::EmitBlockRecursive(u32 blockIdx, u32 stopAt, bool* emitted) {
+    // Don't emit past the stop point (merge block)
+    if (blockIdx == stopAt || blockIdx == NO_BLOCK) return;
+
+    // Don't emit already-emitted blocks
+    if (emitted[blockIdx]) return;
+    emitted[blockIdx] = true;
+
+    // Emit all instructions in this block (except control flow terminators)
+    u32 first = cfg->firstInst[blockIdx];
+    u32 last = cfg->lastInst[blockIdx];
+
+    for (u32 i = first; i <= last; i++) {
+        u16 opcode = ir->opcodes[i];
+
+        // Skip control flow - we handle it structurally
+        if (opcode == IR::OP_BRANCH || opcode == IR::OP_JUMP ||
+            opcode == IR::OP_RET || opcode == IR::OP_SWITCH) {
+            continue;
+        }
+
+        EmitInstruction(i);
+    }
+
+    // Handle control flow based on successor count
+    u8 succCount = cfg->successorCount[blockIdx];
+    u32 mergeBlock = cfg->mergeBlocks ? cfg->mergeBlocks[blockIdx] : NO_BLOCK;
+
+    if (succCount == 0) {
+        // No successors - end of function or return
+        // Check if last instruction is RET
+        if (last < ir->instructionCount && ir->opcodes[last] == IR::OP_RET) {
+            out.NL(indent);
+            out.Lit("return;");
+        }
+    }
+    else if (succCount == 1) {
+        // Unconditional - just continue to next block
+        u32 nextBlock = cfg->GetSuccessor(blockIdx, 0);
+        EmitBlockRecursive(nextBlock, stopAt, emitted);
+    }
+    else if (succCount == 2) {
+        // Conditional branch - emit if/else structure
+        u32 thenBlock = cfg->GetSuccessor(blockIdx, 0);
+        u32 elseBlock = cfg->GetSuccessor(blockIdx, 1);
+
+        // Find the condition from the BRANCH instruction
+        u16 condReg = 0;
+        for (u32 i = first; i <= last; i++) {
+            if (ir->opcodes[i] == IR::OP_BRANCH) {
+                condReg = ir->GetOperand(i, 0);
+                break;
+            }
+        }
+
+        // Emit if statement
+        out.NL(indent);
+        out.Lit("if (");
+        EmitExpr(condReg);
+        out.Lit(") {");
+        indent++;
+
+        // Emit then block (stop at merge point)
+        EmitBlockRecursive(thenBlock, mergeBlock, emitted);
+
+        indent--;
+        out.NL(indent);
+
+        // Check if there's an else block (elseBlock != mergeBlock)
+        if (elseBlock != mergeBlock && elseBlock != NO_BLOCK && !emitted[elseBlock]) {
+            out.Lit("} else {");
+            indent++;
+            EmitBlockRecursive(elseBlock, mergeBlock, emitted);
+            indent--;
+            out.NL(indent);
+        }
+
+        out.Lit("}");
+
+        // Continue after merge block
+        if (mergeBlock != NO_BLOCK) {
+            EmitBlockRecursive(mergeBlock, stopAt, emitted);
+        }
+    }
+    else if (cfg->IsSwitchBlock(blockIdx)) {
+        // Switch statement - emit switch structure
+        out.NL(indent);
+        out.Lit("// TODO: switch statement");
+    }
 }
 
 // ============================================================================
@@ -243,49 +343,29 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
     // Handle different instruction categories
     switch (opcode) {
         // ===== Control Flow =====
+        // These are handled structurally by EmitBlockRecursive
         case IR::OP_NOP:
-            // No operation - skip
-            return;
-
         case IR::OP_JUMP:
-            // Unconditional jump - handled by structured control flow
-            // In structured GLSL, this becomes implicit fall-through or break/continue
+        case IR::OP_BRANCH:
+        case IR::OP_SWITCH:
+        case IR::OP_RET:
+            // Control flow handled by CFG-based emission
             return;
-
-        case IR::OP_BRANCH: {
-            // Conditional branch - emit as if statement
-            // The CFG should provide structure info for proper reconstruction
-            u16 condition = Op(instIdx, 0);
-            out.Lit("if (");
-            EmitExpr(condition);
-            out.Lit(") {");
-            indent++;
-            return;
-        }
 
         case IR::OP_PHI: {
-            // SSA phi node - in structured code, this becomes assignments
-            // at the end of predecessor blocks. For now, emit as a comment.
-            // The phi resolution should happen during pre-processing.
-            out.Lit("// phi: r");
-            out.Uint(dest);
-            out.Lit(" = merge of values from predecessors");
+            // SSA phi node - these should be resolved during phi elimination
+            // For now, just emit the assignment from the first operand
+            // (This is a simplification - proper phi elimination would add
+            // copies at predecessor block ends)
+            u16 firstVal = Op(instIdx, 0);
+            if (firstVal != 0x3FFF) {
+                EmitReg(dest);
+                out.Lit(" = ");
+                EmitExpr(firstVal);
+                out.Lit(";");
+            }
             return;
         }
-
-        case IR::OP_SWITCH: {
-            // Switch statement
-            u16 selector = Op(instIdx, 0);
-            out.Lit("switch (");
-            EmitExpr(selector);
-            out.Lit(") {");
-            indent++;
-            return;
-        }
-
-        case IR::OP_RET:
-            out.Lit("return;");
-            return;
 
         case IR::OP_DISCARD:
             out.Lit("discard;");
@@ -305,8 +385,10 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_STORE_OUTPUT: {
             // Fragment: fragColor = value
             // Vertex: gl_Position = value or varying = value
+            // IR encoding: EmitInstruction(OP_STORE_OUTPUT, valueReg, slot)
+            // So: dest = valueReg, operand[0] = slot/outputIdx
             u16 outputIdx = Op(instIdx, 0);
-            u16 valueReg = Op(instIdx, 1);
+            u16 valueReg = dest;  // Value is in destination, not operand
 
             if (stage == ShaderStage::Fragment) {
                 out.Lit("fragColor = ");
@@ -1100,6 +1182,8 @@ void GLESBuilder::EmitExpr(u16 reg) {
         u16 idx = reg & 0x7FFF;
         if (idx < ir->floatCount) {
             out.Flt(ir->floatConstants[idx]);
+        } else {
+            out.Lit("0.0 /* missing float */");
         }
         return;
     }
@@ -1110,12 +1194,16 @@ void GLESBuilder::EmitExpr(u16 reg) {
             u16 idx = reg & 0x3FFF;
             if (idx < ir->boolCount) {
                 out.Str(ir->boolConstants[idx] ? "true" : "false");
+            } else {
+                out.Lit("false /* missing bool */");
             }
         } else {
             // Int constant
             u16 idx = reg & 0x3FFF;
             if (idx < ir->intCount) {
                 out.Int(ir->intConstants[idx]);
+            } else {
+                out.Lit("0 /* missing int */");
             }
         }
         return;
@@ -1123,7 +1211,8 @@ void GLESBuilder::EmitExpr(u16 reg) {
 
     // Invalid register marker
     if (reg == 0x3FFF) {
-        return;  // Skip invalid operand slots
+        out.Lit("0.0 /* invalid */");  // Emit placeholder instead of nothing
+        return;
     }
 
     // Real register - check if we should inline it
@@ -1154,8 +1243,43 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
         }
 
         case IR::OP_LOAD_INPUT: {
-            // Load fragment input (varying)
+            // Load shader input - could be varying or built-in
             u16 inputIdx = Op(instIdx, 0);
+
+            // Check for built-in inputs (slot >= 0x80)
+            if (inputIdx >= 0x80) {
+                // Built-in inputs (vertex shader)
+                switch (inputIdx) {
+                    case 0x80:  // BuiltinInputSlot::VERTEX_ID
+                        out.Lit("gl_VertexID");
+                        return;
+                    case 0x81:  // BuiltinInputSlot::INSTANCE_ID
+                        out.Lit("gl_InstanceID");
+                        return;
+                    case 0x90:  // GLOBAL_INVOCATION_ID (compute)
+                        out.Lit("gl_GlobalInvocationID");
+                        return;
+                    case 0x91:  // LOCAL_INVOCATION_ID (compute)
+                        out.Lit("gl_LocalInvocationID");
+                        return;
+                    case 0x92:  // WORKGROUP_ID (compute)
+                        out.Lit("gl_WorkGroupID");
+                        return;
+                    case 0x93:  // NUM_WORKGROUPS (compute)
+                        out.Lit("gl_NumWorkGroups");
+                        return;
+                    case 0x94:  // LOCAL_INVOCATION_INDEX (compute)
+                        out.Lit("gl_LocalInvocationIndex");
+                        return;
+                    default:
+                        out.Lit("/* unknown builtin 0x");
+                        out.Uint(inputIdx);
+                        out.Lit(" */");
+                        return;
+                }
+            }
+
+            // Regular fragment input (varying)
             if (varyings && inputIdx < varyings->count) {
                 out.Lit("v_");
                 out.Str(varyings->varyings[inputIdx].name);
@@ -1338,9 +1462,14 @@ void GLESBuilder::EmitVecConstruct(u32 instIdx) {
     EmitType(type);
     out.Chr('(');
 
+    bool first = true;
     for (u32 i = 0; i < components && i < 4; i++) {
-        if (i > 0) out.Lit(", ");
-        EmitExpr(Op(instIdx, i));
+        u16 op = Op(instIdx, i);
+        // Skip invalid operands to avoid trailing commas
+        if (op == 0x3FFF) continue;
+        if (!first) out.Lit(", ");
+        first = false;
+        EmitExpr(op);
     }
     out.Lit(");");
 }

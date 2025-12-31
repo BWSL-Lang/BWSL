@@ -302,7 +302,7 @@ private:
     void EmitOutputs();
     void EmitUniforms();
     void EmitMain();
-    void EmitBlock(u32 blockIdx);
+    void EmitBlockRecursive(u32 blockIdx, u32 stopAt, bool* emitted);
     void EmitInstruction(u32 instIdx);
 
     // ===== Expression Emission =====
