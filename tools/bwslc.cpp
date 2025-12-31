@@ -391,6 +391,12 @@ const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_LOAD_SHARED:   return "LOAD_SHARED";
         case IR::OP_STORE_SHARED:  return "STORE_SHARED";
         case IR::OP_LOAD_INPUT:    return "LOAD_INPUT";
+        case IR::OP_ARRAY_LOAD:    return "ARRAY_LOAD";
+        case IR::OP_ARRAY_STORE:   return "ARRAY_STORE";
+        case IR::OP_STORAGE_PTR:   return "STORAGE_PTR";
+        case IR::OP_STORAGE_FIELD: return "STORAGE_FIELD";
+        case IR::OP_STORAGE_INDEX: return "STORAGE_INDEX";
+        case IR::OP_STORAGE_LOAD:  return "STORAGE_LOAD";
         // Float Arithmetic
         case IR::OP_FADD:          return "FADD";
         case IR::OP_FSUB:          return "FSUB";

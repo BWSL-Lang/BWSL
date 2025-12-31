@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <unordered_map>
 #include <string>
+#include <vector>
 
 namespace BWSL {
 
@@ -92,6 +93,7 @@ struct Parser {
     NodeRef currentPass;
     NodeRef currentPipeline;
     std::unordered_map<std::string, u16> variableRegisters;
+    std::unordered_map<u32, std::vector<u32>> multiDimArrayDims;
 
     struct TypeCache {
         static constexpr u32 CACHE_SIZE = 128;
@@ -139,6 +141,7 @@ struct Parser {
         errors.Init(arena, 16);
         hasLookahead = false;
         has3TokenLookahead = false;
+        multiDimArrayDims.clear();
         SymbolTable::Init(&symbolTable, arena);
         currentShaderStage = ShaderStage::Fragment;
         inShaderStage = false;
@@ -254,6 +257,7 @@ private:
     NodeRef ParseArrayInitializer();
     NodeRef ParseInlineArrayConstruction();
     NodeRef ParseArrayDeclaration(CoreType elementType, StorageClass storageClass = StorageClass::Default);
+    NodeRef FlattenMultiDimArrayAccess(NodeRef access);
     TypeInfo ResolveType(const std::string& typeName);
     TypeInfo GetTypeInfoFromSymbol(Symbol* sym);
     TypeInfo ParseArrayType();

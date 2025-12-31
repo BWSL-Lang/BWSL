@@ -1,6 +1,4 @@
 #pragma once
-// Common types shared between bwsl_ast.h (AoS) and bwsl_ast_soa.h (SoA)
-// This header should be included by both and defines types they share.
 
 #include "bwsl_defs.h"
 #include "bwsl_arena.h"
@@ -42,7 +40,6 @@ struct ArenaArray {
     const T& operator[](u32 index) const { return data[index]; }
 };
 
-// Literal value storage - used by both AST implementations
 struct LiteralValue {
     enum Type { FLOAT, INT, UINT, BOOL, STRING };
     Type type;
@@ -154,14 +151,14 @@ namespace VariantDecl {
 
 // Function call flags - used by both AST implementations
 namespace FunctionCallFlags {
-    constexpr u8 IS_INTRINSIC        = 0x01;
-    constexpr u8 IS_MODULE_FUNCTION  = 0x02;
-    constexpr u8 TYPE_VALIDATED      = 0x04;
-    constexpr u8 NEEDS_CUSTOM_IMPL   = 0x08;
-    constexpr u8 IS_TEXTURE_OP       = 0x10;
-    constexpr u8 IS_WAVE_OP          = 0x20;
+    constexpr u8 IS_INTRINSIC         = 0x01;
+    constexpr u8 IS_MODULE_FUNCTION   = 0x02;
+    constexpr u8 TYPE_VALIDATED       = 0x04;
+    constexpr u8 NEEDS_CUSTOM_IMPL    = 0x08;
+    constexpr u8 IS_TEXTURE_OP        = 0x10;
+    constexpr u8 IS_WAVE_OP           = 0x20;
     constexpr u8 IS_COMPILE_TIME_EVAL = 0x40;
-    constexpr u8 IS_METHOD_CALL      = 0x80;  // Method call on object (e.g., shape.distance(p))
+    constexpr u8 IS_METHOD_CALL       = 0x80;  // Method call on object (e.g., shape.distance(p))
 }
 
 } // namespace BWSL

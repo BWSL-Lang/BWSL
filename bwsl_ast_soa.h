@@ -115,7 +115,10 @@ struct VariableDeclData {
     NodeRef initializer;
     bool isConst;
     StorageClass storageClass;
-    u8 _pad[2];
+    u8 arrayDimensions;
+    u8 _pad;
+    u32 arrayLength;
+    u32 arrayElementTypeHash;
 };
 
 // Function call data (with ArenaArray overhead)
@@ -906,7 +909,9 @@ namespace ASTFactory {
 
     inline NodeRef MakeVariableDecl(AST* ast, const ArenaString& name, const ArenaString& type,
                                     NodeRef initializer, bool isConst, u32 line = 0, u32 col = 0,
-                                    StorageClass storageClass = StorageClass::Default) {
+                                    StorageClass storageClass = StorageClass::Default,
+                                    u8 arrayDimensions = 0, u32 arrayLength = 0,
+                                    u32 arrayElementTypeHash = 0) {
         u32 index = ast->variableDecls.count;
         VariableDeclData data;
         data.name = name;
@@ -914,6 +919,10 @@ namespace ASTFactory {
         data.initializer = initializer;
         data.isConst = isConst;
         data.storageClass = storageClass;
+        data.arrayDimensions = arrayDimensions;
+        data._pad = 0;
+        data.arrayLength = arrayLength;
+        data.arrayElementTypeHash = arrayElementTypeHash;
         ast->variableDecls.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {
@@ -1497,7 +1506,9 @@ namespace ASTClone {
         // Clone initializer first
         NodeRef clonedInit = src.initializer.IsValid() ? CloneNode(ctx, src.initializer) : NodeRef::Null();
 
-        NodeRef newVar = ASTFactory::MakeVariableDecl(ctx.ast, src.name, newType, clonedInit, src.isConst, line, col, src.storageClass);
+        NodeRef newVar = ASTFactory::MakeVariableDecl(ctx.ast, src.name, newType, clonedInit, src.isConst,
+                                                      line, col, src.storageClass, src.arrayDimensions,
+                                                      src.arrayLength, src.arrayElementTypeHash);
 
         return newVar;
     }

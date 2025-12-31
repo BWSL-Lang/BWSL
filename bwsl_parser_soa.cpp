@@ -3,6 +3,7 @@
 #include "bwsl_eval_soa.h"
 #include "bwsl_utils.h"
 #include <cstring>
+#include <algorithm>
 #include <climits>
 #include <cstdlib>
 #include <string>
@@ -1382,7 +1383,8 @@ NodeRef Parser::ParseStatement() {
 
         bool isArray = false;
         u32 arraySize = 0;
-        if (Match(TokenType::LEFT_BRACKET)) {
+        std::vector<u32> arrayDims;
+        while (Match(TokenType::LEFT_BRACKET)) {
             Consume(TokenType::NUMBER, "Expected array size");
             std::string_view sizeStr = PreviousValue();
             int size = 0;
@@ -1404,8 +1406,20 @@ NodeRef Parser::ParseStatement() {
                 return NodeRef::Null();
             }
             Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
+            arrayDims.push_back(static_cast<u32>(size));
+        }
+
+        if (!arrayDims.empty()) {
+            u64 total = 1;
+            for (u32 dim : arrayDims) {
+                if (dim == 0 || total > (MAX_ARRAY_SIZE / dim)) {
+                    Error("Invalid array size. Max 256k elements");
+                    return NodeRef::Null();
+                }
+                total *= dim;
+            }
             isArray = true;
-            arraySize = static_cast<u32>(size);
+            arraySize = static_cast<u32>(total);
         }
 
         NodeRef initializer = NodeRef::Null();
@@ -1422,10 +1436,14 @@ NodeRef Parser::ParseStatement() {
 
         ArenaString typeName = isArray ? ArenaString::MakeHashOnly("array")
                                        : ArenaString::MakeHashOnly(typeStr);
+        u8 arrayDimCount = isArray ? static_cast<u8>(arrayDims.size()) : 0;
+        u32 arrayLen = isArray ? arraySize : 0;
+        u32 elementTypeHash = isArray ? ArenaString::MakeHashOnly(typeStr).nameHash : 0;
         NodeRef varDecl = ASTFactory::MakeVariableDecl(ast,
             ArenaString::MakeHashOnly(varName),
             typeName,
-            initializer, false, line, col, storageClass);
+            initializer, false, line, col, storageClass, arrayDimCount, arrayLen,
+            elementTypeHash);
 
         Symbol* sym = SymbolTable::AddSymbol(&symbolTable, ArenaString::MakeHashOnly(varName), SymbolKind::VARIABLE);
         if (sym) {
@@ -1434,7 +1452,7 @@ NodeRef Parser::ParseStatement() {
                 TypeInfo arrayInfo{};
                 arrayInfo.coreType = TokenTypeToReturnType(varType);
                 arrayInfo.componentCount = GetTypeInfoFromToken(varType).componentCount;
-                arrayInfo.arrayDimensions = 1;
+                arrayInfo.arrayDimensions = static_cast<u8>(arrayDims.size());
                 arrayInfo.customTypeHash = 0;
                 arrayInfo.arrayLength = arraySize;
                 arrayInfo.arrayStride = static_cast<u32>(arrayInfo.componentCount) * 4u;
@@ -1443,6 +1461,10 @@ NodeRef Parser::ParseStatement() {
                 varData.typeInfo = GetTypeInfoFromToken(varType);
             }
             varData.storageClass = storageClass;
+        }
+
+        if (arrayDims.size() > 1) {
+            multiDimArrayDims[ArenaString::MakeHashOnly(varName).nameHash] = arrayDims;
         }
 
         return varDecl;
@@ -2233,7 +2255,49 @@ NodeRef Parser::ParseArrayAccess(NodeRef array) {
 
     Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array index");
 
-    return ASTFactory::MakeArrayAccess(ast, array, index, loc.line, loc.column);
+    NodeRef access = ASTFactory::MakeArrayAccess(ast, array, index, loc.line, loc.column);
+    return FlattenMultiDimArrayAccess(access);
+}
+
+NodeRef Parser::FlattenMultiDimArrayAccess(NodeRef access) {
+    if (access.Type() != ASTNodeType::ARRAY_ACCESS) {
+        return access;
+    }
+
+    std::vector<NodeRef> indices;
+    NodeRef base = access;
+
+    while (base.Type() == ASTNodeType::ARRAY_ACCESS) {
+        const ArrayAccessData& data = ast->GetArrayAccess(base);
+        indices.push_back(data.index);
+        base = data.array;
+    }
+
+    if (base.Type() != ASTNodeType::IDENTIFIER) {
+        return access;
+    }
+
+    u32 baseHash = ast->GetIdentifier(base).name.nameHash;
+    auto it = multiDimArrayDims.find(baseHash);
+    if (it == multiDimArrayDims.end()) {
+        return access;
+    }
+
+    const std::vector<u32>& dims = it->second;
+    if (dims.size() <= 1 || indices.size() != dims.size()) {
+        return access;
+    }
+
+    std::reverse(indices.begin(), indices.end());
+
+    NodeRef flatIndex = indices[0];
+    for (size_t i = 1; i < indices.size(); i++) {
+        NodeRef dimLiteral = ASTFactory::MakeLiteralUint(ast, dims[i], 0, 0);
+        NodeRef mul = ASTFactory::MakeBinaryOp(ast, BinaryOpType::MULTIPLY, flatIndex, dimLiteral, 0, 0);
+        flatIndex = ASTFactory::MakeBinaryOp(ast, BinaryOpType::ADD, mul, indices[i], 0, 0);
+    }
+
+    return ASTFactory::MakeArrayAccess(ast, base, flatIndex, 0, 0);
 }
 
 //==============================================================================
@@ -3277,6 +3341,7 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
     u32 col = loc.column;
 
     // Already consumed '[', now get size
+    std::vector<u32> arrayDims;
     Consume(TokenType::NUMBER, "Expected array size");
 
     std::string_view sizeStr = PreviousValue();
@@ -3288,6 +3353,19 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
     }
 
     Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
+    arrayDims.push_back(static_cast<u32>(size));
+
+    while (Match(TokenType::LEFT_BRACKET)) {
+        Consume(TokenType::NUMBER, "Expected array size");
+        std::string_view dimStr = PreviousValue();
+        int dimSize = std::stoi(std::string(dimStr));
+        if (dimSize <= 0 || static_cast<u32>(dimSize) > MAX_ARRAY_SIZE) {
+            Error("Invalid array size. Max 256k elements");
+            return NodeRef::Null();
+        }
+        Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
+        arrayDims.push_back(static_cast<u32>(dimSize));
+    }
     Consume(TokenType::IDENTIFIER, "Expected array variable name");
 
     std::string varName(stream->GetValue(previous));
@@ -3310,12 +3388,21 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
         return static_cast<u32>(comp) * 4u;
     };
 
+    u64 totalSize = 1;
+    for (u32 dim : arrayDims) {
+        if (dim == 0 || totalSize > (MAX_ARRAY_SIZE / dim)) {
+            Error("Invalid array size. Max 256k elements");
+            return NodeRef::Null();
+        }
+        totalSize *= dim;
+    }
+
     TypeInfo arrayInfo{};
     arrayInfo.coreType = elementType;
     arrayInfo.componentCount = GetComponentCountLocal(elementType);
-    arrayInfo.arrayDimensions = 1;
+    arrayInfo.arrayDimensions = static_cast<u8>(arrayDims.size());
     arrayInfo.customTypeHash = 0;
-    arrayInfo.arrayLength = static_cast<u32>(size);
+    arrayInfo.arrayLength = static_cast<u32>(totalSize);
     arrayInfo.arrayStride = CalculateTypeSizeLocal(elementType, arrayInfo.componentCount);
 
     // Check for initializer
@@ -3326,10 +3413,33 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
 
     Consume(TokenType::SEMICOLON, "Expected ';' after array declaration");
 
+    auto HashFromCoreType = [](CoreType t) -> u32 {
+        switch (t) {
+            case CoreType::BOOL:   return TypeHashes::BOOL;
+            case CoreType::INT:    return TypeHashes::INT;
+            case CoreType::UINT:   return TypeHashes::UINT;
+            case CoreType::FLOAT:  return TypeHashes::FLOAT;
+            case CoreType::INT2:   return TypeHashes::INT2;
+            case CoreType::INT3:   return TypeHashes::INT3;
+            case CoreType::INT4:   return TypeHashes::INT4;
+            case CoreType::UINT2:  return TypeHashes::UINT2;
+            case CoreType::UINT3:  return TypeHashes::UINT3;
+            case CoreType::UINT4:  return TypeHashes::UINT4;
+            case CoreType::FLOAT2: return TypeHashes::FLOAT2;
+            case CoreType::FLOAT3: return TypeHashes::FLOAT3;
+            case CoreType::FLOAT4: return TypeHashes::FLOAT4;
+            case CoreType::MAT2:   return TypeHashes::MAT2;
+            case CoreType::MAT3:   return TypeHashes::MAT3;
+            case CoreType::MAT4:   return TypeHashes::MAT4;
+            default:               return 0;
+        }
+    };
+
     NodeRef varDecl = ASTFactory::MakeVariableDecl(ast,
         ArenaString::MakeHashOnly(varName),
         ArenaString::MakeHashOnly("array"),
-        initializer, false, line, col, storageClass);
+        initializer, false, line, col, storageClass, static_cast<u8>(arrayDims.size()),
+        static_cast<u32>(totalSize), HashFromCoreType(elementType));
 
     // Add to symbol table
     Symbol* sym = SymbolTable::AddSymbol(&symbolTable, ArenaString::MakeHashOnly(varName), SymbolKind::VARIABLE);
@@ -3338,6 +3448,10 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
         VariableData& varData = symbolTable.variables[sym->index];
         varData.typeInfo = arrayInfo;
         varData.storageClass = storageClass;
+    }
+
+    if (arrayDims.size() > 1) {
+        multiDimArrayDims[ArenaString::MakeHashOnly(varName).nameHash] = arrayDims;
     }
 
     return varDecl;

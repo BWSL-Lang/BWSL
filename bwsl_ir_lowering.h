@@ -531,16 +531,9 @@ struct IRLowering {
         builder.EmitInstruction(OP_JUMP, 0, 0);
         program.metadata[backEdgeIdx] = loopHeader;
 
-        // If inside an outer loop, emit NOP to create dedicated merge block
-        // This prevents inner merge from conflicting with outer continue target
-        // The merge point must be the NOP instruction itself
-        u32 loopEnd;
-        if (loopDepth > 0) {
-            loopEnd = builder.currentInstruction;  // NOP is the merge point
-            builder.EmitInstruction(OP_NOP, 0, 0);
-        } else {
-            loopEnd = builder.currentInstruction;
-        }
+        // Always emit a dedicated merge block to avoid conflicts with subsequent headers.
+        u32 loopEnd = builder.currentInstruction;  // NOP is the merge point
+        builder.EmitInstruction(OP_NOP, 0, 0);
 
         // Patch break/skip jumps
         PopLoopContext(continueTarget, loopEnd);
@@ -655,13 +648,8 @@ struct IRLowering {
         // If inside an outer loop, emit NOP to create dedicated merge block
         // This prevents inner merge from conflicting with outer continue target
         // The merge point must be the NOP instruction itself
-        u32 loopEnd;
-        if (loopDepth > 0) {
-            loopEnd = builder.currentInstruction;  // NOP is the merge point
-            builder.EmitInstruction(OP_NOP, 0, 0);
-        } else {
-            loopEnd = builder.currentInstruction;
-        }
+        u32 loopEnd = builder.currentInstruction;  // NOP is the merge point
+        builder.EmitInstruction(OP_NOP, 0, 0);
 
         // Patch break/skip jumps
         PopLoopContext(continueTarget, loopEnd);
@@ -738,13 +726,8 @@ struct IRLowering {
         // If inside an outer loop, emit NOP to create dedicated merge block
         // This prevents inner merge from conflicting with outer continue target
         // The merge point must be the NOP instruction itself
-        u32 loopEnd;
-        if (loopDepth > 0) {
-            loopEnd = builder.currentInstruction;  // NOP is the merge point
-            builder.EmitInstruction(OP_NOP, 0, 0);
-        } else {
-            loopEnd = builder.currentInstruction;
-        }
+        u32 loopEnd = builder.currentInstruction;  // NOP is the merge point
+        builder.EmitInstruction(OP_NOP, 0, 0);
 
         // Patch break/skip jumps
         PopLoopContext(continueTarget, loopEnd);
@@ -813,13 +796,8 @@ struct IRLowering {
             // If inside an outer loop, emit NOP to create dedicated merge block
             // This prevents inner merge from conflicting with outer continue target
             // The merge point must be the NOP instruction itself
-            u32 loopEnd;
-            if (loopDepth > 0) {
-                loopEnd = builder.currentInstruction;  // NOP is the merge point
-                builder.EmitInstruction(OP_NOP, 0, 0);
-            } else {
-                loopEnd = builder.currentInstruction;
-            }
+            u32 loopEnd = builder.currentInstruction;  // NOP is the merge point
+            builder.EmitInstruction(OP_NOP, 0, 0);
 
             // Patch break/skip jumps
             PopLoopContext(continueTarget, loopEnd);
@@ -878,13 +856,8 @@ struct IRLowering {
             // If inside an outer loop, emit NOP to create dedicated merge block
             // This prevents inner merge from conflicting with outer continue target
             // The merge point must be the NOP instruction itself
-            u32 loopEnd;
-            if (loopDepth > 0) {
-                loopEnd = builder.currentInstruction;  // NOP is the merge point
-                builder.EmitInstruction(OP_NOP, 0, 0);
-            } else {
-                loopEnd = builder.currentInstruction;
-            }
+            u32 loopEnd = builder.currentInstruction;  // NOP is the merge point
+            builder.EmitInstruction(OP_NOP, 0, 0);
 
             // Patch break/skip jumps
             PopLoopContext(continueTarget, loopEnd);
@@ -906,6 +879,65 @@ struct IRLowering {
 
     void LowerSwitch(NodeRef ref) {
         const SwitchData& sw = ast->GetSwitch(ref);
+
+        auto GetCaseLiteralValue = [&](NodeRef valueRef, s32* outVal) -> bool {
+            if (valueRef.Type() == ASTNodeType::LITERAL) {
+                const LiteralData& lit = ast->GetLiteral(valueRef);
+                switch (lit.value.type) {
+                    case LiteralValue::INT:
+                        *outVal = static_cast<s32>(lit.value.intValue);
+                        return true;
+                    case LiteralValue::UINT:
+                        *outVal = static_cast<s32>(lit.value.uintValue);
+                        return true;
+                    case LiteralValue::BOOL:
+                        *outVal = lit.value.boolValue ? 1 : 0;
+                        return true;
+                    default:
+                        return false;
+                }
+            }
+
+            if (valueRef.Type() == ASTNodeType::IDENTIFIER) {
+                const IdentifierData& ident = ast->GetIdentifier(valueRef);
+                Symbol* sym = SymbolTable::LookupAny(const_cast<SymbolTableData*>(symbols), ident.name);
+                if (sym) {
+                    if (sym->kind == SymbolKind::EVAL_CONSTANT) {
+                        const LiteralValue& val = symbols->evalConstants[sym->index];
+                        if (val.type == LiteralValue::INT) {
+                            *outVal = static_cast<s32>(val.intValue);
+                            return true;
+                        }
+                        if (val.type == LiteralValue::UINT) {
+                            *outVal = static_cast<s32>(val.uintValue);
+                            return true;
+                        }
+                        if (val.type == LiteralValue::BOOL) {
+                            *outVal = val.boolValue ? 1 : 0;
+                            return true;
+                        }
+                    } else if (sym->kind == SymbolKind::VARIABLE) {
+                        const VariableData& varData = symbols->variables[sym->index];
+                        if (varData.isConst) {
+                            const LiteralValue& val = varData.evalValue;
+                            if (val.type == LiteralValue::INT) {
+                                *outVal = static_cast<s32>(val.intValue);
+                                return true;
+                            }
+                            if (val.type == LiteralValue::UINT) {
+                                *outVal = static_cast<s32>(val.uintValue);
+                                return true;
+                            }
+                            if (val.type == LiteralValue::BOOL) {
+                                *outVal = val.boolValue ? 1 : 0;
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        };
 
         // Lower switch expression
         u16 exprReg = LowerExpression(sw.expression);
@@ -940,8 +972,11 @@ struct IRLowering {
             if (!caseData.isDefault) {
                 for (u32 v = 0; v < caseData.values.count; v++) {
                     NodeRef valueRef = caseData.values[v];
-                    const LiteralData& lit = ast->GetLiteral(valueRef);
-                    s32 caseVal = static_cast<s32>(lit.value.intValue);
+                    s32 caseVal = 0;
+                    if (!GetCaseLiteralValue(valueRef, &caseVal)) {
+                        fprintf(stderr, "Error: switch case values must be compile-time literals\n");
+                        return;
+                    }
                     minCase = (caseVal < minCase) ? caseVal : minCase;
                     maxCase = (caseVal > maxCase) ? caseVal : maxCase;
                 }
@@ -955,12 +990,13 @@ struct IRLowering {
                            (static_cast<u32>(range) <= totalCaseValues * 2);
         (void)useJumpTable;  // For future optimization - currently always use linear
 
-        // Record switch ID and start building case data
+        // Record switch ID and reserve case data range up-front (nested switches rely on this)
         u32 switchId = program.switchCount++;
         program.switchInstructionIndices[switchId] = switchIdx;
-        
+
         // Get offset for case values in flattened arrays
         u32 caseOffset = program.switchCaseOffsets[switchId];
+        program.switchCaseOffsets[switchId + 1] = caseOffset + totalCaseValues;
         
         // Emit case bodies and collect targets
         u32* caseTargets = (u32*)alloca(caseArmCount * sizeof(u32));
@@ -1012,15 +1048,18 @@ struct IRLowering {
                 // Each value in this arm maps to the same target
                 for (u32 v = 0; v < caseData.values.count; v++) {
                     NodeRef valueRef = caseData.values[v];
-                    const LiteralData& lit = ast->GetLiteral(valueRef);
-                    program.switchCaseValues[caseOffset + valueIdx] = static_cast<s32>(lit.value.intValue);
+                    s32 caseVal = 0;
+                    if (!GetCaseLiteralValue(valueRef, &caseVal)) {
+                        fprintf(stderr, "Error: switch case values must be compile-time literals\n");
+                        return;
+                    }
+                    program.switchCaseValues[caseOffset + valueIdx] = caseVal;
                     program.switchCaseTargets[caseOffset + valueIdx] = caseTargets[i];
                     valueIdx++;
                 }
             }
         }
         
-        program.switchCaseOffsets[switchId + 1] = caseOffset + totalCaseValues;
         program.switchDefaultTargets[switchId] = hasDefault ? defaultTarget : mergePoint;
         
         // Annotate switch structure for SPIR-V
@@ -1251,8 +1290,14 @@ struct IRLowering {
 
         Symbol* sym = SymbolTable::LookupByHash(const_cast<SymbolTableData*>(symbols), varDecl.name.nameHash);
         const VariableData* varData = (sym && sym->kind == SymbolKind::VARIABLE) ? &symbols->variables[sym->index] : nullptr;
-        bool isShared = varData && varData->storageClass == StorageClass::Shared;
+        bool isShared = (varDecl.storageClass == StorageClass::Shared) ||
+            (varData && varData->storageClass == StorageClass::Shared);
         bool isArray = varData && IsArray(varData->typeInfo);
+        u32 arrayLength = isArray ? varData->typeInfo.arrayLength : 0;
+        if (!isArray && varDecl.arrayDimensions > 0) {
+            isArray = true;
+            arrayLength = varDecl.arrayLength;
+        }
 
         // Allocate register for the variable
         u16 varReg = AllocateRegister();
@@ -1267,6 +1312,10 @@ struct IRLowering {
             varData && varData->typeInfo.coreType != CoreType::INVALID) {
             coreType = varData->typeInfo.coreType;
             customTypeHash = varData->typeInfo.customTypeHash;
+        }
+        if ((coreType == CoreType::INVALID || coreType == CoreType::VOID) &&
+            varDecl.arrayElementTypeHash != 0) {
+            coreType = ResolveCoreTypeFromHash(varDecl.arrayElementTypeHash, &customTypeHash);
         }
 
         if (isShared) {
@@ -1299,7 +1348,7 @@ struct IRLowering {
             u32 sharedIndex = program.sharedVarCount++;
             program.sharedNameHashes[sharedIndex] = varDecl.name.nameHash;
             program.sharedTypes[sharedIndex] = static_cast<u16>(coreType);
-            program.sharedArraySizes[sharedIndex] = isArray ? varData->typeInfo.arrayLength : 0;
+            program.sharedArraySizes[sharedIndex] = isArray ? arrayLength : 0;
             program.sharedRegisters[sharedIndex] = varReg;
 
             program.registerStorageInfo[varReg] =
@@ -2573,6 +2622,11 @@ void LowerIfStatement(NodeRef ref) {
                 IR::IRProgram::STORAGE_IS_PTR |
                 sharedFlag;
 
+            CoreType baseType = GetRegisterType(baseReg);
+            if (baseType != CoreType::INVALID && baseType != CoreType::VOID) {
+                SetRegisterType(ptrReg, baseType);
+            }
+
             // Now load the value from the element pointer
             builder.EmitInstruction(OP_STORAGE_LOAD, dest, ptrReg);
 
@@ -2593,6 +2647,57 @@ void LowerIfStatement(NodeRef ref) {
         }
 
         return dest;
+    }
+
+    u16 LowerStoragePointerForAtomic(NodeRef ref) {
+        if (ref.Type() != ASTNodeType::ARRAY_ACCESS) {
+            return LowerExpression(ref);
+        }
+
+        const ArrayAccessData& access = ast->GetArrayAccess(ref);
+
+        u16 baseReg = LowerExpression(access.array);
+        u16 indexReg = LowerExpression(access.index);
+
+        bool isStoragePtr = baseReg < MAX_REGISTERS &&
+            (program.registerStorageInfo[baseReg] & IR::IRProgram::STORAGE_IS_PTR);
+
+        if (!isStoragePtr && access.array.Type() == ASTNodeType::IDENTIFIER) {
+            for (u32 i = 0; i < program.sharedVarCount; i++) {
+                if (program.sharedRegisters[i] == baseReg) {
+                    program.registerStorageInfo[baseReg] =
+                        (i << IR::IRProgram::STORAGE_BINDING_SHIFT) |
+                        IR::IRProgram::STORAGE_IS_PTR |
+                        IR::IRProgram::STORAGE_IS_SHARED;
+                    isStoragePtr = true;
+                    break;
+                }
+            }
+        }
+
+        if (!isStoragePtr) {
+            return LowerExpression(ref);
+        }
+
+        u16 ptrReg = AllocateRegister();
+        builder.EmitInstruction(OP_STORAGE_INDEX, ptrReg, baseReg, indexReg);
+
+        u32 srcInfo = program.registerStorageInfo[baseReg];
+        u32 binding = (srcInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
+        u32 depth = ((srcInfo & IR::IRProgram::STORAGE_DEPTH_MASK) >> IR::IRProgram::STORAGE_DEPTH_SHIFT) + 1;
+        u32 sharedFlag = srcInfo & IR::IRProgram::STORAGE_IS_SHARED;
+        program.registerStorageInfo[ptrReg] =
+            (binding << IR::IRProgram::STORAGE_BINDING_SHIFT) |
+            (depth << IR::IRProgram::STORAGE_DEPTH_SHIFT) |
+            IR::IRProgram::STORAGE_IS_PTR |
+            sharedFlag;
+
+        CoreType baseType = GetRegisterType(baseReg);
+        if (baseType != CoreType::INVALID && baseType != CoreType::VOID) {
+            SetRegisterType(ptrReg, baseType);
+        }
+
+        return ptrReg;
     }
     
     u16 LowerMemberAccess(NodeRef ref) {
@@ -3499,6 +3604,20 @@ void LowerIfStatement(NodeRef ref) {
                         SetRegisterType(dest, CoreType::VOID);
                         return dest;
                     }
+                    break;
+                }
+                case Intrinsic::ATOMIC_ADD:
+                case Intrinsic::ATOMIC_MIN:
+                case Intrinsic::ATOMIC_MAX:
+                case Intrinsic::ATOMIC_AND:
+                case Intrinsic::ATOMIC_OR:
+                case Intrinsic::ATOMIC_XOR:
+                case Intrinsic::ATOMIC_EXCHANGE:
+                case Intrinsic::ATOMIC_CMP_EXCHANGE: {
+                    if (call.arguments.count > 0) {
+                        args[0] = LowerStoragePointerForAtomic(call.arguments[0]);
+                    }
+                    op = IntrinsicToOpcode(intrinsic);
                     break;
                 }
                 // Texture operations need special handling:

@@ -1,0 +1,278 @@
+// Test: Switch/case statements
+// Tests: switch on int, switch on enum, default case, multiple cases, fallthrough behavior
+
+pipeline ControlSwitch {
+    attributes {
+        position: float3
+    }
+
+    // Enum for testing switch on enum values
+    enum RenderMode {
+        Solid,
+        Wireframe,
+        Points,
+        Transparent
+    }
+
+    enum LightType {
+        Directional = 0,
+        Point = 1,
+        Spot = 2,
+        Area = 3,
+        Ambient = 4
+    }
+
+    enum MaterialType {
+        Diffuse,
+        Specular,
+        Metallic,
+        Emissive,
+        Glass
+    }
+
+    // Function with switch on int
+    getMultiplier :: (int level) -> float {
+        float result = 1.0;
+
+        switch (level) {
+            case 0: {
+                result = 0.5;
+            }
+            case 1: {
+                result = 1.0;
+            }
+            case 2: {
+                result = 2.0;
+            }
+            case 3: {
+                result = 4.0;
+            }
+            case 4: {
+                result = 8.0;
+            }
+            default: {
+                result = 1.0;
+            }
+        }
+
+        return result;
+    }
+
+    // Function with switch on enum
+    getLightAttenuation :: (LightType type, float distance) -> float {
+        float atten = 1.0;
+
+        switch (type) {
+            case LightType::Directional: {
+                atten = 1.0;  // No attenuation
+            }
+            case LightType::Point: {
+                atten = 1.0 / (distance * distance);
+            }
+            case LightType::Spot: {
+                atten = 1.0 / (distance * distance);
+            }
+            case LightType::Area: {
+                atten = 1.0 / distance;
+            }
+            case LightType::Ambient: {
+                atten = 1.0;
+            }
+            default: {
+                atten = 1.0;
+            }
+        }
+
+        return atten;
+    }
+
+    // Switch with complex expressions in cases
+    getMaterialColor :: (MaterialType mat, float3 baseColor) -> float3 {
+        float3 result = baseColor;
+
+        switch (mat) {
+            case MaterialType::Diffuse: {
+                result = baseColor;
+            }
+            case MaterialType::Specular: {
+                result = baseColor * 0.5 + float3(0.5);
+            }
+            case MaterialType::Metallic: {
+                result = baseColor * 0.8;
+            }
+            case MaterialType::Emissive: {
+                result = baseColor * 2.0;
+            }
+            case MaterialType::Glass: {
+                result = float3(1.0) * 0.1 + baseColor * 0.9;
+            }
+            default: {
+                result = baseColor;
+            }
+        }
+
+        return result;
+    }
+
+    // Switch with early return
+    getRenderModeAlpha :: (RenderMode mode) -> float {
+        switch (mode) {
+            case RenderMode::Solid: {
+                return 1.0;
+            }
+            case RenderMode::Wireframe: {
+                return 0.8;
+            }
+            case RenderMode::Points: {
+                return 0.6;
+            }
+            case RenderMode::Transparent: {
+                return 0.3;
+            }
+            default: {
+                return 1.0;
+            }
+        }
+    }
+
+    // Nested switch statements
+    getComplexFactor :: (int category, int subcategory) -> float {
+        float factor = 0.0;
+
+        switch (category) {
+            case 0: {
+                switch (subcategory) {
+                    case 0: {
+                        factor = 1.0;
+                    }
+                    case 1: {
+                        factor = 1.5;
+                    }
+                    default: {
+                        factor = 1.0;
+                    }
+                }
+            }
+            case 1: {
+                switch (subcategory) {
+                    case 0: {
+                        factor = 2.0;
+                    }
+                    case 1: {
+                        factor = 2.5;
+                    }
+                    case 2: {
+                        factor = 3.0;
+                    }
+                    default: {
+                        factor = 2.0;
+                    }
+                }
+            }
+            case 2: {
+                factor = 4.0;
+            }
+            default: {
+                factor = 0.0;
+            }
+        }
+
+        return factor;
+    }
+
+    // Switch with uint
+    getChannelWeight :: (uint channel) -> float {
+        float weight = 0.0;
+
+        switch (channel) {
+            case 0u: {
+                weight = 0.2126;  // Red (luminance)
+            }
+            case 1u: {
+                weight = 0.7152;  // Green (luminance)
+            }
+            case 2u: {
+                weight = 0.0722;  // Blue (luminance)
+            }
+            case 3u: {
+                weight = 1.0;     // Alpha
+            }
+            default: {
+                weight = 0.0;
+            }
+        }
+
+        return weight;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Test int switch
+            int level = 2;
+            float mult = getMultiplier(level);
+
+            // Test enum switch
+            LightType light = LightType::Point;
+            float atten = getLightAttenuation(light, 10.0);
+
+            // Test material switch
+            MaterialType mat = MaterialType::Metallic;
+            float3 baseColor = float3(0.8, 0.4, 0.2);
+            float3 matColor = getMaterialColor(mat, baseColor);
+
+            // Test render mode switch
+            RenderMode mode = RenderMode::Transparent;
+            float alpha = getRenderModeAlpha(mode);
+
+            // Test nested switch
+            float factor = getComplexFactor(1, 2);
+
+            // Test uint switch
+            float rWeight = getChannelWeight(0u);
+            float gWeight = getChannelWeight(1u);
+            float bWeight = getChannelWeight(2u);
+            float aWeight = getChannelWeight(3u);
+
+            // Combine results
+            float4 finalPos = float4(attributes.position, 1.0);
+            finalPos.xyz = finalPos.xyz * mult * atten * factor;
+            finalPos.xyz = matColor * alpha;
+
+            // Luminance calculation using channel weights
+            float luminance = baseColor.r * rWeight + baseColor.g * gWeight + baseColor.b * bWeight;
+
+            output.position = finalPos;
+            output.luminance = luminance;
+        }
+
+        fragment {
+            // Switch in fragment shader
+            int fragMode = 1;
+            float fragMult = getMultiplier(fragMode);
+
+            // Direct switch usage
+            float intensity = 1.0;
+            int shadingMode = 2;
+
+            switch (shadingMode) {
+                case 0: {
+                    intensity = 0.2;  // Ambient only
+                }
+                case 1: {
+                    intensity = 0.6;  // Diffuse
+                }
+                case 2: {
+                    intensity = 1.0;  // Full
+                }
+                default: {
+                    intensity = 0.5;
+                }
+            }
+
+            float lum = input.luminance;
+            output.color = float4(lum * intensity * fragMult, lum * intensity * fragMult, lum * intensity * fragMult, 1.0);
+        }
+    }
+}

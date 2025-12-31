@@ -1,0 +1,180 @@
+// Test: Wave/SIMD subgroup operations
+// Tests: wave_sum, wave_product, wave_min, wave_max, wave_all, wave_any, wave_broadcast, wave_read_first
+
+pipeline WaveOperations {
+
+    pass "WaveReductions" {
+        compute "Reductions" [64, 1, 1] {
+            uint idx = input.global_id.x;
+            uint localIdx = input.local_index;
+
+            // Each thread has unique values
+            float threadValue = float(localIdx) + 1.0;
+            int intValue = int(localIdx) - 32;
+            uint uintValue = localIdx * 2u;
+
+            // Wave reduction operations - sum all values in wave
+            float waveSum = wave_sum(threadValue);
+
+            // Wave product - multiply all values (careful with overflow)
+            float smallValue = 1.0 + float(localIdx % 4u) * 0.1;
+            float waveProduct = wave_product(smallValue);
+
+            // Wave min/max - find extremes across wave
+            float waveMinF = wave_min(threadValue);
+            float waveMaxF = wave_max(threadValue);
+            int waveMinI = wave_min(intValue);
+            int waveMaxI = wave_max(intValue);
+
+            // Boolean wave operations
+            bool isEven = (localIdx % 2u) == 0u;
+            bool isFirst = localIdx == 0u;
+            bool isLarge = threadValue > 32.0;
+
+            // wave_all - true only if ALL threads have true
+            bool allEven = wave_all(isEven);      // false (not all threads are even)
+            bool allPositive = wave_all(threadValue > 0.0);  // true (all values > 0)
+
+            // wave_any - true if ANY thread has true
+            bool anyFirst = wave_any(isFirst);     // true (thread 0 is first)
+            bool anyLarge = wave_any(isLarge);     // true (some values > 32)
+
+            // wave_broadcast - read value from specific lane
+            float fromLane0 = wave_broadcast(threadValue, 0);  // Get value from lane 0
+            float fromLane31 = wave_broadcast(threadValue, 31); // Get value from lane 31
+
+            // wave_read_first - read from first active lane
+            float firstValue = wave_read_first(threadValue);
+
+            // Use results
+            float result = waveSum + waveProduct + waveMinF + waveMaxF;
+            result = result + fromLane0 + fromLane31 + firstValue;
+
+            int intResult = waveMinI + waveMaxI;
+
+            // Boolean results affect computation
+            if (allPositive && anyFirst) {
+                result = result * 2.0;
+            }
+
+            if (allEven || anyLarge) {
+                intResult = intResult + 1;
+            }
+
+            // Prevent optimization by using results
+            if (idx == 0u && result > 0.0 && intResult != 0) {
+                float _ = result;
+            }
+        }
+    }
+
+    pass "WaveCommunication" {
+        compute "Communication" [32, 1, 1] {
+            uint idx = input.global_id.x;
+            uint localIdx = input.local_index;
+
+            // Thread-specific data
+            float3 position = float3(float(localIdx), float(localIdx) * 2.0, float(localIdx) * 3.0);
+            float4 color = float4(float(localIdx) / 32.0, 0.5, 0.5, 1.0);
+
+            // Broadcast position from different lanes
+            float3 origin = float3(
+                wave_broadcast(position.x, 0),
+                wave_broadcast(position.y, 0),
+                wave_broadcast(position.z, 0)
+            );
+
+            float3 midpoint = float3(
+                wave_broadcast(position.x, 16),
+                wave_broadcast(position.y, 16),
+                wave_broadcast(position.z, 16)
+            );
+
+            // Calculate distance from origin using wave broadcast
+            float3 offset = position - origin;
+            float distFromOrigin = length(offset);
+
+            // Wave reduce to find average position
+            float avgX = wave_sum(position.x) / 32.0;
+            float avgY = wave_sum(position.y) / 32.0;
+            float avgZ = wave_sum(position.z) / 32.0;
+            float3 centroid = float3(avgX, avgY, avgZ);
+
+            // Find bounding box using wave min/max
+            float minX = wave_min(position.x);
+            float maxX = wave_max(position.x);
+            float minY = wave_min(position.y);
+            float maxY = wave_max(position.y);
+            float minZ = wave_min(position.z);
+            float maxZ = wave_max(position.z);
+
+            float3 bboxMin = float3(minX, minY, minZ);
+            float3 bboxMax = float3(maxX, maxY, maxZ);
+            float3 bboxSize = bboxMax - bboxMin;
+
+            // Color blending using wave operations
+            float4 avgColor = float4(
+                wave_sum(color.r) / 32.0,
+                wave_sum(color.g) / 32.0,
+                wave_sum(color.b) / 32.0,
+                wave_sum(color.a) / 32.0
+            );
+
+            // Check if all threads have valid color
+            bool validAlpha = color.a > 0.5;
+            bool allValid = wave_all(validAlpha);
+
+            // Read first valid color
+            float4 firstColor = float4(
+                wave_read_first(color.r),
+                wave_read_first(color.g),
+                wave_read_first(color.b),
+                wave_read_first(color.a)
+            );
+
+            // Use all computed values
+            float3 finalPos = origin + midpoint + centroid;
+            float4 finalColor = avgColor + firstColor;
+            float boxVolume = bboxSize.x * bboxSize.y * bboxSize.z;
+
+            if (allValid && boxVolume > 0.0) {
+                float _ = distFromOrigin + length(finalPos) + length(finalColor);
+            }
+        }
+    }
+
+    pass "WaveConditional" {
+        compute "Conditional" [64, 1, 1] {
+            uint localIdx = input.local_index;
+
+            // Conditional values
+            float value = float(localIdx);
+            bool condition = localIdx < 32u;
+
+            // Different values based on condition
+            float condValue = condition ? value : value * -1.0;
+
+            // Wave operations respect active lanes
+            float sumPositive = wave_sum(condition ? value : 0.0);
+            float sumNegative = wave_sum(condition ? 0.0 : value);
+
+            // Check wave uniformity
+            bool anyNegative = wave_any(!condition);
+            bool allPositive = wave_all(condition);
+
+            // Min/max with conditional
+            float minVal = wave_min(condValue);
+            float maxVal = wave_max(condValue);
+
+            // Broadcast from conditional lane
+            float fromFirst = wave_broadcast(value, 0);
+            float fromMid = wave_broadcast(value, 32);
+
+            // Use results
+            if (anyNegative && !allPositive) {
+                float result = sumPositive - sumNegative + minVal + maxVal;
+                result = result + fromFirst + fromMid;
+            }
+        }
+    }
+}

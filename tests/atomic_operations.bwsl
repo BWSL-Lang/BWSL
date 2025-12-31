@@ -1,0 +1,160 @@
+// Test: Atomic operations
+// Tests: atomic_add, atomic_min, atomic_max, atomic_and, atomic_or, atomic_xor, atomic_exchange, atomic_cmp_exchange
+
+pipeline AtomicOperations {
+
+    pass "AtomicCompute" {
+        compute "AtomicOps" [64, 1, 1] {
+            // Shared memory for atomic operations
+            shared int sharedCounter[1];
+            shared uint sharedMask[1];
+            shared int sharedMin[1];
+            shared int sharedMax[1];
+
+            uint idx = input.global_id.x;
+            uint localIdx = input.local_index;
+
+            // Initialize shared memory (first thread only)
+            if (localIdx == 0u) {
+                sharedCounter[0] = 0;
+                sharedMask[0] = 0u;
+                sharedMin[0] = 2147483647;  // INT_MAX
+                sharedMax[0] = -2147483648; // INT_MIN
+            }
+
+            // Barrier to ensure initialization is complete
+            barrier();
+
+            // Each thread has a unique value based on its index
+            int threadValue = int(idx);
+            uint threadBit = 1u << (localIdx % 32u);
+
+            // atomic_add: Increment counter
+            int oldAdd = atomic_add(sharedCounter[0], 1);
+
+            // atomic_or: Set bit corresponding to this thread
+            uint oldOr = atomic_or(sharedMask[0], threadBit);
+
+            // atomic_and: Test masking
+            uint andMask = 0xFFFFFFFFu;
+            uint oldAnd = atomic_and(sharedMask[0], andMask);
+
+            // atomic_xor: Toggle bits
+            uint oldXor = atomic_xor(sharedMask[0], threadBit);
+
+            // atomic_min: Find minimum thread value
+            int oldMin = atomic_min(sharedMin[0], threadValue);
+
+            // atomic_max: Find maximum thread value
+            int oldMax = atomic_max(sharedMax[0], threadValue);
+
+            // atomic_exchange: Swap value
+            int swapValue = threadValue * 2;
+            int oldExchange = atomic_exchange(sharedCounter[0], swapValue);
+
+            // atomic_cmp_exchange: Compare and swap
+            int expectedValue = swapValue;
+            int newValue = threadValue * 3;
+            int oldCmpExchange = atomic_cmp_exchange(sharedCounter[0], expectedValue, newValue);
+
+            // Barrier before reading final results
+            barrier();
+
+            // Read final values
+            int finalCounter = sharedCounter[0];
+            uint finalMask = sharedMask[0];
+            int finalMin = sharedMin[0];
+            int finalMax = sharedMax[0];
+
+            // Compute results using atomic operation results
+            int resultSum = oldAdd + oldMin + oldMax;
+            uint resultMask = oldOr | oldAnd | oldXor;
+
+            // Use results to prevent optimization
+            if (idx == 0u && resultSum > 0 && resultMask > 0u) {
+                // First thread could write results somewhere
+                int _ = finalCounter + finalMin + finalMax;
+            }
+        }
+    }
+
+    pass "AtomicArithmetic" {
+        compute "ArithmeticOps" [32, 1, 1] {
+            shared int accumulator[4];
+            shared uint uaccumulator[4];
+
+            uint idx = input.global_id.x;
+            uint localIdx = input.local_index;
+
+            // Initialize
+            if (localIdx == 0u) {
+                accumulator[0] = 0;
+                accumulator[1] = 100;
+                accumulator[2] = 50;
+                accumulator[3] = -50;
+                uaccumulator[0] = 0u;
+                uaccumulator[1] = 0xFFu;
+                uaccumulator[2] = 0u;
+                uaccumulator[3] = 0xFFFFFFFFu;
+            }
+
+            barrier();
+
+            // Test atomic add with different values
+            int contribution = int(localIdx) - 16;  // Range: -16 to 15
+            atomic_add(accumulator[0], contribution);
+
+            // Test atomic min/max chains
+            int threadVal = int(localIdx) * 3 - 48;
+            atomic_min(accumulator[1], threadVal);
+            atomic_max(accumulator[2], threadVal);
+
+            // Test unsigned atomic operations
+            atomic_add(uaccumulator[0], localIdx);
+            atomic_and(uaccumulator[1], ~(1u << (localIdx % 8u)));
+            atomic_or(uaccumulator[2], 1u << (localIdx % 32u));
+            atomic_xor(uaccumulator[3], 1u << localIdx);
+
+            barrier();
+
+            // Verify results are accessible
+            int sumResult = accumulator[0];
+            int minResult = accumulator[1];
+            int maxResult = accumulator[2];
+        }
+    }
+
+    pass "AtomicBitwise" {
+        compute "BitwiseOps" [16, 1, 1] {
+            shared uint flags[1];
+            shared uint toggles[1];
+
+            uint localIdx = input.local_index;
+
+            if (localIdx == 0u) {
+                flags[0] = 0u;
+                toggles[0] = 0xAAAAAAAAu;  // Alternating bits
+            }
+
+            barrier();
+
+            // Each thread sets its own bit
+            uint myBit = 1u << localIdx;
+            atomic_or(flags[0], myBit);
+
+            // Toggle pattern
+            atomic_xor(toggles[0], myBit);
+
+            barrier();
+
+            // Check all bits are set (for 16 threads, lower 16 bits)
+            uint allBitsSet = flags[0] & 0xFFFFu;
+            bool allSet = allBitsSet == 0xFFFFu;
+
+            // Final mask operation
+            if (allSet) {
+                atomic_and(flags[0], 0xFFFF0000u);  // Clear lower bits
+            }
+        }
+    }
+}

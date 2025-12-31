@@ -13,7 +13,8 @@
 
 // Constants from SPIRV spec
 constexpr u32 SpvMagicNumber = spv::MagicNumber;
-constexpr u32 SpvVersion = 0x00010200; // SPIR-V 1.2
+constexpr u32 SpvVersion_1_2 = 0x00010200; // SPIR-V 1.2
+constexpr u32 SpvVersion_1_3 = 0x00010300; // SPIR-V 1.3
 
 namespace BWSL {
 
@@ -25,6 +26,7 @@ struct SPIRVBuilder {
     alignas(64) bool* hasPreAllocatedId; // True if register has pre-allocated ID needing definition
     u32 nextId;
     u32 idCapacity;
+    u32 spvVersion = SpvVersion_1_2;
     
     // ============= Type Deduplication =============
     alignas(64) u32 typeIds[static_cast<u32>(CoreType::COUNT)];  // Direct indexed by CoreType

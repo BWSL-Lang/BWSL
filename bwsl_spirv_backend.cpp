@@ -252,6 +252,7 @@ void SPIRVBuilder::Initialize(BWSL_Arena* arena, IR::IRProgram* ir, ShaderStage 
     
     // Analyze IR to determine capabilities, resources, and I/O requirements
     AnalyzeIR(&analysis, ir);
+    spvVersion = analysis.Has(IRAnalysis::CAP_WAVE_OPS) ? SpvVersion_1_3 : SpvVersion_1_2;
 
     // Initialize ID management
     nextId = 1;
@@ -367,6 +368,7 @@ void SPIRVBuilder::EmitPreamble() {
         EmitCapability(static_cast<spv::Capability>(61));  // GroupNonUniform
         EmitCapability(static_cast<spv::Capability>(63));  // GroupNonUniformArithmetic
         EmitCapability(static_cast<spv::Capability>(64));  // GroupNonUniformBallot
+        EmitCapability(static_cast<spv::Capability>(62));  // GroupNonUniformVote
     }
     
     // Atomic operations
@@ -3677,6 +3679,122 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             break;
         }
 
+        case IR::OP_WAVE_SUM:
+        case IR::OP_WAVE_MUL:
+        case IR::OP_WAVE_MIN:
+        case IR::OP_WAVE_MAX:
+        case IR::OP_WAVE_ALL:
+        case IR::OP_WAVE_ANY:
+        case IR::OP_WAVE_READ_LANE:
+        case IR::OP_WAVE_READ_FIRST: {
+            u16 dest_reg = ir->destinations[ir_idx];
+            u16 value_reg = ir->GetOperand(ir_idx, 0);
+            u32 value_id = GetSpirvId(value_reg);
+
+            u32 result_type = GetResultType(dest_reg, value_reg);
+            u32 scope = GetIntConstantId(static_cast<u32>(spv::ScopeSubgroup), true);
+
+            if (op == IR::OP_WAVE_ALL || op == IR::OP_WAVE_ANY) {
+                spv::Op boolOp = (op == IR::OP_WAVE_ALL)
+                    ? static_cast<spv::Op>(334)
+                    : static_cast<spv::Op>(335);
+                Emit(boolOp, result_type, dest, scope, value_id);
+                break;
+            }
+
+            if (op == IR::OP_WAVE_READ_FIRST) {
+                Emit(static_cast<spv::Op>(339), result_type, dest, scope, value_id);
+                break;
+            }
+
+            if (op == IR::OP_WAVE_READ_LANE) {
+                u32 lane_id = GetSpirvId(ir->GetOperand(ir_idx, 1));
+                Emit(static_cast<spv::Op>(337), result_type, dest, scope, value_id, lane_id);
+                break;
+            }
+
+            CoreType valueType = GetOperandType(value_reg);
+            bool isFloat = (mask(valueType) & TypeMasks::FLOAT_TYPES) != 0;
+            bool isUint = (valueType == CoreType::UINT);
+
+            u32 groupOp = static_cast<u32>(spv::GroupOperationReduce);
+            spv::Op groupOpCode = IR_TO_SPV_OP_TABLE[static_cast<u32>(op)];
+
+            if (op == IR::OP_WAVE_SUM) {
+                groupOpCode = isFloat ? static_cast<spv::Op>(350) : static_cast<spv::Op>(349);
+            } else if (op == IR::OP_WAVE_MUL) {
+                groupOpCode = isFloat ? static_cast<spv::Op>(352) : static_cast<spv::Op>(351);
+            } else if (op == IR::OP_WAVE_MIN) {
+                if (isFloat) {
+                    groupOpCode = static_cast<spv::Op>(355);
+                } else {
+                    groupOpCode = isUint ? static_cast<spv::Op>(354) : static_cast<spv::Op>(353);
+                }
+            } else if (op == IR::OP_WAVE_MAX) {
+                if (isFloat) {
+                    groupOpCode = static_cast<spv::Op>(358);
+                } else {
+                    groupOpCode = isUint ? static_cast<spv::Op>(357) : static_cast<spv::Op>(356);
+                }
+            }
+
+            Emit(groupOpCode, result_type, dest, scope, groupOp, value_id);
+            break;
+        }
+
+        case IR::OP_ATOMIC_ADD:
+        case IR::OP_ATOMIC_MIN:
+        case IR::OP_ATOMIC_MAX:
+        case IR::OP_ATOMIC_AND:
+        case IR::OP_ATOMIC_OR:
+        case IR::OP_ATOMIC_XOR:
+        case IR::OP_ATOMIC_XCHG:
+        case IR::OP_ATOMIC_CMP_XCHG: {
+            u16 dest_reg = ir->destinations[ir_idx];
+            u16 ptr_reg = ir->GetOperand(ir_idx, 0);
+            u16 value_reg = ir->GetOperand(ir_idx, 1);
+            u16 cmp_reg = ir->GetOperand(ir_idx, 2);
+
+            u32 ptr_id = GetSpirvId(ptr_reg);
+            u32 value_id = GetSpirvId(value_reg);
+
+            u32 result_type = GetResultType(dest_reg, value_reg);
+
+            bool isShared = false;
+            if (ir->registerStorageInfo && ptr_reg < ir->registerCount) {
+                isShared = (ir->registerStorageInfo[ptr_reg] & IR::IRProgram::STORAGE_IS_SHARED) != 0;
+            }
+
+            u32 scope = GetIntConstantId(static_cast<u32>(isShared ? spv::ScopeWorkgroup : spv::ScopeDevice), true);
+            u32 semanticsMask = spv::MemorySemanticsAcquireReleaseMask |
+                (isShared ? spv::MemorySemanticsWorkgroupMemoryMask : spv::MemorySemanticsUniformMemoryMask);
+            u32 semantics = GetIntConstantId(static_cast<u32>(semanticsMask), true);
+
+            spv::Op atomicOp = IR_TO_SPV_OP_TABLE[static_cast<u32>(op)];
+            if (op == IR::OP_ATOMIC_MIN || op == IR::OP_ATOMIC_MAX) {
+                CoreType valueType = GetOperandType(value_reg);
+                bool useUnsigned = (valueType == CoreType::UINT);
+                if (op == IR::OP_ATOMIC_MIN) {
+                    atomicOp = useUnsigned ? spv::OpAtomicUMin : spv::OpAtomicSMin;
+                } else {
+                    atomicOp = useUnsigned ? spv::OpAtomicUMax : spv::OpAtomicSMax;
+                }
+            }
+
+            if (op == IR::OP_ATOMIC_CMP_XCHG) {
+                u32 cmp_id = GetSpirvId(cmp_reg);
+                u32 failureMask = (isShared ? spv::MemorySemanticsWorkgroupMemoryMask
+                                             : spv::MemorySemanticsUniformMemoryMask) |
+                    spv::MemorySemanticsAcquireMask;
+                u32 failureSemantics = GetIntConstantId(static_cast<u32>(failureMask), true);
+                Emit(spv::OpAtomicCompareExchange, result_type, dest, ptr_id,
+                     scope, semantics, failureSemantics, value_id, cmp_id);
+            } else {
+                Emit(atomicOp, result_type, dest, ptr_id, scope, semantics, value_id);
+            }
+            break;
+        }
+
         case IR::OP_TEX_SAMPLE:
         case IR::OP_TEX_SAMPLE_LOD:
         case IR::OP_TEX_SAMPLE_BIAS:
@@ -5011,7 +5129,7 @@ std::vector<u32> SPIRVBuilder::Finalize() {
     
     // Header
     spirv.push_back(SpvMagicNumber);
-    spirv.push_back(SpvVersion);
+    spirv.push_back(spvVersion);
     spirv.push_back(0); // Generator ID
     spirv.push_back(nextId); // Bound
     spirv.push_back(0); // Schema

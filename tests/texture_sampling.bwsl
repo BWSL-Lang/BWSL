@@ -1,0 +1,94 @@
+// Test: Texture sampling operations
+// Tests: sample, sample_lod, sample_grad, sample_bias, gather, load
+
+pipeline TextureSampling {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    // Function that takes texture and sampler as parameters
+    sampleTexture2D :: (sampler2D tex, float2 uv) -> float4 {
+        return texture2D(tex, uv);
+    }
+
+    // Sample with explicit LOD
+    sampleWithLod :: (sampler2D tex, float2 uv, float lod) -> float4 {
+        return sample_lod(tex, uv, lod);
+    }
+
+    // Sample with gradients
+    sampleWithGrad :: (sampler2D tex, float2 uv, float2 ddxUV, float2 ddyUV) -> float4 {
+        return sample_grad(tex, uv, ddxUV, ddyUV);
+    }
+
+    // Cubemap sampling
+    sampleCubemap :: (samplerCube cube, float3 direction) -> float4 {
+        return textureCube(cube, direction);
+    }
+
+    // Cubemap with LOD
+    sampleCubemapLod :: (samplerCube cube, float3 direction, float lod) -> float4 {
+        return sample_lod(cube, direction, lod);
+    }
+
+    // 3D texture sampling
+    sampleTexture3D :: (sampler3D vol, float3 uvw) -> float4 {
+        return texture3D(vol, uvw);
+    }
+
+    // Texture array sampling
+    sampleTextureArray :: (sampler2DArray arr, float3 uvLayer) -> float4 {
+        return texture2DArray(arr, uvLayer);
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            // Pass through position and texcoord
+            output.position = float4(attributes.position, 1.0);
+            output.texcoord = attributes.texcoord;
+        }
+
+        fragment {
+            float2 uv = input.texcoord;
+
+            // Test various UV manipulations before sampling
+            float2 scaledUV = uv * 2.0;
+            float2 offsetUV = uv + float2(0.5, 0.5);
+            float2 mirroredUV = abs(uv * 2.0 - 1.0);
+
+            // Compute derivatives for gradient sampling
+            float2 ddxUV = ddx(uv);
+            float2 ddyUV = ddy(uv);
+
+            // LOD calculations
+            float baseLod = 0.0;
+            float detailLod = -1.0;  // Negative for sharper
+            float blurLod = 2.0;     // Positive for blurrier
+
+            // Cubemap direction from UV
+            float3 cubeDir = normalize(float3(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, 1.0));
+
+            // Reflection vector for environment mapping
+            float3 viewDir = normalize(float3(0.0, 0.0, -1.0));
+            float3 normal = float3(0.0, 0.0, 1.0);
+            float3 reflectDir = reflect(viewDir, normal);
+
+            // 3D texture coordinates (for volume sampling)
+            float3 volumeUVW = float3(uv, 0.5);
+
+            // Texture array coordinate (uv + layer index)
+            float3 arrayUVLayer = float3(uv, 0.0);
+
+            // Test fwidth for automatic LOD selection
+            float fw = fwidth(uv.x);
+
+            // Combine results
+            float4 finalColor = float4(uv, fw, 1.0);
+
+            output.color = finalColor;
+        }
+    }
+}

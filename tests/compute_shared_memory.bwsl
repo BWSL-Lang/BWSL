@@ -1,0 +1,295 @@
+// Test: Compute shader shared memory and synchronization
+// Tests: shared arrays, barrier(), memoryBarrier(), storageBarrier(), workgroup patterns
+
+pipeline ComputeSharedMemory {
+
+    pass "SharedBasic" {
+        compute "BasicShared" [256, 1, 1] {
+            // Shared memory declarations - various types
+            shared float sharedFloats[256];
+            shared int sharedInts[256];
+            shared uint sharedUints[256];
+            shared float4 sharedVec4s[64];
+
+            uint idx = input.global_id.x;
+            uint localIdx = input.local_index;
+
+            // Each thread writes its own data
+            sharedFloats[localIdx] = float(localIdx) * 0.1;
+            sharedInts[localIdx] = int(localIdx) - 128;
+            sharedUints[localIdx] = localIdx * 2u;
+
+            // Write to vector array (every 4th thread)
+            if (localIdx % 4u == 0u) {
+                uint vecIdx = localIdx / 4u;
+                sharedVec4s[vecIdx] = float4(
+                    float(localIdx),
+                    float(localIdx + 1u),
+                    float(localIdx + 2u),
+                    float(localIdx + 3u)
+                );
+            }
+
+            // Synchronize before reading
+            barrier();
+
+            // Read from neighbor threads
+            uint neighborIdx = (localIdx + 1u) % 256u;
+            float neighborFloat = sharedFloats[neighborIdx];
+            int neighborInt = sharedInts[neighborIdx];
+            uint neighborUint = sharedUints[neighborIdx];
+
+            // Read from vector array
+            uint vecReadIdx = (localIdx / 4u) % 64u;
+            float4 vecData = sharedVec4s[vecReadIdx];
+
+            // Combine data
+            float result = neighborFloat + float(neighborInt) + float(neighborUint);
+            result = result + vecData.x + vecData.y + vecData.z + vecData.w;
+
+            // Second phase: write processed data
+            sharedFloats[localIdx] = result;
+
+            barrier();
+
+            // Reduce pattern: accumulate pairs
+            if (localIdx % 2u == 0u) {
+                sharedFloats[localIdx] = sharedFloats[localIdx] + sharedFloats[localIdx + 1u];
+            }
+
+            barrier();
+
+            // Further reduce
+            if (localIdx % 4u == 0u) {
+                sharedFloats[localIdx] = sharedFloats[localIdx] + sharedFloats[localIdx + 2u];
+            }
+
+            barrier();
+
+            // Final value accessible by first thread
+            if (localIdx == 0u) {
+                float totalSum = 0.0;
+                for (uint i = 0u; i < 256u; i = i + 4u) {
+                    totalSum = totalSum + sharedFloats[i];
+                }
+            }
+        }
+    }
+
+    pass "PrefixSum" {
+        compute "ParallelPrefixSum" [256, 1, 1] {
+            shared float prefixData[256];
+            shared float tempData[256];
+
+            uint localIdx = input.local_index;
+
+            // Initialize with input data
+            prefixData[localIdx] = float(localIdx);
+            tempData[localIdx] = 0.0;
+
+            barrier();
+
+            // Blelloch scan - up-sweep phase
+            uint offset = 1u;
+            for (uint d = 256u >> 1u; d > 0u; d = d >> 1u) {
+                barrier();
+
+                if (localIdx < d) {
+                    uint ai = offset * (2u * localIdx + 1u) - 1u;
+                    uint bi = offset * (2u * localIdx + 2u) - 1u;
+
+                    if (ai < 256u && bi < 256u) {
+                        prefixData[bi] = prefixData[bi] + prefixData[ai];
+                    }
+                }
+
+                offset = offset << 1u;
+            }
+
+            // Clear last element
+            if (localIdx == 0u) {
+                prefixData[255] = 0.0;
+            }
+
+            barrier();
+
+            // Down-sweep phase
+            for (uint d = 1u; d < 256u; d = d << 1u) {
+                offset = offset >> 1u;
+                barrier();
+
+                if (localIdx < d) {
+                    uint ai = offset * (2u * localIdx + 1u) - 1u;
+                    uint bi = offset * (2u * localIdx + 2u) - 1u;
+
+                    if (ai < 256u && bi < 256u) {
+                        float t = prefixData[ai];
+                        prefixData[ai] = prefixData[bi];
+                        prefixData[bi] = prefixData[bi] + t;
+                    }
+                }
+            }
+
+            barrier();
+
+            // Result: prefixData now contains exclusive prefix sum
+            float myPrefixSum = prefixData[localIdx];
+        }
+    }
+
+    pass "TileProcessing" {
+        compute "TileProcess" [16, 16, 1] {
+            // 2D shared memory for tile-based processing
+            shared float tile[18][18];  // 16x16 tile + 1 pixel border
+
+            uint2 localCoord = input.local_id.xy;
+            uint2 globalCoord = input.global_id.xy;
+            uint localIdx = input.local_index;
+
+            // Load tile center
+            float value = float(globalCoord.x + globalCoord.y * 256u);
+            tile[localCoord.y + 1u][localCoord.x + 1u] = value;
+
+            // Load borders (edge threads handle extra pixels)
+            if (localCoord.x == 0u) {
+                tile[localCoord.y + 1u][0] = value - 1.0;
+            }
+            if (localCoord.x == 15u) {
+                tile[localCoord.y + 1u][17] = value + 1.0;
+            }
+            if (localCoord.y == 0u) {
+                tile[0][localCoord.x + 1u] = value - 256.0;
+            }
+            if (localCoord.y == 15u) {
+                tile[17][localCoord.x + 1u] = value + 256.0;
+            }
+
+            // Corners
+            if (localCoord.x == 0u && localCoord.y == 0u) {
+                tile[0][0] = value - 257.0;
+            }
+            if (localCoord.x == 15u && localCoord.y == 0u) {
+                tile[0][17] = value - 255.0;
+            }
+            if (localCoord.x == 0u && localCoord.y == 15u) {
+                tile[17][0] = value + 255.0;
+            }
+            if (localCoord.x == 15u && localCoord.y == 15u) {
+                tile[17][17] = value + 257.0;
+            }
+
+            barrier();
+
+            // Apply 3x3 convolution (edge detection kernel)
+            float kernel[9];
+            kernel[0] = -1.0; kernel[1] = -1.0; kernel[2] = -1.0;
+            kernel[3] = -1.0; kernel[4] =  8.0; kernel[5] = -1.0;
+            kernel[6] = -1.0; kernel[7] = -1.0; kernel[8] = -1.0;
+
+            float result = 0.0;
+            uint ty = localCoord.y + 1u;
+            uint tx = localCoord.x + 1u;
+
+            result = result + tile[ty - 1u][tx - 1u] * kernel[0];
+            result = result + tile[ty - 1u][tx]      * kernel[1];
+            result = result + tile[ty - 1u][tx + 1u] * kernel[2];
+            result = result + tile[ty][tx - 1u]      * kernel[3];
+            result = result + tile[ty][tx]           * kernel[4];
+            result = result + tile[ty][tx + 1u]      * kernel[5];
+            result = result + tile[ty + 1u][tx - 1u] * kernel[6];
+            result = result + tile[ty + 1u][tx]      * kernel[7];
+            result = result + tile[ty + 1u][tx + 1u] * kernel[8];
+
+            // Store result back
+            tile[ty][tx] = result;
+
+            barrier();
+
+            // Could write to output buffer here
+            float finalResult = tile[ty][tx];
+        }
+    }
+
+    pass "BarrierTypes" {
+        compute "BarrierDemo" [64, 1, 1] {
+            shared float data[64];
+            shared uint flags[64];
+
+            uint localIdx = input.local_index;
+
+            // Write initial data
+            data[localIdx] = float(localIdx);
+            flags[localIdx] = 0u;
+
+            // Full barrier - synchronizes execution AND memory
+            barrier();
+
+            // Process data from neighbor
+            uint neighborIdx = (localIdx + 32u) % 64u;
+            float neighborData = data[neighborIdx];
+
+            // Memory barrier - ensures memory operations complete
+            // (execution may continue past this point)
+            memoryBarrier();
+
+            // Update flags to signal completion
+            flags[localIdx] = 1u;
+
+            // Storage barrier - specifically for storage buffer writes
+            storageBarrier();
+
+            // Read neighbor's flag (may see old or new value after memoryBarrier)
+            uint neighborFlag = flags[neighborIdx];
+
+            // Full barrier again for final sync
+            barrier();
+
+            // Now all threads are synchronized and memory is consistent
+            float finalData = data[localIdx];
+            uint finalFlag = flags[localIdx];
+
+            // Use results
+            if (finalFlag == 1u) {
+                float processed = neighborData + finalData;
+            }
+        }
+    }
+
+    pass "Histogram" {
+        compute "HistogramCompute" [256, 1, 1] {
+            // Shared histogram bins
+            shared uint histogram[256];
+
+            uint localIdx = input.local_index;
+            uint globalIdx = input.global_id.x;
+
+            // Initialize histogram to zero
+            histogram[localIdx] = 0u;
+
+            barrier();
+
+            // Each thread processes multiple input values
+            // Simulated input based on thread index
+            for (uint i = 0u; i < 16u; i = i + 1u) {
+                uint value = (globalIdx * 16u + i) % 256u;
+
+                // Atomic increment of histogram bin
+                atomic_add(histogram[value], 1u);
+            }
+
+            barrier();
+
+            // Read final histogram values
+            uint binCount = histogram[localIdx];
+
+            // Could compute statistics here
+            if (localIdx == 0u) {
+                uint totalCount = 0u;
+                for (uint i = 0u; i < 256u; i = i + 1u) {
+                    totalCount = totalCount + histogram[i];
+                }
+                // totalCount should equal 256 * 16 = 4096
+            }
+        }
+    }
+}

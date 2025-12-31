@@ -73,7 +73,10 @@ void SSAConstructor::IdentifyVariables() {
         u16 op = ir->opcodes[i];
 
         // Skip instructions that don't define registers
-        if (op == IR::OP_NOP || op == IR::OP_JUMP || op == IR::OP_RET) continue;
+        if (op == IR::OP_NOP || op == IR::OP_JUMP || op == IR::OP_RET ||
+            op == IR::OP_BRANCH || op == IR::OP_SWITCH) {
+            continue;
+        }
 
         u16 dest = ir->destinations[i];
 
@@ -178,6 +181,10 @@ void SSAConstructor::IdentifyVariables() {
     // Create variables from registers with definitions
     for (u16 reg = 0; reg < ir->registerCount; reg++) {
         if (regDefs[reg].blockCount == 0) continue;
+        if (ir->registerStorageInfo &&
+            (ir->registerStorageInfo[reg] & IR::IRProgram::STORAGE_IS_PTR)) {
+            continue;
+        }
 
         // A register needs SSA treatment if:
         // 1. Defined more than once ANYWHERE (intra-block redefinitions violate SSA)
@@ -531,6 +538,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             op == IR::OP_STRUCT_INSERT ||                   // Struct insert
             op == IR::OP_SELECT ||                          // Ternary select
             op == IR::OP_BRANCH ||                          // Branch condition
+            op == IR::OP_SWITCH ||                          // Switch selector
             op == IR::OP_ENUM_TAG ||                        // Enum tag extraction
             op == IR::OP_ENUM_FIELD ||                      // Enum field extraction
             op == IR::OP_ENUM_CONSTRUCT ||                  // Enum construction
@@ -571,7 +579,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
         }
         
         // Skip instructions that don't define registers
-        if (op == IR::OP_JUMP || op == IR::OP_RET || op == IR::OP_BRANCH) continue;
+        if (op == IR::OP_JUMP || op == IR::OP_RET || op == IR::OP_BRANCH || op == IR::OP_SWITCH) continue;
 
         // For definitions: allocate a new SSA register and update the instruction
         u16 dest = ir->destinations[i];
