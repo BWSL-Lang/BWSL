@@ -303,6 +303,7 @@ private:
     void EmitUniforms();
     void EmitMain();
     void EmitBlockRecursive(u32 blockIdx, u32 stopAt, bool* emitted);
+    void EmitPhiAssignments(u32 fromBlock, u32 toBlock);
     void EmitInstruction(u32 instIdx);
 
     // ===== Expression Emission =====
@@ -335,6 +336,8 @@ private:
                (regInfo[reg].flags & REG_INLINEABLE) &&
                !(regInfo[reg].flags & REG_EMITTED);
     }
+
+    bool IsValidOperand(u16 op) const;
 
     u16 Op(u32 inst, u32 idx) const { return ir->GetOperand(inst, idx); }
     u16 Opcode(u32 inst) const { return ir->opcodes[inst]; }
