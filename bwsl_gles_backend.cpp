@@ -20,6 +20,15 @@ void GLESBuilder::CountUses() {
                 regInfo[op].useCount++;
             }
         }
+
+        // STORE_OUTPUT uses the dest field as the value to store, not as a definition
+        // So we need to count dest as a use for STORE_OUTPUT
+        if (ir->opcodes[i] == IR::OP_STORE_OUTPUT) {
+            u16 valueReg = ir->destinations[i];
+            if ((valueReg & 0xC000) == 0 && valueReg < regCount) {
+                regInfo[valueReg].useCount++;
+            }
+        }
     }
 
     // Also count PHI operand uses - these are stored separately
@@ -40,9 +49,13 @@ void GLESBuilder::CountUses() {
         u16 dest = ir->destinations[i];
         if (dest >= regCount) continue;
 
-        regInfo[dest].defInst = static_cast<u16>(i);
-
         u16 opcode = ir->opcodes[i];
+
+        // STORE_OUTPUT uses dest as the value to store, not as a definition
+        // So don't set defInst for STORE_OUTPUT
+        if (opcode != IR::OP_STORE_OUTPUT) {
+            regInfo[dest].defInst = static_cast<u16>(i);
+        }
 
         // Trivial loads always inline (no temp needed)
         if (opcode == IR::OP_LOAD_CONST ||
@@ -108,12 +121,17 @@ void GLESBuilder::EmitInputs() {
         }
 
         // Scan IR for any LOAD_INPUT slots not in varyings array
-        u32 usedSlots = 0;  // Bitmask of used slots
+        // IR uses OutputSlot values: VARYING0=2, VARYING1=3, etc.
+        // Convert to VaryingInfo slots (0-based) for comparison
+        u32 usedSlots = 0;  // Bitmask of used VaryingInfo slots (0-based)
         for (u32 i = 0; i < ir->instructionCount; i++) {
             if (ir->opcodes[i] == IR::OP_LOAD_INPUT) {
-                u16 slot = ir->GetOperand(i, 0);
-                if (slot < 0x80 && slot < 32) {  // Not a builtin
-                    usedSlots |= (1u << slot);
+                u16 irSlot = ir->GetOperand(i, 0);
+                if (irSlot >= 2 && irSlot < 0x80) {  // VARYING0=2 and up, not a builtin
+                    u16 varyingSlot = irSlot - 2;  // Convert to 0-based
+                    if (varyingSlot < 32) {
+                        usedSlots |= (1u << varyingSlot);
+                    }
                 }
             }
         }
@@ -122,7 +140,7 @@ void GLESBuilder::EmitInputs() {
         for (u32 slot = 0; slot < 32; slot++) {
             if (!(usedSlots & (1u << slot))) continue;
 
-            // Check if this slot is already in varyings
+            // Check if this slot is already in varyings (already 0-based)
             bool inVaryings = false;
             if (varyings) {
                 for (u32 i = 0; i < varyings->count; i++) {
@@ -159,21 +177,24 @@ void GLESBuilder::EmitOutputs() {
 
         // Scan IR for any STORE_OUTPUT slots not in varyings array
         // These need declarations too
-        u32 usedSlots = 0;  // Bitmask of used slots
+        // IR uses OutputSlot values: POSITION=0, VARYING0=2, VARYING1=3, etc.
+        // Convert to VaryingInfo slots (0-based) for comparison
+        u32 usedSlots = 0;  // Bitmask of used VaryingInfo slots (0-based)
         for (u32 i = 0; i < ir->instructionCount; i++) {
             if (ir->opcodes[i] == IR::OP_STORE_OUTPUT) {
-                u16 slot = ir->GetOperand(i, 0);
-                if (slot > 0 && slot < 32) {  // slot 0 is gl_Position
-                    usedSlots |= (1u << slot);
+                u16 irSlot = ir->GetOperand(i, 0);
+                if (irSlot >= 2 && irSlot < 32) {  // VARYING0=2 and up (slot 0 is gl_Position)
+                    u16 varyingSlot = irSlot - 2;  // Convert to 0-based
+                    usedSlots |= (1u << varyingSlot);
                 }
             }
         }
 
         // Emit declarations for slots not in varyings
-        for (u32 slot = 1; slot < 32; slot++) {
+        for (u32 slot = 0; slot < 32; slot++) {
             if (!(usedSlots & (1u << slot))) continue;
 
-            // Check if this slot is already in varyings
+            // Check if this slot is already in varyings (already 0-based)
             bool inVaryings = false;
             if (varyings) {
                 for (u32 i = 0; i < varyings->count; i++) {
@@ -282,6 +303,73 @@ void GLESBuilder::EmitMain() {
 
     // Variables are declared inline at first assignment (like SPIRV-Cross)
     // No pre-declaration needed - we use EmitRegWithDecl to declare on first use
+
+    // Debug: print varyings info
+    #if 0  // Enable for debugging
+    if (varyings) {
+        printf("Varyings count=%u:\n", varyings->count);
+        for (u32 i = 0; i < varyings->count; i++) {
+            printf("  [%u] slot=%u, type=%u, name=%s\n",
+                   i, varyings->varyings[i].slot,
+                   static_cast<u32>(varyings->varyings[i].type),
+                   varyings->varyings[i].name);
+        }
+    }
+    #endif
+
+    // Debug: print STORE_OUTPUT instructions
+    #if 0  // Enable for debugging
+    for (u32 i = 0; i < ir->instructionCount; i++) {
+        if (ir->opcodes[i] == IR::OP_STORE_OUTPUT) {
+            u16 slot = ir->GetOperand(i, 0);
+            u16 valueReg = ir->destinations[i];
+            printf("STORE_OUTPUT[%u]: slot=%u, value=r%u\n", i, slot, valueReg);
+        }
+    }
+    #endif
+
+    // Debug: print all phis with high register numbers (exit block phis)
+    #if 0  // Enable for debugging phi issues
+    if (ir->phiCount > 0 && ir->phiBlockIndices && ir->phiResultRegs) {
+        for (u32 phiIdx = 0; phiIdx < ir->phiCount; phiIdx++) {
+            u16 resultReg = ir->phiResultRegs[phiIdx];
+            u32 phiBlock = ir->phiBlockIndices[phiIdx];
+            // Print phis in exit block or with high register numbers
+            if (resultReg >= 640 || (cfg && phiBlock == cfg->exitBlock)) {
+                printf("PHI[%u]: result=r%u, block=%u (exit=%u), operands: ",
+                       phiIdx, resultReg, phiBlock,
+                       cfg ? cfg->exitBlock : 0xFFFFFFFF);
+                u32 opCount = ir->GetPhiOperandCount(phiIdx);
+                for (u32 opIdx = 0; opIdx < opCount; opIdx++) {
+                    u32 srcBlock = ir->GetPhiOperandBlock(phiIdx, opIdx);
+                    u16 srcValue = ir->GetPhiOperandValue(phiIdx, opIdx);
+                    printf("[block=%u, val=r%u] ", srcBlock, srcValue);
+                }
+                printf("\n");
+            }
+        }
+    }
+    // Debug: print STORE_OUTPUT instructions and their operands
+    for (u32 i = 0; i < ir->instructionCount; i++) {
+        if (ir->opcodes[i] == IR::OP_STORE_OUTPUT) {
+            u16 slot = ir->GetOperand(i, 0);
+            u16 valueReg = ir->destinations[i];
+            printf("STORE_OUTPUT[%u]: slot=%u, value=r%u\n", i, slot, valueReg);
+        }
+    }
+    // Debug: find any instruction that defines r644
+    for (u32 i = 0; i < ir->instructionCount; i++) {
+        u16 dest = ir->destinations[i];
+        if (dest >= 643 && dest <= 646) {
+            u32 blockIdx = cfg ? cfg->instToBlock[i] : 0xFFFFFFFF;
+            printf("INST[%u] opcode=%u defines r%u in block=%u (operands: %u, %u, %u, %u)\n",
+                   i, ir->opcodes[i], dest, blockIdx,
+                   ir->GetOperand(i, 0), ir->GetOperand(i, 1),
+                   ir->GetOperand(i, 2), ir->GetOperand(i, 3));
+        }
+    }
+    printf("Exit block = %u\n", cfg ? cfg->exitBlock : 0xFFFFFFFF);
+    #endif
 
     // Use CFG-based block emission if available
     if (cfg && cfg->blockCount > 0) {
@@ -568,7 +656,8 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
     u16 dest = ir->destinations[instIdx];
 
     // Skip if this instruction's result is inlined elsewhere
-    if (dest < regCount && ShouldInline(dest)) {
+    // BUT don't skip STORE_OUTPUT - its dest is the value to store, not a result
+    if (opcode != IR::OP_STORE_OUTPUT && dest < regCount && ShouldInline(dest)) {
         return;
     }
 
@@ -630,10 +719,12 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
                 if (outputIdx == 0) {  // Position output (slot 0)
                     out.Lit("gl_Position = ");
                 } else if (varyings) {
-                    // Search for varying by slot number
+                    // Convert IR slot (VARYING0=2, VARYING1=3, etc.) to VaryingInfo slot (0-based)
+                    u16 varyingSlot = outputIdx - 2;  // OutputSlot::VARYING0 = 2
+                    // Search for varying by converted slot number
                     bool found = false;
                     for (u32 i = 0; i < varyings->count; i++) {
-                        if (varyings->varyings[i].slot == outputIdx) {
+                        if (varyings->varyings[i].slot == varyingSlot) {
                             out.Lit("v_");
                             out.Str(varyings->varyings[i].name);
                             out.Lit(" = ");
@@ -643,12 +734,12 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
                     }
                     if (!found) {
                         out.Lit("v_slot");
-                        out.Uint(outputIdx);
+                        out.Uint(varyingSlot);
                         out.Lit(" = ");
                     }
                 } else {
                     out.Lit("v_slot");
-                    out.Uint(outputIdx);
+                    out.Uint(outputIdx - 2);
                     out.Lit(" = ");
                 }
             }
@@ -679,10 +770,12 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             if (stage == ShaderStage::Vertex && outputIdx == 0) {
                 out.Lit("gl_Position");
             } else if (varyings) {
-                // Search for varying by slot number
+                // Convert IR slot (VARYING0=2, etc.) to VaryingInfo slot (0-based)
+                u16 varyingSlot = outputIdx - 2;  // OutputSlot::VARYING0 = 2
+                // Search for varying by converted slot number
                 bool found = false;
                 for (u32 i = 0; i < varyings->count; i++) {
-                    if (varyings->varyings[i].slot == outputIdx) {
+                    if (varyings->varyings[i].slot == varyingSlot) {
                         out.Lit("v_");
                         out.Str(varyings->varyings[i].name);
                         found = true;
@@ -691,11 +784,11 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
                 }
                 if (!found) {
                     out.Lit("v_slot");
-                    out.Uint(outputIdx);
+                    out.Uint(varyingSlot);
                 }
             } else {
                 out.Lit("v_slot");
-                out.Uint(outputIdx);
+                out.Uint(outputIdx - 2);
             }
             out.Lit(";");
             return;
@@ -1522,10 +1615,13 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
                 }
             }
 
-            // Fragment/vertex shader inputs: search varyings by slot number
+            // Convert IR slot (VARYING0=2, etc.) to VaryingInfo slot (0-based)
+            u16 varyingSlot = inputIdx - 2;  // OutputSlot::VARYING0 = 2
+
+            // Fragment/vertex shader inputs: search varyings by converted slot number
             if (varyings) {
                 for (u32 i = 0; i < varyings->count; i++) {
-                    if (varyings->varyings[i].slot == inputIdx) {
+                    if (varyings->varyings[i].slot == varyingSlot) {
                         out.Lit("v_");
                         out.Str(varyings->varyings[i].name);
                         return;
@@ -1535,7 +1631,7 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
 
             // Fallback for unmapped inputs
             out.Lit("v_slot");
-            out.Uint(inputIdx);
+            out.Uint(varyingSlot);
             return;
         }
 
