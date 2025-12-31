@@ -234,8 +234,51 @@ void GLESBuilder::EmitMain() {
         bool* emitted = static_cast<bool*>(arena->Allocate(cfg->blockCount * sizeof(bool)));
         for (u32 i = 0; i < cfg->blockCount; i++) emitted[i] = false;
 
+        // Debug: find which blocks contain STORE_OUTPUT instructions
+        #if 0  // Enable for debugging
+        u32 exitBlock = cfg->exitBlock;
+        for (u32 b = 0; b < cfg->blockCount; b++) {
+            u32 first = cfg->firstInst[b];
+            u32 last = cfg->lastInst[b];
+            for (u32 i = first; i <= last; i++) {
+                if (ir->opcodes[i] == IR::OP_STORE_OUTPUT) {
+                    printf("Block %u contains STORE_OUTPUT at inst %u (succs=%d, merge=%u)\n",
+                           b, i, cfg->successorCount[b],
+                           cfg->mergeBlocks ? cfg->mergeBlocks[b] : 0xFFFFFFFF);
+                }
+            }
+            // Check if this block leads to exit
+            u8 succCount = cfg->successorCount[b];
+            for (u8 s = 0; s < succCount && succCount < 3; s++) {
+                if (cfg->GetSuccessor(b, s) == exitBlock) {
+                    printf("Block %u (merge=%u) leads to exit block %u\n", b,
+                           cfg->mergeBlocks ? cfg->mergeBlocks[b] : 0xFFFFFFFF, exitBlock);
+                }
+            }
+        }
+        printf("Entry=%u, Exit=%u, BlockCount=%u\n", cfg->entryBlock, cfg->exitBlock, cfg->blockCount);
+        #endif
+
         // Emit starting from entry block
         EmitBlockRecursive(cfg->entryBlock, NO_BLOCK, emitted);
+
+        // Ensure exit block is emitted at the end (at top level)
+        // This is important because exit block may not have been emitted if it was
+        // skipped due to being inside nested control flow
+        if (cfg->exitBlock != NO_BLOCK && !emitted[cfg->exitBlock]) {
+            emitted[cfg->exitBlock] = true;
+            u32 first = cfg->firstInst[cfg->exitBlock];
+            u32 last = cfg->lastInst[cfg->exitBlock];
+            for (u32 i = first; i <= last; i++) {
+                u16 opcode = ir->opcodes[i];
+                // Skip control flow
+                if (opcode == IR::OP_BRANCH || opcode == IR::OP_JUMP ||
+                    opcode == IR::OP_RET || opcode == IR::OP_SWITCH || opcode == IR::OP_PHI) {
+                    continue;
+                }
+                EmitInstruction(i);
+            }
+        }
     } else {
         // Fallback: linear instruction emission
         for (u32 i = 0; i < ir->instructionCount; i++) {
@@ -281,7 +324,22 @@ void GLESBuilder::EmitBlockRecursive(u32 blockIdx, u32 stopAt, bool* emitted) {
 
     // Don't emit already-emitted blocks
     if (emitted[blockIdx]) return;
+
+    // IMPORTANT: Don't emit exit block inside nested control flow
+    // The exit block should be emitted last, at the top level (indent==1)
+    // This prevents output stores from being placed inside if-else branches
+    if (blockIdx == cfg->exitBlock && indent > 1) {
+        return;  // Will be emitted later when we reach top level
+    }
+
     emitted[blockIdx] = true;
+
+    // Debug: track when exit block is emitted
+    #if 0
+    if (blockIdx == cfg->exitBlock) {
+        printf("Emitting exit block %u at indent=%u, stopAt=%u\n", blockIdx, indent, stopAt);
+    }
+    #endif
 
     // Emit all instructions in this block (except control flow terminators)
     u32 first = cfg->firstInst[blockIdx];
@@ -311,9 +369,14 @@ void GLESBuilder::EmitBlockRecursive(u32 blockIdx, u32 stopAt, bool* emitted) {
     if (succCount == 0) {
         // No successors - end of function or return
         // Check if last instruction is RET
+        // Only emit return at top level (indent == 1 means we're at main() body level)
+        // Inside nested control structures, let control flow fall through naturally
         if (last < ir->instructionCount && ir->opcodes[last] == IR::OP_RET) {
-            out.NL(indent);
-            out.Lit("return;");
+            if (indent == 1 && stopAt == NO_BLOCK) {
+                out.NL(indent);
+                out.Lit("return;");
+            }
+            // If inside nested structure, don't emit return - let control fall through
         }
     }
     else if (succCount == 1) {
@@ -506,6 +569,11 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             u16 outputIdx = Op(instIdx, 0);
             u16 valueReg = dest;  // Value is in destination, not operand
 
+            #if 0
+            printf("STORE_OUTPUT: outputIdx=%u, valueReg=%u, varyings=%p, count=%u\n",
+                   outputIdx, valueReg, (void*)varyings, varyings ? varyings->count : 0);
+            #endif
+
             if (stage == ShaderStage::Fragment) {
                 out.Lit("fragColor = ");
             } else if (stage == ShaderStage::Vertex) {
@@ -514,6 +582,11 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
                 } else if (varyings && outputIdx <= varyings->count) {
                     out.Lit("v_");
                     out.Str(varyings->varyings[outputIdx - 1].name);
+                    out.Lit(" = ");
+                } else {
+                    // Fallback for unknown output
+                    out.Lit("output");
+                    out.Uint(outputIdx);
                     out.Lit(" = ");
                 }
             }
