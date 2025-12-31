@@ -229,6 +229,7 @@ void SSAConstructor::IdentifyVariables() {
             variables[variableCount].type = ir->registerTypes[reg];
             variables[variableCount].defBlocks = regDefs[reg].blocks;
             variables[variableCount].defBlockCount = regDefs[reg].blockCount;
+            variables[variableCount].definitionCount = regDefs[reg].definitionCount;
             variables[variableCount].hasEntryDef = hasEntryDef;
 
             regToVariable[reg] = static_cast<u16>(variableCount);
@@ -318,8 +319,29 @@ void SSAConstructor::Rename() {
     if (variableCount == 0 && phiCount == 0) return;
 
     RenameState state;
+    u32* stackCaps = nullptr;
+    if (variableCount > 0) {
+        u32* phiCounts = (u32*)arena->Allocate(variableCount * sizeof(u32), 64);
+        memset(phiCounts, 0, variableCount * sizeof(u32));
+        for (u32 p = 0; p < phiCount; p++) {
+            u16 varIdx = phiVariables[p];
+            if (varIdx < variableCount) {
+                phiCounts[varIdx]++;
+            }
+        }
+
+        stackCaps = (u32*)arena->Allocate(variableCount * sizeof(u32), 64);
+        for (u32 v = 0; v < variableCount; v++) {
+            u32 cap = variables[v].definitionCount + phiCounts[v] + 1;
+            if (cap < 2) {
+                cap = 2;
+            }
+            stackCaps[v] = cap;
+        }
+    }
+
     // Start new register numbers after the existing ones
-    state.Init(variableCount, arena, static_cast<u16>(ir->registerCount));
+    state.Init(variableCount, arena, stackCaps, static_cast<u16>(ir->registerCount));
 
     // Expand registerTypes array to accommodate new SSA registers
     // Estimate: PHI count + variable count * 4 for redefinitions
@@ -459,7 +481,16 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                                   u32* blockFirstPhi, u32* blockPhiCount) {
     // Track which variables we push registers for, so we can pop them on exit
     u32 pushedCount = 0;
-    u16* pushedVars = (u16*)arena->Allocate(256 * sizeof(u16), 64);  // Temp storage
+    u16* pushedVars = nullptr;
+
+    u32 firstInst = cfg->firstInst[block];
+    u32 lastInst = cfg->lastInst[block];
+    u32 instCount = (lastInst >= firstInst) ? (lastInst - firstInst + 1) : 0;
+    u32 pushedCapacity = instCount + variableCount;
+    if (pushedCapacity == 0) {
+        pushedCapacity = 1;
+    }
+    pushedVars = (u16*)arena->Allocate(pushedCapacity * sizeof(u16), 64);  // Temp storage
     
     // 1. Process PHIs at this block (they define new registers)
     if (blockFirstPhi[block] != 0xFFFFFFFF) {
@@ -488,14 +519,13 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
 
             // Push this register onto the variable's stack
             state.PushRegister(varIdx, newReg);
-            pushedVars[pushedCount++] = static_cast<u16>(varIdx);
+            if (pushedCount < pushedCapacity) {
+                pushedVars[pushedCount++] = static_cast<u16>(varIdx);
+            }
         }
     }
     
     // 2. Process instructions in this block
-    u32 firstInst = cfg->firstInst[block];
-    u32 lastInst = cfg->lastInst[block];
-    
     for (u32 i = firstInst; i <= lastInst; i++) {
         u16 op = ir->opcodes[i];
         if (op == IR::OP_NOP) continue;
@@ -674,7 +704,9 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
 
                 // Push the value register onto the stack
                 state.PushRegister(varIdx, valueReg);
-                pushedVars[pushedCount++] = varIdx;
+                if (pushedCount < pushedCapacity) {
+                    pushedVars[pushedCount++] = varIdx;
+                }
             }
         }
     }

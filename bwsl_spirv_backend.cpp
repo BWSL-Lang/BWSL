@@ -1190,7 +1190,8 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         // ========== Arithmetic ==========
         case IR::OP_FADD:
         case IR::OP_FSUB:
-        case IR::OP_FDIV: {
+        case IR::OP_FDIV:
+        case IR::OP_FMOD: {
             u16 dest_reg = ir->destinations[ir_idx];
             u16 op1_reg = ir->GetOperand(ir_idx, 0);
             u16 op2_reg = ir->GetOperand(ir_idx, 1);

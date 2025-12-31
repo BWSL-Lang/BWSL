@@ -1020,22 +1020,29 @@ struct IRLowering {
         
         // Emit default case if present
         u32 defaultTarget = builder.currentInstruction;
+        u32 defaultJumpIdx = 0;
         if (hasDefault) {
             const SwitchCaseData& defaultData = ast->GetSwitchCase(sw.defaultCase);
             if (!defaultData.body.IsNull()) {
                 LowerStatement(defaultData.body);
             }
             // Jump to merge point
-            u32 defaultJumpIdx = builder.currentInstruction;
+            defaultJumpIdx = builder.currentInstruction;
             builder.EmitInstruction(OP_JUMP, 0, 0);
-            program.metadata[defaultJumpIdx] = builder.currentInstruction;  // Will be patched
         }
-        
+
         u32 mergePoint = builder.currentInstruction;
+        if (loopDepth > 0) {
+            // Keep switch merge inside loop body, distinct from loop continue/merge targets.
+            builder.EmitInstruction(OP_NOP, 0, 0, 0);
+        }
         
         // Patch all case jumps to merge point
         for (u32 i = 0; i < caseArmCount; i++) {
             program.metadata[caseJumps[i]] = mergePoint;
+        }
+        if (defaultJumpIdx != 0) {
+            program.metadata[defaultJumpIdx] = mergePoint;
         }
         
         // Store case data in IR program - each value maps to its arm's target
@@ -4332,12 +4339,18 @@ void LowerIfStatement(NodeRef ref) {
     // Output slot helpers for varying management
     // ==========================================================================
 
-    // Check if an output name is a builtin (position, color, depth)
+    // Check if an output name is a builtin (stage-aware).
+    // - Position is always a builtin output.
+    // - Color/depth are builtin outputs only in fragment stage.
     bool IsBuiltinOutput(u32 nameHash) {
         static const u32 HASH_POSITION = Utils::HashStr("position");
         static const u32 HASH_COLOR = Utils::HashStr("color");
         static const u32 HASH_DEPTH = Utils::HashStr("depth");
-        return nameHash == HASH_POSITION || nameHash == HASH_COLOR || nameHash == HASH_DEPTH;
+        if (nameHash == HASH_POSITION) return true;
+        if (currentStage == ShaderStage::Fragment) {
+            return nameHash == HASH_COLOR || nameHash == HASH_DEPTH;
+        }
+        return false;
     }
 
     // Get the output slot for builtin outputs

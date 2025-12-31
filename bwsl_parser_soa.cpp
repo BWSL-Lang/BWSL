@@ -2095,7 +2095,17 @@ NodeRef Parser::ParsePrimary() {
 
     if (Match(TokenType::NUMBER)) {
         std::string_view numStr = stream->GetValue(previous);
-        if (numStr.find('.') != std::string::npos || numStr.find('f') != std::string::npos) {
+        bool isHex = numStr.size() > 2 && numStr[0] == '0' &&
+                     (numStr[1] == 'x' || numStr[1] == 'X');
+        bool isBin = numStr.size() > 2 && numStr[0] == '0' &&
+                     (numStr[1] == 'b' || numStr[1] == 'B');
+        bool hasDecimal = numStr.find('.') != std::string::npos;
+        bool hasFloatSuffix = (!isHex && !isBin) && !numStr.empty() &&
+                              (numStr.back() == 'f' || numStr.back() == 'F');
+        bool hasExponent = (!isHex && !isBin) &&
+                           (numStr.find('e') != std::string::npos ||
+                            numStr.find('E') != std::string::npos);
+        if (hasDecimal || hasFloatSuffix || hasExponent) {
             float value = std::stof(std::string(numStr));
             return ASTFactory::MakeLiteralFloat(ast, value, line, col);
         } else {

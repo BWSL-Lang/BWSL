@@ -1,0 +1,39 @@
+// Test: Scientific notation literals without decimal points
+// Regression: exponent literals must parse as floats (not ints)
+
+pipeline ScientificNotationLiterals {
+    attributes {
+        position: float3
+    }
+
+    pass "ExponentParsing" {
+        use attributes { position }
+
+        vertex {
+            float3 pos = attributes.position;
+
+            float scale = 1e-2;
+            float offset = 5e-1;
+            float bias = 2E1;
+            float tiny = 1e-3;
+            float big = 6e+2;
+
+            float3 shifted = pos + float3(scale, offset, 1e-1);
+            float3 biased = shifted + float3(bias, tiny, big) * 1e-3;
+
+            output.position = float4(biased, 1.0);
+            output.scale = scale;
+            output.offset = offset;
+            output.big = big;
+        }
+
+        fragment {
+            float scale = input.scale;
+            float offset = input.offset;
+            float big = input.big;
+
+            float3 color = float3(scale * 1e2, offset * 2e0, big * 1e-3);
+            output.color = float4(saturate(color), 1.0);
+        }
+    }
+}

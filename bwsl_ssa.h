@@ -18,6 +18,7 @@ struct VariableInfo {
     u32 defBlockCount;
     u16 originalReg;       // Original (pre-SSA) register
     u16 type;              // CoreType
+    u32 definitionCount;   // Total number of definitions (pre-SSA)
     bool hasEntryDef;      // True if variable has a definition that dominates all uses
 };
 
@@ -26,11 +27,11 @@ struct VariableInfo {
 //==============================================================================
 
 struct RenameState {
-    static constexpr u32 MAX_DEPTH = 32;  // Max nested scopes
-    
     // Per-variable register stacks - stores actual IR register IDs
-    u16* stacks;           // [variableCount * MAX_DEPTH] - actual register IDs
-    u16* stackDepths;      // [variableCount] current stack depth
+    u16* stacks;           // [totalStackSlots] - actual register IDs
+    u32* stackOffsets;     // [variableCount] start offset per variable
+    u32* stackCaps;        // [variableCount] capacity per variable
+    u32* stackDepths;      // [variableCount] current stack depth
     
     // For PHI result registers
     u16 nextNewReg;        // Next available register ID for new allocations
@@ -38,29 +39,45 @@ struct RenameState {
     u32 variableCount;
     BWSL_Arena* arena;
     
-    void Init(u32 varCount, BWSL_Arena* alloc, u16 startingReg = 1000) {
+    void Init(u32 varCount, BWSL_Arena* alloc, const u32* perVarCaps, u16 startingReg = 1000) {
         variableCount = varCount;
         arena = alloc;
         nextNewReg = startingReg;  // Start numbering new registers after existing ones
-        
-        stacks = (u16*)arena->Allocate(varCount * MAX_DEPTH * sizeof(u16), 64);
-        stackDepths = (u16*)arena->Allocate(varCount * sizeof(u16), 64);
-        
-        memset(stackDepths, 0, varCount * sizeof(u16));
-        memset(stacks, 0xFF, varCount * MAX_DEPTH * sizeof(u16));  // Init to 0xFFFF (undefined)
+
+        stackOffsets = (u32*)arena->Allocate(varCount * sizeof(u32), 64);
+        stackCaps = (u32*)arena->Allocate(varCount * sizeof(u32), 64);
+        stackDepths = (u32*)arena->Allocate(varCount * sizeof(u32), 64);
+
+        u32 totalSlots = 0;
+        for (u32 v = 0; v < varCount; v++) {
+            u32 cap = perVarCaps ? perVarCaps[v] : 1;
+            if (cap == 0) {
+                cap = 1;
+            }
+            stackOffsets[v] = totalSlots;
+            stackCaps[v] = cap;
+            totalSlots += cap;
+        }
+
+        stacks = (u16*)arena->Allocate(totalSlots * sizeof(u16), 64);
+
+        memset(stackDepths, 0, varCount * sizeof(u32));
+        memset(stacks, 0xFF, totalSlots * sizeof(u16));  // Init to 0xFFFF (undefined)
     }
     
     // Get the current register ID for a variable (not version number, actual register)
     u16 GetCurrentRegister(u32 var) const {
         if (stackDepths[var] == 0) return 0xFFFF;  // Undefined
-        return stacks[var * MAX_DEPTH + stackDepths[var] - 1];
+        u32 idx = stackOffsets[var] + (stackDepths[var] - 1);
+        return stacks[idx];
     }
     
     // Push a register ID onto the variable's stack (for when a definition is encountered)
     void PushRegister(u32 var, u16 regId) {
-        u16 depth = stackDepths[var]++;
-        if (depth < MAX_DEPTH) {
-            stacks[var * MAX_DEPTH + depth] = regId;
+        u32 depth = stackDepths[var];
+        if (depth < stackCaps[var]) {
+            stacks[stackOffsets[var] + depth] = regId;
+            stackDepths[var] = depth + 1;
         }
     }
     
@@ -146,4 +163,3 @@ bool VerifySSA(const IR::IRProgram* ir);
 
 }  // namespace SSA
 }  // namespace BWSL
-

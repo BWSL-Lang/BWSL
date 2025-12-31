@@ -1,0 +1,31 @@
+// Test: Vertex output.color/output.depth as varyings
+// Regression: Vertex-stage output.color/output.depth should not map to fragment builtins
+
+pipeline OutputBuiltinVaryings {
+    attributes {
+        position: float3
+        color: float4
+    }
+
+    pass "ColorDepthVarying" {
+        use attributes { position, color }
+
+        vertex {
+            float3 pos = attributes.position;
+            float4 col = attributes.color;
+            float depth = pos.z * 0.5 + 0.5;
+
+            output.position = float4(pos, 1.0);
+            output.color = col;
+            output.depth = depth;
+        }
+
+        fragment {
+            float4 col = input.color;
+            float depth = input.depth;
+
+            float3 shaded = col.rgb * (0.25 + 0.75 * depth);
+            output.color = float4(shaded, col.a);
+        }
+    }
+}
