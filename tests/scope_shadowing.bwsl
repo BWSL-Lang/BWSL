@@ -1,0 +1,261 @@
+// Test: Variable scoping and shadowing
+// Tests: block scope, function scope, shadowing in nested blocks
+
+pipeline ScopeShadowing {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    // Global pipeline constant
+    const float GLOBAL_VALUE = 100.0;
+
+    // Function with local scope
+    localScope :: (float x) -> float {
+        float local = x * 2.0;
+        float result = local + GLOBAL_VALUE;
+        return result;
+    }
+
+    // Function demonstrating shadowing
+    shadowingFunc :: (float value) -> float {
+        float x = value;
+
+        // First block with shadowing
+        {
+            float x = value * 2.0;  // Shadows outer x
+            x = x + 1.0;
+        }
+
+        // x here is still the original
+        return x;
+    }
+
+    // Nested block scopes
+    nestedScopes :: (float input) -> float {
+        float a = input;
+
+        {
+            float b = a * 2.0;
+            {
+                float c = b * 3.0;
+                {
+                    float d = c * 4.0;
+                    a = d;  // Modify outer a from inner scope
+                }
+            }
+        }
+
+        return a;
+    }
+
+    // Loop variable scoping
+    loopScoping :: (int count) -> float {
+        float result = 0.0;
+
+        for (int i = 0; i < count; i = i + 1) {
+            float loopLocal = float(i);
+            result = result + loopLocal;
+        }
+        // i and loopLocal are not accessible here
+
+        // New loop with same variable name
+        for (int i = 0; i < count; i = i + 1) {
+            result = result + float(i) * 0.1;
+        }
+
+        return result;
+    }
+
+    // Conditional scoping
+    conditionalScoping :: (float x) -> float {
+        float result = 0.0;
+
+        if (x > 0.0) {
+            float positive = x;
+            result = positive;
+        } else {
+            float negative = -x;
+            result = negative;
+        }
+        // positive and negative not accessible here
+
+        return result;
+    }
+
+    // Parameter shadowing
+    paramShadowing :: (float value) -> float {
+        float result = value;
+
+        {
+            float value = result * 2.0;  // Shadow parameter
+            result = value + 1.0;
+        }
+
+        // Original parameter value unchanged conceptually
+        // but result has been modified
+        return result;
+    }
+
+    // Multiple levels of shadowing
+    multiShadow :: (float x) -> float {
+        float a = x;
+        float result = 0.0;
+
+        {
+            float a = x * 2.0;  // Shadow level 1
+            result = result + a;
+
+            {
+                float a = x * 3.0;  // Shadow level 2
+                result = result + a;
+
+                {
+                    float a = x * 4.0;  // Shadow level 3
+                    result = result + a;
+                }
+            }
+        }
+
+        // Back to original a
+        result = result + a;
+        return result;  // x + x*2 + x*3 + x*4 = 10x
+    }
+
+    // Scoping with different types
+    typedScoping :: (float x) -> float {
+        int a = int(x * 10.0);
+
+        {
+            float a = x;  // Different type, shadows int a
+            a = a + 1.0;
+        }
+
+        // int a is unchanged
+        return float(a);
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            // Test local scope
+            float localResult = localScope(uv.x);
+
+            // Test shadowing
+            float shadowResult = shadowingFunc(uv.y);
+
+            // Test nested scopes
+            float nestedResult = nestedScopes(0.1);
+
+            // Test loop scoping
+            float loopResult = loopScoping(5);
+
+            // Test conditional scoping
+            float condResult = conditionalScoping(uv.x - 0.5);
+
+            // Test parameter shadowing
+            float paramResult = paramShadowing(2.0);
+
+            // Test multi-level shadowing
+            float multiResult = multiShadow(1.0);
+
+            // Test typed scoping
+            float typedResult = typedScoping(1.5);
+
+            // Inline block scoping test
+            float inlineResult = 0.0;
+            {
+                float temp = pos.x;
+                {
+                    float temp = pos.y;  // Shadow
+                    inlineResult = temp;
+                }
+                inlineResult = inlineResult + temp;  // Original temp
+            }
+
+            // Combine results
+            float4 finalPos = float4(pos, 1.0);
+            finalPos.x = finalPos.x + localResult * 0.0001;
+            finalPos.y = finalPos.y + shadowResult * 0.0001;
+
+            output.position = finalPos;
+            output.uv = uv;
+            output.localResult = localResult;
+            output.nestedResult = nestedResult;
+            output.multiResult = multiResult;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float localResult = input.localResult;
+            float nestedResult = input.nestedResult;
+            float multiResult = input.multiResult;
+
+            // Fragment-level scoping
+            float3 color = float3(0.0);
+
+            {
+                float intensity = uv.x;
+                {
+                    float intensity = uv.y;  // Shadow
+                    color.r = intensity;
+                }
+                color.g = intensity;  // Original
+            }
+
+            color.b = 0.5;
+
+            // Modulate by computed values
+            float factor = (localResult / 200.0) * (nestedResult * 0.1) * (multiResult / 10.0);
+            color = color * saturate(factor + 0.5);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "LoopScopes" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            float result = 0.0;
+
+            // Nested loops with same iterator name
+            for (int i = 0; i < 3; i = i + 1) {
+                for (int i = 0; i < 2; i = i + 1) {  // Shadows outer i
+                    result = result + 1.0;
+                }
+            }
+            // Result should be 6 (3 * 2)
+
+            // Loop with block inside
+            for (int j = 0; j < 4; j = j + 1) {
+                float j_float = float(j);
+                {
+                    float j_float = float(j) * 2.0;  // Shadow
+                    result = result + j_float;
+                }
+            }
+
+            output.position = float4(pos, 1.0);
+            output.result = result;
+            output.uv = uv;
+        }
+
+        fragment {
+            float result = input.result;
+            float2 uv = input.uv;
+
+            float3 color = float3(result / 20.0);
+            color = color * (0.5 + 0.5 * uv.x);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+}

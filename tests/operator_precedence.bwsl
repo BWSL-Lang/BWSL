@@ -1,0 +1,152 @@
+// Test: Operator precedence
+// Tests: arithmetic, logical, comparison, bitwise operator precedence
+
+pipeline OperatorPrecedence {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            // ===== Arithmetic precedence =====
+
+            // Multiplication before addition
+            float arith1 = 2.0 + 3.0 * 4.0;           // 14.0 (not 20.0)
+            float arith2 = 10.0 - 2.0 * 3.0;          // 4.0 (not 24.0)
+
+            // Division before addition
+            float arith3 = 10.0 + 20.0 / 4.0;         // 15.0 (not 7.5)
+
+            // Left-to-right for same precedence
+            float arith4 = 20.0 / 4.0 / 2.0;          // 2.5 (left-to-right)
+            float arith5 = 20.0 - 10.0 - 5.0;         // 5.0 (left-to-right)
+
+            // Mixed operations
+            float arith6 = 2.0 + 3.0 * 4.0 - 5.0 / 2.5;  // 2 + 12 - 2 = 12.0
+
+            // Parentheses override
+            float arith7 = (2.0 + 3.0) * 4.0;         // 20.0
+            float arith8 = 10.0 / (2.0 + 3.0);        // 2.0
+
+            // ===== Comparison precedence =====
+
+            // Arithmetic before comparison
+            bool comp1 = 2.0 + 3.0 > 4.0;             // 5.0 > 4.0 = true
+            bool comp2 = 10.0 - 5.0 == 5.0;           // true
+            bool comp3 = 2.0 * 3.0 < 5.0;             // 6.0 < 5.0 = false
+
+            // Multiple comparisons
+            bool comp4 = 1.0 < 2.0 && 2.0 < 3.0;      // true
+            bool comp5 = 5.0 > 4.0 && 4.0 > 3.0;      // true
+
+            // ===== Logical precedence =====
+
+            // NOT before AND before OR
+            bool log1 = true || false && false;        // true || (false && false) = true
+            bool log2 = false || true && true;         // false || (true && true) = true
+            bool log3 = true && false || true;         // (true && false) || true = true
+
+            // NOT has highest precedence
+            bool log4 = !false && true;                // true && true = true
+            bool log5 = !true || false;                // false || false = false
+
+            // Comparison before logical
+            bool log6 = 5.0 > 3.0 && 3.0 > 1.0;       // true && true = true
+            bool log7 = 1.0 > 2.0 || 3.0 > 2.0;       // false || true = true
+
+            // ===== Unary precedence =====
+
+            // Unary minus before multiplication
+            float unary1 = -2.0 * 3.0;                // -6.0
+            float unary2 = 3.0 * -2.0;                // -6.0
+            float unary3 = -2.0 * -3.0;               // 6.0
+
+            // ===== Integer bitwise precedence =====
+            int a = 0xFF;
+            int b = 0x0F;
+            int c = 0xF0;
+
+            // AND before XOR before OR
+            int bit1 = 0xFF | 0x0F & 0xF0;            // 0xFF | (0x0F & 0xF0) = 0xFF | 0x00 = 0xFF
+            int bit2 = 0x0F ^ 0xFF & 0xF0;            // 0x0F ^ (0xFF & 0xF0) = 0x0F ^ 0xF0 = 0xFF
+
+            // Shift before comparison
+            int bit3 = 1 << 4;                        // 16
+            bool shiftComp = (1 << 4) > 10;           // 16 > 10 = true
+
+            // ===== Ternary precedence =====
+
+            // Ternary has low precedence
+            float tern1 = true ? 1.0 : 0.0;
+            float tern2 = 5.0 > 3.0 ? 10.0 : 20.0;    // true ? 10.0 : 20.0 = 10.0
+
+            // Nested ternary (right-associative)
+            float tern3 = true ? false ? 1.0 : 2.0 : 3.0;  // true ? (false ? 1.0 : 2.0) : 3.0 = 2.0
+
+            // Arithmetic in ternary
+            float tern4 = true ? 1.0 + 2.0 : 3.0 + 4.0;    // 3.0 (not parsed as (true ? 1.0) + 2.0)
+
+            // ===== Complex expressions =====
+
+            float complex1 = 2.0 + 3.0 * 4.0 / 2.0 - 1.0;  // 2 + (12/2) - 1 = 7.0
+            float complex2 = (2.0 + 3.0) * (4.0 - 2.0) / 2.0;  // 5 * 2 / 2 = 5.0
+
+            bool complex3 = 5.0 > 3.0 && 10.0 / 2.0 == 5.0;  // true && true = true
+            bool complex4 = !(5.0 < 3.0) || 2.0 + 2.0 > 5.0;  // true || false = true
+
+            // ===== Assignment has lowest precedence =====
+            float result = 5.0 + 3.0;                 // 8.0 assigned to result
+
+            // Combine for output
+            float4 finalPos = float4(pos, 1.0);
+
+            // Use results to prevent optimization
+            float sum = arith1 + arith2 + arith3 + arith4 + arith5 + arith6 + arith7 + arith8;
+            finalPos.x = finalPos.x + sum * 0.00001;
+
+            output.position = finalPos;
+            output.uv = uv;
+            output.arithResult = sum;
+            output.ternResult = tern1 + tern2 + tern3 + tern4;
+            output.logicResult = (log1 ? 1.0 : 0.0) + (log6 ? 1.0 : 0.0);
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float arithResult = input.arithResult;
+            float ternResult = input.ternResult;
+            float logicResult = input.logicResult;
+
+            // More precedence tests in fragment
+            float3 color = float3(0.0);
+
+            // Color based on UV with precedence
+            color.r = uv.x * 0.5 + 0.25;              // (uv.x * 0.5) + 0.25
+            color.g = 1.0 - uv.y * 0.5;               // 1.0 - (uv.y * 0.5)
+            color.b = (uv.x + uv.y) * 0.5;            // Explicit parentheses
+
+            // Conditional coloring with precedence
+            bool inCenter = uv.x > 0.25 && uv.x < 0.75 && uv.y > 0.25 && uv.y < 0.75;
+            bool onEdge = uv.x < 0.1 || uv.x > 0.9 || uv.y < 0.1 || uv.y > 0.9;
+
+            if (inCenter) {
+                color = color * 1.5;
+            }
+            if (onEdge) {
+                color = color * 0.5;
+            }
+
+            // Normalize by computed values
+            float normalizer = arithResult / 100.0 + ternResult / 50.0 + logicResult / 10.0;
+            color = color * saturate(normalizer);
+
+            output.color = float4(saturate(color), 1.0);
+        }
+    }
+}

@@ -1,0 +1,243 @@
+// Test: Member access patterns
+// Tests: struct member access, vector component access, chained access
+
+pipeline MemberAccess {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    struct Point2D {
+        float x;
+        float y;
+    }
+
+    struct Point3D {
+        float x;
+        float y;
+        float z;
+    }
+
+    struct Rectangle {
+        Point2D min;
+        Point2D max;
+    }
+
+    struct Box {
+        Point3D min;
+        Point3D max;
+    }
+
+    struct Transform {
+        Point3D position;
+        Point3D rotation;
+        Point3D scale;
+    }
+
+    struct GameObject {
+        Transform transform;
+        Box bounds;
+        int id;
+    }
+
+    // Simple member access
+    getX :: (Point2D p) -> float {
+        return p.x;
+    }
+
+    getY :: (Point2D p) -> float {
+        return p.y;
+    }
+
+    // Chained member access (one level)
+    getRectWidth :: (Rectangle r) -> float {
+        return r.max.x - r.min.x;
+    }
+
+    getRectHeight :: (Rectangle r) -> float {
+        return r.max.y - r.min.y;
+    }
+
+    // Two levels of chained access
+    getBoxVolume :: (Box b) -> float {
+        float width = b.max.x - b.min.x;
+        float height = b.max.y - b.min.y;
+        float depth = b.max.z - b.min.z;
+        return width * height * depth;
+    }
+
+    // Deep chained access (three levels)
+    getObjectX :: (GameObject obj) -> float {
+        return obj.transform.position.x;
+    }
+
+    getObjectY :: (GameObject obj) -> float {
+        return obj.transform.position.y;
+    }
+
+    getObjectZ :: (GameObject obj) -> float {
+        return obj.transform.position.z;
+    }
+
+    // Member modification
+    setPointX :: (Point2D p, float x) -> Point2D {
+        p.x = x;
+        return p;
+    }
+
+    // Chained member modification
+    setTransformX :: (Transform t, float x) -> Transform {
+        t.position.x = x;
+        return t;
+    }
+
+    // Deep member modification
+    setObjectPosition :: (GameObject obj, Point3D pos) -> GameObject {
+        obj.transform.position.x = pos.x;
+        obj.transform.position.y = pos.y;
+        obj.transform.position.z = pos.z;
+        return obj;
+    }
+
+    // Member access with expressions
+    computeCenter :: (Rectangle r) -> Point2D {
+        Point2D center;
+        center.x = (r.min.x + r.max.x) * 0.5;
+        center.y = (r.min.y + r.max.y) * 0.5;
+        return center;
+    }
+
+    // Member access with vector swizzles combined
+    point2DToVec :: (Point2D p) -> float2 {
+        return float2(p.x, p.y);
+    }
+
+    point3DToVec :: (Point3D p) -> float3 {
+        return float3(p.x, p.y, p.z);
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            // Create and access Point2D
+            Point2D pt2d;
+            pt2d.x = uv.x;
+            pt2d.y = uv.y;
+
+            float xVal = getX(pt2d);
+            float yVal = getY(pt2d);
+
+            // Create and access Point3D
+            Point3D pt3d;
+            pt3d.x = pos.x;
+            pt3d.y = pos.y;
+            pt3d.z = pos.z;
+
+            // Create and access Rectangle
+            Rectangle rect;
+            rect.min.x = 0.0;
+            rect.min.y = 0.0;
+            rect.max.x = 1.0;
+            rect.max.y = 1.0;
+
+            float width = getRectWidth(rect);
+            float height = getRectHeight(rect);
+            Point2D center = computeCenter(rect);
+
+            // Create and access Box
+            Box box;
+            box.min.x = -1.0;
+            box.min.y = -1.0;
+            box.min.z = -1.0;
+            box.max.x = 1.0;
+            box.max.y = 1.0;
+            box.max.z = 1.0;
+
+            float volume = getBoxVolume(box);
+
+            // Create and access Transform
+            Transform trans;
+            trans.position.x = pos.x;
+            trans.position.y = pos.y;
+            trans.position.z = pos.z;
+            trans.rotation.x = 0.0;
+            trans.rotation.y = 0.0;
+            trans.rotation.z = 0.0;
+            trans.scale.x = 1.0;
+            trans.scale.y = 1.0;
+            trans.scale.z = 1.0;
+
+            // Create and access GameObject (deepest nesting)
+            GameObject obj;
+            obj.transform = trans;
+            obj.bounds = box;
+            obj.id = 42;
+
+            float objX = getObjectX(obj);
+            float objY = getObjectY(obj);
+            float objZ = getObjectZ(obj);
+
+            // Chained access in expressions
+            float combined = obj.transform.position.x +
+                           obj.transform.position.y +
+                           obj.bounds.max.z;
+
+            // Modify through chained access
+            obj.transform.position.x = objX + 0.1;
+            obj.transform.scale.y = 2.0;
+            obj.bounds.min.z = -2.0;
+
+            // Convert to vectors
+            float2 pt2dVec = point2DToVec(pt2d);
+            float3 pt3dVec = point3DToVec(pt3d);
+
+            // Final position
+            float4 finalPos = float4(pos, 1.0);
+            finalPos.x = finalPos.x + center.x * 0.01;
+            finalPos.y = finalPos.y + center.y * 0.01;
+
+            output.position = finalPos;
+            output.uv = uv;
+            output.xVal = xVal;
+            output.volume = volume;
+            output.combined = combined;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float xVal = input.xVal;
+            float volume = input.volume;
+            float combined = input.combined;
+
+            // Create structs in fragment
+            Point2D fragPoint;
+            fragPoint.x = uv.x;
+            fragPoint.y = uv.y;
+
+            Rectangle fragRect;
+            fragRect.min.x = 0.25;
+            fragRect.min.y = 0.25;
+            fragRect.max.x = 0.75;
+            fragRect.max.y = 0.75;
+
+            // Check if point is inside rectangle
+            bool inside = uv.x >= fragRect.min.x &&
+                         uv.x <= fragRect.max.x &&
+                         uv.y >= fragRect.min.y &&
+                         uv.y <= fragRect.max.y;
+
+            // Color based on results
+            float3 color = float3(xVal, volume / 10.0, combined / 5.0);
+
+            if (inside) {
+                color = float3(0.0, 1.0, 0.0);
+            }
+
+            output.color = float4(saturate(color), 1.0);
+        }
+    }
+}

@@ -1,0 +1,203 @@
+// Test: Constant expressions and compile-time evaluation
+// Tests: constant folding, const declarations, compile-time math
+
+pipeline ConstantExpressions {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    // Mathematical constants
+    const float PI = 3.14159265358979;
+    const float TAU = 6.28318530717958;
+    const float E_CONST = 2.71828182845904;
+    const float SQRT2 = 1.41421356237309;
+    const float GOLDEN_RATIO = 1.61803398874989;
+
+    // Derived constants
+    const float HALF_PI = 1.57079632679489;
+    const float QUARTER_PI = 0.78539816339744;
+    const float TWO_PI = 6.28318530717958;
+    const float INV_PI = 0.31830988618379;
+    const float INV_TAU = 0.15915494309189;
+
+    // Color constants
+    const float3 RED = float3(1.0, 0.0, 0.0);
+    const float3 GREEN = float3(0.0, 1.0, 0.0);
+    const float3 BLUE = float3(0.0, 0.0, 1.0);
+    const float3 WHITE = float3(1.0, 1.0, 1.0);
+    const float3 BLACK = float3(0.0, 0.0, 0.0);
+
+    // Physics constants
+    const float GRAVITY = 9.81;
+    const float EPSILON = 0.0001;
+    const int MAX_ITERATIONS = 100;
+
+    // Size and count constants
+    const int GRID_SIZE = 16;
+    const int CELL_COUNT = 256;
+    const float INV_GRID_SIZE = 0.0625;
+
+    // Function using constants
+    degToRad :: (float degrees) -> float {
+        return degrees * PI / 180.0;
+    }
+
+    radToDeg :: (float radians) -> float {
+        return radians * 180.0 / PI;
+    }
+
+    // Normalized sin using TAU
+    normalizedSin :: (float t) -> float {
+        return sin(t * TAU);
+    }
+
+    // Golden ratio spiral
+    goldenAngle :: (int index) -> float {
+        return float(index) * TAU / (GOLDEN_RATIO * GOLDEN_RATIO);
+    }
+
+    // Safe division with epsilon
+    safeDivide :: (float a, float b) -> float {
+        return a / max(abs(b), EPSILON) * sign(b);
+    }
+
+    // Grid cell calculation
+    getGridCell :: (float2 uv) -> int {
+        int x = int(uv.x * float(GRID_SIZE));
+        int y = int(uv.y * float(GRID_SIZE));
+        x = clamp(x, 0, GRID_SIZE - 1);
+        y = clamp(y, 0, GRID_SIZE - 1);
+        return y * GRID_SIZE + x;
+    }
+
+    // Iterative function with max iterations
+    iterativeFunction :: (float x) -> float {
+        float result = x;
+        for (int i = 0; i < MAX_ITERATIONS; i = i + 1) {
+            result = result * 0.99;
+            if (result < EPSILON) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            // Use various constants
+            float angle = uv.x * TAU;
+            float sinVal = sin(angle);
+            float cosVal = cos(angle);
+
+            // Circular motion using constants
+            float radius = 0.5;
+            float2 circlePos = float2(cos(angle), sin(angle)) * radius;
+
+            // Golden ratio spiral point
+            float goldAngle = goldenAngle(int(uv.y * 100.0));
+            float2 spiralPos = float2(cos(goldAngle), sin(goldAngle)) * uv.y;
+
+            // Grid calculations
+            int cell = getGridCell(uv);
+            float cellNorm = float(cell) / float(CELL_COUNT);
+
+            // Degree/radian conversions
+            float deg90 = degToRad(90.0);
+            float rad1 = radToDeg(1.0);
+
+            // Combine position
+            float4 finalPos = float4(pos, 1.0);
+            finalPos.x = finalPos.x + circlePos.x * 0.1;
+            finalPos.y = finalPos.y + circlePos.y * 0.1;
+
+            output.position = finalPos;
+            output.uv = uv;
+            output.angle = angle;
+            output.cellNorm = cellNorm;
+            output.sinVal = sinVal;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float angle = input.angle;
+            float cellNorm = input.cellNorm;
+            float sinVal = input.sinVal;
+
+            // Color mixing using constants
+            float3 color = BLACK;
+
+            // Blend between constant colors
+            float t = uv.x;
+            if (t < 0.33) {
+                color = lerp(RED, GREEN, t * 3.0);
+            } else if (t < 0.66) {
+                color = lerp(GREEN, BLUE, (t - 0.33) * 3.0);
+            } else {
+                color = lerp(BLUE, RED, (t - 0.66) * 3.0);
+            }
+
+            // Modulate by sin wave
+            color = color * (0.5 + sinVal * 0.5);
+
+            // Add grid pattern using constants
+            float2 gridUV = fract(uv * float(GRID_SIZE));
+            float gridLine = step(0.95, max(gridUV.x, gridUV.y));
+            color = lerp(color, WHITE, gridLine * 0.3);
+
+            // Apply golden ratio-based intensity
+            float intensity = fract(cellNorm * GOLDEN_RATIO);
+            color = color * (0.7 + intensity * 0.3);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "Constants" {
+        use attributes { position, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+
+            // Visualize various constants
+            float3 color = BLACK;
+
+            // Show PI-related constants in different regions
+            float region = uv.x * 5.0;
+
+            if (region < 1.0) {
+                // PI visualization
+                float piPattern = sin(uv.y * PI * 10.0);
+                color = float3(0.5 + piPattern * 0.5, 0.0, 0.0);
+            } else if (region < 2.0) {
+                // TAU visualization
+                float tauPattern = sin(uv.y * TAU * 5.0);
+                color = float3(0.0, 0.5 + tauPattern * 0.5, 0.0);
+            } else if (region < 3.0) {
+                // E visualization (exponential)
+                float expPattern = exp(-uv.y * E);
+                color = float3(0.0, 0.0, expPattern);
+            } else if (region < 4.0) {
+                // SQRT2 visualization
+                float sqrtPattern = fract(uv.y * SQRT2 * 10.0);
+                color = float3(sqrtPattern, sqrtPattern, 0.0);
+            } else {
+                // Golden ratio visualization
+                float goldPattern = fract(uv.y * GOLDEN_RATIO * 10.0);
+                color = float3(goldPattern, 0.5, 1.0 - goldPattern);
+            }
+
+            output.color = float4(color, 1.0);
+        }
+    }
+}

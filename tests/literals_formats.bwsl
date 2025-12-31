@@ -1,0 +1,186 @@
+// Test: Literal formats and number representations
+// Tests: integer literals, float literals, hex literals, scientific notation
+
+pipeline LiteralsFormats {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            // ===== Integer literals =====
+            int decimal = 42;
+            int negative = -17;
+            int zero = 0;
+            int large = 1000000;
+
+            // ===== Unsigned integer literals =====
+            uint unsigned = 42u;
+            uint unsignedLarge = 4294967295u;  // Max uint
+            uint unsignedZero = 0u;
+
+            // ===== Hexadecimal literals =====
+            uint hexValue = 0xFF;         // 255
+            uint hexLarge = 0xDEADBEEF;   // Common test value
+            uint hexLower = 0xabcdef;     // Lowercase
+            uint hexMixed = 0xAbCdEf;     // Mixed case
+            uint hexZero = 0x0;
+
+            // ===== Float literals =====
+            float simple = 1.0;
+            float negative_f = -2.5;
+            float small = 0.001;
+            float large_f = 1000.0;
+
+            // Float with explicit leading/trailing digits (required in BWSL)
+            float noLeading = 0.5;
+
+            // Float with explicit decimal
+            float noTrailing = 5.0;
+
+            // ===== Scientific notation =====
+            float sci1 = 1e10;            // 10^10
+            float sci2 = 1.5e5;           // 150000
+            float sci3 = 2.5e-3;          // 0.0025
+            float sci4 = 1E10;            // Uppercase E
+            float sci5 = 3.14159e0;       // e0 = 10^0 = 1
+
+            // Negative exponents
+            float tiny = 1e-10;
+            float micro = 1.23e-6;
+
+            // Large scientific notation
+            float huge = 9.999e30;
+
+            // ===== Boolean literals =====
+            bool trueVal = true;
+            bool falseVal = false;
+
+            // ===== Operations with different literal types =====
+
+            // Integer arithmetic
+            int intSum = decimal + large;
+            int intProd = decimal * 10;
+            int intMod = large % 7;
+
+            // Unsigned arithmetic
+            uint uintSum = unsigned + 100u;
+            uint uintBit = hexValue & 0x0Fu;  // Mask lower nibble
+
+            // Float arithmetic
+            float floatSum = simple + large_f;
+            float floatProd = sci2 * sci3;
+
+            // Mixed type expressions (implicit conversion)
+            float mixedA = float(decimal) + simple;
+            float mixedB = float(hexValue) / 255.0;
+
+            // Scientific notation in expressions
+            float normalizedSci = micro / tiny;  // Should be ~12300
+
+            // ===== Use results =====
+            float4 finalPos = float4(pos, 1.0);
+
+            // Normalize hex to 0-1 range
+            float hexNorm = float(hexValue) / 255.0;
+
+            // Use scientific notation for small offsets
+            finalPos.x = finalPos.x + sci3 * uv.x;
+            finalPos.y = finalPos.y + tiny * float(decimal);
+
+            output.position = finalPos;
+            output.uv = uv;
+            output.hexNorm = hexNorm;
+            output.sciValue = sci2;
+            output.intValue = float(intSum);
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float hexNorm = input.hexNorm;
+            float sciValue = input.sciValue;
+            float intValue = input.intValue;
+
+            // More literal tests in fragment
+            float3 color = float3(0.0);
+
+            // Use hex for color definition
+            uint red = 0xFF0000;
+            uint green = 0x00FF00;
+            uint blue = 0x0000FF;
+
+            // Extract components using bit operations
+            float r = float((red >> 16u) & 0xFFu) / 255.0;
+            float g = float((green >> 8u) & 0xFFu) / 255.0;
+            float b = float(blue & 0xFFu) / 255.0;
+
+            // Blend based on UV
+            color.r = lerp(0.0, r, uv.x);
+            color.g = lerp(0.0, g, uv.y);
+            color.b = lerp(0.0, b, 1.0 - uv.x);
+
+            // Add hex-based pattern
+            uint pattern = uint(uv.x * 16.0) ^ uint(uv.y * 16.0);
+            float patternFloat = float(pattern & 0xFu) / 15.0;
+
+            color = color + float3(patternFloat * 0.2);
+
+            // Scientific notation for subtle effects
+            float glow = 1e-2 * sin(uv.x * 100.0);
+            color = color + float3(glow);
+
+            output.color = float4(saturate(color), 1.0);
+        }
+    }
+
+    pass "BitPatterns" {
+        use attributes { position, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+
+            // Visualize different bit patterns
+            int x = int(uv.x * 8.0);
+            int y = int(uv.y * 8.0);
+
+            // Create various patterns using hex
+            uint pattern1 = 0xAAAAAAAAu;  // Alternating bits
+            uint pattern2 = 0x55555555u;  // Inverse alternating
+            uint pattern3 = 0xF0F0F0F0u;  // Alternating nibbles
+
+            // Select pattern based on position
+            uint cellIndex = uint(y * 8 + x);
+            uint selectedPattern = 0u;
+
+            if (cellIndex % 3u == 0u) {
+                selectedPattern = pattern1;
+            } else if (cellIndex % 3u == 1u) {
+                selectedPattern = pattern2;
+            } else {
+                selectedPattern = pattern3;
+            }
+
+            // Extract bit at position
+            uint bitPos = cellIndex % 32u;
+            uint bit = (selectedPattern >> bitPos) & 1u;
+
+            float3 color = float3(float(bit));
+
+            // Add gradient
+            color = color * (0.5 + 0.5 * uv.x);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+}

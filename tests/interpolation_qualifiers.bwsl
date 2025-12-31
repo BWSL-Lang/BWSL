@@ -1,0 +1,201 @@
+// Test: Interpolation qualifiers for varying data
+// Tests: flat, smooth, noperspective interpolation between vertex and fragment stages
+
+pipeline InterpolationQualifiers {
+    attributes {
+        position: float3
+        normal: float3
+        texcoord: float2
+        color: float4
+    }
+
+    pass "Main" {
+        use attributes { position, normal, texcoord, color }
+
+        vertex {
+            float3 pos = attributes.position;
+            float3 norm = attributes.normal;
+            float2 uv = attributes.texcoord;
+            float4 col = attributes.color;
+            int id = input.instance_id;
+
+            // Transform position
+            float4 clipPos = float4(pos, 1.0);
+
+            // Pass various data to fragment shader
+            // These will be interpolated differently based on type
+
+            // Smooth interpolation (default for floats)
+            float3 worldPos = pos;
+            float3 worldNormal = normalize(norm);
+            float2 texCoord = uv;
+
+            // Data that should be flat (not interpolated)
+            int instanceIndex = id;
+            float materialId = float(id % 4);
+
+            // Color data (typically smooth)
+            float4 vertexColor = col;
+
+            // Compute per-vertex lighting for Gouraud shading
+            float3 lightDir = normalize(float3(1.0, 1.0, 1.0));
+            float NdotL = max(dot(worldNormal, lightDir), 0.0);
+            float3 diffuse = float3(NdotL);
+
+            // Barycentric-like coordinates for wireframe
+            float3 bary = float3(0.0);
+            int vertId = id % 3;
+            if (vertId == 0) {
+                bary = float3(1.0, 0.0, 0.0);
+            } else if (vertId == 1) {
+                bary = float3(0.0, 1.0, 0.0);
+            } else {
+                bary = float3(0.0, 0.0, 1.0);
+            }
+
+            output.position = clipPos;
+            output.worldPos = worldPos;
+            output.worldNormal = worldNormal;
+            output.texcoord = texCoord;
+            output.vertexColor = vertexColor;
+            output.diffuse = diffuse;
+            output.bary = bary;
+            output.instanceId = float(instanceIndex);
+            output.materialId = materialId;
+        }
+
+        fragment {
+            // Retrieve interpolated values
+            float3 worldPos = input.worldPos;
+            float3 worldNormal = normalize(input.worldNormal);  // Re-normalize after interpolation
+            float2 uv = input.texcoord;
+            float4 vertexColor = input.vertexColor;
+            float3 diffuse = input.diffuse;
+            float3 bary = input.bary;
+            float instanceId = input.instanceId;
+            float materialId = input.materialId;
+
+            // Per-pixel lighting (Phong shading)
+            float3 lightDir = normalize(float3(1.0, 1.0, 1.0));
+            float NdotL = max(dot(worldNormal, lightDir), 0.0);
+            float3 phongDiffuse = float3(NdotL);
+
+            // Compare Gouraud vs Phong
+            float3 gouraudColor = diffuse;
+            float3 phongColor = phongDiffuse;
+
+            // Wireframe using barycentric coordinates
+            float wireThickness = 0.02;
+            float minBary = min(bary.x, min(bary.y, bary.z));
+            float wire = smoothstep(0.0, wireThickness, minBary);
+
+            // Material selection based on flat instanceId
+            float3 materialColor = float3(1.0);
+            int matIdx = int(materialId);
+            if (matIdx == 0) {
+                materialColor = float3(1.0, 0.3, 0.3);  // Red
+            } else if (matIdx == 1) {
+                materialColor = float3(0.3, 1.0, 0.3);  // Green
+            } else if (matIdx == 2) {
+                materialColor = float3(0.3, 0.3, 1.0);  // Blue
+            } else {
+                materialColor = float3(1.0, 1.0, 0.3);  // Yellow
+            }
+
+            // Combine everything
+            float3 baseColor = materialColor * phongColor;
+            float3 finalColor = lerp(float3(0.0), baseColor, wire);
+
+            // Add vertex color influence
+            finalColor = finalColor * vertexColor.rgb;
+
+            output.color = float4(finalColor, vertexColor.a);
+        }
+    }
+
+    pass "FlatShading" {
+        use attributes { position, normal }
+
+        vertex {
+            float3 pos = attributes.position;
+            float3 norm = attributes.normal;
+
+            // Flat shading - compute face normal (in real use, this would be face normal)
+            float3 faceNormal = normalize(norm);
+
+            // Flat color per primitive using instance ID
+            int primId = input.instance_id;
+            float3 primColor = float3(
+                fract(float(primId) * 0.123),
+                fract(float(primId) * 0.456),
+                fract(float(primId) * 0.789)
+            );
+
+            output.position = float4(pos, 1.0);
+            output.faceNormal = faceNormal;
+            output.primColor = primColor;
+            output.primId = float(primId);
+        }
+
+        fragment {
+            // These should be flat (not interpolated)
+            float3 faceNormal = input.faceNormal;
+            float3 primColor = input.primColor;
+            float primId = input.primId;
+
+            // Simple flat lighting
+            float3 lightDir = normalize(float3(1.0, 1.0, 1.0));
+            float NdotL = max(dot(faceNormal, lightDir), 0.0);
+
+            float3 finalColor = primColor * (0.3 + 0.7 * NdotL);
+
+            output.color = float4(finalColor, 1.0);
+        }
+    }
+
+    pass "NoPerspective" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            // Perspective-correct UV (default)
+            float2 perspectiveUV = uv;
+
+            // Screen-space UV (noperspective)
+            // In real shaders, this would use noperspective qualifier
+            float2 screenUV = uv;
+
+            // Depth for visualization
+            float depth = pos.z * 0.5 + 0.5;
+
+            output.position = float4(pos, 1.0);
+            output.perspectiveUV = perspectiveUV;
+            output.screenUV = screenUV;
+            output.depth = depth;
+        }
+
+        fragment {
+            float2 perspUV = input.perspectiveUV;
+            float2 screenUV = input.screenUV;
+            float depth = input.depth;
+
+            // Create checkerboard patterns to show interpolation difference
+            float2 perspCheck = floor(perspUV * 8.0);
+            float perspPattern = mod(perspCheck.x + perspCheck.y, 2.0);
+
+            float2 screenCheck = floor(screenUV * 8.0);
+            float screenPattern = mod(screenCheck.x + screenCheck.y, 2.0);
+
+            // Visualize depth
+            float3 depthColor = float3(depth);
+
+            // Final output
+            float3 finalColor = lerp(float3(0.2), float3(0.8), perspPattern);
+            finalColor = finalColor * (0.5 + 0.5 * depth);
+
+            output.color = float4(finalColor, 1.0);
+        }
+    }
+}

@@ -1,0 +1,248 @@
+// Test: Matrix construction patterns
+// Tests: identity, diagonal, row/column construction, transformations
+
+pipeline MatrixConstruction {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    // Identity matrix helpers
+    identityMat2 :: () -> mat2 {
+        return mat2(
+            1.0, 0.0,
+            0.0, 1.0
+        );
+    }
+
+    identityMat3 :: () -> mat3 {
+        return mat3(
+            1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 1.0
+        );
+    }
+
+    identityMat4 :: () -> mat4 {
+        return mat4(
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0
+        );
+    }
+
+    // Diagonal matrix
+    diagonalMat3 :: (float3 diag) -> mat3 {
+        return mat3(
+            diag.x, 0.0, 0.0,
+            0.0, diag.y, 0.0,
+            0.0, 0.0, diag.z
+        );
+    }
+
+    // Scale matrix
+    scaleMat4 :: (float3 scale) -> mat4 {
+        return mat4(
+            scale.x, 0.0, 0.0, 0.0,
+            0.0, scale.y, 0.0, 0.0,
+            0.0, 0.0, scale.z, 0.0,
+            0.0, 0.0, 0.0, 1.0
+        );
+    }
+
+    // Translation matrix
+    translateMat4 :: (float3 offset) -> mat4 {
+        return mat4(
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            offset.x, offset.y, offset.z, 1.0
+        );
+    }
+
+    // Rotation around Z axis
+    rotateZMat3 :: (float angle) -> mat3 {
+        float c = cos(angle);
+        float s = sin(angle);
+        return mat3(
+            c, s, 0.0,
+            -s, c, 0.0,
+            0.0, 0.0, 1.0
+        );
+    }
+
+    // Rotation around Y axis
+    rotateYMat3 :: (float angle) -> mat3 {
+        float c = cos(angle);
+        float s = sin(angle);
+        return mat3(
+            c, 0.0, -s,
+            0.0, 1.0, 0.0,
+            s, 0.0, c
+        );
+    }
+
+    // Rotation around X axis
+    rotateXMat3 :: (float angle) -> mat3 {
+        float c = cos(angle);
+        float s = sin(angle);
+        return mat3(
+            1.0, 0.0, 0.0,
+            0.0, c, s,
+            0.0, -s, c
+        );
+    }
+
+    // Look-at matrix construction
+    lookAtMat3 :: (float3 forward, float3 up) -> mat3 {
+        float3 f = normalize(forward);
+        float3 r = normalize(cross(up, f));
+        float3 u = cross(f, r);
+        return mat3(
+            r.x, u.x, f.x,
+            r.y, u.y, f.y,
+            r.z, u.z, f.z
+        );
+    }
+
+    // Orthographic projection
+    orthoMat4 :: (float left, float right, float bottom, float top, float near, float far) -> mat4 {
+        float rl = 1.0 / (right - left);
+        float tb = 1.0 / (top - bottom);
+        float fn = 1.0 / (far - near);
+        return mat4(
+            2.0 * rl, 0.0, 0.0, 0.0,
+            0.0, 2.0 * tb, 0.0, 0.0,
+            0.0, 0.0, -2.0 * fn, 0.0,
+            -(right + left) * rl, -(top + bottom) * tb, -(far + near) * fn, 1.0
+        );
+    }
+
+    // Matrix from basis vectors
+    basisMat3 :: (float3 x, float3 y, float3 z) -> mat3 {
+        return mat3(
+            x.x, y.x, z.x,
+            x.y, y.y, z.y,
+            x.z, y.z, z.z
+        );
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            // Test identity matrices
+            mat2 id2 = identityMat2();
+            mat3 id3 = identityMat3();
+            mat4 id4 = identityMat4();
+
+            // Test diagonal matrix
+            mat3 diag = diagonalMat3(float3(2.0, 1.0, 0.5));
+
+            // Test scale matrix
+            mat4 scale = scaleMat4(float3(1.5, 1.5, 1.5));
+
+            // Test translation matrix
+            mat4 translate = translateMat4(float3(0.1, 0.0, 0.0));
+
+            // Test rotation matrices
+            float angle = uv.x * 3.14159;
+            mat3 rotZ = rotateZMat3(angle);
+            mat3 rotY = rotateYMat3(angle * 0.5);
+            mat3 rotX = rotateXMat3(angle * 0.25);
+
+            // Combine rotations
+            mat3 combinedRot = rotZ * rotY * rotX;
+
+            // Test look-at
+            float3 forward = normalize(float3(0.0, 0.0, -1.0));
+            float3 up = float3(0.0, 1.0, 0.0);
+            mat3 lookAt = lookAtMat3(forward, up);
+
+            // Test orthographic
+            mat4 ortho = orthoMat4(-1.0, 1.0, -1.0, 1.0, 0.1, 100.0);
+
+            // Test basis matrix
+            float3 basisX = float3(1.0, 0.0, 0.0);
+            float3 basisY = float3(0.0, 1.0, 0.0);
+            float3 basisZ = float3(0.0, 0.0, 1.0);
+            mat3 basis = basisMat3(basisX, basisY, basisZ);
+
+            // Apply transformations
+            float3 rotatedPos = combinedRot * pos;
+            float4 scaledPos = scale * float4(pos, 1.0);
+            float4 translatedPos = translate * float4(pos, 1.0);
+
+            // Final position with all transforms
+            float4 finalPos = translate * scale * float4(combinedRot * pos, 1.0);
+
+            output.position = float4(pos, 1.0);
+            output.transformedPos = rotatedPos;
+            output.uv = uv;
+            output.angle = angle;
+        }
+
+        fragment {
+            float3 transformedPos = input.transformedPos;
+            float2 uv = input.uv;
+            float angle = input.angle;
+
+            // Visualize transformed position as color
+            float3 color = transformedPos * 0.5 + 0.5;
+
+            // Add rotation visualization
+            float2 rotatedUV;
+            rotatedUV.x = uv.x * cos(angle) - uv.y * sin(angle);
+            rotatedUV.y = uv.x * sin(angle) + uv.y * cos(angle);
+
+            float pattern = sin(rotatedUV.x * 10.0) * sin(rotatedUV.y * 10.0);
+            color = color + float3(pattern * 0.2);
+
+            output.color = float4(saturate(color), 1.0);
+        }
+    }
+
+    pass "MatrixOps" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            // Matrix-vector multiplication
+            mat3 m = rotateZMat3(uv.x * 3.14159);
+            float3 v = float3(1.0, 0.0, 0.0);
+            float3 result = m * v;
+
+            // Matrix-matrix multiplication
+            mat3 m1 = rotateXMat3(0.5);
+            mat3 m2 = rotateYMat3(0.5);
+            mat3 combined = m1 * m2;
+
+            // Extract columns/rows via multiplication
+            float3 col0 = combined * float3(1.0, 0.0, 0.0);
+            float3 col1 = combined * float3(0.0, 1.0, 0.0);
+            float3 col2 = combined * float3(0.0, 0.0, 1.0);
+
+            output.position = float4(pos, 1.0);
+            output.result = result;
+            output.col0 = col0;
+            output.uv = uv;
+        }
+
+        fragment {
+            float3 result = input.result;
+            float3 col0 = input.col0;
+            float2 uv = input.uv;
+
+            float3 color = lerp(result, col0, uv.x);
+            color = color * 0.5 + 0.5;
+
+            output.color = float4(color, 1.0);
+        }
+    }
+}

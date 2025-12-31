@@ -1,0 +1,78 @@
+// Test file for return if, break if, and skip if statements
+
+pipeline ConditionalControlFlow {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    // Test 1: return if with return value
+    testReturnIfValue :: (float x) -> float {
+        return if (x < 0.0) 0.0;
+        return if (x > 1.0) 1.0;
+        return x;
+    }
+
+    // Test 2: break if in a loop
+    testBreakIf :: (float limit) -> float {
+        float sum = 0.0;
+        for (int i = 0; i < 100; i = i + 1) {
+            sum = sum + float(i);
+            break if (sum > limit);
+        }
+        return sum;
+    }
+
+    // Test 3: skip if (continue if) in a loop
+    testSkipIf :: () -> float {
+        float sum = 0.0;
+        for (int i = 0; i < 10; i = i + 1) {
+            skip if (i % 2 == 0);
+            sum = sum + float(i);
+        }
+        return sum;
+    }
+
+    // Test 4: Combined usage
+    combinedTest :: (float x) -> float {
+        return if (x < 0.0) -1.0;
+
+        float result = 0.0;
+        for (int i = 0; i < 10; i = i + 1) {
+            skip if (float(i) < x);
+            result = result + float(i);
+            break if (result > 20.0);
+        }
+
+        return if (result == 0.0) x;
+        return result;
+    }
+
+    // Test 5: return if with no value (early exit)
+    testReturnIfVoid :: (float x) -> float {
+        return if (x < 0.0);
+        return x * 2.0;
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            float val = testReturnIfValue(uv.x);
+            float sum1 = testBreakIf(50.0);
+            float sum2 = testSkipIf();
+            float combined = combinedTest(sum1 + sum2);
+
+            output.position = float4(pos, 1.0);
+            output.result = combined + val;
+        }
+
+        fragment {
+            float r = input.result;
+            output.color = float4(r, r, r, 1.0);
+        }
+    }
+}

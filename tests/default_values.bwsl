@@ -1,0 +1,191 @@
+// Test: Default initialization and zero values
+// Tests: uninitialized locals, zero initialization, default struct values
+
+pipeline DefaultValues {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    struct EmptyStruct {
+        float value;
+    }
+
+    struct SimpleStruct {
+        float x;
+        float y;
+        float z;
+    }
+
+    struct ComplexStruct {
+        float3 position;
+        float4 color;
+        int id;
+        bool active;
+    }
+
+    struct NestedStruct {
+        SimpleStruct inner;
+        float outer;
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            // ===== Scalar default initialization =====
+            float uninitFloat;
+            int uninitInt;
+            bool uninitBool;
+            uint uninitUint;
+
+            // Explicit zero initialization
+            float zeroFloat = 0.0;
+            int zeroInt = 0;
+            bool zeroBool = false;
+            uint zeroUint = 0u;
+
+            // ===== Vector default initialization =====
+            float2 uninitVec2;
+            float3 uninitVec3;
+            float4 uninitVec4;
+
+            // Explicit zero vectors
+            float2 zeroVec2 = float2(0.0);
+            float3 zeroVec3 = float3(0.0);
+            float4 zeroVec4 = float4(0.0);
+
+            // ===== Matrix default initialization =====
+            mat2 uninitMat2;
+            mat3 uninitMat3;
+            mat4 uninitMat4;
+
+            // Explicit identity matrix
+            mat4 identityMat = mat4(
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0
+            );
+
+            // ===== Struct default initialization =====
+            EmptyStruct emptyS;
+            SimpleStruct simpleS;
+            ComplexStruct complexS;
+            NestedStruct nestedS;
+
+            // ===== Array default initialization =====
+            float[4] uninitArr;
+            int[4] uninitIntArr;
+
+            // Zero-initialized array
+            float[4] zeroArr;
+            zeroArr[0] = 0.0;
+            zeroArr[1] = 0.0;
+            zeroArr[2] = 0.0;
+            zeroArr[3] = 0.0;
+
+            // ===== Initialize structs after declaration =====
+            simpleS.x = 1.0;
+            simpleS.y = 2.0;
+            simpleS.z = 3.0;
+
+            complexS.position = float3(0.0);
+            complexS.color = float4(1.0);
+            complexS.id = 0;
+            complexS.active = true;
+
+            nestedS.inner.x = 0.0;
+            nestedS.inner.y = 0.0;
+            nestedS.inner.z = 0.0;
+            nestedS.outer = 1.0;
+
+            // ===== Conditional initialization =====
+            float condInit;
+            if (uv.x > 0.5) {
+                condInit = 1.0;
+            } else {
+                condInit = 0.0;
+            }
+
+            // ===== Loop initialization =====
+            float loopInit = 0.0;
+            for (int i = 0; i < 4; i = i + 1) {
+                loopInit = loopInit + float(i);
+            }
+
+            // ===== Use initialized values =====
+            float4 finalPos = float4(pos, 1.0);
+            finalPos.x = finalPos.x + zeroFloat;
+            finalPos.y = finalPos.y + simpleS.x * 0.001;
+
+            output.position = finalPos;
+            output.uv = uv;
+            output.structSum = simpleS.x + simpleS.y + simpleS.z;
+            output.condInit = condInit;
+            output.loopInit = loopInit;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float structSum = input.structSum;
+            float condInit = input.condInit;
+            float loopInit = input.loopInit;
+
+            // Fragment-local defaults
+            SimpleStruct fragStruct;
+            fragStruct.x = uv.x;
+            fragStruct.y = uv.y;
+            fragStruct.z = 1.0;
+
+            float3 color = float3(0.0);
+
+            // Use struct values
+            color.r = fragStruct.x;
+            color.g = fragStruct.y;
+            color.b = fragStruct.z * 0.5;
+
+            // Modulate by initialized values
+            color = color * (structSum / 10.0);
+            color.r = color.r + condInit * 0.1;
+            color.b = color.b + loopInit * 0.01;
+
+            output.color = float4(saturate(color), 1.0);
+        }
+    }
+
+    pass "ZeroChecks" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+
+            // Create various zero-initialized values
+            float3 zeroPos = float3(0.0);
+            float4 zeroColor = float4(0.0, 0.0, 0.0, 1.0);
+            mat3 zeroMat = mat3(
+                0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0
+            );
+
+            // Verify zeros don't affect position
+            float4 finalPos = float4(pos + zeroPos, 1.0);
+
+            output.position = finalPos;
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+
+            // Simple gradient to verify pass works
+            float3 color = float3(uv.x, uv.y, 0.5);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+}

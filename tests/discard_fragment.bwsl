@@ -1,0 +1,245 @@
+// Test: Fragment discard/kill functionality
+// Tests: discard in various conditions, alpha testing, cutout patterns
+
+pipeline DiscardFragment {
+    attributes {
+        position: float3
+        texcoord: float2
+        color: float4
+    }
+
+    pass "AlphaTest" {
+        use attributes { position, texcoord, color }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+            output.color = attributes.color;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float4 color = input.color;
+
+            // Simulate texture alpha
+            float alpha = color.a;
+
+            // Alpha test - discard if below threshold
+            if (alpha < 0.5) {
+                discard;
+            }
+
+            output.color = float4(color.rgb, 1.0);
+        }
+    }
+
+    pass "CircleCutout" {
+        use attributes { position, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+
+            // Center UV
+            float2 centered = uv * 2.0 - 1.0;
+            float dist = length(centered);
+
+            // Discard outside circle
+            if (dist > 0.8) {
+                discard;
+            }
+
+            // Color gradient based on distance
+            float3 color = lerp(float3(1.0, 0.5, 0.0), float3(0.0, 0.5, 1.0), dist / 0.8);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "GridPattern" {
+        use attributes { position, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+
+            // Create grid pattern
+            float2 grid = fract(uv * 10.0);
+
+            // Discard cells in checkerboard pattern
+            float2 cell = floor(uv * 10.0);
+            float checker = mod(cell.x + cell.y, 2.0);
+
+            if (checker < 0.5) {
+                discard;
+            }
+
+            // Color remaining cells
+            float3 color = float3(grid.x, grid.y, 0.5);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "NoiseDiscard" {
+        use attributes { position, texcoord }
+
+        // Simple hash function for noise
+        hash :: (float2 p) -> float {
+            float3 p3 = fract(float3(p.x, p.y, p.x) * 0.13);
+            p3 = p3 + float3(dot(p3, float3(p3.y + 3.333, p3.z + 3.333, p3.x + 3.333)));
+            return fract((p3.x + p3.y) * p3.z);
+        }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+
+            // Generate noise value
+            float noise = hash(floor(uv * 20.0));
+
+            // Dissolve effect - discard based on noise
+            float threshold = 0.3;  // Adjustable threshold
+            if (noise < threshold) {
+                discard;
+            }
+
+            // Color based on noise
+            float3 color = float3(noise, noise * 0.5, 1.0 - noise);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "ConditionalDiscard" {
+        use attributes { position, texcoord, color }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+            output.vertColor = attributes.color;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float4 vertColor = input.vertColor;
+
+            // Multiple discard conditions
+            bool discardPixel = false;
+
+            // Condition 1: Outside bounds
+            if (uv.x < 0.1 || uv.x > 0.9) {
+                discardPixel = true;
+            }
+
+            // Condition 2: Below diagonal
+            if (uv.y < uv.x * 0.5) {
+                discardPixel = true;
+            }
+
+            // Condition 3: In specific region
+            float2 center = float2(0.5, 0.5);
+            float dist = length(uv - center);
+            if (dist > 0.3 && dist < 0.35) {
+                discardPixel = true;
+            }
+
+            // Single discard point
+            if (discardPixel) {
+                discard;
+            }
+
+            // Surviving pixels get colored
+            float3 color = vertColor.rgb * (0.5 + 0.5 * uv.y);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "DepthDiscard" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+
+            // Compute depth
+            float depth = pos.z * 0.5 + 0.5;
+
+            output.position = float4(pos, 1.0);
+            output.uv = attributes.texcoord;
+            output.depth = depth;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float depth = input.depth;
+
+            // Discard based on depth threshold
+            float depthThreshold = 0.5;
+
+            // Create depth-based cutout
+            if (depth > depthThreshold) {
+                // Additional pattern check
+                float2 pattern = fract(uv * 5.0);
+                if (pattern.x > 0.5 && pattern.y > 0.5) {
+                    discard;
+                }
+            }
+
+            // Color by depth
+            float3 nearColor = float3(0.0, 1.0, 0.0);
+            float3 farColor = float3(1.0, 0.0, 0.0);
+            float3 color = lerp(nearColor, farColor, depth);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "EarlyDiscard" {
+        use attributes { position, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+
+            // Early discard for efficiency
+            // Discard pixels that won't contribute
+            if (uv.x + uv.y < 0.2) {
+                discard;
+            }
+
+            // Only compute expensive operations for non-discarded pixels
+            float2 centered = uv * 2.0 - 1.0;
+            float angle = atan2(centered.y, centered.x);
+            float dist = length(centered);
+
+            // Spiral pattern
+            float spiral = sin(angle * 5.0 + dist * 10.0);
+
+            // Discard based on spiral
+            if (spiral < 0.0) {
+                discard;
+            }
+
+            float3 color = float3(0.5 + 0.5 * spiral, dist, 1.0 - dist);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+}

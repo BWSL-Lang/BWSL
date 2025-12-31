@@ -1,0 +1,191 @@
+// Test: Vector construction patterns
+// Tests: scalar broadcast, component-wise construction, swizzle in construction
+
+pipeline VectorConstruction {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            // ===== Scalar broadcast construction =====
+            float2 vec2_scalar = float2(1.0);           // (1.0, 1.0)
+            float3 vec3_scalar = float3(0.5);           // (0.5, 0.5, 0.5)
+            float4 vec4_scalar = float4(0.25);          // (0.25, 0.25, 0.25, 0.25)
+
+            // ===== Component-wise construction =====
+            float2 vec2_comp = float2(1.0, 2.0);
+            float3 vec3_comp = float3(1.0, 2.0, 3.0);
+            float4 vec4_comp = float4(1.0, 2.0, 3.0, 4.0);
+
+            // ===== Mixed scalar and vector construction =====
+            // float3 from float2 + float
+            float3 vec3_from_vec2 = float3(uv, 1.0);
+            float3 vec3_from_float_vec2 = float3(1.0, uv);
+
+            // float4 from float3 + float
+            float4 vec4_from_vec3 = float4(pos, 1.0);
+            float4 vec4_from_float_vec3 = float4(1.0, pos);
+
+            // float4 from float2 + float2
+            float4 vec4_from_two_vec2 = float4(uv, uv);
+
+            // float4 from float2 + float + float
+            float4 vec4_mixed = float4(uv, 0.5, 1.0);
+
+            // float4 from float + float2 + float
+            float4 vec4_mixed2 = float4(0.0, uv, 1.0);
+
+            // ===== Construction using swizzles =====
+            float3 swizzled = float3(pos.zyx);
+            float4 swizzled4 = float4(pos.xzy, 1.0);
+            float2 swizzled2 = float2(pos.xy);
+
+            // ===== Construction with expressions =====
+            float3 expr_vec = float3(
+                sin(uv.x * 3.14159),
+                cos(uv.y * 3.14159),
+                uv.x + uv.y
+            );
+
+            float4 expr_vec4 = float4(
+                pos.x * 2.0,
+                pos.y * 2.0,
+                pos.z * 2.0,
+                length(pos)
+            );
+
+            // ===== Nested construction =====
+            float4 nested = float4(
+                float2(1.0, 2.0),
+                float2(3.0, 4.0)
+            );
+
+            // ===== Integer vectors =====
+            int2 ivec2 = int2(1, 2);
+            int3 ivec3 = int3(1, 2, 3);
+            int4 ivec4 = int4(1, 2, 3, 4);
+
+            // Integer from float conversion
+            int2 ivec_from_float = int2(uv * 10.0);
+            int3 ivec3_from_float3 = int3(pos * 5.0);
+
+            // ===== Unsigned integer vectors =====
+            uint2 uvec2 = uint2(1u, 2u);
+            uint3 uvec3 = uint3(1u, 2u, 3u);
+            uint4 uvec4 = uint4(1u, 2u, 3u, 4u);
+
+            // ===== Boolean vectors =====
+            bool2 bvec2 = bool2(true, false);
+            bool3 bvec3 = bool3(pos.x > 0.0, pos.y > 0.0, pos.z > 0.0);
+            bool4 bvec4 = bool4(true, false, true, false);
+
+            // ===== Construction from operations =====
+            float3 from_ops = float3(
+                dot(pos, float3(1.0, 0.0, 0.0)),
+                dot(pos, float3(0.0, 1.0, 0.0)),
+                dot(pos, float3(0.0, 0.0, 1.0))
+            );
+
+            // ===== Zero and one vectors =====
+            float3 zero_vec = float3(0.0);
+            float4 one_vec = float4(1.0);
+            float2 half_vec = float2(0.5);
+
+            // ===== Combine results =====
+            float4 finalPos = float4(pos, 1.0);
+            finalPos.x = finalPos.x + vec2_scalar.x * 0.001;
+            finalPos.y = finalPos.y + vec3_scalar.y * 0.001;
+            finalPos.z = finalPos.z + vec4_scalar.z * 0.001;
+
+            output.position = finalPos;
+            output.uv = uv;
+            output.vec3_result = vec3_from_vec2;
+            output.vec4_result = vec4_from_vec3;
+            output.expr_result = expr_vec;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float3 vec3_result = input.vec3_result;
+            float4 vec4_result = input.vec4_result;
+            float3 expr_result = input.expr_result;
+
+            // More construction patterns in fragment
+            float3 color = float3(0.0);
+
+            // Gradient construction
+            float3 gradientColor = float3(uv.x, uv.y, 1.0 - uv.x);
+
+            // Checkerboard using vector construction
+            float2 checker = floor(uv * 8.0);
+            float pattern = mod(checker.x + checker.y, 2.0);
+            float3 checkerColor = float3(pattern);
+
+            // Combine using vector construction
+            color = float3(
+                gradientColor.r * 0.5 + checkerColor.r * 0.5,
+                gradientColor.g * 0.5 + checkerColor.g * 0.5,
+                gradientColor.b * 0.5 + checkerColor.b * 0.5
+            );
+
+            // Add expression result influence
+            color = color + expr_result * 0.1;
+
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "Swizzle" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            // Swizzle-based construction
+            float4 pos4 = float4(pos, 1.0);
+
+            // Various swizzle patterns
+            float4 rgba = float4(pos4.rgba);
+            float4 bgra = float4(pos4.bgra);
+            float4 abgr = float4(pos4.abgr);
+
+            float3 xyz = float3(pos4.xyz);
+            float3 zyx = float3(pos4.zyx);
+            float3 xzy = float3(pos4.xzy);
+
+            float2 xy = float2(pos4.xy);
+            float2 yx = float2(pos4.yx);
+            float2 zw = float2(pos4.zw);
+
+            // Duplicate component swizzles
+            float3 xxx = float3(pos.xxx);
+            float4 xyzx = float4(pos.xyzx);
+            float2 xx = float2(pos.xx);
+
+            output.position = float4(pos, 1.0);
+            output.swizzled = bgra;
+            output.uv = uv;
+        }
+
+        fragment {
+            float4 swizzled = input.swizzled;
+            float2 uv = input.uv;
+
+            // Display swizzled color
+            float3 color = swizzled.rgb;
+
+            // Modify with UV
+            color = color * (0.5 + 0.5 * uv.x);
+
+            output.color = float4(color, swizzled.a);
+        }
+    }
+}

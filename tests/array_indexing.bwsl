@@ -1,0 +1,189 @@
+// Test: Array indexing patterns
+// Tests: constant index, variable index, expression index, bounds
+
+pipeline ArrayIndexing {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            // ===== Constant indexing =====
+            float[4] constArr;
+            constArr[0] = 1.0;
+            constArr[1] = 2.0;
+            constArr[2] = 3.0;
+            constArr[3] = 4.0;
+
+            float val0 = constArr[0];
+            float val1 = constArr[1];
+            float val2 = constArr[2];
+            float val3 = constArr[3];
+
+            // ===== Variable indexing =====
+            int idx = int(uv.x * 3.99);
+            float varIndexed = constArr[idx];
+
+            // ===== Expression indexing =====
+            int exprIdx = int(uv.x * 2.0) + int(uv.y * 2.0);
+            exprIdx = clamp(exprIdx, 0, 3);
+            float exprIndexed = constArr[exprIdx];
+
+            // ===== Integer array =====
+            int[4] intArr;
+            intArr[0] = 10;
+            intArr[1] = 20;
+            intArr[2] = 30;
+            intArr[3] = 40;
+
+            int intVal = intArr[idx];
+
+            // ===== Vector array =====
+            float3[4] vecArr;
+            vecArr[0] = float3(1.0, 0.0, 0.0);
+            vecArr[1] = float3(0.0, 1.0, 0.0);
+            vecArr[2] = float3(0.0, 0.0, 1.0);
+            vecArr[3] = float3(1.0, 1.0, 0.0);
+
+            float3 vecVal = vecArr[idx];
+
+            // ===== Array element modification =====
+            float[4] modArr;
+            modArr[0] = 0.0;
+            modArr[1] = 0.0;
+            modArr[2] = 0.0;
+            modArr[3] = 0.0;
+
+            modArr[idx] = 100.0;  // Modify via variable index
+            float modResult = modArr[0] + modArr[1] + modArr[2] + modArr[3];
+
+            // ===== Loop with array indexing =====
+            float loopSum = 0.0;
+            for (int i = 0; i < 4; i = i + 1) {
+                loopSum = loopSum + constArr[i];
+            }
+
+            // ===== Nested array access (2D simulation) =====
+            // Simulate 4x4 grid using 1D array
+            float[16] grid;
+            for (int row = 0; row < 4; row = row + 1) {
+                for (int col = 0; col < 4; col = col + 1) {
+                    grid[row * 4 + col] = float(row + col);
+                }
+            }
+
+            int gridX = int(uv.x * 3.99);
+            int gridY = int(uv.y * 3.99);
+            float gridVal = grid[gridY * 4 + gridX];
+
+            // ===== Array with computed indices =====
+            float[8] lut;
+            lut[0] = 0.0;
+            lut[1] = 0.142;
+            lut[2] = 0.283;
+            lut[3] = 0.424;
+            lut[4] = 0.565;
+            lut[5] = 0.707;
+            lut[6] = 0.848;
+            lut[7] = 1.0;
+
+            // Linear interpolation between LUT entries
+            float lutT = uv.x * 7.0;
+            int lutIdx = int(lutT);
+            int lutIdxNext = min(lutIdx + 1, 7);
+            float lutFrac = fract(lutT);
+            float lutVal = lerp(lut[lutIdx], lut[lutIdxNext], lutFrac);
+
+            // ===== Vector component via array-style access =====
+            // (if supported - accessing vec.x as vec[0])
+            float4 testVec = float4(1.0, 2.0, 3.0, 4.0);
+            // Note: vec[i] syntax may or may not be supported
+
+            // ===== Write to output =====
+            float4 finalPos = float4(pos, 1.0);
+            finalPos.x = finalPos.x + varIndexed * 0.01;
+
+            output.position = finalPos;
+            output.uv = uv;
+            output.varIndexed = varIndexed;
+            output.exprIndexed = exprIndexed;
+            output.loopSum = loopSum;
+            output.gridVal = gridVal;
+            output.lutVal = lutVal;
+            output.vecVal = vecVal;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float varIndexed = input.varIndexed;
+            float exprIndexed = input.exprIndexed;
+            float loopSum = input.loopSum;
+            float gridVal = input.gridVal;
+            float lutVal = input.lutVal;
+            float3 vecVal = input.vecVal;
+
+            // Create color palette array
+            float3[4] palette;
+            palette[0] = float3(0.1, 0.1, 0.3);
+            palette[1] = float3(0.3, 0.1, 0.1);
+            palette[2] = float3(0.1, 0.3, 0.1);
+            palette[3] = float3(0.3, 0.3, 0.1);
+
+            // Select palette color based on grid position
+            int paletteIdx = int(gridVal) % 4;
+            float3 baseColor = palette[paletteIdx];
+
+            // Blend with vector array color
+            float3 color = lerp(baseColor, vecVal, 0.3);
+
+            // Apply LUT-based brightness
+            color = color * lutVal;
+
+            // Visualize array values
+            if (uv.y > 0.9) {
+                color = float3(varIndexed / 5.0, exprIndexed / 5.0, loopSum / 15.0);
+            }
+
+            output.color = float4(saturate(color), 1.0);
+        }
+    }
+
+    pass "Patterns" {
+        use attributes { position, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+
+            // Create pattern using array lookups
+            float[8] pattern;
+            pattern[0] = 0.0;
+            pattern[1] = 1.0;
+            pattern[2] = 1.0;
+            pattern[3] = 0.0;
+            pattern[4] = 0.0;
+            pattern[5] = 1.0;
+            pattern[6] = 1.0;
+            pattern[7] = 0.0;
+
+            int patternX = int(uv.x * 8.0) % 8;
+            int patternY = int(uv.y * 8.0) % 8;
+
+            float patVal = pattern[patternX] * pattern[patternY];
+
+            float3 color = float3(patVal);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+}

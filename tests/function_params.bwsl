@@ -1,0 +1,241 @@
+// Test: Function parameter passing patterns
+// Tests: value semantics, struct parameters, multiple returns via out params, parameter count
+
+pipeline FunctionParams {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    struct Color {
+        float r;
+        float g;
+        float b;
+        float a;
+    }
+
+    struct Transform {
+        float3 position;
+        float3 rotation;
+        float3 scale;
+    }
+
+    struct Ray {
+        float3 origin;
+        float3 direction;
+    }
+
+    struct HitResult {
+        bool hit;
+        float distance;
+        float3 normal;
+        float3 point;
+    }
+
+    // Simple value parameters
+    add :: (float a, float b) -> float {
+        return a + b;
+    }
+
+    // Multiple parameters
+    clampValue :: (float value, float minVal, float maxVal) -> float {
+        return max(minVal, min(maxVal, value));
+    }
+
+    // Vector parameters
+    dotProduct :: (float3 a, float3 b) -> float {
+        return a.x * b.x + a.y * b.y + a.z * b.z;
+    }
+
+    crossProduct :: (float3 a, float3 b) -> float3 {
+        return float3(
+            a.y * b.z - a.z * b.y,
+            a.z * b.x - a.x * b.z,
+            a.x * b.y - a.y * b.x
+        );
+    }
+
+    // Struct parameter (passed by value)
+    colorToGray :: (Color c) -> float {
+        return c.r * 0.299 + c.g * 0.587 + c.b * 0.114;
+    }
+
+    // Struct return
+    makeColor :: (float r, float g, float b, float a) -> Color {
+        Color c;
+        c.r = r;
+        c.g = g;
+        c.b = b;
+        c.a = a;
+        return c;
+    }
+
+    // Struct parameter and return
+    invertColor :: (Color c) -> Color {
+        Color result;
+        result.r = 1.0 - c.r;
+        result.g = 1.0 - c.g;
+        result.b = 1.0 - c.b;
+        result.a = c.a;
+        return result;
+    }
+
+    // Multiple struct parameters
+    blendColors :: (Color a, Color b, float t) -> Color {
+        Color result;
+        result.r = lerp(a.r, b.r, t);
+        result.g = lerp(a.g, b.g, t);
+        result.b = lerp(a.b, b.b, t);
+        result.a = lerp(a.a, b.a, t);
+        return result;
+    }
+
+    // Transform struct operations
+    applyTransform :: (Transform t, float3 point) -> float3 {
+        // Scale, then translate (simplified - no rotation)
+        return point * t.scale + t.position;
+    }
+
+    // Ray-sphere intersection
+    intersectSphere :: (Ray ray, float3 center, float radius) -> HitResult {
+        HitResult result;
+        result.hit = false;
+        result.distance = 0.0;
+        result.normal = float3(0.0);
+        result.point = float3(0.0);
+
+        float3 oc = ray.origin - center;
+        float a = dot(ray.direction, ray.direction);
+        float b = 2.0 * dot(oc, ray.direction);
+        float c = dot(oc, oc) - radius * radius;
+        float discriminant = b * b - 4.0 * a * c;
+
+        if (discriminant > 0.0) {
+            float t = (-b - sqrt(discriminant)) / (2.0 * a);
+            if (t > 0.001) {
+                result.hit = true;
+                result.distance = t;
+                result.point = ray.origin + ray.direction * t;
+                result.normal = normalize(result.point - center);
+            }
+        }
+
+        return result;
+    }
+
+    // Function with many parameters
+    multiParam :: (float a, float b, float c, float d, float e, float f) -> float {
+        return a + b * c - d / max(e, 0.001) + f;
+    }
+
+    // Function returning multiple values via struct
+    computeMinMax :: (float a, float b, float c) -> float2 {
+        float minVal = min(a, min(b, c));
+        float maxVal = max(a, max(b, c));
+        return float2(minVal, maxVal);
+    }
+
+    // Nested function calls with params
+    processColor :: (float3 rgb) -> Color {
+        Color c = makeColor(rgb.r, rgb.g, rgb.b, 1.0);
+        float gray = colorToGray(c);
+
+        // Adjust saturation based on brightness
+        Color adjusted;
+        float saturation = 0.5 + gray * 0.5;
+        adjusted.r = lerp(gray, c.r, saturation);
+        adjusted.g = lerp(gray, c.g, saturation);
+        adjusted.b = lerp(gray, c.b, saturation);
+        adjusted.a = c.a;
+
+        return adjusted;
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            // Test simple functions
+            float sum = add(pos.x, pos.y);
+            float clamped = clampValue(pos.z, -0.5, 0.5);
+
+            // Test vector functions
+            float3 up = float3(0.0, 1.0, 0.0);
+            float dp = dotProduct(pos, up);
+            float3 cp = crossProduct(pos, up);
+
+            // Test struct creation and passing
+            Color color = makeColor(uv.x, uv.y, 0.5, 1.0);
+            float gray = colorToGray(color);
+            Color inverted = invertColor(color);
+
+            // Test color blending
+            Color red = makeColor(1.0, 0.0, 0.0, 1.0);
+            Color blue = makeColor(0.0, 0.0, 1.0, 1.0);
+            Color blended = blendColors(red, blue, uv.x);
+
+            // Test transform
+            Transform t;
+            t.position = float3(0.1, 0.0, 0.0);
+            t.rotation = float3(0.0);
+            t.scale = float3(1.0, 1.0, 1.0);
+            float3 transformed = applyTransform(t, pos);
+
+            // Test ray intersection
+            Ray ray;
+            ray.origin = float3(0.0, 0.0, -5.0);
+            ray.direction = normalize(float3(uv.x - 0.5, uv.y - 0.5, 1.0));
+            HitResult hit = intersectSphere(ray, float3(0.0), 1.0);
+
+            // Test multi-param function
+            float multi = multiParam(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+
+            // Test min/max return
+            float2 minMax = computeMinMax(pos.x, pos.y, pos.z);
+
+            // Combine results
+            float4 finalPos = float4(transformed, 1.0);
+            finalPos.xyz = finalPos.xyz + cp * 0.01;
+
+            output.position = finalPos;
+            output.uv = uv;
+            output.colorR = blended.r;
+            output.colorG = blended.g;
+            output.colorB = blended.b;
+            output.hitDist = hit.hit ? hit.distance : -1.0;
+            output.gray = gray;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float colorR = input.colorR;
+            float colorG = input.colorG;
+            float colorB = input.colorB;
+            float hitDist = input.hitDist;
+            float gray = input.gray;
+
+            // Process color
+            Color inputColor = makeColor(colorR, colorG, colorB, 1.0);
+            Color processed = processColor(float3(colorR, colorG, colorB));
+
+            // Use hit distance for effect
+            float3 color = float3(processed.r, processed.g, processed.b);
+
+            if (hitDist > 0.0) {
+                // Shade hit areas
+                float shade = 1.0 / (1.0 + hitDist * 0.1);
+                color = color * shade;
+            }
+
+            // Add gray visualization in corner
+            if (uv.x > 0.9 && uv.y > 0.9) {
+                color = float3(gray);
+            }
+
+            output.color = float4(color, 1.0);
+        }
+    }
+}

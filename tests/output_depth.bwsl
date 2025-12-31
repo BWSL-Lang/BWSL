@@ -1,0 +1,204 @@
+// Test: Depth output and manipulation
+// Tests: writing to depth buffer, depth comparisons, depth-based effects
+
+pipeline OutputDepth {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    // Linearize depth from clip space
+    linearizeDepth :: (float depth, float near, float far) -> float {
+        return (2.0 * near) / (far + near - depth * (far - near));
+    }
+
+    // Convert linear depth back to clip space
+    clipDepth :: (float linearDepth, float near, float far) -> float {
+        return (far + near - 2.0 * near / linearDepth) / (far - near);
+    }
+
+    pass "CustomDepth" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            // Transform position
+            float4 clipPos = float4(pos, 1.0);
+
+            // Compute custom depth based on distance from center
+            float2 centered = pos.xy;
+            float distFromCenter = length(centered);
+
+            // Warp depth based on distance
+            float warpedZ = pos.z + sin(distFromCenter * 3.14159) * 0.2;
+
+            output.position = clipPos;
+            output.worldPos = pos;
+            output.uv = uv;
+            output.customDepth = warpedZ * 0.5 + 0.5;  // Normalize to [0, 1]
+        }
+
+        fragment {
+            float3 worldPos = input.worldPos;
+            float2 uv = input.uv;
+            float customDepth = input.customDepth;
+
+            // Output custom depth
+            output.depth = customDepth;
+
+            // Color based on depth
+            float3 nearColor = float3(0.0, 0.5, 1.0);
+            float3 farColor = float3(1.0, 0.2, 0.0);
+            float3 color = lerp(nearColor, farColor, customDepth);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "DepthVisualization" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+
+            output.position = float4(pos, 1.0);
+            output.depth = pos.z * 0.5 + 0.5;
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float depth = input.depth;
+            float2 uv = input.uv;
+
+            // Visualize depth with bands
+            float bands = 10.0;
+            float bandedDepth = floor(depth * bands) / bands;
+
+            // Smooth gradient
+            float3 gradientColor = float3(depth);
+
+            // Banded visualization
+            float3 bandColor = float3(bandedDepth, 1.0 - bandedDepth, 0.5);
+
+            // Mix based on UV
+            float3 finalColor = lerp(gradientColor, bandColor, step(0.5, uv.x));
+
+            output.color = float4(finalColor, 1.0);
+        }
+    }
+
+    pass "DepthOffset" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            output.position = float4(pos, 1.0);
+            output.uv = uv;
+            output.baseDepth = pos.z * 0.5 + 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float baseDepth = input.baseDepth;
+
+            // Create pattern-based depth offset
+            float2 grid = floor(uv * 8.0);
+            float checker = mod(grid.x + grid.y, 2.0);
+
+            // Offset depth based on pattern
+            float depthOffset = checker * 0.1;
+            float finalDepth = saturate(baseDepth + depthOffset);
+
+            // Write modified depth
+            output.depth = finalDepth;
+
+            // Color
+            float3 color = checker > 0.5 ? float3(0.8, 0.3, 0.3) : float3(0.3, 0.3, 0.8);
+            color = color * (0.5 + 0.5 * finalDepth);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "DepthPeeling" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+
+            output.position = float4(pos, 1.0);
+            output.worldZ = pos.z;
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float worldZ = input.worldZ;
+            float2 uv = input.uv;
+
+            // Simulated depth peeling layer
+            float layer = 0.5;  // Which layer we're rendering
+            float layerDepth = worldZ * 0.5 + 0.5;
+
+            // Discard if not in our layer range
+            float layerMin = layer - 0.25;
+            float layerMax = layer + 0.25;
+
+            if (layerDepth < layerMin || layerDepth > layerMax) {
+                discard;
+            }
+
+            // Color by layer
+            float3 layerColor = float3(
+                sin(layer * 6.28) * 0.5 + 0.5,
+                cos(layer * 6.28) * 0.5 + 0.5,
+                layer
+            );
+
+            output.depth = layerDepth;
+            output.color = float4(layerColor, 0.5);  // Semi-transparent
+        }
+    }
+
+    pass "DepthFade" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+
+            // Simulate camera distance
+            float cameraZ = 5.0;
+            float distToCamera = length(float3(pos.xy, pos.z - cameraZ));
+
+            output.position = float4(pos, 1.0);
+            output.distance = distToCamera;
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float dist = input.distance;
+            float2 uv = input.uv;
+
+            // Fog/fade based on distance
+            float fogStart = 3.0;
+            float fogEnd = 8.0;
+            float fogFactor = saturate((dist - fogStart) / (fogEnd - fogStart));
+
+            // Base color
+            float3 objectColor = float3(0.2, 0.6, 0.9);
+            float3 fogColor = float3(0.7, 0.7, 0.8);
+
+            // Apply fog
+            float3 finalColor = lerp(objectColor, fogColor, fogFactor);
+
+            // Depth output
+            float normalizedDist = saturate(dist / 10.0);
+            output.depth = normalizedDist;
+
+            output.color = float4(finalColor, 1.0 - fogFactor * 0.5);
+        }
+    }
+}

@@ -1181,15 +1181,70 @@ NodeRef Parser::ParseStatement() {
     }
 
     if (Match(TokenType::RETURN)) {
+        if (Match(TokenType::IF)) {
+            Consume(TokenType::LEFT_PAREN, "Expected '(' after 'return if'");
+            NodeRef condition = ParseExpression();
+            Consume(TokenType::RIGHT_PAREN, "Expected ')' after condition");
+
+            // Check for optional return value
+            NodeRef returnValue = NodeRef::Null();
+            if (!Check(TokenType::SEMICOLON)) {
+                returnValue = ParseExpression();
+            }
+            Consume(TokenType::SEMICOLON, "Expected ';' after return if");
+
+            NodeRef ifNode = ASTFactory::MakeIfStatement(ast, line, col);
+            ast->GetBlock(ifNode).statements.Push(arena, condition);
+
+            NodeRef body = ASTFactory::MakeBlock(ast, line, col);
+            ast->GetBlock(body).statements.Push(arena, ASTFactory::MakeReturn(ast, returnValue, line, col));
+            ast->GetBlock(ifNode).statements.Push(arena, body);
+
+            return ifNode;
+        }
+
         NodeRef value = NodeRef::Null();
         if (!Check(TokenType::SEMICOLON)) {
             value = ParseExpression();
+
+            // Check for trailing 'if (condition)' syntax: return value if (condition);
+            if (Match(TokenType::IF)) {
+                Consume(TokenType::LEFT_PAREN, "Expected '(' after 'if'");
+                NodeRef condition = ParseExpression();
+                Consume(TokenType::RIGHT_PAREN, "Expected ')' after condition");
+                Consume(TokenType::SEMICOLON, "Expected ';' after return if");
+
+                NodeRef ifNode = ASTFactory::MakeIfStatement(ast, line, col);
+                ast->GetBlock(ifNode).statements.Push(arena, condition);
+
+                NodeRef body = ASTFactory::MakeBlock(ast, line, col);
+                ast->GetBlock(body).statements.Push(arena, ASTFactory::MakeReturn(ast, value, line, col));
+                ast->GetBlock(ifNode).statements.Push(arena, body);
+
+                return ifNode;
+            }
         }
         Consume(TokenType::SEMICOLON, "Expected ';' after return statement");
         return ASTFactory::MakeReturn(ast, value, line, col);
     }
 
     if (Match(TokenType::BREAK)) {
+        if (Match(TokenType::IF)) {
+            Consume(TokenType::LEFT_PAREN, "Expected '(' after 'break if'");
+            NodeRef condition = ParseExpression();
+            Consume(TokenType::RIGHT_PAREN, "Expected ')' after condition");
+            Consume(TokenType::SEMICOLON, "Expected ';' after break if");
+
+            NodeRef ifNode = ASTFactory::MakeIfStatement(ast, line, col);
+            ast->GetBlock(ifNode).statements.Push(arena, condition);
+
+            NodeRef body = ASTFactory::MakeBlock(ast, line, col);
+            ast->GetBlock(body).statements.Push(arena, NodeRef(ASTNodeType::BREAK_STATEMENT, 0));
+            ast->GetBlock(ifNode).statements.Push(arena, body);
+
+            return ifNode;
+        }
+
         Consume(TokenType::SEMICOLON, "Expected ';' after break");
         return NodeRef(ASTNodeType::BREAK_STATEMENT, 0);  // No data needed
     }

@@ -1,0 +1,311 @@
+// Test: Complex nested control flow
+// Tests: deeply nested if/else, nested loops with break/skip, switch in loops, early returns
+
+pipeline NestedControlFlow {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    // Function with multiple nested conditions
+    classifyPoint :: (float3 p) -> int {
+        int result = 0;
+
+        if (p.x > 0.0) {
+            if (p.y > 0.0) {
+                if (p.z > 0.0) {
+                    result = 1;  // +++ octant
+                } else {
+                    result = 2;  // ++- octant
+                }
+            } else {
+                if (p.z > 0.0) {
+                    result = 3;  // +-+ octant
+                } else {
+                    result = 4;  // +-- octant
+                }
+            }
+        } else {
+            if (p.y > 0.0) {
+                if (p.z > 0.0) {
+                    result = 5;  // -++ octant
+                } else {
+                    result = 6;  // -+- octant
+                }
+            } else {
+                if (p.z > 0.0) {
+                    result = 7;  // --+ octant
+                } else {
+                    result = 8;  // --- octant
+                }
+            }
+        }
+
+        return result;
+    }
+
+    // Nested loops with break
+    findFirstMatch :: (float target, float tolerance) -> int {
+        int found = -1;
+
+        for (int i = 0; i < 10; i = i + 1) {
+            for (int j = 0; j < 10; j = j + 1) {
+                float value = float(i * 10 + j) / 100.0;
+                if (abs(value - target) < tolerance) {
+                    found = i * 10 + j;
+                    break;
+                }
+            }
+            if (found >= 0) {
+                break;
+            }
+        }
+
+        return found;
+    }
+
+    // Nested loops with skip
+    sumEvenProducts :: () -> int {
+        int sum = 0;
+
+        for (int i = 0; i < 5; i = i + 1) {
+            for (int j = 0; j < 5; j = j + 1) {
+                int product = i * j;
+
+                // Skip odd products
+                skip if (product % 2 != 0);
+
+                // Skip if either is zero
+                skip if (i == 0 || j == 0);
+
+                sum = sum + product;
+            }
+        }
+
+        return sum;
+    }
+
+    // Complex condition chains
+    evaluateComplex :: (float x, float y) -> float {
+        float result = 0.0;
+
+        if (x > 0.0 && y > 0.0) {
+            if (x > y) {
+                if (x > 2.0 * y) {
+                    result = 1.0;
+                } else {
+                    result = 0.75;
+                }
+            } else if (y > x) {
+                if (y > 2.0 * x) {
+                    result = 0.5;
+                } else {
+                    result = 0.25;
+                }
+            } else {
+                result = 0.0;  // x == y
+            }
+        } else if (x < 0.0 && y < 0.0) {
+            result = -1.0;
+        } else if (x == 0.0 || y == 0.0) {
+            result = 0.0;
+        } else {
+            // Mixed signs
+            result = x * y;  // Will be negative
+        }
+
+        return result;
+    }
+
+    // Switch inside loop
+    processSequence :: (int start, int count) -> int {
+        int accumulator = 0;
+
+        for (int i = 0; i < count; i = i + 1) {
+            int current = (start + i) % 4;
+
+            switch (current) {
+                case 0: {
+                    accumulator = accumulator + 1;
+                }
+                case 1: {
+                    accumulator = accumulator * 2;
+                }
+                case 2: {
+                    accumulator = accumulator - 1;
+                }
+                case 3: {
+                    if (accumulator > 10) {
+                        accumulator = accumulator / 2;
+                    }
+                }
+            }
+        }
+
+        return accumulator;
+    }
+
+    // Loop inside switch
+    processMode :: (int mode, int iterations) -> float {
+        float result = 0.0;
+
+        switch (mode) {
+            case 0: {
+                // Accumulate
+                for (int i = 0; i < iterations; i = i + 1) {
+                    result = result + float(i);
+                }
+            }
+            case 1: {
+                // Multiply
+                result = 1.0;
+                for (int i = 1; i <= iterations; i = i + 1) {
+                    result = result * float(i);
+                }
+            }
+            case 2: {
+                // Alternating
+                for (int i = 0; i < iterations; i = i + 1) {
+                    if (i % 2 == 0) {
+                        result = result + float(i);
+                    } else {
+                        result = result - float(i);
+                    }
+                }
+            }
+            default: {
+                result = -1.0;
+            }
+        }
+
+        return result;
+    }
+
+    // Early return from nested structure
+    findInMatrix :: (int target) -> int {
+        for (int row = 0; row < 4; row = row + 1) {
+            for (int col = 0; col < 4; col = col + 1) {
+                int value = row * 4 + col;
+                return row * 10 + col if (value == target);
+            }
+        }
+        return -1;  // Not found
+    }
+
+    // Triple nested loop with mixed control
+    computeVolume :: (int size) -> int {
+        int count = 0;
+
+        for (int x = 0; x < size; x = x + 1) {
+            skip if (x % 2 == 0);  // Skip even x
+
+            for (int y = 0; y < size; y = y + 1) {
+                bool yValid = y > 0 && y < size - 1;
+                skip if (!yValid);
+
+                for (int z = 0; z < size; z = z + 1) {
+                    if (x + y + z > size) {
+                        break;  // Early exit from z loop
+                    }
+                    count = count + 1;
+                }
+            }
+        }
+
+        return count;
+    }
+
+    // Ternary chains
+    selectValue :: (int index) -> float {
+        return index == 0 ? 1.0 :
+               index == 1 ? 2.0 :
+               index == 2 ? 4.0 :
+               index == 3 ? 8.0 :
+               0.0;
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            // Test octant classification
+            int octant = classifyPoint(pos);
+
+            // Test nested loop with break
+            int matchIdx = findFirstMatch(uv.x, 0.05);
+
+            // Test nested loop with skip
+            int evenSum = sumEvenProducts();
+
+            // Test complex conditions
+            float complexVal = evaluateComplex(pos.x, pos.y);
+
+            // Test switch in loop
+            int seqResult = processSequence(int(uv.x * 4.0), 8);
+
+            // Test loop in switch
+            float modeResult = processMode(int(uv.y * 3.0), 5);
+
+            // Test early return
+            int matrixPos = findInMatrix(int(uv.x * 15.0));
+
+            // Test triple nested
+            int volumeCount = computeVolume(4);
+
+            // Test ternary chains
+            float selectedVal = selectValue(octant % 4);
+
+            // Combine results
+            float4 finalPos = float4(pos, 1.0);
+            finalPos.x = finalPos.x + float(octant) * 0.001;
+            finalPos.y = finalPos.y + complexVal * 0.001;
+
+            output.position = finalPos;
+            output.uv = uv;
+            output.octant = float(octant);
+            output.complexVal = complexVal;
+            output.seqResult = float(seqResult);
+            output.volumeCount = float(volumeCount);
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float octant = input.octant;
+            float complexVal = input.complexVal;
+            float seqResult = input.seqResult;
+            float volumeCount = input.volumeCount;
+
+            // Visualize results
+            float3 color = float3(0.0);
+
+            // Color by octant
+            int oct = int(octant);
+            if (oct == 1) {
+                color = float3(1.0, 0.0, 0.0);
+            } else if (oct == 2) {
+                color = float3(0.0, 1.0, 0.0);
+            } else if (oct == 3) {
+                color = float3(0.0, 0.0, 1.0);
+            } else if (oct == 4) {
+                color = float3(1.0, 1.0, 0.0);
+            } else if (oct == 5) {
+                color = float3(1.0, 0.0, 1.0);
+            } else if (oct == 6) {
+                color = float3(0.0, 1.0, 1.0);
+            } else if (oct == 7) {
+                color = float3(0.5, 0.5, 0.5);
+            } else {
+                color = float3(1.0, 1.0, 1.0);
+            }
+
+            // Modulate by other results
+            color = color * (0.5 + complexVal * 0.5);
+            color = color * (0.8 + seqResult * 0.001);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+}
