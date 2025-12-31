@@ -1340,6 +1340,17 @@ NodeRef Parser::ParseStatement() {
         } else if (stream->GetType(next) == TokenType::IDENTIFIER) {
             // Could be custom type variable declaration: TypeName varName;
             return ParseCustomTypeVarDecl();
+        } else if (stream->GetType(next) == TokenType::LEFT_BRACKET) {
+            // Could be custom type array declaration: TypeName[size] varName;
+            TokenRef sizeTok = current + 2;
+            TokenRef rightTok = current + 3;
+            TokenRef nameTok = current + 4;
+            if (nameTok < stream->Count() &&
+                stream->GetType(sizeTok) == TokenType::NUMBER &&
+                stream->GetType(rightTok) == TokenType::RIGHT_BRACKET &&
+                stream->GetType(nameTok) == TokenType::IDENTIFIER) {
+                return ParseCustomTypeVarDecl();
+            }
         } else if (stream->GetType(next) == TokenType::DOUBLE_COLON) {
             // Could be module-qualified type: Module::Type varName;
             // ParseCustomTypeVarDecl handles the full pattern
@@ -1511,9 +1522,37 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
         typeName = std::string(stream->GetValue(previous));
     }
 
+    auto ParseArrayDims = [&](std::vector<u32>& dims) -> bool {
+        do {
+            Consume(TokenType::NUMBER, "Expected array size");
+            std::string_view sizeStr = PreviousValue();
+            int size = std::stoi(std::string(sizeStr));
+            if (size <= 0 || static_cast<u32>(size) > MAX_ARRAY_SIZE) {
+                Error("Invalid array size. Max 256k elements");
+                return false;
+            }
+            Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
+            dims.push_back(static_cast<u32>(size));
+        } while (Match(TokenType::LEFT_BRACKET));
+        return true;
+    };
+
+    std::vector<u32> arrayDims;
+    if (Match(TokenType::LEFT_BRACKET)) {
+        if (!ParseArrayDims(arrayDims)) {
+            return NodeRef::Null();
+        }
+    }
+
     // Now expect variable name
     Consume(TokenType::IDENTIFIER, "Expected variable name");
     std::string varName(stream->GetValue(previous));
+
+    if (arrayDims.empty() && Match(TokenType::LEFT_BRACKET)) {
+        if (!ParseArrayDims(arrayDims)) {
+            return NodeRef::Null();
+        }
+    }
 
     // Optional initializer
     NodeRef initializer = NodeRef::Null();
@@ -1522,12 +1561,6 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
     }
 
     Consume(TokenType::SEMICOLON, "Expected ';' after variable declaration");
-
-    // Create the variable declaration node
-    NodeRef varDecl = ASTFactory::MakeVariableDecl(ast,
-        ArenaString::MakeHashOnly(varName),
-        ArenaString::MakeHashOnly(typeName),
-        initializer, false, line, col);
 
     // Look up the type in symbol table to get struct info
     ArenaString typeArena = ArenaString::MakeHashOnly(typeName);
@@ -1549,6 +1582,43 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
         typeSym = SymbolTable::LookupAny(&symbolTable, internalArena);
     } else {
         typeSym = SymbolTable::LookupAny(&symbolTable, typeArena);
+    }
+
+    u32 arrayElementTypeHash = 0;
+    if (!arrayDims.empty()) {
+        if (typeSym) {
+            arrayElementTypeHash = typeSym->name.nameHash;
+        } else {
+            arrayElementTypeHash = typeArena.nameHash;
+        }
+    }
+
+    u32 totalSize = 0;
+    if (!arrayDims.empty()) {
+        u64 total = 1;
+        for (u32 dim : arrayDims) {
+            if (dim == 0 || total > (MAX_ARRAY_SIZE / dim)) {
+                Error("Invalid array size. Max 256k elements");
+                return NodeRef::Null();
+            }
+            total *= dim;
+        }
+        totalSize = static_cast<u32>(total);
+    }
+
+    // Create the variable declaration node
+    NodeRef varDecl = NodeRef::Null();
+    if (!arrayDims.empty()) {
+        varDecl = ASTFactory::MakeVariableDecl(ast,
+            ArenaString::MakeHashOnly(varName),
+            ArenaString::MakeHashOnly("array"),
+            initializer, false, line, col, StorageClass::Default,
+            static_cast<u8>(arrayDims.size()), totalSize, arrayElementTypeHash);
+    } else {
+        varDecl = ASTFactory::MakeVariableDecl(ast,
+            ArenaString::MakeHashOnly(varName),
+            ArenaString::MakeHashOnly(typeName),
+            initializer, false, line, col);
     }
 
     // Register variable in symbol table
@@ -1574,6 +1644,20 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
                 symbolTable.variables[varSym->index].typeInfo.customTypeHash = typeSym->name.nameHash;
             }
         }
+        if (!arrayDims.empty()) {
+            VariableData& varData = symbolTable.variables[varSym->index];
+            varData.typeInfo.arrayDimensions = static_cast<u8>(arrayDims.size());
+            varData.typeInfo.arrayLength = totalSize;
+            if (varData.typeInfo.coreType != CoreType::CUSTOM) {
+                varData.typeInfo.arrayStride = static_cast<u32>(varData.typeInfo.componentCount) * 4u;
+            } else {
+                varData.typeInfo.arrayStride = 0;
+            }
+        }
+    }
+
+    if (arrayDims.size() > 1) {
+        multiDimArrayDims[ArenaString::MakeHashOnly(varName).nameHash] = arrayDims;
     }
 
     return varDecl;
@@ -2659,9 +2743,7 @@ void Parser::ParseFunctionParameters(NodeRef function) {
 
             // Check for array type suffix: type[size]
             if (Match(TokenType::LEFT_BRACKET)) {
-                if (Match(TokenType::NUMBER)) {
-                    paramType += "[" + std::string(stream->GetValue(previous)) + "]";
-                } else {
+                if (!Match(TokenType::NUMBER)) {
                     Error("Expected array size");
                 }
                 Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
@@ -2725,9 +2807,7 @@ void Parser::ParseFunctionParameters(NodeRef function) {
                 // CustomType[size] name - array of custom type
                 paramType = identifierStr;
                 Match(TokenType::LEFT_BRACKET);
-                if (Match(TokenType::NUMBER)) {
-                    paramType += "[" + std::string(stream->GetValue(previous)) + "]";
-                } else {
+                if (!Match(TokenType::NUMBER)) {
                     Error("Expected array size");
                 }
                 Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
@@ -4197,48 +4277,37 @@ NodeRef Parser::ParseStruct() {
             continue;
         }
 
-        Consume(TokenType::IDENTIFIER, "Expected field name");
-        std::string fieldNameStr(stream->GetValue(previous));
-
-        // Create field with pre-computed hash
-        StructData::Field field;
-        field.name = ArenaString::MakeHashOnly(fieldNameStr);
-        // Register field name for debug symbol lookup
-        ReverseLookup::Register(field.name.nameHash, fieldNameStr.c_str());
-        field.type = fieldType;
-        field.arraySize = 0;  // Default: not an array
-
-        // Check for fixed-size array [size]
-        if (Match(TokenType::LEFT_BRACKET)) {
+        auto ParseFieldArraySize = [&]() -> u32 {
+            u32 sizeValue = 0;
             if (Match(TokenType::NUMBER)) {
                 // Literal number size
                 std::string_view numStr = stream->GetValue(previous);
-                field.arraySize = static_cast<u32>(std::stoul(std::string(numStr), nullptr, 0));
+                sizeValue = static_cast<u32>(std::stoul(std::string(numStr), nullptr, 0));
             } else if (Match(TokenType::IDENTIFIER)) {
                 // Constant name (e.g., MAX_LIGHTS)
                 std::string constName(stream->GetValue(previous));
                 ArenaString constArena = ArenaString::MakeHashOnly(constName);
-                
+
                 bool found = false;
-                
+
                 // Look up in symbol table for eval constants
                 Symbol* sym = SymbolTable::LookupAny(&symbolTable, constArena);
                 if (sym) {
                     if (sym->kind == SymbolKind::VARIABLE) {
                         const VariableData& varData = symbolTable.variables[sym->index];
                         if (varData.isEval && varData.evalValue.type == LiteralValue::INT) {
-                            field.arraySize = static_cast<u32>(varData.evalValue.intValue);
+                            sizeValue = static_cast<u32>(varData.evalValue.intValue);
                             found = true;
                         }
                     } else if (sym->kind == SymbolKind::EVAL_CONSTANT) {
                         const LiteralValue& constVal = symbolTable.evalConstants[sym->index];
                         if (constVal.type == LiteralValue::INT) {
-                            field.arraySize = static_cast<u32>(constVal.intValue);
+                            sizeValue = static_cast<u32>(constVal.intValue);
                             found = true;
                         }
                     }
                 }
-                
+
                 // Try module-qualified lookup if in module scope
                 if (!found && symbolTable.inModuleScope && symbolTable.currentModuleIndex != INVALID_INDEX) {
                     const ModuleData& mod = symbolTable.modules[symbolTable.currentModuleIndex];
@@ -4248,12 +4317,12 @@ NodeRef Parser::ParseStruct() {
                     if (sym && sym->kind == SymbolKind::EVAL_CONSTANT) {
                         const LiteralValue& constVal = symbolTable.evalConstants[sym->index];
                         if (constVal.type == LiteralValue::INT) {
-                            field.arraySize = static_cast<u32>(constVal.intValue);
+                            sizeValue = static_cast<u32>(constVal.intValue);
                             found = true;
                         }
                     }
                 }
-                
+
                 if (!found) {
                     char msg[256];
                     snprintf(msg, sizeof(msg), "Unknown constant '%s' for array size", constName.c_str());
@@ -4264,6 +4333,33 @@ NodeRef Parser::ParseStruct() {
             }
             Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
             structData.isIndexable = true;
+            return sizeValue;
+        };
+
+        u32 arraySize = 0;
+        bool arrayBeforeName = false;
+        if (Match(TokenType::LEFT_BRACKET)) {
+            arraySize = ParseFieldArraySize();
+            arrayBeforeName = true;
+        }
+
+        Consume(TokenType::IDENTIFIER, "Expected field name");
+        std::string fieldNameStr(stream->GetValue(previous));
+
+        // Create field with pre-computed hash
+        StructData::Field field;
+        field.name = ArenaString::MakeHashOnly(fieldNameStr);
+        // Register field name for debug symbol lookup
+        ReverseLookup::Register(field.name.nameHash, fieldNameStr.c_str());
+        field.type = fieldType;
+        field.arraySize = arraySize;
+
+        // Check for fixed-size array [size] after name
+        if (Match(TokenType::LEFT_BRACKET)) {
+            if (arrayBeforeName) {
+                Error("Multiple array size declarations for struct field");
+            }
+            field.arraySize = ParseFieldArraySize();
         }
 
         // Add to AST node (for code generation)

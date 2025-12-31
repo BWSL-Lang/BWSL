@@ -1,0 +1,255 @@
+// Test: Advanced array patterns
+// Tests: arrays in structs, array of structs, array element access, array parameters
+
+pipeline ArraysAdvanced {
+    attributes {
+        position: float3
+    }
+
+    // Struct with array members
+    struct Vertex {
+        float3 position;
+        float3 normal;
+        float2 texcoord;
+    }
+
+    struct Light {
+        float3 position;
+        float3 color;
+        float intensity;
+        float radius;
+    }
+
+    struct BoneTransform {
+        mat4 matrix;
+        float weight;
+    }
+
+    // Array manipulation functions - note: float[8] not float arr[8]
+    sumArray :: (float[8] arr) -> float {
+        float sum = 0.0;
+        for (int i = 0; i < 8; i++) {
+            sum = sum + arr[i];
+        }
+        return sum;
+    }
+
+    averageArray :: (float[8] arr) -> float {
+        return sumArray(arr) / 8.0;
+    }
+
+    // Find min/max in array
+    findMin :: (float[8] arr) -> float {
+        float minVal = arr[0];
+        for (int i = 1; i < 8; i++) {
+            if (arr[i] < minVal) {
+                minVal = arr[i];
+            }
+        }
+        return minVal;
+    }
+
+    findMax :: (float[8] arr) -> float {
+        float maxVal = arr[0];
+        for (int i = 1; i < 8; i++) {
+            if (arr[i] > maxVal) {
+                maxVal = arr[i];
+            }
+        }
+        return maxVal;
+    }
+
+    // Work with array of vectors
+    sumVectors :: (float3[4] vecs) -> float3 {
+        float3 sum = float3(0.0);
+        for (int i = 0; i < 4; i++) {
+            sum = sum + vecs[i];
+        }
+        return sum;
+    }
+
+    averageVectors :: (float3[4] vecs) -> float3 {
+        return sumVectors(vecs) / 4.0;
+    }
+
+    // Array of structs operations
+    calculateLighting :: (Light[4] lights, float3 worldPos, float3 normal) -> float3 {
+        float3 totalLight = float3(0.0);
+
+        for (int i = 0; i < 4; i++) {
+            float3 toLight = lights[i].position - worldPos;
+            float dist = length(toLight);
+            float3 lightDir = toLight / dist;
+
+            float NdotL = max(dot(normal, lightDir), 0.0);
+            float attenuation = lights[i].intensity / (1.0 + dist * dist / (lights[i].radius * lights[i].radius));
+
+            totalLight = totalLight + lights[i].color * NdotL * attenuation;
+        }
+
+        return totalLight;
+    }
+
+    // Skinning with bone transforms
+    applySkinning :: (BoneTransform[4] bones, float3 position) -> float3 {
+        float3 skinnedPos = float3(0.0);
+        float totalWeight = 0.0;
+
+        for (int i = 0; i < 4; i++) {
+            if (bones[i].weight > 0.0) {
+                float4 transformed = bones[i].matrix * float4(position, 1.0);
+                skinnedPos = skinnedPos + transformed.xyz * bones[i].weight;
+                totalWeight = totalWeight + bones[i].weight;
+            }
+        }
+
+        if (totalWeight > 0.0) {
+            skinnedPos = skinnedPos / totalWeight;
+        }
+
+        return skinnedPos;
+    }
+
+    // Process vertex array
+    getVertexCenter :: (Vertex[4] verts) -> float3 {
+        float3 center = float3(0.0);
+        for (int i = 0; i < 4; i++) {
+            center = center + verts[i].position;
+        }
+        return center / 4.0;
+    }
+
+    // Matrix as 1D array (simulating 2D)
+    getMatrixElement :: (float[16] mat, int row, int col) -> float {
+        return mat[row * 4 + col];
+    }
+
+    // Dot product of array rows
+    dotRows :: (float[16] mat, int row1, int row2) -> float {
+        float sum = 0.0;
+        for (int i = 0; i < 4; i++) {
+            sum = sum + mat[row1 * 4 + i] * mat[row2 * 4 + i];
+        }
+        return sum;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Basic array operations
+            float[8] values;
+            values[0] = 1.0;
+            values[1] = 2.0;
+            values[2] = 4.0;
+            values[3] = 8.0;
+            values[4] = 16.0;
+            values[5] = 32.0;
+            values[6] = 64.0;
+            values[7] = 128.0;
+
+            float sum = sumArray(values);
+            float avg = averageArray(values);
+            float minV = findMin(values);
+            float maxV = findMax(values);
+
+            // Vector array
+            float3[4] vectors;
+            vectors[0] = float3(1.0, 0.0, 0.0);
+            vectors[1] = float3(0.0, 1.0, 0.0);
+            vectors[2] = float3(0.0, 0.0, 1.0);
+            vectors[3] = float3(1.0, 1.0, 1.0);
+
+            float3 vecSum = sumVectors(vectors);
+            float3 vecAvg = averageVectors(vectors);
+
+            // Array element swizzle access
+            float3 v0xy = float3(vectors[0].x, vectors[0].y, 0.0);
+            float2 v1xz = float2(vectors[1].x, vectors[1].z);
+            float vecDot = dot(vectors[0], vectors[1]);
+
+            // Array of structs - Lights
+            Light[4] lights;
+            lights[0].position = float3(10.0, 10.0, 10.0);
+            lights[0].color = float3(1.0, 1.0, 1.0);
+            lights[0].intensity = 1.0;
+            lights[0].radius = 20.0;
+
+            lights[1].position = float3(-10.0, 5.0, 0.0);
+            lights[1].color = float3(1.0, 0.5, 0.0);
+            lights[1].intensity = 0.8;
+            lights[1].radius = 15.0;
+
+            lights[2].position = float3(0.0, -5.0, 10.0);
+            lights[2].color = float3(0.0, 0.5, 1.0);
+            lights[2].intensity = 0.6;
+            lights[2].radius = 10.0;
+
+            lights[3].position = float3(5.0, 5.0, -5.0);
+            lights[3].color = float3(0.0, 1.0, 0.5);
+            lights[3].intensity = 0.4;
+            lights[3].radius = 8.0;
+
+            float3 normal = normalize(float3(0.0, 1.0, 0.0));
+            float3 lighting = calculateLighting(lights, attributes.position, normal);
+
+            // Array of structs - Bones
+            BoneTransform[4] bones;
+            mat4 identity = mat4(1.0);
+            bones[0].matrix = identity;
+            bones[0].weight = 0.5;
+            bones[1].matrix = identity;
+            bones[1].weight = 0.3;
+            bones[2].matrix = identity;
+            bones[2].weight = 0.15;
+            bones[3].matrix = identity;
+            bones[3].weight = 0.05;
+
+            float3 skinnedPos = applySkinning(bones, attributes.position);
+
+            // Array of structs - Vertices
+            Vertex[4] verts;
+            verts[0].position = float3(0.0, 0.0, 0.0);
+            verts[0].normal = float3(0.0, 1.0, 0.0);
+            verts[0].texcoord = float2(0.0, 0.0);
+            verts[1].position = float3(1.0, 0.0, 0.0);
+            verts[1].normal = float3(0.0, 1.0, 0.0);
+            verts[1].texcoord = float2(1.0, 0.0);
+            verts[2].position = float3(0.0, 1.0, 0.0);
+            verts[2].normal = float3(0.0, 1.0, 0.0);
+            verts[2].texcoord = float2(0.0, 1.0);
+            verts[3].position = float3(1.0, 1.0, 0.0);
+            verts[3].normal = float3(0.0, 1.0, 0.0);
+            verts[3].texcoord = float2(1.0, 1.0);
+
+            float3 vertCenter = getVertexCenter(verts);
+
+            // Matrix as 1D array
+            float[16] matrix;
+            for (int i = 0; i < 16; i++) {
+                matrix[i] = float(i);
+            }
+
+            float elem = getMatrixElement(matrix, 1, 2);
+            float rowDot = dotRows(matrix, 0, 1);
+
+            // Indexed array access with expressions
+            int idx = 3;
+            float dynAccess = values[idx];
+            float3 dynVec = vectors[idx % 4];
+
+            // Combine results
+            float4 finalPos = float4(skinnedPos, 1.0);
+            finalPos.xyz = finalPos.xyz + vecSum * 0.01;
+            finalPos.xyz = finalPos.xyz + lighting * 0.1;
+            finalPos.xyz = finalPos.xyz + vertCenter * 0.05;
+            finalPos.x = finalPos.x + sum * 0.001 + elem * 0.001;
+
+            output.position = finalPos;
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

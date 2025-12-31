@@ -637,41 +637,7 @@ u32 SPIRVBuilder::GetStructTypeId(u32 structTypeHash) {
             fieldTypeId = GetTypeId(CoreType::FLOAT);
         }
 
-        // Check if this field is an array
-        u32 arraySize = 0;
-        if (ir->structFieldArraySizes) {
-            arraySize = ir->structFieldArraySizes[structInfo->fieldOffset + i];
-        }
-
-        if (arraySize > 0) {
-            // Create an array type for this field
-            u32 arrayTypeId = AllocateId();
-            u32 lengthConstId = GetIntConstantId(arraySize, true);  // unsigned constant
-            u32 arrayOps[] = {arrayTypeId, fieldTypeId, lengthConstId};
-            EmitToSection(&typesConstants, spv::OpTypeArray, arrayOps, 3);
-
-            // Emit ArrayStride decoration (std140: vec3 stride is 16 bytes)
-            u32 elementSize = 0;
-            switch (fieldType) {
-                case CoreType::FLOAT: elementSize = 4; break;
-                case CoreType::FLOAT2: elementSize = 8; break;
-                case CoreType::FLOAT3: elementSize = 16; break;  // std140 rounds up to 16
-                case CoreType::FLOAT4: elementSize = 16; break;
-                case CoreType::INT: elementSize = 4; break;
-                case CoreType::INT2: elementSize = 8; break;
-                case CoreType::INT3: elementSize = 16; break;
-                case CoreType::INT4: elementSize = 16; break;
-                case CoreType::UINT: elementSize = 4; break;
-                case CoreType::MAT4: elementSize = 64; break;
-                default: elementSize = 16; break;
-            }
-            u32 stride_ops[] = {arrayTypeId, spv::DecorationArrayStride, elementSize};
-            EmitToSection(&decorations, spv::OpDecorate, stride_ops, 3);
-
-            ops[1 + i] = arrayTypeId;
-        } else {
-            ops[1 + i] = fieldTypeId;
-        }
+        ops[1 + i] = fieldTypeId;
     }
 
     EmitToSection(&typesConstants, spv::OpTypeStruct, ops, 1 + fieldCount);
@@ -3321,6 +3287,23 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 }
             }
             u32 elem_type_id = GetTypeId(elemType);
+            if (elem_type_id == 0 &&
+                (elemType == CoreType::CUSTOM || elemType == CoreType::ENUM) &&
+                ir->registerStructTypes) {
+                u32 structHash = 0;
+                if (dest_reg < ir->registerCount) {
+                    structHash = ir->registerStructTypes[dest_reg];
+                }
+                if (structHash == 0 && base_reg < ir->registerCount) {
+                    structHash = ir->registerStructTypes[base_reg];
+                }
+                if (structHash != 0) {
+                    elem_type_id = GetStructTypeId(structHash);
+                }
+            }
+            if (elem_type_id == 0) {
+                elem_type_id = GetTypeId(CoreType::FLOAT);
+            }
 
             // Non-storage arrays are lowered as placeholder values; ignore index to keep SPIR-V valid.
             Emit(spv::OpUndef, elem_type_id, dest);
@@ -3358,8 +3341,25 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                         elemType = regType;
                     }
                 }
-
-                u32 elem_ptr_type = GetPointerTypeId(GetTypeId(elemType), storageClass);
+                u32 elem_type_id = GetTypeId(elemType);
+                if (elem_type_id == 0 &&
+                    (elemType == CoreType::CUSTOM || elemType == CoreType::ENUM) &&
+                    ir->registerStructTypes) {
+                    u32 structHash = 0;
+                    if (value_reg < ir->registerCount) {
+                        structHash = ir->registerStructTypes[value_reg];
+                    }
+                    if (structHash == 0 && base_reg < ir->registerCount) {
+                        structHash = ir->registerStructTypes[base_reg];
+                    }
+                    if (structHash != 0) {
+                        elem_type_id = GetStructTypeId(structHash);
+                    }
+                }
+                if (elem_type_id == 0) {
+                    elem_type_id = GetTypeId(CoreType::FLOAT);
+                }
+                u32 elem_ptr_type = GetPointerTypeId(elem_type_id, storageClass);
                 u32 base_id = GetSpirvId(base_reg);
                 u32 index_id = GetSpirvId(index_reg);
                 u32 value_id = GetSpirvId(value_reg);
@@ -3384,15 +3384,35 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 }
 
                 u32 type_id = GetTypeId(elemType);
+                if (type_id == 0 &&
+                    (elemType == CoreType::CUSTOM || elemType == CoreType::ENUM) &&
+                    ir->registerStructTypes) {
+                    u32 structHash = 0;
+                    if (value_reg < ir->registerCount) {
+                        structHash = ir->registerStructTypes[value_reg];
+                    }
+                    if (structHash == 0 && base_reg < ir->registerCount) {
+                        structHash = ir->registerStructTypes[base_reg];
+                    }
+                    if (structHash != 0) {
+                        type_id = GetStructTypeId(structHash);
+                    }
+                }
                 if (type_id == 0) {
                     type_id = GetTypeId(CoreType::FLOAT);
                 }
                 u32 value_id = GetSpirvId(value_reg);
-                u32 base_id = GetSpirvId(base_reg);
-                Emit(spv::OpCopyObject, type_id, base_id, value_id);
-
+                u32 result_id = 0;
                 if (base_reg < idCapacity && hasPreAllocatedId[base_reg]) {
+                    result_id = spirvIds[base_reg];
                     hasPreAllocatedId[base_reg] = false;
+                } else if (base_reg < idCapacity) {
+                    result_id = AllocateId();
+                    spirvIds[base_reg] = result_id;
+                }
+
+                if (result_id != 0) {
+                    Emit(spv::OpCopyObject, type_id, result_id, value_id);
                 }
             }
             break;
@@ -4377,18 +4397,20 @@ static CoreType GetFallbackAttributeType(u32 attrIdx) {
     // 1: normal (float3)
     // 2: texcoord (float2)
     // 3: tangent (float4)
-    // 4: color (float4)
-    // 5: boneWeights (float4)
+    // 4: bitangent (float3)
+    // 5: color (float4)
     // 6: boneIndices (uint4)
-    // 7+: custom (float4 default)
+    // 7: boneWeights (float4)
+    // 8+: custom (float4 default)
     switch (attrIdx) {
         case 0: return CoreType::FLOAT3;  // position
         case 1: return CoreType::FLOAT3;  // normal
         case 2: return CoreType::FLOAT2;  // texcoord
         case 3: return CoreType::FLOAT4;  // tangent
-        case 4: return CoreType::FLOAT4;  // color
-        case 5: return CoreType::FLOAT4;  // boneWeights
+        case 4: return CoreType::FLOAT3;  // bitangent
+        case 5: return CoreType::FLOAT4;  // color
         case 6: return CoreType::UINT4;   // boneIndices
+        case 7: return CoreType::FLOAT4;  // boneWeights
         default: return CoreType::FLOAT4; // custom
     }
 }
@@ -4850,8 +4872,8 @@ u32 SPIRVBuilder::CreateStorageBufferForAttribute(u32 attrIdx, CoreType elementT
     // Emit debug names for attribute buffers if enabled
     if (emitDebugNames && attrIdx < 8) {
         static const char* attrNames[] = {
-            "position_buffer", "normal_buffer", "texcoord_buffer", "color_buffer",
-            "tangent_buffer", "bitangent_buffer", "boneIndices_buffer", "boneWeights_buffer"
+            "position_buffer", "normal_buffer", "texcoord_buffer", "tangent_buffer",
+            "bitangent_buffer", "color_buffer", "boneIndices_buffer", "boneWeights_buffer"
         };
         EmitName(var_id, attrNames[attrIdx]);
     }

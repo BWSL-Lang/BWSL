@@ -1,0 +1,227 @@
+// Test: Advanced struct patterns
+// Tests: nested structs, struct initialization, deep member access, struct arrays, struct copy
+
+pipeline StructsAdvanced {
+    attributes {
+        position: float3
+    }
+
+    // Simple struct
+    struct Point {
+        float x;
+        float y;
+        float z;
+    }
+
+    // Struct with vector members
+    struct Transform {
+        float3 position;
+        float4 rotation;
+        float3 scale;
+    }
+
+    // Nested struct - level 1
+    struct BoundingBox {
+        Point min;
+        Point max;
+    }
+
+    // Nested struct - level 2
+    struct PhysicsBody {
+        Transform transform;
+        BoundingBox bounds;
+        float mass;
+        float friction;
+    }
+
+    // Deeply nested struct - level 3
+    struct GameObject {
+        PhysicsBody physics;
+        int id;
+        bool active;
+        float health;
+    }
+
+    // Struct with array members
+    struct Skeleton {
+        mat4[4] bones;
+        float[4] weights;
+        int boneCount;
+    }
+
+    // Complex nested with arrays
+    struct AnimationFrame {
+        Transform[4] transforms;
+        float timestamp;
+    }
+
+    // Create a Point from components
+    makePoint :: (float x, float y, float z) -> Point {
+        Point p;
+        p.x = x;
+        p.y = y;
+        p.z = z;
+        return p;
+    }
+
+    // Create Transform
+    makeTransform :: (float3 pos, float4 rot, float3 scl) -> Transform {
+        Transform t;
+        t.position = pos;
+        t.rotation = rot;
+        t.scale = scl;
+        return t;
+    }
+
+    // Create BoundingBox from two points
+    makeBounds :: (Point minPt, Point maxPt) -> BoundingBox {
+        BoundingBox bb;
+        bb.min = minPt;
+        bb.max = maxPt;
+        return bb;
+    }
+
+    // Access deeply nested member
+    getObjectPosition :: (GameObject obj) -> float3 {
+        return obj.physics.transform.position;
+    }
+
+    // Modify deeply nested member
+    setObjectPosition :: (GameObject obj, float3 newPos) -> GameObject {
+        obj.physics.transform.position = newPos;
+        return obj;
+    }
+
+    // Get bounds center
+    getBoundsCenter :: (BoundingBox bb) -> float3 {
+        float cx = (bb.min.x + bb.max.x) * 0.5;
+        float cy = (bb.min.y + bb.max.y) * 0.5;
+        float cz = (bb.min.z + bb.max.z) * 0.5;
+        return float3(cx, cy, cz);
+    }
+
+    // Get bounds size
+    getBoundsSize :: (BoundingBox bb) -> float3 {
+        float sx = bb.max.x - bb.min.x;
+        float sy = bb.max.y - bb.min.y;
+        float sz = bb.max.z - bb.min.z;
+        return float3(sx, sy, sz);
+    }
+
+    // Check if point is inside bounds
+    isInsideBounds :: (BoundingBox bb, float3 point) -> bool {
+        bool inX = point.x >= bb.min.x && point.x <= bb.max.x;
+        bool inY = point.y >= bb.min.y && point.y <= bb.max.y;
+        bool inZ = point.z >= bb.min.z && point.z <= bb.max.z;
+        return inX && inY && inZ;
+    }
+
+    // Apply transform to point
+    transformPoint :: (Transform t, float3 p) -> float3 {
+        return t.position + p * t.scale;
+    }
+
+    // Struct copy and modify
+    copyAndModifyPhysics :: (PhysicsBody original, float newMass) -> PhysicsBody {
+        PhysicsBody copy = original;
+        copy.mass = newMass;
+        return copy;
+    }
+
+    // Work with skeleton
+    getBoneWeight :: (Skeleton skel, int boneIndex) -> float {
+        return skel.weights[boneIndex];
+    }
+
+    // Blend animation frames
+    blendFrames :: (AnimationFrame a, AnimationFrame b, float t) -> AnimationFrame {
+        AnimationFrame result;
+        result.timestamp = lerp(a.timestamp, b.timestamp, t);
+
+        for (int i = 0; i < 4; i = i + 1) {
+            result.transforms[i].position = lerp(a.transforms[i].position, b.transforms[i].position, t);
+            result.transforms[i].rotation = lerp(a.transforms[i].rotation, b.transforms[i].rotation, t);
+            result.transforms[i].scale = lerp(a.transforms[i].scale, b.transforms[i].scale, t);
+        }
+
+        return result;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Create structs
+            Point p1 = makePoint(0.0, 0.0, 0.0);
+            Point p2 = makePoint(1.0, 1.0, 1.0);
+
+            // Nested struct creation
+            BoundingBox bounds = makeBounds(p1, p2);
+
+            // Deep nested struct
+            GameObject obj;
+            obj.id = 1;
+            obj.active = true;
+            obj.health = 100.0;
+            obj.physics.mass = 1.0;
+            obj.physics.friction = 0.5;
+            obj.physics.transform.position = attributes.position;
+            obj.physics.transform.rotation = float4(0.0, 0.0, 0.0, 1.0);
+            obj.physics.transform.scale = float3(1.0);
+            obj.physics.bounds = bounds;
+
+            // Access deeply nested
+            float3 objPos = getObjectPosition(obj);
+
+            // Modify deeply nested
+            GameObject movedObj = setObjectPosition(obj, objPos + float3(1.0, 0.0, 0.0));
+
+            // Work with bounds
+            float3 center = getBoundsCenter(bounds);
+            float3 size = getBoundsSize(bounds);
+            bool inside = isInsideBounds(bounds, attributes.position);
+
+            // Struct copy
+            PhysicsBody copiedPhys = copyAndModifyPhysics(obj.physics, 2.0);
+
+            // Create skeleton
+            Skeleton skel;
+            skel.boneCount = 4;
+            skel.weights[0] = 0.5;
+            skel.weights[1] = 0.3;
+            skel.weights[2] = 0.15;
+            skel.weights[3] = 0.05;
+            skel.bones[0] = mat4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0);
+            skel.bones[1] = skel.bones[0];
+            skel.bones[2] = skel.bones[0];
+            skel.bones[3] = skel.bones[0];
+
+            float w0 = getBoneWeight(skel, 0);
+
+            // Animation frames
+            AnimationFrame frame1;
+            frame1.timestamp = 0.0;
+            AnimationFrame frame2;
+            frame2.timestamp = 1.0;
+
+            for (int i = 0; i < 4; i = i + 1) {
+                frame1.transforms[i] = makeTransform(float3(0.0), float4(0.0, 0.0, 0.0, 1.0), float3(1.0));
+                frame2.transforms[i] = makeTransform(float3(1.0), float4(0.0, 0.0, 0.0, 1.0), float3(1.0));
+            }
+
+            AnimationFrame blended = blendFrames(frame1, frame2, 0.5);
+
+            // Use results
+            float4 finalPos = float4(movedObj.physics.transform.position, 1.0);
+            if (inside) {
+                finalPos.xyz = finalPos.xyz + center;
+            }
+
+            output.position = finalPos;
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

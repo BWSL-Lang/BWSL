@@ -1,0 +1,265 @@
+// Test: Extended vertex attribute types
+// Tests: tangent, bitangent for normal mapping, boneIndices, boneWeights for skeletal animation
+
+pipeline VertexAttributesExtended {
+    attributes {
+        position: float3
+        normal: float3
+        texcoord: float2
+        tangent: float4       // xyz = tangent direction, w = handedness
+        bitangent: float3
+        boneIndices: int4     // Up to 4 bone influences
+        boneWeights: float4   // Weights for each bone
+    }
+
+    // Construct TBN matrix from tangent space vectors
+    buildTBN :: (float3 T, float3 B, float3 N) -> mat3 {
+        return mat3(
+            T.x, B.x, N.x,
+            T.y, B.y, N.y,
+            T.z, B.z, N.z
+        );
+    }
+
+    // Transform normal from tangent space to world space
+    tangentToWorld :: (mat3 TBN, float3 tangentNormal) -> float3 {
+        return normalize(TBN * tangentNormal);
+    }
+
+    // Calculate bitangent from tangent and normal
+    calculateBitangent :: (float3 normal, float4 tangent) -> float3 {
+        return cross(normal, tangent.xyz) * tangent.w;
+    }
+
+    // Apply skinning transform
+    skinPosition :: (float3 position, mat4[4] boneMatrices, int4 indices, float4 weights) -> float3 {
+        float3 skinnedPos = float3(0.0);
+
+        // Apply each bone influence
+        if (weights.x > 0.0) {
+            float4 transformed = boneMatrices[indices.x] * float4(position, 1.0);
+            skinnedPos = skinnedPos + transformed.xyz * weights.x;
+        }
+        if (weights.y > 0.0) {
+            float4 transformed = boneMatrices[indices.y] * float4(position, 1.0);
+            skinnedPos = skinnedPos + transformed.xyz * weights.y;
+        }
+        if (weights.z > 0.0) {
+            float4 transformed = boneMatrices[indices.z] * float4(position, 1.0);
+            skinnedPos = skinnedPos + transformed.xyz * weights.z;
+        }
+        if (weights.w > 0.0) {
+            float4 transformed = boneMatrices[indices.w] * float4(position, 1.0);
+            skinnedPos = skinnedPos + transformed.xyz * weights.w;
+        }
+
+        return skinnedPos;
+    }
+
+    // Apply skinning to normal/tangent vectors
+    skinNormal :: (float3 normal, mat4[4] boneMatrices, int4 indices, float4 weights) -> float3 {
+        float3 skinnedNormal = float3(0.0);
+
+        if (weights.x > 0.0) {
+            float3 transformed = (boneMatrices[indices.x] * float4(normal, 0.0)).xyz;
+            skinnedNormal = skinnedNormal + transformed * weights.x;
+        }
+        if (weights.y > 0.0) {
+            float3 transformed = (boneMatrices[indices.y] * float4(normal, 0.0)).xyz;
+            skinnedNormal = skinnedNormal + transformed * weights.y;
+        }
+        if (weights.z > 0.0) {
+            float3 transformed = (boneMatrices[indices.z] * float4(normal, 0.0)).xyz;
+            skinnedNormal = skinnedNormal + transformed * weights.z;
+        }
+        if (weights.w > 0.0) {
+            float3 transformed = (boneMatrices[indices.w] * float4(normal, 0.0)).xyz;
+            skinnedNormal = skinnedNormal + transformed * weights.w;
+        }
+
+        return normalize(skinnedNormal);
+    }
+
+    // Normalize bone weights to sum to 1.0
+    normalizeBoneWeights :: (float4 weights) -> float4 {
+        float total = weights.x + weights.y + weights.z + weights.w;
+        if (total > 0.0) {
+            return weights / total;
+        }
+        return float4(1.0, 0.0, 0.0, 0.0);
+    }
+
+    // Check if vertex has skinning data
+    isSkinned :: (float4 weights) -> bool {
+        return (weights.x + weights.y + weights.z + weights.w) > 0.0;
+    }
+
+    // Get dominant bone index
+    getDominantBone :: (int4 indices, float4 weights) -> int {
+        float maxWeight = weights.x;
+        int maxIndex = indices.x;
+
+        if (weights.y > maxWeight) {
+            maxWeight = weights.y;
+            maxIndex = indices.y;
+        }
+        if (weights.z > maxWeight) {
+            maxWeight = weights.z;
+            maxIndex = indices.z;
+        }
+        if (weights.w > maxWeight) {
+            maxIndex = indices.w;
+        }
+
+        return maxIndex;
+    }
+
+    pass "Main" {
+        use attributes { position, normal, texcoord, tangent, bitangent, boneIndices, boneWeights }
+
+        vertex {
+            // Get vertex attributes
+            float3 pos = attributes.position;
+            float3 norm = attributes.normal;
+            float2 uv = attributes.texcoord;
+            float4 tang = attributes.tangent;
+            float3 bitang = attributes.bitangent;
+            int4 boneIdx = attributes.boneIndices;
+            float4 boneWts = attributes.boneWeights;
+
+            // Normalize bone weights
+            float4 normalizedWeights = normalizeBoneWeights(boneWts);
+
+            // Create identity bone matrices for testing
+            mat4 identity = mat4(
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0
+            );
+
+            mat4[4] boneMatrices;
+            boneMatrices[0] = identity;
+            boneMatrices[1] = identity;
+            boneMatrices[2] = identity;
+            boneMatrices[3] = identity;
+
+            // Apply skinning
+            float3 skinnedPosition = pos;
+            float3 skinnedNormal = norm;
+            float3 skinnedTangent = tang.xyz;
+            float3 skinnedBitangent = bitang;
+
+            if (isSkinned(normalizedWeights)) {
+                skinnedPosition = skinPosition(pos, boneMatrices, boneIdx, normalizedWeights);
+                skinnedNormal = skinNormal(norm, boneMatrices, boneIdx, normalizedWeights);
+                skinnedTangent = skinNormal(tang.xyz, boneMatrices, boneIdx, normalizedWeights);
+                skinnedBitangent = skinNormal(bitang, boneMatrices, boneIdx, normalizedWeights);
+            }
+
+            // Re-orthogonalize TBN after skinning
+            skinnedNormal = normalize(skinnedNormal);
+            skinnedTangent = normalize(skinnedTangent - dot(skinnedTangent, skinnedNormal) * skinnedNormal);
+            skinnedBitangent = cross(skinnedNormal, skinnedTangent) * tang.w;
+
+            // Alternative: calculate bitangent from tangent
+            float3 calcBitangent = calculateBitangent(skinnedNormal, float4(skinnedTangent, tang.w));
+
+            // Build TBN matrix for normal mapping
+            mat3 TBN = buildTBN(skinnedTangent, skinnedBitangent, skinnedNormal);
+
+            // Get dominant bone for debug
+            int dominantBone = getDominantBone(boneIdx, normalizedWeights);
+
+            // Output
+            output.position = float4(skinnedPosition, 1.0);
+            output.worldPos = skinnedPosition;
+            output.worldNormal = skinnedNormal;
+            output.worldTangent = skinnedTangent;
+            output.worldBitangent = skinnedBitangent;
+            output.texcoord = uv;
+            output.boneWeights = normalizedWeights;
+            output.tangentW = tang.w;
+        }
+
+        fragment {
+            // Reconstruct TBN in fragment shader
+            float3 T = normalize(input.worldTangent);
+            float3 B = normalize(input.worldBitangent);
+            float3 N = normalize(input.worldNormal);
+            mat3 TBN = buildTBN(T, B, N);
+
+            // Sample normal map (simulated - would come from texture)
+            float3 tangentNormal = float3(0.0, 0.0, 1.0);
+
+            // Transform to world space
+            float3 worldNormal = tangentToWorld(TBN, tangentNormal);
+
+            // Simple lighting
+            float3 lightDir = normalize(float3(1.0, 1.0, 1.0));
+            float NdotL = max(dot(worldNormal, lightDir), 0.0);
+
+            // Use bone weights for visualization
+            float4 boneViz = input.boneWeights;
+
+            // Debug: visualize TBN as color
+            float3 tbnDebug = T * 0.5 + 0.5;
+
+            // Final color
+            float3 finalColor = float3(NdotL);
+
+            output.color = float4(finalColor, 1.0);
+        }
+    }
+
+    pass "BoneVisualization" {
+        use attributes { position, boneIndices, boneWeights }
+
+        vertex {
+            mat4 identity = mat4(
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0
+            );
+
+            mat4[4] boneMatrices;
+            boneMatrices[0] = identity;
+            boneMatrices[1] = identity;
+            boneMatrices[2] = identity;
+            boneMatrices[3] = identity;
+
+            float4 normalizedWeights = normalizeBoneWeights(attributes.boneWeights);
+            float3 skinnedPos = skinPosition(attributes.position, boneMatrices, attributes.boneIndices, normalizedWeights);
+
+            output.position = float4(skinnedPos, 1.0);
+            output.boneWeights = normalizedWeights;
+            output.boneIndex = float(getDominantBone(attributes.boneIndices, normalizedWeights));
+        }
+
+        fragment {
+            // Visualize bone influence with colors
+            float4 weights = input.boneWeights;
+            float boneIdx = input.boneIndex;
+
+            // Color by dominant bone
+            float3[4] boneColors;
+            boneColors[0] = float3(1.0, 0.0, 0.0);  // Red
+            boneColors[1] = float3(0.0, 1.0, 0.0);  // Green
+            boneColors[2] = float3(0.0, 0.0, 1.0);  // Blue
+            boneColors[3] = float3(1.0, 1.0, 0.0);  // Yellow
+
+            int idx = int(boneIdx) % 4;
+            float3 boneColor = boneColors[idx];
+
+            // Blend colors by weight
+            float3 blendedColor =
+                boneColors[0] * weights.x +
+                boneColors[1] * weights.y +
+                boneColors[2] * weights.z +
+                boneColors[3] * weights.w;
+
+            output.color = float4(blendedColor, 1.0);
+        }
+    }
+}

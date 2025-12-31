@@ -1,0 +1,74 @@
+// Test: Struct array member access
+// Tests: nested struct arrays, member access on array access, array field syntax variants
+
+pipeline StructsArrayMemberAccess {
+    attributes {
+        position: float3
+    }
+
+    struct Pose {
+        float3 position;
+        float4 rotation;
+        float3 scale;
+    }
+
+    struct Frame {
+        Pose[2] poses;
+        float time;
+    }
+
+    struct Clip {
+        Frame frames[2];
+        float duration;
+    }
+
+    blendPose :: (Pose a, Pose b, float t) -> Pose {
+        Pose result;
+        result.position = lerp(a.position, b.position, t);
+        result.rotation = lerp(a.rotation, b.rotation, t);
+        result.scale = lerp(a.scale, b.scale, t);
+        return result;
+    }
+
+    blendFrame :: (Frame a, Frame b, float t) -> Frame {
+        Frame result;
+        result.time = lerp(a.time, b.time, t);
+        for (int i = 0; i < 2; i = i + 1) {
+            result.poses[i] = blendPose(a.poses[i], b.poses[i], t);
+        }
+        return result;
+    }
+
+    getPosePosition :: (Clip clip, int frameIdx, int poseIdx) -> float3 {
+        return clip.frames[frameIdx].poses[poseIdx].position;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            Clip clip;
+            clip.duration = 2.0;
+            clip.frames[0].time = 0.0;
+            clip.frames[1].time = 1.0;
+
+            clip.frames[0].poses[0].position = attributes.position;
+            clip.frames[0].poses[0].rotation = float4(0.0, 0.0, 0.0, 1.0);
+            clip.frames[0].poses[0].scale = float3(1.0);
+
+            clip.frames[1].poses[0].position = attributes.position + float3(1.0, 0.0, 0.0);
+            clip.frames[1].poses[0].rotation = float4(0.0, 0.0, 0.0, 1.0);
+            clip.frames[1].poses[0].scale = float3(1.0);
+
+            Frame blended = blendFrame(clip.frames[0], clip.frames[1], 0.5);
+            float3 pos = blended.poses[0].position;
+            float3 pos2 = getPosePosition(clip, 0, 0);
+
+            output.position = float4(pos + pos2 * 0.0, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

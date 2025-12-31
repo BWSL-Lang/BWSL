@@ -1,0 +1,31 @@
+// Test: Local array stores in fragment
+// Tests: repeated array stores, dynamic indexing, vector array loads in fragment
+
+pipeline LocalArrayStoreFragment {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.color = float4(0.25, 0.5, 0.75, 1.0);
+        }
+
+        fragment {
+            float3[4] palette;
+            palette[0] = float3(1.0, 0.0, 0.0);
+            palette[1] = float3(0.0, 1.0, 0.0);
+            palette[2] = float3(0.0, 0.0, 1.0);
+            palette[3] = float3(1.0, 1.0, 0.0);
+
+            int idx = int(input.color.r * 3.0) % 4;
+            float3 chosen = palette[idx];
+            float3 sum = palette[0] + palette[1] + palette[2] + palette[3];
+
+            output.color = float4(chosen + sum * 0.0, 1.0);
+        }
+    }
+}

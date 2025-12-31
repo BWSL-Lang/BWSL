@@ -1377,41 +1377,15 @@ struct IRLowering {
             builder.EmitInstruction(OP_STORE_REG, varReg, initReg);
             initializedVariables.insert(varDecl.name.nameHash);
         } else if (coreType == CoreType::CUSTOM) {
-            // For struct types without initializer, emit a construct with zero/undef values
-            // This gives the struct an initial value that can be modified with OpCompositeInsert
+            // For struct types without initializer, emit a zero/undef struct value.
             u32 structTypeHash = variableStructTypes[varDecl.name.nameHash];
+            if (structTypeHash == 0 && varReg < MAX_REGISTERS) {
+                structTypeHash = program.registerStructTypes[varReg];
+            }
             if (structTypeHash != 0) {
-                // Find the struct type info to get field count
-                for (u32 i = 0; i < program.structTypeCount; i++) {
-                    if (program.structTypes[i].nameHash == structTypeHash) {
-                        u32 fieldCount = program.structTypes[i].fieldCount;
-                        u32 fieldOffset = program.structTypes[i].fieldOffset;
-
-                        // Create zero constants for each field
-                        u16 fieldRegs[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
-                        for (u32 f = 0; f < fieldCount && f < 4; f++) {
-                            CoreType fieldType = static_cast<CoreType>(program.structFieldTypes[fieldOffset + f]);
-                            u32 fieldTypeHash = 0;
-                            if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
-                                program.structFieldTypeHashes) {
-                                fieldTypeHash = program.structFieldTypeHashes[fieldOffset + f];
-                            }
-                            // Emit zero constant (or zero struct) for this field type
-                            if (fieldTypeHash != 0) {
-                                fieldRegs[f] = EmitZeroStruct(fieldTypeHash);
-                            } else {
-                                fieldRegs[f] = EmitZeroConstant(fieldType);
-                            }
-                        }
-
-                        // Emit struct construct
-                        builder.EmitInstruction(OP_STRUCT_CONSTRUCT, varReg,
-                                                fieldRegs[0], fieldRegs[1], fieldRegs[2], fieldRegs[3]);
-                        program.metadata[program.instructionCount - 1] = structTypeHash;
-                        initializedVariables.insert(varDecl.name.nameHash);
-                        break;
-                    }
-                }
+                u16 zeroStruct = EmitZeroStruct(structTypeHash);
+                builder.EmitInstruction(OP_STORE_REG, varReg, zeroStruct);
+                initializedVariables.insert(varDecl.name.nameHash);
             }
         } else if (coreType == CoreType::FLOAT2 || coreType == CoreType::FLOAT3 || coreType == CoreType::FLOAT4) {
             // For vector types without initializer, emit a zero vector construct
@@ -1429,47 +1403,71 @@ struct IRLowering {
             return EmitZeroConstant(CoreType::FLOAT);
         }
 
-        // Find struct info
-        const IRProgram::StructTypeInfo* structInfo = nullptr;
-        for (u32 i = 0; i < program.structTypeCount; i++) {
-            if (program.structTypes[i].nameHash == structTypeHash) {
-                structInfo = &program.structTypes[i];
-                break;
+        auto FindStructInfo = [&](u32 hash) -> const IRProgram::StructTypeInfo* {
+            for (u32 i = 0; i < program.structTypeCount; i++) {
+                if (program.structTypes[i].nameHash == hash) {
+                    return &program.structTypes[i];
+                }
+            }
+            return nullptr;
+        };
+
+        // Find struct info, registering if needed (for nested custom types).
+        const IRProgram::StructTypeInfo* structInfo = FindStructInfo(structTypeHash);
+        if (!structInfo) {
+            if (LookupOrRegisterStructType(structTypeHash) != 0) {
+                structInfo = FindStructInfo(structTypeHash);
             }
         }
         if (!structInfo || structInfo->fieldCount == 0) {
             return EmitZeroConstant(CoreType::FLOAT);
         }
 
-        u16 destReg = AllocateRegister();
-        SetRegisterType(destReg, CoreType::CUSTOM);
-        if (destReg < MAX_REGISTERS) {
-            program.registerStructTypes[destReg] = structTypeHash;
+        u16 baseReg = AllocateRegister();
+        SetRegisterType(baseReg, CoreType::CUSTOM);
+        if (baseReg < MAX_REGISTERS) {
+            program.registerStructTypes[baseReg] = structTypeHash;
         }
+        AddUndefRegister(baseReg, CoreType::CUSTOM);
 
-        u16 fieldRegs[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
-        for (u32 f = 0; f < structInfo->fieldCount && f < 4; f++) {
+        u16 currentReg = baseReg;
+        for (u32 f = 0; f < structInfo->fieldCount; f++) {
             CoreType fieldType = static_cast<CoreType>(program.structFieldTypes[structInfo->fieldOffset + f]);
             u32 fieldTypeHash = 0;
             if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
                 program.structFieldTypeHashes) {
                 fieldTypeHash = program.structFieldTypeHashes[structInfo->fieldOffset + f];
             }
+            u16 valueReg = 0xFFFF;
             if (fieldTypeHash != 0) {
-                fieldRegs[f] = EmitZeroStruct(fieldTypeHash);
+                valueReg = EmitZeroStruct(fieldTypeHash);
             } else {
-                fieldRegs[f] = EmitZeroConstant(fieldType);
+                valueReg = EmitZeroConstant(fieldType);
             }
+
+            u16 nextReg = AllocateRegister();
+            SetRegisterType(nextReg, CoreType::CUSTOM);
+            if (nextReg < MAX_REGISTERS) {
+                program.registerStructTypes[nextReg] = structTypeHash;
+            }
+            builder.EmitInstruction(OP_STRUCT_INSERT, nextReg, currentReg, f, valueReg);
+            program.metadata[program.instructionCount - 1] = structTypeHash;
+            currentReg = nextReg;
         }
 
-        builder.EmitInstruction(OP_STRUCT_CONSTRUCT, destReg,
-                                fieldRegs[0], fieldRegs[1], fieldRegs[2], fieldRegs[3]);
-        program.metadata[program.instructionCount - 1] = structTypeHash;
-        return destReg;
+        return currentReg;
     }
 
     // Emit a zero constant for a given type
     u16 EmitZeroConstant(CoreType type) {
+        auto EmitZeroVector = [&](CoreType vecType, u16 zero, u32 componentCount) -> u16 {
+            u16 destReg = AllocateRegister();
+            SetRegisterType(destReg, vecType);
+            builder.EmitInstruction(OP_VEC_CONSTRUCT, destReg, zero, zero, zero, zero);
+            program.metadata[program.instructionCount - 1] = componentCount;
+            return destReg;
+        };
+
         switch (type) {
             case CoreType::FLOAT:
                 return builder.EmitConstant(0.0f);
@@ -1479,16 +1477,54 @@ struct IRLowering {
             case CoreType::FLOAT3:
             case CoreType::FLOAT4: {
                 u16 zero = builder.EmitConstant(0.0f);
-                u16 destReg = AllocateRegister();
-                SetRegisterType(destReg, type);
                 u32 componentCount = (type == CoreType::FLOAT2) ? 2 : (type == CoreType::FLOAT3) ? 3 : 4;
-                builder.EmitInstruction(OP_VEC_CONSTRUCT, destReg, zero, zero, zero, zero);
-                program.metadata[program.instructionCount - 1] = componentCount;
-                return destReg;
+                return EmitZeroVector(type, zero, componentCount);
             }
             case CoreType::INT:
-            case CoreType::UINT:
                 return EmitConstantInt(0);
+            case CoreType::UINT:
+                return EmitConstantUint(0);
+            case CoreType::INT2:
+            case CoreType::INT3:
+            case CoreType::INT4: {
+                u16 zero = EmitConstantInt(0);
+                u32 componentCount = (type == CoreType::INT2) ? 2 : (type == CoreType::INT3) ? 3 : 4;
+                return EmitZeroVector(type, zero, componentCount);
+            }
+            case CoreType::UINT2:
+            case CoreType::UINT3:
+            case CoreType::UINT4: {
+                u16 zero = EmitConstantUint(0);
+                u32 componentCount = (type == CoreType::UINT2) ? 2 : (type == CoreType::UINT3) ? 3 : 4;
+                return EmitZeroVector(type, zero, componentCount);
+            }
+            case CoreType::BOOL2:
+            case CoreType::BOOL3:
+            case CoreType::BOOL4: {
+                u16 zero = builder.EmitConstantBool(false);
+                u32 componentCount = (type == CoreType::BOOL2) ? 2 : (type == CoreType::BOOL3) ? 3 : 4;
+                return EmitZeroVector(type, zero, componentCount);
+            }
+            case CoreType::MAT2:
+            case CoreType::MAT3:
+            case CoreType::MAT4: {
+                u32 columnCount = (type == CoreType::MAT2) ? 2 : (type == CoreType::MAT3) ? 3 : 4;
+                CoreType columnType = (type == CoreType::MAT2) ? CoreType::FLOAT2 :
+                    (type == CoreType::MAT3) ? CoreType::FLOAT3 : CoreType::FLOAT4;
+                u32 componentCount = (columnType == CoreType::FLOAT2) ? 2 :
+                    (columnType == CoreType::FLOAT3) ? 3 : 4;
+                u16 zero = builder.EmitConstant(0.0f);
+                u16 columns[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+                for (u32 i = 0; i < columnCount; i++) {
+                    columns[i] = EmitZeroVector(columnType, zero, componentCount);
+                }
+                u16 destReg = AllocateRegister();
+                SetRegisterType(destReg, type);
+                builder.EmitInstruction(OP_MAT_CONSTRUCT, destReg,
+                                        columns[0], columns[1], columns[2], columns[3]);
+                program.metadata[program.instructionCount - 1] = columnCount;
+                return destReg;
+            }
             default:
                 return builder.EmitConstant(0.0f);
         }
@@ -2106,14 +2142,17 @@ struct IRLowering {
             u16 baseReg = LowerExpression(arrAccess.array);
             u16 indexReg = LowerExpression(arrAccess.index);
             if (baseReg < MAX_REGISTERS) {
-                CoreType baseType = static_cast<CoreType>(program.registerTypes[baseReg]);
-                if (baseType == CoreType::INVALID || baseType == CoreType::VOID) {
-                    CoreType valueType = GetRegisterType(valueReg);
-                    if (valueType != CoreType::INVALID && valueType != CoreType::VOID) {
+                CoreType valueType = GetRegisterType(valueReg);
+                if (valueType != CoreType::INVALID && valueType != CoreType::VOID) {
+                    CoreType baseType = static_cast<CoreType>(program.registerTypes[baseReg]);
+                    if (baseType == CoreType::INVALID || baseType == CoreType::VOID || baseType != valueType) {
                         SetRegisterType(baseReg, valueType);
-                        if ((valueType == CoreType::CUSTOM || valueType == CoreType::ENUM) &&
-                            baseReg < MAX_REGISTERS && valueReg < MAX_REGISTERS) {
-                            program.registerStructTypes[baseReg] = program.registerStructTypes[valueReg];
+                    }
+                    if ((valueType == CoreType::CUSTOM || valueType == CoreType::ENUM) &&
+                        valueReg < MAX_REGISTERS) {
+                        u32 structHash = program.registerStructTypes[valueReg];
+                        if (structHash != 0) {
+                            program.registerStructTypes[baseReg] = structHash;
                         }
                     }
                 }
@@ -2634,6 +2673,10 @@ void LowerIfStatement(NodeRef ref) {
             if (baseReg < MAX_REGISTERS) {
                 CoreType baseType = static_cast<CoreType>(program.registerTypes[baseReg]);
                 SetRegisterType(dest, baseType);
+                if ((baseType == CoreType::CUSTOM || baseType == CoreType::ENUM) &&
+                    baseReg < MAX_REGISTERS) {
+                    program.registerStructTypes[dest] = program.registerStructTypes[baseReg];
+                }
             }
         } else {
             // Regular array load
@@ -2643,6 +2686,10 @@ void LowerIfStatement(NodeRef ref) {
             if (baseReg < MAX_REGISTERS) {
                 CoreType baseType = static_cast<CoreType>(program.registerTypes[baseReg]);
                 SetRegisterType(dest, baseType);
+                if ((baseType == CoreType::CUSTOM || baseType == CoreType::ENUM) &&
+                    baseReg < MAX_REGISTERS) {
+                    program.registerStructTypes[dest] = program.registerStructTypes[baseReg];
+                }
             }
         }
 
@@ -2704,7 +2751,8 @@ void LowerIfStatement(NodeRef ref) {
         const MemberAccessData& access = ast->GetMemberAccess(ref);
 
         // Handle chained member access (e.g., attributes.normal.y or resources.lights.positions)
-        if (access.object.Type() == ASTNodeType::MEMBER_ACCESS) {
+        if (access.object.Type() == ASTNodeType::MEMBER_ACCESS ||
+            access.object.Type() == ASTNodeType::ARRAY_ACCESS) {
             // First, lower the object (e.g., attributes.normal -> float3 register)
             u16 objectReg = LowerExpression(access.object);
 
@@ -2718,11 +2766,13 @@ void LowerIfStatement(NodeRef ref) {
                 // This is a struct field access (e.g., lights.positions)
                 u32 fieldIndex = 0xFFFFFFFF;
                 CoreType fieldType = CoreType::FLOAT;
+                u32 fieldOffset = 0;
 
                 auto structIt = structTypeMap.find(structTypeHash);
                 if (structIt != structTypeMap.end()) {
                     u32 structIdx = structIt->second;
                     const IRProgram::StructTypeInfo& info = program.structTypes[structIdx];
+                    fieldOffset = info.fieldOffset;
                     for (u32 i = 0; i < info.fieldCount; i++) {
                         if (program.structFieldNameHashes[info.fieldOffset + i] == access.member.nameHash) {
                             fieldIndex = i;
@@ -2761,6 +2811,13 @@ void LowerIfStatement(NodeRef ref) {
                     }
 
                     SetRegisterType(dest, fieldType);
+                    if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
+                        program.structFieldTypeHashes) {
+                        u32 fieldTypeHash = program.structFieldTypeHashes[fieldOffset + fieldIndex];
+                        if (fieldTypeHash != 0 && dest < MAX_REGISTERS) {
+                            program.registerStructTypes[dest] = fieldTypeHash;
+                        }
+                    }
                     return dest;
                 }
             }
@@ -4347,13 +4404,19 @@ void LowerIfStatement(NodeRef ref) {
         static const u32 NORMAL_HASH = Utils::HashStr("normal");
         static const u32 TEXCOORD_HASH = Utils::HashStr("texcoord");
         static const u32 TANGENT_HASH = Utils::HashStr("tangent");
+        static const u32 BITANGENT_HASH = Utils::HashStr("bitangent");
         static const u32 COLOR_HASH = Utils::HashStr("color");
+        static const u32 BONE_INDICES_HASH = Utils::HashStr("boneIndices");
+        static const u32 BONE_WEIGHTS_HASH = Utils::HashStr("boneWeights");
 
         if (nameHash == POSITION_HASH) return 0;
         if (nameHash == NORMAL_HASH) return 1;
         if (nameHash == TEXCOORD_HASH) return 2;
         if (nameHash == TANGENT_HASH) return 3;
-        if (nameHash == COLOR_HASH) return 4;
+        if (nameHash == BITANGENT_HASH) return 4;
+        if (nameHash == COLOR_HASH) return 5;
+        if (nameHash == BONE_INDICES_HASH) return 6;
+        if (nameHash == BONE_WEIGHTS_HASH) return 7;
         return 0;
     }
 
@@ -4474,6 +4537,22 @@ void LowerIfStatement(NodeRef ref) {
         if (reg < MAX_REGISTERS) {
             program.registerTypes[reg] = static_cast<u16>(type);
         }
+    }
+
+    void AddUndefRegister(u16 reg, CoreType type) {
+        if (program.undefRegCount >= program.undefRegCapacity) {
+            u32 newCapacity = program.undefRegCapacity * 2;
+            u16* newRegs = (u16*)pool->Allocate(newCapacity * sizeof(u16), 64);
+            u16* newTypes = (u16*)pool->Allocate(newCapacity * sizeof(u16), 64);
+            memcpy(newRegs, program.undefRegs, program.undefRegCapacity * sizeof(u16));
+            memcpy(newTypes, program.undefRegTypes, program.undefRegCapacity * sizeof(u16));
+            program.undefRegs = newRegs;
+            program.undefRegTypes = newTypes;
+            program.undefRegCapacity = newCapacity;
+        }
+        program.undefRegs[program.undefRegCount] = reg;
+        program.undefRegTypes[program.undefRegCount] = static_cast<u16>(type);
+        program.undefRegCount++;
     }
 
     // Get the scalar component type of a vector type

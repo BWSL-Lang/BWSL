@@ -1,0 +1,193 @@
+// Test: Additional math intrinsics
+// Tests: saturate, smoothstep, lerp, step, fract, sincos, exp2, log2, rsqrt, and more
+
+pipeline IntrinsicsAdditional {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+            float t = uv.x;
+
+            // ===== saturate - clamp to [0, 1] =====
+            float sat_neg = saturate(-0.5);         // 0.0
+            float sat_mid = saturate(0.5);          // 0.5
+            float sat_over = saturate(1.5);         // 1.0
+            float3 sat_vec = saturate(float3(-0.5, 0.5, 1.5));  // (0.0, 0.5, 1.0)
+
+            // ===== smoothstep - Hermite interpolation =====
+            float ss_below = smoothstep(0.0, 1.0, -0.5);    // 0.0
+            float ss_mid = smoothstep(0.0, 1.0, 0.5);       // 0.5 (smooth)
+            float ss_above = smoothstep(0.0, 1.0, 1.5);     // 1.0
+            float ss_quarter = smoothstep(0.0, 1.0, 0.25);  // ~0.156
+            float ss_3quarter = smoothstep(0.0, 1.0, 0.75); // ~0.844
+
+            // Smoothstep with different ranges
+            float ss_range = smoothstep(0.2, 0.8, t);
+            float3 ss_vec = smoothstep(0.0, 1.0, float3(0.25, 0.5, 0.75));
+
+            // ===== lerp (mix) - linear interpolation =====
+            float lerp_0 = lerp(0.0, 10.0, 0.0);      // 0.0
+            float lerp_half = lerp(0.0, 10.0, 0.5);   // 5.0
+            float lerp_1 = lerp(0.0, 10.0, 1.0);      // 10.0
+            float lerp_over = lerp(0.0, 10.0, 1.5);   // 15.0 (extrapolation)
+
+            float3 lerp_vec = lerp(float3(0.0), float3(1.0), 0.5);
+            float4 lerp_col = lerp(float4(1.0, 0.0, 0.0, 1.0), float4(0.0, 0.0, 1.0, 1.0), t);
+
+            // Lerp for color blending
+            float3 colorA = float3(1.0, 0.0, 0.0);  // Red
+            float3 colorB = float3(0.0, 0.0, 1.0);  // Blue
+            float3 blendedColor = lerp(colorA, colorB, t);
+
+            // ===== step - threshold function =====
+            float step_below = step(0.5, 0.3);   // 0.0 (0.3 < 0.5)
+            float step_above = step(0.5, 0.7);   // 1.0 (0.7 >= 0.5)
+            float step_equal = step(0.5, 0.5);   // 1.0 (0.5 >= 0.5)
+
+            float3 step_vec = step(0.5, float3(0.3, 0.5, 0.7));  // (0.0, 1.0, 1.0)
+            float3 step_vec2 = step(float3(0.3, 0.5, 0.7), float3(0.5));  // (1.0, 1.0, 0.0)
+
+            // ===== fract - fractional part =====
+            float fract_pos = fract(3.7);         // 0.7
+            float fract_neg = fract(-0.3);        // 0.7 (1.0 - 0.3)
+            float fract_whole = fract(5.0);       // 0.0
+            float3 fract_vec = fract(float3(1.2, 2.5, 3.9));  // (0.2, 0.5, 0.9)
+
+            // Fract for repeating patterns
+            float2 repeatingUV = fract(uv * 4.0);
+
+            // ===== exp2 - 2^x =====
+            float exp2_0 = exp2(0.0);     // 1.0
+            float exp2_1 = exp2(1.0);     // 2.0
+            float exp2_3 = exp2(3.0);     // 8.0
+            float exp2_neg = exp2(-1.0);  // 0.5
+
+            // ===== log2 - log base 2 =====
+            float log2_1 = log2(1.0);     // 0.0
+            float log2_2 = log2(2.0);     // 1.0
+            float log2_8 = log2(8.0);     // 3.0
+            float log2_half = log2(0.5);  // -1.0
+
+            // ===== rsqrt - 1/sqrt(x) =====
+            float rsqrt_1 = rsqrt(1.0);   // 1.0
+            float rsqrt_4 = rsqrt(4.0);   // 0.5
+            float rsqrt_16 = rsqrt(16.0); // 0.25
+
+            // rsqrt for fast normalization
+            float3 vec = float3(3.0, 4.0, 0.0);
+            float invLen = rsqrt(dot(vec, vec));
+            float3 normalized = vec * invLen;
+
+            // ===== sign - sign of value =====
+            float sign_neg = sign(-5.0);    // -1.0
+            float sign_zero = sign(0.0);    // 0.0
+            float sign_pos = sign(5.0);     // 1.0
+            float3 sign_vec = sign(float3(-1.0, 0.0, 1.0));
+
+            // ===== trunc - truncate toward zero =====
+            float trunc_pos = trunc(3.7);    // 3.0
+            float trunc_neg = trunc(-3.7);   // -3.0
+
+            // ===== mod - floating-point modulo =====
+            float mod_1 = mod(5.0, 3.0);     // 2.0
+            float mod_2 = mod(7.5, 2.5);     // 0.0
+            float mod_neg = mod(-5.0, 3.0);  // 1.0 (or -2.0 depending on impl)
+
+            // ===== pow - power function =====
+            float pow_sq = pow(2.0, 2.0);    // 4.0
+            float pow_cube = pow(2.0, 3.0);  // 8.0
+            float pow_sqrt = pow(4.0, 0.5);  // 2.0
+            float pow_frac = pow(2.0, 1.5);  // ~2.83
+
+            // ===== Combination examples =====
+
+            // Smooth pulse using smoothstep
+            float pulse = smoothstep(0.0, 0.5, t) * (1.0 - smoothstep(0.5, 1.0, t));
+
+            // Soft threshold using lerp and smoothstep
+            float softThresh = lerp(0.0, 1.0, smoothstep(0.4, 0.6, t));
+
+            // Band-limited step for anti-aliasing (fwidth moved to fragment shader)
+            float aaStep = smoothstep(0.45, 0.55, t);
+
+            // Gamma correction
+            float gamma = 2.2;
+            float3 linearColor = pow(blendedColor, float3(gamma));
+            float3 srgbColor = pow(linearColor, float3(1.0 / gamma));
+
+            // HDR tone mapping (simple Reinhard)
+            float3 hdrColor = float3(2.0, 1.5, 1.0);
+            float3 toneMapped = hdrColor / (hdrColor + float3(1.0));
+
+            // Mipmap level calculation using log2
+            float texSize = 1024.0;
+            float screenSize = 512.0;
+            float mipLevel = log2(texSize / screenSize);
+
+            // Fast inverse square root pattern
+            float dist = length(pos);
+            float invDist = rsqrt(dist * dist + 0.001);
+
+            // Use all results to prevent optimization
+            float4 finalPos = float4(pos, 1.0);
+            finalPos.x = finalPos.x + sat_mid * 0.01;
+            finalPos.y = finalPos.y + ss_mid * 0.01;
+            finalPos.z = finalPos.z + lerp_half * 0.001;
+
+            output.position = finalPos;
+            output.uv = uv;
+            output.t = t;
+            output.pulse = pulse;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float t = input.t;
+            float pulse = input.pulse;
+
+            // Fragment-specific intrinsic tests
+            float2 ddxUV = ddx(uv);
+            float2 ddyUV = ddy(uv);
+            float fw = fwidth(uv.x);
+
+            // Create patterns using intrinsics
+            float2 repeating = fract(uv * 8.0);
+            float checker = step(0.5, repeating.x) * step(0.5, repeating.y) +
+                           (1.0 - step(0.5, repeating.x)) * (1.0 - step(0.5, repeating.y));
+
+            // Gradient with smoothstep
+            float gradient = smoothstep(0.0, 1.0, uv.x);
+
+            // Vignette using saturate and smoothstep
+            float2 centered = uv * 2.0 - 1.0;
+            float dist = length(centered);
+            float vignette = 1.0 - saturate(smoothstep(0.5, 1.5, dist));
+
+            // Circular pattern using fract and step
+            float rings = fract(dist * 5.0);
+            float ringPattern = smoothstep(0.4, 0.5, rings) * (1.0 - smoothstep(0.5, 0.6, rings));
+
+            // Color using lerp
+            float3 color1 = float3(0.1, 0.2, 0.5);
+            float3 color2 = float3(0.9, 0.7, 0.3);
+            float3 gradientColor = lerp(color1, color2, gradient);
+
+            // Apply vignette and patterns
+            float3 finalColor = gradientColor * vignette;
+            finalColor = lerp(finalColor, float3(1.0), pulse * 0.3);
+            finalColor = lerp(finalColor, float3(ringPattern), 0.2);
+
+            // Gamma correct output
+            finalColor = pow(saturate(finalColor), float3(1.0 / 2.2));
+
+            output.color = float4(finalColor, 1.0);
+        }
+    }
+}

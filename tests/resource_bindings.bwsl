@@ -1,0 +1,177 @@
+// Test: Resource binding declarations and struct layouts
+// Tests: struct definitions for uniform buffers, struct member access, nested structs
+
+pipeline ResourceBindings {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    // Struct layout for camera uniform buffer
+    struct CameraData {
+        mat4 viewMatrix;
+        mat4 projMatrix;
+        mat4 viewProjMatrix;
+        float3 cameraPos;
+        float nearPlane;
+        float farPlane;
+        float fov;
+        float aspectRatio;
+        float padding;
+    }
+
+    // Struct for light data
+    struct LightData {
+        float3 position;
+        float intensity;
+        float3 color;
+        float radius;
+        float3 direction;
+        int lightType;
+    }
+
+    // Struct for material properties
+    struct MaterialData {
+        float4 baseColor;
+        float metallic;
+        float roughness;
+        float ao;
+        float emissiveStrength;
+        float3 emissiveColor;
+        float padding;
+    }
+
+    // Instance transform data
+    struct InstanceData {
+        mat4 modelMatrix;
+        mat4 normalMatrix;
+        float4 customData;
+    }
+
+    // Function to transform position using camera matrices
+    transformPosition :: (CameraData camera, float3 worldPos) -> float4 {
+        float4 pos = float4(worldPos, 1.0);
+        return camera.viewProjMatrix * pos;
+    }
+
+    // Function to calculate view direction
+    getViewDirection :: (CameraData camera, float3 worldPos) -> float3 {
+        return normalize(camera.cameraPos - worldPos);
+    }
+
+    // Light attenuation calculation
+    calculateAttenuation :: (LightData light, float3 worldPos) -> float {
+        float3 toLight = light.position - worldPos;
+        float distance = length(toLight);
+        float attenuation = 1.0 / (1.0 + distance * distance / (light.radius * light.radius));
+        return attenuation * light.intensity;
+    }
+
+    // Apply material properties
+    applyMaterial :: (MaterialData mat, float3 baseLight) -> float3 {
+        float3 color = mat.baseColor.rgb * baseLight;
+        color = color + mat.emissiveColor * mat.emissiveStrength;
+        return color * mat.ao;
+    }
+
+    // Compute linear depth from camera data
+    linearizeDepth :: (CameraData camera, float depth) -> float {
+        float near = camera.nearPlane;
+        float far = camera.farPlane;
+        return (2.0 * near) / (far + near - depth * (far - near));
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            // Create camera data for testing
+            CameraData camera;
+            camera.viewMatrix = mat4(
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0
+            );
+            camera.projMatrix = camera.viewMatrix;
+            camera.viewProjMatrix = camera.viewMatrix;
+            camera.cameraPos = float3(0.0, 0.0, 5.0);
+            camera.nearPlane = 0.1;
+            camera.farPlane = 100.0;
+            camera.fov = 60.0;
+            camera.aspectRatio = 1.777;
+
+            // Create light data
+            LightData light;
+            light.position = float3(10.0, 10.0, 10.0);
+            light.intensity = 1.0;
+            light.color = float3(1.0, 1.0, 1.0);
+            light.radius = 50.0;
+            light.direction = normalize(float3(-1.0, -1.0, -1.0));
+            light.lightType = 1;
+
+            // Create material data
+            MaterialData material;
+            material.baseColor = float4(0.8, 0.6, 0.4, 1.0);
+            material.metallic = 0.0;
+            material.roughness = 0.5;
+            material.ao = 1.0;
+            material.emissiveStrength = 0.0;
+            material.emissiveColor = float3(0.0);
+
+            // Create instance data
+            InstanceData instance;
+            instance.modelMatrix = mat4(
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0
+            );
+            instance.normalMatrix = instance.modelMatrix;
+            instance.customData = float4(1.0, 0.0, 0.0, 0.0);
+
+            // Use struct functions
+            float4 worldPos = instance.modelMatrix * float4(attributes.position, 1.0);
+            float4 clipPos = transformPosition(camera, worldPos.xyz);
+            float3 viewDir = getViewDirection(camera, worldPos.xyz);
+            float atten = calculateAttenuation(light, worldPos.xyz);
+
+            // Access nested struct members
+            float3 lightPos = light.position;
+            float3 camPos = camera.cameraPos;
+            float near = camera.nearPlane;
+
+            output.position = clipPos;
+            output.worldPos = worldPos.xyz;
+            output.texcoord = attributes.texcoord;
+            output.viewDir = viewDir;
+            output.attenuation = atten;
+        }
+
+        fragment {
+            float2 uv = input.texcoord;
+            float3 worldPos = input.worldPos;
+            float3 viewDir = input.viewDir;
+            float atten = input.attenuation;
+
+            // Create material for fragment
+            MaterialData material;
+            material.baseColor = float4(0.8, 0.6, 0.4, 1.0);
+            material.metallic = 0.0;
+            material.roughness = 0.5;
+            material.ao = 1.0;
+            material.emissiveStrength = 0.0;
+            material.emissiveColor = float3(0.0);
+
+            // Simple lighting
+            float3 lightDir = normalize(float3(1.0, 1.0, 1.0));
+            float3 normal = float3(0.0, 0.0, 1.0);
+            float NdotL = max(dot(normal, lightDir), 0.0);
+
+            float3 diffuse = material.baseColor.rgb * NdotL * atten;
+            float3 finalColor = applyMaterial(material, diffuse);
+
+            output.color = float4(finalColor, material.baseColor.a);
+        }
+    }
+}
