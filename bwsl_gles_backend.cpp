@@ -211,38 +211,8 @@ void GLESBuilder::EmitMain() {
     out.Lit("void main() {\n");
     indent = 1;
 
-    // Emit temp variables only for registers that will be explicitly assigned
-    // Skip inlined registers and unused registers to reduce output size
-    if (ir->registerTypes) {
-        for (u32 i = 0; i < regCount; i++) {
-            u16 regType = ir->registerTypes[i];
-            if (regType == 0 || regType == static_cast<u16>(CoreType::INVALID)) {
-                continue;
-            }
-            // Skip if this register will be inlined (trivial or single-use)
-            if (ShouldInline(static_cast<u16>(i))) {
-                continue;
-            }
-            // Only declare if register is assigned (has a defining instruction)
-            if (regInfo[i].defInst == 0 && i != 0) {
-                // Check if this is a PHI target
-                bool isPhiTarget = false;
-                for (u32 phi = 0; phi < ir->phiCount; phi++) {
-                    if (ir->phiResultRegs && ir->phiResultRegs[phi] == i) {
-                        isPhiTarget = true;
-                        break;
-                    }
-                }
-                if (!isPhiTarget) continue;
-            }
-            out.NL(indent);
-            EmitType(regType);
-            out.Chr(' ');
-            EmitReg(static_cast<u16>(i));
-            out.Lit(";");
-        }
-    }
-    out.NL(0);
+    // Variables are declared inline at first assignment (like SPIRV-Cross)
+    // No pre-declaration needed - we use EmitRegWithDecl to declare on first use
 
     // Use CFG-based block emission if available
     if (cfg && cfg->blockCount > 0) {
@@ -324,7 +294,7 @@ void GLESBuilder::EmitPhiAssignments(u32 fromBlock, u32 toBlock) {
                 u16 destReg = ir->phiResultRegs[phiIdx];
 
                 out.NL(indent);
-                EmitReg(destReg);
+                EmitRegWithDecl(destReg);
                 out.Lit(" = ");
                 EmitExpr(srcValue);
                 out.Chr(';');
@@ -554,7 +524,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             // copies at predecessor block ends)
             u16 firstVal = Op(instIdx, 0);
             if (firstVal != 0x3FFF) {
-                EmitReg(dest);
+                EmitRegWithDecl(dest);
                 out.Lit(" = ");
                 EmitExpr(firstVal);
                 out.Lit(";");
@@ -570,7 +540,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_STORE_REG: {
             // Register-to-register copy/store
             u16 srcReg = Op(instIdx, 0);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(srcReg);
             out.Lit(";");
@@ -618,7 +588,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_LOAD_UNIFORM:
             // These are inlined when used, but if multi-use, emit assignment
             if (dest < regCount && regInfo[dest].useCount > 1) {
-                EmitReg(dest);
+                EmitRegWithDecl(dest);
                 out.Lit(" = ");
                 EmitExprForInst(instIdx);
                 out.Lit(";");
@@ -628,7 +598,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_LOAD_OUTPUT: {
             // Load from a previously written output (rare, for reading gl_Position etc.)
             u16 outputIdx = Op(instIdx, 0);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             if (stage == ShaderStage::Vertex && outputIdx == 0) {
                 out.Lit("gl_Position");
@@ -646,7 +616,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_LOAD_LOCAL:
         case IR::OP_STORE_LOCAL:
             // Thread-local storage - emit as local variable access
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = local");
             out.Uint(Op(instIdx, 0));
             out.Lit(";");
@@ -807,7 +777,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
         case IR::OP_SATURATE:
             // GLSL ES doesn't have saturate, use clamp(x, 0.0, 1.0)
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = clamp(");
             EmitExpr(Op(instIdx, 0));
             out.Lit(", 0.0, 1.0);");
@@ -864,7 +834,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
         case IR::OP_CLZ: {
             // GLSL ES 300: use findMSB and compute 31 - findMSB(x)
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = (");
             EmitExpr(Op(instIdx, 0));
             out.Lit(" == 0) ? 32 : (31 - findMSB(");
@@ -874,7 +844,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         }
         case IR::OP_CTZ: {
             // GLSL ES 300: use findLSB
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = (");
             EmitExpr(Op(instIdx, 0));
             out.Lit(" == 0) ? 32 : findLSB(");
@@ -888,37 +858,37 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         // ===== Type Conversion =====
         case IR::OP_F2I:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = int(");
             EmitExpr(Op(instIdx, 0));
             out.Lit(");");
             return;
         case IR::OP_I2F:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = float(");
             EmitExpr(Op(instIdx, 0));
             out.Lit(");");
             return;
         case IR::OP_F2U:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = uint(");
             EmitExpr(Op(instIdx, 0));
             out.Lit(");");
             return;
         case IR::OP_U2F:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = float(");
             EmitExpr(Op(instIdx, 0));
             out.Lit(");");
             return;
         case IR::OP_I2U:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = uint(");
             EmitExpr(Op(instIdx, 0));
             out.Lit(");");
             return;
         case IR::OP_U2I:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = int(");
             EmitExpr(Op(instIdx, 0));
             out.Lit(");");
@@ -928,28 +898,28 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             u16 srcType = ir->registerTypes[Op(instIdx, 0)];
             u16 dstType = ir->types[instIdx];
             if (srcType == static_cast<u16>(CoreType::FLOAT) && dstType == static_cast<u16>(CoreType::INT)) {
-                EmitReg(dest);
+                EmitRegWithDecl(dest);
                 out.Lit(" = floatBitsToInt(");
                 EmitExpr(Op(instIdx, 0));
                 out.Lit(");");
             } else if (srcType == static_cast<u16>(CoreType::FLOAT) && dstType == static_cast<u16>(CoreType::UINT)) {
-                EmitReg(dest);
+                EmitRegWithDecl(dest);
                 out.Lit(" = floatBitsToUint(");
                 EmitExpr(Op(instIdx, 0));
                 out.Lit(");");
             } else if (srcType == static_cast<u16>(CoreType::INT) && dstType == static_cast<u16>(CoreType::FLOAT)) {
-                EmitReg(dest);
+                EmitRegWithDecl(dest);
                 out.Lit(" = intBitsToFloat(");
                 EmitExpr(Op(instIdx, 0));
                 out.Lit(");");
             } else if (srcType == static_cast<u16>(CoreType::UINT) && dstType == static_cast<u16>(CoreType::FLOAT)) {
-                EmitReg(dest);
+                EmitRegWithDecl(dest);
                 out.Lit(" = uintBitsToFloat(");
                 EmitExpr(Op(instIdx, 0));
                 out.Lit(");");
             } else {
                 // Fallback - just copy
-                EmitReg(dest);
+                EmitRegWithDecl(dest);
                 out.Lit(" = ");
                 EmitExpr(Op(instIdx, 0));
                 out.Lit(";");
@@ -966,7 +936,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         case IR::OP_VEC_EXTRACT:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(Op(instIdx, 0));
             out.Chr('.');
@@ -984,12 +954,12 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             u16 vecReg = Op(instIdx, 0);
             u16 componentIdx = Op(instIdx, 1);
             u16 valueReg = Op(instIdx, 2);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(vecReg);
             out.Lit(";\n");
             out.NL(indent);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Chr('.');
             out.Chr(Str::SWIZZLE[componentIdx & 3]);
             out.Lit(" = ");
@@ -1000,7 +970,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         // ===== Texture =====
         case IR::OP_TEX_SAMPLE:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = texture(");
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
@@ -1009,7 +979,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         case IR::OP_TEX_SAMPLE_LOD:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = textureLod(");
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
@@ -1021,7 +991,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         case IR::OP_TEX_SAMPLE_BIAS:
             // GLSL ES 300 has texture with bias
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = texture(");
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
@@ -1032,7 +1002,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         case IR::OP_TEX_SAMPLE_GRAD:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = textureGrad(");
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
@@ -1045,7 +1015,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         case IR::OP_TEX_FETCH:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = texelFetch(");
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
@@ -1056,7 +1026,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         case IR::OP_TEX_SIZE:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = textureSize(");
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
@@ -1065,7 +1035,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         case IR::OP_TEX_GATHER:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = textureGather(");
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
@@ -1075,7 +1045,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         case IR::OP_LOAD_TEX_HANDLE:
             // Bindless textures - emit as sampler reference
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = sampler");
             out.Uint(Op(instIdx, 0));
             out.Lit(";");
@@ -1107,7 +1077,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         // ===== Select (ternary) =====
         case IR::OP_SELECT:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(Op(instIdx, 0));  // condition
             out.Lit(" ? ");
@@ -1121,7 +1091,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_MAT_MUL:
         case IR::OP_MAT_VEC_MUL:
         case IR::OP_VEC_MAT_MUL:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(Op(instIdx, 0));
             out.Lit(" * ");
@@ -1142,7 +1112,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_MAT_CONSTRUCT: {
             // Build matrix from values
             u16 type = ir->types[instIdx];
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitType(type);
             out.Chr('(');
@@ -1160,7 +1130,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         case IR::OP_MAT_SCALE:
             // Matrix * Scalar
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(Op(instIdx, 0));
             out.Lit(" * ");
@@ -1171,7 +1141,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_MAT_IDENTITY: {
             // Identity matrix
             u16 type = ir->types[instIdx];
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitType(type);
             out.Lit("(1.0);");
@@ -1181,7 +1151,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_MAT_ZERO: {
             // Zero matrix
             u16 type = ir->types[instIdx];
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitType(type);
             out.Lit("(0.0);");
@@ -1191,7 +1161,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         // ===== Struct Operations =====
         case IR::OP_STRUCT_CONSTRUCT: {
             // Build struct from field values - emit as struct constructor
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = /* struct construct */;");
             return;
         }
@@ -1200,7 +1170,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             // Extract field from struct
             u16 structReg = Op(instIdx, 0);
             u16 fieldIdx = Op(instIdx, 1);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(structReg);
             out.Lit(".field");
@@ -1214,12 +1184,12 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             u16 structReg = Op(instIdx, 0);
             u16 fieldIdx = Op(instIdx, 1);
             u16 valueReg = Op(instIdx, 2);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(structReg);
             out.Lit(";\n");
             out.NL(indent);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(".field");
             out.Uint(fieldIdx);
             out.Lit(" = ");
@@ -1236,7 +1206,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             // Get element address - emit as array indexing
             u16 arrayReg = Op(instIdx, 0);
             u16 indexReg = Op(instIdx, 1);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(arrayReg);
             out.Chr('[');
@@ -1249,7 +1219,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             // Load from array element
             u16 arrayReg = Op(instIdx, 0);
             u16 indexReg = Op(instIdx, 1);
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(arrayReg);
             out.Chr('[');
@@ -1275,7 +1245,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_ARRAY_CONSTRUCT: {
             // Build array from elements
             u16 type = ir->types[instIdx];
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitType(type);
             out.Lit("[](");
@@ -1302,21 +1272,21 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         // ===== Enum Operations (emit as int) =====
         case IR::OP_ENUM_CONSTRUCT:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(Op(instIdx, 0));
             out.Lit(";");
             return;
 
         case IR::OP_ENUM_TAG:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(Op(instIdx, 0));
             out.Lit(";");
             return;
 
         case IR::OP_ENUM_FIELD:
-            EmitReg(dest);
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(Op(instIdx, 0));
             out.Lit(";");
@@ -1986,7 +1956,7 @@ void GLESBuilder::EmitConstant(u32 instIdx) {
 
 void GLESBuilder::EmitSwizzle(u32 instIdx) {
     u16 dest = ir->destinations[instIdx];
-    EmitReg(dest);
+    EmitRegWithDecl(dest);
     out.Lit(" = ");
     EmitExpr(Op(instIdx, 0));
     out.Chr('.');
@@ -2038,7 +2008,7 @@ void GLESBuilder::EmitVecConstruct(u32 instIdx) {
     u16 dest = ir->destinations[instIdx];
     u16 type = ir->types[instIdx];
 
-    EmitReg(dest);
+    EmitRegWithDecl(dest);
     out.Lit(" = ");
 
     // Count valid operands to determine component count
@@ -2107,21 +2077,21 @@ void GLESBuilder::EmitVecConstruct(u32 instIdx) {
 // ============================================================================
 
 void GLESBuilder::EmitBinaryAssign(u32 instIdx, u16 dest, const char* op) {
-    EmitReg(dest);
+    EmitRegWithDecl(dest);
     out.Lit(" = ");
     EmitBinaryOp(instIdx, op);
     out.Lit(";");
 }
 
 void GLESBuilder::EmitUnaryAssign(u32 instIdx, u16 dest, const char* op) {
-    EmitReg(dest);
+    EmitRegWithDecl(dest);
     out.Lit(" = ");
     EmitUnaryOp(instIdx, op);
     out.Lit(";");
 }
 
 void GLESBuilder::EmitFuncAssign(u32 instIdx, u16 dest, const char* func, u32 arity) {
-    EmitReg(dest);
+    EmitRegWithDecl(dest);
     out.Lit(" = ");
     EmitFuncCall(instIdx, func, arity);
     out.Lit(";");

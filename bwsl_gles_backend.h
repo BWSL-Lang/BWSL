@@ -231,6 +231,7 @@ struct RegInfo {
 static constexpr u8 REG_INLINEABLE = 0x01;
 static constexpr u8 REG_TRIVIAL    = 0x02;  // Simple load, always inline
 static constexpr u8 REG_EMITTED    = 0x04;  // Already emitted as temp
+static constexpr u8 REG_DECLARED   = 0x08;  // Type has been declared for this reg
 
 // ============================================================================
 // GLSL ES Backend
@@ -329,6 +330,27 @@ private:
     void EmitReg(u16 reg) {
         out.Lit("r");
         out.Uint(reg);
+    }
+
+    // Emit register with type declaration if not yet declared
+    // Returns true if type was emitted (first declaration)
+    bool EmitRegWithDecl(u16 reg) {
+        if (reg >= regCount) {
+            EmitReg(reg);
+            return false;
+        }
+        if (!(regInfo[reg].flags & REG_DECLARED)) {
+            regInfo[reg].flags |= REG_DECLARED;
+            u16 regType = ir->registerTypes ? ir->registerTypes[reg] : 0;
+            if (regType != 0 && regType != static_cast<u16>(CoreType::INVALID)) {
+                EmitType(regType);
+                out.Chr(' ');
+            }
+            EmitReg(reg);
+            return true;
+        }
+        EmitReg(reg);
+        return false;
     }
 
     bool ShouldInline(u16 reg) const {
