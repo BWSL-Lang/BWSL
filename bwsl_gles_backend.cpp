@@ -211,19 +211,35 @@ void GLESBuilder::EmitMain() {
     out.Lit("void main() {\n");
     indent = 1;
 
-    // Emit temp variables for all registers with valid types
-    // SSA form means many registers have single use, but we need them all
-    // declared since GLSL doesn't support SSA directly
+    // Emit temp variables only for registers that will be explicitly assigned
+    // Skip inlined registers and unused registers to reduce output size
     if (ir->registerTypes) {
         for (u32 i = 0; i < regCount; i++) {
             u16 regType = ir->registerTypes[i];
-            if (regType != 0 && regType != static_cast<u16>(CoreType::INVALID)) {
-                out.NL(indent);
-                EmitType(regType);
-                out.Chr(' ');
-                EmitReg(static_cast<u16>(i));
-                out.Lit(";");
+            if (regType == 0 || regType == static_cast<u16>(CoreType::INVALID)) {
+                continue;
             }
+            // Skip if this register will be inlined (trivial or single-use)
+            if (ShouldInline(static_cast<u16>(i))) {
+                continue;
+            }
+            // Only declare if register is assigned (has a defining instruction)
+            if (regInfo[i].defInst == 0 && i != 0) {
+                // Check if this is a PHI target
+                bool isPhiTarget = false;
+                for (u32 phi = 0; phi < ir->phiCount; phi++) {
+                    if (ir->phiResultRegs && ir->phiResultRegs[phi] == i) {
+                        isPhiTarget = true;
+                        break;
+                    }
+                }
+                if (!isPhiTarget) continue;
+            }
+            out.NL(indent);
+            EmitType(regType);
+            out.Chr(' ');
+            EmitReg(static_cast<u16>(i));
+            out.Lit(";");
         }
     }
     out.NL(0);
