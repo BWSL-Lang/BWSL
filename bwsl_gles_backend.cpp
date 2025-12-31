@@ -106,6 +106,40 @@ void GLESBuilder::EmitInputs() {
                 out.Lit(";\n");
             }
         }
+
+        // Scan IR for any LOAD_INPUT slots not in varyings array
+        u32 usedSlots = 0;  // Bitmask of used slots
+        for (u32 i = 0; i < ir->instructionCount; i++) {
+            if (ir->opcodes[i] == IR::OP_LOAD_INPUT) {
+                u16 slot = ir->GetOperand(i, 0);
+                if (slot < 0x80 && slot < 32) {  // Not a builtin
+                    usedSlots |= (1u << slot);
+                }
+            }
+        }
+
+        // Emit declarations for slots not in varyings
+        for (u32 slot = 0; slot < 32; slot++) {
+            if (!(usedSlots & (1u << slot))) continue;
+
+            // Check if this slot is already in varyings
+            bool inVaryings = false;
+            if (varyings) {
+                for (u32 i = 0; i < varyings->count; i++) {
+                    if (varyings->varyings[i].slot == slot) {
+                        inVaryings = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!inVaryings) {
+                // Emit declaration for this slot - default to float
+                out.Lit("in float v_slot");
+                out.Uint(slot);
+                out.Lit(";\n");
+            }
+        }
     }
     out.NL(0);
 }
@@ -119,6 +153,41 @@ void GLESBuilder::EmitOutputs() {
                 EmitType(static_cast<u16>(varyings->varyings[i].type));
                 out.Lit(" v_");
                 out.Str(varyings->varyings[i].name);
+                out.Lit(";\n");
+            }
+        }
+
+        // Scan IR for any STORE_OUTPUT slots not in varyings array
+        // These need declarations too
+        u32 usedSlots = 0;  // Bitmask of used slots
+        for (u32 i = 0; i < ir->instructionCount; i++) {
+            if (ir->opcodes[i] == IR::OP_STORE_OUTPUT) {
+                u16 slot = ir->GetOperand(i, 0);
+                if (slot > 0 && slot < 32) {  // slot 0 is gl_Position
+                    usedSlots |= (1u << slot);
+                }
+            }
+        }
+
+        // Emit declarations for slots not in varyings
+        for (u32 slot = 1; slot < 32; slot++) {
+            if (!(usedSlots & (1u << slot))) continue;
+
+            // Check if this slot is already in varyings
+            bool inVaryings = false;
+            if (varyings) {
+                for (u32 i = 0; i < varyings->count; i++) {
+                    if (varyings->varyings[i].slot == slot) {
+                        inVaryings = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!inVaryings) {
+                // Emit declaration for this slot - default to float
+                out.Lit("out float v_slot");
+                out.Uint(slot);
                 out.Lit(";\n");
             }
         }
@@ -555,23 +624,30 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             u16 outputIdx = Op(instIdx, 0);
             u16 valueReg = dest;  // Value is in destination, not operand
 
-            #if 0
-            printf("STORE_OUTPUT: outputIdx=%u, valueReg=%u, varyings=%p, count=%u\n",
-                   outputIdx, valueReg, (void*)varyings, varyings ? varyings->count : 0);
-            #endif
-
             if (stage == ShaderStage::Fragment) {
                 out.Lit("fragColor = ");
             } else if (stage == ShaderStage::Vertex) {
-                if (outputIdx == 0) {  // Position output
+                if (outputIdx == 0) {  // Position output (slot 0)
                     out.Lit("gl_Position = ");
-                } else if (varyings && outputIdx <= varyings->count) {
-                    out.Lit("v_");
-                    out.Str(varyings->varyings[outputIdx - 1].name);
-                    out.Lit(" = ");
+                } else if (varyings) {
+                    // Search for varying by slot number
+                    bool found = false;
+                    for (u32 i = 0; i < varyings->count; i++) {
+                        if (varyings->varyings[i].slot == outputIdx) {
+                            out.Lit("v_");
+                            out.Str(varyings->varyings[i].name);
+                            out.Lit(" = ");
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        out.Lit("v_slot");
+                        out.Uint(outputIdx);
+                        out.Lit(" = ");
+                    }
                 } else {
-                    // Fallback for unknown output
-                    out.Lit("output");
+                    out.Lit("v_slot");
                     out.Uint(outputIdx);
                     out.Lit(" = ");
                 }
@@ -602,11 +678,23 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             out.Lit(" = ");
             if (stage == ShaderStage::Vertex && outputIdx == 0) {
                 out.Lit("gl_Position");
-            } else if (varyings && outputIdx <= varyings->count) {
-                out.Lit("v_");
-                out.Str(varyings->varyings[outputIdx - 1].name);
+            } else if (varyings) {
+                // Search for varying by slot number
+                bool found = false;
+                for (u32 i = 0; i < varyings->count; i++) {
+                    if (varyings->varyings[i].slot == outputIdx) {
+                        out.Lit("v_");
+                        out.Str(varyings->varyings[i].name);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    out.Lit("v_slot");
+                    out.Uint(outputIdx);
+                }
             } else {
-                out.Lit("output");
+                out.Lit("v_slot");
                 out.Uint(outputIdx);
             }
             out.Lit(";");
@@ -1419,6 +1507,8 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
 
         case IR::OP_LOAD_INPUT: {
             u16 inputIdx = Op(instIdx, 0);
+
+            // Check for built-in inputs (slot >= 0x80)
             if (inputIdx >= 0x80) {
                 switch (inputIdx) {
                     case 0x80: out.Lit("gl_VertexID"); return;
@@ -1431,13 +1521,21 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
                     default: out.Lit("gl_BuiltIn"); out.Uint(inputIdx); return;
                 }
             }
-            if (varyings && inputIdx < varyings->count) {
-                out.Lit("v_");
-                out.Str(varyings->varyings[inputIdx].name);
-            } else {
-                out.Lit("v_input");
-                out.Uint(inputIdx);
+
+            // Fragment/vertex shader inputs: search varyings by slot number
+            if (varyings) {
+                for (u32 i = 0; i < varyings->count; i++) {
+                    if (varyings->varyings[i].slot == inputIdx) {
+                        out.Lit("v_");
+                        out.Str(varyings->varyings[i].name);
+                        return;
+                    }
+                }
             }
+
+            // Fallback for unmapped inputs
+            out.Lit("v_slot");
+            out.Uint(inputIdx);
             return;
         }
 
@@ -1704,8 +1802,16 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
         // ===== Vector Operations =====
         case IR::OP_VEC_CONSTRUCT: {
             u16 type = ir->types[instIdx];
+            u16 dest = ir->destinations[instIdx];
 
-            // Count actual valid operands first
+            // Try register type if instruction type is invalid
+            if ((type == 0 || type == static_cast<u16>(CoreType::VOID) ||
+                 type == static_cast<u16>(CoreType::INVALID)) &&
+                ir->registerTypes && dest < regCount) {
+                type = ir->registerTypes[dest];
+            }
+
+            // Count actual valid operands
             u32 validCount = 0;
             for (u32 i = 0; i < 4; i++) {
                 u16 op = Op(instIdx, i);
@@ -1717,8 +1823,9 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
             }
             if (validCount == 0) validCount = 1;
 
-            // Determine component count from type, or use validCount as fallback
-            u32 components = validCount;
+            // Determine component count from TYPE (not operand count!)
+            // vec4(vec3, float) has 2 operands but 4 components
+            u32 components = 4;  // Default to vec4
             if (type == static_cast<u16>(CoreType::FLOAT2) ||
                 type == static_cast<u16>(CoreType::INT2) ||
                 type == static_cast<u16>(CoreType::UINT2)) {
@@ -1736,10 +1843,8 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
                        type == static_cast<u16>(CoreType::UINT) ||
                        type == static_cast<u16>(CoreType::BOOL)) {
                 components = 1;
-            }
-
-            // Use the smaller of declared type components and valid operands
-            if (components > validCount) {
+            } else {
+                // Unknown type - use validCount as last resort
                 components = validCount;
             }
 
@@ -1748,10 +1853,28 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
             out.Str(typeNames[components > 4 ? 3 : components - 1]);
 
             out.Chr('(');
-            for (u32 i = 0; i < components && i < 4; i++) {
-                u16 op = Op(instIdx, i);
-                if (i > 0) out.Lit(", ");
-                EmitExpr(op);
+
+            // Check if this is a scalar splat (all operands are the same)
+            bool isScalarSplat = validCount > 1;
+            u16 firstOp = Op(instIdx, 0);
+            for (u32 i = 1; i < validCount && isScalarSplat; i++) {
+                if (Op(instIdx, i) != firstOp) {
+                    isScalarSplat = false;
+                }
+            }
+
+            if (isScalarSplat) {
+                // Scalar splat: emit single value, GLSL will broadcast
+                EmitExpr(firstOp);
+            } else {
+                // Normal case: emit the minimum of validCount and components
+                // This handles both vec4(vec3, float) and prevents extra args
+                u32 emitCount = (validCount < components) ? validCount : components;
+                for (u32 i = 0; i < emitCount; i++) {
+                    u16 op = Op(instIdx, i);
+                    if (i > 0) out.Lit(", ");
+                    EmitExpr(op);
+                }
             }
             out.Chr(')');
             return;
@@ -2011,22 +2134,40 @@ void GLESBuilder::EmitVecConstruct(u32 instIdx) {
     EmitRegWithDecl(dest);
     out.Lit(" = ");
 
-    // Count valid operands to determine component count
-    u32 components = 0;
+    // Priority for determining type:
+    // 1. Instruction's stored type (if valid)
+    // 2. Destination register's type (if valid)
+    // 3. Fall back to operand counting (last resort)
+
+    bool typeValid = (type != 0 &&
+                      type != static_cast<u16>(CoreType::VOID) &&
+                      type != static_cast<u16>(CoreType::INVALID));
+
+    if (!typeValid && ir->registerTypes && dest < regCount) {
+        u16 regType = ir->registerTypes[dest];
+        if (regType != 0 &&
+            regType != static_cast<u16>(CoreType::VOID) &&
+            regType != static_cast<u16>(CoreType::INVALID)) {
+            type = regType;
+            typeValid = true;
+        }
+    }
+
+    // Count valid operands (for emission, not type inference)
+    u32 operandCount = 0;
     for (u32 i = 0; i < 4; i++) {
         u16 op = Op(instIdx, i);
         if (IsValidOperand(op)) {
-            components++;
+            operandCount++;
         } else {
             break;
         }
     }
-    if (components == 0) components = 1;
+    if (operandCount == 0) operandCount = 1;
 
-    // Fix type if it's VOID or INVALID - infer from component count and first operand
-    if (type == static_cast<u16>(CoreType::VOID) ||
-        type == static_cast<u16>(CoreType::INVALID) ||
-        type == 0) {
+    // If type still invalid, infer from operand count (legacy fallback)
+    // Note: This is imprecise for vec4(vec3, float) cases
+    if (!typeValid) {
         // Check first operand type to determine base type
         u16 firstOp = Op(instIdx, 0);
         bool isInt = false;
@@ -2037,16 +2178,17 @@ void GLESBuilder::EmitVecConstruct(u32 instIdx) {
             isInt = true;
         }
 
-        // Default to float vectors
-        if (components == 1) {
+        // Default to float vectors based on operand count
+        // This is a fallback - prefer using stored types
+        if (operandCount == 1) {
             type = isInt ? static_cast<u16>(CoreType::INT) :
                    isUint ? static_cast<u16>(CoreType::UINT) :
                    static_cast<u16>(CoreType::FLOAT);
-        } else if (components == 2) {
+        } else if (operandCount == 2) {
             type = isInt ? static_cast<u16>(CoreType::INT2) :
                    isUint ? static_cast<u16>(CoreType::UINT2) :
                    static_cast<u16>(CoreType::FLOAT2);
-        } else if (components == 3) {
+        } else if (operandCount == 3) {
             type = isInt ? static_cast<u16>(CoreType::INT3) :
                    isUint ? static_cast<u16>(CoreType::UINT3) :
                    static_cast<u16>(CoreType::FLOAT3);
@@ -2060,14 +2202,46 @@ void GLESBuilder::EmitVecConstruct(u32 instIdx) {
     EmitType(type);
     out.Chr('(');
 
-    bool first = true;
-    for (u32 i = 0; i < components && i < 4; i++) {
-        u16 op = Op(instIdx, i);
-        // Skip invalid operands to avoid trailing commas
-        if (!IsValidOperand(op)) continue;
-        if (!first) out.Lit(", ");
-        first = false;
-        EmitExpr(op);
+    // Determine how many components the target type has
+    u32 components = 4;
+    if (type == static_cast<u16>(CoreType::FLOAT2) ||
+        type == static_cast<u16>(CoreType::INT2) ||
+        type == static_cast<u16>(CoreType::UINT2)) {
+        components = 2;
+    } else if (type == static_cast<u16>(CoreType::FLOAT3) ||
+               type == static_cast<u16>(CoreType::INT3) ||
+               type == static_cast<u16>(CoreType::UINT3)) {
+        components = 3;
+    } else if (type == static_cast<u16>(CoreType::FLOAT) ||
+               type == static_cast<u16>(CoreType::INT) ||
+               type == static_cast<u16>(CoreType::UINT) ||
+               type == static_cast<u16>(CoreType::BOOL)) {
+        components = 1;
+    }
+
+    // Check if this is a scalar splat (all operands are the same)
+    bool isScalarSplat = operandCount > 1;
+    u16 firstOp = Op(instIdx, 0);
+    for (u32 i = 1; i < operandCount && isScalarSplat; i++) {
+        if (Op(instIdx, i) != firstOp) {
+            isScalarSplat = false;
+        }
+    }
+
+    if (isScalarSplat) {
+        // Scalar splat: emit single value, GLSL will broadcast
+        EmitExpr(firstOp);
+    } else {
+        // Normal case: emit minimum of operandCount and components
+        u32 emitCount = (operandCount < components) ? operandCount : components;
+        bool first = true;
+        for (u32 i = 0; i < emitCount; i++) {
+            u16 op = Op(instIdx, i);
+            if (!IsValidOperand(op)) continue;
+            if (!first) out.Lit(", ");
+            first = false;
+            EmitExpr(op);
+        }
     }
     out.Lit(");");
 }
