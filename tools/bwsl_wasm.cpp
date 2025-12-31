@@ -46,6 +46,11 @@ namespace spirv_cross_wrapper {
 }
 #endif
 
+// ============= Direct GLES Toggle =============
+// Set to true to use direct IR->GLES backend (faster, bypasses SPIRV-Cross)
+// Set to false to use SPIR-V + SPIRV-Cross path (more mature)
+static constexpr bool USE_DIRECT_GLES = false;
+
 // BWSL compiler includes (all standalone)
 #include "../bwsl_spirv_backend.h"
 #include "../bwsl_ir_gen.h"
@@ -60,6 +65,7 @@ namespace spirv_cross_wrapper {
 #include "../bwsl_mem_pool.h"
 #include "../bwsl_render_config.h"
 #include "../bwsl_compute_graph.h"
+#include "../bwsl_gles_backend.h"
 
 // Unity build: include all implementation files
 #include "../bwsl_lexer.cpp"
@@ -73,6 +79,7 @@ namespace spirv_cross_wrapper {
 #include "../bwsl_spirv_backend.cpp"
 #include "../bwsl_compute_graph.cpp"
 #include "../bwsl_custom_type_registry.cpp"
+#include "../bwsl_gles_backend.cpp"
 
 using namespace BWSL;
 using namespace BWSL::IR;
@@ -539,33 +546,73 @@ static ShaderOutput CompileShaderStage(
     }
 
     // Cross-compile to GLSL ES 300
-#ifdef USE_SPIRV_CROSS_LIB
-    std::vector<uint32_t> spirvData(spirv.begin(), spirv.end());
-
     std::string glslSource;
-    if (stage == ShaderStage::Vertex || stage == ShaderStage::Fragment) {
-        // Build varying name map for clean output names
-        // Map location -> "v_" + original BWSL name (e.g., "v_position", "v_normal")
-        std::unordered_map<uint32_t, std::string> varyingNames;
-        if (varyingContext) {
-            for (u32 i = 0; i < varyingContext->count; i++) {
-                const auto& varying = varyingContext->varyings[i];
-                if (varying.name[0] != '\0') {
-                    // Use "v_" prefix for clean varying names
-                    varyingNames[varying.slot] = std::string("v_") + varying.name;
+
+    // Use direct GLES backend for vertex/fragment shaders (faster, no SPIRV-Cross)
+    if constexpr (USE_DIRECT_GLES) {
+        if (stage == ShaderStage::Vertex || stage == ShaderStage::Fragment) {
+            // Run IR analysis (needed for attribute/output types)
+            IRAnalysis glesAnalysis = {};
+            AnalyzeIR(&glesAnalysis, &lowering.program);
+
+            // Create GLES arena
+            Memory::BWEMemoryArena glesArena;
+            char glesMem[128 * 1024];
+            glesArena.Initialize(glesMem, sizeof(glesMem));
+
+            // Initialize and emit GLES
+            GLES::GLESBuilder glesBuilder;
+            glesBuilder.Initialize(&glesArena, sourceBase,
+                                   &lowering.program, cfgPtr, stage,
+                                   &pass, &renderConfig, &glesAnalysis, varyingContext);
+            std::string_view glesOutput = glesBuilder.Emit();
+            glslSource = std::string(glesOutput);
+
+            if (glslSource.empty()) {
+                output.error = "Direct GLES generation failed";
+                return output;
+            }
+        } else if (stage == ShaderStage::Compute) {
+            // Compute shaders still use SPIRV-Cross (needs GLSL 310 es features)
+#ifdef USE_SPIRV_CROSS_LIB
+            std::vector<uint32_t> spirvData(spirv.begin(), spirv.end());
+            glslSource = spirv_cross_wrapper::CompileToGLSL(spirvData, 310, true);
+#else
+            output.error = "Compute shaders require SPIRV-Cross";
+            return output;
+#endif
+        }
+    } else {
+        // Original SPIRV-Cross path
+#ifdef USE_SPIRV_CROSS_LIB
+        std::vector<uint32_t> spirvData(spirv.begin(), spirv.end());
+
+        if (stage == ShaderStage::Vertex || stage == ShaderStage::Fragment) {
+            // Build varying name map for clean output names
+            std::unordered_map<uint32_t, std::string> varyingNames;
+            if (varyingContext) {
+                for (u32 i = 0; i < varyingContext->count; i++) {
+                    const auto& varying = varyingContext->varyings[i];
+                    if (varying.name[0] != '\0') {
+                        varyingNames[varying.slot] = std::string("v_") + varying.name;
+                    }
                 }
             }
-        }
 
-        bool isVertex = (stage == ShaderStage::Vertex);
-        glslSource = spirv_cross_wrapper::CompileToGLSLWithVaryings(
-            spirvData, 300, true, varyingNames, isVertex);
-    } else if (stage == ShaderStage::Compute) {
-        glslSource = spirv_cross_wrapper::CompileToGLSL(spirvData, 310, true);
+            bool isVertex = (stage == ShaderStage::Vertex);
+            glslSource = spirv_cross_wrapper::CompileToGLSLWithVaryings(
+                spirvData, 300, true, varyingNames, isVertex);
+        } else if (stage == ShaderStage::Compute) {
+            glslSource = spirv_cross_wrapper::CompileToGLSL(spirvData, 310, true);
+        }
+#else
+        output.error = "SPIRV-Cross not available (USE_SPIRV_CROSS_LIB not defined)";
+        return output;
+#endif
     }
 
     if (glslSource.empty() || glslSource.find("error:") == 0) {
-        output.error = glslSource.empty() ? "GLSL ES cross-compilation failed" : glslSource;
+        output.error = glslSource.empty() ? "GLSL ES compilation failed" : glslSource;
         return output;
     }
 
@@ -576,10 +623,6 @@ static ShaderOutput CompileShaderStage(
     } else if (stage == ShaderStage::Compute) {
         output.computeGlsl = glslSource;
     }
-#else
-    output.error = "SPIRV-Cross not available (USE_SPIRV_CROSS_LIB not defined)";
-    return output;
-#endif
 
     output.success = true;
     return output;

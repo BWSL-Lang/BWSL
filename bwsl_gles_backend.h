@@ -225,13 +225,15 @@ struct StringBuilder {
 struct RegInfo {
     u16 useCount;      // Times this register is read
     u16 defInst;       // Instruction that defines it
+    u16 defBlock;      // Block where first defined (0xFFFF = unset)
     u8 flags;          // Inlineable, trivial load, etc.
 };
 
-static constexpr u8 REG_INLINEABLE = 0x01;
-static constexpr u8 REG_TRIVIAL    = 0x02;  // Simple load, always inline
-static constexpr u8 REG_EMITTED    = 0x04;  // Already emitted as temp
-static constexpr u8 REG_DECLARED   = 0x08;  // Type has been declared for this reg
+static constexpr u8 REG_INLINEABLE      = 0x01;
+static constexpr u8 REG_TRIVIAL         = 0x02;  // Simple load, always inline
+static constexpr u8 REG_EMITTED         = 0x04;  // Already emitted as temp
+static constexpr u8 REG_DECLARED        = 0x08;  // Type has been declared for this reg
+static constexpr u8 REG_MULTI_BLOCK_DEF = 0x10;  // Defined in multiple blocks, needs hoisting
 
 // ============================================================================
 // GLSL ES Backend
@@ -261,6 +263,8 @@ struct GLESBuilder {
     const IRAnalysis* analysis;              // For attribute/output types
     IR::PassVaryingContext* varyings;        // Vertex→Fragment varyings
 
+
+    void DebugDumpRegisterInfo();
     // ============= Public API =============
 
     void Initialize(Memory::BWEMemoryArena* arenaPtr,
@@ -285,7 +289,10 @@ struct GLESBuilder {
 
         regCount = ir->registerCount;
         regInfo = static_cast<RegInfo*>(arena->Allocate(regCount * sizeof(RegInfo)));
-        for (u32 i = 0; i < regCount; i++) regInfo[i] = {};
+        for (u32 i = 0; i < regCount; i++) {
+            regInfo[i] = {};
+            regInfo[i].defBlock = 0xFFFF;  // Mark as unset
+        }
 
         out.Init(arena, 64 * 1024);  // 64KB output buffer
         indent = 0;
@@ -306,6 +313,10 @@ private:
     void EmitBlockRecursive(u32 blockIdx, u32 stopAt, bool* emitted);
     void EmitPhiAssignments(u32 fromBlock, u32 toBlock);
     void EmitInstruction(u32 instIdx);
+
+    void EmitPhiDeclarations();
+    void EmitUndefDeclarations();
+    void EmitDefaultValue(u16 type);
 
     // ===== Expression Emission =====
     void EmitExpr(u16 reg);
@@ -366,6 +377,8 @@ private:
     u16 Dest(u32 inst) const { return ir->destinations[inst]; }
     u16 Type(u32 inst) const { return ir->types[inst]; }
 };
+
+
 
 } // namespace GLES
 } // namespace BWSL

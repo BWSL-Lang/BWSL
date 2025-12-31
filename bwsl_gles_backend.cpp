@@ -45,6 +45,7 @@ void GLESBuilder::CountUses() {
     }
 
     // Second pass: determine which instructions can be inlined
+    // Also track which registers are defined in multiple blocks (need hoisting)
     for (u32 i = 0; i < ir->instructionCount; i++) {
         u16 dest = ir->destinations[i];
         if (dest >= regCount) continue;
@@ -55,6 +56,19 @@ void GLESBuilder::CountUses() {
         // So don't set defInst for STORE_OUTPUT
         if (opcode != IR::OP_STORE_OUTPUT) {
             regInfo[dest].defInst = static_cast<u16>(i);
+
+            // Track which block this register is defined in
+            // If defined in multiple blocks, mark for hoisting
+            if (cfg && cfg->instToBlock) {
+                u32 thisBlock = cfg->instToBlock[i];
+                if (regInfo[dest].defBlock == 0xFFFF) {
+                    // First definition - record the block
+                    regInfo[dest].defBlock = static_cast<u16>(thisBlock);
+                } else if (regInfo[dest].defBlock != thisBlock) {
+                    // Already defined in a different block - needs hoisting
+                    regInfo[dest].flags |= REG_MULTI_BLOCK_DEF;
+                }
+            }
         }
 
         // Trivial loads always inline (no temp needed)
@@ -298,11 +312,19 @@ void GLESBuilder::EmitUniforms() {
 // ============================================================================
 
 void GLESBuilder::EmitMain() {
+
+#if 0  // Enable for debugging
+         DebugDumpRegisterInfo();
+#endif
+
     out.Lit("void main() {\n");
     indent = 1;
 
-    // Variables are declared inline at first assignment (like SPIRV-Cross)
-    // No pre-declaration needed - we use EmitRegWithDecl to declare on first use
+       // Hoist PHI result declarations to function scope (fixes scoping issue)
+    EmitPhiDeclarations();
+    
+    // Declare undef registers with default values (fixes undefined variable issue)
+    EmitUndefDeclarations();
 
     // Debug: print varyings info
     #if 0  // Enable for debugging
@@ -433,16 +455,125 @@ void GLESBuilder::EmitMain() {
     out.Lit("}\n");
 }
 
+void GLESBuilder::EmitDefaultValue(u16 type) {
+    switch (static_cast<CoreType>(type)) {
+        case CoreType::BOOL:   out.Lit("false"); break;
+        case CoreType::INT:    out.Lit("0"); break;
+        case CoreType::UINT:   out.Lit("0u"); break;
+        case CoreType::FLOAT:  out.Lit("0.0"); break;
+        case CoreType::BOOL2:  out.Lit("bvec2(false)"); break;
+        case CoreType::BOOL3:  out.Lit("bvec3(false)"); break;
+        case CoreType::BOOL4:  out.Lit("bvec4(false)"); break;
+        case CoreType::INT2:   out.Lit("ivec2(0)"); break;
+        case CoreType::INT3:   out.Lit("ivec3(0)"); break;
+        case CoreType::INT4:   out.Lit("ivec4(0)"); break;
+        case CoreType::UINT2:  out.Lit("uvec2(0u)"); break;
+        case CoreType::UINT3:  out.Lit("uvec3(0u)"); break;
+        case CoreType::UINT4:  out.Lit("uvec4(0u)"); break;
+        case CoreType::FLOAT2: out.Lit("vec2(0.0)"); break;
+        case CoreType::FLOAT3: out.Lit("vec3(0.0)"); break;
+        case CoreType::FLOAT4: out.Lit("vec4(0.0)"); break;
+        case CoreType::MAT2:   out.Lit("mat2(0.0)"); break;
+        case CoreType::MAT3:   out.Lit("mat3(0.0)"); break;
+        case CoreType::MAT4:   out.Lit("mat4(0.0)"); break;
+        default:               out.Lit("0.0"); break;  // Fallback
+    }
+}
+
+void GLESBuilder::EmitUndefDeclarations() {
+    if (!ir->undefRegCount || !ir->undefRegs || !ir->undefRegTypes) return;
+    
+    // Undef registers are created by SSA when a PHI operand comes from a path
+    // where the variable was never defined. We need to declare them with defaults.
+    for (u32 i = 0; i < ir->undefRegCount; i++) {
+        u16 reg = ir->undefRegs[i];
+        u16 type = ir->undefRegTypes[i];
+        
+        if (reg >= regCount) continue;
+        if (regInfo[reg].flags & REG_DECLARED) continue;
+        
+        // Mark as declared
+        regInfo[reg].flags |= REG_DECLARED;
+        
+        out.NL(indent);
+        EmitType(type);
+        out.Chr(' ');
+        EmitReg(reg);
+        out.Lit(" = ");
+        EmitDefaultValue(type);
+        out.Chr(';');
+    }
+}
+
+
+void GLESBuilder::EmitPhiDeclarations() {
+    bool emittedAny = false;
+
+    // 1. Emit declarations for PHI result registers
+    if (ir->phiCount > 0 && ir->phiResultRegs && ir->phiTypes) {
+        for (u32 phiIdx = 0; phiIdx < ir->phiCount; phiIdx++) {
+            u16 resultReg = ir->phiResultRegs[phiIdx];
+            u16 type = ir->phiTypes[phiIdx];
+
+            // Skip if already declared
+            if (resultReg >= regCount) continue;
+            if (regInfo[resultReg].flags & REG_DECLARED) continue;
+
+            // Mark as declared so EmitRegWithDecl won't re-declare inside branches
+            regInfo[resultReg].flags |= REG_DECLARED;
+
+            // Emit type and register name with default initialization
+            out.NL(indent);
+            EmitType(type);
+            out.Chr(' ');
+            EmitReg(resultReg);
+            out.Lit(" = ");
+            EmitDefaultValue(type);
+            out.Chr(';');
+            emittedAny = true;
+        }
+    }
+
+    // 2. Emit declarations for registers defined in multiple blocks
+    // These need hoisting to function scope so they're visible in all branches
+    if (ir->registerTypes) {
+        for (u32 reg = 0; reg < regCount; reg++) {
+            // Skip if not a multi-block definition or already declared
+            if (!(regInfo[reg].flags & REG_MULTI_BLOCK_DEF)) continue;
+            if (regInfo[reg].flags & REG_DECLARED) continue;
+
+            u16 type = ir->registerTypes[reg];
+            if (type == 0) continue;  // No type info
+
+            // Mark as declared
+            regInfo[reg].flags |= REG_DECLARED;
+
+            // Emit type and register name with default initialization
+            out.NL(indent);
+            EmitType(type);
+            out.Chr(' ');
+            EmitReg(static_cast<u16>(reg));
+            out.Lit(" = ");
+            EmitDefaultValue(type);
+            out.Chr(';');
+            emittedAny = true;
+        }
+    }
+
+    // Add blank line after declarations if we emitted any
+    if (emittedAny) {
+        out.NL(0);
+    }
+}
+
 // Emit PHI assignments when transitioning from one block to another
 // PHI nodes in toBlock that have values from fromBlock need assignments
 void GLESBuilder::EmitPhiAssignments(u32 fromBlock, u32 toBlock) {
     if (!ir->phiCount || !ir->phiBlockIndices) return;
 
     for (u32 phiIdx = 0; phiIdx < ir->phiCount; phiIdx++) {
-        // Check if this PHI is in the target block
         if (ir->phiBlockIndices[phiIdx] != toBlock) continue;
 
-        // Find the operand that comes from fromBlock
         u32 opCount = ir->GetPhiOperandCount(phiIdx);
         for (u32 opIdx = 0; opIdx < opCount; opIdx++) {
             u32 srcBlock = ir->GetPhiOperandBlock(phiIdx, opIdx);
@@ -451,7 +582,9 @@ void GLESBuilder::EmitPhiAssignments(u32 fromBlock, u32 toBlock) {
                 u16 destReg = ir->phiResultRegs[phiIdx];
 
                 out.NL(indent);
-                EmitRegWithDecl(destReg);
+                // We DON'T use EmitRegWithDecl here - the variable was already
+                // declared at function scope by EmitPhiDeclarations
+                EmitReg(destReg);  // Just emit "rXXX", no type prefix
                 out.Lit(" = ");
                 EmitExpr(srcValue);
                 out.Chr(';');
@@ -2380,6 +2513,115 @@ std::string_view GLESBuilder::Emit() {
     EmitMain();
     return out.View();
 }
+
+// ============================================================================
+// Debug
+// ============================================================================
+void GLESBuilder::DebugDumpRegisterInfo() {
+    fprintf(stderr, "\n=== REGISTER DEBUG INFO ===\n");
+    
+    // 1. Dump PHI nodes and their result registers
+    fprintf(stderr, "\n--- PHI Nodes (%u total) ---\n", ir->phiCount);
+    if (ir->phiCount > 0 && ir->phiResultRegs && ir->phiBlockIndices) {
+        for (u32 i = 0; i < ir->phiCount; i++) {
+            u16 resultReg = ir->phiResultRegs[i];
+            u32 block = ir->phiBlockIndices[i];
+            u16 type = ir->phiTypes ? ir->phiTypes[i] : 0;
+            
+            fprintf(stderr, "  PHI[%u]: result=r%u, block=%u, type=%u\n", 
+                    i, resultReg, block, type);
+            
+            // Show operands
+            u32 opCount = ir->GetPhiOperandCount(i);
+            for (u32 j = 0; j < opCount; j++) {
+                u16 val = ir->GetPhiOperandValue(i, j);
+                u32 srcBlock = ir->GetPhiOperandBlock(i, j);
+                fprintf(stderr, "    [fromBlock=%u] <- r%u\n", srcBlock, val);
+            }
+        }
+    }
+    
+    // 2. Dump undef registers
+    fprintf(stderr, "\n--- Undef Registers (%u total) ---\n", ir->undefRegCount);
+    if (ir->undefRegCount > 0 && ir->undefRegs) {
+        for (u32 i = 0; i < ir->undefRegCount; i++) {
+            u16 reg = ir->undefRegs[i];
+            u16 type = ir->undefRegTypes ? ir->undefRegTypes[i] : 0;
+            fprintf(stderr, "  UNDEF r%u (type=%u)\n", reg, type);
+        }
+    }
+    
+    // 3. Find referenced but possibly undefined registers
+    fprintf(stderr, "\n--- Potentially Undefined References ---\n");
+    
+    // Track what registers are defined by instructions
+    bool* definedByInst = new bool[ir->registerCount]();
+    
+    for (u32 i = 0; i < ir->instructionCount; i++) {
+        u16 op = ir->opcodes[i];
+        if (op == IR::OP_STORE_OUTPUT || op == IR::OP_JUMP || 
+            op == IR::OP_BRANCH || op == IR::OP_RET || op == IR::OP_NOP) {
+            continue;
+        }
+        u16 dest = ir->destinations[i];
+        if ((dest & 0xE000) == 0 && dest < ir->registerCount) {
+            definedByInst[dest] = true;
+        }
+    }
+    
+    // Add PHI results
+    if (ir->phiResultRegs) {
+        for (u32 i = 0; i < ir->phiCount; i++) {
+            u16 reg = ir->phiResultRegs[i];
+            if (reg < ir->registerCount) {
+                definedByInst[reg] = true;
+            }
+        }
+    }
+    
+    // Add undef registers (they're "defined" as undef)
+    if (ir->undefRegs) {
+        for (u32 i = 0; i < ir->undefRegCount; i++) {
+            u16 reg = ir->undefRegs[i];
+            if (reg < ir->registerCount) {
+                definedByInst[reg] = true;
+            }
+        }
+    }
+    
+    // Check instruction operands for undefined references
+    for (u32 i = 0; i < ir->instructionCount; i++) {
+        for (u32 j = 0; j < 4; j++) {
+            u16 opReg = ir->GetOperand(i, j);
+            if ((opReg & 0xE000) == 0 && opReg < ir->registerCount) {
+                if (!definedByInst[opReg]) {
+                    fprintf(stderr, "  Inst[%u] operand[%u] uses r%u - NOT DEFINED\n", 
+                            i, j, opReg);
+                }
+            }
+        }
+    }
+    
+    // Check PHI operands for undefined references
+    if (ir->phiOperandValues) {
+        for (u32 i = 0; i < ir->phiCount; i++) {
+            u32 opCount = ir->GetPhiOperandCount(i);
+            for (u32 j = 0; j < opCount; j++) {
+                u16 val = ir->GetPhiOperandValue(i, j);
+                if ((val & 0xE000) == 0 && val < ir->registerCount) {
+                    if (!definedByInst[val]) {
+                        fprintf(stderr, "  PHI[%u] operand[%u] uses r%u - NOT DEFINED\n",
+                                i, j, val);
+                    }
+                }
+            }
+        }
+    }
+    
+    delete[] definedByInst;
+    fprintf(stderr, "\n=== END REGISTER DEBUG ===\n\n");
+}
+
 
 } // namespace GLES
 } // namespace BWSL
