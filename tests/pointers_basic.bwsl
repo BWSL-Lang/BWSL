@@ -1,0 +1,90 @@
+// Test: Basic pointer operations
+// Tests: pointer types (int^), address-of (^), dereference (^)
+
+pipeline PointersBasic {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // ========== Basic pointer declaration and usage ==========
+
+            // Simple pointer to int
+            int x = 42;
+            int^ ptr = ^x;
+
+            // Read through pointer
+            int readValue = ptr^;
+
+            // Write through pointer
+            ptr^ = 100;
+
+            // Verify x was modified
+            int afterWrite = x;  // Should be 100
+
+            // ========== Pointers to different scalar types ==========
+
+            float f = 3.14;
+            float^ fptr = ^f;
+            fptr^ = 2.718;
+            float fResult = f;  // Should be 2.718
+
+            uint u = 255u;
+            uint^ uptr = ^u;
+            uptr^ = 128u;
+            uint uResult = u;  // Should be 128
+
+            bool b = true;
+            bool^ bptr = ^b;
+            bptr^ = false;
+            bool bResult = b;  // Should be false
+
+            // ========== Multiple operations on same pointer ==========
+
+            int counter = 0;
+            int^ counterPtr = ^counter;
+            counterPtr^ = counterPtr^ + 1;  // Increment through pointer
+            counterPtr^ = counterPtr^ + 1;
+            counterPtr^ = counterPtr^ + 1;
+            int finalCount = counter;  // Should be 3
+
+            // ========== Pointer reassignment ==========
+
+            int a = 10;
+            int b2 = 20;
+            int^ p = ^a;
+            int fromA = p^;  // Should be 10
+            p = ^b2;         // Reassign pointer to b2
+            int fromB = p^;  // Should be 20
+
+            // ========== Bitwise XOR still works ==========
+
+            int xorA = 0b1010;
+            int xorB = 0b1100;
+            int xorResult = xorA ^ xorB;  // Should be 0b0110 = 6
+
+            // XOR with multiple operands
+            int xorC = 0b1111;
+            int xorChain = xorA ^ xorB ^ xorC;
+
+            // ========== Mixed expressions ==========
+
+            int val = 50;
+            int^ valPtr = ^val;
+
+            // Dereference in arithmetic
+            int sum = valPtr^ + 10;
+            int diff = valPtr^ - 5;
+            int prod = valPtr^ * 2;
+
+            // XOR and pointers in same expression (XOR has lower precedence)
+            int mixedXor = 7 ^ 3;  // XOR operation
+            int ptrRead = valPtr^; // Dereference
+
+            output.position = float4(float(afterWrite), float(xorResult), float(finalCount), 1.0);
+        }
+    }
+}

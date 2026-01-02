@@ -118,6 +118,7 @@ struct IRProgram {
     alignas(64) u32* registerStorageInfo;       // Storage buffer info or 0 if not a storage ptr
     static constexpr u32 STORAGE_IS_PTR = 0x1;
     static constexpr u32 STORAGE_IS_SHARED = 0x2;
+    static constexpr u32 STORAGE_IS_ADDRESS_TAKEN = 0x4;  // Variable has its address taken (&var)
     static constexpr u32 STORAGE_BINDING_SHIFT = 16;
     static constexpr u32 STORAGE_DEPTH_SHIFT = 1;
     static constexpr u32 STORAGE_DEPTH_MASK = 0x7F << 1;
@@ -398,6 +399,11 @@ enum OpCode : u16 {
                                 // operands = variant field values (up to 4 scalars)
     OP_ENUM_TAG        = 0xD7,  // Extract tag: dest = enum.tag (operand0=enum reg)
     OP_ENUM_FIELD      = 0xD8,  // Extract field: dest = enum.field[N] (operand0=enum, operand1=fieldIndex)
+
+    // ========== Local Pointer Operations ==========
+    OP_LOCAL_VAR_PTR   = 0xD9,  // Get pointer to local variable: dest = ^var (operand0=var_reg)
+    OP_LOCAL_LOAD      = 0xDA,  // Load from local pointer: dest = ptr^ (operand0=ptr_reg)
+    OP_LOCAL_STORE     = 0xDB,  // Store to local pointer: ptr^ = value (operand0=ptr_reg, operand1=value_reg)
 
     // ========== Atomics ==========
     OP_ATOMIC_ADD      = 0xE0,

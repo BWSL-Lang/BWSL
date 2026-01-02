@@ -185,6 +185,11 @@ void SSAConstructor::IdentifyVariables() {
             (ir->registerStorageInfo[reg] & IR::IRProgram::STORAGE_IS_PTR)) {
             continue;
         }
+        // Skip address-taken variables - they live in OpVariables and don't need SSA phi nodes
+        if (ir->registerStorageInfo &&
+            (ir->registerStorageInfo[reg] & IR::IRProgram::STORAGE_IS_ADDRESS_TAKEN)) {
+            continue;
+        }
 
         // A register needs SSA treatment if:
         // 1. Defined more than once ANYWHERE (intra-block redefinitions violate SSA)
@@ -572,7 +577,8 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             op == IR::OP_ENUM_TAG ||                        // Enum tag extraction
             op == IR::OP_ENUM_FIELD ||                      // Enum field extraction
             op == IR::OP_ENUM_CONSTRUCT ||                  // Enum construction
-            op == IR::OP_STORAGE_FIELD || op == IR::OP_STORAGE_INDEX || op == IR::OP_STORAGE_LOAD) {
+            op == IR::OP_STORAGE_FIELD || op == IR::OP_STORAGE_INDEX || op == IR::OP_STORAGE_LOAD ||
+            op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_LOAD || op == IR::OP_LOCAL_STORE) {  // Pointer operations
             shouldRenameOperands = true;
         }
         

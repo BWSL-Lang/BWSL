@@ -672,7 +672,38 @@ static std::string CompileToJson(const char* bwslSource, const char* rcfgSource,
             if (i > 0) errorJson += ",";
             const ParseError& err = parser.errors[i];
             std::string msg = err.message ? err.message : "Parse error";
-            errorJson += "\"Line " + std::to_string(err.line) + ", Col " + std::to_string(err.column) + ": " + EscapeJsonString(msg) + "\"";
+
+            // Get token text for the error
+            std::string tokenText;
+            if (err.token != INVALID_TOKEN) {
+                std::string_view tokenView = stream.GetValue(err.token);
+                tokenText = std::string(tokenView);
+            }
+
+            // Get context lines (1 before, error line, 1 after)
+            std::string lineBefore = err.line > 1 ? lexer.GetLine(err.line - 1) : "";
+            std::string sourceLine = lexer.GetLine(err.line);
+            std::string lineAfter = lexer.GetLine(err.line + 1);
+
+            errorJson += "{\"line\":" + std::to_string(err.line) +
+                         ",\"column\":" + std::to_string(err.column) +
+                         ",\"message\":\"" + EscapeJsonString(msg) + "\"";
+            if (!tokenText.empty()) {
+                errorJson += ",\"token\":\"" + EscapeJsonString(tokenText) + "\"";
+            }
+
+            // Add context array with line before, error line, and line after
+            errorJson += ",\"context\":[";
+            if (!lineBefore.empty()) {
+                errorJson += "\"" + EscapeJsonString(lineBefore) + "\",";
+            }
+            errorJson += "\"" + EscapeJsonString(sourceLine) + "\"";
+            if (!lineAfter.empty()) {
+                errorJson += ",\"" + EscapeJsonString(lineAfter) + "\"";
+            }
+            errorJson += "]";
+
+            errorJson += "}";
         }
         errorJson += "]}";
         return errorJson;

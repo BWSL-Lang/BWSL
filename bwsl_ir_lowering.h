@@ -1247,6 +1247,30 @@ struct IRLowering {
                 builder.EmitInstruction(OP_STORE_REG, operand, newVal);
                 return dest; // Return old value
             }
+            case UnaryOpType::ADDRESS_OF: {
+                // ^x: Get pointer to variable
+                builder.EmitInstruction(OP_LOCAL_VAR_PTR, dest, operand);
+                // Mark as pointer type - store pointee type and source register in storage info
+                // Format: bits 0-7: flags, bits 8-15: pointee type, bits 16-31: source register
+                CoreType pointeeType = GetRegisterType(operand);
+                SetRegisterType(dest, CoreType::CUSTOM); // Use CUSTOM to indicate pointer
+                u32 storageVal = (static_cast<u32>(operand) << 16) |
+                                 (static_cast<u32>(pointeeType) << 8) |
+                                 IR::IRProgram::STORAGE_IS_PTR;
+                builder.program->registerStorageInfo[dest] = storageVal;
+                // Mark the source register as address-taken so SSA doesn't create phi nodes for it
+                builder.program->registerStorageInfo[operand] |= IR::IRProgram::STORAGE_IS_ADDRESS_TAKEN;
+                return dest;
+            }
+            case UnaryOpType::DEREFERENCE: {
+                // x^: Dereference pointer
+                // Get pointee type from storage info
+                u32 storageInfo = builder.program->registerStorageInfo[operand];
+                CoreType pointeeType = static_cast<CoreType>((storageInfo >> 8) & 0xFF);
+                builder.EmitInstruction(OP_LOCAL_LOAD, dest, operand);
+                SetRegisterType(dest, pointeeType);
+                return dest;
+            }
         }
 
         // Fallthrough for unhandled cases (shouldn't happen)
@@ -1382,6 +1406,11 @@ struct IRLowering {
         if (!varDecl.initializer.IsNull()) {
             u16 initReg = LowerExpression(varDecl.initializer);
             builder.EmitInstruction(OP_STORE_REG, varReg, initReg);
+            // Propagate pointer storage info if the init expression is a pointer
+            if (initReg < MAX_REGISTERS &&
+                (program.registerStorageInfo[initReg] & IR::IRProgram::STORAGE_IS_PTR)) {
+                program.registerStorageInfo[varReg] = program.registerStorageInfo[initReg];
+            }
             initializedVariables.insert(varDecl.name.nameHash);
         } else if (coreType == CoreType::CUSTOM) {
             // For struct types without initializer, emit a zero/undef struct value.
@@ -1876,6 +1905,11 @@ struct IRLowering {
             const IdentifierData& ident = ast->GetIdentifier(target);
             u16 varReg = GetOrAllocateVariable(ident.name.nameHash);
             builder.EmitInstruction(OP_STORE_REG, varReg, valueReg);
+            // Propagate pointer storage info if the value is a pointer
+            if (valueReg < MAX_REGISTERS &&
+                (program.registerStorageInfo[valueReg] & IR::IRProgram::STORAGE_IS_PTR)) {
+                program.registerStorageInfo[varReg] = program.registerStorageInfo[valueReg];
+            }
             initializedVariables.insert(ident.name.nameHash);
         } else if (target.Type() == ASTNodeType::MEMBER_ACCESS) {
             const MemberAccessData& access = ast->GetMemberAccess(target);
@@ -2165,6 +2199,16 @@ struct IRLowering {
                 }
             }
             builder.EmitInstruction(OP_ARRAY_STORE, baseReg, indexReg, valueReg);
+        } else if (target.Type() == ASTNodeType::UNARY_OP) {
+            // Handle dereference as lvalue: ptr^ = value
+            const UnaryOpData& unaryOp = ast->GetUnaryOp(target);
+            if (unaryOp.op == UnaryOpType::DEREFERENCE) {
+                // Get the pointer value
+                u16 ptrReg = LowerExpression(unaryOp.operand);
+                // Store through the pointer
+                // Format: dest=0 (no result), s0=ptr, s1=value
+                builder.EmitInstruction(OP_LOCAL_STORE, 0, ptrReg, valueReg);
+            }
         }
     }
 

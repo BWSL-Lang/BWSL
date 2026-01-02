@@ -1,0 +1,112 @@
+// Test: XOR and pointer disambiguation
+// Tests: ensuring ^ is correctly parsed as XOR vs address-of/dereference
+
+pipeline PointersXorDisambiguation {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // ========== Clear XOR cases ==========
+
+            // Simple XOR
+            int a = 5;       // 0101
+            int b = 3;       // 0011
+            int xor1 = a ^ b; // 0110 = 6
+
+            // XOR with literals
+            int xor2 = 0xFF ^ 0x0F;  // 0xF0 = 240
+
+            // Chained XOR
+            int c = 7;
+            int xor3 = a ^ b ^ c;
+
+            // XOR with parentheses
+            int xor4 = (a ^ b) ^ c;
+            int xor5 = a ^ (b ^ c);
+
+            // XOR in larger expression
+            int xor6 = (a + b) ^ (c - 1);
+
+            // XOR with negative numbers
+            int neg = -1;
+            int xor7 = a ^ neg;
+
+            // ========== Clear pointer cases ==========
+
+            int val = 42;
+            int^ ptr = ^val;       // Address-of
+            int deref = ptr^;      // Dereference
+
+            // Pointer write
+            ptr^ = 100;            // Dereference as lvalue
+
+            // Multiple derefs in sequence
+            int x = ptr^;
+            int y = ptr^;
+
+            // Dereference in expressions (not followed by identifier)
+            int sum = ptr^ + 10;   // ptr^ then + 10
+            int product = ptr^ * 2;
+
+            // Dereference at end of statement
+            int atEnd = ptr^;
+
+            // Dereference before semicolon
+            ptr^ = 50;
+
+            // Dereference before comma (in function call)
+            float result = max(float(ptr^), 0.0);
+
+            // Dereference before closing paren
+            float inParen = float(ptr^);
+
+            // ========== Mixed but unambiguous ==========
+
+            int m = 10;
+            int n = 20;
+            int^ mPtr = ^m;
+
+            // XOR between two variables
+            int mixXor = m ^ n;
+
+            // Dereference then used in XOR
+            int derefThenXor = mPtr^ ^ n;  // (mPtr^) ^ n
+
+            // Address-of in expression... then XOR
+            int^ nPtr = ^n;
+            int bothPtrs = mPtr^ ^ nPtr^;  // Deref both, then XOR
+
+            // ========== Edge cases ==========
+
+            // XOR with zero (identity)
+            int xorZero = a ^ 0;  // Should equal a
+
+            // XOR self (always 0)
+            int xorSelf = a ^ a;  // Should be 0
+
+            // Multiple pointers in expression
+            int v1 = 5;
+            int v2 = 10;
+            int^ p1 = ^v1;
+            int^ p2 = ^v2;
+
+            // XOR two dereferenced values
+            int xorDerefs = p1^ ^ p2^;
+
+            // Complex: deref, XOR, deref
+            int complex1 = p1^ ^ 3;
+            int complex2 = 7 ^ p2^;
+
+            // ========== Verification sums ==========
+
+            int xorSum = xor1 + xor2 + xor3;
+            int ptrSum = val + deref + x;
+
+            output.position = float4(float(xorSum), float(ptrSum), float(xorDerefs), 1.0);
+        }
+    }
+}

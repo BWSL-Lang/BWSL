@@ -175,14 +175,24 @@ struct TimingInfo {
     }
 };
 
+
+void print_splash() {
+    printf(R"(
+    ╭─────────────────────────────────────╮
+    │ ░▒▓█ B W S L █▓▒░                   │
+    │ ─────────────────────────────       │
+    │ » Brawl Shading Language            │
+    │ » Compiler v 0.5.0                  │
+    │ » Made by Alexander Presthus        │
+    │ » https://github.com/apresthus/bwsl │
+    │                                     │
+    ╰─────────────────────────────────────╯
+)" "\n");
+}
 // ============= Utility Functions =============
 
 void PrintUsage(const char* programName) {
-    printf("BWSL Compiler CLI - Compile .bwsl shaders to SPIR-V and cross-compile to other formats\n\n");
-    printf("Version: %s\n", VERSION);
-    printf("Made by Alexander Presthus\n");
-    printf("https://github.com/apresthus/bwsl\n");
-    printf("----------------------------------------\n");
+    print_splash();
     printf("Usage: %s <input.bwsl> [options]\n\n", programName);
     printf("Options:\n");
     printf("  -o <dir>       Output directory (default: current directory)\n");

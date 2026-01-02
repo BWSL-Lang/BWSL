@@ -261,10 +261,12 @@ void SPIRVBuilder::Initialize(BWSL_Arena* arena, IR::IRProgram* ir, ShaderStage 
     idTypes = (u16*)arena->Allocate(idCapacity * sizeof(u16), 64);
     idDecorations = (u32*)arena->Allocate(idCapacity * sizeof(u32), 64);
     hasPreAllocatedId = (bool*)arena->Allocate(idCapacity * sizeof(bool), 64);
+    localVarIds = (u32*)arena->Allocate(idCapacity * sizeof(u32), 64);
     memset(spirvIds, 0, idCapacity * sizeof(u32));
     memset(idTypes, 0, idCapacity * sizeof(u16));
     memset(idDecorations, 0, idCapacity * sizeof(u32));
     memset(hasPreAllocatedId, 0, idCapacity * sizeof(bool));
+    memset(localVarIds, 0, idCapacity * sizeof(u32));
     
     // Initialize type arrays
     memset(typeIds, 0, sizeof(typeIds));
@@ -3681,6 +3683,89 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             break;
         }
 
+        // ========== Local Pointer Operations ==========
+        case IR::OP_LOCAL_VAR_PTR: {
+            // Get pointer to local variable
+            // In SPIR-V, we need an OpVariable to have a pointer
+            // The OpVariable was pre-allocated and emitted at function start
+            u16 var_reg = ir->GetOperand(ir_idx, 0);
+            u16 dest_reg = ir->destinations[ir_idx];
+
+            // Get the pre-allocated OpVariable for this register
+            u32 var_id = 0;
+            if (var_reg < idCapacity) {
+                var_id = localVarIds[var_reg];
+            }
+
+            if (var_id != 0) {
+                // Store the current value into the pre-allocated OpVariable
+                u32 src_id = GetSpirvId(var_reg);
+                Emit(spv::OpStore, var_id, src_id);
+            } else {
+                // Should not happen if pre-pass worked correctly
+                fprintf(stderr, "Warning: OP_LOCAL_VAR_PTR without pre-allocated variable for reg %u\n", var_reg);
+            }
+
+            // The result of address-of is the OpVariable itself (which is a pointer)
+            spirvIds[dest_reg] = var_id;
+            break;
+        }
+
+        case IR::OP_LOCAL_LOAD: {
+            // Load from local pointer - OpLoad
+            // The pointer register's storageInfo contains the source variable register
+            u16 ptr_reg = ir->GetOperand(ir_idx, 0);
+            u32 storageInfo = 0;
+            if (ir->registerStorageInfo && ptr_reg < ir->registerCount) {
+                storageInfo = ir->registerStorageInfo[ptr_reg];
+            }
+            // Extract source register (bits 16-31) and pointee type (bits 8-15)
+            u16 src_reg = static_cast<u16>((storageInfo >> 16) & 0xFFFF);
+            CoreType pointeeType = static_cast<CoreType>((storageInfo >> 8) & 0xFF);
+            if (pointeeType == CoreType::INVALID || pointeeType == CoreType::VOID) {
+                pointeeType = CoreType::FLOAT; // Fallback
+            }
+            // Get the OpVariable for the source register
+            u32 var_id = 0;
+            if (src_reg < idCapacity) {
+                var_id = localVarIds[src_reg];
+            }
+            if (var_id == 0) {
+                // Fallback: use the pointer register's SPIR-V ID
+                var_id = GetSpirvId(ptr_reg);
+            }
+            u32 result_type_id = GetTypeId(pointeeType);
+            Emit(spv::OpLoad, result_type_id, dest, var_id);
+            break;
+        }
+
+        case IR::OP_LOCAL_STORE: {
+            // Store to local pointer - OpStore
+            // Format: dest=0, operand0=ptr, operand1=value
+            // The pointer register's storageInfo contains the source variable register
+            u16 ptr_reg = ir->GetOperand(ir_idx, 0);
+            u16 val_reg = ir->GetOperand(ir_idx, 1);
+
+            u32 storageInfo = 0;
+            if (ir->registerStorageInfo && ptr_reg < ir->registerCount) {
+                storageInfo = ir->registerStorageInfo[ptr_reg];
+            }
+            // Extract source register (bits 16-31)
+            u16 src_reg = static_cast<u16>((storageInfo >> 16) & 0xFFFF);
+            // Get the OpVariable for the source register
+            u32 var_id = 0;
+            if (src_reg < idCapacity) {
+                var_id = localVarIds[src_reg];
+            }
+            if (var_id == 0) {
+                // Fallback: use the pointer register's SPIR-V ID
+                var_id = GetSpirvId(ptr_reg);
+            }
+            u32 val_id = GetSpirvId(val_reg);
+            Emit(spv::OpStore, var_id, val_id);
+            break;
+        }
+
         case IR::OP_BARRIER: {
             u32 scope = GetIntConstantId(static_cast<u32>(spv::ScopeWorkgroup), true);
             u32 semantics = GetIntConstantId(static_cast<u32>(
@@ -4076,6 +4161,37 @@ void SPIRVBuilder::EmitPhiNodes(u32 blockIndex) {
             }
             continue;
         }
+
+        // Check if any operand is address-taken (has a localVarId)
+        // For address-taken variables, we need to load from the OpVariable instead of using SSA
+        bool hasAddressTakenOperand = false;
+        u32 addressTakenVarId = 0;
+        CoreType addressTakenType = CoreType::INT;
+        for (u32 op = 0; op < operandCount; op++) {
+            u16 valueReg = ir->GetPhiOperandValue(phi_idx, op);
+            if (valueReg < idCapacity && localVarIds[valueReg] != 0) {
+                hasAddressTakenOperand = true;
+                addressTakenVarId = localVarIds[valueReg];
+                // Get the type for the load
+                if (valueReg < ir->registerCount && ir->registerTypes) {
+                    addressTakenType = static_cast<CoreType>(ir->registerTypes[valueReg]);
+                }
+                break;
+            }
+        }
+
+        if (hasAddressTakenOperand && addressTakenVarId != 0) {
+            // For address-taken variables, skip the phi and emit OpLoad instead
+            // The OpVariable holds the current value after all branches
+            u32 result_type_id = GetTypeId(addressTakenType);
+            if (result_type_id == 0) result_type_id = GetTypeId(CoreType::INT);
+            u32 load_result = AllocateId();
+            Emit(spv::OpLoad, result_type_id, load_result, addressTakenVarId);
+            if (phiResultReg < idCapacity) {
+                spirvIds[phiResultReg] = load_result;
+            }
+            continue;
+        }
         
         // Get PHI result type and register
         // Use pre-allocated ID if available (from EmitFunctionBody Phase 1),
@@ -4295,11 +4411,69 @@ void SPIRVBuilder::EmitFunctionBody() {
         }
     }
 
+    // Pre-pass: collect all OP_LOCAL_VAR_PTR instructions and pre-allocate OpVariable IDs.
+    // SPIR-V requires all OpVariable instructions to be at the start of the first block.
+    // We use a separate "emittedLocalVars" flag array to track which have been emitted.
+    bool* emittedLocalVars = nullptr;
+    if (idCapacity > 0) {
+        emittedLocalVars = (bool*)arena->Allocate(idCapacity * sizeof(bool), 64);
+        memset(emittedLocalVars, 0, idCapacity * sizeof(bool));
+    }
+
+    for (u32 i = 0; i < ir->instructionCount; i++) {
+        if (ir->opcodes[i] == IR::OP_LOCAL_VAR_PTR) {
+            u16 var_reg = ir->GetOperand(i, 0);
+
+            // Check if we already created a variable for this source register
+            if (var_reg < idCapacity && localVarIds[var_reg] == 0) {
+                // Get the type of the source value
+                CoreType varType = CoreType::FLOAT;
+                if (var_reg < ir->registerCount && ir->registerTypes) {
+                    varType = static_cast<CoreType>(ir->registerTypes[var_reg]);
+                }
+                if (varType == CoreType::INVALID || varType == CoreType::VOID) {
+                    varType = CoreType::INT;  // Fallback
+                }
+
+                // Allocate ID for the OpVariable (will be emitted after first OpLabel)
+                u32 var_id = AllocateId();
+                localVarIds[var_reg] = var_id;
+            }
+        }
+    }
+
+    // Helper lambda to emit all local pointer OpVariables
+    auto emitLocalPointerVars = [&]() {
+        for (u32 i = 0; i < ir->instructionCount; i++) {
+            if (ir->opcodes[i] == IR::OP_LOCAL_VAR_PTR) {
+                u16 var_reg = ir->GetOperand(i, 0);
+                if (var_reg < idCapacity && localVarIds[var_reg] != 0 &&
+                    emittedLocalVars && !emittedLocalVars[var_reg]) {
+                    CoreType varType = CoreType::FLOAT;
+                    if (var_reg < ir->registerCount && ir->registerTypes) {
+                        varType = static_cast<CoreType>(ir->registerTypes[var_reg]);
+                    }
+                    if (varType == CoreType::INVALID || varType == CoreType::VOID) {
+                        varType = CoreType::INT;
+                    }
+                    u32 elem_type_id = GetTypeId(varType);
+                    u32 ptr_type_id = GetPointerTypeId(elem_type_id, spv::StorageClassFunction);
+                    u32 var_id = localVarIds[var_reg];
+                    Emit(spv::OpVariable, ptr_type_id, var_id, spv::StorageClassFunction);
+                    emittedLocalVars[var_reg] = true;
+                }
+            }
+        }
+    };
+
     if (!cfg || cfg->blockCount == 0) {
         // Fallback for trivial shaders without CFG
         u32 entry_label = GetOrCreateBlockLabel(0);
         Emit(spv::OpLabel, entry_label);
-        
+
+        // Emit all local pointer OpVariables at the start of the function
+        emitLocalPointerVars();
+
         for (u32 i = 0; i < ir->instructionCount; i++) {
             TranslateInstruction(i);
         }
@@ -4315,11 +4489,16 @@ void SPIRVBuilder::EmitFunctionBody() {
     for (u32 blockIdx = 0; blockIdx < cfg->blockCount; blockIdx++) {
         u32 firstInst = cfg->firstInst[blockIdx];
         u32 lastInst = cfg->lastInst[blockIdx];
-        
+
         // Emit block label
         u32 labelId = GetOrCreateBlockLabel(firstInst);
         Emit(spv::OpLabel, labelId);
-        
+
+        // Emit all local pointer OpVariables at the start of the FIRST block
+        if (blockIdx == 0) {
+            emitLocalPointerVars();
+        }
+
         // Emit PHI nodes first (required by SPIR-V spec)
         EmitPhiNodes(blockIdx);
         

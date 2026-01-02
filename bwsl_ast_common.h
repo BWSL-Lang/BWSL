@@ -143,6 +143,8 @@ enum class UnaryOpType : u8 {
     PRE_DECREMENT,   // --x
     POST_INCREMENT,  // x++
     POST_DECREMENT,  // x--
+    ADDRESS_OF,      // ^x (get address)
+    DEREFERENCE,     // x^ (dereference pointer)
 };
 
 namespace VariantDecl {

@@ -1,0 +1,119 @@
+// Test: Pointer edge cases
+// Tests: const pointers, pointer expressions, unusual usage patterns
+
+pipeline PointersEdgeCases {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // ========== Immediate dereference after address-of ==========
+
+            int x = 42;
+            int immediate = (^x)^;  // Take address, immediately dereference - should equal x
+
+            // ========== Pointer in compound assignment ==========
+
+            int val = 10;
+            int^ ptr = ^val;
+
+            // These should work as: (ptr^) += 5, etc.
+            // ptr^ += 5;  // May need special handling
+            ptr^ = ptr^ + 5;  // Workaround if compound not supported
+            int afterAdd = val;  // Should be 15
+
+            ptr^ = ptr^ - 3;
+            int afterSub = val;  // Should be 12
+
+            ptr^ = ptr^ * 2;
+            int afterMul = val;  // Should be 24
+
+            // ========== Chained pointer reads ==========
+
+            int source = 100;
+            int^ p = ^source;
+
+            // Multiple reads from same pointer
+            int r1 = p^;
+            int r2 = p^;
+            int r3 = p^;
+            int chainSum = r1 + r2 + r3;  // Should be 300
+
+            // ========== Pointer after modification ==========
+
+            int changing = 1;
+            int^ chgPtr = ^changing;
+
+            int before = chgPtr^;
+            changing = 50;  // Direct modification
+            int after = chgPtr^;  // Should see 50
+
+            // ========== Nested address-of expressions ==========
+
+            int nested = 7;
+            int^ nestedPtr = ^nested;
+
+            // Using address-of in expression
+            int^ anotherPtr = ^nested;  // Same target
+            anotherPtr^ = 8;
+            int fromOriginal = nestedPtr^;  // Should be 8
+
+            // ========== Pointer with unary operators ==========
+
+            int neg = -5;
+            int^ negPtr = ^neg;
+            int negDeref = negPtr^;  // Should be -5
+
+            int toNegate = 10;
+            int^ toNegatePtr = ^toNegate;
+            int negated = -(toNegatePtr^);  // Should be -10
+
+            // Bitwise NOT on dereferenced value
+            int forNot = 0xFF;
+            int^ forNotPtr = ^forNot;
+            int notResult = ~(forNotPtr^);
+
+            // Logical NOT on dereferenced bool
+            bool flag = true;
+            bool^ flagPtr = ^flag;
+            bool notFlag = !(flagPtr^);  // Should be false
+
+            // ========== Pointer in boolean expressions ==========
+
+            int threshold = 50;
+            int^ threshPtr = ^threshold;
+
+            bool isAbove = threshPtr^ > 25;
+            bool isBelow = threshPtr^ < 100;
+            bool isEqual = threshPtr^ == 50;
+            bool combined = isAbove && isBelow;
+
+            // ========== Type conversion through pointer ==========
+
+            int intVal = 42;
+            int^ intPtr = ^intVal;
+            float asFloat = float(intPtr^);
+
+            float floatVal = 3.14;
+            float^ floatPtr = ^floatVal;
+            int asInt = int(floatPtr^);
+
+            // ========== Pointer in intrinsic functions ==========
+
+            float absVal = -5.0;
+            float^ absPtr = ^absVal;
+            float absResult = abs(absPtr^);  // Should be 5.0
+
+            float minA = 3.0;
+            float minB = 7.0;
+            float^ minAPtr = ^minA;
+            float^ minBPtr = ^minB;
+            float minResult = min(minAPtr^, minBPtr^);  // Should be 3.0
+
+            output.position = float4(asFloat, float(chainSum), absResult, 1.0);
+        }
+    }
+}

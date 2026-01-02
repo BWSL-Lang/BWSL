@@ -24,6 +24,7 @@ struct SPIRVBuilder {
     alignas(64) u16* idTypes;            // CoreType for each SPIR-V ID
     alignas(64) u32* idDecorations;      // Packed decoration flags per ID
     alignas(64) bool* hasPreAllocatedId; // True if register has pre-allocated ID needing definition
+    alignas(64) u32* localVarIds;        // Maps IR register -> OpVariable ID (for address-taken vars)
     u32 nextId;
     u32 idCapacity;
     u32 spvVersion = SpvVersion_1_2;

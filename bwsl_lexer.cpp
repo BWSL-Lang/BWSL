@@ -463,4 +463,29 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
     return TokenType::IDENTIFIER;
 }
 
+std::string Lexer::GetLine(size_t lineNum) const {
+    if (lineNum == 0 || lineTable.lineStarts.empty()) return "";
+
+    size_t lineIndex = lineNum - 1;  // Convert 1-based to 0-based
+    if (lineIndex >= lineTable.lineStarts.size()) return "";
+
+    u32 lineStart = lineTable.lineStarts[lineIndex];
+    u32 lineEnd;
+
+    if (lineIndex + 1 < lineTable.lineStarts.size()) {
+        lineEnd = lineTable.lineStarts[lineIndex + 1];
+    } else {
+        lineEnd = static_cast<u32>(source.length());
+    }
+
+    // Trim trailing newline and carriage return
+    while (lineEnd > lineStart && (source[lineEnd - 1] == '\n' || source[lineEnd - 1] == '\r')) {
+        lineEnd--;
+    }
+
+    if (lineStart >= source.length()) return "";
+
+    return source.substr(lineStart, lineEnd - lineStart);
+}
+
 } // namespace BWSL

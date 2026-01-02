@@ -1355,6 +1355,12 @@ NodeRef Parser::ParseStatement() {
 
         TokenType varType = static_cast<TokenType>(stream->GetType(previous));
         std::string typeStr(stream->GetValue(previous));
+
+        // Check for pointer type: int^ means pointer to int
+        while (Match(TokenType::BITWISE_XOR)) {
+            typeStr += "^";
+        }
+
         Consume(TokenType::IDENTIFIER, "Expected variable name");
         std::string varName = std::string(stream->GetValue(previous));
 
@@ -1510,6 +1516,11 @@ NodeRef Parser::ParseStatement() {
 
         TokenType varType = static_cast<TokenType>(stream->GetType(previous));
         std::string typeStr(stream->GetValue(previous));
+
+        // Check for pointer type: int^ means pointer to int
+        while (Match(TokenType::BITWISE_XOR)) {
+            typeStr += "^";
+        }
 
         if (Check(TokenType::LEFT_BRACKET)) {
             Advance();
@@ -1936,6 +1947,13 @@ NodeRef Parser::ParseUnary() {
         return ASTFactory::MakeUnaryOp(ast, UnaryOpType::BITWISE_NOT, operand, loc.line, loc.column);
     }
 
+    // Address-of operator: ^x
+    if (Match(TokenType::BITWISE_XOR)) {
+        NodeRef operand = ParseUnary();
+        if (!operand.IsValid()) return NodeRef::Null();
+        return ASTFactory::MakeUnaryOp(ast, UnaryOpType::ADDRESS_OF, operand, loc.line, loc.column);
+    }
+
     return ParsePostfix();
 }
 
@@ -2126,6 +2144,36 @@ NodeRef Parser::ParsePostfix() {
             // Postfix decrement: x--
             SourceLocation loc = getLocation(stream->GetOffset(previous));
             expr = ASTFactory::MakeUnaryOp(ast, UnaryOpType::POST_DECREMENT, expr, loc.line, loc.column);
+        } else if (Check(TokenType::BITWISE_XOR)) {
+            // Could be postfix dereference (x^) or binary XOR (x ^ y)
+            // It's a dereference only if NOT followed by something that starts an expression
+            // NOTE: We exclude MINUS/PLUS from expr start because they're more commonly
+            // binary operators after a postfix expression. Use parens for "a ^ (-b)".
+            TokenRef nextTok = current + 1;
+            if (nextTok < stream->Count()) {
+                u8 nextTypeVal = stream->GetType(nextTok);
+                TokenType nextType = static_cast<TokenType>(nextTypeVal);
+                // If next token can start an expression (excluding ambiguous binary ops),
+                // this is binary XOR, not dereference
+                // Core types are 0-16, so we check if nextTypeVal <= 16
+                bool nextIsExprStart = (nextType == TokenType::IDENTIFIER ||
+                                        nextType == TokenType::NUMBER ||
+                                        nextType == TokenType::LEFT_PAREN ||
+                                        // Exclude MINUS - it's usually binary subtraction after postfix
+                                        nextType == TokenType::NOT ||
+                                        nextType == TokenType::BITWISE_NOT ||
+                                        // Don't include BITWISE_XOR - consecutive ^ means deref-then-XOR
+                                        // e.g., mPtr^ ^ nPtr^ should be (mPtr^) ^ (nPtr^)
+                                        nextTypeVal <= 16); // Core types (FLOAT..VOID)
+                if (nextIsExprStart) {
+                    // It's binary XOR - don't match here, let ParseBitwiseXor handle it
+                    break;
+                }
+            }
+            // It's postfix dereference
+            Advance(); // consume the ^
+            SourceLocation loc = getLocation(stream->GetOffset(previous));
+            expr = ASTFactory::MakeUnaryOp(ast, UnaryOpType::DEREFERENCE, expr, loc.line, loc.column);
         } else {
             break;
         }
@@ -2881,6 +2929,11 @@ void Parser::ParseFunctionParameters(NodeRef function) {
             Advance();
             paramType = std::string(stream->GetValue(previous));
 
+            // Check for pointer type: int^ means pointer to int
+            while (Match(TokenType::BITWISE_XOR)) {
+                paramType += "^";
+            }
+
             // Check for array type suffix: type[size]
             if (Match(TokenType::LEFT_BRACKET)) {
                 if (!Match(TokenType::NUMBER)) {
@@ -2930,6 +2983,10 @@ void Parser::ParseFunctionParameters(NodeRef function) {
                 // Parse type (could be core type, custom type, or module-qualified type)
                 if (MatchMask(TokenMasks::CORE_TYPES)) {
                     paramType = std::string(stream->GetValue(previous));
+                    // Check for pointer type: int^ means pointer to int
+                    while (Match(TokenType::BITWISE_XOR)) {
+                        paramType += "^";
+                    }
                 } else if (Match(TokenType::IDENTIFIER)) {
                     std::string typeIdent(stream->GetValue(previous));
                     // Check for module-qualified type after colon
@@ -2938,6 +2995,10 @@ void Parser::ParseFunctionParameters(NodeRef function) {
                         paramType = typeIdent + "::" + std::string(stream->GetValue(previous));
                     } else {
                         paramType = typeIdent;
+                    }
+                    // Check for pointer type on custom types
+                    while (Match(TokenType::BITWISE_XOR)) {
+                        paramType += "^";
                     }
                 } else {
                     Error("Expected parameter type after ':'");
@@ -3309,6 +3370,11 @@ NodeRef Parser::ParseForStatement(bool isEval) {
             Advance(); // consume type
             TokenType varType = static_cast<TokenType>(stream->GetType(previous));
             std::string typeStr(stream->GetValue(previous));
+
+            // Check for pointer type: int^ means pointer to int
+            while (Match(TokenType::BITWISE_XOR)) {
+                typeStr += "^";
+            }
 
             Consume(TokenType::IDENTIFIER, "Expected variable name in for loop init");
             std::string varName(stream->GetValue(previous));

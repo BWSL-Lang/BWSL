@@ -1,0 +1,93 @@
+// Test: Pointers in control flow constructs
+// Tests: pointers in if/else, for loops, while-style loops
+
+pipeline PointersControlFlow {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // ========== Pointers in conditionals ==========
+
+            int value = 10;
+            int^ ptr = ^value;
+
+            // Conditional write through pointer
+            if (ptr^ > 5) {
+                ptr^ = 100;
+            } else {
+                ptr^ = 0;
+            }
+            int afterIf = value;  // Should be 100
+
+            // Conditional based on dereferenced value
+            int result = 0;
+            if (ptr^ == 100) {
+                result = 1;
+            }
+
+            // ========== Pointers in for loops ==========
+
+            int sum = 0;
+            int^ sumPtr = ^sum;
+
+            for (int i = 0; i < 5; i++) {
+                sumPtr^ = sumPtr^ + i;  // sum = 0+1+2+3+4 = 10
+            }
+            int loopSum = sum;
+
+            // Accumulate through pointer
+            int accumulator = 1;
+            int^ accPtr = ^accumulator;
+            for (int j = 1; j <= 4; j++) {
+                accPtr^ = accPtr^ * j;  // 1*1*2*3*4 = 24
+            }
+            int factorial = accumulator;
+
+            // ========== Pointer modification in loop ==========
+
+            int arr0 = 0;
+            int arr1 = 0;
+            int arr2 = 0;
+
+            // Simulate array-like access with pointers
+            int^ targets[3];  // Array of pointers - may not be supported
+            // Fallback: individual pointer assignments
+            int^ p0 = ^arr0;
+            int^ p1 = ^arr1;
+            int^ p2 = ^arr2;
+
+            p0^ = 10;
+            p1^ = 20;
+            p2^ = 30;
+
+            int totalArr = arr0 + arr1 + arr2;  // Should be 60
+
+            // ========== Nested control flow with pointers ==========
+
+            int outer = 0;
+            int inner = 0;
+            int^ outerPtr = ^outer;
+            int^ innerPtr = ^inner;
+
+            for (int x = 0; x < 3; x++) {
+                outerPtr^ = outerPtr^ + 1;
+                for (int y = 0; y < 2; y++) {
+                    innerPtr^ = innerPtr^ + 1;
+                }
+            }
+            // outer should be 3, inner should be 6
+
+            // ========== Ternary with pointers ==========
+
+            int ternVal = 5;
+            int^ ternPtr = ^ternVal;
+            int ternResult = (ternPtr^ > 3) ? ternPtr^ * 2 : ternPtr^;  // Should be 10
+
+            output.position = float4(float(loopSum), float(factorial), float(totalArr), 1.0);
+        }
+    }
+}
