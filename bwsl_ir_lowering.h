@@ -3729,8 +3729,13 @@ void LowerIfStatement(NodeRef ref) {
                     break;
                 }
                 // Texture operations need special handling:
-                // args[0] = texture (may be encoded with 0x2000 marker)
-                // args[1] = coordinates
+                // 2-arg form: sample(texture, coord)
+                //   args[0] = combined texture/sampler (with 0x2000 marker)
+                //   args[1] = coordinates
+                // 3-arg form: sample(texture, sampler, coord)
+                //   args[0] = texture (with 0x2000 marker)
+                //   args[1] = sampler (ignored for now, assumed combined with texture)
+                //   args[2] = coordinates
                 // Result type is always FLOAT4
                 case Intrinsic::SAMPLE:
                 case Intrinsic::SAMPLE_LOD:
@@ -3739,7 +3744,8 @@ void LowerIfStatement(NodeRef ref) {
                 case Intrinsic::SAMPLE_CMP: {
                     OpCode texOp = IntrinsicToOpcode(intrinsic);
                     u16 texReg = args[0];  // Texture with 0x2000 marker
-                    u16 coordReg = args[1];
+                    // Coordinate is the last argument - handle both 2-arg and 3-arg forms
+                    u16 coordReg = (argCount >= 3) ? args[2] : args[1];
 
                     // Emit with texture in operand 0 (preserving 0x2000 marker for analysis)
                     // and coordinates in operand 1
@@ -3753,7 +3759,8 @@ void LowerIfStatement(NodeRef ref) {
                 case Intrinsic::LOAD: {
                     OpCode texOp = IntrinsicToOpcode(intrinsic);
                     u16 texReg = args[0];  // Texture with 0x2000 marker
-                    u16 coordReg = args[1];
+                    // Coordinate is the last argument - handle both 2-arg and 3-arg forms
+                    u16 coordReg = (argCount >= 3) ? args[2] : args[1];
 
                     // Emit with texture in operand 0 (preserving 0x2000 marker for analysis)
                     // and coordinates in operand 1
@@ -4285,12 +4292,13 @@ void LowerIfStatement(NodeRef ref) {
         u16 coordReg = LowerExpression(call.arguments[1]);
         u16 dest = AllocateRegister();
 
+        // IR format: s0 = texture (with 0x2000 marker for slot), s1 = coordinate
         if (texReg & 0x2000) {
-            u16 slot = texReg & 0x1FFF;
-            builder.EmitInstruction(OP_TEX_SAMPLE, dest, coordReg, slot);
+            // texReg already has 0x2000 marker, pass it directly
+            builder.EmitInstruction(OP_TEX_SAMPLE, dest, texReg, coordReg);
         } else {
-            // Bindless
-            builder.EmitInstruction(OP_TEX_SAMPLE, dest, coordReg, texReg);
+            // Bindless - texReg is a register containing texture handle
+            builder.EmitInstruction(OP_TEX_SAMPLE, dest, texReg, coordReg);
         }
 
         return dest;

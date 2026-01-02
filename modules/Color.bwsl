@@ -1,0 +1,47 @@
+// Color space conversion and tone mapping
+module Color {
+
+// sRGB to linear
+sRGBToLinear :: (float3 srgb) -> float3 {
+    float3 lo = srgb / 12.92;
+    float3 hi = pow((srgb + 0.055) / 1.055, float3(2.4, 2.4, 2.4));
+    float3 result;
+    result.x = (srgb.x <= 0.04045) ? lo.x : hi.x;
+    result.y = (srgb.y <= 0.04045) ? lo.y : hi.y;
+    result.z = (srgb.z <= 0.04045) ? lo.z : hi.z;
+    return result;
+}
+
+// Linear to sRGB
+linearToSRGB :: (float3 linear) -> float3 {
+    float3 lo = linear * 12.92;
+    float3 hi = pow(linear, float3(1.0/2.4, 1.0/2.4, 1.0/2.4)) * 1.055 - 0.055;
+    float3 result;
+    result.x = (linear.x <= 0.0031308) ? lo.x : hi.x;
+    result.y = (linear.y <= 0.0031308) ? lo.y : hi.y;
+    result.z = (linear.z <= 0.0031308) ? lo.z : hi.z;
+    return result;
+}
+
+// ACES filmic tone mapping
+ACESFilm :: (float3 x) -> float3 {
+    float a = 2.51;
+    float b = 0.03;
+    float c = 2.43;
+    float d = 0.59;
+    float e = 0.14;
+    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
+}
+
+// Reinhard tone mapping
+reinhardToneMap :: (float3 hdr) -> float3 {
+    return hdr / (hdr + 1.0);
+}
+
+// Extended Reinhard with white point
+reinhardExtendedToneMap :: (float3 hdr, float whitePoint) -> float3 {
+    float wp2 = whitePoint * whitePoint;
+    return hdr * (1.0 + hdr / wp2) / (1.0 + hdr);
+}
+
+}

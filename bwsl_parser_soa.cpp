@@ -2738,11 +2738,14 @@ bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
     TokenStream moduleStream;
     moduleStream.Init(arena, persistentSource, moduleSource.size());
     Lexer moduleLexer(std::string(persistentSource, moduleSource.size()), moduleStream);
+    moduleLexer.Tokenize();  // Must tokenize before parsing!
     lexer = &moduleLexer;
     stream = &moduleStream;
     hasLookahead = false;
 
-    // Initialize current token
+    // Reset token position and advance to first token
+    current = static_cast<TokenRef>(-1);  // Will become 0 after Advance()
+    previous = static_cast<TokenRef>(0);
     Advance();
 
     // Parse the module - look for 'module' keyword
