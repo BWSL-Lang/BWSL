@@ -91,11 +91,13 @@ struct ShaderStageData {
     NodeRef body;
     ArenaString inheritsFrom;   // Pass name to inherit from (if isInherited)
     bool isInherited;           // True if this stage inherits from another pass
-    u8 _pad[3];
+    bool isDeferred;            // True if this stage comes from expression (function call or ternary)
+    u8 _pad[2];
     ArenaString name;           // Compute block name (if compute stage)
     u32 workgroupSizeX;
     u32 workgroupSizeY;
     u32 workgroupSizeZ;
+    NodeRef deferredExpr;       // Expression to resolve at compile-time (if isDeferred)
 };
 
 // 4 bytes + ArenaArray (12 bytes) = 16 bytes typical
@@ -943,10 +945,12 @@ namespace ASTFactory {
         data.body = body;
         data.inheritsFrom = ArenaString::MakeHashOnly(0u);
         data.isInherited = false;
+        data.isDeferred = false;
         data.name = ArenaString::MakeHashOnly(0u);
         data.workgroupSizeX = 1;
         data.workgroupSizeY = 1;
         data.workgroupSizeZ = 1;
+        data.deferredExpr = NodeRef::Null();
         ast->shaderStages.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {

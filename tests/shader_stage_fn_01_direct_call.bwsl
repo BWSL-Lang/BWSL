@@ -1,0 +1,20 @@
+// Test: Direct function call for vertex shader
+pipeline ShaderStageFnDirectCall {
+    attributes {
+        position: float3
+    }
+
+    vertexFuncRed :: () -> vertex_function {
+        vertex {
+            output.position = float4(1.0, 0.0, 0.0, 1.0);
+        }
+    }
+
+    pass "DirectCall" {
+        use attributes { position }
+        vertex = vertexFuncRed()
+        fragment {
+            output.color = float4(1.0, 0.0, 0.0, 1.0);
+        }
+    }
+}

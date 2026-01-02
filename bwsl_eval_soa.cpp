@@ -5,6 +5,49 @@
 
 namespace BWSL {
 
+// Pre-computed hashes for vector constructor names
+static const u32 kFloat2Hash = Utils::HashStr("float2");
+static const u32 kFloat3Hash = Utils::HashStr("float3");
+static const u32 kFloat4Hash = Utils::HashStr("float4");
+static const u32 kInt2Hash = Utils::HashStr("int2");
+static const u32 kInt3Hash = Utils::HashStr("int3");
+static const u32 kInt4Hash = Utils::HashStr("int4");
+static const u32 kVec2Hash = Utils::HashStr("vec2");
+static const u32 kVec3Hash = Utils::HashStr("vec3");
+static const u32 kVec4Hash = Utils::HashStr("vec4");
+static const u32 kIvec2Hash = Utils::HashStr("ivec2");
+static const u32 kIvec3Hash = Utils::HashStr("ivec3");
+static const u32 kIvec4Hash = Utils::HashStr("ivec4");
+
+// Check if a function call is a vector constructor
+static bool IsVectorConstructor(u32 nameHash, LiteralValue::Type* outType = nullptr) {
+    if (nameHash == kFloat2Hash || nameHash == kVec2Hash) {
+        if (outType) *outType = LiteralValue::FLOAT2;
+        return true;
+    }
+    if (nameHash == kFloat3Hash || nameHash == kVec3Hash) {
+        if (outType) *outType = LiteralValue::FLOAT3;
+        return true;
+    }
+    if (nameHash == kFloat4Hash || nameHash == kVec4Hash) {
+        if (outType) *outType = LiteralValue::FLOAT4;
+        return true;
+    }
+    if (nameHash == kInt2Hash || nameHash == kIvec2Hash) {
+        if (outType) *outType = LiteralValue::INT2;
+        return true;
+    }
+    if (nameHash == kInt3Hash || nameHash == kIvec3Hash) {
+        if (outType) *outType = LiteralValue::INT3;
+        return true;
+    }
+    if (nameHash == kInt4Hash || nameHash == kIvec4Hash) {
+        if (outType) *outType = LiteralValue::INT4;
+        return true;
+    }
+    return false;
+}
+
 void CompileTimeEvaluatorSoA::Init(EvalStateSoA* state, Parser* parser, AST* ast, EvalCache* cache, BWSL_Arena* arena) {
     state->arena = arena;
     state->parser = parser;
@@ -147,6 +190,16 @@ bool CompileTimeEvaluatorSoA::CanEvaluateNode(EvalStateSoA* state, NodeRef node)
         case ASTNodeType::FUNCTION_CALL: {
             // Only certain intrinsics can be evaluated at compile time
             const FunctionCallData& func = state->ast->GetFunctionCall(node);
+
+            // Check for vector constructors first (float2, float3, float4, etc.)
+            if (IsVectorConstructor(func.name.nameHash)) {
+                // All arguments must be evaluable
+                for (u32 i = 0; i < func.arguments.count; i++) {
+                    if (!CanEvaluateNode(state, func.arguments[i])) return false;
+                }
+                return true;
+            }
+
             if (!(func.flags & FunctionCallFlags::IS_INTRINSIC)) {
                 // Check for user-defined eval functions
                 u32 argCount = func.arguments.count;
@@ -368,6 +421,71 @@ bool CompileTimeEvaluatorSoA::EvaluateFunctionCall(EvalStateSoA* state, NodeRef 
 
     // Handle common intrinsics
     u32 nameHash = func.name.nameHash;
+
+    // Handle vector constructors (float2, float3, float4, int2, int3, int4)
+    LiteralValue::Type vecType;
+    if (IsVectorConstructor(nameHash, &vecType)) {
+        outValue->type = vecType;
+        u8 expectedComponents = 0;
+        bool isFloat = (vecType == LiteralValue::FLOAT2 || vecType == LiteralValue::FLOAT3 || vecType == LiteralValue::FLOAT4);
+
+        switch (vecType) {
+            case LiteralValue::FLOAT2: case LiteralValue::INT2: expectedComponents = 2; break;
+            case LiteralValue::FLOAT3: case LiteralValue::INT3: expectedComponents = 3; break;
+            case LiteralValue::FLOAT4: case LiteralValue::INT4: expectedComponents = 4; break;
+            default: break;
+        }
+
+        // Initialize to zero
+        for (u8 i = 0; i < 4; i++) {
+            if (isFloat) outValue->floatVec[i] = 0.0f;
+            else outValue->intVec[i] = 0;
+        }
+
+        // Handle different constructor patterns:
+        // 1. float3(x, y, z) - individual components
+        // 2. float3(scalar) - broadcast scalar to all components
+        // 3. float4(vec3, w) - combine smaller vector with scalar(s)
+        u8 componentIndex = 0;
+        for (u32 i = 0; i < argCount && componentIndex < expectedComponents; i++) {
+            if (args[i].IsVector()) {
+                // Copy components from vector argument
+                u8 srcSize = args[i].VectorSize();
+                bool srcIsFloat = (args[i].type >= LiteralValue::FLOAT2 && args[i].type <= LiteralValue::FLOAT4);
+                for (u8 j = 0; j < srcSize && componentIndex < expectedComponents; j++) {
+                    if (isFloat) {
+                        outValue->floatVec[componentIndex++] = srcIsFloat ? args[i].floatVec[j] : (float)args[i].intVec[j];
+                    } else {
+                        outValue->intVec[componentIndex++] = srcIsFloat ? (int)args[i].floatVec[j] : args[i].intVec[j];
+                    }
+                }
+            } else {
+                // Scalar argument
+                float fval = 0.0f;
+                int ival = 0;
+                switch (args[i].type) {
+                    case LiteralValue::FLOAT: fval = args[i].floatValue; ival = (int)fval; break;
+                    case LiteralValue::INT: ival = args[i].intValue; fval = (float)ival; break;
+                    case LiteralValue::UINT: ival = (int)args[i].uintValue; fval = (float)args[i].uintValue; break;
+                    default: break;
+                }
+
+                if (argCount == 1) {
+                    // Broadcast single scalar to all components
+                    for (u8 j = 0; j < expectedComponents; j++) {
+                        if (isFloat) outValue->floatVec[j] = fval;
+                        else outValue->intVec[j] = ival;
+                    }
+                    componentIndex = expectedComponents;
+                } else {
+                    // Single component
+                    if (isFloat) outValue->floatVec[componentIndex++] = fval;
+                    else outValue->intVec[componentIndex++] = ival;
+                }
+            }
+        }
+        return true;
+    }
 
     // min(a, b)
     static const u32 minHash = Utils::HashStr("min");

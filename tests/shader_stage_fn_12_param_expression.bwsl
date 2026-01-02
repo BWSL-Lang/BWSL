@@ -1,0 +1,24 @@
+// Test: Parameter expression with arithmetic
+pipeline ShaderStageFnParamExpression {
+    attributes {
+        position: float3
+    }
+
+    vertexFuncWithScale :: (float scale) -> vertex_function {
+        vertex {
+            output.position = float4(scale, scale * 0.5, 0.0, 1.0);
+        }
+    }
+
+    fragmentFuncWithColor :: (float r, float g, float b) -> fragment_function {
+        fragment {
+            output.color = float4(r, g, b, 1.0);
+        }
+    }
+
+    pass "ParamExpression" {
+        use attributes { position }
+        vertex = vertexFuncWithScale(1.0 + 0.5)
+        fragment = fragmentFuncWithColor(0.5 * 2.0, 0.25 + 0.25, 1.0 - 0.3)
+    }
+}

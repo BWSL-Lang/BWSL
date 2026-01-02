@@ -1,0 +1,20 @@
+// Test: Fragment function with multiple parameters
+pipeline ShaderStageFnMultiParam {
+    attributes {
+        position: float3
+    }
+
+    fragmentFuncWithColor :: (float r, float g, float b) -> fragment_function {
+        fragment {
+            output.color = float4(r, g, b, 1.0);
+        }
+    }
+
+    pass "WithColorParams" {
+        use attributes { position }
+        vertex {
+            output.position = float4(position, 1.0);
+        }
+        fragment = fragmentFuncWithColor(0.8, 0.2, 0.6)
+    }
+}

@@ -1,0 +1,28 @@
+// Test: Mixed parameterized and non-parameterized in ternary
+pipeline ShaderStageFnMixedParamTernary {
+    attributes {
+        position: float3
+    }
+
+    const bool useRedVertex = true;
+
+    vertexFuncWithScale :: (float scale) -> vertex_function {
+        vertex {
+            output.position = float4(scale, scale * 0.5, 0.0, 1.0);
+        }
+    }
+
+    vertexFuncBlue :: () -> vertex_function {
+        vertex {
+            output.position = float4(0.0, 0.0, 1.0, 1.0);
+        }
+    }
+
+    pass "MixedParamTernary" {
+        use attributes { position }
+        vertex = useRedVertex ? vertexFuncWithScale(2.0) : vertexFuncBlue()
+        fragment {
+            output.color = float4(1.0, 0.0, 0.5, 1.0);
+        }
+    }
+}

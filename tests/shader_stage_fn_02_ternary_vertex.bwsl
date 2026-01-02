@@ -1,0 +1,28 @@
+// Test: Ternary selection for vertex shader
+pipeline ShaderStageFnTernaryVertex {
+    attributes {
+        position: float3
+    }
+
+    const bool useRedVertex = true;
+
+    vertexFuncRed :: () -> vertex_function {
+        vertex {
+            output.position = float4(1.0, 0.0, 0.0, 1.0);
+        }
+    }
+
+    vertexFuncBlue :: () -> vertex_function {
+        vertex {
+            output.position = float4(0.0, 0.0, 1.0, 1.0);
+        }
+    }
+
+    pass "TernaryVertex" {
+        use attributes { position }
+        vertex = useRedVertex ? vertexFuncRed() : vertexFuncBlue()
+        fragment {
+            output.color = float4(0.0, 1.0, 0.0, 1.0);
+        }
+    }
+}

@@ -1,0 +1,54 @@
+// Test: All three branches covered in nested ternary
+pipeline ShaderStageFnNestedAllBranches {
+    attributes {
+        position: float3
+    }
+
+    const bool useVariantA = true;
+    const bool useVariantB = false;
+    const bool useSolidFragment = false;
+
+    vertexFuncRed :: () -> vertex_function {
+        vertex {
+            output.position = float4(1.0, 0.0, 0.0, 1.0);
+        }
+    }
+
+    vertexFuncBlue :: () -> vertex_function {
+        vertex {
+            output.position = float4(0.0, 0.0, 1.0, 1.0);
+        }
+    }
+
+    vertexFuncGreen :: () -> vertex_function {
+        vertex {
+            output.position = float4(0.0, 1.0, 0.0, 1.0);
+        }
+    }
+
+    fragmentFuncSolid :: () -> fragment_function {
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+
+    fragmentFuncGradient :: () -> fragment_function {
+        fragment {
+            output.color = float4(0.5, 0.5, 0.5, 1.0);
+        }
+    }
+
+    fragmentFuncDark :: () -> fragment_function {
+        fragment {
+            output.color = float4(0.1, 0.1, 0.1, 1.0);
+        }
+    }
+
+    pass "NestedTernaryAllBranches" {
+        use attributes { position }
+        // useVariantB=false, so goes to inner ternary
+        // useVariantA=true, so selects vertexFuncBlue
+        vertex = useVariantB ? vertexFuncGreen() : (useVariantA ? vertexFuncBlue() : vertexFuncRed())
+        fragment = useVariantB ? fragmentFuncDark() : (useSolidFragment ? fragmentFuncSolid() : fragmentFuncGradient())
+    }
+}

@@ -1,0 +1,27 @@
+// Test: Parameter from const expression
+pipeline ShaderStageFnParamConstExpr {
+    attributes {
+        position: float3
+    }
+
+    const float baseScale = 2.0;
+    const float colorIntensity = 0.75;
+
+    vertexFuncWithScale :: (float scale) -> vertex_function {
+        vertex {
+            output.position = float4(scale, scale * 0.5, 0.0, 1.0);
+        }
+    }
+
+    fragmentFuncWithColor :: (float r, float g, float b) -> fragment_function {
+        fragment {
+            output.color = float4(r, g, b, 1.0);
+        }
+    }
+
+    pass "ParamConstExpression" {
+        use attributes { position }
+        vertex = vertexFuncWithScale(baseScale * 0.5)
+        fragment = fragmentFuncWithColor(colorIntensity, colorIntensity * 0.5, 0.0)
+    }
+}

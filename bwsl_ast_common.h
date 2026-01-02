@@ -41,7 +41,7 @@ struct ArenaArray {
 };
 
 struct LiteralValue {
-    enum Type { FLOAT, INT, UINT, BOOL, STRING };
+    enum Type { FLOAT, INT, UINT, BOOL, STRING, FLOAT2, FLOAT3, FLOAT4, INT2, INT3, INT4 };
     Type type;
     union {
         float floatValue;
@@ -49,7 +49,24 @@ struct LiteralValue {
         unsigned int uintValue;
         bool boolValue;
         ArenaString stringValue;
+        float floatVec[4];  // For FLOAT2, FLOAT3, FLOAT4
+        int intVec[4];      // For INT2, INT3, INT4
     };
+
+    // Helper to check if this is a vector type
+    bool IsVector() const {
+        return type >= FLOAT2 && type <= INT4;
+    }
+
+    // Get component count for vector types
+    u8 VectorSize() const {
+        switch (type) {
+            case FLOAT2: case INT2: return 2;
+            case FLOAT3: case INT3: return 3;
+            case FLOAT4: case INT4: return 4;
+            default: return 1;
+        }
+    }
 };
 
 // Common AST node types

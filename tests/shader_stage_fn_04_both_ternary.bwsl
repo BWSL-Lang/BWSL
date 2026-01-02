@@ -1,0 +1,39 @@
+// Test: Both vertex and fragment with ternary selection
+pipeline ShaderStageFnBothTernary {
+    attributes {
+        position: float3
+    }
+
+    const bool useRedVertex = true;
+    const bool useSolidFragment = false;
+
+    vertexFuncRed :: () -> vertex_function {
+        vertex {
+            output.position = float4(1.0, 0.0, 0.0, 1.0);
+        }
+    }
+
+    vertexFuncBlue :: () -> vertex_function {
+        vertex {
+            output.position = float4(0.0, 0.0, 1.0, 1.0);
+        }
+    }
+
+    fragmentFuncSolid :: () -> fragment_function {
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+
+    fragmentFuncGradient :: () -> fragment_function {
+        fragment {
+            output.color = float4(0.5, 0.5, 0.5, 1.0);
+        }
+    }
+
+    pass "BothTernary" {
+        use attributes { position }
+        vertex = useRedVertex ? vertexFuncRed() : vertexFuncBlue()
+        fragment = useSolidFragment ? fragmentFuncSolid() : fragmentFuncGradient()
+    }
+}

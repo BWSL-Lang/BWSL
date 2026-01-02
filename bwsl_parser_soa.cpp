@@ -639,6 +639,9 @@ NodeRef Parser::ParsePipeline() {
 
     Consume(TokenType::RIGHT_BRACE, "Expected '}' after pipeline body");
 
+    // Resolve deferred shader stage expressions before returning
+    ResolveShaderStageExpressions(pipeline);
+
     context->root = pipeline;
     PARSER_TIMING_PRINT();
     return pipeline;
@@ -930,9 +933,15 @@ void Parser::ParsePassBody(NodeRef pass) {
                 continue;
             }
             if (Match(TokenType::ASSIGN)) {
-                // Shader stage inheritance: vertex = "PassName".vertex
-                NodeRef inheritedStage = ParseShaderStageInheritance(ASTNodeType::VERTEX_STAGE);
-                ast->GetPass(pass).vertexShader = inheritedStage;
+                if (Check(TokenType::STRING)) {
+                    // Pass inheritance: vertex = "PassName".vertex
+                    NodeRef inheritedStage = ParseShaderStageInheritance(ASTNodeType::VERTEX_STAGE);
+                    ast->GetPass(pass).vertexShader = inheritedStage;
+                } else {
+                    // Expression assignment: vertex = funcCall() or vertex = cond ? f1() : f2()
+                    NodeRef exprStage = ParseShaderStageExpression(ASTNodeType::VERTEX_STAGE);
+                    ast->GetPass(pass).vertexShader = exprStage;
+                }
             } else {
                 ast->GetPass(pass).vertexShader = ParseShaderStage(ASTNodeType::VERTEX_STAGE);
             }
@@ -945,10 +954,14 @@ void Parser::ParsePassBody(NodeRef pass) {
             if (Match(TokenType::ASSIGN)) {
                 if (Match(TokenType::NULL_TOKEN)) {
                     ast->GetPass(pass).fragmentShader = NodeRef::Null();
-                } else {
-                    // Shader stage inheritance: fragment = "PassName".fragment
+                } else if (Check(TokenType::STRING)) {
+                    // Pass inheritance: fragment = "PassName".fragment
                     NodeRef inheritedStage = ParseShaderStageInheritance(ASTNodeType::FRAGMENT_STAGE);
                     ast->GetPass(pass).fragmentShader = inheritedStage;
+                } else {
+                    // Expression assignment: fragment = funcCall() or fragment = cond ? f1() : f2()
+                    NodeRef exprStage = ParseShaderStageExpression(ASTNodeType::FRAGMENT_STAGE);
+                    ast->GetPass(pass).fragmentShader = exprStage;
                 }
             } else {
                 ast->GetPass(pass).fragmentShader = ParseShaderStage(ASTNodeType::FRAGMENT_STAGE);
@@ -1205,7 +1218,30 @@ NodeRef Parser::ParseShaderStageInheritance(ASTNodeType stageType) {
     // Store the inheritance info
     ast->GetShaderStage(stage).inheritsFrom = ArenaString::MakeHashOnly(inheritFromPass);
     ast->GetShaderStage(stage).isInherited = true;
-    
+
+    return stage;
+}
+
+NodeRef Parser::ParseShaderStageExpression(ASTNodeType stageType) {
+    // Parse: funcCall() or cond ? funcA() : funcB()
+    // The expression must resolve to a shader stage at compile-time
+    SourceLocation loc = getLocation(stream->GetOffset(current));
+
+    // Parse the expression (function call or ternary)
+    NodeRef expr = ParseExpression();
+
+    if (!expr.IsValid()) {
+        Error("Expected expression for shader stage assignment");
+        return NodeRef::Null();
+    }
+
+    // Create a deferred shader stage node
+    NodeRef stage = ASTFactory::MakeShaderStage(ast, stageType, NodeRef::Null(), loc.line, loc.column);
+
+    // Mark as deferred and store the expression for later resolution
+    ast->GetShaderStage(stage).isDeferred = true;
+    ast->GetShaderStage(stage).deferredExpr = expr;
+
     return stage;
 }
 
@@ -2783,6 +2819,14 @@ NodeRef Parser::ParseFunction() {
         }
     } else if (MatchMask(TokenMasks::CORE_TYPES)) {
         ast->GetFunction(function).returnType = TokenTypeToReturnType(static_cast<TokenType>(stream->GetType(previous)));
+    } else if (Match(TokenType::VERTEX_FUNCTION)) {
+        ast->GetFunction(function).returnType = CoreType::VERTEX_FUNCTION;
+    } else if (Match(TokenType::FRAGMENT_FUNCTION)) {
+        ast->GetFunction(function).returnType = CoreType::FRAGMENT_FUNCTION;
+    } else if (Match(TokenType::COMPUTE_FUNCTION)) {
+        ast->GetFunction(function).returnType = CoreType::COMPUTE_FUNCTION;
+    } else if (Match(TokenType::PASS_BLOCK)) {
+        ast->GetFunction(function).returnType = CoreType::PASS_BLOCK;
     } else {
         Error("Expected valid return type after '->'");
         return NodeRef::Null();
@@ -5110,6 +5154,426 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
 
     // Type not found
     return TYPE_INFO(CoreType::INVALID, 0, false);
+}
+
+//==============================================================================
+// Shader Stage Expression Resolution
+// Resolves deferred shader expressions (function calls/ternaries) at compile-time
+//==============================================================================
+
+NodeRef Parser::LookupShaderFunction(u32 nameHash, const PassData& pass, CoreType expectedReturnType) {
+    // Search in pass-scoped functions first
+    for (u32 i = 0; i < pass.functions.count; i++) {
+        const FunctionDeclData& func = ast->GetFunction(pass.functions[i]);
+        if (func.name.nameHash == nameHash && func.returnType == expectedReturnType) {
+            return pass.functions[i];
+        }
+    }
+
+    // Search in pipeline-scoped functions
+    if (currentPipeline.IsValid()) {
+        const PipelineData& pipeline = ast->GetPipeline(currentPipeline);
+        for (u32 i = 0; i < pipeline.functions.count; i++) {
+            const FunctionDeclData& func = ast->GetFunction(pipeline.functions[i]);
+            if (func.name.nameHash == nameHash && func.returnType == expectedReturnType) {
+                return pipeline.functions[i];
+            }
+        }
+    }
+
+    // Search in global functions
+    for (u32 i = 0; i < ast->functions.count; i++) {
+        const FunctionDeclData& func = ast->GetFunction(NodeRef(ASTNodeType::FUNCTION, i));
+        if (func.name.nameHash == nameHash && func.returnType == expectedReturnType) {
+            return NodeRef(ASTNodeType::FUNCTION, i);
+        }
+    }
+
+    return NodeRef::Null();
+}
+
+NodeRef Parser::ResolveShaderStageExpr(NodeRef stageNode, const PassData& pass, ASTNodeType expectedType) {
+    if (stageNode.IsNull()) return stageNode;
+
+    ShaderStageData& stage = ast->GetShaderStage(stageNode);
+    if (!stage.isDeferred) return stageNode;  // Already resolved
+
+    NodeRef expr = stage.deferredExpr;
+    if (expr.IsNull()) {
+        Error("Deferred shader stage has no expression");
+        return NodeRef::Null();
+    }
+
+    ASTNodeType exprType = expr.Type();
+
+    if (exprType == ASTNodeType::TERNARY_EXPRESSION) {
+        // Evaluate condition at compile-time
+        const TernaryExprData& ternary = ast->GetTernaryExpression(expr);
+
+        EvalStateSoA evalState;
+        CompileTimeEvaluatorSoA::Init(&evalState, this, ast, &context->evalCache, ast->arena);
+
+        LiteralValue condValue;
+        if (!CompileTimeEvaluatorSoA::CanEvaluateNode(&evalState, ternary.condition)) {
+            Error("Shader stage selection condition must be compile-time constant");
+            return NodeRef::Null();
+        }
+
+        if (!CompileTimeEvaluatorSoA::EvaluateNode(&evalState, ternary.condition, &condValue)) {
+            Error("Failed to evaluate shader stage selection condition");
+            return NodeRef::Null();
+        }
+
+        if (condValue.type != LiteralValue::BOOL) {
+            Error("Shader stage selection condition must be boolean");
+            return NodeRef::Null();
+        }
+
+        // Select the branch and recursively resolve
+        NodeRef selectedBranch = condValue.boolValue ? ternary.trueExpr : ternary.falseExpr;
+
+        // Create a new deferred stage node for the selected branch and resolve it
+        NodeRef newStageNode = ASTFactory::MakeShaderStage(ast, expectedType, NodeRef::Null(),
+            ast->GetLine(stageNode), ast->GetColumn(stageNode));
+        ast->GetShaderStage(newStageNode).isDeferred = true;
+        ast->GetShaderStage(newStageNode).deferredExpr = selectedBranch;
+
+        return ResolveShaderStageExpr(newStageNode, pass, expectedType);
+    }
+    else if (exprType == ASTNodeType::FUNCTION_CALL) {
+        const FunctionCallData& call = ast->GetFunctionCall(expr);
+
+        // Determine expected return type
+        CoreType expectedReturnType = (expectedType == ASTNodeType::VERTEX_STAGE) ? CoreType::VERTEX_FUNCTION :
+                                      (expectedType == ASTNodeType::FRAGMENT_STAGE) ? CoreType::FRAGMENT_FUNCTION :
+                                      CoreType::COMPUTE_FUNCTION;
+
+        // Look up the function
+        NodeRef funcRef = LookupShaderFunction(call.name.nameHash, pass, expectedReturnType);
+        if (funcRef.IsNull()) {
+            Error("Cannot find shader function with expected return type");
+            return NodeRef::Null();
+        }
+
+        const FunctionDeclData& func = ast->GetFunction(funcRef);
+
+        // The function body should be the shader stage
+        NodeRef shaderBody = func.body;
+        if (shaderBody.IsNull() || shaderBody.Type() != expectedType) {
+            Error("Shader function does not contain expected shader stage");
+            return NodeRef::Null();
+        }
+
+        // Handle parameters if any (substitute with evaluated argument values)
+        if (func.parameters.count > 0) {
+            if (call.arguments.count < func.parameters.count) {
+                Error("Not enough arguments for shader function call");
+                return NodeRef::Null();
+            }
+
+            // Evaluate all arguments at compile-time
+            ParamSubstitution paramSubs[16];
+            u32 paramSubCount = 0;
+
+            EvalStateSoA evalState;
+            CompileTimeEvaluatorSoA::Init(&evalState, this, ast, &context->evalCache, ast->arena);
+
+            for (u32 i = 0; i < func.parameters.count && i < 16; i++) {
+                LiteralValue argValue;
+                if (!CompileTimeEvaluatorSoA::CanEvaluateNode(&evalState, call.arguments[i])) {
+                    Error("Shader function arguments must be compile-time constants");
+                    return NodeRef::Null();
+                }
+                if (!CompileTimeEvaluatorSoA::EvaluateNode(&evalState, call.arguments[i], &argValue)) {
+                    Error("Failed to evaluate shader function argument");
+                    return NodeRef::Null();
+                }
+                paramSubs[paramSubCount].nameHash = func.parameters[i].first.nameHash;
+                paramSubs[paramSubCount].value = argValue;
+                paramSubCount++;
+            }
+
+            // Clone the shader stage body with parameter substitution
+            shaderBody = CloneShaderStageWithParams(shaderBody, paramSubs, paramSubCount);
+        }
+
+        // Return the resolved shader stage
+        return shaderBody;
+    }
+    else {
+        Error("Invalid expression type for shader stage assignment (expected function call or ternary)");
+        return NodeRef::Null();
+    }
+}
+
+//==============================================================================
+// Parameter Substitution Cloning
+// Clones AST nodes while replacing parameter identifiers with literal values
+//==============================================================================
+
+NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs, u32 subCount) {
+    if (node.IsNull()) return NodeRef::Null();
+
+    u32 line = ast->GetLine(node);
+    u32 col = ast->GetColumn(node);
+
+    switch (node.Type()) {
+        case ASTNodeType::IDENTIFIER: {
+            const IdentifierData& src = ast->GetIdentifier(node);
+            // Check if this identifier should be substituted
+            for (u32 i = 0; i < subCount; i++) {
+                if (subs[i].nameHash == src.name.nameHash) {
+                    // Replace with literal value
+                    switch (subs[i].value.type) {
+                        case LiteralValue::FLOAT:
+                            return ASTFactory::MakeLiteralFloat(ast, subs[i].value.floatValue, line, col);
+                        case LiteralValue::INT:
+                            return ASTFactory::MakeLiteralInt(ast, subs[i].value.intValue, line, col);
+                        case LiteralValue::UINT:
+                            return ASTFactory::MakeLiteralUint(ast, subs[i].value.uintValue, line, col);
+                        case LiteralValue::BOOL:
+                            return ASTFactory::MakeLiteralBool(ast, subs[i].value.boolValue, line, col);
+                        case LiteralValue::FLOAT2:
+                        case LiteralValue::FLOAT3:
+                        case LiteralValue::FLOAT4:
+                        case LiteralValue::INT2:
+                        case LiteralValue::INT3:
+                        case LiteralValue::INT4: {
+                            // Create a vector constructor call
+                            const char* constructorName = nullptr;
+                            u8 componentCount = 0;
+                            bool isFloat = true;
+                            switch (subs[i].value.type) {
+                                case LiteralValue::FLOAT2: constructorName = "float2"; componentCount = 2; break;
+                                case LiteralValue::FLOAT3: constructorName = "float3"; componentCount = 3; break;
+                                case LiteralValue::FLOAT4: constructorName = "float4"; componentCount = 4; break;
+                                case LiteralValue::INT2: constructorName = "int2"; componentCount = 2; isFloat = false; break;
+                                case LiteralValue::INT3: constructorName = "int3"; componentCount = 3; isFloat = false; break;
+                                case LiteralValue::INT4: constructorName = "int4"; componentCount = 4; isFloat = false; break;
+                                default: break;
+                            }
+                            ArenaString ctorName = ArenaString::MakeHashOnly(constructorName);
+                            NodeRef vecCall = ASTFactory::MakeFunctionCall(ast, ctorName, line, col);
+                            FunctionCallData& callData = ast->GetFunctionCall(vecCall);
+                            for (u8 c = 0; c < componentCount; c++) {
+                                NodeRef arg;
+                                if (isFloat) {
+                                    arg = ASTFactory::MakeLiteralFloat(ast, subs[i].value.floatVec[c], line, col);
+                                } else {
+                                    arg = ASTFactory::MakeLiteralInt(ast, subs[i].value.intVec[c], line, col);
+                                }
+                                callData.arguments.Push(arena, arg);
+                            }
+                            return vecCall;
+                        }
+                        default:
+                            break;
+                    }
+                }
+            }
+            // Not a parameter - clone as-is
+            return ASTFactory::MakeIdentifier(ast, src.name, line, col);
+        }
+
+        case ASTNodeType::LITERAL: {
+            const LiteralData& src = ast->GetLiteral(node);
+            switch (src.value.type) {
+                case LiteralValue::FLOAT:
+                    return ASTFactory::MakeLiteralFloat(ast, src.value.floatValue, line, col);
+                case LiteralValue::INT:
+                    return ASTFactory::MakeLiteralInt(ast, src.value.intValue, line, col);
+                case LiteralValue::UINT:
+                    return ASTFactory::MakeLiteralUint(ast, src.value.uintValue, line, col);
+                case LiteralValue::BOOL:
+                    return ASTFactory::MakeLiteralBool(ast, src.value.boolValue, line, col);
+                default:
+                    return NodeRef::Null();
+            }
+        }
+
+        case ASTNodeType::BINARY_OP: {
+            const BinaryOpData& src = ast->GetBinaryOp(node);
+            NodeRef left = CloneNodeWithParams(src.left, subs, subCount);
+            NodeRef right = CloneNodeWithParams(src.right, subs, subCount);
+            return ASTFactory::MakeBinaryOp(ast, src.op, left, right, line, col);
+        }
+
+        case ASTNodeType::UNARY_OP: {
+            const UnaryOpData& src = ast->GetUnaryOp(node);
+            NodeRef operand = CloneNodeWithParams(src.operand, subs, subCount);
+            return ASTFactory::MakeUnaryOp(ast, src.op, operand, line, col);
+        }
+
+        case ASTNodeType::MEMBER_ACCESS: {
+            const MemberAccessData& src = ast->GetMemberAccess(node);
+            NodeRef object = CloneNodeWithParams(src.object, subs, subCount);
+            return ASTFactory::MakeMemberAccess(ast, object, src.member, line, col);
+        }
+
+        case ASTNodeType::ARRAY_ACCESS: {
+            const ArrayAccessData& src = ast->GetArrayAccess(node);
+            NodeRef array = CloneNodeWithParams(src.array, subs, subCount);
+            NodeRef index = CloneNodeWithParams(src.index, subs, subCount);
+            return ASTFactory::MakeArrayAccess(ast, array, index, line, col);
+        }
+
+        case ASTNodeType::ASSIGNMENT: {
+            const AssignmentData& src = ast->GetAssignment(node);
+            NodeRef target = CloneNodeWithParams(src.target, subs, subCount);
+            NodeRef value = CloneNodeWithParams(src.value, subs, subCount);
+            return ASTFactory::MakeAssignment(ast, target, value, line, col);
+        }
+
+        case ASTNodeType::BLOCK: {
+            const BlockData& src = ast->GetBlock(node);
+            NodeRef newBlock = ASTFactory::MakeBlock(ast, line, col);
+            BlockData& dst = ast->GetBlock(newBlock);
+            for (u32 i = 0; i < src.statements.count; i++) {
+                NodeRef cloned = CloneNodeWithParams(src.statements[i], subs, subCount);
+                if (cloned.IsValid()) {
+                    dst.statements.Push(arena, cloned);
+                }
+            }
+            return newBlock;
+        }
+
+        case ASTNodeType::VARIABLE_DECL: {
+            const VariableDeclData& src = ast->GetVariableDecl(node);
+            NodeRef initializer = CloneNodeWithParams(src.initializer, subs, subCount);
+            return ASTFactory::MakeVariableDecl(ast, src.name, src.type, initializer, src.isConst,
+                                                 line, col, src.storageClass, src.arrayDimensions,
+                                                 src.arrayLength, src.arrayElementTypeHash);
+        }
+
+        case ASTNodeType::FUNCTION_CALL: {
+            const FunctionCallData& src = ast->GetFunctionCall(node);
+            NodeRef newCall = ASTFactory::MakeFunctionCall(ast, src.name, line, col);
+            FunctionCallData& dst = ast->GetFunctionCall(newCall);
+            dst.intrinsicIndex = src.intrinsicIndex;
+            dst.flags = src.flags;
+            dst.moduleIndex = src.moduleIndex;
+            dst.moduleQualifiedHash = src.moduleQualifiedHash;
+            dst.moduleObject = src.moduleObject.IsValid() ? CloneNodeWithParams(src.moduleObject, subs, subCount) : NodeRef::Null();
+            for (u32 i = 0; i < src.arguments.count; i++) {
+                NodeRef clonedArg = CloneNodeWithParams(src.arguments[i], subs, subCount);
+                dst.arguments.Push(arena, clonedArg);
+            }
+            return newCall;
+        }
+
+        case ASTNodeType::TERNARY_EXPRESSION: {
+            const TernaryExprData& src = ast->GetTernaryExpression(node);
+            NodeRef condition = CloneNodeWithParams(src.condition, subs, subCount);
+            NodeRef trueExpr = CloneNodeWithParams(src.trueExpr, subs, subCount);
+            NodeRef falseExpr = CloneNodeWithParams(src.falseExpr, subs, subCount);
+            return ASTFactory::MakeTernaryExpr(ast, condition, trueExpr, falseExpr, line, col);
+        }
+
+        case ASTNodeType::IF_STATEMENT: {
+            // IF_STATEMENT uses BlockData: [condition, thenBranch, elseBranch?]
+            const BlockData& src = ast->GetBlock(node);
+            NodeRef newIf = ASTFactory::MakeIfStatement(ast, line, col);
+            BlockData& dst = ast->GetBlock(newIf);
+            for (u32 i = 0; i < src.statements.count; i++) {
+                NodeRef cloned = CloneNodeWithParams(src.statements[i], subs, subCount);
+                if (cloned.IsValid()) {
+                    dst.statements.Push(arena, cloned);
+                }
+            }
+            return newIf;
+        }
+
+        case ASTNodeType::FOR_CSTYLE: {
+            const ForCStyleData& src = ast->GetForCStyle(node);
+            NodeRef init = CloneNodeWithParams(src.init, subs, subCount);
+            NodeRef condition = CloneNodeWithParams(src.condition, subs, subCount);
+            NodeRef increment = CloneNodeWithParams(src.increment, subs, subCount);
+            NodeRef body = CloneNodeWithParams(src.body, subs, subCount);
+            NodeRef newFor = ASTFactory::MakeForCStyle(ast, init, condition, increment, body, line, col);
+            return newFor;
+        }
+
+        case ASTNodeType::RETURN: {
+            // RETURN uses AssignmentData
+            const AssignmentData& src = ast->GetAssignment(node);
+            NodeRef value = src.value.IsValid() ? CloneNodeWithParams(src.value, subs, subCount) : NodeRef::Null();
+            return ASTFactory::MakeReturn(ast, value, line, col);
+        }
+
+        default:
+            // For other node types, just return a clone without recursion
+            // This might need expansion for more complex cases
+            return node;
+    }
+}
+
+NodeRef Parser::CloneShaderStageWithParams(NodeRef stageNode, const ParamSubstitution* subs, u32 subCount) {
+    if (stageNode.IsNull()) return stageNode;
+
+    const ShaderStageData& src = ast->GetShaderStage(stageNode);
+    u32 line = ast->GetLine(stageNode);
+    u32 col = ast->GetColumn(stageNode);
+
+    // Clone the body with parameter substitution
+    NodeRef newBody = CloneNodeWithParams(src.body, subs, subCount);
+
+    // Create a new shader stage with the cloned body
+    NodeRef newStage = ASTFactory::MakeShaderStage(ast, stageNode.Type(), newBody, line, col);
+    ShaderStageData& dst = ast->GetShaderStage(newStage);
+
+    // Copy other fields
+    dst.workgroupSizeX = src.workgroupSizeX;
+    dst.workgroupSizeY = src.workgroupSizeY;
+    dst.workgroupSizeZ = src.workgroupSizeZ;
+    dst.name = src.name;
+    // Don't copy inheritsFrom/isInherited/isDeferred - this is a fresh resolved stage
+
+    return newStage;
+}
+
+void Parser::ResolveShaderStageExpressions(NodeRef pipeline) {
+    if (!pipeline.IsValid()) return;
+
+    const PipelineData& pipelineData = ast->GetPipeline(pipeline);
+
+    // Iterate through all passes
+    for (u32 i = 0; i < pipelineData.passes.count; i++) {
+        NodeRef passRef = pipelineData.passes[i];
+        PassData& pass = ast->GetPass(passRef);
+
+        // Resolve vertex shader if deferred
+        if (!pass.vertexShader.IsNull()) {
+            const ShaderStageData& vertexStage = ast->GetShaderStage(pass.vertexShader);
+            if (vertexStage.isDeferred) {
+                NodeRef resolved = ResolveShaderStageExpr(pass.vertexShader, pass, ASTNodeType::VERTEX_STAGE);
+                if (resolved.IsValid()) {
+                    pass.vertexShader = resolved;
+                }
+            }
+        }
+
+        // Resolve fragment shader if deferred
+        if (!pass.fragmentShader.IsNull()) {
+            const ShaderStageData& fragmentStage = ast->GetShaderStage(pass.fragmentShader);
+            if (fragmentStage.isDeferred) {
+                NodeRef resolved = ResolveShaderStageExpr(pass.fragmentShader, pass, ASTNodeType::FRAGMENT_STAGE);
+                if (resolved.IsValid()) {
+                    pass.fragmentShader = resolved;
+                }
+            }
+        }
+
+        // Resolve compute shader if deferred
+        if (!pass.computeShader.IsNull()) {
+            const ShaderStageData& computeStage = ast->GetShaderStage(pass.computeShader);
+            if (computeStage.isDeferred) {
+                NodeRef resolved = ResolveShaderStageExpr(pass.computeShader, pass, ASTNodeType::COMPUTE_STAGE);
+                if (resolved.IsValid()) {
+                    pass.computeShader = resolved;
+                }
+            }
+        }
+    }
 }
 
 } // namespace BWSL

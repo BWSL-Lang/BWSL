@@ -1,0 +1,24 @@
+// Test: Both vertex and fragment as function calls
+pipeline ShaderStageFnBothFunctions {
+    attributes {
+        position: float3
+    }
+
+    vertexFuncBlue :: () -> vertex_function {
+        vertex {
+            output.position = float4(0.0, 0.0, 1.0, 1.0);
+        }
+    }
+
+    fragmentFuncSolid :: () -> fragment_function {
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+
+    pass "BothFunctions" {
+        use attributes { position }
+        vertex = vertexFuncBlue()
+        fragment = fragmentFuncSolid()
+    }
+}

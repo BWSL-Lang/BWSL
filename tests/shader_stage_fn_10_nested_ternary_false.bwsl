@@ -1,0 +1,35 @@
+// Test: Nested ternary (false path)
+pipeline ShaderStageFnNestedTernaryFalse {
+    attributes {
+        position: float3
+    }
+
+    const bool useVariantA = true;
+    const bool useVariantB = false;
+
+    vertexFuncRed :: () -> vertex_function {
+        vertex {
+            output.position = float4(1.0, 0.0, 0.0, 1.0);
+        }
+    }
+
+    vertexFuncBlue :: () -> vertex_function {
+        vertex {
+            output.position = float4(0.0, 0.0, 1.0, 1.0);
+        }
+    }
+
+    vertexFuncGreen :: () -> vertex_function {
+        vertex {
+            output.position = float4(0.0, 1.0, 0.0, 1.0);
+        }
+    }
+
+    pass "NestedTernaryFalse" {
+        use attributes { position }
+        vertex = useVariantB ? vertexFuncRed() : (useVariantA ? vertexFuncBlue() : vertexFuncGreen())
+        fragment {
+            output.color = float4(0.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

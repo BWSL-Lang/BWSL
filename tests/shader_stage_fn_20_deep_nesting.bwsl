@@ -1,0 +1,36 @@
+// Test: Deep nesting stress test
+pipeline ShaderStageFnDeepNesting {
+    attributes {
+        position: float3
+    }
+
+    const bool useVariantA = true;
+    const bool useVariantB = false;
+    const bool useRedVertex = true;
+
+    vertexFuncRed :: () -> vertex_function {
+        vertex {
+            output.position = float4(1.0, 0.0, 0.0, 1.0);
+        }
+    }
+
+    vertexFuncBlue :: () -> vertex_function {
+        vertex {
+            output.position = float4(0.0, 0.0, 1.0, 1.0);
+        }
+    }
+
+    vertexFuncGreen :: () -> vertex_function {
+        vertex {
+            output.position = float4(0.0, 1.0, 0.0, 1.0);
+        }
+    }
+
+    pass "DeepNesting" {
+        use attributes { position }
+        vertex = useVariantA ? (useVariantB ? vertexFuncRed() : (useRedVertex ? vertexFuncBlue() : vertexFuncGreen())) : vertexFuncGreen()
+        fragment {
+            output.color = float4(0.9, 0.9, 0.9, 1.0);
+        }
+    }
+}

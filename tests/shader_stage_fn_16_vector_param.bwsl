@@ -1,0 +1,20 @@
+// Test: Vector parameter
+pipeline ShaderStageFnVectorParam {
+    attributes {
+        position: float3
+    }
+
+    vertexFuncWithOffset :: (float3 offset) -> vertex_function {
+        vertex {
+            output.position = float4(offset, 1.0);
+        }
+    }
+
+    pass "VectorParam" {
+        use attributes { position }
+        vertex = vertexFuncWithOffset(float3(0.5, 0.25, 0.125))
+        fragment {
+            output.color = float4(0.2, 0.4, 0.6, 1.0);
+        }
+    }
+}

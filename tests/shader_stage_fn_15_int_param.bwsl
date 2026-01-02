@@ -1,0 +1,21 @@
+// Test: Integer parameter
+pipeline ShaderStageFnIntParam {
+    attributes {
+        position: float3
+    }
+
+    vertexFuncWithIndex :: (int idx) -> vertex_function {
+        vertex {
+            float f = float(idx) * 0.1;
+            output.position = float4(f, f, f, 1.0);
+        }
+    }
+
+    pass "IntParam" {
+        use attributes { position }
+        vertex = vertexFuncWithIndex(5)
+        fragment {
+            output.color = float4(0.5, 0.5, 0.5, 1.0);
+        }
+    }
+}

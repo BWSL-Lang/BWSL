@@ -240,6 +240,7 @@ private:
     NodeRef ParseArrayAccess(NodeRef array);
     NodeRef ParseShaderStage(ASTNodeType stageType);
     NodeRef ParseShaderStageInheritance(ASTNodeType stageType);
+    NodeRef ParseShaderStageExpression(ASTNodeType stageType);  // Parse vertex = expr or fragment = expr
     NodeRef ParseSwitch();
     NodeRef ParseForStatement(bool isEval);
     NodeRef ParseLoopStatement(bool isEval);
@@ -272,6 +273,19 @@ private:
     bool CheckMask(TokenMask mask);
     bool ValidateAttributeInUse(const ArenaString& attrName);
     bool ValidateAssignmentTarget(NodeRef target);
+
+    //----------------- Shader stage expression resolution ------------------------//
+    void ResolveShaderStageExpressions(NodeRef pipeline);
+    NodeRef ResolveShaderStageExpr(NodeRef stageNode, const PassData& pass, ASTNodeType expectedType);
+    NodeRef LookupShaderFunction(u32 nameHash, const PassData& pass, CoreType expectedReturnType);
+
+    // Parameter substitution for shader functions
+    struct ParamSubstitution {
+        u32 nameHash;
+        LiteralValue value;
+    };
+    NodeRef CloneShaderStageWithParams(NodeRef stageNode, const ParamSubstitution* subs, u32 subCount);
+    NodeRef CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs, u32 subCount);
 
     inline TypeInfo ResolveTypeFromToken(TokenType token);
 };

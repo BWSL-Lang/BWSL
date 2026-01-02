@@ -1,0 +1,20 @@
+// Test: Function with single parameter
+pipeline ShaderStageFnSingleParam {
+    attributes {
+        position: float3
+    }
+
+    vertexFuncWithScale :: (float scale) -> vertex_function {
+        vertex {
+            output.position = float4(scale, scale * 0.5, 0.0, 1.0);
+        }
+    }
+
+    pass "WithScaleParam" {
+        use attributes { position }
+        vertex = vertexFuncWithScale(2.5)
+        fragment {
+            output.color = float4(1.0, 0.0, 1.0, 1.0);
+        }
+    }
+}

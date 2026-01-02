@@ -1,0 +1,20 @@
+// Test: Regular inline vertex with function fragment
+pipeline ShaderStageFnMixedInline {
+    attributes {
+        position: float3
+    }
+
+    fragmentFuncGradient :: () -> fragment_function {
+        fragment {
+            output.color = float4(0.5, 0.5, 0.5, 1.0);
+        }
+    }
+
+    pass "MixedInlineAndFunction" {
+        use attributes { position }
+        vertex {
+            output.position = float4(position, 1.0);
+        }
+        fragment = fragmentFuncGradient()
+    }
+}
