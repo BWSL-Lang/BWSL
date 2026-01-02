@@ -128,7 +128,7 @@ struct AttributeData {
     TypeInfo typeInfo;          // Semantic type (e.g., float3 for position)
     CompressionFormat compression;  // Compression format
     u8 attributeIndex;
-    bool isOptional;
+    u8 _pad;
 };
 
 // Get the raw storage type for a compression format

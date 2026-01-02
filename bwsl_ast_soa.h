@@ -141,9 +141,8 @@ struct AttributeDeclData {
     ArenaString dataType;
     ArenaString compression;
     u8 attributeIndex;
-    bool isOptional;
     bool isInstance;
-    u8 _pad;
+    u8 _pad[2];
 };
 
 // 24 bytes + ArenaArray
@@ -225,7 +224,7 @@ struct ConstraintDeclData {
     TypeMask allowedTypes;
 };
 
-// Pass - 28 bytes + ArenaArrays
+// Pass - 32 bytes + ArenaArrays
 struct PassData {
     ArenaString name;
     ArenaArray<ArenaString> usedAttributes;
@@ -234,6 +233,7 @@ struct PassData {
     NodeRef vertexShader;
     NodeRef fragmentShader;
     NodeRef computeShader;
+    u32 optionalAttributesMask;     // Bitmask of optional attributes (from ? syntax)
 };
 
 enum class ResourceAccessMode : u8 {
@@ -973,7 +973,6 @@ namespace ASTFactory {
         data.dataType = ArenaString::MakeHashOnly(type);
         data.compression = ArenaString::MakeHashOnly(0u);
         data.attributeIndex = 0xFF;
-        data.isOptional = false;
         data.isInstance = false;
         ast->attributeDecls.Push(ast->arena, data);
 
@@ -999,6 +998,7 @@ namespace ASTFactory {
         data.vertexShader = NodeRef::Null();
         data.fragmentShader = NodeRef::Null();
         data.computeShader = NodeRef::Null();
+        data.optionalAttributesMask = 0;
         ast->passes.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {

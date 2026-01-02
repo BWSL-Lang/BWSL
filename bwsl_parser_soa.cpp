@@ -803,8 +803,6 @@ NodeRef Parser::ParseAttributeDecl() {
             if (!Consume(TokenType::RIGHT_PAREN, "Expected ')' after compression type")) {
                 break;
             }
-        } else if (decoHash == Utils::HashStr("optional")) {
-            ast->GetAttributeDecl(attr).isOptional = true;
         } else if (decoHash == Utils::HashStr("instance")) {
             ast->GetAttributeDecl(attr).isInstance = true;
         } else {
@@ -1003,12 +1001,16 @@ void Parser::ParseUseAttributes(NodeRef pass) {
         Consume(TokenType::IDENTIFIER, "Expected attribute name");
         ArenaString attrName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
         bool isOptional = Match(TokenType::QUESTION);
-        (void)isOptional;
 
         u8 idx = GetAttributeIndex(attrName);
         if (idx == 0xFF) { Error("Unknown attribute in 'use attributes'"); break; }
 
         ast->GetPass(pass).usedAttributes.Push(arena, attrName);
+
+        // Set the optional bit for this attribute
+        if (isOptional && idx < 32) {
+            ast->GetPass(pass).optionalAttributesMask |= (1u << idx);
+        }
 
         if (!Match(TokenType::COMMA)) break;
     }

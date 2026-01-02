@@ -123,9 +123,7 @@ namespace BWSL{
         {Utils::HashStr("import"), "import"},
         {Utils::HashStr("pipeline"), "pipeline"},
         {Utils::HashStr("compressed"), "compressed"},
-        {Utils::HashStr("instance"), "instance"},
-        {Utils::HashStr("optional"), "optional"}
-
+        {Utils::HashStr("instance"), "instance"}
     };
 
     // Dynamic string table for runtime-registered strings (e.g., module/struct names)
