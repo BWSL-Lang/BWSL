@@ -2941,9 +2941,10 @@ void LowerIfStatement(NodeRef ref) {
             return objectReg;
         }
 
-        // Handle function call object (e.g., sample(tex, uv).rgb)
-        if (access.object.Type() == ASTNodeType::FUNCTION_CALL) {
-            // Lower the function call first to get the result
+        // Handle any expression object (function call, binary/unary expression, constructor, etc.)
+        // e.g., sample(tex, uv).rgb, (matrix * vec4).xyz, float4(x,y,z,w).xy
+        if (access.object.Type() != ASTNodeType::IDENTIFIER) {
+            // Lower the expression first to get the result
             u16 objectReg = LowerExpression(access.object);
 
             // Then apply swizzle/member access
@@ -3002,11 +3003,6 @@ void LowerIfStatement(NodeRef ref) {
 
             // No swizzle or unknown member, return object as-is
             return objectReg;
-        }
-
-        if (access.object.Type() != ASTNodeType::IDENTIFIER) {
-            // Other complex member access not yet supported
-            return 0;
         }
 
         const IdentifierData& obj = ast->GetIdentifier(access.object);

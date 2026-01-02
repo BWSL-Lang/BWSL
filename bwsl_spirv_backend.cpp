@@ -4668,8 +4668,9 @@ void SPIRVBuilder::DeclareInputOutput() {
         }
         
         // --- Outputs: User varyings (if used) ---
+        // Support up to 16 varyings (VARYING0 through VARYING0+15) to match fragment shader
         u32 locationCounter = 0;
-        for (u32 slot = OutputSlot::VARYING0; slot <= OutputSlot::VARYING3; slot++) {
+        for (u32 slot = OutputSlot::VARYING0; slot <= OutputSlot::VARYING0 + 15; slot++) {
             if (!(analysis.usedOutputMask & (1 << slot))) continue;
 
             // Get type from analysis or use fallback
