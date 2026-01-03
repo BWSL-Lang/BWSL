@@ -4315,6 +4315,20 @@ void SPIRVBuilder::EmitBranch(u32 ir_idx) {
     IR::OpCode op = static_cast<IR::OpCode>(ir->opcodes[ir_idx]);
 
     if (op == IR::OP_BRANCH) {
+        // Check if this is an empty if-block (both targets are the same)
+        // In this case, we emit OpBranch instead of OpBranchConditional
+        // and skip the OpSelectionMerge entirely (fixes SPIRV-Cross DCE bug)
+        u32 metadata = ir->metadata[ir_idx];
+        u32 true_target = metadata & 0xFFFF;
+        u32 false_target = metadata >> 16;
+
+        if (true_target == false_target) {
+            // Empty if-block: just emit unconditional branch, skip merge
+            u32 label = GetOrCreateBlockLabel(true_target);
+            Emit(spv::OpBranch, label);
+            return;
+        }
+
         // Pre-convert condition to bool if needed (before merge instruction)
         u16 cond_reg = ir->GetOperand(ir_idx, 0);
         CoreType condType = CoreType::BOOL;

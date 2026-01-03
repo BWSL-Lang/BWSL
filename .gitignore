@@ -32,9 +32,8 @@ build/
 *.bak
 
 # Test output files (keep .bwsl and .rcfg source files)
-tests/*.spv
-tests/*.metal
-tests/*.hlsl
-tests/*.glsl
-tests/*.gles
-tests/*.json
+tests/output/
+
+# Golden files should be tracked (un-ignore)
+!tests/golden/
+!tests/golden/*.metal
