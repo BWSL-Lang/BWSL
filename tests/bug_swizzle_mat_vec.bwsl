@@ -1,0 +1,29 @@
+// BUG: .xyz swizzle on mat*vec result generates invalid OpCompositeExtract
+// Expected: Valid SPIR-V extracting xyz from float4
+// Actual: "Result type (OpTypeFloat) does not match the type that results from indexing into the composite (OpTypeVector)"
+
+pipeline BugSwizzleMatVec {
+
+attributes {
+    position: float3
+}
+
+pass "Test" {
+    use attributes { position }
+
+    vertex {
+        mat4 modelMatrix = resources.modelMatrix;
+        mat4 viewProjMatrix = resources.projectionMatrix * resources.viewMatrix;
+
+        // This causes the SPIR-V validation error
+        float3 worldPos = (modelMatrix * float4(attributes.position, 1.0)).xyz;
+
+        output.position = viewProjMatrix * float4(worldPos, 1.0);
+    }
+
+    fragment {
+        output.color = float4(1.0);
+    }
+}
+
+}

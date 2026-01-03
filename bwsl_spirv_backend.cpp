@@ -262,11 +262,15 @@ void SPIRVBuilder::Initialize(BWSL_Arena* arena, IR::IRProgram* ir, ShaderStage 
     idDecorations = (u32*)arena->Allocate(idCapacity * sizeof(u32), 64);
     hasPreAllocatedId = (bool*)arena->Allocate(idCapacity * sizeof(bool), 64);
     localVarIds = (u32*)arena->Allocate(idCapacity * sizeof(u32), 64);
+    localArrayVarIds = (u32*)arena->Allocate(32 * sizeof(u32), 64);
+    localArrayElemPtrTypes = (u32*)arena->Allocate(32 * sizeof(u32), 64);
     memset(spirvIds, 0, idCapacity * sizeof(u32));
     memset(idTypes, 0, idCapacity * sizeof(u16));
     memset(idDecorations, 0, idCapacity * sizeof(u32));
     memset(hasPreAllocatedId, 0, idCapacity * sizeof(bool));
     memset(localVarIds, 0, idCapacity * sizeof(u32));
+    memset(localArrayVarIds, 0, 32 * sizeof(u32));
+    memset(localArrayElemPtrTypes, 0, 32 * sizeof(u32));
     
     // Initialize type arrays
     memset(typeIds, 0, sizeof(typeIds));
@@ -3308,8 +3312,21 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 elem_type_id = GetTypeId(CoreType::FLOAT);
             }
 
-            // Non-storage arrays are lowered as placeholder values; ignore index to keep SPIR-V valid.
-            Emit(spv::OpUndef, elem_type_id, dest);
+            // Check if this is a local array
+            bool isLocalArray = ir->registerStorageInfo &&
+                base_reg < ir->registerCount &&
+                (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY);
+
+            if (isLocalArray) {
+                // Local array with Function storage class
+                u32 elem_ptr_type = GetPointerTypeId(elem_type_id, spv::StorageClassFunction);
+                u32 ptr_id = AllocateId();
+                Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, index_id);
+                Emit(spv::OpLoad, elem_type_id, dest, ptr_id);
+            } else {
+                // Non-storage arrays are lowered as placeholder values; ignore index to keep SPIR-V valid.
+                Emit(spv::OpUndef, elem_type_id, dest);
+            }
             break;
         }
 
@@ -3326,7 +3343,33 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 base_reg < ir->registerCount &&
                 (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_PTR);
 
-            if (isStoragePtr) {
+            // Check if this is a local array
+            bool isLocalArray = ir->registerStorageInfo &&
+                base_reg < ir->registerCount &&
+                (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY);
+
+            if (isLocalArray) {
+                // Local array with Function storage class
+                CoreType elemType = CoreType::FLOAT;
+                if (ir->registerTypes && value_reg < ir->registerCount) {
+                    CoreType regType = static_cast<CoreType>(ir->registerTypes[value_reg]);
+                    if (regType != CoreType::VOID && regType != CoreType::INVALID) {
+                        elemType = regType;
+                    }
+                }
+                u32 elem_type_id = GetTypeId(elemType);
+                if (elem_type_id == 0) {
+                    elem_type_id = GetTypeId(CoreType::FLOAT);
+                }
+                u32 elem_ptr_type = GetPointerTypeId(elem_type_id, spv::StorageClassFunction);
+                u32 base_id = GetSpirvId(base_reg);
+                u32 index_id = GetSpirvId(index_reg);
+                u32 value_id = GetSpirvId(value_reg);
+
+                u32 ptr_id = AllocateId();
+                Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, index_id);
+                Emit(spv::OpStore, ptr_id, value_id);
+            } else if (isStoragePtr) {
                 spv::StorageClass storageClass = spv::StorageClassStorageBuffer;
                 if (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_SHARED) {
                     storageClass = spv::StorageClassWorkgroup;
@@ -3535,11 +3578,63 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 }
             }
 
-            // Get pointer type for the element
-            u32 elem_ptr_type = GetPointerTypeId(GetTypeId(elemType), storageClass);
+            // Get element type ID (handle struct types specially)
+            u32 elem_type_id = GetTypeId(elemType);
+            u32 structHash = 0;
 
-            // Emit OpAccessChain with the dynamic index
-            Emit(spv::OpAccessChain, elem_ptr_type, dest, base_id, index_id);
+            // First check the buffer element struct types (discovered from usage)
+            if (ir->registerStorageInfo && base_reg < ir->registerCount) {
+                u32 storageInfo = ir->registerStorageInfo[base_reg];
+                if (storageInfo != 0) {
+                    u32 binding = (storageInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
+                    if (binding < 32) {
+                        structHash = ir->bufferElementStructTypes[binding];
+                    }
+                }
+            }
+
+            // If not found, look up from destination or base register
+            if (structHash == 0 && (elemType == CoreType::CUSTOM || elemType == CoreType::ENUM)) {
+                if (ir->registerStructTypes) {
+                    if (dest_reg < ir->registerCount) {
+                        structHash = ir->registerStructTypes[dest_reg];
+                    }
+                    if (structHash == 0 && base_reg < ir->registerCount) {
+                        structHash = ir->registerStructTypes[base_reg];
+                    }
+                }
+            }
+
+            // Get struct type ID if we found a struct hash
+            if (structHash != 0) {
+                elem_type_id = GetStructTypeId(structHash);
+                elemType = CoreType::CUSTOM;
+            }
+
+            if (elem_type_id == 0) {
+                elem_type_id = GetTypeId(CoreType::FLOAT);
+            }
+
+            // Get pointer type for the element
+            u32 elem_ptr_type = GetPointerTypeId(elem_type_id, storageClass);
+
+            // Check if base is a storage buffer variable (needs extra 0 index for wrapper struct)
+            bool isStorageBufferVar = false;
+            for (u32 b = 0; b < 32; b++) {
+                if (storageBufferIds[b] == base_id) {
+                    isStorageBufferVar = true;
+                    break;
+                }
+            }
+
+            if (isStorageBufferVar) {
+                // Storage buffer variable - need to access member 0 (runtime array) first
+                u32 zero_id = GetIntConstantId(0, true);
+                Emit(spv::OpAccessChain, elem_ptr_type, dest, base_id, zero_id, index_id);
+            } else {
+                // Intermediate pointer - direct index
+                Emit(spv::OpAccessChain, elem_ptr_type, dest, base_id, index_id);
+            }
             break;
         }
 
@@ -3558,7 +3653,42 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                     elemType = regType;
                 }
             }
+
+            // Get element type ID (handle struct types specially)
             u32 elem_type_id = GetTypeId(elemType);
+            u32 structHash = 0;
+
+            // First check the buffer element struct types (discovered from usage)
+            if (ir->registerStorageInfo && ptr_reg < ir->registerCount) {
+                u32 storageInfo = ir->registerStorageInfo[ptr_reg];
+                if (storageInfo != 0) {
+                    u32 binding = (storageInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
+                    if (binding < 32) {
+                        structHash = ir->bufferElementStructTypes[binding];
+                    }
+                }
+            }
+
+            // If not found, look up from destination or pointer register
+            if (structHash == 0 && (elemType == CoreType::CUSTOM || elemType == CoreType::ENUM)) {
+                if (ir->registerStructTypes) {
+                    if (dest_reg < ir->registerCount) {
+                        structHash = ir->registerStructTypes[dest_reg];
+                    }
+                    if (structHash == 0 && ptr_reg < ir->registerCount) {
+                        structHash = ir->registerStructTypes[ptr_reg];
+                    }
+                }
+            }
+
+            // Get struct type ID if we found a struct hash
+            if (structHash != 0) {
+                elem_type_id = GetStructTypeId(structHash);
+            }
+
+            if (elem_type_id == 0) {
+                elem_type_id = GetTypeId(CoreType::FLOAT);
+            }
 
             // Emit OpLoad
             Emit(spv::OpLoad, elem_type_id, dest, ptr_id);
@@ -4464,6 +4594,36 @@ void SPIRVBuilder::EmitFunctionBody() {
                 }
             }
         }
+
+        // Emit local array OpVariables
+        if (ir && ir->localArrayCount > 0) {
+            for (u32 i = 0; i < ir->localArrayCount; i++) {
+                CoreType elemType = static_cast<CoreType>(ir->localArrayTypes[i]);
+                u32 elemTypeId = GetTypeId(elemType);
+                if (elemTypeId == 0) {
+                    elemTypeId = GetTypeId(CoreType::FLOAT);
+                }
+
+                u32 arraySize = ir->localArraySizes[i];
+                u32 arrayTypeId = AllocateId();
+                u32 lengthConstId = GetIntConstantId(arraySize, true);
+                u32 arrayOps[] = {arrayTypeId, elemTypeId, lengthConstId};
+                EmitToSection(&typesConstants, spv::OpTypeArray, arrayOps, 3);
+
+                u32 ptrTypeId = GetPointerTypeId(arrayTypeId, spv::StorageClassFunction);
+                u32 varId = AllocateId();
+                Emit(spv::OpVariable, ptrTypeId, varId, spv::StorageClassFunction);
+
+                u16 reg = ir->localArrayRegisters[i];
+                if (reg < idCapacity) {
+                    spirvIds[reg] = varId;
+                }
+
+                // Store the element pointer type for later use in array access
+                localArrayElemPtrTypes[i] = GetPointerTypeId(elemTypeId, spv::StorageClassFunction);
+                localArrayVarIds[i] = varId;
+            }
+        }
     };
 
     if (!cfg || cfg->blockCount == 0) {
@@ -5098,7 +5258,10 @@ void SPIRVBuilder::DeclareResources() {
     // ============= Uniform Buffers =============
     for (u32 binding = 0; binding < 32; binding++) {
         if (!(analysis.usedUniformMask & (1 << binding))) continue;
-        
+
+        // Skip bindings that are also used as storage buffers - those are handled separately
+        if (analysis.usedStorageBufferMask & (1 << binding)) continue;
+
         // Get the actual type from analysis (derived from IR register types)
         CoreType uniformType = static_cast<CoreType>(analysis.uniformTypes[binding]);
         if (uniformType == CoreType::VOID || uniformType == CoreType::INVALID) {
@@ -5237,9 +5400,12 @@ void SPIRVBuilder::DeclareResources() {
         for (u32 binding = 0; binding < 32; binding++) {
             if (!(analysis.usedStorageBufferMask & (1 << binding))) continue;
 
-            // Check if this storage buffer has a struct type from the symbol table
-            u32 structTypeHash = 0;
-            if (symbols) {
+            // Check if this storage buffer has a struct type
+            // First check IR's discovered buffer element types (from usage context)
+            u32 structTypeHash = ir->bufferElementStructTypes[binding];
+
+            // Then check symbol table as fallback
+            if (structTypeHash == 0 && symbols) {
                 for (u32 r = 0; r < symbols->resources.count; r++) {
                     const ResourceData& resData = symbols->resources[r];
                     if (resData.bindingIndex == binding &&
@@ -5256,12 +5422,50 @@ void SPIRVBuilder::DeclareResources() {
 
             if (structTypeHash != 0) {
                 // Use the actual struct type for this storage buffer
-                ssbo_struct_type = GetStructTypeId(structTypeHash);
-                if (ssbo_struct_type != 0) {
-                    // Block decoration for struct type
+                u32 elem_struct_type = GetStructTypeId(structTypeHash);
+                if (elem_struct_type != 0) {
+                    // For storage buffer arrays, we need:
+                    // 1. Element struct type (Particle)
+                    // 2. RuntimeArray of that struct
+                    // 3. Wrapper struct containing the RuntimeArray (Block-decorated)
+                    // 4. Pointer to wrapper struct
+
+                    // Create RuntimeArray type
+                    u32 runtime_array_type = AllocateId();
+                    {
+                        u32 ops[] = {runtime_array_type, elem_struct_type};
+                        EmitToSection(&typesConstants, spv::OpTypeRuntimeArray, ops, 2);
+                    }
+
+                    // ArrayStride decoration for the runtime array
+                    // Calculate struct size from IR struct info
+                    u32 structSize = 32; // Default fallback
+                    for (u32 i = 0; i < ir->structTypeCount; i++) {
+                        if (ir->structTypes[i].nameHash == structTypeHash) {
+                            structSize = ir->structTypes[i].totalSize;
+                            break;
+                        }
+                    }
+                    // Align to 16 bytes (std430 alignment for structs)
+                    structSize = (structSize + 15) & ~15;
+                    u32 stride_ops[] = {runtime_array_type, spv::DecorationArrayStride, structSize};
+                    EmitToSection(&decorations, spv::OpDecorate, stride_ops, 3);
+
+                    // Create wrapper struct type containing the runtime array
+                    ssbo_struct_type = AllocateId();
+                    {
+                        u32 ops[] = {ssbo_struct_type, runtime_array_type};
+                        EmitToSection(&typesConstants, spv::OpTypeStruct, ops, 2);
+                    }
+
+                    // Block decoration for wrapper struct
                     EmitDecoration(ssbo_struct_type, spv::DecorationBlock, nullptr, 0);
 
-                    // Pointer type for the struct
+                    // Member offset for the runtime array member
+                    u32 member_offset[] = {ssbo_struct_type, 0, spv::DecorationOffset, 0};
+                    EmitToSection(&decorations, spv::OpMemberDecorate, member_offset, 4);
+
+                    // Pointer type for the wrapper struct
                     ptr_ssbo_type = AllocateId();
                     u32 ops[] = {ptr_ssbo_type, spv::StorageClassStorageBuffer, ssbo_struct_type};
                     EmitToSection(&typesConstants, spv::OpTypePointer, ops, 3);

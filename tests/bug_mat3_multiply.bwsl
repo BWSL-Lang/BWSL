@@ -1,0 +1,41 @@
+// BUG: mat3 constructor and matrix-vector multiplication has type inference issues
+// Expected: Proper mat3 * float3 multiplication
+// Actual: SPIR-V type mismatch errors
+
+pipeline BugMat3Multiply {
+
+attributes {
+    position: float3
+    normal: float3
+    tangent: float3
+}
+
+pass "Test" {
+    use attributes { position, normal, tangent }
+
+    vertex {
+        output.position = resources.viewProjMatrix * float4(attributes.position, 1.0);
+        output.normal = attributes.normal;
+        output.tangent = attributes.tangent;
+    }
+
+    fragment {
+        float3 bitangent = cross(input.normal, input.tangent);
+
+        // Construct TBN matrix - this causes type issues
+        mat3 TBN = mat3(
+            input.tangent,
+            bitangent,
+            input.normal
+        );
+
+        float3 tangentNormal = float3(0.0, 0.0, 1.0);
+
+        // mat3 * float3 multiplication fails
+        float3 worldNormal = TBN * tangentNormal;
+
+        output.color = float4(worldNormal * 0.5 + 0.5, 1.0);
+    }
+}
+
+}

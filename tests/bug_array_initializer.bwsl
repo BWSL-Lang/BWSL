@@ -1,0 +1,30 @@
+// BUG: Array initializer syntax { ... } not supported
+// Expected: Should allow inline array initialization
+// Actual: Parse error
+
+pipeline BugArrayInitializer {
+
+attributes {
+    position: float3
+}
+
+pass "Test" {
+    use attributes { position }
+
+    vertex {
+        // This syntax fails - need element-by-element instead
+        float2[3] positions = {
+            float2(-1.0, -1.0),
+            float2( 3.0, -1.0),
+            float2(-1.0,  3.0)
+        };
+
+        output.position = float4(positions[input.vertex_id], 0.0, 1.0);
+    }
+
+    fragment {
+        output.color = float4(1.0);
+    }
+}
+
+}

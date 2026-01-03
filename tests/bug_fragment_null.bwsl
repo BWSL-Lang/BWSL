@@ -1,0 +1,22 @@
+// BUG: fragment = null syntax not supported for depth-only passes
+// Expected: Allow depth-only rendering without fragment shader
+// Actual: Syntax error
+
+pipeline BugFragmentNull {
+
+attributes {
+    position: float3
+}
+
+pass "ShadowPass" {
+    use attributes { position }
+
+    vertex {
+        output.position = resources.lightViewProjMatrix * float4(attributes.position, 1.0);
+    }
+
+    // Depth-only pass - no fragment output needed
+    fragment = null
+}
+
+}

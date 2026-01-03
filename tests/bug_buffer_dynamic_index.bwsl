@@ -1,0 +1,34 @@
+// BUG: Buffer array access with dynamic index generates null SPIR-V IDs
+// Expected: Valid SPIR-V with proper buffer access
+// Actual: "error: line X: Id is 0" during SPIR-V validation
+// CRITICAL - blocks GPU particle systems and instanced rendering
+
+pipeline BugBufferDynamicIndex {
+
+struct Particle {
+    float3 position;
+    float size;
+    float4 color;
+};
+
+attributes {
+    position: float3
+}
+
+pass "Test" {
+    use attributes { position }
+
+    vertex {
+        // This causes "Id is 0" SPIR-V error
+        Particle particle = resources.particles[input.instance_id];
+
+        output.position = float4(particle.position, 1.0);
+        output.color = particle.color;
+    }
+
+    fragment {
+        output.color = input.color;
+    }
+}
+
+}

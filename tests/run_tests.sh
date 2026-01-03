@@ -49,17 +49,35 @@ for test_file in "$SCRIPT_DIR"/*.bwsl; do
         continue
     fi
 
+    # Find associated config file
+    config_flag=""
+    # 1. Check for exact match: <test_name>.rcfg
+    if [ -f "$SCRIPT_DIR/${test_name}.rcfg" ]; then
+        config_flag="-config $SCRIPT_DIR/${test_name}.rcfg"
+    else
+        # 2. Check for prefix match: <prefix>_test.rcfg (e.g., bug_test.rcfg for bug_*)
+        prefix=$(echo "$test_name" | cut -d'_' -f1)
+        if [ -f "$SCRIPT_DIR/${prefix}_test.rcfg" ]; then
+            config_flag="-config $SCRIPT_DIR/${prefix}_test.rcfg"
+        fi
+    fi
+
     # Run compiler
     compile_flags=""
     if [ "$test_name" = "inline_return_jump" ] || [ "$test_name" = "inline_return_loop" ] || [ "$test_name" = "inline_return_nested_loops" ] || [ "$test_name" = "inline_return_nested_loops_skip_break" ] || [ "$test_name" = "inline_return_outer_skip_break" ] || [ "$test_name" = "inline_return_nested_if" ] || [ "$test_name" = "inline_return_range_loop" ] || [ "$test_name" = "inline_return_count_loop" ] || [ "$test_name" = "inline_return_loop_until" ] || [ "$test_name" = "inline_return_enum" ] || [ "$test_name" = "inline_return_struct" ]; then
         compile_flags="-internals"
     fi
 
-    output=$("$BWSLC" "$test_file" -o "$OUTPUT_DIR" $compile_flags 2>&1)
+    output=$("$BWSLC" "$test_file" -o "$OUTPUT_DIR" $config_flag $compile_flags 2>&1)
     exit_code=$?
 
     if [ $exit_code -eq 0 ]; then
-        echo -e "[${GREEN}PASS${NC}] $test_name"
+        if [ -n "$config_flag" ]; then
+            config_name=$(basename $(echo "$config_flag" | awk '{print $2}'))
+            echo -e "[${GREEN}PASS${NC}] $test_name (config: $config_name)"
+        else
+            echo -e "[${GREEN}PASS${NC}] $test_name"
+        fi
         ((PASSED++))
 
         if [ "$test_name" = "inline_return_jump" ] || [ "$test_name" = "inline_return_nested_if" ] || [ "$test_name" = "inline_return_enum" ] || [ "$test_name" = "inline_return_struct" ]; then

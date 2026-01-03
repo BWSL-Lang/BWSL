@@ -1,0 +1,38 @@
+# Generic test config for bug reproduction
+pipeline Test
+
+target Color RGBA8Unorm viewport
+target Depth Depth32Float viewport
+
+# Common uniforms
+uniform viewMatrix mat4 0 vertex
+uniform projectionMatrix mat4 1 vertex
+uniform modelMatrix mat4 2 vertex
+uniform viewProjMatrix mat4 3 vertex
+uniform lightViewProjMatrix mat4 4 vertex
+
+# For buffer test
+uniform particles buffer 5 vertex
+
+pass Test
+  type geometry
+  color Color clear 0.0 0.0 0.0 1.0 store
+  depth Depth clear 1.0 store
+  depends none
+
+pass BasePass
+  type geometry
+  color Color load store
+  depth Depth load store
+  depends Test
+
+pass ReusePass
+  type geometry
+  color Color load store
+  depth Depth load store
+  depends BasePass
+
+pass ShadowPass
+  type geometry
+  depth Depth clear 1.0 store
+  depends none

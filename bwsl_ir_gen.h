@@ -119,6 +119,7 @@ struct IRProgram {
     static constexpr u32 STORAGE_IS_PTR = 0x1;
     static constexpr u32 STORAGE_IS_SHARED = 0x2;
     static constexpr u32 STORAGE_IS_ADDRESS_TAKEN = 0x4;  // Variable has its address taken (&var)
+    static constexpr u32 STORAGE_IS_LOCAL_ARRAY = 0x8;    // Function-local array with initializer
     static constexpr u32 STORAGE_BINDING_SHIFT = 16;
     static constexpr u32 STORAGE_DEPTH_SHIFT = 1;
     static constexpr u32 STORAGE_DEPTH_MASK = 0x7F << 1;
@@ -130,6 +131,18 @@ struct IRProgram {
     alignas(64) u16* sharedRegisters;
     u32 sharedVarCount;
     u32 sharedVarCapacity;
+
+    // Local (function-scope) array declarations
+    alignas(64) u32* localArrayNameHashes;
+    alignas(64) u16* localArrayTypes;
+    alignas(64) u32* localArraySizes;
+    alignas(64) u16* localArrayRegisters;
+    u32 localArrayCount;
+    u32 localArrayCapacity;
+
+    // Buffer element struct types (discovered from usage context)
+    // Index by binding slot (0-31), stores struct type hash or 0 if unknown/primitive
+    alignas(64) u32 bufferElementStructTypes[32];
 
     enum StructureType : u32 {
     STRUCT_NONE          = 0,

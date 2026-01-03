@@ -3743,7 +3743,12 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
     // Check for initializer
     NodeRef initializer = NodeRef::Null();
     if (Match(TokenType::ASSIGN)) {
-        initializer = ParseExpression();
+        // Check for brace-enclosed array initializer: { expr, expr, ... }
+        if (Check(TokenType::LEFT_BRACE)) {
+            initializer = ParseArrayInitializer();
+        } else {
+            initializer = ParseExpression();
+        }
     }
 
     Consume(TokenType::SEMICOLON, "Expected ';' after array declaration");
@@ -3790,6 +3795,38 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
     }
 
     return varDecl;
+}
+
+NodeRef Parser::ParseArrayInitializer() {
+    // Handle brace-enclosed array initializer: { expr, expr, ... }
+    SourceLocation loc = getLocation(stream->GetOffset(current));
+    u32 line = loc.line;
+    u32 col = loc.column;
+
+    Consume(TokenType::LEFT_BRACE, "Expected '{' for array initializer");
+
+    NodeRef arrayNode = ASTFactory::MakeBlock(ast, line, col);
+
+    // Parse elements
+    if (!Check(TokenType::RIGHT_BRACE)) {
+        do {
+            if (Check(TokenType::RIGHT_BRACE)) {
+                break;  // Handle trailing comma
+            }
+
+            NodeRef element = ParseExpression();
+            if (!element.IsValid()) {
+                Error("Expected element expression in array initializer");
+                return NodeRef::Null();
+            }
+
+            ast->GetBlock(arrayNode).statements.Push(arena, element);
+        } while (Match(TokenType::COMMA));
+    }
+
+    Consume(TokenType::RIGHT_BRACE, "Expected '}' after array initializer");
+
+    return arrayNode;
 }
 
 NodeRef Parser::ParseInlineArrayConstruction() {

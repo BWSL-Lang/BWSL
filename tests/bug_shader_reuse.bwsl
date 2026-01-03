@@ -1,0 +1,37 @@
+// BUG: vertex = "OtherPass".vertex shader reuse syntax not working
+// Expected: Reuse vertex shader from another pass
+// Actual: Syntax error or not implemented
+
+pipeline BugShaderReuse {
+
+attributes {
+    position: float3
+    color: float4
+}
+
+pass "BasePass" {
+    use attributes { position, color }
+
+    vertex {
+        output.position = resources.viewProjMatrix * float4(attributes.position, 1.0);
+        output.color = attributes.color;
+    }
+
+    fragment {
+        output.color = input.color;
+    }
+}
+
+pass "ReusePass" {
+    use attributes { position, color }
+
+    // This should reuse the vertex shader from BasePass
+    vertex = "BasePass".vertex
+
+    fragment {
+        // Different fragment shader
+        output.color = input.color * 0.5;
+    }
+}
+
+}

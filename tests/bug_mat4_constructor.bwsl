@@ -1,0 +1,31 @@
+// BUG: mat4 inline constructor with 4 float4 columns generates wrong SPIR-V
+// Expected: Valid OpCompositeConstruct with 4 column vectors
+// Actual: "Expected total number of Constituents to be equal to the number of columns of Result Type matrix"
+
+pipeline BugMat4Constructor {
+
+attributes {
+    position: float3
+}
+
+pass "Test" {
+    use attributes { position }
+
+    vertex {
+        // This generates invalid SPIR-V OpCompositeConstruct
+        mat4 orthoProjection = mat4(
+            float4(2.0 / 1920.0, 0.0, 0.0, 0.0),
+            float4(0.0, 2.0 / 1080.0, 0.0, 0.0),
+            float4(0.0, 0.0, 1.0, 0.0),
+            float4(-1.0, -1.0, 0.0, 1.0)
+        );
+
+        output.position = orthoProjection * float4(attributes.position, 1.0);
+    }
+
+    fragment {
+        output.color = float4(1.0);
+    }
+}
+
+}

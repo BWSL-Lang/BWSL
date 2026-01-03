@@ -243,6 +243,18 @@ struct IRLowering {
         program.sharedVarCount = 0;
         program.sharedVarCapacity = sharedCapacity;
 
+        // Local array tracking
+        u32 localArrayCapacity = 16;
+        program.localArrayNameHashes = (u32*)pool->Allocate(localArrayCapacity * sizeof(u32), 64);
+        program.localArrayTypes = (u16*)pool->Allocate(localArrayCapacity * sizeof(u16), 64);
+        program.localArraySizes = (u32*)pool->Allocate(localArrayCapacity * sizeof(u32), 64);
+        program.localArrayRegisters = (u16*)pool->Allocate(localArrayCapacity * sizeof(u16), 64);
+        program.localArrayCount = 0;
+        program.localArrayCapacity = localArrayCapacity;
+
+        // Buffer element struct types (initialized to 0 = unknown)
+        memset(program.bufferElementStructTypes, 0, sizeof(program.bufferElementStructTypes));
+
         // PHI fields (will be populated by SSA if needed)
         program.phiBlockIndices = nullptr;
         program.phiResultRegs = nullptr;
@@ -1404,14 +1416,76 @@ struct IRLowering {
 
         // If there's an initializer, evaluate it
         if (!varDecl.initializer.IsNull()) {
-            u16 initReg = LowerExpression(varDecl.initializer);
-            builder.EmitInstruction(OP_STORE_REG, varReg, initReg);
-            // Propagate pointer storage info if the init expression is a pointer
-            if (initReg < MAX_REGISTERS &&
-                (program.registerStorageInfo[initReg] & IR::IRProgram::STORAGE_IS_PTR)) {
-                program.registerStorageInfo[varReg] = program.registerStorageInfo[initReg];
+            // Check for array initializer (BLOCK node with element expressions)
+            if (isArray && varDecl.initializer.Type() == ASTNodeType::BLOCK) {
+                const BlockData& initBlock = ast->GetBlock(varDecl.initializer);
+
+                // Get element type from the variable's array element type hash
+                CoreType elementType = coreType;
+                if (varDecl.arrayElementTypeHash != 0) {
+                    elementType = ResolveCoreTypeFromHash(varDecl.arrayElementTypeHash, nullptr);
+                } else if (varData) {
+                    elementType = varData->typeInfo.coreType;
+                }
+
+                // Register the array for local array tracking
+                program.localArrayNameHashes[program.localArrayCount] = varDecl.name.nameHash;
+                program.localArrayTypes[program.localArrayCount] = static_cast<u16>(elementType);
+                program.localArraySizes[program.localArrayCount] = arrayLength;
+                program.localArrayRegisters[program.localArrayCount] = varReg;
+                program.localArrayCount++;
+
+                // Mark the register as an array pointer
+                program.registerStorageInfo[varReg] =
+                    ((program.localArrayCount - 1) << IR::IRProgram::STORAGE_BINDING_SHIFT) |
+                    IR::IRProgram::STORAGE_IS_PTR |
+                    IR::IRProgram::STORAGE_IS_LOCAL_ARRAY;
+
+                // Emit element-by-element stores
+                for (u32 i = 0; i < initBlock.statements.count && i < arrayLength; i++) {
+                    NodeRef elementExpr = initBlock.statements[i];
+                    u16 elementReg = LowerExpression(elementExpr);
+
+                    // Emit array store: store element at index i
+                    u16 indexReg = EmitConstantUint(i);
+                    builder.EmitInstruction(OP_ARRAY_STORE, varReg, indexReg, elementReg);
+                }
+                initializedVariables.insert(varDecl.name.nameHash);
+            } else {
+                u16 initReg = LowerExpression(varDecl.initializer);
+
+                // If the variable has a known struct type and the initializer doesn't,
+                // propagate the struct type to the initializer result. This handles cases
+                // like loading from untyped storage buffers into typed variables.
+                if (coreType == CoreType::CUSTOM && initReg < MAX_REGISTERS) {
+                    u32 varStructHash = variableStructTypes[varDecl.name.nameHash];
+                    if (varStructHash == 0) {
+                        varStructHash = program.registerStructTypes[varReg];
+                    }
+                    if (varStructHash != 0 && program.registerStructTypes[initReg] == 0) {
+                        program.registerStructTypes[initReg] = varStructHash;
+                        SetRegisterType(initReg, CoreType::CUSTOM);
+
+                        // If the initializer came from a storage buffer load, record the
+                        // element struct type for this binding
+                        u32 storageInfo = program.registerStorageInfo[initReg];
+                        if (storageInfo != 0) {
+                            u32 binding = (storageInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
+                            if (binding < 32) {
+                                program.bufferElementStructTypes[binding] = varStructHash;
+                            }
+                        }
+                    }
+                }
+
+                builder.EmitInstruction(OP_STORE_REG, varReg, initReg);
+                // Propagate pointer storage info if the init expression is a pointer
+                if (initReg < MAX_REGISTERS &&
+                    (program.registerStorageInfo[initReg] & IR::IRProgram::STORAGE_IS_PTR)) {
+                    program.registerStorageInfo[varReg] = program.registerStorageInfo[initReg];
+                }
+                initializedVariables.insert(varDecl.name.nameHash);
             }
-            initializedVariables.insert(varDecl.name.nameHash);
         } else if (coreType == CoreType::CUSTOM) {
             // For struct types without initializer, emit a zero/undef struct value.
             u32 structTypeHash = variableStructTypes[varDecl.name.nameHash];
@@ -2689,9 +2763,10 @@ void LowerIfStatement(NodeRef ref) {
         u16 indexReg = LowerExpression(access.index);
         u16 dest = AllocateRegister();
 
-        // Check if the base register is a storage buffer pointer
+        // Check if the base register is a storage buffer pointer (but NOT a local array)
         bool isStoragePtr = baseReg < MAX_REGISTERS &&
-            (program.registerStorageInfo[baseReg] & IR::IRProgram::STORAGE_IS_PTR);
+            (program.registerStorageInfo[baseReg] & IR::IRProgram::STORAGE_IS_PTR) &&
+            !(program.registerStorageInfo[baseReg] & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY);
 
         if (isStoragePtr) {
             // Storage buffer array indexing:
@@ -2719,6 +2794,13 @@ void LowerIfStatement(NodeRef ref) {
 
             // Now load the value from the element pointer
             builder.EmitInstruction(OP_STORAGE_LOAD, dest, ptrReg);
+
+            // Store the binding info in dest for later struct type association
+            // (without IS_PTR flag since this is a loaded value, not a pointer)
+            if (dest < MAX_REGISTERS) {
+                program.registerStorageInfo[dest] =
+                    (binding << IR::IRProgram::STORAGE_BINDING_SHIFT);
+            }
 
             // Propagate element type from base array type
             if (baseReg < MAX_REGISTERS) {
@@ -3051,11 +3133,9 @@ void LowerIfStatement(NodeRef ref) {
 
                 switch (resData.type) {
                     case ResourceBinding::Buffer:
-                        // Check if this is a storage buffer with a struct type
-                        // If so, emit OP_STORAGE_PTR to get a pointer (for access chains)
-                        // Otherwise, emit OP_LOAD_UNIFORM for simple uniform buffers
-                        if (resData.structTypeHash != 0) {
-                            // Storage buffer with struct type - emit pointer operation
+                        // Distinguish between storage buffers (CUSTOM struct types) and uniform buffers (primitive types)
+                        if (static_cast<CoreType>(resData.coreType) == CoreType::CUSTOM || resData.structTypeHash != 0) {
+                            // Storage buffer with struct elements - emit OP_STORAGE_PTR for access chains
                             builder.EmitInstruction(OP_STORAGE_PTR, dest, resData.bindingIndex);
                             program.metadata[builder.currentInstruction - 1] = resData.structTypeHash;
 
@@ -3066,9 +3146,8 @@ void LowerIfStatement(NodeRef ref) {
                                     IR::IRProgram::STORAGE_IS_PTR;
                             }
                         } else {
-                            // Simple uniform buffer - load directly
+                            // Uniform buffer with primitive type (mat4, float4, etc.) - emit OP_LOAD_UNIFORM
                             builder.EmitInstruction(OP_LOAD_UNIFORM, dest, resData.bindingIndex);
-                            program.metadata[builder.currentInstruction - 1] = access.member.nameHash;
                         }
                         break;
 
