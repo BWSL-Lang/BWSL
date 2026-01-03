@@ -728,10 +728,12 @@ void Parser::ParseImports(NodeRef pipeline) {
 
 void Parser::ParseAttributes(NodeRef pipeline) {
     Consume(TokenType::LEFT_BRACE, "Expected '{' after 'attributes'");
+    u8 attrIndex = 0;  // Assign indices by declaration order
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
         NodeRef attr = ParseAttributeDecl();
         if (attr.IsValid()) {
+            ast->GetAttributeDecl(attr).attributeIndex = attrIndex++;
             ast->GetPipeline(pipeline).attributes.Push(arena, attr);
         } else {
             if (panicMode) {
@@ -748,6 +750,17 @@ void Parser::ParseAttributes(NodeRef pipeline) {
     }
 
     Consume(TokenType::RIGHT_BRACE, "Expected '}' after attributes");
+
+    // Validate first attribute is "position"
+    static const u32 POSITION_HASH = Utils::HashStr("position");
+    PipelineData& pipelineData = ast->GetPipeline(pipeline);
+    if (pipelineData.attributes.count > 0) {
+        NodeRef firstAttr = pipelineData.attributes[0];
+        const AttributeDeclData& first = ast->GetAttributeDecl(firstAttr);
+        if (first.name.nameHash != POSITION_HASH) {
+            Error("First attribute must be 'position'");
+        }
+    }
 }
 
 NodeRef Parser::ParseAttributeDecl() {
@@ -812,11 +825,7 @@ NodeRef Parser::ParseAttributeDecl() {
         if (panicMode) break;
     }
 
-    if (attr.IsValid() && !panicMode) {
-        ast->GetAttributeDecl(attr).attributeIndex = GetAttributeIndex(ast->GetAttributeDecl(attr).name);
-    } else if (attr.IsValid()) {
-        ast->GetAttributeDecl(attr).attributeIndex = 0xFF;
-    }
+    // Note: attributeIndex is assigned by ParseAttributes() based on declaration order
 
     return attr;
 }
@@ -1002,7 +1011,21 @@ void Parser::ParseUseAttributes(NodeRef pass) {
         ArenaString attrName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
         bool isOptional = Match(TokenType::QUESTION);
 
-        u8 idx = GetAttributeIndex(attrName);
+        // Look up attribute in current pipeline's attribute list
+        u8 idx = 0xFF;
+        if (!currentPipeline.IsNull()) {
+            const PipelineData& pipeline = ast->GetPipeline(currentPipeline);
+            for (u32 i = 0; i < pipeline.attributes.count; i++) {
+                NodeRef attrRef = pipeline.attributes[i];
+                if (attrRef.Type() == ASTNodeType::ATTRIBUTE_DECL) {
+                    const AttributeDeclData& attr = ast->GetAttributeDecl(attrRef);
+                    if (attr.name.nameHash == attrName.nameHash) {
+                        idx = attr.attributeIndex;
+                        break;
+                    }
+                }
+            }
+        }
         if (idx == 0xFF) { Error("Unknown attribute in 'use attributes'"); break; }
 
         ast->GetPass(pass).usedAttributes.Push(arena, attrName);
@@ -2613,27 +2636,6 @@ NodeRef Parser::FlattenMultiDimArrayAccess(NodeRef access) {
 //==============================================================================
 // Helper functions
 //==============================================================================
-
-u8 Parser::GetAttributeIndex(const ArenaString& name) {
-    // Hash lookup for standard attributes
-    static const struct { u32 hash; u8 index; } ATTR_MAP[] = {
-        {Utils::HashStr("position"), 0},
-        {Utils::HashStr("normal"), 1},
-        {Utils::HashStr("texcoord"), 2},
-        {Utils::HashStr("tangent"), 3},
-        {Utils::HashStr("bitangent"), 4},
-        {Utils::HashStr("color"), 5},
-        {Utils::HashStr("boneIndices"), 6},
-        {Utils::HashStr("boneWeights"), 7},
-    };
-
-    for (const auto& entry : ATTR_MAP) {
-        if (entry.hash == name.nameHash) {
-            return entry.index;
-        }
-    }
-    return 0xFF;
-}
 
 bool Parser::ValidateAttributeInUse(const ArenaString& attrName) {
     if (!currentPass.IsValid()) return false;

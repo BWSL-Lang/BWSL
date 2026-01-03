@@ -4655,25 +4655,21 @@ void LowerIfStatement(NodeRef ref) {
     }
 
     u32 GetAttributeIndex(u32 nameHash) {
-        // Common attribute name hashes
-        static const u32 POSITION_HASH = Utils::HashStr("position");
-        static const u32 NORMAL_HASH = Utils::HashStr("normal");
-        static const u32 TEXCOORD_HASH = Utils::HashStr("texcoord");
-        static const u32 TANGENT_HASH = Utils::HashStr("tangent");
-        static const u32 BITANGENT_HASH = Utils::HashStr("bitangent");
-        static const u32 COLOR_HASH = Utils::HashStr("color");
-        static const u32 BONE_INDICES_HASH = Utils::HashStr("boneIndices");
-        static const u32 BONE_WEIGHTS_HASH = Utils::HashStr("boneWeights");
+        // Look up attribute by name in current pipeline's attribute list
+        // Returns the declaration-order index (position is always 0)
+        if (currentPipeline.IsNull()) return 0;
 
-        if (nameHash == POSITION_HASH) return 0;
-        if (nameHash == NORMAL_HASH) return 1;
-        if (nameHash == TEXCOORD_HASH) return 2;
-        if (nameHash == TANGENT_HASH) return 3;
-        if (nameHash == BITANGENT_HASH) return 4;
-        if (nameHash == COLOR_HASH) return 5;
-        if (nameHash == BONE_INDICES_HASH) return 6;
-        if (nameHash == BONE_WEIGHTS_HASH) return 7;
-        return 0;
+        const PipelineData& pipeline = ast->GetPipeline(currentPipeline);
+        for (u32 i = 0; i < pipeline.attributes.count; i++) {
+            NodeRef attrRef = pipeline.attributes[i];
+            if (attrRef.Type() == ASTNodeType::ATTRIBUTE_DECL) {
+                const AttributeDeclData& attr = ast->GetAttributeDecl(attrRef);
+                if (attr.name.nameHash == nameHash) {
+                    return attr.attributeIndex;
+                }
+            }
+        }
+        return 0;  // Fallback to position
     }
 
     u32 GetInputSlotIndex(u32 nameHash) {

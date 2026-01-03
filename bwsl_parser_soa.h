@@ -264,7 +264,6 @@ private:
     TypeInfo ParseArrayType();
 
     //----------------- Helper functions ------------------------//
-    u8 GetAttributeIndex(const ArenaString& name);
     bool TryRegisterModuleFromDisk(const std::string& moduleName);
     ResourceType GetResourceType(TokenType type);
     CoreType TokenTypeToReturnType(TokenType type);

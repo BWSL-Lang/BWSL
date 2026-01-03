@@ -4907,29 +4907,11 @@ u32 SPIRVBuilder::CreateInterfaceVariable(CoreType type, spv::StorageClass stora
     return var_id;
 }
 
-// Helper: Get fallback attribute type by index (standard vertex attribute layout)
+// Helper: Get fallback attribute type by index
+// With user-defined attributes, only position (index 0) is known to be float3
 static CoreType GetFallbackAttributeType(u32 attrIdx) {
-    // Standard attribute layout fallbacks when type info not available:
-    // 0: position (float3)
-    // 1: normal (float3)
-    // 2: texcoord (float2)
-    // 3: tangent (float4)
-    // 4: bitangent (float3)
-    // 5: color (float4)
-    // 6: boneIndices (uint4)
-    // 7: boneWeights (float4)
-    // 8+: custom (float4 default)
-    switch (attrIdx) {
-        case 0: return CoreType::FLOAT3;  // position
-        case 1: return CoreType::FLOAT3;  // normal
-        case 2: return CoreType::FLOAT2;  // texcoord
-        case 3: return CoreType::FLOAT4;  // tangent
-        case 4: return CoreType::FLOAT3;  // bitangent
-        case 5: return CoreType::FLOAT4;  // color
-        case 6: return CoreType::UINT4;   // boneIndices
-        case 7: return CoreType::FLOAT4;  // boneWeights
-        default: return CoreType::FLOAT4; // custom
-    }
+    // Index 0 is always position (float3), everything else defaults to float4
+    return (attrIdx == 0) ? CoreType::FLOAT3 : CoreType::FLOAT4;
 }
 
 // Helper: Get fallback output type by slot
