@@ -70,6 +70,8 @@ void AnalyzeIR(IRAnalysis* analysis, const IR::IRProgram* ir) {
                     analysis->usedBuiltinInputMask |= IRAnalysis::NUM_WORKGROUPS;
                 } else if (inputSlot == BuiltinInputSlot::LOCAL_INVOCATION_INDEX) {
                     analysis->usedBuiltinInputMask |= IRAnalysis::LOCAL_INDEX;
+                } else if (inputSlot == BuiltinInputSlot::FRAG_COORD) {
+                    analysis->usedBuiltinInputMask |= IRAnalysis::BUILTIN_FRAG_COORD;
                 } else if (inputSlot < 16) {
                     // Fragment varyings (slots 0-15)
                     analysis->usedInputMask |= (1 << inputSlot);

@@ -247,13 +247,16 @@ struct IRLowering {
         u32 localArrayCapacity = 16;
         program.localArrayNameHashes = (u32*)pool->Allocate(localArrayCapacity * sizeof(u32), 64);
         program.localArrayTypes = (u16*)pool->Allocate(localArrayCapacity * sizeof(u16), 64);
+        program.localArrayStructTypes = (u32*)pool->Allocate(localArrayCapacity * sizeof(u32), 64);
         program.localArraySizes = (u32*)pool->Allocate(localArrayCapacity * sizeof(u32), 64);
         program.localArrayRegisters = (u16*)pool->Allocate(localArrayCapacity * sizeof(u16), 64);
+        memset(program.localArrayStructTypes, 0, localArrayCapacity * sizeof(u32));
         program.localArrayCount = 0;
         program.localArrayCapacity = localArrayCapacity;
 
-        // Buffer element struct types (initialized to 0 = unknown)
+        // Buffer element types (initialized to 0 = unknown)
         memset(program.bufferElementStructTypes, 0, sizeof(program.bufferElementStructTypes));
+        memset(program.bufferElementCoreTypes, 0, sizeof(program.bufferElementCoreTypes));
 
         // PHI fields (will be populated by SSA if needed)
         program.phiBlockIndices = nullptr;
@@ -1414,34 +1417,47 @@ struct IRLowering {
 
         SetRegisterType(varReg, coreType);
 
+        // Register local arrays (with or without initializer)
+        if (isArray && arrayLength > 0) {
+            // Get element type from the variable's array element type hash
+            CoreType elementType = coreType;
+            u32 elementStructHash = 0;
+            if (varDecl.arrayElementTypeHash != 0) {
+                elementType = ResolveCoreTypeFromHash(varDecl.arrayElementTypeHash, &elementStructHash);
+            } else if (varData) {
+                elementType = varData->typeInfo.coreType;
+                elementStructHash = varData->typeInfo.customTypeHash;
+            }
+            // For struct element types, ensure we have the struct type registered
+            if ((elementType == CoreType::CUSTOM || elementType == CoreType::INVALID) &&
+                elementStructHash == 0 && varDecl.arrayElementTypeHash != 0) {
+                elementStructHash = LookupOrRegisterStructType(varDecl.arrayElementTypeHash);
+                if (elementStructHash != 0) {
+                    elementType = CoreType::CUSTOM;
+                }
+            }
+
+            // Register the array for local array tracking
+            program.localArrayNameHashes[program.localArrayCount] = varDecl.name.nameHash;
+            program.localArrayTypes[program.localArrayCount] = static_cast<u16>(elementType);
+            program.localArrayStructTypes[program.localArrayCount] = elementStructHash;
+            program.localArraySizes[program.localArrayCount] = arrayLength;
+            program.localArrayRegisters[program.localArrayCount] = varReg;
+            program.localArrayCount++;
+
+            // Mark the register as an array pointer
+            program.registerStorageInfo[varReg] =
+                ((program.localArrayCount - 1) << IR::IRProgram::STORAGE_BINDING_SHIFT) |
+                IR::IRProgram::STORAGE_IS_PTR |
+                IR::IRProgram::STORAGE_IS_LOCAL_ARRAY;
+        }
+
         // If there's an initializer, evaluate it
         if (!varDecl.initializer.IsNull()) {
             // Check for array initializer (BLOCK node with element expressions)
             if (isArray && varDecl.initializer.Type() == ASTNodeType::BLOCK) {
+                // Array with block initializer - emit element-by-element stores
                 const BlockData& initBlock = ast->GetBlock(varDecl.initializer);
-
-                // Get element type from the variable's array element type hash
-                CoreType elementType = coreType;
-                if (varDecl.arrayElementTypeHash != 0) {
-                    elementType = ResolveCoreTypeFromHash(varDecl.arrayElementTypeHash, nullptr);
-                } else if (varData) {
-                    elementType = varData->typeInfo.coreType;
-                }
-
-                // Register the array for local array tracking
-                program.localArrayNameHashes[program.localArrayCount] = varDecl.name.nameHash;
-                program.localArrayTypes[program.localArrayCount] = static_cast<u16>(elementType);
-                program.localArraySizes[program.localArrayCount] = arrayLength;
-                program.localArrayRegisters[program.localArrayCount] = varReg;
-                program.localArrayCount++;
-
-                // Mark the register as an array pointer
-                program.registerStorageInfo[varReg] =
-                    ((program.localArrayCount - 1) << IR::IRProgram::STORAGE_BINDING_SHIFT) |
-                    IR::IRProgram::STORAGE_IS_PTR |
-                    IR::IRProgram::STORAGE_IS_LOCAL_ARRAY;
-
-                // Emit element-by-element stores
                 for (u32 i = 0; i < initBlock.statements.count && i < arrayLength; i++) {
                     NodeRef elementExpr = initBlock.statements[i];
                     u16 elementReg = LowerExpression(elementExpr);
@@ -1478,6 +1494,18 @@ struct IRLowering {
                     }
                 }
 
+                // If the initializer came from a storage buffer load, record the element type
+                // for this binding (needed for SPIR-V backend to declare correct buffer element types)
+                if (initReg < MAX_REGISTERS && coreType != CoreType::CUSTOM) {
+                    u32 storageInfo = program.registerStorageInfo[initReg];
+                    if (storageInfo != 0) {
+                        u32 binding = (storageInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
+                        if (binding < 32 && program.bufferElementCoreTypes[binding] == 0) {
+                            program.bufferElementCoreTypes[binding] = static_cast<u8>(coreType);
+                        }
+                    }
+                }
+
                 builder.EmitInstruction(OP_STORE_REG, varReg, initReg);
                 // Propagate pointer storage info if the init expression is a pointer
                 if (initReg < MAX_REGISTERS &&
@@ -1486,8 +1514,10 @@ struct IRLowering {
                 }
                 initializedVariables.insert(varDecl.name.nameHash);
             }
-        } else if (coreType == CoreType::CUSTOM) {
-            // For struct types without initializer, emit a zero/undef struct value.
+        } else if (!isArray && coreType == CoreType::CUSTOM) {
+            // For single struct types without initializer, emit a zero/undef struct value.
+            // Note: struct arrays are handled differently - they are pointer-based and
+            // individual elements are stored via ARRAY_STORE.
             u32 structTypeHash = variableStructTypes[varDecl.name.nameHash];
             if (structTypeHash == 0 && varReg < MAX_REGISTERS) {
                 structTypeHash = program.registerStructTypes[varReg];
@@ -1497,7 +1527,7 @@ struct IRLowering {
                 builder.EmitInstruction(OP_STORE_REG, varReg, zeroStruct);
                 initializedVariables.insert(varDecl.name.nameHash);
             }
-        } else if (coreType == CoreType::FLOAT2 || coreType == CoreType::FLOAT3 || coreType == CoreType::FLOAT4) {
+        } else if (!isArray && (coreType == CoreType::FLOAT2 || coreType == CoreType::FLOAT3 || coreType == CoreType::FLOAT4)) {
             // For vector types without initializer, emit a zero vector construct
             // This ensures the variable has a defined value for OpCompositeInsert to use
             u16 zero = builder.EmitConstant(0.0f);
@@ -2251,6 +2281,62 @@ struct IRLowering {
                     // Fallback: unknown struct/field - just store directly
                     builder.EmitInstruction(OP_STORE_REG, objReg, valueReg);
                 }
+            } else if (access.object.Type() == ASTNodeType::ARRAY_ACCESS) {
+                // Struct array element field assignment: arr[i].field = value
+                // e.g., lights[0].position = float3(10, 10, 10)
+                const ArrayAccessData& arrAccess = ast->GetArrayAccess(access.object);
+                u16 arrayReg = LowerExpression(arrAccess.array);
+                u16 indexReg = LowerExpression(arrAccess.index);
+
+                // Get the struct type for the array elements
+                u32 structTypeHash = 0;
+                if (arrayReg < MAX_REGISTERS) {
+                    structTypeHash = program.registerStructTypes[arrayReg];
+                }
+                // Check localArrayStructTypes if registerStructTypes doesn't have it
+                if (structTypeHash == 0 && program.registerStorageInfo &&
+                    arrayReg < program.registerCount &&
+                    (program.registerStorageInfo[arrayReg] & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY)) {
+                    u32 arrayIdx = (program.registerStorageInfo[arrayReg] >> IR::IRProgram::STORAGE_BINDING_SHIFT);
+                    if (arrayIdx < program.localArrayCount && program.localArrayStructTypes) {
+                        structTypeHash = program.localArrayStructTypes[arrayIdx];
+                    }
+                }
+
+                if (structTypeHash != 0) {
+                    // Find the field index
+                    u32 fieldIndex = 0xFFFFFFFF;
+                    auto structIt = structTypeMap.find(structTypeHash);
+                    if (structIt != structTypeMap.end()) {
+                        u32 structIdx = structIt->second;
+                        const IRProgram::StructTypeInfo& info = program.structTypes[structIdx];
+                        for (u32 i = 0; i < info.fieldCount; i++) {
+                            if (program.structFieldNameHashes[info.fieldOffset + i] == access.member.nameHash) {
+                                fieldIndex = i;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (fieldIndex != 0xFFFFFFFF) {
+                        // 1. Load the struct element from the array
+                        u16 elemReg = AllocateRegister();
+                        SetRegisterType(elemReg, CoreType::CUSTOM);
+                        program.registerStructTypes[elemReg] = structTypeHash;
+                        builder.EmitInstruction(OP_ARRAY_LOAD, elemReg, arrayReg, indexReg);
+
+                        // 2. Insert the new field value into the struct
+                        u16 newStructReg = AllocateRegister();
+                        SetRegisterType(newStructReg, CoreType::CUSTOM);
+                        program.registerStructTypes[newStructReg] = structTypeHash;
+                        builder.EmitInstruction(OP_STRUCT_INSERT, newStructReg, elemReg, fieldIndex, valueReg);
+                        program.metadata[builder.currentInstruction - 1] = structTypeHash;
+
+                        // 3. Store the modified struct back to the array
+                        builder.EmitInstruction(OP_ARRAY_STORE, arrayReg, indexReg, newStructReg);
+                        return;
+                    }
+                }
             }
         } else if (target.Type() == ASTNodeType::ARRAY_ACCESS) {
             const ArrayAccessData& arrAccess = ast->GetArrayAccess(target);
@@ -2815,10 +2901,30 @@ void LowerIfStatement(NodeRef ref) {
             // Regular array load
             builder.EmitInstruction(OP_ARRAY_LOAD, dest, baseReg, indexReg);
 
-            // Propagate element type from base array type
+            // Compute correct element type based on base type
             if (baseReg < MAX_REGISTERS) {
                 CoreType baseType = static_cast<CoreType>(program.registerTypes[baseReg]);
-                SetRegisterType(dest, baseType);
+                CoreType elemType = baseType;
+
+                // Check if this is a local array (subscripting returns element, not scalar)
+                bool isLocalArray = (program.registerStorageInfo[baseReg] & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY);
+
+                if (!isLocalArray) {
+                    // Matrix subscript returns a column vector
+                    if (baseType == CoreType::MAT2) elemType = CoreType::FLOAT2;
+                    else if (baseType == CoreType::MAT3) elemType = CoreType::FLOAT3;
+                    else if (baseType == CoreType::MAT4) elemType = CoreType::FLOAT4;
+                    // Vector subscript returns a scalar (but NOT for local arrays of vectors)
+                    else if (baseType == CoreType::FLOAT2 || baseType == CoreType::FLOAT3 || baseType == CoreType::FLOAT4)
+                        elemType = CoreType::FLOAT;
+                    else if (baseType == CoreType::INT2 || baseType == CoreType::INT3 || baseType == CoreType::INT4)
+                        elemType = CoreType::INT;
+                    else if (baseType == CoreType::UINT2 || baseType == CoreType::UINT3 || baseType == CoreType::UINT4)
+                        elemType = CoreType::UINT;
+                }
+                // For local arrays, elemType stays as baseType (the array element type)
+
+                SetRegisterType(dest, elemType);
                 if ((baseType == CoreType::CUSTOM || baseType == CoreType::ENUM) &&
                     baseReg < MAX_REGISTERS) {
                     program.registerStructTypes[dest] = program.registerStructTypes[baseReg];
@@ -3247,6 +3353,16 @@ void LowerIfStatement(NodeRef ref) {
                         builder.EmitInstruction(OP_LOAD_INPUT, dest, BuiltinInputSlot::LOCAL_INVOCATION_INDEX);
                         SetRegisterType(dest, CoreType::UINT);
                         return dest;
+
+                    case BuiltinHash::POSITION:
+                        // In fragment shaders, input.position refers to gl_FragCoord
+                        if (currentStage == ShaderStage::Fragment) {
+                            builder.EmitInstruction(OP_LOAD_INPUT, dest, BuiltinInputSlot::FRAG_COORD);
+                            SetRegisterType(dest, CoreType::FLOAT4);
+                            return dest;
+                        }
+                        // In other stages, fall through to varying lookup
+                        break;
 
                     default:
                         break;

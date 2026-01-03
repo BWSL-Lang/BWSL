@@ -1,8 +1,0 @@
-{
-  "uniforms": {
-    "time": 2
-  },
-  "samplers": {
-    "sceneColor": 4
-  }
-}

@@ -578,7 +578,8 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             op == IR::OP_ENUM_FIELD ||                      // Enum field extraction
             op == IR::OP_ENUM_CONSTRUCT ||                  // Enum construction
             op == IR::OP_STORAGE_FIELD || op == IR::OP_STORAGE_INDEX || op == IR::OP_STORAGE_LOAD ||
-            op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_LOAD || op == IR::OP_LOCAL_STORE) {  // Pointer operations
+            op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_LOAD || op == IR::OP_LOCAL_STORE ||  // Pointer operations
+            op == IR::OP_ARRAY_LOAD || op == IR::OP_ARRAY_STORE) {  // Array operations with register indices
             shouldRenameOperands = true;
         }
         

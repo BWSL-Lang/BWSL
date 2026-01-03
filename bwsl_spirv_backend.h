@@ -134,6 +134,10 @@ struct SPIRVBuilder {
     alignas(64) u8* bindingSets;         // Descriptor set indices
     alignas(64) u8* bindingIndices;      // Binding within set
     u32 resourceCount;
+
+    // ============= Storage Pointer Type Tracking =============
+    // Tracks element type IDs for STORAGE_INDEX results (IR register -> SPIR-V element type ID)
+    alignas(64) u32* storagePtrElemTypes;
     
     // ============= IR Mapping Tables =============
     IR::IRProgram* ir;
@@ -185,6 +189,9 @@ struct SPIRVBuilder {
     // Built-in input variables (vertex shader)
     u32 vertexIdVarId = 0;     // BuiltIn VertexIndex (gl_VertexID)
     u32 instanceIdVarId = 0;   // BuiltIn InstanceIndex (gl_InstanceID)
+
+    // Built-in input variables (fragment shader)
+    u32 fragCoordVarId = 0;    // BuiltIn FragCoord (gl_FragCoord)
     
     // ============= Methods =============
     
@@ -282,6 +289,7 @@ struct SPIRVBuilder {
     void DeclareVertexPullingBuffers();
     void DeclareVertexIdBuiltin();
     void DeclareInstanceIdBuiltin();
+    void DeclareFragCoordBuiltin();
     u32 CreateStorageBufferForAttribute(u32 attrIdx, CoreType elementType, u32 binding);
     
     // Final assembly

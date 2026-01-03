@@ -135,14 +135,16 @@ struct IRProgram {
     // Local (function-scope) array declarations
     alignas(64) u32* localArrayNameHashes;
     alignas(64) u16* localArrayTypes;
+    alignas(64) u32* localArrayStructTypes;  // Struct type hash for CUSTOM element types
     alignas(64) u32* localArraySizes;
     alignas(64) u16* localArrayRegisters;
     u32 localArrayCount;
     u32 localArrayCapacity;
 
-    // Buffer element struct types (discovered from usage context)
-    // Index by binding slot (0-31), stores struct type hash or 0 if unknown/primitive
-    alignas(64) u32 bufferElementStructTypes[32];
+    // Buffer element types
+    // Index by binding slot (0-31)
+    alignas(64) u32 bufferElementStructTypes[32];  // Struct type hash, or 0 if primitive/unknown
+    alignas(64) u8 bufferElementCoreTypes[32];     // CoreType enum value for primitive element types
 
     enum StructureType : u32 {
     STRUCT_NONE          = 0,

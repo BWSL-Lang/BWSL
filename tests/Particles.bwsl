@@ -1,0 +1,202 @@
+// ============================================
+// Particles Pipeline - GPU Particle Effects
+// ============================================
+pipeline Particles {
+
+import Math
+
+// ============================================
+// Vertex Attributes
+// ============================================
+attributes {
+    position: float3
+}
+
+// ============================================
+// Particle Pass - Billboard Rendering
+// ============================================
+pass "ParticlePass" {
+    use attributes { position }
+
+    vertex {
+        // Get particle index from instance
+        uint idx = input.instance_id;
+
+        // Access particle data from buffer arrays
+        float3 particlePos = resources.particlePositions[idx];
+        float size = resources.particleSizes[idx];
+        float rotation = resources.particleRotations[idx];
+        float4 color = resources.particleColors[idx];
+        float life = resources.particleLives[idx];
+        uint textureIndex = resources.particleTexIndices[idx];
+
+        // Billboard quad vertices (4 vertices per particle)
+        float2[4] quadOffsets;
+        quadOffsets[0] = float2(-0.5,  0.5);  // Top-left
+        quadOffsets[1] = float2(-0.5, -0.5);  // Bottom-left
+        quadOffsets[2] = float2( 0.5,  0.5);  // Top-right
+        quadOffsets[3] = float2( 0.5, -0.5);  // Bottom-right
+
+        float2 quadOffset = quadOffsets[input.vertex_id];
+
+        // Calculate billboard orientation (camera-facing)
+        float3 cameraRight = float3(
+            resources.viewMatrix[0][0],
+            resources.viewMatrix[1][0],
+            resources.viewMatrix[2][0]
+        );
+        float3 cameraUp = float3(
+            resources.viewMatrix[0][1],
+            resources.viewMatrix[1][1],
+            resources.viewMatrix[2][1]
+        );
+
+        // Apply rotation to quad
+        float c = cos(rotation);
+        float s = sin(rotation);
+        float2 rotatedOffset = float2(
+            quadOffset.x * c - quadOffset.y * s,
+            quadOffset.x * s + quadOffset.y * c
+        );
+
+        // Calculate world position
+        float3 worldPos = particlePos +
+            cameraRight * rotatedOffset.x * size +
+            cameraUp * rotatedOffset.y * size;
+
+        // Transform to clip space
+        mat4 viewProjMatrix = resources.projectionMatrix * resources.viewMatrix;
+        output.position = viewProjMatrix * float4(worldPos, 1.0);
+
+        // Pass particle data to fragment
+        output.uv = quadOffset + 0.5;  // Convert from [-0.5, 0.5] to [0, 1]
+        output.color = color;
+        output.life = life;
+        output.textureIndex = textureIndex;
+    }
+
+    fragment {
+        // Sample particle texture
+        float4 texColor = sample(resources.particleTexture, resources.textureSampler, input.uv);
+
+        // Apply particle color
+        float4 finalColor = texColor * input.color;
+
+        // Soft particles - fade near depth buffer
+        float sceneDepth = sample(resources.depthBuffer, resources.depthSampler, input.position.xy / resources.screenSize).r;
+        float particleDepth = input.position.z;
+        float depthDiff = sceneDepth - particleDepth;
+        float softness = saturate(depthDiff * resources.softParticleFactor);
+        finalColor.a *= softness;
+
+        // Discard fully transparent pixels
+        if (finalColor.a < 0.01) {
+            discard;
+        }
+
+        output.color = finalColor;
+    }
+}
+
+// ============================================
+// Additive Blend Pass (for fire, sparks, etc.)
+// ============================================
+pass "ParticlePassAdditive" {
+    use attributes { position }
+
+    vertex {
+        // Get particle index from instance
+        uint idx = input.instance_id;
+
+        // Access particle data from buffer arrays
+        float3 particlePos = resources.particlePositions[idx];
+        float size = resources.particleSizes[idx];
+        float rotation = resources.particleRotations[idx];
+        float4 color = resources.particleColors[idx];
+        float life = resources.particleLives[idx];
+        uint textureIndex = resources.particleTexIndices[idx];
+
+        // Billboard quad vertices
+        float2[4] quadOffsets;
+        quadOffsets[0] = float2(-0.5,  0.5);
+        quadOffsets[1] = float2(-0.5, -0.5);
+        quadOffsets[2] = float2( 0.5,  0.5);
+        quadOffsets[3] = float2( 0.5, -0.5);
+
+        float2 quadOffset = quadOffsets[input.vertex_id];
+
+        // Calculate billboard orientation (camera-facing)
+        float3 cameraRight = float3(
+            resources.viewMatrix[0][0],
+            resources.viewMatrix[1][0],
+            resources.viewMatrix[2][0]
+        );
+        float3 cameraUp = float3(
+            resources.viewMatrix[0][1],
+            resources.viewMatrix[1][1],
+            resources.viewMatrix[2][1]
+        );
+
+        // Apply rotation to quad
+        float c = cos(rotation);
+        float s = sin(rotation);
+        float2 rotatedOffset = float2(
+            quadOffset.x * c - quadOffset.y * s,
+            quadOffset.x * s + quadOffset.y * c
+        );
+
+        // Calculate world position
+        float3 worldPos = particlePos +
+            cameraRight * rotatedOffset.x * size +
+            cameraUp * rotatedOffset.y * size;
+
+        // Transform to clip space
+        mat4 viewProjMatrix = resources.projectionMatrix * resources.viewMatrix;
+        output.position = viewProjMatrix * float4(worldPos, 1.0);
+
+        // Pass particle data to fragment
+        output.uv = quadOffset + 0.5;
+        output.color = color;
+        output.life = life;
+        output.textureIndex = textureIndex;
+    }
+
+    fragment {
+        float4 texColor = sample(resources.particleTexture, resources.textureSampler, input.uv);
+
+        // For additive blending, use color intensity as alpha
+        float3 finalColor = texColor.rgb * input.color.rgb * input.color.a;
+
+        // Soft particles
+        float sceneDepth = sample(resources.depthBuffer, resources.depthSampler, input.position.xy / resources.screenSize).r;
+        float particleDepth = input.position.z;
+        float depthDiff = sceneDepth - particleDepth;
+        float softness = saturate(depthDiff * resources.softParticleFactor);
+        finalColor = finalColor * softness;
+
+        output.color = float4(finalColor, 1.0);
+    }
+}
+
+// ============================================
+// Particle Simulation Compute Shaders (TODO: convert to proper pass syntax)
+// ============================================
+// BUG: Compute shaders must be in pass blocks with proper syntax:
+// pass "SimulateParticles" {
+//     compute "Main" [256, 1, 1] { ... }
+// }
+
+// ============================================
+// Helper Functions
+// ============================================
+
+hashToFloat :: (uint seed) -> float {
+    seed = (seed ^ 61u) ^ (seed >> 16u);
+    seed = seed * 9u;
+    seed = seed ^ (seed >> 4u);
+    seed = seed * 0x27d4eb2du;
+    seed = seed ^ (seed >> 15u);
+    return float(seed) / 4294967295.0;
+}
+
+}

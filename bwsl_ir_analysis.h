@@ -19,17 +19,19 @@ struct IRAnalysis {
     enum BuiltinInputFlags : u32 {
         BUILTIN_VERTEX_ID   = 1 << 0,   // input.vertex_id used
         BUILTIN_INSTANCE_ID = 1 << 1,   // input.instance_id used
-        GLOBAL_ID           = 1 << 2,
-        LOCAL_ID            = 1 << 3,
+        BUILTIN_FRAG_COORD  = 1 << 2,   // input.position (fragment) used
+        GLOBAL_ID           = 1 << 3,
+        LOCAL_ID            = 1 << 4,
         WORKGROUP_ID        = 1 << 10,
         NUM_WORKGROUPS      = 1 << 11,
         LOCAL_INDEX         = 1 << 12
-        
+
     };
 
     // Built-in input helpers
     bool UsesVertexId()      const { return (usedBuiltinInputMask & BUILTIN_VERTEX_ID) != 0; }
     bool UsesInstanceId()    const { return (usedBuiltinInputMask & BUILTIN_INSTANCE_ID) != 0; }
+    bool UsesFragCoord()     const { return (usedBuiltinInputMask & BUILTIN_FRAG_COORD) != 0; }
     bool UsesGlobalId()      const { return (usedBuiltinInputMask & GLOBAL_ID) != 0; }
     bool UsesLocalId()       const { return (usedBuiltinInputMask & LOCAL_ID) != 0; }
     bool UsesWorkgroupId()   const { return (usedBuiltinInputMask & WORKGROUP_ID) != 0; }
@@ -112,6 +114,7 @@ namespace OutputSlot {
 namespace BuiltinInputSlot {
     constexpr u32 VERTEX_ID              = 0x80;   // input.vertex_id -> BuiltIn VertexIndex
     constexpr u32 INSTANCE_ID            = 0x81;   // input.instance_id -> BuiltIn InstanceIndex
+    constexpr u32 FRAG_COORD             = 0x82;   // input.position (fragment) -> BuiltIn FragCoord
     constexpr u32 GLOBAL_INVOCATION_ID   = 0x90;
     constexpr u32 LOCAL_INVOCATION_ID    = 0x91;
     constexpr u32 WORKGROUP_ID           = 0x92;
@@ -130,6 +133,7 @@ namespace OutputHash {
 namespace BuiltinHash {
     constexpr u32 VERTEX_ID      = Utils::HashStr("vertex_id");
     constexpr u32 INSTANCE_ID    = Utils::HashStr("instance_id");
+    constexpr u32 POSITION       = Utils::HashStr("position");  // input.position (fragment) -> FragCoord
     constexpr u32 GLOBAL_ID      = Utils::HashStr("global_id");
     constexpr u32 LOCAL_ID       = Utils::HashStr("local_id");
     constexpr u32 WORKGROUP_ID   = Utils::HashStr("workgroup_id");

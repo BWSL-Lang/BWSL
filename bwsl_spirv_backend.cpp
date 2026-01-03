@@ -271,7 +271,11 @@ void SPIRVBuilder::Initialize(BWSL_Arena* arena, IR::IRProgram* ir, ShaderStage 
     memset(localVarIds, 0, idCapacity * sizeof(u32));
     memset(localArrayVarIds, 0, 32 * sizeof(u32));
     memset(localArrayElemPtrTypes, 0, 32 * sizeof(u32));
-    
+
+    // Initialize storage pointer element type tracking
+    storagePtrElemTypes = (u32*)arena->Allocate(idCapacity * sizeof(u32), 64);
+    memset(storagePtrElemTypes, 0, idCapacity * sizeof(u32));
+
     // Initialize type arrays
     memset(typeIds, 0, sizeof(typeIds));
     compositeTypeCount = 0;
@@ -2460,6 +2464,13 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 }
                 break;
             }
+            if (input_slot == BuiltinInputSlot::FRAG_COORD) {
+                u32 float4_type = GetTypeId(CoreType::FLOAT4);
+                if (fragCoordVarId != 0) {
+                    Emit(spv::OpLoad, float4_type, dest, fragCoordVarId);
+                }
+                break;
+            }
 
             // Fragment shader loading interpolated varying from vertex output
             // Get the input type - for varyings, default to float3
@@ -3295,14 +3306,22 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             }
             u32 elem_type_id = GetTypeId(elemType);
             if (elem_type_id == 0 &&
-                (elemType == CoreType::CUSTOM || elemType == CoreType::ENUM) &&
-                ir->registerStructTypes) {
+                (elemType == CoreType::CUSTOM || elemType == CoreType::ENUM)) {
                 u32 structHash = 0;
-                if (dest_reg < ir->registerCount) {
+                if (ir->registerStructTypes && dest_reg < ir->registerCount) {
                     structHash = ir->registerStructTypes[dest_reg];
                 }
-                if (structHash == 0 && base_reg < ir->registerCount) {
+                if (structHash == 0 && ir->registerStructTypes && base_reg < ir->registerCount) {
                     structHash = ir->registerStructTypes[base_reg];
+                }
+                // Also check localArrayStructTypes for local arrays
+                if (structHash == 0 && ir->localArrayStructTypes && ir->registerStorageInfo &&
+                    base_reg < ir->registerCount &&
+                    (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY)) {
+                    u32 arrayIdx = (ir->registerStorageInfo[base_reg] >> IR::IRProgram::STORAGE_BINDING_SHIFT);
+                    if (arrayIdx < ir->localArrayCount) {
+                        structHash = ir->localArrayStructTypes[arrayIdx];
+                    }
                 }
                 if (structHash != 0) {
                     elem_type_id = GetStructTypeId(structHash);
@@ -3324,8 +3343,61 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, index_id);
                 Emit(spv::OpLoad, elem_type_id, dest, ptr_id);
             } else {
-                // Non-storage arrays are lowered as placeholder values; ignore index to keep SPIR-V valid.
-                Emit(spv::OpUndef, elem_type_id, dest);
+                // Check if base is a matrix type - need to extract column
+                CoreType baseType = CoreType::FLOAT;
+                if (ir->registerTypes && base_reg < ir->registerCount) {
+                    baseType = static_cast<CoreType>(ir->registerTypes[base_reg]);
+                }
+
+                if (baseType == CoreType::MAT2 || baseType == CoreType::MAT3 || baseType == CoreType::MAT4) {
+                    // Matrix column extraction using OpCompositeExtract (for constant index)
+                    // or OpVectorExtractDynamic (for dynamic index)
+                    CoreType columnType = (baseType == CoreType::MAT2) ? CoreType::FLOAT2 :
+                                         (baseType == CoreType::MAT3) ? CoreType::FLOAT3 : CoreType::FLOAT4;
+                    u32 column_type_id = GetTypeId(columnType);
+
+                    // Check if index is a constant
+                    bool isConstIndex = (index_reg & 0xC000) == 0x4000;
+                    if (isConstIndex) {
+                        u32 idx = index_reg & 0x3FFF;
+                        u32 index_val = ir->intConstants[idx];
+                        // OpCompositeExtract for constant index
+                        if (currentFunctionSize + 5 > currentFunctionCapacity) {
+                            GrowCurrentFunction();
+                        }
+                        currentFunction[currentFunctionSize++] = (5 << 16) | spv::OpCompositeExtract;
+                        currentFunction[currentFunctionSize++] = column_type_id;
+                        currentFunction[currentFunctionSize++] = dest;
+                        currentFunction[currentFunctionSize++] = base_id;
+                        currentFunction[currentFunctionSize++] = index_val;
+                    } else {
+                        // Dynamic index - use OpVectorExtractDynamic on each row and reconstruct
+                        // For simplicity, emit OpUndef for now (dynamic matrix indexing is rare)
+                        Emit(spv::OpUndef, column_type_id, dest);
+                    }
+                } else if (baseType == CoreType::FLOAT2 || baseType == CoreType::FLOAT3 || baseType == CoreType::FLOAT4) {
+                    // Vector element extraction
+                    bool isConstIndex = (index_reg & 0xC000) == 0x4000;
+                    if (isConstIndex) {
+                        u32 idx = index_reg & 0x3FFF;
+                        u32 index_val = ir->intConstants[idx];
+                        // OpCompositeExtract for constant index
+                        if (currentFunctionSize + 5 > currentFunctionCapacity) {
+                            GrowCurrentFunction();
+                        }
+                        currentFunction[currentFunctionSize++] = (5 << 16) | spv::OpCompositeExtract;
+                        currentFunction[currentFunctionSize++] = elem_type_id;
+                        currentFunction[currentFunctionSize++] = dest;
+                        currentFunction[currentFunctionSize++] = base_id;
+                        currentFunction[currentFunctionSize++] = index_val;
+                    } else {
+                        // Dynamic vector index
+                        Emit(spv::OpVectorExtractDynamic, elem_type_id, dest, base_id, index_id);
+                    }
+                } else {
+                    // Non-storage arrays are lowered as placeholder values
+                    Emit(spv::OpUndef, elem_type_id, dest);
+                }
             }
             break;
         }
@@ -3351,13 +3423,42 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             if (isLocalArray) {
                 // Local array with Function storage class
                 CoreType elemType = CoreType::FLOAT;
-                if (ir->registerTypes && value_reg < ir->registerCount) {
+                // First check if value_reg is a constant - infer type from encoding
+                if ((value_reg & 0xC000) == 0xC000) {
+                    elemType = CoreType::BOOL;
+                } else if (value_reg & 0x8000) {
+                    elemType = CoreType::FLOAT;
+                } else if (value_reg & 0x4000) {
+                    elemType = CoreType::INT;
+                } else if (value_reg & 0x2000) {
+                    elemType = CoreType::UINT;
+                } else if (ir->registerTypes && value_reg < ir->registerCount) {
                     CoreType regType = static_cast<CoreType>(ir->registerTypes[value_reg]);
                     if (regType != CoreType::VOID && regType != CoreType::INVALID) {
                         elemType = regType;
                     }
                 }
                 u32 elem_type_id = GetTypeId(elemType);
+
+                // Handle struct element types for local arrays
+                if (elem_type_id == 0 &&
+                    (elemType == CoreType::CUSTOM || elemType == CoreType::INVALID)) {
+                    // Try to get struct type from value register
+                    u32 structHash = 0;
+                    if (ir->registerStructTypes && value_reg < ir->registerCount) {
+                        structHash = ir->registerStructTypes[value_reg];
+                    }
+                    // If not found, try localArrayStructTypes
+                    if (structHash == 0 && ir->localArrayStructTypes) {
+                        u32 arrayIdx = (ir->registerStorageInfo[base_reg] >> IR::IRProgram::STORAGE_BINDING_SHIFT);
+                        if (arrayIdx < ir->localArrayCount) {
+                            structHash = ir->localArrayStructTypes[arrayIdx];
+                        }
+                    }
+                    if (structHash != 0) {
+                        elem_type_id = GetStructTypeId(structHash);
+                    }
+                }
                 if (elem_type_id == 0) {
                     elem_type_id = GetTypeId(CoreType::FLOAT);
                 }
@@ -3376,7 +3477,16 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 }
 
                 CoreType elemType = CoreType::FLOAT;
-                if (ir->registerTypes && value_reg < ir->registerCount) {
+                // First check if value_reg is a constant - infer type from encoding
+                if ((value_reg & 0xC000) == 0xC000) {
+                    elemType = CoreType::BOOL;
+                } else if (value_reg & 0x8000) {
+                    elemType = CoreType::FLOAT;
+                } else if (value_reg & 0x4000) {
+                    elemType = CoreType::INT;
+                } else if (value_reg & 0x2000) {
+                    elemType = CoreType::UINT;
+                } else if (ir->registerTypes && value_reg < ir->registerCount) {
                     CoreType regType = static_cast<CoreType>(ir->registerTypes[value_reg]);
                     if (regType != CoreType::VOID && regType != CoreType::INVALID) {
                         elemType = regType;
@@ -3566,7 +3676,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             u16 dest_reg = ir->destinations[ir_idx];
             if (ir->registerTypes && dest_reg < ir->registerCount) {
                 CoreType regType = static_cast<CoreType>(ir->registerTypes[dest_reg]);
-                if (regType != CoreType::VOID && regType != CoreType::INVALID) {
+                // Exclude invalid, void, and resource types (BUFFER, CBUFFER) that aren't valid element types
+                if (regType != CoreType::VOID && regType != CoreType::INVALID &&
+                    regType != CoreType::BUFFER && regType != CoreType::CBUFFER) {
                     elemType = regType;
                 }
             }
@@ -3582,13 +3694,36 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             u32 elem_type_id = GetTypeId(elemType);
             u32 structHash = 0;
 
-            // First check the buffer element struct types (discovered from usage)
-            if (ir->registerStorageInfo && base_reg < ir->registerCount) {
+            // First check for shared memory arrays
+            bool isShared = ir->registerStorageInfo && base_reg < ir->registerCount &&
+                (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_SHARED);
+
+            if (isShared && ir->sharedTypes) {
+                u32 storageInfo = ir->registerStorageInfo[base_reg];
+                u32 sharedIndex = (storageInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
+                if (sharedIndex < ir->sharedVarCount) {
+                    CoreType sharedType = static_cast<CoreType>(ir->sharedTypes[sharedIndex]);
+                    if (sharedType != CoreType::VOID && sharedType != CoreType::INVALID) {
+                        elemType = sharedType;
+                        elem_type_id = GetTypeId(elemType);
+                    }
+                }
+            } else if (ir->registerStorageInfo && base_reg < ir->registerCount) {
+                // Check buffer element types for storage buffers
                 u32 storageInfo = ir->registerStorageInfo[base_reg];
                 if (storageInfo != 0) {
                     u32 binding = (storageInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
                     if (binding < 32) {
                         structHash = ir->bufferElementStructTypes[binding];
+                        // Also check for primitive element type if no struct type
+                        if (structHash == 0) {
+                            CoreType discoveredType = static_cast<CoreType>(ir->bufferElementCoreTypes[binding]);
+                            if (discoveredType != CoreType::VOID && discoveredType != CoreType::INVALID &&
+                                discoveredType != CoreType::CUSTOM) {
+                                elemType = discoveredType;
+                                elem_type_id = GetTypeId(elemType);
+                            }
+                        }
                     }
                 }
             }
@@ -3635,6 +3770,11 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 // Intermediate pointer - direct index
                 Emit(spv::OpAccessChain, elem_ptr_type, dest, base_id, index_id);
             }
+
+            // Store element type for this pointer register so STORAGE_LOAD can use it
+            if (dest_reg < idCapacity) {
+                storagePtrElemTypes[dest_reg] = elem_type_id;
+            }
             break;
         }
 
@@ -3649,7 +3789,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             u16 dest_reg = ir->destinations[ir_idx];
             if (ir->registerTypes && dest_reg < ir->registerCount) {
                 CoreType regType = static_cast<CoreType>(ir->registerTypes[dest_reg]);
-                if (regType != CoreType::VOID && regType != CoreType::INVALID) {
+                // Exclude invalid, void, and resource types (BUFFER, CBUFFER) that aren't valid element types
+                if (regType != CoreType::VOID && regType != CoreType::INVALID &&
+                    regType != CoreType::BUFFER && regType != CoreType::CBUFFER) {
                     elemType = regType;
                 }
             }
@@ -3658,13 +3800,36 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             u32 elem_type_id = GetTypeId(elemType);
             u32 structHash = 0;
 
-            // First check the buffer element struct types (discovered from usage)
-            if (ir->registerStorageInfo && ptr_reg < ir->registerCount) {
+            // First check for shared memory arrays
+            bool isShared = ir->registerStorageInfo && ptr_reg < ir->registerCount &&
+                (ir->registerStorageInfo[ptr_reg] & IR::IRProgram::STORAGE_IS_SHARED);
+
+            if (isShared && ir->sharedTypes) {
+                u32 storageInfo = ir->registerStorageInfo[ptr_reg];
+                u32 sharedIndex = (storageInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
+                if (sharedIndex < ir->sharedVarCount) {
+                    CoreType sharedType = static_cast<CoreType>(ir->sharedTypes[sharedIndex]);
+                    if (sharedType != CoreType::VOID && sharedType != CoreType::INVALID) {
+                        elemType = sharedType;
+                        elem_type_id = GetTypeId(elemType);
+                    }
+                }
+            } else if (ir->registerStorageInfo && ptr_reg < ir->registerCount) {
+                // Check buffer element types for storage buffers
                 u32 storageInfo = ir->registerStorageInfo[ptr_reg];
                 if (storageInfo != 0) {
                     u32 binding = (storageInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
                     if (binding < 32) {
                         structHash = ir->bufferElementStructTypes[binding];
+                        // Also check for primitive element type if no struct type
+                        if (structHash == 0) {
+                            CoreType discoveredType = static_cast<CoreType>(ir->bufferElementCoreTypes[binding]);
+                            if (discoveredType != CoreType::VOID && discoveredType != CoreType::INVALID &&
+                                discoveredType != CoreType::CUSTOM) {
+                                elemType = discoveredType;
+                                elem_type_id = GetTypeId(elemType);
+                            }
+                        }
                     }
                 }
             }
@@ -3684,6 +3849,11 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             // Get struct type ID if we found a struct hash
             if (structHash != 0) {
                 elem_type_id = GetStructTypeId(structHash);
+            }
+
+            // Fallback: use the element type stored by STORAGE_INDEX
+            if (elem_type_id == 0 && ptr_reg < idCapacity && storagePtrElemTypes[ptr_reg] != 0) {
+                elem_type_id = storagePtrElemTypes[ptr_reg];
             }
 
             if (elem_type_id == 0) {
@@ -4600,6 +4770,13 @@ void SPIRVBuilder::EmitFunctionBody() {
             for (u32 i = 0; i < ir->localArrayCount; i++) {
                 CoreType elemType = static_cast<CoreType>(ir->localArrayTypes[i]);
                 u32 elemTypeId = GetTypeId(elemType);
+
+                // Handle struct element types
+                if (elemTypeId == 0 && (elemType == CoreType::CUSTOM || elemType == CoreType::INVALID)) {
+                    if (ir->localArrayStructTypes && ir->localArrayStructTypes[i] != 0) {
+                        elemTypeId = GetStructTypeId(ir->localArrayStructTypes[i]);
+                    }
+                }
                 if (elemTypeId == 0) {
                     elemTypeId = GetTypeId(CoreType::FLOAT);
                 }
@@ -4858,6 +5035,11 @@ void SPIRVBuilder::DeclareInputOutput() {
     
     // ============= Fragment Shader =============
     else if (stage == ShaderStage::Fragment) {
+        // Declare built-in inputs (FragCoord) if used by shader code
+        if (analysis.UsesFragCoord() && fragCoordVarId == 0) {
+            DeclareFragCoordBuiltin();
+        }
+
         // --- Inputs: Varyings from vertex shader ---
         // Use usedInputMask which tracks OP_LOAD_INPUT usage (input.normal, etc.)
         // Slots are VARYING0+index, so location = slot - VARYING0 to match vertex output
@@ -5045,6 +5227,27 @@ void SPIRVBuilder::DeclareInstanceIdBuiltin() {
 
     // Add to interface list for entry point
     inputIds[inputCount] = instanceIdVarId;
+    inputLocations[inputCount] = 0xFF;  // Mark as builtin
+    inputCount++;
+}
+
+void SPIRVBuilder::DeclareFragCoordBuiltin() {
+    // Declare gl_FragCoord (SPIR-V BuiltIn FragCoord) for fragment position
+    u32 float4_type = GetTypeId(CoreType::FLOAT4);
+    u32 ptr_type = GetPointerTypeId(float4_type, spv::StorageClassInput);
+
+    fragCoordVarId = AllocateId();
+
+    // OpVariable for frag coord input
+    u32 ops[] = {ptr_type, fragCoordVarId, static_cast<u32>(spv::StorageClassInput)};
+    EmitToSection(&globals, spv::OpVariable, ops, 3);
+
+    // Decorate as BuiltIn FragCoord
+    u32 builtin_val[] = {static_cast<u32>(spv::BuiltInFragCoord)};
+    EmitDecoration(fragCoordVarId, spv::DecorationBuiltIn, builtin_val, 1);
+
+    // Add to interface list for entry point
+    inputIds[inputCount] = fragCoordVarId;
     inputLocations[inputCount] = 0xFF;  // Mark as builtin
     inputCount++;
 }
@@ -5474,7 +5677,49 @@ void SPIRVBuilder::DeclareResources() {
                     ptr_ssbo_type = default_ptr_ssbo_type;
                 }
             } else {
-                ptr_ssbo_type = default_ptr_ssbo_type;
+                // Check for primitive element type discovered from shader usage
+                CoreType elementCoreType = static_cast<CoreType>(ir->bufferElementCoreTypes[binding]);
+                if (elementCoreType != CoreType::VOID && elementCoreType != CoreType::CUSTOM) {
+                    // Create runtime array with the discovered primitive element type
+                    u32 elem_type = GetTypeId(elementCoreType);
+                    u32 runtime_array_type = AllocateId();
+                    {
+                        u32 ops[] = {runtime_array_type, elem_type};
+                        EmitToSection(&typesConstants, spv::OpTypeRuntimeArray, ops, 2);
+                    }
+
+                    // ArrayStride decoration - calculate element size
+                    u32 elemSize = 4; // default for float/int/uint
+                    switch (elementCoreType) {
+                        case CoreType::FLOAT2: case CoreType::INT2: case CoreType::UINT2: elemSize = 8; break;
+                        case CoreType::FLOAT3: case CoreType::INT3: case CoreType::UINT3: elemSize = 12; break;
+                        case CoreType::FLOAT4: case CoreType::INT4: case CoreType::UINT4: elemSize = 16; break;
+                        default: elemSize = 4; break;
+                    }
+                    u32 stride_ops[] = {runtime_array_type, spv::DecorationArrayStride, elemSize};
+                    EmitToSection(&decorations, spv::OpDecorate, stride_ops, 3);
+
+                    // Create wrapper struct containing the runtime array
+                    ssbo_struct_type = AllocateId();
+                    {
+                        u32 ops[] = {ssbo_struct_type, runtime_array_type};
+                        EmitToSection(&typesConstants, spv::OpTypeStruct, ops, 2);
+                    }
+
+                    // Block decoration
+                    EmitDecoration(ssbo_struct_type, spv::DecorationBlock, nullptr, 0);
+
+                    // Member offset
+                    u32 member_offset[] = {ssbo_struct_type, 0, spv::DecorationOffset, 0};
+                    EmitToSection(&decorations, spv::OpMemberDecorate, member_offset, 4);
+
+                    // Pointer type
+                    ptr_ssbo_type = AllocateId();
+                    u32 ops[] = {ptr_ssbo_type, spv::StorageClassStorageBuffer, ssbo_struct_type};
+                    EmitToSection(&typesConstants, spv::OpTypePointer, ops, 3);
+                } else {
+                    ptr_ssbo_type = default_ptr_ssbo_type;
+                }
             }
 
             u32 ssbo_var_id = AllocateId();
