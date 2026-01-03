@@ -1,0 +1,43 @@
+pipeline enums_complex {
+    enum MyEnum {
+        A,
+        B,
+        C
+    }
+
+    struct MyStruct {
+        MyEnum e;
+        float f;
+    }
+
+    get_enum_value :: (MyEnum e) -> int {
+        switch (e) {
+            case MyEnum::A:
+                return 1;
+            case MyEnum::B:
+                return 2;
+            case MyEnum::C:
+                return 3;
+        }
+        return 0;
+    }
+
+    pass "Main" {
+        vertex {
+            MyStruct s;
+            s.e = MyEnum::B;
+            s.f = 2.5;
+
+            int enum_val = get_enum_value(s.e);
+
+            if (enum_val == 2 && s.f == 2.5) {
+                output.position = float4(1.0, 1.0, 1.0, 1.0);
+            } else {
+                output.position = float4(0.0, 0.0, 0.0, 0.0);
+            }
+        }
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

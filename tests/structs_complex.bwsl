@@ -1,0 +1,48 @@
+pipeline structs_complex {
+    struct Inner {
+        float f;
+        int i;
+    };
+
+    struct Outer {
+        Inner inner1;
+        Inner inner_array[2];
+        float4 color;
+    };
+
+    modify_outer :: (Outer o) -> Outer {
+        o.inner1.f = 2.0;
+        o.inner_array[0].i = 10;
+        o.inner_array[1].f = 3.0;
+        o.color = float4(1.0, 0.0, 1.0, 1.0);
+        return o;
+    }
+
+    pass "Main" {
+        vertex {
+            Outer outer_var;
+            outer_var.inner1.f = 1.0;
+            outer_var.inner1.i = 5;
+            outer_var.inner_array[0].f = 1.5;
+            outer_var.inner_array[0].i = 8;
+            outer_var.inner_array[1].f = 2.5;
+            outer_var.inner_array[1].i = 9;
+            outer_var.color = float4(0.0, 1.0, 0.0, 1.0);
+
+            Outer modified = modify_outer(outer_var);
+
+            if (modified.inner1.f == 2.0 &&
+                modified.inner_array[0].i == 10 &&
+                modified.inner_array[1].f == 3.0 &&
+                modified.color.r == 1.0) {
+                output.position = float4(1.0, 1.0, 1.0, 1.0);
+            } else {
+                output.position = float4(0.0, 0.0, 0.0, 0.0);
+            }
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}
