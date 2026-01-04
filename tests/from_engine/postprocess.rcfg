@@ -1,0 +1,86 @@
+  # PostProcess Pipeline - TAA, Bloom, Tone Mapping, FXAA
+pipeline PostProcess
+
+# ============= TARGETS =============
+target SceneColor RGBA16Float viewport
+target HistoryBuffer RGBA16Float viewport
+target VelocityBuffer RG16Float viewport
+target BloomMip0 RGBA16Float 0.5
+target BloomMip1 RGBA16Float 0.25
+target BloomMip2 RGBA16Float 0.125
+target FinalOutput BGRA8Unorm_sRGB viewport
+
+# ============= UNIFORMS =============
+# Screen/texture sizes
+uniform screenSize float2 0 fragment
+uniform sourceSize float2 1 fragment
+
+# TAA uniforms
+uniform currentFrameBuffer sampler2D 2 fragment
+uniform velocityBuffer sampler2D 3 fragment
+uniform historyBuffer sampler2D 4 fragment
+
+# Bloom uniforms
+uniform sceneColor sampler2D 5 fragment
+uniform sourceTexture sampler2D 6 fragment
+uniform previousMipTexture sampler2D 7 fragment
+uniform bloomTexture sampler2D 8 fragment
+uniform bloomThreshold float 9 fragment
+uniform bloomKnee float 10 fragment
+uniform bloomIntensity float 11 fragment
+
+# Tone mapping uniforms
+uniform hdrBuffer sampler2D 12 fragment
+uniform exposure float 13 fragment
+uniform tonemapOperator int 14 fragment
+uniform whitePoint float 15 fragment
+
+# Effects
+uniform vignetteEnabled int 16 fragment
+uniform vignetteIntensity float 17 fragment
+uniform filmGrainEnabled int 18 fragment
+uniform filmGrainIntensity float 19 fragment
+uniform time float 20 fragment
+
+# FXAA
+uniform inputTexture sampler2D 21 fragment
+
+# Samplers
+uniform pointSampler sampler 22 fragment
+uniform linearSampler sampler 23 fragment
+
+# ============= PASSES =============
+pass TAAPass
+  type fullscreen
+  color HistoryBuffer load store
+  depends none
+
+pass BloomExtract
+  type fullscreen
+  color BloomMip0 clear 0.0 0.0 0.0 0.0 store
+  depends TAAPass
+
+pass BloomDownsample
+  type fullscreen
+  color BloomMip1 clear 0.0 0.0 0.0 0.0 store
+  depends BloomExtract
+
+pass BloomUpsample
+  type fullscreen
+  color BloomMip0 load store
+  depends BloomDownsample
+
+pass BloomPass
+  type fullscreen
+  color SceneColor load store
+  depends BloomUpsample
+
+pass ToneMappingPass
+  type fullscreen
+  color FinalOutput clear 0.0 0.0 0.0 1.0 store
+  depends BloomPass
+
+pass FXAAPass
+  type fullscreen
+  color @screen load store
+  depends ToneMappingPass

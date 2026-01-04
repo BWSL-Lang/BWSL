@@ -1,0 +1,74 @@
+# UI Pipeline - User Interface Rendering
+pipeline UI
+
+# ============= TARGETS =============
+target UIColor RGBA8Unorm_sRGB viewport
+
+# ============= UNIFORMS =============
+# Screen parameters (vertex) - bindings are automatically offset by vertex pulling buffer count
+uniform screenSize float2 0 vertex
+
+# Fragment uniforms - properly numbered
+uniform atlasSize float2 0 fragment
+uniform opacity float 1 fragment
+uniform time float 2 fragment
+
+# SDF text parameters
+uniform isSDFText int 3 fragment
+uniform outlineWidth float 4 fragment
+uniform outlineColor float4 5 fragment
+uniform shadowEnabled int 6 fragment
+uniform shadowOffset float2 7 fragment
+uniform shadowOpacity float 8 fragment
+uniform shadowColor float4 9 fragment
+
+# Nine-slice parameters
+uniform elementSize float2 10 fragment
+uniform sliceBorders float4 11 fragment
+uniform sourceSlice float4 12 fragment
+
+# Rounded rect parameters
+uniform rectSize float2 13 fragment
+uniform cornerRadii float4 14 fragment
+uniform borderWidth float 15 fragment
+uniform borderColor float4 16 fragment
+
+# Progress bar parameters
+uniform progress float 17 fragment
+uniform backgroundColor float4 18 fragment
+uniform fillColor float4 19 fragment
+uniform useGradient int 20 fragment
+uniform gradientStart float4 21 fragment
+uniform gradientEnd float4 22 fragment
+uniform shineEnabled int 23 fragment
+
+# Textures
+uniform atlasTexture sampler2D 24 fragment
+uniform sdfAtlas sampler2D 25 fragment
+uniform atlasSampler sampler 26 fragment
+
+# ============= PASSES =============
+pass UIPass
+  type geometry
+  color UIColor clear 0.0 0.0 0.0 0.0 store
+  depends none
+
+pass SDFTextPass
+  type geometry
+  color UIColor load store
+  depends UIPass
+
+pass NineSlicePass
+  type geometry
+  color UIColor load store
+  depends SDFTextPass
+
+pass RoundedRectPass
+  type geometry
+  color UIColor load store
+  depends NineSlicePass
+
+pass ProgressBarPass
+  type geometry
+  color UIColor load store
+  depends RoundedRectPass

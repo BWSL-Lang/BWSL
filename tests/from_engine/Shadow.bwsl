@@ -1,0 +1,115 @@
+// ============================================
+// Shadow Pipeline - Shadow Map Generation
+// ============================================
+pipeline Shadow {
+
+import Math
+import Compression
+
+// ============================================
+// Vertex Attributes (minimal for shadow pass)
+// ============================================
+attributes {
+    position: float3 @compressed(10_10_10)
+    texcoord: float2 @compressed(unorm16_16)
+}
+
+// ============================================
+// Directional Light Shadow Pass (Cascaded)
+// ============================================
+pass "ShadowPass" {
+    use attributes { position }
+
+    vertex {
+        float3 pos = Compression::decompressPosition_10_10_10(attributes.position);
+
+        // Transform to world space, then to light space
+        float4 worldPos = resources.modelMatrix * float4(pos, 1.0);
+        output.position = resources.lightViewProjMatrix * worldPos;
+    }
+
+    // Minimal fragment - just depth write
+    fragment {
+        output.color = float4(1.0);
+    }
+}
+
+// ============================================
+// Directional Light Shadow Pass with Alpha Test
+// ============================================
+pass "ShadowPassAlphaTest" {
+    use attributes { position, texcoord }
+
+    vertex {
+        float3 pos = Compression::decompressPosition_10_10_10(attributes.position);
+        float2 uv = Compression::decompressUV16_16(attributes.texcoord);
+
+        float4 worldPos = resources.modelMatrix * float4(pos, 1.0);
+        output.position = resources.lightViewProjMatrix * worldPos;
+        output.texCoord = uv;
+    }
+
+    fragment {
+        float alpha = sample(resources.albedoTexture, resources.textureSampler, input.texCoord).a;
+
+        // Alpha test
+        if (alpha < resources.alphaThreshold) {
+            discard;
+        }
+
+        output.color = float4(1.0);
+    }
+}
+
+// ============================================
+// Point Light Shadow Pass (Cube Map)
+// ============================================
+pass "PointShadowPass" {
+    use attributes { position }
+
+    vertex {
+        float3 pos = Compression::decompressPosition_10_10_10(attributes.position);
+
+        float4 worldPos = resources.modelMatrix * float4(pos, 1.0);
+        output.worldPos = worldPos.xyz;
+        output.position = resources.lightViewProjMatrix * worldPos;
+    }
+
+    fragment {
+        // Calculate linear depth from light position
+        float lightDistance = length(input.worldPos - resources.lightPosition);
+
+        // Normalize to [0, 1] range based on far plane
+        lightDistance = lightDistance / resources.farPlane;
+
+        // Write normalized depth
+        output.color = float4(lightDistance, lightDistance, lightDistance, 1.0);
+    }
+}
+
+// ============================================
+// Spot Light Shadow Pass
+// ============================================
+pass "SpotShadowPass" {
+    use attributes { position }
+
+    vertex {
+        float3 pos = Compression::decompressPosition_10_10_10(attributes.position);
+
+        float4 worldPos = resources.modelMatrix * float4(pos, 1.0);
+        output.position = resources.lightViewProjMatrix * worldPos;
+    }
+
+    fragment {
+        output.color = float4(1.0);
+    }
+}
+
+// ============================================
+// Cascade Selection Compute Shader (TODO: implement in proper pass syntax)
+// ============================================
+// Compute shaders for cascade shadow map setup would go here
+// Requires proper pass "Name" { compute "Name" [X, Y, Z] { ... } } syntax
+
+}
+

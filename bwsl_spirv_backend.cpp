@@ -5453,7 +5453,23 @@ void SPIRVBuilder::DeclareResources() {
     // Declare resources based on IR analysis results
     // Each uniform binding in BWSL is a single typed value (resources.modelMatrix, etc.)
     // We create a struct wrapper for each to satisfy SPIR-V UBO requirements
-    
+
+    // Calculate binding offset for vertex pulling buffers
+    // When vertex pulling is enabled, attribute buffers occupy bindings starting at baseBufferBinding
+    // Uniforms need to be offset to avoid collisions
+    u32 vertexPullingBindingOffset = 0;
+    if (vertexPullingConfig.mode == VertexInputMode::SeparateBuffers) {
+        // Count used attributes - each gets a separate buffer binding
+        for (u32 i = 0; i < 8; i++) {
+            if (analysis.usedAttributeMask & (1 << i)) {
+                vertexPullingBindingOffset++;
+            }
+        }
+    } else if (vertexPullingConfig.mode == VertexInputMode::UnifiedWithOffsets) {
+        // Unified mode uses 2 bindings: vertex buffer + offset table
+        vertexPullingBindingOffset = 2;
+    }
+
     // ============= Uniform Buffers =============
     for (u32 binding = 0; binding < 32; binding++) {
         if (!(analysis.usedUniformMask & (1 << binding))) continue;
@@ -5509,14 +5525,16 @@ void SPIRVBuilder::DeclareResources() {
         }
         
         // Decorate with DescriptorSet and Binding
+        // Apply vertex pulling offset to avoid binding collisions with attribute buffers
+        u32 actualBinding = binding + vertexPullingBindingOffset;
         u32 set_val[] = {0};
-        u32 bind_val[] = {binding};
+        u32 bind_val[] = {actualBinding};
         EmitDecoration(var_id, spv::DecorationDescriptorSet, set_val, 1);
         EmitDecoration(var_id, spv::DecorationBinding, bind_val, 1);
-        
+
         uniformBufferIds[binding] = var_id;
         bindingSets[resourceCount] = 0;
-        bindingIndices[resourceCount] = binding;
+        bindingIndices[resourceCount] = actualBinding;
         resourceCount++;
     }
     
@@ -5548,15 +5566,16 @@ void SPIRVBuilder::DeclareResources() {
             EmitToSection(&globals, spv::OpVariable, ops, 3);
         }
         
-        // Decorate - textures typically in set 0 after uniforms
+        // Decorate - textures typically in set 0 after uniforms and vertex pulling buffers
+        u32 textureBinding = binding + analysis.UniformCount() + vertexPullingBindingOffset;
         u32 set_val[] = {0};
-        u32 bind_val[] = {binding + analysis.UniformCount()};  // Offset by uniform count
+        u32 bind_val[] = {textureBinding};
         EmitDecoration(tex_var_id, spv::DecorationDescriptorSet, set_val, 1);
         EmitDecoration(tex_var_id, spv::DecorationBinding, bind_val, 1);
-        
+
         textureIds[binding] = tex_var_id;
         bindingSets[resourceCount] = 0;
-        bindingIndices[resourceCount] = binding + analysis.UniformCount();
+        bindingIndices[resourceCount] = textureBinding;
         resourceCount++;
     }
     

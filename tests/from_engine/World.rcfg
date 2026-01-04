@@ -1,0 +1,46 @@
+# World Pipeline - Static Environment/Ring Rendering
+pipeline World
+
+# ============= TARGETS =============
+target SceneColor RGBA16Float viewport
+target VelocityBuffer RG16Float viewport
+target SceneDepth Depth32Float viewport
+
+# ============= UNIFORMS =============
+# Transform matrices
+uniform modelMatrix mat4 0 vertex
+uniform viewMatrix mat4 1 vertex
+uniform projectionMatrix mat4 2 vertex
+uniform previousViewProjMatrix mat4 3 vertex
+uniform lightViewProjMatrix mat4 4 vertex
+
+# TAA
+uniform taaJitter float2 5 vertex
+
+# Camera and lighting
+uniform cameraPosition float3 0 fragment
+uniform lightDirection float3 1 fragment
+uniform lightColor float3 2 fragment
+uniform lightIntensity float 3 fragment
+uniform ambientColor float3 4 fragment
+
+# PBR textures
+uniform albedoTexture sampler2D 5 fragment
+uniform normalMap sampler2D 6 fragment
+uniform roughnessMap sampler2D 7 fragment
+uniform metallicMap sampler2D 8 fragment
+uniform aoMap sampler2D 9 fragment
+uniform textureSampler sampler 10 fragment
+
+# ============= PASSES =============
+pass ShadowPass
+  type geometry
+  depth SceneDepth clear 1.0 store
+  depends none
+
+pass OpaquePass
+  type geometry
+  color SceneColor clear 0.0 0.0 0.0 1.0 store
+  color VelocityBuffer clear 0.0 0.0 0.0 0.0 store
+  depth SceneDepth clear 1.0 store
+  depends ShadowPass

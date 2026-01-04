@@ -1,0 +1,255 @@
+// ============================================
+// UI Pipeline - User Interface Rendering
+// ============================================
+pipeline UI {
+
+import Math
+
+// ============================================
+// Vertex Attributes
+// ============================================
+attributes {
+    position: float3
+    texcoord: float2
+    color: float4
+}
+
+// ============================================
+// Main UI Pass
+// ============================================
+pass "UIPass" {
+    use attributes { position, texcoord, color }
+    
+    vertex {
+        // Create orthographic projection based on screen size
+        mat4 orthoProjection = mat4(
+            float4(2.0 / resources.screenSize.x, 0.0, 0.0, 0.0),
+            float4(0.0, 2.0 / resources.screenSize.y, 0.0, 0.0),
+            float4(0.0, 0.0, 1.0, 0.0),
+            float4(-1.0, -1.0, 0.0, 1.0)
+        );
+        
+        output.position = orthoProjection * float4(attributes.position, 1.0);
+        output.texCoord = attributes.texcoord;
+        output.color = attributes.color;
+    }
+    
+    fragment {
+        // Sample font atlas or UI texture
+        float4 texColor = sample(resources.atlasTexture, resources.atlasSampler, input.texCoord);
+        
+        // For SDF text rendering
+        if (resources.isSDFText) {
+            float distance = texColor.a;
+            float smoothing = fwidth(distance) * 0.5;
+            float alpha = smoothstep(0.5 - smoothing, 0.5 + smoothing, distance);
+            texColor = float4(input.color.rgb, alpha * input.color.a);
+        } else {
+            // Regular texture/color
+            texColor *= input.color;
+        }
+        
+        // Apply global opacity
+        texColor.a *= resources.opacity;
+        
+        // Discard fully transparent pixels
+        if (texColor.a < 0.01) {
+            discard;
+        }
+        
+        output.color = texColor;
+    }
+}
+
+// ============================================
+// SDF Text Pass (Signed Distance Field)
+// ============================================
+pass "SDFTextPass" {
+    use attributes { position, texcoord, color }
+    
+    vertex {
+        mat4 orthoProjection = mat4(
+            float4(2.0 / resources.screenSize.x, 0.0, 0.0, 0.0),
+            float4(0.0, 2.0 / resources.screenSize.y, 0.0, 0.0),
+            float4(0.0, 0.0, 1.0, 0.0),
+            float4(-1.0, -1.0, 0.0, 1.0)
+        );
+
+        output.position = orthoProjection * float4(attributes.position, 1.0);
+        output.texCoord = attributes.texcoord;
+        output.color = attributes.color;
+    }
+
+    fragment {
+        // Sample SDF atlas
+        float distance = sample(resources.sdfAtlas, resources.atlasSampler, input.texCoord).r;
+
+        // Calculate smoothing based on screen-space derivatives
+        float smoothing = fwidth(distance);
+
+        // Standard SDF rendering
+        float alpha = smoothstep(0.5 - smoothing, 0.5 + smoothing, distance);
+
+        // Optional outline
+        float3 finalColor = input.color.rgb;
+        if (resources.outlineWidth > 0.0) {
+            float outlineEdge = 0.5 - resources.outlineWidth;
+            float outlineAlpha = smoothstep(outlineEdge - smoothing, outlineEdge + smoothing, distance);
+            float3 outlineColor = resources.outlineColor.rgb;
+
+            // Blend outline and fill
+            finalColor = lerp(outlineColor, input.color.rgb, step(0.5, distance));
+            alpha = max(alpha, outlineAlpha);
+        }
+
+        // Optional shadow/drop shadow
+        if (resources.shadowEnabled) {
+            float2 shadowOffset = resources.shadowOffset / resources.atlasSize;
+            float shadowDist = sample(resources.sdfAtlas, resources.atlasSampler, input.texCoord - shadowOffset).r;
+            float shadowAlpha = smoothstep(0.5 - smoothing * 2.0, 0.5 + smoothing, shadowDist);
+            shadowAlpha *= resources.shadowOpacity;
+
+            // Composite shadow under text
+            float3 shadowColor = resources.shadowColor.rgb;
+            float compositeAlpha = alpha + shadowAlpha * (1.0 - alpha);
+            finalColor = lerp(shadowColor * shadowAlpha, finalColor, alpha / max(compositeAlpha, 0.001));
+            alpha = compositeAlpha;
+        }
+
+        output.color = float4(finalColor, alpha * input.color.a * resources.opacity);
+    }
+}
+
+// ============================================
+// Nine-Slice UI Pass
+// ============================================
+pass "NineSlicePass" {
+    use attributes { position, texcoord, color }
+
+    vertex {
+        mat4 orthoProjection = mat4(
+            float4(2.0 / resources.screenSize.x, 0.0, 0.0, 0.0),
+            float4(0.0, 2.0 / resources.screenSize.y, 0.0, 0.0),
+            float4(0.0, 0.0, 1.0, 0.0),
+            float4(-1.0, -1.0, 0.0, 1.0)
+        );
+
+        output.position = orthoProjection * float4(attributes.position, 1.0);
+        output.texCoord = attributes.texcoord;
+        output.color = attributes.color;
+    }
+    
+    fragment {
+        // Simplified nine-slice - just sample texture
+        float4 texColor = sample(resources.atlasTexture, resources.atlasSampler, input.texCoord);
+        output.color = texColor * input.color;
+    }
+}
+
+// ============================================
+// Rounded Rectangle Pass (Procedural)
+// ============================================
+pass "RoundedRectPass" {
+    use attributes { position, texcoord, color }
+
+    vertex {
+        mat4 orthoProjection = mat4(
+            float4(2.0 / resources.screenSize.x, 0.0, 0.0, 0.0),
+            float4(0.0, 2.0 / resources.screenSize.y, 0.0, 0.0),
+            float4(0.0, 0.0, 1.0, 0.0),
+            float4(-1.0, -1.0, 0.0, 1.0)
+        );
+
+        output.position = orthoProjection * float4(attributes.position, 1.0);
+        output.texCoord = attributes.texcoord;
+        output.color = attributes.color;
+        output.localPos = attributes.position.xy;
+    }
+    
+    fragment {
+        float2 size = resources.rectSize;
+        float4 radii = resources.cornerRadii;  // Per-corner radii: TL, TR, BL, BR
+        
+        // Convert UV to local coordinates
+        float2 pos = input.texCoord * size;
+        
+        // Calculate SDF for rounded rectangle
+        float2 halfSize = size * 0.5;
+        float2 centered = pos - halfSize;
+        
+        // Determine which corner we're closest to
+        float radius;
+        if (centered.x < 0.0 && centered.y < 0.0) {
+            radius = radii.x;  // Top-left
+        } else if (centered.x >= 0.0 && centered.y < 0.0) {
+            radius = radii.y;  // Top-right
+        } else if (centered.x < 0.0 && centered.y >= 0.0) {
+            radius = radii.z;  // Bottom-left
+        } else {
+            radius = radii.w;  // Bottom-right
+        }
+        
+        // SDF calculation
+        float2 q = abs(centered) - halfSize + radius;
+        float dist = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
+        
+        // Anti-aliased edge
+        float smoothing = fwidth(dist);
+        float alpha = 1.0 - smoothstep(-smoothing, smoothing, dist);
+        
+        // Optional border
+        float4 finalColor = input.color;
+        if (resources.borderWidth > 0.0) {
+            float borderDist = abs(dist) - resources.borderWidth;
+            float borderAlpha = 1.0 - smoothstep(-smoothing, smoothing, borderDist);
+            
+            if (dist > -resources.borderWidth) {
+                finalColor = lerp(finalColor, resources.borderColor, borderAlpha);
+            }
+        }
+        
+        finalColor.a *= alpha * resources.opacity;
+        
+        if (finalColor.a < 0.01) {
+            discard;
+        }
+        
+        output.color = finalColor;
+    }
+}
+
+// ============================================
+// Progress Bar Pass
+// ============================================
+pass "ProgressBarPass" {
+    use attributes { position, texcoord, color }
+
+    vertex {
+        mat4 orthoProjection = mat4(
+            float4(2.0 / resources.screenSize.x, 0.0, 0.0, 0.0),
+            float4(0.0, 2.0 / resources.screenSize.y, 0.0, 0.0),
+            float4(0.0, 0.0, 1.0, 0.0),
+            float4(-1.0, -1.0, 0.0, 1.0)
+        );
+
+        output.position = orthoProjection * float4(attributes.position, 1.0);
+        output.texCoord = attributes.texcoord;
+        output.color = attributes.color;
+    }
+
+    fragment {
+        float progress = resources.progress;  // 0.0 to 1.0
+        float2 uv = input.texCoord;
+
+        // Background color or fill color based on progress
+        float4 finalColor = resources.backgroundColor;
+        if (uv.x <= progress) {
+            finalColor = resources.fillColor;
+        }
+
+        output.color = finalColor * input.color;
+    }
+}
+
+}
+

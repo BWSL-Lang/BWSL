@@ -1,0 +1,41 @@
+# Shadow Pipeline - Shadow Map Generation
+pipeline Shadow
+
+# ============= TARGETS =============
+target ShadowMap Depth32Float 2048 2048
+target PointShadowMap Depth32Float 1024 1024
+
+# ============= UNIFORMS =============
+# Vertex uniforms - bindings are automatically offset by vertex pulling buffer count
+uniform modelMatrix mat4 0 vertex
+uniform lightViewProjMatrix mat4 1 vertex
+
+# Point/spot light parameters
+uniform lightPosition float3 2 fragment
+uniform farPlane float 3 fragment
+
+# Alpha test
+uniform alphaThreshold float 4 fragment
+uniform albedoTexture sampler2D 5 fragment
+uniform textureSampler sampler 6 fragment
+
+# ============= PASSES =============
+pass ShadowPass
+  type geometry
+  depth ShadowMap clear 1.0 store
+  depends none
+
+pass ShadowPassAlphaTest
+  type geometry
+  depth ShadowMap load store
+  depends ShadowPass
+
+pass PointShadowPass
+  type geometry
+  depth PointShadowMap clear 1.0 store
+  depends none
+
+pass SpotShadowPass
+  type geometry
+  depth ShadowMap clear 1.0 store
+  depends none
