@@ -4048,27 +4048,47 @@ void LowerIfStatement(NodeRef ref) {
                         SetRegisterType(dest, constructedType);
                     }
                 } else if (constructedType == CoreType::MAT2 || constructedType == CoreType::MAT3 || constructedType == CoreType::MAT4) {
-                    // Matrix type constructor - need to build column vectors first
-                    // mat2 = 2 columns of vec2 (4 floats)
-                    // mat3 = 3 columns of vec3 (9 floats)
-                    // mat4 = 4 columns of vec4 (16 floats)
+                    // Matrix type constructor
+                    // mat2 = 2 columns of vec2 (4 floats or 2 vec2s)
+                    // mat3 = 3 columns of vec3 (9 floats or 3 vec3s)
+                    // mat4 = 4 columns of vec4 (16 floats or 4 vec4s)
                     u32 numColumns = (constructedType == CoreType::MAT2) ? 2 : (constructedType == CoreType::MAT3) ? 3 : 4;
                     u32 numRows = numColumns;
                     CoreType columnType = (numColumns == 2) ? CoreType::FLOAT2 : (numColumns == 3) ? CoreType::FLOAT3 : CoreType::FLOAT4;
 
+                    // Check if arguments are already column vectors (e.g., mat4(vec4, vec4, vec4, vec4))
+                    bool argsAreColumnVectors = (argCount == numColumns);
+                    if (argsAreColumnVectors) {
+                        for (u32 i = 0; i < argCount; i++) {
+                            CoreType argType = GetRegisterType(args[i]);
+                            if (argType != columnType) {
+                                argsAreColumnVectors = false;
+                                break;
+                            }
+                        }
+                    }
+
                     u16 columnRegs[4];
-                    for (u32 col = 0; col < numColumns; col++) {
-                        columnRegs[col] = AllocateRegister();
-                        SetRegisterType(columnRegs[col], columnType);
+                    if (argsAreColumnVectors) {
+                        // Arguments are already column vectors - use them directly
+                        for (u32 col = 0; col < numColumns; col++) {
+                            columnRegs[col] = args[col];
+                        }
+                    } else {
+                        // Arguments are scalars - build column vectors
+                        for (u32 col = 0; col < numColumns; col++) {
+                            columnRegs[col] = AllocateRegister();
+                            SetRegisterType(columnRegs[col], columnType);
 
-                        // Get the scalars for this column
-                        u16 s0 = (col * numRows + 0 < argCount) ? args[col * numRows + 0] : 0xFFFF;
-                        u16 s1 = (col * numRows + 1 < argCount) ? args[col * numRows + 1] : 0xFFFF;
-                        u16 s2 = (numRows >= 3 && col * numRows + 2 < argCount) ? args[col * numRows + 2] : 0xFFFF;
-                        u16 s3 = (numRows >= 4 && col * numRows + 3 < argCount) ? args[col * numRows + 3] : 0xFFFF;
+                            // Get the scalars for this column
+                            u16 s0 = (col * numRows + 0 < argCount) ? args[col * numRows + 0] : 0xFFFF;
+                            u16 s1 = (col * numRows + 1 < argCount) ? args[col * numRows + 1] : 0xFFFF;
+                            u16 s2 = (numRows >= 3 && col * numRows + 2 < argCount) ? args[col * numRows + 2] : 0xFFFF;
+                            u16 s3 = (numRows >= 4 && col * numRows + 3 < argCount) ? args[col * numRows + 3] : 0xFFFF;
 
-                        builder.EmitInstruction(OP_VEC_CONSTRUCT, columnRegs[col], s0, s1, s2, s3);
-                        program.metadata[builder.currentInstruction - 1] = numRows;
+                            builder.EmitInstruction(OP_VEC_CONSTRUCT, columnRegs[col], s0, s1, s2, s3);
+                            program.metadata[builder.currentInstruction - 1] = numRows;
+                        }
                     }
 
                     // Now construct the matrix from column vectors
