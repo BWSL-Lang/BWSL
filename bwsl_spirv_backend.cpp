@@ -5385,6 +5385,10 @@ u32 SPIRVBuilder::CreateStorageBufferForAttribute(u32 attrIdx, CoreType elementT
         case CoreType::UINT2:  stride = 8; break;
         case CoreType::UINT3:  stride = vec3Stride; break;
         case CoreType::UINT4:  stride = 16; break;
+        // Matrices: stored as arrays of column vectors, each aligned to 16 bytes
+        case CoreType::MAT2:   stride = 32; break;  // 2 columns × 16 bytes
+        case CoreType::MAT3:   stride = 48; break;  // 3 columns × 16 bytes
+        case CoreType::MAT4:   stride = 64; break;  // 4 columns × 16 bytes
         default:               stride = 16; break;
     }
     
@@ -5718,12 +5722,16 @@ void SPIRVBuilder::DeclareResources() {
                         EmitToSection(&typesConstants, spv::OpTypeRuntimeArray, ops, 2);
                     }
 
-                    // ArrayStride decoration - calculate element size
+                    // ArrayStride decoration - calculate element size (std430 layout)
                     u32 elemSize = 4; // default for float/int/uint
                     switch (elementCoreType) {
                         case CoreType::FLOAT2: case CoreType::INT2: case CoreType::UINT2: elemSize = 8; break;
                         case CoreType::FLOAT3: case CoreType::INT3: case CoreType::UINT3: elemSize = 12; break;
                         case CoreType::FLOAT4: case CoreType::INT4: case CoreType::UINT4: elemSize = 16; break;
+                        // Matrices: stored as arrays of column vectors, each aligned to 16 bytes
+                        case CoreType::MAT2: elemSize = 32; break;  // 2 columns × 16 bytes
+                        case CoreType::MAT3: elemSize = 48; break;  // 3 columns × 16 bytes
+                        case CoreType::MAT4: elemSize = 64; break;  // 4 columns × 16 bytes
                         default: elemSize = 4; break;
                     }
                     u32 stride_ops[] = {runtime_array_type, spv::DecorationArrayStride, elemSize};
