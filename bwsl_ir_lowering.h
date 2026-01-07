@@ -1972,6 +1972,9 @@ struct IRLowering {
             case CoreType::INT2:   return 8;
             case CoreType::INT3:   return 12;
             case CoreType::INT4:   return 16;
+            case CoreType::UINT2:  return 8;
+            case CoreType::UINT3:  return 12;
+            case CoreType::UINT4:  return 16;
             case CoreType::MAT2:   return 32;  // 2 x float4
             case CoreType::MAT3:   return 48;  // 3 x float4
             case CoreType::MAT4:   return 64;  // 4 x float4
@@ -1992,6 +1995,9 @@ struct IRLowering {
             case CoreType::INT2:   return 8;
             case CoreType::INT3:   return 16;
             case CoreType::INT4:   return 16;
+            case CoreType::UINT2:  return 8;
+            case CoreType::UINT3:  return 16;
+            case CoreType::UINT4:  return 16;
             case CoreType::MAT2:   return 16;
             case CoreType::MAT3:   return 16;
             case CoreType::MAT4:   return 16;
