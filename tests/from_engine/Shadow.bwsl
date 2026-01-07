@@ -7,6 +7,17 @@ import Math
 import Compression
 
 // ============================================
+// Per-Draw Metadata Structure
+// ============================================
+struct DrawMetadata {
+    uint2 pipelineState    // void* placeholder (8 bytes)
+    uint sectionId
+    uint transformIndex
+    uint materialIndex
+    uint _padding
+}
+
+// ============================================
 // Vertex Attributes (minimal for shadow pass)
 // ============================================
 attributes {
@@ -21,10 +32,15 @@ pass "ShadowPass" {
     use attributes { position }
 
     vertex {
+        // Get per-draw data using instance_id
+        uint drawIndex = input.instance_id;
+        DrawMetadata meta = resources.drawMetadata[drawIndex];
+        mat4 modelMatrix = resources.transformBuffer[meta.transformIndex];
+
         float3 pos = Compression::decompressPosition_10_10_10(attributes.position);
 
         // Transform to world space, then to light space
-        float4 worldPos = resources.modelMatrix * float4(pos, 1.0);
+        float4 worldPos = modelMatrix * float4(pos, 1.0);
         output.position = resources.lightViewProjMatrix * worldPos;
     }
 
@@ -41,10 +57,15 @@ pass "ShadowPassAlphaTest" {
     use attributes { position, texcoord }
 
     vertex {
+        // Get per-draw data using instance_id
+        uint drawIndex = input.instance_id;
+        DrawMetadata meta = resources.drawMetadata[drawIndex];
+        mat4 modelMatrix = resources.transformBuffer[meta.transformIndex];
+
         float3 pos = Compression::decompressPosition_10_10_10(attributes.position);
         float2 uv = Compression::decompressUV16_16(attributes.texcoord);
 
-        float4 worldPos = resources.modelMatrix * float4(pos, 1.0);
+        float4 worldPos = modelMatrix * float4(pos, 1.0);
         output.position = resources.lightViewProjMatrix * worldPos;
         output.texCoord = uv;
     }
@@ -68,9 +89,14 @@ pass "PointShadowPass" {
     use attributes { position }
 
     vertex {
+        // Get per-draw data using instance_id
+        uint drawIndex = input.instance_id;
+        DrawMetadata meta = resources.drawMetadata[drawIndex];
+        mat4 modelMatrix = resources.transformBuffer[meta.transformIndex];
+
         float3 pos = Compression::decompressPosition_10_10_10(attributes.position);
 
-        float4 worldPos = resources.modelMatrix * float4(pos, 1.0);
+        float4 worldPos = modelMatrix * float4(pos, 1.0);
         output.worldPos = worldPos.xyz;
         output.position = resources.lightViewProjMatrix * worldPos;
     }
@@ -94,9 +120,14 @@ pass "SpotShadowPass" {
     use attributes { position }
 
     vertex {
+        // Get per-draw data using instance_id
+        uint drawIndex = input.instance_id;
+        DrawMetadata meta = resources.drawMetadata[drawIndex];
+        mat4 modelMatrix = resources.transformBuffer[meta.transformIndex];
+
         float3 pos = Compression::decompressPosition_10_10_10(attributes.position);
 
-        float4 worldPos = resources.modelMatrix * float4(pos, 1.0);
+        float4 worldPos = modelMatrix * float4(pos, 1.0);
         output.position = resources.lightViewProjMatrix * worldPos;
     }
 

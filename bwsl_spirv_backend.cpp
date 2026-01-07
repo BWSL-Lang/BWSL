@@ -3331,6 +3331,11 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 elem_type_id = GetTypeId(CoreType::FLOAT);
             }
 
+            // Check if this is a storage buffer pointer
+            bool isStoragePtr = ir->registerStorageInfo &&
+                base_reg < ir->registerCount &&
+                (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_PTR);
+
             // Check if this is a local array
             bool isLocalArray = ir->registerStorageInfo &&
                 base_reg < ir->registerCount &&
@@ -3339,6 +3344,16 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             if (isLocalArray) {
                 // Local array with Function storage class
                 u32 elem_ptr_type = GetPointerTypeId(elem_type_id, spv::StorageClassFunction);
+                u32 ptr_id = AllocateId();
+                Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, index_id);
+                Emit(spv::OpLoad, elem_type_id, dest, ptr_id);
+            } else if (isStoragePtr) {
+                // Storage buffer or workgroup array
+                spv::StorageClass storageClass = spv::StorageClassStorageBuffer;
+                if (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_SHARED) {
+                    storageClass = spv::StorageClassWorkgroup;
+                }
+                u32 elem_ptr_type = GetPointerTypeId(elem_type_id, storageClass);
                 u32 ptr_id = AllocateId();
                 Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, index_id);
                 Emit(spv::OpLoad, elem_type_id, dest, ptr_id);

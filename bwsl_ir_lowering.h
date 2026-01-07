@@ -3238,22 +3238,35 @@ void LowerIfStatement(NodeRef ref) {
                 u16 dest = AllocateRegister();
 
                 switch (resData.type) {
-                    case ResourceBinding::Buffer:
-                        // Distinguish between storage buffers (CUSTOM struct types) and uniform buffers (primitive types)
-                        if (static_cast<CoreType>(resData.coreType) == CoreType::CUSTOM || resData.structTypeHash != 0) {
-                            // Storage buffer with struct elements - emit OP_STORAGE_PTR for access chains
-                            builder.EmitInstruction(OP_STORAGE_PTR, dest, resData.bindingIndex);
-                            program.metadata[builder.currentInstruction - 1] = resData.structTypeHash;
+                    case ResourceBinding::UniformBuffer:
+                        // Uniform buffers (declared with "uniform" keyword) contain a single value
+                        // They emit OP_LOAD_UNIFORM to load the value directly
+                        builder.EmitInstruction(OP_LOAD_UNIFORM, dest, resData.bindingIndex);
+                        break;
 
-                            // Mark this register as holding a storage buffer pointer
-                            if (dest < MAX_REGISTERS) {
-                                program.registerStorageInfo[dest] =
-                                    (resData.bindingIndex << IR::IRProgram::STORAGE_BINDING_SHIFT) |
-                                    IR::IRProgram::STORAGE_IS_PTR;
+                    case ResourceBinding::StorageBuffer:
+                        // Storage buffers (declared with "buffer" keyword) are arrays
+                        // They emit OP_STORAGE_PTR to enable dynamic indexing via OpAccessChain
+                        builder.EmitInstruction(OP_STORAGE_PTR, dest, resData.bindingIndex);
+                        program.metadata[builder.currentInstruction - 1] = resData.structTypeHash;
+
+                        // Mark this register as holding a storage buffer pointer
+                        if (dest < MAX_REGISTERS) {
+                            program.registerStorageInfo[dest] =
+                                (resData.bindingIndex << IR::IRProgram::STORAGE_BINDING_SHIFT) |
+                                IR::IRProgram::STORAGE_IS_PTR;
+                        }
+
+                        // Register buffer element types for SPIR-V backend
+                        if (resData.bindingIndex < 32) {
+                            if (resData.structTypeHash != 0) {
+                                program.bufferElementStructTypes[resData.bindingIndex] = resData.structTypeHash;
+                            } else {
+                                CoreType coreType = static_cast<CoreType>(resData.coreType);
+                                if (coreType != CoreType::VOID && coreType != CoreType::INVALID) {
+                                    program.bufferElementCoreTypes[resData.bindingIndex] = resData.coreType;
+                                }
                             }
-                        } else {
-                            // Uniform buffer with primitive type (mat4, float4, etc.) - emit OP_LOAD_UNIFORM
-                            builder.EmitInstruction(OP_LOAD_UNIFORM, dest, resData.bindingIndex);
                         }
                         break;
 

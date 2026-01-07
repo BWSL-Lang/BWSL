@@ -6,9 +6,12 @@ target ShadowMap Depth32Float 2048 2048
 target PointShadowMap Depth32Float 1024 1024
 
 # ============= UNIFORMS =============
-# Vertex uniforms - bindings are automatically offset by vertex pulling buffer count
-uniform modelMatrix mat4 0 vertex
-uniform lightViewProjMatrix mat4 1 vertex
+# Note: vertex uniforms start at binding 2 because bindings 0-1 are used for vertex pulling (position, texcoord)
+uniform lightViewProjMatrix mat4 3 vertex
+
+# ============= STORAGE BUFFERS =============
+buffer drawMetadata DrawMetadata 6 readonly vertex
+buffer transformBuffer mat4 7 readonly vertex
 
 # Point/spot light parameters
 uniform lightPosition float3 2 fragment

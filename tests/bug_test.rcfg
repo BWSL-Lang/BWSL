@@ -11,8 +11,8 @@ uniform modelMatrix mat4 3 vertex
 uniform viewProjMatrix mat4 4 vertex
 uniform lightViewProjMatrix mat4 5 vertex
 
-# For buffer test
-uniform particles buffer 6 vertex
+# For buffer test - storage buffer array
+buffer particles Particle 6 readonly vertex
 
 pass Test
   type geometry

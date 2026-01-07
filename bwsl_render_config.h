@@ -84,7 +84,7 @@ enum class StoreAction { Store, DontCare };
 // ============= Resource Bindings =============
 
 struct ResourceBinding {
-    enum Type { Texture, Buffer, Sampler };
+    enum Type { Texture, Buffer, Sampler, UniformBuffer, StorageBuffer };
     Type type = Buffer;
     std::string resourceName;
     u32 bindingIndex = 0;

@@ -560,7 +560,7 @@ namespace SymbolTable {
             sym.index = table->resources.count;
 
             ResourceData resData;
-            resData.type = ResourceBinding::Buffer;
+            resData.type = ResourceBinding::UniformBuffer;
             resData.bindingIndex = ub.bindingIndex;
             // Parser stores stage flags as bitmask directly (1=vertex, 2=fragment, 3=both)
             resData.stageFlags = static_cast<u8>(ub.stages);
@@ -626,7 +626,7 @@ namespace SymbolTable {
             sym.index = table->resources.count;
 
             ResourceData resData;
-            resData.type = ResourceBinding::Buffer;
+            resData.type = ResourceBinding::StorageBuffer;
             resData.bindingIndex = buf.bindingIndex;
             resData.stageFlags = static_cast<u8>(buf.stages);
             // Store the type name for struct lookup during IR lowering

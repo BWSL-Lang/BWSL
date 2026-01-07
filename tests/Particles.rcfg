@@ -10,13 +10,13 @@ target SceneDepth Depth32Float viewport
 uniform viewMatrix mat4 0 vertex
 uniform projectionMatrix mat4 1 vertex
 
-# Particle buffer arrays (vertex)
-uniform particlePositions buffer 2 vertex
-uniform particleSizes buffer 3 vertex
-uniform particleRotations buffer 4 vertex
-uniform particleColors buffer 5 vertex
-uniform particleLives buffer 6 vertex
-uniform particleTexIndices buffer 7 vertex
+# Particle buffer arrays (vertex) - storage buffers
+buffer particlePositions float3 2 readonly vertex
+buffer particleSizes float 3 readonly vertex
+buffer particleRotations float 4 readonly vertex
+buffer particleColors float4 5 readonly vertex
+buffer particleLives float 6 readonly vertex
+buffer particleTexIndices uint 7 readonly vertex
 
 # Screen parameters (fragment)
 uniform screenSize float2 0 fragment
