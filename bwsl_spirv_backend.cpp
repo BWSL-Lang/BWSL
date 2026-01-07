@@ -5751,6 +5751,17 @@ void SPIRVBuilder::DeclareResources() {
                     u32 member_offset[] = {ssbo_struct_type, 0, spv::DecorationOffset, 0};
                     EmitToSection(&decorations, spv::OpMemberDecorate, member_offset, 4);
 
+                    // Matrix-specific decorations (required for mat2, mat3, mat4)
+                    if (elementCoreType == CoreType::MAT2 ||
+                        elementCoreType == CoreType::MAT3 ||
+                        elementCoreType == CoreType::MAT4) {
+                        u32 col_major[] = {ssbo_struct_type, 0, spv::DecorationColMajor};
+                        EmitToSection(&decorations, spv::OpMemberDecorate, col_major, 3);
+
+                        u32 matrix_stride[] = {ssbo_struct_type, 0, spv::DecorationMatrixStride, 16};
+                        EmitToSection(&decorations, spv::OpMemberDecorate, matrix_stride, 4);
+                    }
+
                     // Pointer type
                     ptr_ssbo_type = AllocateId();
                     u32 ops[] = {ptr_ssbo_type, spv::StorageClassStorageBuffer, ssbo_struct_type};
