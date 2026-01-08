@@ -22,6 +22,56 @@
 
 namespace spirv_cross_wrapper {
 
+// Helper to add MSL resource bindings that preserve SPIR-V binding indices
+static void preserveBindingIndices(spirv_cross::CompilerMSL& compiler, spv::ExecutionModel stage) {
+    auto resources = compiler.get_shader_resources();
+
+    // Helper lambda to add binding for a resource
+    auto addBinding = [&](const spirv_cross::Resource& res) {
+        uint32_t set = compiler.get_decoration(res.id, spv::DecorationDescriptorSet);
+        uint32_t binding = compiler.get_decoration(res.id, spv::DecorationBinding);
+
+        spirv_cross::MSLResourceBinding mslBinding;
+        mslBinding.stage = stage;
+        mslBinding.desc_set = set;
+        mslBinding.binding = binding;
+        mslBinding.msl_buffer = binding;
+        mslBinding.msl_texture = binding;
+        mslBinding.msl_sampler = binding;
+        compiler.add_msl_resource_binding(mslBinding);
+    };
+
+    // Uniform buffers
+    for (const auto& res : resources.uniform_buffers) {
+        addBinding(res);
+    }
+
+    // Storage buffers
+    for (const auto& res : resources.storage_buffers) {
+        addBinding(res);
+    }
+
+    // Separate images (textures)
+    for (const auto& res : resources.separate_images) {
+        addBinding(res);
+    }
+
+    // Separate samplers
+    for (const auto& res : resources.separate_samplers) {
+        addBinding(res);
+    }
+
+    // Combined image samplers
+    for (const auto& res : resources.sampled_images) {
+        addBinding(res);
+    }
+
+    // Storage images
+    for (const auto& res : resources.storage_images) {
+        addBinding(res);
+    }
+}
+
 std::string CompileToMSL(const std::vector<uint32_t>& spirv) {
 #ifdef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
     // No exceptions - just compile (will abort on error)
@@ -30,6 +80,11 @@ std::string CompileToMSL(const std::vector<uint32_t>& spirv) {
     mslOpts.platform = spirv_cross::CompilerMSL::Options::macOS;
     mslOpts.msl_version = spirv_cross::CompilerMSL::Options::make_msl_version(2, 0);
     compiler.set_msl_options(mslOpts);
+
+    // Preserve SPIR-V binding indices in Metal output
+    auto entry = compiler.get_entry_points_and_stages()[0];
+    preserveBindingIndices(compiler, entry.execution_model);
+
     return compiler.compile();
 #else
     try {
@@ -38,6 +93,11 @@ std::string CompileToMSL(const std::vector<uint32_t>& spirv) {
         mslOpts.platform = spirv_cross::CompilerMSL::Options::macOS;
         mslOpts.msl_version = spirv_cross::CompilerMSL::Options::make_msl_version(2, 0);
         compiler.set_msl_options(mslOpts);
+
+        // Preserve SPIR-V binding indices in Metal output
+        auto entry = compiler.get_entry_points_and_stages()[0];
+        preserveBindingIndices(compiler, entry.execution_model);
+
         return compiler.compile();
     } catch (const spirv_cross::CompilerError& e) {
         return std::string("error: ") + e.what();

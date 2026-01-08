@@ -6,7 +6,7 @@ pipeline World {
 import Math
 import Compression
 import Color
-import Lighting
+// import Lighting  // Not available yet
 
 // ============================================
 // Per-Draw Metadata Structure
@@ -74,8 +74,7 @@ pass "OpaquePass" {
         DrawMetadata meta = resources.drawMetadata[drawIndex];
         mat4 modelMatrix = resources.transformBuffer[meta.transformIndex];
 
-        // Decompress vertex at
-        tributes
+        // Decompress vertex attributes
         float3 pos = Compression::decompressPosition_10_10_10(attributes.position);
         float3 normal = Compression::decompressOctahedral16(attributes.normal);
         float2 uv = Compression::decompressUV16_16(attributes.texcoord);
