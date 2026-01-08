@@ -1,12 +1,11 @@
 // ============================================
-// World Pipeline - Static Environment/Ring Rendering
+// Crowd Pipeline - Instanced Crowd Rendering
 // ============================================
-pipeline World {
+pipeline Crowd {
 
 import Math
 import Compression
 import Color
-import Lighting
 
 // ============================================
 // Per-Draw Metadata Structure
@@ -26,8 +25,6 @@ attributes {
     position: float3 @compressed(10_10_10)
     normal: float3 @compressed(octahedral16)
     texcoord: float2 @compressed(unorm16_16)
-    tangent: float3 @compressed(octahedral16)
-    bitangent: float3 @compressed(octahedral16)
 }
 
 // ============================================
@@ -63,10 +60,10 @@ pass "ShadowPass" {
 }
 
 // ============================================
-// Opaque Pass - PBR Rendering
+// Opaque Pass - Rendering
 // ============================================
 pass "OpaquePass" {
-    use attributes { position, normal, texcoord, tangent, bitangent }
+    use attributes { position, normal, texcoord }
 
     vertex {
         // Get per-draw data using instance_id
@@ -74,26 +71,21 @@ pass "OpaquePass" {
         DrawMetadata meta = resources.drawMetadata[drawIndex];
         mat4 modelMatrix = resources.transformBuffer[meta.transformIndex];
 
-        // Decompress vertex at
-        tributes
+        // Decompress vertex attributes
         float3 pos = Compression::decompressPosition_10_10_10(attributes.position);
         float3 normal = Compression::decompressOctahedral16(attributes.normal);
         float2 uv = Compression::decompressUV16_16(attributes.texcoord);
-        float3 tangent = Compression::decompressOctahedral16(attributes.tangent);
-        float3 bitangent = Compression::decompressOctahedral16(attributes.bitangent);
 
         // Transform to world space using looked-up matrix
         output.worldPos = (modelMatrix * float4(pos, 1.0)).xyz;
         output.normal = normalize((modelMatrix * float4(normal, 0.0)).xyz);
-        output.tangent = normalize((modelMatrix * float4(tangent, 0.0)).xyz);
-        output.bitangent = normalize((modelMatrix * float4(bitangent, 0.0)).xyz);
         output.texCoord = uv;
 
         // Calculate clip space position
         float4 worldPos4 = float4(output.worldPos, 1.0);
         output.position = resources.projectionMatrix * resources.viewMatrix * worldPos4;
 
-        // Store previous frame position for velocity
+        // Previous frame position for velocity
         output.previousPosition = resources.previousViewProjMatrix * worldPos4;
 
         // Apply TAA jitter
@@ -101,67 +93,32 @@ pass "OpaquePass" {
     }
 
     fragment {
-        // Sample PBR textures
+        // Sample albedo texture
         float4 albedoSample = sample(resources.albedoTexture, resources.textureSampler, input.texCoord);
         float3 albedo = Color::sRGBToLinear(albedoSample.rgb);
 
-        float3 tangentNormal = sample(resources.normalMap, resources.textureSampler, input.texCoord).xyz * 2.0 - 1.0;
-        float roughness = sample(resources.roughnessMap, resources.textureSampler, input.texCoord).r;
-        float metallic = sample(resources.metallicMap, resources.textureSampler, input.texCoord).r;
-        float ao = sample(resources.aoMap, resources.textureSampler, input.texCoord).r;
+        // Apply tint
+        albedo = albedo * resources.tintColor.rgb;
 
-        // Apply TBN transform manually (tangent space to world space)
-        float3 N = normalize(
-            input.tangent * tangentNormal.x +
-            input.bitangent * tangentNormal.y +
-            input.normal * tangentNormal.z
-        );
+        // Simple lighting
+        float3 N = normalize(input.normal);
         float3 V = normalize(resources.cameraPosition - input.worldPos);
-
-        // Simple directional light
         float3 L = normalize(resources.lightDirection);
-        float3 H = normalize(V + L);
 
-        // Fresnel
-        float3 F0 = lerp(float3(0.04), albedo, metallic);
-        float HdotV = max(dot(H, V), 0.0);
-        float3 F = F0 + (1.0 - F0) * pow(1.0 - HdotV, 5.0);
-
-        // Distribution GGX
-        float a = roughness * roughness;
-        float a2 = a * a;
-        float NdotH = max(dot(N, H), 0.0);
-        float NdotH2 = NdotH * NdotH;
-        float denom = (NdotH2 * (a2 - 1.0) + 1.0);
-        float D = a2 / (Math::PI * denom * denom);
-
-        // Geometry Smith
-        float NdotV = max(dot(N, V), 0.0);
+        // Lambert diffuse
         float NdotL = max(dot(N, L), 0.0);
-        float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
-        float ggx1 = NdotV / (NdotV * (1.0 - k) + k);
-        float ggx2 = NdotL / (NdotL * (1.0 - k) + k);
-        float G = ggx1 * ggx2;
-
-        // Cook-Torrance BRDF
-        float3 specular = (D * G * F) / (4.0 * NdotV * NdotL + 0.001);
-        float3 kD = (float3(1.0) - F) * (1.0 - metallic);
-        float3 diffuse = kD * albedo / Math::PI;
-
-        float3 radiance = resources.lightColor * resources.lightIntensity;
-        float3 directLighting = (diffuse + specular) * radiance * NdotL;
+        float3 diffuse = albedo * resources.lightColor * resources.lightIntensity * NdotL;
 
         // Ambient
-        float3 ambient = albedo * resources.ambientColor * ao * 0.3;
+        float3 ambient = albedo * resources.ambientColor * 0.3;
 
-        // Combine
-        float3 finalColor = ambient + directLighting;
+        float3 finalColor = diffuse + ambient;
 
         // Tone mapping and gamma
         finalColor = Color::ACESFilm(finalColor);
         finalColor = Color::linearToSRGB(finalColor);
 
-        output.color = float4(finalColor, 1.0);
+        output.color = float4(finalColor, albedoSample.a);
         output.velocity = calculateVelocity(input.position, input.previousPosition);
     }
 }

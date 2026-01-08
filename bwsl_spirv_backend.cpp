@@ -5544,8 +5544,13 @@ void SPIRVBuilder::DeclareResources() {
         }
         
         // Decorate with DescriptorSet and Binding
-        // Apply vertex pulling offset to avoid binding collisions with attribute buffers
-        u32 actualBinding = binding + vertexPullingBindingOffset;
+        // Only offset binding if it would collide with vertex attribute buffers
+        // Attribute buffers occupy bindings [baseBufferBinding, baseBufferBinding + count)
+        u32 actualBinding = binding;
+        if (binding < vertexPullingBindingOffset) {
+            // This uniform would collide with vertex attributes, offset it
+            actualBinding = binding + vertexPullingBindingOffset;
+        }
         u32 set_val[] = {0};
         u32 bind_val[] = {actualBinding};
         EmitDecoration(var_id, spv::DecorationDescriptorSet, set_val, 1);

@@ -1,5 +1,5 @@
-# World Pipeline - Static Environment/Ring Rendering
-pipeline World
+# Crowd Pipeline - Crowd Rendering
+pipeline Crowd
 
 # ============= TARGETS =============
 target SceneColor RGBA16Float viewport
@@ -18,10 +18,7 @@ uniform lightViewProjMatrix mat4 13 vertex
 uniform taaJitter float2 14 vertex
 
 # ============= STORAGE BUFFERS =============
-# Per-draw metadata buffer (indexed by instance_id)
 buffer drawMetadata DrawMetadata 15 readonly vertex
-
-# Transform buffer (indexed by metadata.transformIndex)
 buffer transformBuffer mat4 16 readonly vertex
 
 # Camera and lighting
@@ -30,14 +27,11 @@ uniform lightDirection float3 1 fragment
 uniform lightColor float3 2 fragment
 uniform lightIntensity float 3 fragment
 uniform ambientColor float3 4 fragment
+uniform tintColor float4 5 fragment
 
-# PBR textures
-uniform albedoTexture sampler2D 5 fragment
-uniform normalMap sampler2D 6 fragment
-uniform roughnessMap sampler2D 7 fragment
-uniform metallicMap sampler2D 8 fragment
-uniform aoMap sampler2D 9 fragment
-uniform textureSampler sampler 10 fragment
+# Textures
+uniform albedoTexture sampler2D 6 fragment
+uniform textureSampler sampler 7 fragment
 
 # ============= PASSES =============
 pass ShadowPass
@@ -49,5 +43,5 @@ pass OpaquePass
   type geometry
   color SceneColor clear 0.0 0.0 0.0 1.0 store
   color VelocityBuffer clear 0.0 0.0 0.0 0.0 store
-  depth SceneDepth clear 1.0 store
+  depth SceneDepth load store
   depends ShadowPass
