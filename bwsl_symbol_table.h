@@ -653,13 +653,14 @@ namespace SymbolTable {
         table->currentScope++;
         table->scopeStartIndices.Push(table->arena, table->symbols.count);
     }
-    
+
     inline void ExitScope(SymbolTableData* table) {
         if (table->currentScope == 0) return;
-        
-        // Remove symbols from current scope
+
+        // Remove symbols from current scope by truncating to scopeStart
         u32 scopeStart = table->scopeStartIndices[table->currentScope];
         table->symbols.count = scopeStart;
+        table->scopeStartIndices.count--;  // Pop the scope start index
         table->currentScope--;
     }
     

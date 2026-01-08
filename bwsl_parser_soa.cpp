@@ -844,6 +844,9 @@ NodeRef Parser::ParsePass() {
     SymbolTable::SetCurrentPass(&symbolTable, passName);
     currentPass = pass;
 
+    // Enter a pass scope for pass-local symbols
+    SymbolTable::EnterScope(&symbolTable);
+
     Consume(TokenType::LEFT_BRACE, "Expected '{' after pass name");
     ParsePassBody(pass);
     Consume(TokenType::RIGHT_BRACE, "Expected '}' after pass body");

@@ -24,6 +24,9 @@ buffer drawMetadata DrawMetadata 15 readonly vertex
 # Transform buffer (indexed by metadata.transformIndex)
 buffer transformBuffer mat4 16 readonly vertex
 
+# Material buffer (indexed by metadata.materialIndex)
+buffer materialBuffer GPUMaterialData 17 readonly fragment
+
 # Camera and lighting
 uniform cameraPosition float3 0 fragment
 uniform lightDirection float3 1 fragment
@@ -31,13 +34,17 @@ uniform lightColor float3 2 fragment
 uniform lightIntensity float 3 fragment
 uniform ambientColor float3 4 fragment
 
-# PBR textures
+# PBR textures (legacy individual bindings)
 uniform albedoTexture sampler2D 5 fragment
 uniform normalMap sampler2D 6 fragment
 uniform roughnessMap sampler2D 7 fragment
 uniform metallicMap sampler2D 8 fragment
 uniform aoMap sampler2D 9 fragment
 uniform textureSampler sampler 10 fragment
+
+# Material texture array (bindless access via materialIndex)
+uniform materialTextureArray sampler2DArray 11 fragment
+uniform materialSampler sampler 12 fragment
 
 # ============= PASSES =============
 pass ShadowPass

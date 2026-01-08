@@ -19,6 +19,42 @@ struct DrawMetadata {
     uint _padding
 }
 
+// GPU Material Data structure (96 bytes, matches C++ GPUMaterialData)
+struct GPUMaterialData {
+    // Texture array indices (-1 = no texture, use scalar fallback)
+    int albedoTextureIndex
+    int normalTextureIndex
+    int roughnessTextureIndex
+    int metallicTextureIndex
+    int aoTextureIndex
+    int heightTextureIndex
+    int emissiveTextureIndex
+    uint flags
+
+    // Base color (sRGB, alpha for transparency)
+    float4 baseColor
+
+    // Emissive color (w unused)
+    float4 emissiveColor
+
+    // Scalar PBR values
+    float roughnessValue
+    float metallicValue
+    float aoValue
+    float heightScale
+
+    // UV transform
+    float2 uvScale
+    float2 uvOffset
+}
+
+// Material flag constants
+const uint MAT_HAS_ALBEDO    = 0x01u;
+const uint MAT_HAS_NORMAL    = 0x02u;
+const uint MAT_HAS_ROUGHNESS = 0x04u;
+const uint MAT_HAS_METALLIC  = 0x08u;
+const uint MAT_HAS_AO        = 0x10u;
+
 // ============================================
 // Vertex Attributes (with compression)
 // ============================================
@@ -63,7 +99,7 @@ pass "ShadowPass" {
 }
 
 // ============================================
-// Opaque Pass - PBR Rendering
+// Opaque Pass - PBR Rendering with Material Buffer
 // ============================================
 pass "OpaquePass" {
     use attributes { position, normal, texcoord, tangent, bitangent }
@@ -88,6 +124,9 @@ pass "OpaquePass" {
         output.bitangent = normalize((modelMatrix * float4(bitangent, 0.0)).xyz);
         output.texCoord = uv;
 
+        // Pass material index to fragment shader (flat, no interpolation)
+        output.materialIndex = meta.materialIndex;
+
         // Calculate clip space position
         float4 worldPos4 = float4(output.worldPos, 1.0);
         output.position = resources.projectionMatrix * resources.viewMatrix * worldPos4;
@@ -100,14 +139,60 @@ pass "OpaquePass" {
     }
 
     fragment {
-        // Sample PBR textures
-        float4 albedoSample = sample(resources.albedoTexture, resources.textureSampler, input.texCoord);
-        float3 albedo = Color::sRGBToLinear(albedoSample.rgb);
+        // Look up material data from buffer
+        GPUMaterialData mat = resources.materialBuffer[input.materialIndex];
 
-        float3 tangentNormal = sample(resources.normalMap, resources.textureSampler, input.texCoord).xyz * 2.0 - 1.0;
-        float roughness = sample(resources.roughnessMap, resources.textureSampler, input.texCoord).r;
-        float metallic = sample(resources.metallicMap, resources.textureSampler, input.texCoord).r;
-        float ao = sample(resources.aoMap, resources.textureSampler, input.texCoord).r;
+        // Apply UV transform from material
+        float2 uv = input.texCoord * mat.uvScale + mat.uvOffset;
+
+        // Get material flags
+        uint flags = mat.flags;
+
+        // Sample albedo: texture array or scalar fallback
+        float3 albedo;
+        bool hasAlbedoTex = (flags & MAT_HAS_ALBEDO) > 0;
+        if (hasAlbedoTex) {
+            float4 albedoSample = sample(resources.materialTextureArray, resources.materialSampler, float3(uv, float(mat.albedoTextureIndex)));
+            albedo = Color::sRGBToLinear(albedoSample.rgb);
+        } else {
+            albedo = Color::sRGBToLinear(mat.baseColor.rgb);
+        }
+
+        // Sample normal: texture array or flat normal
+        float3 tangentNormal;
+        bool hasNormalTex = (flags & MAT_HAS_NORMAL) > 0;
+        if (hasNormalTex) {
+            tangentNormal = sample(resources.materialTextureArray, resources.materialSampler, float3(uv, float(mat.normalTextureIndex))).xyz * 2.0 - 1.0;
+        } else {
+            tangentNormal = float3(0.0, 0.0, 1.0);
+        }
+
+        // Sample roughness: texture array or scalar
+        float roughness;
+        bool hasRoughnessTex = (flags & MAT_HAS_ROUGHNESS) > 0;
+        if (hasRoughnessTex) {
+            roughness = sample(resources.materialTextureArray, resources.materialSampler, float3(uv, float(mat.roughnessTextureIndex))).r;
+        } else {
+            roughness = mat.roughnessValue;
+        }
+
+        // Sample metallic: texture array or scalar
+        float metallic;
+        bool hasMetallicTex = (flags & MAT_HAS_METALLIC) > 0;
+        if (hasMetallicTex) {
+            metallic = sample(resources.materialTextureArray, resources.materialSampler, float3(uv, float(mat.metallicTextureIndex))).r;
+        } else {
+            metallic = mat.metallicValue;
+        }
+
+        // Sample AO: texture array or scalar
+        float ao;
+        bool hasAOTex = (flags & MAT_HAS_AO) > 0;
+        if (hasAOTex) {
+            ao = sample(resources.materialTextureArray, resources.materialSampler, float3(uv, float(mat.aoTextureIndex))).r;
+        } else {
+            ao = mat.aoValue;
+        }
 
         // Apply TBN transform manually (tangent space to world space)
         float3 N = normalize(
