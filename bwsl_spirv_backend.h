@@ -47,6 +47,16 @@ struct SPIRVBuilder {
     static constexpr u32 MAX_FIELDS_PER_STRUCT = 32;
     alignas(64) u32* structFieldTypeIds;  // SPIR-V type IDs for each field (may be array types)
 
+    // Track registers that hold struct field array values
+    // When OP_STRUCT_EXTRACT extracts an array field, mark the dest register here
+    // This is checked by OP_ARRAY_LOAD to do array element extraction instead of matrix column
+    alignas(64) bool* regIsStructArrayField;  // True if register holds a struct field array value
+
+    // Override SPIR-V type IDs for registers where IR type differs from actual SPIR-V type
+    // This handles cases like struct array element extraction where IR says FLOAT4 but actual is MAT4
+    // 0 = no override (use normal type lookup), non-zero = use this SPIR-V type ID
+    alignas(64) u32* spirvTypeOverrides;
+
     // Texture type IDs (cached for reuse)
     u32 imageTypeId = 0;          // OpTypeImage for 2D sampled texture
     u32 samplerTypeId = 0;        // OpTypeSampler
@@ -138,7 +148,10 @@ struct SPIRVBuilder {
     // ============= Storage Pointer Type Tracking =============
     // Tracks element type IDs for STORAGE_INDEX results (IR register -> SPIR-V element type ID)
     alignas(64) u32* storagePtrElemTypes;
-    
+    // Tracks storage class for pointer registers (IR register -> spv::StorageClass)
+    // 0 = use default/IR-based lookup, non-zero = use this storage class
+    alignas(64) u32* storagePtrStorageClass;
+
     // ============= IR Mapping Tables =============
     IR::IRProgram* ir;
     BWSL_Arena* arena;

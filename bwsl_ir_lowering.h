@@ -1407,11 +1407,14 @@ struct IRLowering {
         // Check if this is a struct or enum sum type
         if (coreType == CoreType::CUSTOM || coreType == CoreType::INVALID) {
             u32 lookupHash = (customTypeHash != 0) ? customTypeHash : varDecl.type.nameHash;
+            fprintf(stderr, "DEBUG LowerVariableDecl: varDecl.name.nameHash=%u, customTypeHash=%u, varDecl.type.nameHash=%u, lookupHash=%u\n",
+                    varDecl.name.nameHash, customTypeHash, varDecl.type.nameHash, lookupHash);
             u32 structTypeHash = LookupOrRegisterStructType(lookupHash);
             if (structTypeHash != 0) {
                 coreType = CoreType::CUSTOM;
                 variableStructTypes[varDecl.name.nameHash] = structTypeHash;
                 program.registerStructTypes[varReg] = structTypeHash;
+                fprintf(stderr, "DEBUG LowerVariableDecl: registered struct hash=%u for register %u\n", structTypeHash, varReg);
             }
         }
 
@@ -1578,6 +1581,18 @@ struct IRLowering {
                 program.structFieldTypeHashes) {
                 fieldTypeHash = program.structFieldTypeHashes[structInfo->fieldOffset + f];
             }
+
+            // Check if this field is an array - skip zero init for arrays
+            // (they will remain undefined, which is valid in SPIR-V)
+            u32 arraySize = 0;
+            if (program.structFieldArraySizes) {
+                arraySize = program.structFieldArraySizes[structInfo->fieldOffset + f];
+            }
+            if (arraySize > 0) {
+                // Skip array fields - they remain as undef in the base struct
+                continue;
+            }
+
             u16 valueReg = 0xFFFF;
             if (fieldTypeHash != 0) {
                 valueReg = EmitZeroStruct(fieldTypeHash);
@@ -1672,10 +1687,12 @@ struct IRLowering {
 
     // Look up or register a struct type in the IR program
     u32 LookupOrRegisterStructType(u32 typeNameHash) {
-        // Check if already registered
+        // Check if already registered with this hash
         auto it = structTypeMap.find(typeNameHash);
         if (it != structTypeMap.end()) {
-            return typeNameHash;
+            // Return the canonical hash stored in structTypes, not the lookup hash
+            u32 structIdx = it->second;
+            return program.structTypes[structIdx].nameHash;
         }
 
         // Look up in symbol table
@@ -1693,14 +1710,46 @@ struct IRLowering {
             // Try looking up via global custom type registry
             StructData* structData = g_customTypes.LookupType(typeNameHash);
             if (structData) {
+                fprintf(stderr, "DEBUG LookupOrRegisterStructType: found in g_customTypes (hash=%u)\n", typeNameHash);
                 return RegisterStructTypeFromData(typeNameHash, structData);
             }
+            fprintf(stderr, "DEBUG LookupOrRegisterStructType: not found (hash=%u)\n", typeNameHash);
             return 0;
         }
-
-        // Get struct data from symbol table
+        // Get the struct data - use its name hash as canonical (unqualified name from struct definition)
+        // This is important for module-qualified types like PBR::PBRMaterial where:
+        // - typeSym->name.nameHash is the qualified hash "PBR::PBRMaterial"
+        // - structData.name.nameHash is the unqualified hash "PBRMaterial"
         const StructData& structData = symbols->structs[typeSym->index];
-        return RegisterStructTypeFromSymbol(typeNameHash, structData);
+        u32 canonicalHash = structData.name.nameHash;
+        fprintf(stderr, "DEBUG LookupOrRegisterStructType: found symbol (lookupHash=%u, symNameHash=%u, structNameHash=%u)\n",
+                typeNameHash, typeSym->name.nameHash, canonicalHash);
+
+        // Check if already registered with the canonical hash (may differ from lookup hash)
+        auto canonIt = structTypeMap.find(canonicalHash);
+        if (canonIt != structTypeMap.end()) {
+            // Also register the lookup hash as an alias to the same struct
+            if (typeNameHash != canonicalHash) {
+                structTypeMap[typeNameHash] = canonIt->second;
+            }
+            return canonicalHash;
+        }
+
+        // Register with canonical hash
+        u32 result = RegisterStructTypeFromSymbol(canonicalHash, structData);
+
+        // Also register the lookup hash and symbol name hash as aliases if different
+        if (result != 0) {
+            u32 structIdx = structTypeMap[canonicalHash];
+            if (typeNameHash != canonicalHash) {
+                structTypeMap[typeNameHash] = structIdx;
+            }
+            if (typeSym->name.nameHash != canonicalHash) {
+                structTypeMap[typeSym->name.nameHash] = structIdx;
+            }
+        }
+
+        return result;
     }
 
     u32 RegisterStructTypeFromSymbol(u32 typeNameHash, const StructData& structData) {
@@ -2900,7 +2949,12 @@ void LowerIfStatement(NodeRef ref) {
                 SetRegisterType(dest, baseType);
                 if ((baseType == CoreType::CUSTOM || baseType == CoreType::ENUM) &&
                     baseReg < MAX_REGISTERS) {
-                    program.registerStructTypes[dest] = program.registerStructTypes[baseReg];
+                    u32 srcHash = program.registerStructTypes[baseReg];
+                    if (srcHash != 0) {
+                        // Ensure the struct type is registered in structTypeMap
+                        u32 canonicalHash = LookupOrRegisterStructType(srcHash);
+                        program.registerStructTypes[dest] = canonicalHash != 0 ? canonicalHash : srcHash;
+                    }
                 }
             }
         } else {
@@ -2933,7 +2987,12 @@ void LowerIfStatement(NodeRef ref) {
                 SetRegisterType(dest, elemType);
                 if ((baseType == CoreType::CUSTOM || baseType == CoreType::ENUM) &&
                     baseReg < MAX_REGISTERS) {
-                    program.registerStructTypes[dest] = program.registerStructTypes[baseReg];
+                    u32 srcHash = program.registerStructTypes[baseReg];
+                    if (srcHash != 0) {
+                        // Ensure the struct type is registered in structTypeMap
+                        u32 canonicalHash = LookupOrRegisterStructType(srcHash);
+                        program.registerStructTypes[dest] = canonicalHash != 0 ? canonicalHash : srcHash;
+                    }
                 }
             }
         }
@@ -3014,6 +3073,9 @@ void LowerIfStatement(NodeRef ref) {
                 u32 fieldOffset = 0;
 
                 auto structIt = structTypeMap.find(structTypeHash);
+                fprintf(stderr, "DEBUG LowerMemberAccess: objectReg=%u, structTypeHash=%u, found=%s, member=%u\n",
+                        objectReg, structTypeHash, structIt != structTypeMap.end() ? "yes" : "no",
+                        access.member.nameHash);
                 if (structIt != structTypeMap.end()) {
                     u32 structIdx = structIt->second;
                     const IRProgram::StructTypeInfo& info = program.structTypes[structIdx];
@@ -4182,6 +4244,8 @@ void LowerIfStatement(NodeRef ref) {
             for (u32 i = 0; i < argCount; i++) {
                 OverloadTypeMask paramMask = MakeOverloadMaskFromResolvedTypeHash(fn.parameters[i].second.nameHash);
                 if (!OverloadMaskMatches(paramMask, argMasks[i])) {
+                    fprintf(stderr, "DEBUG: Param[%u] type mismatch: paramMask=%llu, argMask=%llu, paramTypeHash=%u\n",
+                            i, (unsigned long long)paramMask, (unsigned long long)argMasks[i], fn.parameters[i].second.nameHash);
                     return false;
                 }
             }
@@ -4207,16 +4271,22 @@ void LowerIfStatement(NodeRef ref) {
 
         // Also try looking up by qualified hash in all modules
         if (funcRef.IsNull() && call.moduleQualifiedHash != 0) {
+            fprintf(stderr, "DEBUG: Searching modules by qualifiedHash=%u, call.name.nameHash=%u\n",
+                    call.moduleQualifiedHash, call.name.nameHash);
             for (u32 m = 0; m < ast->modules.count; m++) {
                 const ModuleNodeData& module = ast->modules[m];
+                fprintf(stderr, "DEBUG: Module[%u] has %u functions\n", m, module.functions.count);
                 for (u32 i = 0; i < module.functions.count; i++) {
                     NodeRef fnRef = module.functions[i];
                     if (fnRef.Type() == ASTNodeType::FUNCTION) {
                         const FunctionDeclData& fn = ast->GetFunction(fnRef);
+                        fprintf(stderr, "DEBUG:   [%u] fn.name.nameHash=%u params=%u\n", i, fn.name.nameHash, fn.parameters.count);
                         // Check both plain name and qualified hash match
                         if (fn.name.nameHash == call.name.nameHash ||
                             fn.name.nameHash == call.moduleQualifiedHash) {
+                            fprintf(stderr, "DEBUG:   -> Name match! Checking signature...\n");
                             if (!matchesSignature(fn)) {
+                                fprintf(stderr, "DEBUG:   -> Signature mismatch\n");
                                 continue;
                             }
                             funcRef = fnRef;
@@ -4281,6 +4351,21 @@ void LowerIfStatement(NodeRef ref) {
         }
 
         if (funcRef.IsNull()) {
+            fprintf(stderr, "DEBUG: Function not found (hash=%u, moduleIndex=%u, argCount=%u, currentPipeline=%s)\n",
+                    call.name.nameHash, call.moduleIndex, argCount,
+                    currentPipeline.IsNull() ? "NULL" : "valid");
+            if (!currentPipeline.IsNull()) {
+                const PipelineData& pipeline = ast->GetPipeline(currentPipeline);
+                fprintf(stderr, "DEBUG: Pipeline has %u functions:\n", pipeline.functions.count);
+                for (u32 i = 0; i < pipeline.functions.count && i < 10; i++) {
+                    NodeRef fnRef = pipeline.functions[i];
+                    if (fnRef.Type() == ASTNodeType::FUNCTION) {
+                        const FunctionDeclData& fn = ast->GetFunction(fnRef);
+                        fprintf(stderr, "  [%u] hash=%u, params=%u\n", i,
+                                fn.name.nameHash, fn.parameters.count);
+                    }
+                }
+            }
             return 0xFFFF; // Function not found
         }
 
@@ -4317,12 +4402,18 @@ void LowerIfStatement(NodeRef ref) {
             // The second element of the pair is the type name (e.g., "uint", "float3")
             u32 paramTypeHash = 0;
             CoreType paramType = ResolveCoreTypeFromHash(param.second.nameHash, &paramTypeHash);
+            fprintf(stderr, "DEBUG TryInlineFunction param[%u]: typeNameHash=%u, paramTypeHash=%u, paramType=%d\n",
+                    i, param.second.nameHash, paramTypeHash, static_cast<int>(paramType));
             if (paramType != CoreType::INVALID && paramType != CoreType::VOID) {
                 SetRegisterType(args[i], paramType);
                 if ((paramType == CoreType::CUSTOM || paramType == CoreType::ENUM) && paramTypeHash != 0) {
                     u32 structHash = LookupOrRegisterStructType(paramTypeHash);
+                    fprintf(stderr, "DEBUG TryInlineFunction param[%u]: structHash=%u for reg %u, paramName=%u\n",
+                            i, structHash, args[i], paramNameHash);
                     if (structHash != 0) {
                         program.registerStructTypes[args[i]] = structHash;
+                        // Also set variableStructTypes for local struct member access (e.g., mat.albedo)
+                        variableStructTypes[paramNameHash] = structHash;
                     }
                 }
             }
@@ -5041,7 +5132,20 @@ void LowerIfStatement(NodeRef ref) {
 
         if (sym && sym->kind == SymbolKind::CUSTOM_TYPE) {
             if (outCustomHash) {
-                *outCustomHash = sym->name.nameHash;
+                // Use the struct's unqualified name hash for consistency
+                const StructData& structData = symbols->structs[sym->index];
+                *outCustomHash = structData.name.nameHash;
+            }
+            return CoreType::CUSTOM;
+        }
+
+        // Fall back to global custom type registry
+        // This handles cases where the type is known by unqualified name (e.g., "PBRMaterial")
+        // but registered in symbol table with qualified name (e.g., "PBR::PBRMaterial")
+        StructData* structData = g_customTypes.LookupType(typeHash);
+        if (structData) {
+            if (outCustomHash) {
+                *outCustomHash = structData->name.nameHash;
             }
             return CoreType::CUSTOM;
         }

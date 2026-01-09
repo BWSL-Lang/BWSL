@@ -276,6 +276,10 @@ void SPIRVBuilder::Initialize(BWSL_Arena* arena, IR::IRProgram* ir, ShaderStage 
     storagePtrElemTypes = (u32*)arena->Allocate(idCapacity * sizeof(u32), 64);
     memset(storagePtrElemTypes, 0, idCapacity * sizeof(u32));
 
+    // Initialize storage pointer storage class tracking
+    storagePtrStorageClass = (u32*)arena->Allocate(idCapacity * sizeof(u32), 64);
+    memset(storagePtrStorageClass, 0, idCapacity * sizeof(u32));
+
     // Initialize type arrays
     memset(typeIds, 0, sizeof(typeIds));
     compositeTypeCount = 0;
@@ -292,7 +296,15 @@ void SPIRVBuilder::Initialize(BWSL_Arena* arena, IR::IRProgram* ir, ShaderStage 
     // Initialize struct field type IDs (64 structs * 32 fields each)
     structFieldTypeIds = (u32*)arena->Allocate(64 * MAX_FIELDS_PER_STRUCT * sizeof(u32), 64);
     memset(structFieldTypeIds, 0, 64 * MAX_FIELDS_PER_STRUCT * sizeof(u32));
-    
+
+    // Initialize struct array field tracking (tracks registers holding struct field arrays)
+    regIsStructArrayField = (bool*)arena->Allocate(idCapacity * sizeof(bool), 64);
+    memset(regIsStructArrayField, 0, idCapacity * sizeof(bool));
+
+    // Initialize SPIR-V type overrides (for when IR type differs from actual SPIR-V type)
+    spirvTypeOverrides = (u32*)arena->Allocate(idCapacity * sizeof(u32), 64);
+    memset(spirvTypeOverrides, 0, idCapacity * sizeof(u32));
+
     // Initialize constant pools
     constantCount = 0;
     floatConstantIds = (u32*)arena->Allocate(ir->floatCount * sizeof(u32), 64);
@@ -647,6 +659,61 @@ u32 SPIRVBuilder::GetStructTypeId(u32 structTypeHash) {
             fieldTypeId = GetTypeId(CoreType::FLOAT);
         }
 
+        // Check if this field is an array
+        u32 arraySize = 0;
+        if (ir->structFieldArraySizes) {
+            arraySize = ir->structFieldArraySizes[structInfo->fieldOffset + i];
+        }
+
+        if (arraySize > 0) {
+            u32 baseTypeId = fieldTypeId;
+
+            // Create OpTypeArray wrapping the base type
+            u32 arrayTypeId = AllocateId();
+            u32 lengthConstId = GetIntConstantId(arraySize, true);
+            u32 arrayOps[] = {arrayTypeId, baseTypeId, lengthConstId};
+            EmitToSection(&typesConstants, spv::OpTypeArray, arrayOps, 3);
+
+            // Calculate element stride for std140 layout (aligned to 16 bytes)
+            u32 fieldSize = 0;
+            if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
+                ir->structFieldTypeHashes) {
+                // For custom structs, use totalSize from IR
+                u32 fieldTypeHash = ir->structFieldTypeHashes[structInfo->fieldOffset + i];
+                if (fieldTypeHash != 0) {
+                    for (u32 j = 0; j < ir->structTypeCount; j++) {
+                        if (ir->structTypes[j].nameHash == fieldTypeHash) {
+                            fieldSize = ir->structTypes[j].totalSize;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (fieldSize == 0) {
+                // Fall back to core type size
+                switch (fieldType) {
+                    case CoreType::FLOAT: case CoreType::INT: case CoreType::UINT: case CoreType::BOOL:
+                        fieldSize = 4; break;
+                    case CoreType::FLOAT2: case CoreType::INT2: case CoreType::UINT2:
+                        fieldSize = 8; break;
+                    case CoreType::FLOAT3: case CoreType::INT3: case CoreType::UINT3:
+                        fieldSize = 12; break;
+                    case CoreType::FLOAT4: case CoreType::INT4: case CoreType::UINT4:
+                        fieldSize = 16; break;
+                    case CoreType::MAT2: fieldSize = 32; break;
+                    case CoreType::MAT3: fieldSize = 48; break;
+                    case CoreType::MAT4: fieldSize = 64; break;
+                    default: fieldSize = 4; break;
+                }
+            }
+            // std140: array stride aligned to 16 bytes
+            u32 stride = (fieldSize + 15) & ~15;
+            u32 stride_val[] = {stride};
+            EmitDecoration(arrayTypeId, spv::DecorationArrayStride, stride_val, 1);
+
+            fieldTypeId = arrayTypeId;  // Use array type instead of base type
+        }
+
         ops[1 + i] = fieldTypeId;
     }
 
@@ -664,6 +731,17 @@ u32 SPIRVBuilder::GetStructTypeId(u32 structTypeHash) {
     for (u32 i = 0; i < fieldCount; i++) {
         u32 byteOffset = ir->structFieldByteOffsets[structInfo->fieldOffset + i];
         EmitMemberDecoration(struct_type_id, i, spv::DecorationOffset, byteOffset);
+
+        // Add ColMajor and MatrixStride decorations for matrix fields
+        CoreType fieldType = static_cast<CoreType>(ir->structFieldTypes[structInfo->fieldOffset + i]);
+        if (fieldType == CoreType::MAT2 || fieldType == CoreType::MAT3 || fieldType == CoreType::MAT4) {
+            // Emit ColMajor decoration (no value)
+            u32 col_major_ops[] = {struct_type_id, i, spv::DecorationColMajor};
+            EmitToSection(&decorations, spv::OpMemberDecorate, col_major_ops, 3);
+            // Emit MatrixStride decoration (16 bytes per column for std140)
+            u32 matrix_stride_ops[] = {struct_type_id, i, spv::DecorationMatrixStride, 16};
+            EmitToSection(&decorations, spv::OpMemberDecorate, matrix_stride_ops, 4);
+        }
 
         // Emit member name for debugging
         if (emitDebugNames && ir->structFieldNameHashes) {
@@ -940,6 +1018,11 @@ static CoreType GetFallbackOutputType(u32 slot);
 u32 SPIRVBuilder::GetResultType(u16 dest_reg, u16 op1_reg) {
     u32 typeId = 0;
 
+    // Check for SPIR-V type override first (for struct array element types etc.)
+    if (dest_reg < idCapacity && spirvTypeOverrides[dest_reg] != 0) {
+        return spirvTypeOverrides[dest_reg];
+    }
+
     // Try destination register type first
     if (ir->registerTypes && dest_reg < ir->registerCount) {
         CoreType regType = static_cast<CoreType>(ir->registerTypes[dest_reg]);
@@ -1110,44 +1193,82 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 // For constants, we must emit OpCopyObject to create a properly defined ID.
                 // This is critical for phi nodes: the phi may be emitted before this block,
                 // so the destination register needs an actual instruction defining it.
-                CoreType destType = CoreType::FLOAT;
-                if (dest_reg < ir->registerCount && ir->registerTypes) {
-                    destType = static_cast<CoreType>(ir->registerTypes[dest_reg]);
-                }
-                // Infer type from constant encoding if register type not set
-                if (destType == CoreType::VOID || destType == CoreType::INVALID) {
-                    if ((src_reg & 0xC000) == 0xC000) {
-                        destType = CoreType::BOOL;
-                    } else if (src_reg & 0x8000) {
-                        destType = CoreType::FLOAT;
-                    } else {
-                        destType = CoreType::INT;
-                    }
-                }
                 u32 type_id = 0;
-                if ((destType == CoreType::CUSTOM || destType == CoreType::ENUM) &&
-                    ir->registerStructTypes && dest_reg < ir->registerCount) {
-                    u32 structHash = ir->registerStructTypes[dest_reg];
-                    if (structHash != 0) {
-                        type_id = GetStructTypeId(structHash);
-                    }
-                } else {
-                    type_id = GetTypeId(destType);
+
+                // Check if source register has a SPIR-V type override (e.g., from struct array extraction)
+                if (!srcIsConstant && src_reg < idCapacity && spirvTypeOverrides[src_reg] != 0) {
+                    type_id = spirvTypeOverrides[src_reg];
+                    // Propagate the override to the destination
+                    spirvTypeOverrides[dest_reg] = type_id;
                 }
+
                 if (type_id == 0) {
-                    type_id = GetTypeId(CoreType::FLOAT);
+                    CoreType destType = CoreType::FLOAT;
+                    if (dest_reg < ir->registerCount && ir->registerTypes) {
+                        destType = static_cast<CoreType>(ir->registerTypes[dest_reg]);
+                    }
+                    // Infer type from constant encoding if register type not set
+                    if (destType == CoreType::VOID || destType == CoreType::INVALID) {
+                        if ((src_reg & 0xC000) == 0xC000) {
+                            destType = CoreType::BOOL;
+                        } else if (src_reg & 0x8000) {
+                            destType = CoreType::FLOAT;
+                        } else {
+                            destType = CoreType::INT;
+                        }
+                    }
+                    if ((destType == CoreType::CUSTOM || destType == CoreType::ENUM) &&
+                        ir->registerStructTypes && dest_reg < ir->registerCount) {
+                        u32 structHash = ir->registerStructTypes[dest_reg];
+                        if (structHash != 0) {
+                            type_id = GetStructTypeId(structHash);
+                        }
+                    } else {
+                        type_id = GetTypeId(destType);
+                    }
+                    if (type_id == 0) {
+                        type_id = GetTypeId(CoreType::FLOAT);
+                    }
                 }
                 Emit(spv::OpCopyObject, type_id, dest, src_id);
                 if (needsPreallocDef) {
                     hasPreAllocatedId[dest_reg] = false;
                 }
+                // Propagate storage pointer tracking for OpCopyObject path
+                if (!srcIsConstant && src_reg < idCapacity) {
+                    if (regIsStructArrayField[src_reg]) {
+                        regIsStructArrayField[dest_reg] = true;
+                    }
+                    if (storagePtrStorageClass[src_reg] != 0) {
+                        storagePtrStorageClass[dest_reg] = storagePtrStorageClass[src_reg];
+                    }
+                    if (storagePtrElemTypes[src_reg] != 0) {
+                        storagePtrElemTypes[dest_reg] = storagePtrElemTypes[src_reg];
+                    }
+                }
             } else if (dest_reg < idCapacity) {
                 // For register-to-register copy, just alias the SPIR-V ID
                 spirvIds[dest_reg] = src_id;
+                // Propagate type override if source has one
+                if (src_reg < idCapacity && spirvTypeOverrides[src_reg] != 0) {
+                    spirvTypeOverrides[dest_reg] = spirvTypeOverrides[src_reg];
+                }
+                // Propagate storage pointer tracking
+                if (src_reg < idCapacity) {
+                    if (regIsStructArrayField[src_reg]) {
+                        regIsStructArrayField[dest_reg] = true;
+                    }
+                    if (storagePtrStorageClass[src_reg] != 0) {
+                        storagePtrStorageClass[dest_reg] = storagePtrStorageClass[src_reg];
+                    }
+                    if (storagePtrElemTypes[src_reg] != 0) {
+                        storagePtrElemTypes[dest_reg] = storagePtrElemTypes[src_reg];
+                    }
+                }
             }
             break;
         }
-        
+
         case IR::OP_LOAD_CONST: {
             // Load constant - the constant value is in metadata or operands
             u16 dest_reg = ir->destinations[ir_idx];
@@ -1184,19 +1305,54 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 u32 existing_id = spirvIds[dest_reg];
                 if (existing_id != src_id) {
                     // Define the pre-allocated ID by copying from the source
-                    u32 type_id = GetResultType(dest_reg, src_reg);
+                    // Check for type override on source first
+                    u32 type_id = 0;
+                    if (src_reg < idCapacity && spirvTypeOverrides[src_reg] != 0) {
+                        type_id = spirvTypeOverrides[src_reg];
+                        spirvTypeOverrides[dest_reg] = type_id;
+                    } else {
+                        type_id = GetResultType(dest_reg, src_reg);
+                    }
                     Emit(spv::OpCopyObject, type_id, existing_id, src_id);
                 }
                 // Clear the flag - ID is now defined, subsequent STORE_REG will just alias
                 hasPreAllocatedId[dest_reg] = false;
                 // Keep the pre-allocated ID in spirvIds so PHIs can reference it
+                // Propagate storage pointer tracking
+                if (src_reg < idCapacity) {
+                    if (regIsStructArrayField[src_reg]) {
+                        regIsStructArrayField[dest_reg] = true;
+                    }
+                    if (storagePtrStorageClass[src_reg] != 0) {
+                        storagePtrStorageClass[dest_reg] = storagePtrStorageClass[src_reg];
+                    }
+                    if (storagePtrElemTypes[src_reg] != 0) {
+                        storagePtrElemTypes[dest_reg] = storagePtrElemTypes[src_reg];
+                    }
+                }
             } else if (dest_reg < idCapacity) {
                 // No pre-allocated ID (or already defined), just alias
                 spirvIds[dest_reg] = src_id;
+                // Propagate type override if source has one
+                if (src_reg < idCapacity && spirvTypeOverrides[src_reg] != 0) {
+                    spirvTypeOverrides[dest_reg] = spirvTypeOverrides[src_reg];
+                }
+                // Propagate storage pointer tracking
+                if (src_reg < idCapacity) {
+                    if (regIsStructArrayField[src_reg]) {
+                        regIsStructArrayField[dest_reg] = true;
+                    }
+                    if (storagePtrStorageClass[src_reg] != 0) {
+                        storagePtrStorageClass[dest_reg] = storagePtrStorageClass[src_reg];
+                    }
+                    if (storagePtrElemTypes[src_reg] != 0) {
+                        storagePtrElemTypes[dest_reg] = storagePtrElemTypes[src_reg];
+                    }
+                }
             }
             break;
         }
-        
+
         // ========== Arithmetic ==========
         case IR::OP_FADD:
         case IR::OP_FSUB:
@@ -1279,6 +1435,23 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             u16 op2_reg = ir->GetOperand(ir_idx, 1);
             u32 op1 = GetSpirvId(op1_reg);
             u32 op2 = GetSpirvId(op2_reg);
+
+            // Load from storage pointers if needed
+            if (op1_reg < idCapacity && storagePtrStorageClass[op1_reg] != 0) {
+                CoreType loadType = ir->registerTypes ? static_cast<CoreType>(ir->registerTypes[op1_reg]) : CoreType::FLOAT;
+                u32 load_type = GetTypeId(loadType);
+                u32 loaded = AllocateId();
+                Emit(spv::OpLoad, load_type, loaded, op1);
+                op1 = loaded;
+            }
+            if (op2_reg < idCapacity && storagePtrStorageClass[op2_reg] != 0) {
+                CoreType loadType = ir->registerTypes ? static_cast<CoreType>(ir->registerTypes[op2_reg]) : CoreType::FLOAT;
+                u32 load_type = GetTypeId(loadType);
+                u32 loaded = AllocateId();
+                Emit(spv::OpLoad, load_type, loaded, op2);
+                op2 = loaded;
+            }
+
             u32 result_type = GetResultType(dest_reg, op1_reg);
 
             // Check for vector-scalar multiplication
@@ -1879,9 +2052,38 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         case IR::OP_U2F: {
             // Unsigned int to float: OpConvertUToF
             u16 dest_reg = ir->destinations[ir_idx];
-            u32 operand = GetSpirvId(ir->GetOperand(ir_idx, 0));
+            u16 src_reg = ir->GetOperand(ir_idx, 0);
+            u32 operand = GetSpirvId(src_reg);
             u32 result_type = GetTypeId(CoreType::FLOAT);
-            Emit(spv::OpConvertUToF, result_type, dest, operand);
+
+            // Check if source is a storage buffer pointer - if so, load from it first
+            if (src_reg < idCapacity && storagePtrStorageClass[src_reg] != 0) {
+                u32 uint_type = GetTypeId(CoreType::UINT);
+                u32 loaded_id = AllocateId();
+                Emit(spv::OpLoad, uint_type, loaded_id, operand);
+                operand = loaded_id;
+            }
+
+            // Validate source type - must be uint or int (we'll convert to float either way)
+            CoreType srcType = CoreType::UINT;
+            if (ir->registerTypes && src_reg < ir->registerCount) {
+                srcType = static_cast<CoreType>(ir->registerTypes[src_reg]);
+            }
+            if (srcType == CoreType::UINT || srcType == CoreType::UINT2 ||
+                srcType == CoreType::UINT3 || srcType == CoreType::UINT4) {
+                Emit(spv::OpConvertUToF, result_type, dest, operand);
+            } else if (srcType == CoreType::INT || srcType == CoreType::INT2 ||
+                       srcType == CoreType::INT3 || srcType == CoreType::INT4) {
+                // Source is signed int, use OpConvertSToF instead
+                Emit(spv::OpConvertSToF, result_type, dest, operand);
+            } else if (srcType == CoreType::FLOAT || srcType == CoreType::FLOAT2 ||
+                       srcType == CoreType::FLOAT3 || srcType == CoreType::FLOAT4) {
+                // Source is already float, just copy
+                Emit(spv::OpCopyObject, result_type, dest, operand);
+            } else {
+                // Unknown/invalid type - attempt conversion anyway
+                Emit(spv::OpConvertUToF, result_type, dest, operand);
+            }
             break;
         }
 
@@ -2600,7 +2802,12 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             u16 dest_reg = ir->destinations[ir_idx];
             CoreType resultType = CoreType::FLOAT4;
             if (ir->registerTypes && dest_reg < ir->registerCount) {
-                resultType = static_cast<CoreType>(ir->registerTypes[dest_reg]);
+                CoreType regType = static_cast<CoreType>(ir->registerTypes[dest_reg]);
+                // Only use register type if it's a valid vector type, not CUSTOM or INVALID
+                if (regType != CoreType::CUSTOM && regType != CoreType::ENUM &&
+                    regType != CoreType::INVALID && regType != CoreType::VOID) {
+                    resultType = regType;
+                }
             }
             
             u32 result_type_id = GetTypeId(resultType);
@@ -2620,7 +2827,20 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 u16 op_reg = ir->GetOperand(ir_idx, c);
                 if (op_reg == 0xFFFF) continue; // Sentinel for unused
                 inputRegs[inputCount] = op_reg;
-                inputIds[inputCount++] = GetSpirvId(op_reg);
+                u32 op_id = GetSpirvId(op_reg);
+                // Check if this is a storage buffer pointer - if so, load from it
+                if (op_reg < idCapacity && storagePtrStorageClass[op_reg] != 0) {
+                    // Determine the type to load based on register type
+                    CoreType loadType = CoreType::FLOAT;
+                    if (ir->registerTypes && op_reg < ir->registerCount) {
+                        loadType = static_cast<CoreType>(ir->registerTypes[op_reg]);
+                    }
+                    u32 load_type_id = GetTypeId(loadType);
+                    u32 loaded_id = AllocateId();
+                    Emit(spv::OpLoad, load_type_id, loaded_id, op_id);
+                    op_id = loaded_id;
+                }
+                inputIds[inputCount++] = op_id;
             }
 
             // OpCompositeConstruct can take mixed vectors and scalars
@@ -2773,6 +2993,13 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                     }
 
                     CoreType opScalarType = GetScalarComponentType(opType);
+                    // If type is CUSTOM or unknown, use it as-is without conversion
+                    // (CUSTOM types shouldn't be components of vectors)
+                    if (opType == CoreType::CUSTOM || opType == CoreType::ENUM ||
+                        opType == CoreType::INVALID || opType == CoreType::VOID) {
+                        scalarIds[scalarCount++] = inputIds[c];
+                        continue;
+                    }
                     if (opComponents == 1) {
                         // Scalar - use directly
                         scalarIds[scalarCount++] = convertScalar(inputIds[c], opScalarType);
@@ -3000,25 +3227,44 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 struct_type_hash = ir->registerStructTypes[src_reg];
             }
 
-            // Determine result type from struct field types
+            // Determine result type from cached struct field types
+            // (must match the type used when the struct was created in GetStructTypeId)
             u32 result_type = GetTypeId(CoreType::FLOAT);  // Default
-            if (struct_type_hash != 0 && ir->structTypes) {
-                for (u32 i = 0; i < ir->structTypeCount; i++) {
-                    if (ir->structTypes[i].nameHash == struct_type_hash) {
-                        u32 fieldOffset = ir->structTypes[i].fieldOffset;
-                        if (field_idx < ir->structTypes[i].fieldCount) {
-                            CoreType fieldType = static_cast<CoreType>(ir->structFieldTypes[fieldOffset + field_idx]);
-                            if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
-                                ir->structFieldTypeHashes) {
-                                u32 fieldTypeHash = ir->structFieldTypeHashes[fieldOffset + field_idx];
-                                if (fieldTypeHash != 0) {
-                                    result_type = GetStructTypeId(fieldTypeHash);
-                                }
-                            } else {
-                                result_type = GetTypeId(fieldType);
-                            }
+            bool isArrayField = false;  // Track if this field is an array
+            if (struct_type_hash != 0) {
+                // Look up the struct in our cache to get the field type ID
+                for (u32 i = 0; i < structTypeCount; i++) {
+                    if (structTypeHashes[i] == struct_type_hash) {
+                        if (field_idx < MAX_FIELDS_PER_STRUCT) {
+                            result_type = structFieldTypeIds[i * MAX_FIELDS_PER_STRUCT + field_idx];
                         }
                         break;
+                    }
+                }
+                // If not in cache, ensure the struct is created (will populate cache)
+                if (result_type == 0) {
+                    GetStructTypeId(struct_type_hash);
+                    // Try again
+                    for (u32 i = 0; i < structTypeCount; i++) {
+                        if (structTypeHashes[i] == struct_type_hash) {
+                            if (field_idx < MAX_FIELDS_PER_STRUCT) {
+                                result_type = structFieldTypeIds[i * MAX_FIELDS_PER_STRUCT + field_idx];
+                            }
+                            break;
+                        }
+                    }
+                }
+                // Check if this field is an array (from IR struct info)
+                if (ir->structFieldArraySizes) {
+                    for (u32 i = 0; i < ir->structTypeCount; i++) {
+                        if (ir->structTypes[i].nameHash == struct_type_hash) {
+                            u32 fieldOffset = ir->structTypes[i].fieldOffset;
+                            if (field_idx < ir->structTypes[i].fieldCount &&
+                                ir->structFieldArraySizes[fieldOffset + field_idx] > 0) {
+                                isArrayField = true;
+                            }
+                            break;
+                        }
                     }
                 }
             }
@@ -3026,15 +3272,130 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 result_type = GetTypeId(CoreType::FLOAT);
             }
 
-            // OpCompositeExtract: result_type result_id composite index...
-            if (currentFunctionSize + 5 > currentFunctionCapacity) {
-                GrowCurrentFunction();
+            // Check if source is a storage buffer variable (can't use OpCompositeExtract)
+            bool isStorageBufferVar = false;
+            for (u32 b = 0; b < 32; b++) {
+                if (storageBufferIds[b] == src_id) {
+                    isStorageBufferVar = true;
+                    break;
+                }
             }
-            currentFunction[currentFunctionSize++] = (5 << 16) | spv::OpCompositeExtract;
-            currentFunction[currentFunctionSize++] = result_type;
-            currentFunction[currentFunctionSize++] = dest;
-            currentFunction[currentFunctionSize++] = src_id;
-            currentFunction[currentFunctionSize++] = field_idx;
+
+            u16 dest_reg = ir->destinations[ir_idx];
+
+            if (isStorageBufferVar) {
+                // Storage buffer - use OpAccessChain
+                // Access pattern: buffer -> 0 (block member) -> 0 (first array element) -> field_idx
+                u32 field_ptr_type = GetPointerTypeId(result_type, spv::StorageClassStorageBuffer);
+                u32 zero_id = GetIntConstantId(0, true);
+                u32 field_id = GetIntConstantId(field_idx, false);
+
+                if (isArrayField) {
+                    // Array field - leave as pointer for later indexing by OP_ARRAY_LOAD
+                    // The dest register will hold a pointer, not a value
+                    if (currentFunctionSize + 7 > currentFunctionCapacity) {
+                        GrowCurrentFunction();
+                    }
+                    currentFunction[currentFunctionSize++] = (7 << 16) | spv::OpAccessChain;
+                    currentFunction[currentFunctionSize++] = field_ptr_type;
+                    currentFunction[currentFunctionSize++] = dest;  // Store pointer directly in dest
+                    currentFunction[currentFunctionSize++] = src_id;
+                    currentFunction[currentFunctionSize++] = zero_id;  // Block wrapper member 0
+                    currentFunction[currentFunctionSize++] = zero_id;  // First element in runtime array
+                    currentFunction[currentFunctionSize++] = field_id; // Field within struct
+
+                    // Track storage class for this pointer
+                    if (dest_reg < idCapacity) {
+                        storagePtrStorageClass[dest_reg] = static_cast<u32>(spv::StorageClassStorageBuffer);
+
+                        // Look up the element type from IR struct field types (not array type)
+                        // This is needed for OP_ARRAY_LOAD to know the element type
+                        for (u32 si = 0; si < ir->structTypeCount; si++) {
+                            if (ir->structTypes[si].nameHash == struct_type_hash) {
+                                u32 fieldOffset = ir->structTypes[si].fieldOffset;
+                                if (field_idx < ir->structTypes[si].fieldCount) {
+                                    CoreType elemType = static_cast<CoreType>(ir->structFieldTypes[fieldOffset + field_idx]);
+                                    u32 elemTypeId = 0;
+                                    if (elemType == CoreType::CUSTOM || elemType == CoreType::ENUM) {
+                                        // Struct element type - look up struct type hash
+                                        if (ir->structFieldTypeHashes) {
+                                            u32 elemStructHash = ir->structFieldTypeHashes[fieldOffset + field_idx];
+                                            if (elemStructHash != 0) {
+                                                elemTypeId = GetStructTypeId(elemStructHash);
+                                            }
+                                        }
+                                    } else {
+                                        elemTypeId = GetTypeId(elemType);
+                                    }
+                                    if (elemTypeId != 0) {
+                                        storagePtrElemTypes[dest_reg] = elemTypeId;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    // Non-array field - access and load
+                    u32 ptr_id = AllocateId();
+                    if (currentFunctionSize + 7 > currentFunctionCapacity) {
+                        GrowCurrentFunction();
+                    }
+                    currentFunction[currentFunctionSize++] = (7 << 16) | spv::OpAccessChain;
+                    currentFunction[currentFunctionSize++] = field_ptr_type;
+                    currentFunction[currentFunctionSize++] = ptr_id;
+                    currentFunction[currentFunctionSize++] = src_id;
+                    currentFunction[currentFunctionSize++] = zero_id;  // Block wrapper member 0
+                    currentFunction[currentFunctionSize++] = zero_id;  // First element in runtime array
+                    currentFunction[currentFunctionSize++] = field_id; // Field within struct
+
+                    // Load from the pointer
+                    Emit(spv::OpLoad, result_type, dest, ptr_id);
+                }
+            } else {
+                // Regular struct - use OpCompositeExtract
+                if (currentFunctionSize + 5 > currentFunctionCapacity) {
+                    GrowCurrentFunction();
+                }
+                currentFunction[currentFunctionSize++] = (5 << 16) | spv::OpCompositeExtract;
+                currentFunction[currentFunctionSize++] = result_type;
+                currentFunction[currentFunctionSize++] = dest;
+                currentFunction[currentFunctionSize++] = src_id;
+                currentFunction[currentFunctionSize++] = field_idx;
+            }
+
+            // Mark destination register if it holds a struct field array
+            if (isArrayField && dest_reg < idCapacity) {
+                regIsStructArrayField[dest_reg] = true;
+
+                // Track element type for ALL array fields (not just storage buffers)
+                // This is needed for OP_ARRAY_LOAD to get the correct element type
+                if (storagePtrElemTypes[dest_reg] == 0) {  // Only if not already set
+                    for (u32 si = 0; si < ir->structTypeCount; si++) {
+                        if (ir->structTypes[si].nameHash == struct_type_hash) {
+                            u32 fieldOffset = ir->structTypes[si].fieldOffset;
+                            if (field_idx < ir->structTypes[si].fieldCount) {
+                                CoreType elemType = static_cast<CoreType>(ir->structFieldTypes[fieldOffset + field_idx]);
+                                u32 elemTypeId = 0;
+                                if (elemType == CoreType::CUSTOM || elemType == CoreType::ENUM) {
+                                    if (ir->structFieldTypeHashes) {
+                                        u32 elemStructHash = ir->structFieldTypeHashes[fieldOffset + field_idx];
+                                        if (elemStructHash != 0) {
+                                            elemTypeId = GetStructTypeId(elemStructHash);
+                                        }
+                                    }
+                                } else {
+                                    elemTypeId = GetTypeId(elemType);
+                                }
+                                if (elemTypeId != 0) {
+                                    storagePtrElemTypes[dest_reg] = elemTypeId;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
             break;
         }
 
@@ -3358,13 +3719,61 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, index_id);
                 Emit(spv::OpLoad, elem_type_id, dest, ptr_id);
             } else {
+                // Check if base is a struct field array (not a matrix/vector)
+                bool isStructArrayField = base_reg < idCapacity && regIsStructArrayField[base_reg];
+
                 // Check if base is a matrix type - need to extract column
                 CoreType baseType = CoreType::FLOAT;
                 if (ir->registerTypes && base_reg < ir->registerCount) {
                     baseType = static_cast<CoreType>(ir->registerTypes[base_reg]);
                 }
 
-                if (baseType == CoreType::MAT2 || baseType == CoreType::MAT3 || baseType == CoreType::MAT4) {
+                if (isStructArrayField) {
+                    // Array element extraction from struct field array
+                    // Check if base is a storage buffer pointer (from OP_STRUCT_EXTRACT on storage buffer)
+                    bool isStoragePtr = base_reg < idCapacity && storagePtrStorageClass[base_reg] != 0;
+
+                    // Use tracked element type from OP_STRUCT_EXTRACT if available,
+                    // otherwise fall back to destination register type
+                    u32 array_elem_type_id = elem_type_id;
+                    if (base_reg < idCapacity && storagePtrElemTypes[base_reg] != 0) {
+                        array_elem_type_id = storagePtrElemTypes[base_reg];
+                    }
+
+                    if (isStoragePtr) {
+                        // Storage buffer pointer - use OpAccessChain + OpLoad
+                        spv::StorageClass storageClass = static_cast<spv::StorageClass>(storagePtrStorageClass[base_reg]);
+                        u32 elem_ptr_type = GetPointerTypeId(array_elem_type_id, storageClass);
+                        u32 ptr_id = AllocateId();
+                        Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, index_id);
+                        Emit(spv::OpLoad, array_elem_type_id, dest, ptr_id);
+                    } else {
+                        // Regular array value - use OpCompositeExtract or OpUndef
+                        bool isConstIndex = (index_reg & 0xC000) == 0x4000;
+                        if (isConstIndex) {
+                            u32 idx = index_reg & 0x3FFF;
+                            u32 index_val = ir->intConstants[idx];
+                            // OpCompositeExtract for constant index
+                            if (currentFunctionSize + 5 > currentFunctionCapacity) {
+                                GrowCurrentFunction();
+                            }
+                            currentFunction[currentFunctionSize++] = (5 << 16) | spv::OpCompositeExtract;
+                            currentFunction[currentFunctionSize++] = array_elem_type_id;
+                            currentFunction[currentFunctionSize++] = dest;
+                            currentFunction[currentFunctionSize++] = base_id;
+                            currentFunction[currentFunctionSize++] = index_val;
+                        } else {
+                            // Dynamic index on non-storage array - emit OpUndef for now
+                            Emit(spv::OpUndef, array_elem_type_id, dest);
+                        }
+                    }
+
+                    // Store the actual SPIR-V type for this register so downstream
+                    // operations use the correct type (not the IR's column type)
+                    if (dest_reg < idCapacity) {
+                        spirvTypeOverrides[dest_reg] = array_elem_type_id;
+                    }
+                } else if (baseType == CoreType::MAT2 || baseType == CoreType::MAT3 || baseType == CoreType::MAT4) {
                     // Matrix column extraction using OpCompositeExtract (for constant index)
                     // or OpVectorExtractDynamic (for dynamic index)
                     CoreType columnType = (baseType == CoreType::MAT2) ? CoreType::FLOAT2 :
@@ -3541,36 +3950,45 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             } else {
                 // For local arrays (not storage), define the base register as a simple assignment.
                 // This keeps SSA values defined even though full array semantics are not implemented.
-                CoreType elemType = CoreType::FLOAT;
-                if (ir->registerTypes && value_reg < ir->registerCount) {
-                    CoreType regType = static_cast<CoreType>(ir->registerTypes[value_reg]);
-                    if (regType != CoreType::VOID && regType != CoreType::INVALID) {
-                        elemType = regType;
-                    }
-                } else if (ir->registerTypes && base_reg < ir->registerCount) {
-                    CoreType regType = static_cast<CoreType>(ir->registerTypes[base_reg]);
-                    if (regType != CoreType::VOID && regType != CoreType::INVALID) {
-                        elemType = regType;
-                    }
+                u32 type_id = 0;
+
+                // Check for SPIR-V type override on value register (e.g., from struct array extraction)
+                if (value_reg < idCapacity && spirvTypeOverrides[value_reg] != 0) {
+                    type_id = spirvTypeOverrides[value_reg];
                 }
 
-                u32 type_id = GetTypeId(elemType);
-                if (type_id == 0 &&
-                    (elemType == CoreType::CUSTOM || elemType == CoreType::ENUM) &&
-                    ir->registerStructTypes) {
-                    u32 structHash = 0;
-                    if (value_reg < ir->registerCount) {
-                        structHash = ir->registerStructTypes[value_reg];
-                    }
-                    if (structHash == 0 && base_reg < ir->registerCount) {
-                        structHash = ir->registerStructTypes[base_reg];
-                    }
-                    if (structHash != 0) {
-                        type_id = GetStructTypeId(structHash);
-                    }
-                }
                 if (type_id == 0) {
-                    type_id = GetTypeId(CoreType::FLOAT);
+                    CoreType elemType = CoreType::FLOAT;
+                    if (ir->registerTypes && value_reg < ir->registerCount) {
+                        CoreType regType = static_cast<CoreType>(ir->registerTypes[value_reg]);
+                        if (regType != CoreType::VOID && regType != CoreType::INVALID) {
+                            elemType = regType;
+                        }
+                    } else if (ir->registerTypes && base_reg < ir->registerCount) {
+                        CoreType regType = static_cast<CoreType>(ir->registerTypes[base_reg]);
+                        if (regType != CoreType::VOID && regType != CoreType::INVALID) {
+                            elemType = regType;
+                        }
+                    }
+
+                    type_id = GetTypeId(elemType);
+                    if (type_id == 0 &&
+                        (elemType == CoreType::CUSTOM || elemType == CoreType::ENUM) &&
+                        ir->registerStructTypes) {
+                        u32 structHash = 0;
+                        if (value_reg < ir->registerCount) {
+                            structHash = ir->registerStructTypes[value_reg];
+                        }
+                        if (structHash == 0 && base_reg < ir->registerCount) {
+                            structHash = ir->registerStructTypes[base_reg];
+                        }
+                        if (structHash != 0) {
+                            type_id = GetStructTypeId(structHash);
+                        }
+                    }
+                    if (type_id == 0) {
+                        type_id = GetTypeId(CoreType::FLOAT);
+                    }
                 }
                 u32 value_id = GetSpirvId(value_reg);
                 u32 result_id = 0;
@@ -3661,19 +4079,47 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             }
             u32 field_ptr_type = GetPointerTypeId(fieldTypeId, storageClass);
 
-            // Emit OpAccessChain: result = base[field_idx]
-            // For storage buffer structs, we access the field directly (no wrapper)
-            u32 field_id = GetIntConstantId(field_idx, false);
-
-            // OpAccessChain result_type result base indices...
-            if (currentFunctionSize + 5 > currentFunctionCapacity) {
-                GrowCurrentFunction();
+            // Check if base is a storage buffer variable (needs extra indices for wrapper struct)
+            bool isStorageBufferVar = false;
+            for (u32 b = 0; b < 32; b++) {
+                if (storageBufferIds[b] == base_id) {
+                    isStorageBufferVar = true;
+                    break;
+                }
             }
-            currentFunction[currentFunctionSize++] = (5 << 16) | spv::OpAccessChain;
-            currentFunction[currentFunctionSize++] = field_ptr_type;
-            currentFunction[currentFunctionSize++] = dest;
-            currentFunction[currentFunctionSize++] = base_id;
-            currentFunction[currentFunctionSize++] = field_id; // Field within struct
+
+            u32 field_id = GetIntConstantId(field_idx, false);
+            u32 zero_id = GetIntConstantId(0, true);
+
+            if (isStorageBufferVar) {
+                // Storage buffer variable - need to access through Block wrapper and runtime array
+                // Access pattern: buffer -> 0 (block member) -> 0 (first array element) -> field_idx
+                if (currentFunctionSize + 7 > currentFunctionCapacity) {
+                    GrowCurrentFunction();
+                }
+                currentFunction[currentFunctionSize++] = (7 << 16) | spv::OpAccessChain;
+                currentFunction[currentFunctionSize++] = field_ptr_type;
+                currentFunction[currentFunctionSize++] = dest;
+                currentFunction[currentFunctionSize++] = base_id;
+                currentFunction[currentFunctionSize++] = zero_id;  // Block wrapper member 0 (runtime array)
+                currentFunction[currentFunctionSize++] = zero_id;  // First element in runtime array
+                currentFunction[currentFunctionSize++] = field_id; // Field within struct
+            } else {
+                // Intermediate pointer (already pointing into struct) - direct field access
+                if (currentFunctionSize + 5 > currentFunctionCapacity) {
+                    GrowCurrentFunction();
+                }
+                currentFunction[currentFunctionSize++] = (5 << 16) | spv::OpAccessChain;
+                currentFunction[currentFunctionSize++] = field_ptr_type;
+                currentFunction[currentFunctionSize++] = dest;
+                currentFunction[currentFunctionSize++] = base_id;
+                currentFunction[currentFunctionSize++] = field_id; // Field within struct
+            }
+
+            // Track the storage class for this pointer register
+            if (dest_reg < idCapacity) {
+                storagePtrStorageClass[dest_reg] = static_cast<u32>(storageClass);
+            }
             break;
         }
 
@@ -3698,8 +4144,11 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 }
             }
 
+            // Determine storage class - first check tracked storage class from previous pointer ops
             spv::StorageClass storageClass = spv::StorageClassStorageBuffer;
-            if (ir->registerStorageInfo && base_reg < ir->registerCount) {
+            if (base_reg < idCapacity && storagePtrStorageClass[base_reg] != 0) {
+                storageClass = static_cast<spv::StorageClass>(storagePtrStorageClass[base_reg]);
+            } else if (ir->registerStorageInfo && base_reg < ir->registerCount) {
                 if (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_SHARED) {
                     storageClass = spv::StorageClassWorkgroup;
                 }
@@ -3710,8 +4159,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             u32 structHash = 0;
 
             // First check for shared memory arrays
-            bool isShared = ir->registerStorageInfo && base_reg < ir->registerCount &&
-                (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_SHARED);
+            bool isShared = (storageClass == spv::StorageClassWorkgroup) ||
+                (ir->registerStorageInfo && base_reg < ir->registerCount &&
+                (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_SHARED));
 
             if (isShared && ir->sharedTypes) {
                 u32 storageInfo = ir->registerStorageInfo[base_reg];
@@ -3786,9 +4236,10 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 Emit(spv::OpAccessChain, elem_ptr_type, dest, base_id, index_id);
             }
 
-            // Store element type for this pointer register so STORAGE_LOAD can use it
+            // Store element type and storage class for this pointer register
             if (dest_reg < idCapacity) {
                 storagePtrElemTypes[dest_reg] = elem_type_id;
+                storagePtrStorageClass[dest_reg] = static_cast<u32>(storageClass);
             }
             break;
         }

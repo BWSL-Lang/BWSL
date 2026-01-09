@@ -1768,6 +1768,9 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
     ArenaString typeArena = ArenaString::MakeHashOnly(typeName);
     Symbol* typeSym = nullptr;
 
+    // For module-qualified types, track the unqualified name hash for signature matching
+    u32 unqualifiedTypeHash = 0;
+
     if (isModuleQualified) {
         // For Module::Type, need to look up using internal naming scheme
         size_t colonPos = typeName.find("::");
@@ -1776,6 +1779,9 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
 
         ArenaString moduleArena = ArenaString::MakeHashOnly(moduleName);
         ArenaString localTypeArena = ArenaString::MakeHashOnly(localTypeName);
+
+        // Store the unqualified type hash for later use
+        unqualifiedTypeHash = localTypeArena.nameHash;
 
         // Build internal qualified name: m<moduleHash>::s<typeHash>
         std::string internalName = "m" + std::to_string(moduleArena.nameHash) +
@@ -1788,7 +1794,10 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
 
     u32 arrayElementTypeHash = 0;
     if (!arrayDims.empty()) {
-        if (typeSym) {
+        // For module-qualified types, use unqualified hash for consistent signature matching
+        if (unqualifiedTypeHash != 0) {
+            arrayElementTypeHash = unqualifiedTypeHash;
+        } else if (typeSym) {
             arrayElementTypeHash = typeSym->name.nameHash;
         } else {
             arrayElementTypeHash = typeArena.nameHash;
@@ -1843,7 +1852,15 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
         } else {
             symbolTable.variables[varSym->index].typeInfo.coreType = CoreType::CUSTOM;
             if (typeSym && typeSym->kind == SymbolKind::CUSTOM_TYPE) {
-                symbolTable.variables[varSym->index].typeInfo.customTypeHash = typeSym->name.nameHash;
+                // For module-qualified types, use the unqualified hash for signature matching
+                // This allows PBR::PBRMaterial variables to match PBRMaterial parameters
+                if (unqualifiedTypeHash != 0) {
+                    fprintf(stderr, "DEBUG Parser: Setting customTypeHash=%u (unqualified) for var '%s', typeSym->name.nameHash=%u\n",
+                            unqualifiedTypeHash, varName.c_str(), typeSym->name.nameHash);
+                    symbolTable.variables[varSym->index].typeInfo.customTypeHash = unqualifiedTypeHash;
+                } else {
+                    symbolTable.variables[varSym->index].typeInfo.customTypeHash = typeSym->name.nameHash;
+                }
             }
         }
         if (!arrayDims.empty()) {
@@ -4699,6 +4716,10 @@ NodeRef Parser::ParseStruct() {
             // Register with human-readable qualified name in global registry
             // Use pointer to the stored copy in symbolTable.structs
             g_customTypes.RegisterType(humanQualifiedArena, &symbolTable.structs[sym->index]);
+
+            // Also register with unqualified name for function signature matching
+            // This allows PBR::PBRMaterial variables to match PBRMaterial parameters
+            g_customTypes.RegisterType(structData.name, &symbolTable.structs[sym->index]);
 
             // Add to module's struct list
             symbolTable.modules[symbolTable.currentModuleIndex].structIndices.Push(

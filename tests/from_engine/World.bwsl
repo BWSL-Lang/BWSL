@@ -6,7 +6,8 @@ pipeline World {
 import Math
 import Compression
 import Color
-// import Lighting  // Not available yet
+// import Lighting  // Module not available
+import PBR  
 
 // ============================================
 // Per-Draw Metadata Structure
@@ -56,6 +57,59 @@ const uint MAT_HAS_METALLIC  = 0x08u;
 const uint MAT_HAS_AO        = 0x10u;
 
 // ============================================
+// Light Types (matches Aurora::LightTypes)
+// ============================================
+const uint LIGHT_POINT       = 0u;
+const uint LIGHT_DIRECTIONAL = 1u;
+const uint LIGHT_LINE        = 2u;
+const uint LIGHT_SPOT        = 3u;
+const uint LIGHT_PROBE       = 4u;
+const uint LIGHT_AREA        = 5u;
+
+const uint MAX_LIGHTS = 16u;
+const uint MAX_POINT_SHADOW_LIGHTS = 2u;
+
+// ============================================
+// Light Sources SoA (matches Aurora::LightSourcesSoA)
+// ============================================
+struct LightSourcesSoA {
+    float3[16] positions
+    float3[16] directions
+    float3[16] colors
+    float[16] intensities
+    float[16] constantAttenuations
+    float[16] linearAttenuations
+    float[16] quadraticAttenuations
+    float[16] innerCutoffs
+    float[16] outerCutoffs
+    float[16] lengths
+    float[16] radii
+    uint[16] types
+    uint version
+}
+
+// ============================================
+// Shadow System Structures
+// ============================================
+struct CascadeData {
+    mat4 viewProjMatrix
+    float splitDistance
+    float3 _padding
+}
+
+struct ShadowData {
+    CascadeData[4] cascades
+    float4 lightDirection
+    uint numCascades
+    uint shadowMapSize
+    float cascadeSplitLambda
+    float shadowBias
+    float shadowSlopeBias
+    float shadowFilterRadius
+    float2 _padding
+}
+
+// ============================================
 // Vertex Attributes (with compression)
 // ============================================
 attributes {
@@ -74,6 +128,84 @@ calculateVelocity :: (float4 currentPos, float4 previousPos) -> float2 {
     float2 currentNDC = currentPos.xy / currentPos.w;
     float2 previousNDC = previousPos.xy / previousPos.w;
     return (currentNDC - previousNDC) * 0.5;
+}
+
+// ============================================
+// Shadow Sampling Functions
+// ============================================
+
+// Sample shadow map with PCF filtering
+sampleShadowPCF :: (float3 shadowCoords, uint cascadeIndex, float bias) -> float {
+    float shadow = 0.0;
+    float texelSize = 1.0 / float(resources.shadowData.shadowMapSize);
+    float filterRadius = resources.shadowData.shadowFilterRadius;
+
+    // 3x3 PCF kernel
+    for (int x = -1; x <= 1; x = x + 1) {
+        for (int y = -1; y <= 1; y = y + 1) {
+            float2 offset = float2(float(x), float(y)) * texelSize * filterRadius;
+            float3 samplePos = float3(shadowCoords.xy + offset, float(cascadeIndex));
+            float shadowDepth = sample(resources.shadowMapArray, resources.shadowSampler, samplePos).r;
+            shadow = shadow + ((shadowCoords.z - bias > shadowDepth) ? 0.0 : 1.0);
+        }
+    }
+    return shadow / 9.0;
+}
+
+// Find cascade and sample CSM
+sampleCascadedShadow :: (float3 worldPos, float3 N, float3 L) -> float {
+    float viewDepth = length(resources.cameraPosition - worldPos);
+    ShadowData shadow = resources.shadowData;
+
+    // Find cascade
+    uint cascadeIndex = 0u;
+    for (uint j = 0u; j < shadow.numCascades; j = j + 1u) {
+        if (viewDepth < shadow.cascades[j].splitDistance) {
+            cascadeIndex = j;
+            break;
+        }
+    }
+
+    // Transform to shadow space
+    float4 shadowPos = shadow.cascades[cascadeIndex].viewProjMatrix * float4(worldPos, 1.0);
+    shadowPos.xyz = shadowPos.xyz / shadowPos.w;
+
+    // NDC to texture coords
+    float3 shadowCoords = float3(
+        shadowPos.x * 0.5 + 0.5,
+        -shadowPos.y * 0.5 + 0.5,
+        shadowPos.z
+    );
+
+    // Out of bounds check
+    if (shadowCoords.x < 0.0 || shadowCoords.x > 1.0 ||
+        shadowCoords.y < 0.0 || shadowCoords.y > 1.0 ||
+        shadowCoords.z < 0.0 || shadowCoords.z > 1.0) {
+        return 1.0;
+    }
+
+    // Calculate bias based on slope
+    float bias = max(shadow.shadowBias * (1.0 - dot(N, L)), shadow.shadowBias);
+    bias = bias * (1.0 + float(cascadeIndex) * 0.5);
+
+    return sampleShadowPCF(shadowCoords, cascadeIndex, bias);
+}
+
+// Sample point light shadow from cubemap
+samplePointShadow :: (float3 worldPos, float3 lightPos, uint lightIndex) -> float {
+    float3 fragToLight = worldPos - lightPos;
+    float currentDepth = length(fragToLight);
+    float farPlane = resources.pointShadowFarPlane;
+    float bias = resources.shadowData.shadowBias * currentDepth;
+
+    float closestDepth;
+    if (lightIndex == 0u) {
+        closestDepth = sample(resources.pointShadowCube0, resources.shadowSampler, fragToLight).r * farPlane;
+    } else {
+        closestDepth = sample(resources.pointShadowCube1, resources.shadowSampler, fragToLight).r * farPlane;
+    }
+
+    return (currentDepth - bias > closestDepth) ? 0.0 : 1.0;
 }
 
 // ============================================
@@ -202,44 +334,88 @@ pass "OpaquePass" {
         );
         float3 V = normalize(resources.cameraPosition - input.worldPos);
 
-        // Simple directional light
-        float3 L = normalize(resources.lightDirection);
-        float3 H = normalize(V + L);
+        // Build PBR material struct for module functions
+        PBR::PBRMaterial pbrMat;
+        pbrMat.albedo = albedo;
+        pbrMat.roughness = roughness;
+        pbrMat.metallic = metallic;
+        pbrMat.ao = ao;
 
-        // Fresnel
-        float3 F0 = lerp(float3(0.04), albedo, metallic);
-        float HdotV = max(dot(H, V), 0.0);
-        float3 F = F0 + (1.0 - F0) * pow(1.0 - HdotV, 5.0);
+        // Get light count
+        uint numLights = resources.lightCount;
 
-        // Distribution GGX
-        float a = roughness * roughness;
-        float a2 = a * a;
-        float NdotH = max(dot(N, H), 0.0);
-        float NdotH2 = NdotH * NdotH;
-        float denom = (NdotH2 * (a2 - 1.0) + 1.0);
-        float D = a2 / (Math::PI * denom * denom);
+        // Accumulated direct lighting
+        float3 Lo = float3(0.0);
+        uint pointLightIndex = 0u;
 
-        // Geometry Smith
-        float NdotV = max(dot(N, V), 0.0);
-        float NdotL = max(dot(N, L), 0.0);
-        float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
-        float ggx1 = NdotV / (NdotV * (1.0 - k) + k);
-        float ggx2 = NdotL / (NdotL * (1.0 - k) + k);
-        float G = ggx1 * ggx2;
+        // Loop over all lights
+        for (uint i = 0u; i < numLights; i = i + 1u) {
+            uint lightType = resources.lightBuffer.types[i];
+            float3 lightColor = resources.lightBuffer.colors[i];
+            float intensity = resources.lightBuffer.intensities[i];
 
-        // Cook-Torrance BRDF
-        float3 specular = (D * G * F) / (4.0 * NdotV * NdotL + 0.001);
-        float3 kD = (float3(1.0) - F) * (1.0 - metallic);
-        float3 diffuse = kD * albedo / Math::PI;
+            float3 L;
+            float attenuation = 1.0;
+            float shadowFactor = 1.0;
 
-        float3 radiance = resources.lightColor * resources.lightIntensity;
-        float3 directLighting = (diffuse + specular) * radiance * NdotL;
+            if (lightType == LIGHT_DIRECTIONAL) {
+                L = normalize(resources.lightBuffer.directions[i]);
+                // Sample CSM shadow for directional light
+                shadowFactor = sampleCascadedShadow(input.worldPos, N, L);
+            }
+            else if (lightType == LIGHT_POINT) {
+                float3 lightPos = resources.lightBuffer.positions[i];
+                float3 toLight = lightPos - input.worldPos;
+                float dist = length(toLight);
+                L = toLight / dist;
+
+                // Point light attenuation
+                float c = resources.lightBuffer.constantAttenuations[i];
+                float l = resources.lightBuffer.linearAttenuations[i];
+                float q = resources.lightBuffer.quadraticAttenuations[i];
+                attenuation = 1.0 / (c + l * dist + q * dist * dist);
+
+                // Point shadow (first 2 point lights only)
+                if (pointLightIndex < MAX_POINT_SHADOW_LIGHTS) {
+                    shadowFactor = samplePointShadow(input.worldPos, lightPos, pointLightIndex);
+                }
+                pointLightIndex = pointLightIndex + 1u;
+            }
+            else if (lightType == LIGHT_AREA) {
+                // Area light with soft falloff
+                float3 lightPos = resources.lightBuffer.positions[i];
+                float3 toLight = lightPos - input.worldPos;
+                float dist = length(toLight);
+                L = toLight / dist;
+
+                float radius = resources.lightBuffer.radii[i];
+                float sinTMax = clamp(radius / dist, 0.0, 1.0);
+                float cosTMax = sqrt(1.0 - sinTMax * sinTMax);
+                float coverage = 1.0 - cosTMax;
+
+                float c = resources.lightBuffer.constantAttenuations[i];
+                float l = resources.lightBuffer.linearAttenuations[i];
+                float q = resources.lightBuffer.quadraticAttenuations[i];
+                attenuation = coverage / (c + l * dist + q * dist * dist);
+            }
+            else {
+                // Default for unhandled light types
+                L = float3(0.0, 1.0, 0.0);
+            }
+
+            // Calculate radiance with shadow
+            float3 radiance = lightColor * intensity * attenuation * shadowFactor;
+
+            // Use PBR module for direct lighting calculation
+            float3 contribution = PBR::calculateDirectLighting(pbrMat, N, V, L, radiance);
+            Lo = Lo + contribution;
+        }
 
         // Ambient
         float3 ambient = albedo * resources.ambientColor * ao * 0.3;
 
-        // Combine
-        float3 finalColor = ambient + directLighting;
+        // Combine direct lighting and ambient
+        float3 finalColor = ambient + Lo;
 
         // Tone mapping and gamma
         finalColor = Color::ACESFilm(finalColor);

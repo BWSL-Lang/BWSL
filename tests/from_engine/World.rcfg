@@ -27,11 +27,8 @@ buffer transformBuffer mat4 16 readonly vertex
 # Material buffer (indexed by metadata.materialIndex)
 buffer materialBuffer GPUMaterialData 17 readonly fragment
 
-# Camera and lighting
+# Camera (kept for view calculations)
 uniform cameraPosition float3 0 fragment
-uniform lightDirection float3 1 fragment
-uniform lightColor float3 2 fragment
-uniform lightIntensity float 3 fragment
 uniform ambientColor float3 4 fragment
 
 # PBR textures (legacy individual bindings)
@@ -45,6 +42,26 @@ uniform textureSampler sampler 10 fragment
 # Material texture array (bindless access via materialIndex)
 uniform materialTextureArray sampler2DArray 11 fragment
 uniform materialSampler sampler 12 fragment
+
+# ============= LIGHTING =============
+# Light count
+uniform lightCount uint 13 fragment
+
+# Light buffer (SoA structure from Aurora)
+buffer lightBuffer LightSourcesSoA 18 readonly fragment
+
+# ============= SHADOWS =============
+# Shadow data buffer (CSM cascades + settings)
+buffer shadowData ShadowData 19 readonly fragment
+
+# Shadow map array texture (CSM layers)
+uniform shadowMapArray sampler2DArray 14 fragment
+uniform shadowSampler sampler 15 fragment
+
+# Point light shadows (cubemaps for first 2 point lights)
+uniform pointShadowCube0 samplerCube 16 fragment
+uniform pointShadowCube1 samplerCube 17 fragment
+uniform pointShadowFarPlane float 20 fragment
 
 # ============= PASSES =============
 pass ShadowPass
