@@ -2,11 +2,13 @@
 pipeline UI
 
 # ============= TARGETS =============
-target UIColor RGBA8Unorm_sRGB viewport
+# Note: UI renders to the swapchain which uses BGRA8Unorm_sRGB
+target UIColor BGRA8Unorm_sRGB viewport
 
 # ============= UNIFORMS =============
-# Screen parameters (vertex) - bindings are automatically offset by vertex pulling buffer count
-uniform screenSize float2 0 vertex
+# Screen parameters (vertex)
+# Note: indices 0-9 reserved for vertex attribute buffers
+uniform screenSize float2 10 vertex
 
 # Fragment uniforms - properly numbered
 uniform atlasSize float2 0 fragment
@@ -45,7 +47,12 @@ uniform shineEnabled int 23 fragment
 # Textures
 uniform atlasTexture sampler2D 24 fragment
 uniform sdfAtlas sampler2D 25 fragment
-uniform atlasSampler sampler 26 fragment
+uniform atlasSampler sampler 0 fragment
+
+# MSDF Text parameters
+# Note: fontAtlas must be at low binding so SPIRV-Cross generates sampler index < 16
+uniform fontAtlas sampler2D 3 fragment
+uniform pxRange float 28 fragment
 
 # ============= PASSES =============
 pass UIPass
@@ -58,10 +65,15 @@ pass SDFTextPass
   color UIColor load store
   depends UIPass
 
-pass NineSlicePass
+pass MSDFTextPass
   type geometry
   color UIColor load store
   depends SDFTextPass
+
+pass NineSlicePass
+  type geometry
+  color UIColor load store
+  depends MSDFTextPass
 
 pass RoundedRectPass
   type geometry

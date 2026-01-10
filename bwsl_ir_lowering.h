@@ -1802,8 +1802,13 @@ struct IRLowering {
             currentOffset = (currentOffset + alignment - 1) & ~(alignment - 1);
             program.structFieldByteOffsets[fieldOffset + i] = currentOffset;
             if (field.arraySize > 0) {
-                // Array stride is aligned to 16 bytes in std140
-                u32 arrayStride = (fieldSize + 15) & ~15;
+                // std430 layout: scalars and vec2 use natural stride, vec3+ rounds to 16
+                u32 arrayStride;
+                if (fieldSize <= 8) {
+                    arrayStride = fieldSize;  // Natural size for scalars (4) and vec2 (8)
+                } else {
+                    arrayStride = (fieldSize + 15) & ~15;  // Round to 16 for vec3, vec4, mat
+                }
                 currentOffset += arrayStride * field.arraySize;
             } else {
                 currentOffset += fieldSize;
@@ -1869,8 +1874,13 @@ struct IRLowering {
             currentOffset = (currentOffset + alignment - 1) & ~(alignment - 1);
             program.structFieldByteOffsets[fieldOffset + i] = currentOffset;
             if (field.arraySize > 0) {
-                // Array stride is aligned to 16 bytes in std140
-                u32 arrayStride = (fieldSize + 15) & ~15;
+                // std430 layout: scalars and vec2 use natural stride, vec3+ rounds to 16
+                u32 arrayStride;
+                if (fieldSize <= 8) {
+                    arrayStride = fieldSize;  // Natural size for scalars (4) and vec2 (8)
+                } else {
+                    arrayStride = (fieldSize + 15) & ~15;  // Round to 16 for vec3, vec4, mat
+                }
                 currentOffset += arrayStride * field.arraySize;
             } else {
                 currentOffset += fieldSize;

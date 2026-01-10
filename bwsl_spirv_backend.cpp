@@ -706,8 +706,13 @@ u32 SPIRVBuilder::GetStructTypeId(u32 structTypeHash) {
                     default: fieldSize = 4; break;
                 }
             }
-            // std140: array stride aligned to 16 bytes
-            u32 stride = (fieldSize + 15) & ~15;
+            // std430 layout: scalars and vec2 use natural stride, vec3+ rounds to 16
+            u32 stride;
+            if (fieldSize <= 8) {
+                stride = fieldSize;  // Natural size for scalars (4) and vec2 (8)
+            } else {
+                stride = (fieldSize + 15) & ~15;  // Round to 16 for vec3, vec4, mat
+            }
             u32 stride_val[] = {stride};
             EmitDecoration(arrayTypeId, spv::DecorationArrayStride, stride_val, 1);
 
