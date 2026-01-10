@@ -1407,14 +1407,11 @@ struct IRLowering {
         // Check if this is a struct or enum sum type
         if (coreType == CoreType::CUSTOM || coreType == CoreType::INVALID) {
             u32 lookupHash = (customTypeHash != 0) ? customTypeHash : varDecl.type.nameHash;
-            fprintf(stderr, "DEBUG LowerVariableDecl: varDecl.name.nameHash=%u, customTypeHash=%u, varDecl.type.nameHash=%u, lookupHash=%u\n",
-                    varDecl.name.nameHash, customTypeHash, varDecl.type.nameHash, lookupHash);
             u32 structTypeHash = LookupOrRegisterStructType(lookupHash);
             if (structTypeHash != 0) {
                 coreType = CoreType::CUSTOM;
                 variableStructTypes[varDecl.name.nameHash] = structTypeHash;
                 program.registerStructTypes[varReg] = structTypeHash;
-                fprintf(stderr, "DEBUG LowerVariableDecl: registered struct hash=%u for register %u\n", structTypeHash, varReg);
             }
         }
 
@@ -1710,10 +1707,8 @@ struct IRLowering {
             // Try looking up via global custom type registry
             StructData* structData = g_customTypes.LookupType(typeNameHash);
             if (structData) {
-                fprintf(stderr, "DEBUG LookupOrRegisterStructType: found in g_customTypes (hash=%u)\n", typeNameHash);
                 return RegisterStructTypeFromData(typeNameHash, structData);
             }
-            fprintf(stderr, "DEBUG LookupOrRegisterStructType: not found (hash=%u)\n", typeNameHash);
             return 0;
         }
         // Get the struct data - use its name hash as canonical (unqualified name from struct definition)
@@ -1722,8 +1717,6 @@ struct IRLowering {
         // - structData.name.nameHash is the unqualified hash "PBRMaterial"
         const StructData& structData = symbols->structs[typeSym->index];
         u32 canonicalHash = structData.name.nameHash;
-        fprintf(stderr, "DEBUG LookupOrRegisterStructType: found symbol (lookupHash=%u, symNameHash=%u, structNameHash=%u)\n",
-                typeNameHash, typeSym->name.nameHash, canonicalHash);
 
         // Check if already registered with the canonical hash (may differ from lookup hash)
         auto canonIt = structTypeMap.find(canonicalHash);
@@ -1787,6 +1780,25 @@ struct IRLowering {
             // std140 alignment rules - for arrays, account for array length
             u32 fieldSize = GetTypeSize(field.type.coreType);
             u32 alignment = GetTypeAlignment(field.type.coreType);
+
+            // For CUSTOM types (nested structs), ensure nested struct is registered and get its size
+            if (field.type.coreType == CoreType::CUSTOM && field.type.customTypeHash != 0) {
+                // First, ensure the nested struct is registered (recursively)
+                auto it = structTypeMap.find(field.type.customTypeHash);
+                if (it == structTypeMap.end()) {
+                    // Nested struct not registered yet - register it now
+                    LookupOrRegisterStructType(field.type.customTypeHash);
+                    it = structTypeMap.find(field.type.customTypeHash);
+                }
+
+                if (it != structTypeMap.end()) {
+                    u32 nestedIdx = it->second;
+                    fieldSize = program.structTypes[nestedIdx].totalSize;
+                    // Struct alignment is max of its member alignments, minimum 16 for std140
+                    alignment = 16;
+                }
+            }
+
             currentOffset = (currentOffset + alignment - 1) & ~(alignment - 1);
             program.structFieldByteOffsets[fieldOffset + i] = currentOffset;
             if (field.arraySize > 0) {
@@ -1835,6 +1847,25 @@ struct IRLowering {
 
             u32 fieldSize = GetTypeSize(field.type.coreType);
             u32 alignment = GetTypeAlignment(field.type.coreType);
+
+            // For CUSTOM types (nested structs), ensure nested struct is registered and get its size
+            if (field.type.coreType == CoreType::CUSTOM && field.type.customTypeHash != 0) {
+                // First, ensure the nested struct is registered (recursively)
+                auto it = structTypeMap.find(field.type.customTypeHash);
+                if (it == structTypeMap.end()) {
+                    // Nested struct not registered yet - register it now
+                    LookupOrRegisterStructType(field.type.customTypeHash);
+                    it = structTypeMap.find(field.type.customTypeHash);
+                }
+
+                if (it != structTypeMap.end()) {
+                    u32 nestedIdx = it->second;
+                    fieldSize = program.structTypes[nestedIdx].totalSize;
+                    // Struct alignment is max of its member alignments, minimum 16 for std140
+                    alignment = 16;
+                }
+            }
+
             currentOffset = (currentOffset + alignment - 1) & ~(alignment - 1);
             program.structFieldByteOffsets[fieldOffset + i] = currentOffset;
             if (field.arraySize > 0) {
@@ -3073,9 +3104,7 @@ void LowerIfStatement(NodeRef ref) {
                 u32 fieldOffset = 0;
 
                 auto structIt = structTypeMap.find(structTypeHash);
-                fprintf(stderr, "DEBUG LowerMemberAccess: objectReg=%u, structTypeHash=%u, found=%s, member=%u\n",
-                        objectReg, structTypeHash, structIt != structTypeMap.end() ? "yes" : "no",
-                        access.member.nameHash);
+      
                 if (structIt != structTypeMap.end()) {
                     u32 structIdx = structIt->second;
                     const IRProgram::StructTypeInfo& info = program.structTypes[structIdx];
@@ -4271,22 +4300,17 @@ void LowerIfStatement(NodeRef ref) {
 
         // Also try looking up by qualified hash in all modules
         if (funcRef.IsNull() && call.moduleQualifiedHash != 0) {
-            fprintf(stderr, "DEBUG: Searching modules by qualifiedHash=%u, call.name.nameHash=%u\n",
-                    call.moduleQualifiedHash, call.name.nameHash);
             for (u32 m = 0; m < ast->modules.count; m++) {
                 const ModuleNodeData& module = ast->modules[m];
-                fprintf(stderr, "DEBUG: Module[%u] has %u functions\n", m, module.functions.count);
+
                 for (u32 i = 0; i < module.functions.count; i++) {
                     NodeRef fnRef = module.functions[i];
                     if (fnRef.Type() == ASTNodeType::FUNCTION) {
                         const FunctionDeclData& fn = ast->GetFunction(fnRef);
-                        fprintf(stderr, "DEBUG:   [%u] fn.name.nameHash=%u params=%u\n", i, fn.name.nameHash, fn.parameters.count);
                         // Check both plain name and qualified hash match
                         if (fn.name.nameHash == call.name.nameHash ||
                             fn.name.nameHash == call.moduleQualifiedHash) {
-                            fprintf(stderr, "DEBUG:   -> Name match! Checking signature...\n");
                             if (!matchesSignature(fn)) {
-                                fprintf(stderr, "DEBUG:   -> Signature mismatch\n");
                                 continue;
                             }
                             funcRef = fnRef;
@@ -4402,14 +4426,12 @@ void LowerIfStatement(NodeRef ref) {
             // The second element of the pair is the type name (e.g., "uint", "float3")
             u32 paramTypeHash = 0;
             CoreType paramType = ResolveCoreTypeFromHash(param.second.nameHash, &paramTypeHash);
-            fprintf(stderr, "DEBUG TryInlineFunction param[%u]: typeNameHash=%u, paramTypeHash=%u, paramType=%d\n",
-                    i, param.second.nameHash, paramTypeHash, static_cast<int>(paramType));
+
             if (paramType != CoreType::INVALID && paramType != CoreType::VOID) {
                 SetRegisterType(args[i], paramType);
                 if ((paramType == CoreType::CUSTOM || paramType == CoreType::ENUM) && paramTypeHash != 0) {
                     u32 structHash = LookupOrRegisterStructType(paramTypeHash);
-                    fprintf(stderr, "DEBUG TryInlineFunction param[%u]: structHash=%u for reg %u, paramName=%u\n",
-                            i, structHash, args[i], paramNameHash);
+
                     if (structHash != 0) {
                         program.registerStructTypes[args[i]] = structHash;
                         // Also set variableStructTypes for local struct member access (e.g., mat.albedo)

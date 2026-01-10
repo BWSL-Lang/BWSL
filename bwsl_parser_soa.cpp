@@ -1855,8 +1855,6 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
                 // For module-qualified types, use the unqualified hash for signature matching
                 // This allows PBR::PBRMaterial variables to match PBRMaterial parameters
                 if (unqualifiedTypeHash != 0) {
-                    fprintf(stderr, "DEBUG Parser: Setting customTypeHash=%u (unqualified) for var '%s', typeSym->name.nameHash=%u\n",
-                            unqualifiedTypeHash, varName.c_str(), typeSym->name.nameHash);
                     symbolTable.variables[varSym->index].typeInfo.customTypeHash = unqualifiedTypeHash;
                 } else {
                     symbolTable.variables[varSym->index].typeInfo.customTypeHash = typeSym->name.nameHash;
