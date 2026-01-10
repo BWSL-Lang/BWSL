@@ -4219,11 +4219,14 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             u32 elem_ptr_type = GetPointerTypeId(elem_type_id, storageClass);
 
             // Check if base is a storage buffer variable (needs extra 0 index for wrapper struct)
+            // Skip this check for shared memory - shared arrays don't have wrapper structs
             bool isStorageBufferVar = false;
-            for (u32 b = 0; b < 32; b++) {
-                if (storageBufferIds[b] == base_id) {
-                    isStorageBufferVar = true;
-                    break;
+            if (!isShared) {
+                for (u32 b = 0; b < 32; b++) {
+                    if (storageBufferIds[b] == base_id) {
+                        isStorageBufferVar = true;
+                        break;
+                    }
                 }
             }
 
