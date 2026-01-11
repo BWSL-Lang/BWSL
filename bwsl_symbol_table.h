@@ -170,6 +170,8 @@ struct ResourceData {
     u32 bindingIndex = 0;
     u8 stageFlags = 0;
     u8 coreType = static_cast<u8>(CoreType::FLOAT4);  // CoreType for uniform buffers (from render config)
+    bool isArrayTexture = false;   // For texture arrays (sampler2DArray)
+    bool isCubemapTexture = false; // For cubemap textures (samplerCube)
     u32 structTypeHash = 0;  // For struct types (storage buffers), hash of the fully qualified type name
     ArenaString renderTargetName;
     ArenaString typeName;  // Raw type name string from render config (e.g., "Globals::LightSourcesSoA")
@@ -587,6 +589,8 @@ namespace SymbolTable {
             resData.type = ResourceBinding::Texture;
             resData.bindingIndex = tex.bindingIndex;
             resData.stageFlags = static_cast<u8>(tex.stages);
+            resData.isArrayTexture = tex.isArray;
+            resData.isCubemapTexture = tex.isCubemap;
             table->resources.Push(table->arena, resData);
             table->symbols.Push(table->arena, sym);
         }

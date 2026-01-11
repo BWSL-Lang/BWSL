@@ -820,6 +820,39 @@ u32 SPIRVBuilder::GetSampledImageTypeId() {
     return sampledImageTypeId;
 }
 
+u32 SPIRVBuilder::GetArrayImageTypeId() {
+    if (arrayImageTypeId != 0) return arrayImageTypeId;
+
+    // OpTypeImage for 2D array sampled texture: float, Dim2D, 0, 1 (arrayed), 0, 1, Unknown
+    arrayImageTypeId = AllocateId();
+    u32 float_type = GetTypeId(CoreType::FLOAT);
+    u32 ops[] = {
+        arrayImageTypeId,
+        float_type,
+        static_cast<u32>(spv::Dim2D),
+        0,  // depth (not depth texture)
+        1,  // arrayed (IS array texture)
+        0,  // ms (not multisampled)
+        1,  // sampled (used with sampler)
+        static_cast<u32>(spv::ImageFormatUnknown)
+    };
+    EmitToSection(&typesConstants, spv::OpTypeImage, ops, 8);
+
+    return arrayImageTypeId;
+}
+
+u32 SPIRVBuilder::GetArraySampledImageTypeId() {
+    if (arraySampledImageTypeId != 0) return arraySampledImageTypeId;
+
+    // OpTypeSampledImage requires the array image type
+    u32 img_type = GetArrayImageTypeId();
+    arraySampledImageTypeId = AllocateId();
+    u32 ops[] = {arraySampledImageTypeId, img_type};
+    EmitToSection(&typesConstants, spv::OpTypeSampledImage, ops, 2);
+
+    return arraySampledImageTypeId;
+}
+
 // ============= Constant Management =============
 u32 SPIRVBuilder::GetFloatConstantId(float value) {
     // Check for existing constant
@@ -4700,8 +4733,8 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             // Get result type (float4 for most texture samples)
             u32 result_type = GetTypeId(CoreType::FLOAT4);
 
-            // Get sampled image type for the load
-            u32 sampled_img_type = GetSampledImageTypeId();
+            // Get sampled image type for the load - use array type if this is an array texture
+            u32 sampled_img_type = textureIsArray[tex_slot] ? GetArraySampledImageTypeId() : GetSampledImageTypeId();
 
             // Load the combined sampled image
             u32 sampled_img_id = AllocateId();
@@ -6026,31 +6059,74 @@ void SPIRVBuilder::DeclareResources() {
     u32 image_type_id = 0;
     u32 sampled_image_type_id = 0;
     u32 ptr_sampled_image_type = 0;
+    u32 array_image_type_id = 0;
+    u32 array_sampled_image_type_id = 0;
+    u32 ptr_array_sampled_image_type = 0;
 
-    if (analysis.usedTextureMask != 0) {
-        // Reuse cached image type to avoid duplicate OpTypeImage declarations
-        image_type_id = GetImageTypeId();
-        sampled_image_type_id = GetSampledImageTypeId();
+    // Check if we need array texture types by looking up textures in symbol table
+    bool needsArrayTexture = false;
+    bool needsRegularTexture = false;
 
-        ptr_sampled_image_type = AllocateId();
-        {
-            u32 ops[] = {ptr_sampled_image_type, spv::StorageClassUniformConstant, sampled_image_type_id};
-            EmitToSection(&typesConstants, spv::OpTypePointer, ops, 3);
+    if (analysis.usedTextureMask != 0 && symbols) {
+        for (u32 binding = 0; binding < 32; binding++) {
+            if (!(analysis.usedTextureMask & (1 << binding))) continue;
+
+            // Look up texture in symbol table to check if it's an array
+            bool isArray = false;
+            for (u32 r = 0; r < symbols->resources.count; r++) {
+                const ResourceData& resData = symbols->resources[r];
+                if (resData.bindingIndex == binding && resData.type == ResourceBinding::Texture) {
+                    isArray = resData.isArrayTexture;
+                    break;
+                }
+            }
+            textureIsArray[binding] = isArray;
+            if (isArray) needsArrayTexture = true;
+            else needsRegularTexture = true;
         }
     }
-    
+
+    if (analysis.usedTextureMask != 0) {
+        // Create regular 2D texture types if needed
+        if (needsRegularTexture) {
+            image_type_id = GetImageTypeId();
+            sampled_image_type_id = GetSampledImageTypeId();
+
+            ptr_sampled_image_type = AllocateId();
+            {
+                u32 ops[] = {ptr_sampled_image_type, spv::StorageClassUniformConstant, sampled_image_type_id};
+                EmitToSection(&typesConstants, spv::OpTypePointer, ops, 3);
+            }
+        }
+
+        // Create 2D array texture types if needed
+        if (needsArrayTexture) {
+            array_image_type_id = GetArrayImageTypeId();
+            array_sampled_image_type_id = GetArraySampledImageTypeId();
+
+            ptr_array_sampled_image_type = AllocateId();
+            {
+                u32 ops[] = {ptr_array_sampled_image_type, spv::StorageClassUniformConstant, array_sampled_image_type_id};
+                EmitToSection(&typesConstants, spv::OpTypePointer, ops, 3);
+            }
+        }
+    }
+
     // Create texture variables for each used binding
     for (u32 binding = 0; binding < 32; binding++) {
         if (!(analysis.usedTextureMask & (1 << binding))) continue;
-        
+
+        // Use array pointer type if this texture is an array, otherwise regular
+        u32 ptr_type = textureIsArray[binding] ? ptr_array_sampled_image_type : ptr_sampled_image_type;
+
         u32 tex_var_id = AllocateId();
         {
-            u32 ops[] = {ptr_sampled_image_type, tex_var_id, spv::StorageClassUniformConstant};
+            u32 ops[] = {ptr_type, tex_var_id, spv::StorageClassUniformConstant};
             EmitToSection(&globals, spv::OpVariable, ops, 3);
         }
-        
-        // Decorate - textures typically in set 0 after uniforms and vertex pulling buffers
-        u32 textureBinding = binding + analysis.UniformCount() + vertexPullingBindingOffset;
+
+        // Use absolute binding index from rcfg (not offset)
+        u32 textureBinding = binding;
         u32 set_val[] = {0};
         u32 bind_val[] = {textureBinding};
         EmitDecoration(tex_var_id, spv::DecorationDescriptorSet, set_val, 1);

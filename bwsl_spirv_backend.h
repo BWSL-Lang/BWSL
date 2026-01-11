@@ -58,9 +58,14 @@ struct SPIRVBuilder {
     alignas(64) u32* spirvTypeOverrides;
 
     // Texture type IDs (cached for reuse)
-    u32 imageTypeId = 0;          // OpTypeImage for 2D sampled texture
-    u32 samplerTypeId = 0;        // OpTypeSampler
-    u32 sampledImageTypeId = 0;   // OpTypeSampledImage
+    u32 imageTypeId = 0;              // OpTypeImage for 2D sampled texture
+    u32 arrayImageTypeId = 0;         // OpTypeImage for 2D array sampled texture
+    u32 samplerTypeId = 0;            // OpTypeSampler
+    u32 sampledImageTypeId = 0;       // OpTypeSampledImage
+    u32 arraySampledImageTypeId = 0;  // OpTypeSampledImage for array textures
+
+    // Track which texture bindings are array textures
+    bool textureIsArray[32] = {false};
 
     // Built-in input type IDs (cached for reuse)
     u32 globalInvocationIdVarId = 0;
@@ -233,9 +238,11 @@ struct SPIRVBuilder {
     u32 GetStructTypeId(u32 structTypeHash);  // Get or create SPIR-V struct type from IR struct info
 
     // Texture type management
-    u32 GetImageTypeId();           // Get OpTypeImage ID for 2D sampled texture
-    u32 GetSamplerTypeId();         // Get OpTypeSampler ID
-    u32 GetSampledImageTypeId();    // Get OpTypeSampledImage ID
+    u32 GetImageTypeId();               // Get OpTypeImage ID for 2D sampled texture
+    u32 GetArrayImageTypeId();          // Get OpTypeImage ID for 2D array sampled texture
+    u32 GetSamplerTypeId();             // Get OpTypeSampler ID
+    u32 GetSampledImageTypeId();        // Get OpTypeSampledImage ID
+    u32 GetArraySampledImageTypeId();   // Get OpTypeSampledImage ID for array textures
 
     // Constant management
     u32 GetFloatConstantId(float value);

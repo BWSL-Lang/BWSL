@@ -451,7 +451,7 @@ inline ParseResult Parse(const std::string& content) {
                     texDesc.name = name;
                     texDesc.bindingIndex = binding;
                     texDesc.stages = stages;
-                    texDesc.isArray = false;
+                    texDesc.isArray = (typeName.find("Array") != std::string::npos);
                     texDesc.isCubemap = (typeName.find("Cube") != std::string::npos);
                     result.config.textures.push_back(texDesc);
                 } else {
