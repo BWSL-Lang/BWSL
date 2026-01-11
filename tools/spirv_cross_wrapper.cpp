@@ -23,10 +23,13 @@
 namespace spirv_cross_wrapper {
 
 // Helper to add MSL resource bindings that preserve SPIR-V binding indices
+// Note: Metal only allows sampler indices 0-15, so we remap sampler bindings
+// to stay within this range while keeping texture bindings as-is.
 static void preserveBindingIndices(spirv_cross::CompilerMSL& compiler, spv::ExecutionModel stage) {
     auto resources = compiler.get_shader_resources();
+    uint32_t nextSamplerSlot = 0;  // Track sampler slots separately (0-15 max)
 
-    // Helper lambda to add binding for a resource
+    // Helper lambda to add binding for a resource (non-sampler)
     auto addBinding = [&](const spirv_cross::Resource& res) {
         uint32_t set = compiler.get_decoration(res.id, spv::DecorationDescriptorSet);
         uint32_t binding = compiler.get_decoration(res.id, spv::DecorationBinding);
@@ -37,7 +40,24 @@ static void preserveBindingIndices(spirv_cross::CompilerMSL& compiler, spv::Exec
         mslBinding.binding = binding;
         mslBinding.msl_buffer = binding;
         mslBinding.msl_texture = binding;
-        mslBinding.msl_sampler = binding;
+        mslBinding.msl_sampler = binding;  // Not used for non-sampler resources
+        compiler.add_msl_resource_binding(mslBinding);
+    };
+
+    // Helper lambda to add binding for combined image sampler
+    // Texture binding stays as-is, sampler binding is remapped to 0-15 range
+    auto addSampledImageBinding = [&](const spirv_cross::Resource& res) {
+        uint32_t set = compiler.get_decoration(res.id, spv::DecorationDescriptorSet);
+        uint32_t binding = compiler.get_decoration(res.id, spv::DecorationBinding);
+
+        spirv_cross::MSLResourceBinding mslBinding;
+        mslBinding.stage = stage;
+        mslBinding.desc_set = set;
+        mslBinding.binding = binding;
+        mslBinding.msl_buffer = binding;
+        mslBinding.msl_texture = binding;
+        // Remap sampler to sequential slots within 0-15 range
+        mslBinding.msl_sampler = nextSamplerSlot < 16 ? nextSamplerSlot++ : 15;
         compiler.add_msl_resource_binding(mslBinding);
     };
 
@@ -56,14 +76,24 @@ static void preserveBindingIndices(spirv_cross::CompilerMSL& compiler, spv::Exec
         addBinding(res);
     }
 
-    // Separate samplers
+    // Separate samplers - these also need remapped bindings
     for (const auto& res : resources.separate_samplers) {
-        addBinding(res);
+        uint32_t set = compiler.get_decoration(res.id, spv::DecorationDescriptorSet);
+        uint32_t binding = compiler.get_decoration(res.id, spv::DecorationBinding);
+
+        spirv_cross::MSLResourceBinding mslBinding;
+        mslBinding.stage = stage;
+        mslBinding.desc_set = set;
+        mslBinding.binding = binding;
+        mslBinding.msl_buffer = binding;
+        mslBinding.msl_texture = binding;
+        mslBinding.msl_sampler = nextSamplerSlot < 16 ? nextSamplerSlot++ : 15;
+        compiler.add_msl_resource_binding(mslBinding);
     }
 
-    // Combined image samplers
+    // Combined image samplers - texture binding preserved, sampler remapped
     for (const auto& res : resources.sampled_images) {
-        addBinding(res);
+        addSampledImageBinding(res);
     }
 
     // Storage images

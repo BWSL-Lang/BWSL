@@ -853,6 +853,39 @@ u32 SPIRVBuilder::GetArraySampledImageTypeId() {
     return arraySampledImageTypeId;
 }
 
+u32 SPIRVBuilder::GetCubeImageTypeId() {
+    if (cubeImageTypeId != 0) return cubeImageTypeId;
+
+    // OpTypeImage for cube sampled texture: float, DimCube, 0, 0, 0, 1, Unknown
+    cubeImageTypeId = AllocateId();
+    u32 float_type = GetTypeId(CoreType::FLOAT);
+    u32 ops[] = {
+        cubeImageTypeId,
+        float_type,
+        static_cast<u32>(spv::DimCube),
+        0,  // depth (not depth texture)
+        0,  // arrayed (not array)
+        0,  // ms (not multisampled)
+        1,  // sampled (used with sampler)
+        static_cast<u32>(spv::ImageFormatUnknown)
+    };
+    EmitToSection(&typesConstants, spv::OpTypeImage, ops, 8);
+
+    return cubeImageTypeId;
+}
+
+u32 SPIRVBuilder::GetCubeSampledImageTypeId() {
+    if (cubeSampledImageTypeId != 0) return cubeSampledImageTypeId;
+
+    // OpTypeSampledImage requires the cube image type
+    u32 img_type = GetCubeImageTypeId();
+    cubeSampledImageTypeId = AllocateId();
+    u32 ops[] = {cubeSampledImageTypeId, img_type};
+    EmitToSection(&typesConstants, spv::OpTypeSampledImage, ops, 2);
+
+    return cubeSampledImageTypeId;
+}
+
 // ============= Constant Management =============
 u32 SPIRVBuilder::GetFloatConstantId(float value) {
     // Check for existing constant
@@ -4733,8 +4766,15 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             // Get result type (float4 for most texture samples)
             u32 result_type = GetTypeId(CoreType::FLOAT4);
 
-            // Get sampled image type for the load - use array type if this is an array texture
-            u32 sampled_img_type = textureIsArray[tex_slot] ? GetArraySampledImageTypeId() : GetSampledImageTypeId();
+            // Get sampled image type for the load - use array/cube type if applicable
+            u32 sampled_img_type;
+            if (textureIsArray[tex_slot]) {
+                sampled_img_type = GetArraySampledImageTypeId();
+            } else if (textureIsCubemap[tex_slot]) {
+                sampled_img_type = GetCubeSampledImageTypeId();
+            } else {
+                sampled_img_type = GetSampledImageTypeId();
+            }
 
             // Load the combined sampled image
             u32 sampled_img_id = AllocateId();
@@ -6062,26 +6102,34 @@ void SPIRVBuilder::DeclareResources() {
     u32 array_image_type_id = 0;
     u32 array_sampled_image_type_id = 0;
     u32 ptr_array_sampled_image_type = 0;
+    u32 cube_image_type_id = 0;
+    u32 cube_sampled_image_type_id = 0;
+    u32 ptr_cube_sampled_image_type = 0;
 
-    // Check if we need array texture types by looking up textures in symbol table
+    // Check if we need array/cube texture types by looking up textures in symbol table
     bool needsArrayTexture = false;
+    bool needsCubeTexture = false;
     bool needsRegularTexture = false;
 
     if (analysis.usedTextureMask != 0 && symbols) {
         for (u32 binding = 0; binding < 32; binding++) {
             if (!(analysis.usedTextureMask & (1 << binding))) continue;
 
-            // Look up texture in symbol table to check if it's an array
+            // Look up texture in symbol table to check if it's an array or cubemap
             bool isArray = false;
+            bool isCubemap = false;
             for (u32 r = 0; r < symbols->resources.count; r++) {
                 const ResourceData& resData = symbols->resources[r];
                 if (resData.bindingIndex == binding && resData.type == ResourceBinding::Texture) {
                     isArray = resData.isArrayTexture;
+                    isCubemap = resData.isCubemapTexture;
                     break;
                 }
             }
             textureIsArray[binding] = isArray;
+            textureIsCubemap[binding] = isCubemap;
             if (isArray) needsArrayTexture = true;
+            else if (isCubemap) needsCubeTexture = true;
             else needsRegularTexture = true;
         }
     }
@@ -6110,14 +6158,33 @@ void SPIRVBuilder::DeclareResources() {
                 EmitToSection(&typesConstants, spv::OpTypePointer, ops, 3);
             }
         }
+
+        // Create cube texture types if needed
+        if (needsCubeTexture) {
+            cube_image_type_id = GetCubeImageTypeId();
+            cube_sampled_image_type_id = GetCubeSampledImageTypeId();
+
+            ptr_cube_sampled_image_type = AllocateId();
+            {
+                u32 ops[] = {ptr_cube_sampled_image_type, spv::StorageClassUniformConstant, cube_sampled_image_type_id};
+                EmitToSection(&typesConstants, spv::OpTypePointer, ops, 3);
+            }
+        }
     }
 
     // Create texture variables for each used binding
     for (u32 binding = 0; binding < 32; binding++) {
         if (!(analysis.usedTextureMask & (1 << binding))) continue;
 
-        // Use array pointer type if this texture is an array, otherwise regular
-        u32 ptr_type = textureIsArray[binding] ? ptr_array_sampled_image_type : ptr_sampled_image_type;
+        // Select the correct pointer type based on texture type
+        u32 ptr_type;
+        if (textureIsArray[binding]) {
+            ptr_type = ptr_array_sampled_image_type;
+        } else if (textureIsCubemap[binding]) {
+            ptr_type = ptr_cube_sampled_image_type;
+        } else {
+            ptr_type = ptr_sampled_image_type;
+        }
 
         u32 tex_var_id = AllocateId();
         {

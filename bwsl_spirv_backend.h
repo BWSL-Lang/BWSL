@@ -60,12 +60,15 @@ struct SPIRVBuilder {
     // Texture type IDs (cached for reuse)
     u32 imageTypeId = 0;              // OpTypeImage for 2D sampled texture
     u32 arrayImageTypeId = 0;         // OpTypeImage for 2D array sampled texture
+    u32 cubeImageTypeId = 0;          // OpTypeImage for cube sampled texture
     u32 samplerTypeId = 0;            // OpTypeSampler
     u32 sampledImageTypeId = 0;       // OpTypeSampledImage
     u32 arraySampledImageTypeId = 0;  // OpTypeSampledImage for array textures
+    u32 cubeSampledImageTypeId = 0;   // OpTypeSampledImage for cube textures
 
-    // Track which texture bindings are array textures
+    // Track which texture bindings are array/cubemap textures
     bool textureIsArray[32] = {false};
+    bool textureIsCubemap[32] = {false};
 
     // Built-in input type IDs (cached for reuse)
     u32 globalInvocationIdVarId = 0;
@@ -240,9 +243,11 @@ struct SPIRVBuilder {
     // Texture type management
     u32 GetImageTypeId();               // Get OpTypeImage ID for 2D sampled texture
     u32 GetArrayImageTypeId();          // Get OpTypeImage ID for 2D array sampled texture
+    u32 GetCubeImageTypeId();           // Get OpTypeImage ID for cube sampled texture
     u32 GetSamplerTypeId();             // Get OpTypeSampler ID
     u32 GetSampledImageTypeId();        // Get OpTypeSampledImage ID
     u32 GetArraySampledImageTypeId();   // Get OpTypeSampledImage ID for array textures
+    u32 GetCubeSampledImageTypeId();    // Get OpTypeSampledImage ID for cube textures
 
     // Constant management
     u32 GetFloatConstantId(float value);
