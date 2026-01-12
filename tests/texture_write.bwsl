@@ -1,0 +1,19 @@
+// Test: Storage image write operations using store() intrinsic
+// Verifies compute shader can write to textures via OpImageWrite
+
+pipeline TextureWrite {
+
+    pass "Compute" {
+        compute "WriteGradient" [8, 8, 1] {
+            uint3 gid = input.global_id;
+            int2 coords = int2(int(gid.x), int(gid.y));
+
+            // Create a gradient pattern based on coordinates
+            float2 uv = float2(gid.xy) / 64.0;
+            float4 color = float4(uv.x, uv.y, 1.0 - uv.x, 1.0);
+
+            // Write to storage image
+            store(resources.outputImage, coords, color);
+        }
+    }
+}

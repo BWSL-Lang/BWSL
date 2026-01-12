@@ -66,6 +66,10 @@ struct SPIRVBuilder {
     u32 arraySampledImageTypeId = 0;  // OpTypeSampledImage for array textures
     u32 cubeSampledImageTypeId = 0;   // OpTypeSampledImage for cube textures
 
+    // Storage image type IDs (for image load/store operations)
+    u32 storageImageTypeId = 0;       // OpTypeImage for 2D storage image (read/write)
+    u32 ptrStorageImageTypeId = 0;    // Pointer to storage image type
+
     // Track which texture bindings are array/cubemap textures
     bool textureIsArray[32] = {false};
     bool textureIsCubemap[32] = {false};
@@ -149,6 +153,7 @@ struct SPIRVBuilder {
     alignas(64) u32* textureIds;
     alignas(64) u32* samplerIds;
     alignas(64) u32* storageBufferIds;
+    alignas(64) u32* storageImageIds;    // Storage images (read/write textures)
     alignas(64) u8* bindingSets;         // Descriptor set indices
     alignas(64) u8* bindingIndices;      // Binding within set
     u32 resourceCount;
@@ -248,6 +253,7 @@ struct SPIRVBuilder {
     u32 GetSampledImageTypeId();        // Get OpTypeSampledImage ID
     u32 GetArraySampledImageTypeId();   // Get OpTypeSampledImage ID for array textures
     u32 GetCubeSampledImageTypeId();    // Get OpTypeSampledImage ID for cube textures
+    u32 GetStorageImageTypeId();        // Get OpTypeImage ID for 2D storage image (read/write)
 
     // Constant management
     u32 GetFloatConstantId(float value);

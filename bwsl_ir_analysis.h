@@ -40,9 +40,10 @@ struct IRAnalysis {
 
     // Resource usage (indexed by binding)
     u32 usedUniformMask;          // Bit per uniform binding (0-31)
-    u32 usedTextureMask;          // Bit per texture binding
+    u32 usedTextureMask;          // Bit per texture binding (sampled textures)
     u32 usedSamplerMask;          // Bit per sampler binding
     u32 usedStorageBufferMask;    // Bit per storage buffer binding
+    u32 usedStorageImageMask;     // Bit per storage image binding (read/write textures)
     
     // Type info for each binding (CoreType stored per slot)
     u8 uniformTypes[32];          // CoreType for each uniform binding
@@ -83,6 +84,7 @@ struct IRAnalysis {
     u32 TextureCount() const { return __builtin_popcount(usedTextureMask); }
     u32 SamplerCount() const { return __builtin_popcount(usedSamplerMask); }
     u32 StorageBufferCount() const { return __builtin_popcount(usedStorageBufferMask); }
+    u32 StorageImageCount() const { return __builtin_popcount(usedStorageImageMask); }
     u32 AttributeCount() const { return __builtin_popcount(usedAttributeMask); }
     u32 OutputCount() const { return __builtin_popcount(usedOutputMask); }
     u32 InputCount() const { return __builtin_popcount(usedInputMask); }

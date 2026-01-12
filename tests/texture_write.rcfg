@@ -1,0 +1,4 @@
+# Resource configuration for texture_write.bwsl test
+# Declares a storage image for compute shader write operations
+
+image outputImage 0 writeonly compute

@@ -200,11 +200,27 @@ void AnalyzeIR(IRAnalysis* analysis, const IR::IRProgram* ir) {
             
             // ========== Image Operations ==========
             case IR::OP_IMG_LOAD: {
+                // Storage image register is encoded as 0x2000 | bindingIndex (same as textures)
+                u16 imgReg = ir->GetOperand(i, 0);
+                if ((imgReg & 0xF000) == 0x2000) {
+                    u16 binding = imgReg & 0x0FFF;
+                    if (binding < 32) {
+                        analysis->usedStorageImageMask |= (1 << binding);
+                    }
+                }
                 analysis->Set(IRAnalysis::CAP_IMAGE_LOAD);
                 break;
             }
-            
+
             case IR::OP_IMG_STORE: {
+                // Storage image register is encoded as 0x2000 | bindingIndex (same as textures)
+                u16 imgReg = ir->GetOperand(i, 0);
+                if ((imgReg & 0xF000) == 0x2000) {
+                    u16 binding = imgReg & 0x0FFF;
+                    if (binding < 32) {
+                        analysis->usedStorageImageMask |= (1 << binding);
+                    }
+                }
                 analysis->Set(IRAnalysis::CAP_IMAGE_STORE);
                 break;
             }

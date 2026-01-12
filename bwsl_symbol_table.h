@@ -651,8 +651,28 @@ namespace SymbolTable {
             table->resources.Push(table->arena, resData);
             table->symbols.Push(table->arena, sym);
         }
+
+        // Register storage images as resources
+        for (const auto& img : config.storageImages) {
+            ArenaString name = ArenaString::MakeHashOnly(img.name);
+
+            Symbol sym;
+            sym.name = name;
+            sym.moduleIndex = INVALID_INDEX;
+            sym.namespaceKind = NamespaceKind::RESOURCES;
+            sym.kind = SymbolKind::RESOURCE;
+            sym.scopeLevel = 0;
+            sym.index = table->resources.count;
+
+            ResourceData resData;
+            resData.type = ResourceBinding::StorageImage;
+            resData.bindingIndex = img.bindingIndex;
+            resData.stageFlags = static_cast<u8>(img.stages);
+            table->resources.Push(table->arena, resData);
+            table->symbols.Push(table->arena, sym);
+        }
     }
-    
+
     inline void EnterScope(SymbolTableData* table) {
         table->currentScope++;
         table->scopeStartIndices.Push(table->arena, table->symbols.count);

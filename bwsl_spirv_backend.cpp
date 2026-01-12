@@ -359,6 +359,7 @@ void SPIRVBuilder::Initialize(BWSL_Arena* arena, IR::IRProgram* ir, ShaderStage 
     textureIds = (u32*)arena->Allocate(32 * sizeof(u32), 64);
     samplerIds = (u32*)arena->Allocate(32 * sizeof(u32), 64);
     storageBufferIds = (u32*)arena->Allocate(32 * sizeof(u32), 64);
+    storageImageIds = (u32*)arena->Allocate(32 * sizeof(u32), 64);
     bindingSets = (u8*)arena->Allocate(128 * sizeof(u8), 64);
     bindingIndices = (u8*)arena->Allocate(128 * sizeof(u8), 64);
     
@@ -884,6 +885,29 @@ u32 SPIRVBuilder::GetCubeSampledImageTypeId() {
     EmitToSection(&typesConstants, spv::OpTypeSampledImage, ops, 2);
 
     return cubeSampledImageTypeId;
+}
+
+u32 SPIRVBuilder::GetStorageImageTypeId() {
+    if (storageImageTypeId != 0) return storageImageTypeId;
+
+    // OpTypeImage for 2D storage image (read/write): float, Dim2D, 0, 0, 0, 2, Rgba32f
+    // sampled = 2 means storage image (not used with sampler)
+    // Using Rgba32f format for compatibility, but we have StorageImageWriteWithoutFormat capability
+    storageImageTypeId = AllocateId();
+    u32 float_type = GetTypeId(CoreType::FLOAT);
+    u32 ops[] = {
+        storageImageTypeId,
+        float_type,
+        static_cast<u32>(spv::Dim2D),
+        0,  // depth (not depth texture)
+        0,  // arrayed (not array)
+        0,  // ms (not multisampled)
+        2,  // sampled = 2 (storage image, not used with sampler)
+        static_cast<u32>(spv::ImageFormatRgba32f)
+    };
+    EmitToSection(&typesConstants, spv::OpTypeImage, ops, 8);
+
+    return storageImageTypeId;
 }
 
 // ============= Constant Management =============
@@ -4833,6 +4857,46 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             break;
         }
 
+        case IR::OP_IMG_STORE: {
+            // Image store: store(image, coord, value)
+            // IR format: s0 = image (with 0x2000 marker), s1 = coord (int2), s2 = value (float4)
+            // OpImageWrite has no result - it's a void operation
+            u16 img_reg = ir->GetOperand(ir_idx, 0);
+            u16 coord_reg = ir->GetOperand(ir_idx, 1);
+            u16 value_reg = ir->GetOperand(ir_idx, 2);
+
+            u16 img_slot = img_reg & 0x0FFF;  // Extract binding from 0x2000 | binding
+
+            // Get the storage image variable ID from the dedicated storage image array
+            u32 img_var_id = storageImageIds[img_slot];
+
+            if (img_var_id == 0) {
+                // Storage image not declared - this shouldn't happen if analysis worked correctly
+                fprintf(stderr, "Error: Storage image at binding %u not declared\n", img_slot);
+                break;
+            }
+
+            // Get coordinate and value SPIR-V IDs
+            u32 coord_id = GetSpirvId(coord_reg);
+            u32 value_id = GetSpirvId(value_reg);
+
+            // Get storage image type (should already be created during DeclareResources)
+            u32 storage_img_type = GetStorageImageTypeId();
+
+            // Load the image from the variable
+            u32 img_id = AllocateId();
+            Emit(spv::OpLoad, storage_img_type, img_id, img_var_id);
+
+            // Emit OpImageWrite: Image, Coordinate, Texel
+            // OpImageWrite has no result, word count = 4
+            if (currentFunctionSize + 4 > currentFunctionCapacity) GrowCurrentFunction();
+            currentFunction[currentFunctionSize++] = (4 << 16) | spv::OpImageWrite;
+            currentFunction[currentFunctionSize++] = img_id;
+            currentFunction[currentFunctionSize++] = coord_id;
+            currentFunction[currentFunctionSize++] = value_id;
+            break;
+        }
+
         // TODO: Add more opcode translations (OP_DISCARD for OpKill, etc.)
     }
 }
@@ -6410,6 +6474,44 @@ void SPIRVBuilder::DeclareResources() {
 
             storageBufferIds[binding] = ssbo_var_id;
             bindingSets[resourceCount] = 1;
+            bindingIndices[resourceCount] = binding;
+            resourceCount++;
+        }
+    }
+
+    // ============= Storage Images (read/write textures) =============
+    if (analysis.usedStorageImageMask != 0) {
+        // Get or create storage image type
+        u32 storage_image_type = GetStorageImageTypeId();
+
+        // Create pointer type for storage image (UniformConstant storage class)
+        if (ptrStorageImageTypeId == 0) {
+            ptrStorageImageTypeId = AllocateId();
+            u32 ptr_ops[] = {ptrStorageImageTypeId, spv::StorageClassUniformConstant, storage_image_type};
+            EmitToSection(&typesConstants, spv::OpTypePointer, ptr_ops, 3);
+        }
+
+        // Create variables for each used storage image binding
+        for (u32 binding = 0; binding < 32; binding++) {
+            if (!(analysis.usedStorageImageMask & (1 << binding))) continue;
+
+            u32 img_var_id = AllocateId();
+            {
+                u32 ops[] = {ptrStorageImageTypeId, img_var_id, spv::StorageClassUniformConstant};
+                EmitToSection(&globals, spv::OpVariable, ops, 3);
+            }
+
+            // Decorate with binding - storage images use set 0 with their binding index
+            u32 set_val[] = {0};
+            u32 bind_val[] = {binding};
+            EmitDecoration(img_var_id, spv::DecorationDescriptorSet, set_val, 1);
+            EmitDecoration(img_var_id, spv::DecorationBinding, bind_val, 1);
+
+            // NonReadable decoration for write-only images
+            EmitDecoration(img_var_id, spv::DecorationNonReadable, nullptr, 0);
+
+            storageImageIds[binding] = img_var_id;
+            bindingSets[resourceCount] = 0;
             bindingIndices[resourceCount] = binding;
             resourceCount++;
         }

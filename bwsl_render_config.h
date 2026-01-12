@@ -84,7 +84,7 @@ enum class StoreAction { Store, DontCare };
 // ============= Resource Bindings =============
 
 struct ResourceBinding {
-    enum Type { Texture, Buffer, Sampler, UniformBuffer, StorageBuffer };
+    enum Type { Texture, Buffer, Sampler, UniformBuffer, StorageBuffer, StorageImage };
     Type type = Buffer;
     std::string resourceName;
     u32 bindingIndex = 0;
@@ -119,6 +119,20 @@ struct StorageBufferBinding {
     u32 bindingIndex = 0;
     bool readOnly = true;
     u8 stages = 1;
+};
+
+enum class ResourceAccessMode : u8 {
+    ReadOnly = 0,
+    WriteOnly = 1,
+    ReadWrite = 2
+};
+
+struct StorageImageBinding {
+    std::string name;
+    u32 bindingIndex = 0;
+    PixelFormat format = PixelFormat::RGBA32Float;
+    ResourceAccessMode accessMode = ResourceAccessMode::WriteOnly;
+    u8 stages = 4;  // Bitmask: 1=vertex, 2=fragment, 4=compute
 };
 
 // ============= Buffer Group Config (minimal) =============
@@ -230,6 +244,7 @@ struct RenderConfig {
     std::vector<TextureBinding> textures;
     std::vector<SamplerBinding> samplers;
     std::vector<StorageBufferBinding> storageBuffers;
+    std::vector<StorageImageBinding> storageImages;
 
     struct ComputeDispatchConfig {
         u32 groupCountX = 1;
@@ -533,6 +548,32 @@ inline ParseResult Parse(const std::string& content) {
                 if (desc.stages == 0) desc.stages = 1;
 
                 result.config.storageBuffers.push_back(desc);
+            }
+            else if (tokens[0] == "image") {
+                // Storage image declaration: image name binding [readonly|writeonly|readwrite] [compute|fragment|vertex]
+                if (tokens.size() < 3) {
+                    result.success = false;
+                    result.error = "Line " + std::to_string(lineNum) + ": image requires name and binding";
+                    return result;
+                }
+
+                StorageImageBinding desc;
+                desc.name = tokens[1];
+                desc.bindingIndex = std::stoi(tokens[2]);
+                desc.accessMode = ResourceAccessMode::WriteOnly;  // Default to write-only
+                desc.stages = 0;
+
+                for (size_t i = 3; i < tokens.size(); i++) {
+                    if (tokens[i] == "readonly") desc.accessMode = ResourceAccessMode::ReadOnly;
+                    else if (tokens[i] == "writeonly") desc.accessMode = ResourceAccessMode::WriteOnly;
+                    else if (tokens[i] == "readwrite") desc.accessMode = ResourceAccessMode::ReadWrite;
+                    else if (tokens[i] == "compute") desc.stages |= 4;
+                    else if (tokens[i] == "vertex") desc.stages |= 1;
+                    else if (tokens[i] == "fragment") desc.stages |= 2;
+                }
+                if (desc.stages == 0) desc.stages = 4;  // Default to compute
+
+                result.config.storageImages.push_back(desc);
             }
             else if (tokens[0] == "instanced") {
                 if (tokens.size() < 2) {

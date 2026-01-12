@@ -3179,10 +3179,19 @@ void LowerIfStatement(NodeRef ref) {
             else if (memberHash == Utils::HashStr("w") || memberHash == Utils::HashStr("a")) componentIndex = 3;
 
             if (componentIndex != 0xFFFFFFFF) {
+                // If objectReg is a storage pointer, load it first before swizzle
+                u16 srcReg = objectReg;
+                if (objectReg < MAX_REGISTERS &&
+                    (program.registerStorageInfo[objectReg] & IR::IRProgram::STORAGE_IS_PTR)) {
+                    srcReg = AllocateRegister();
+                    CoreType loadType = GetRegisterType(objectReg);
+                    SetRegisterType(srcReg, loadType);
+                    builder.EmitInstruction(OP_STORAGE_LOAD, srcReg, objectReg);
+                }
                 u16 dest = AllocateRegister();
-                builder.EmitInstruction(OP_VEC_EXTRACT, dest, objectReg, componentIndex);
+                builder.EmitInstruction(OP_VEC_EXTRACT, dest, srcReg, componentIndex);
                 // Get the scalar type from the vector type
-                CoreType vectorType = GetRegisterType(objectReg);
+                CoreType vectorType = GetRegisterType(srcReg);
                 CoreType scalarType = GetScalarComponentType(vectorType);
                 SetRegisterType(dest, scalarType);
                 return dest;
@@ -3217,15 +3226,24 @@ void LowerIfStatement(NodeRef ref) {
 
             for (const auto& pattern : swizzlePatterns) {
                 if (access.member.nameHash == Utils::HashStr(pattern.name)) {
+                    // If objectReg is a storage pointer, load it first before swizzle
+                    u16 srcReg = objectReg;
+                    if (objectReg < MAX_REGISTERS &&
+                        (program.registerStorageInfo[objectReg] & IR::IRProgram::STORAGE_IS_PTR)) {
+                        srcReg = AllocateRegister();
+                        CoreType loadType = GetRegisterType(objectReg);
+                        SetRegisterType(srcReg, loadType);
+                        builder.EmitInstruction(OP_STORAGE_LOAD, srcReg, objectReg);
+                    }
                     u16 dest = AllocateRegister();
                     u32 shuffleMask = 0;
                     for (u32 i = 0; i < pattern.count; i++) {
                         shuffleMask |= (pattern.indices[i] & 0xF) << (i * 4);
                     }
-                    builder.EmitInstruction(OP_VEC_SHUFFLE, dest, objectReg, objectReg);
+                    builder.EmitInstruction(OP_VEC_SHUFFLE, dest, srcReg, srcReg);
                     program.metadata[builder.currentInstruction - 1] = shuffleMask;
 
-                    CoreType vectorType = GetRegisterType(objectReg);
+                    CoreType vectorType = GetRegisterType(srcReg);
                     CoreType scalarType = GetScalarComponentType(vectorType);
                     SetRegisterType(dest, GetVectorType(scalarType, pattern.count));
                     return dest;
@@ -3379,6 +3397,11 @@ void LowerIfStatement(NodeRef ref) {
 
                     case ResourceBinding::Texture:
                         // Traditional bound texture - encode slot in register
+                        dest = 0x2000 | resData.bindingIndex;
+                        break;
+
+                    case ResourceBinding::StorageImage:
+                        // Storage image (read/write texture) - encode slot same as texture
                         dest = 0x2000 | resData.bindingIndex;
                         break;
 
@@ -4849,8 +4872,7 @@ void LowerIfStatement(NodeRef ref) {
                 // Return VARYING0 + index to match vertex output slot assignments
                 return OutputSlot::VARYING0 + (u32)varyingIndex;
             }
-            // Not found in vertex outputs - this might be an error
-            // For now, fall through to legacy mappings for backward compatibility
+            // Not found in vertex outputs - fall through to legacy mappings
         }
 
         // Fallback to legacy hardcoded mappings for backward compatibility
