@@ -1,0 +1,68 @@
+// Test case with module imports - matching MaterialPreview pattern
+pipeline LargeStructSwizzleTest {
+
+import Color
+
+struct GPUMaterialData {
+    int albedoTextureIndex
+    int normalTextureIndex
+    int roughnessTextureIndex
+    int metallicTextureIndex
+    int aoTextureIndex
+    int heightTextureIndex
+    int emissiveTextureIndex
+    uint flags
+    
+    float4 baseColor
+    float4 emissiveColor  // Field index 9
+    
+    float roughnessValue
+    float metallicValue
+    float aoValue
+    float heightScale
+    
+    float2 uvScale
+    float2 uvOffset
+}
+
+const uint MAT_HAS_ALBEDO = 0x01u;
+const uint MAT_HAS_NORMAL = 0x02u;
+
+pass "pass0" {
+    vertex {
+        output.position = float4(0.0, 0.0, 0.0, 1.0);
+    }
+
+    fragment {
+        GPUMaterialData mat = resources.material;
+        
+        float2 uv = mat.uvScale + mat.uvOffset;
+        uint flags = mat.flags;
+        
+        // Use a module function (like MaterialPreview does)
+        float3 linearColor = Color::sRGBToLinear(mat.baseColor.rgb);
+        
+        // Multiple if statements
+        float3 albedo = linearColor;
+        bool hasAlbedoTex = (flags & MAT_HAS_ALBEDO) > 0;
+        if (hasAlbedoTex) {
+            albedo = linearColor * 0.5;
+        }
+        
+        bool hasNormalTex = (flags & MAT_HAS_NORMAL) > 0;
+        float3 N = float3(0.0, 1.0, 0.0);
+        if (hasNormalTex) {
+            N = float3(0.0, 0.0, 1.0);
+        }
+        
+        // Now access emissiveColor.rgb AFTER control flow and module call
+        float3 emissive = mat.emissiveColor.rgb * mat.emissiveColor.a;
+        
+        float3 finalColor = albedo + emissive;
+        finalColor = Color::linearToSRGB(finalColor);
+    
+        output.color = float4(finalColor, 1.0);
+    }
+}
+
+}

@@ -1,0 +1,31 @@
+# Material Preview Pipeline - PBR Sphere Rendering
+pipeline MaterialPreview
+
+# ============= TARGETS =============
+target PreviewColor RGBA8Unorm 256 256
+target PreviewDepth Depth32Float 256 256
+
+# ============= UNIFORMS =============
+# Camera matrices (vertex)
+uniform viewMatrix mat4 0 vertex
+uniform projMatrix mat4 1 vertex
+
+# Camera position for view vector calculation (fragment)
+uniform cameraPosition float3 0 fragment
+
+# Material data (fragment) - GPUMaterialData struct
+uniform material GPUMaterialData 1 fragment
+
+# Preview light (fragment)
+uniform previewLight PreviewLight 2 fragment
+
+# Material texture array (for materials with textures)
+uniform materialTextureArray sampler2DArray 0 fragment
+uniform materialSampler sampler 0 fragment
+
+# ============= PASSES =============
+pass PreviewPass
+  type geometry
+  color PreviewColor clear 0.05 0.02 0.08 1.0 store
+  depth PreviewDepth clear 1.0 store
+  depends none

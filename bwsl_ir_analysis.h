@@ -47,6 +47,7 @@ struct IRAnalysis {
     
     // Type info for each binding (CoreType stored per slot)
     u8 uniformTypes[32];          // CoreType for each uniform binding
+    u32 uniformTypeHashes[32];    // Struct type hash for CUSTOM uniform types, 0 otherwise
     u8 attributeTypes[16];        // CoreType for each attribute
     u8 outputTypes[32];           // CoreType for each output slot
     u8 inputTypes[16];            // CoreType for each fragment input
