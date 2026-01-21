@@ -1,0 +1,27 @@
+// Regression: Ternary with numeric condition for vector result
+// Ensures OP_SELECT converts numeric conditions to bools for SPIR-V.
+
+pipeline BugTernaryNumericCondition {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float cond = attributes.position.x;
+            float3 colorA = float3(1.0, 0.0, 0.0);
+            float3 colorB = float3(0.0, 1.0, 0.0);
+
+            float3 selected = cond ? colorA : colorB;
+
+            output.position = float4(attributes.position, 1.0);
+            output.color = float4(selected, 1.0);
+        }
+
+        fragment {
+            output.color = input.color;
+        }
+    }
+}

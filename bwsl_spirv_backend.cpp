@@ -2249,8 +2249,8 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u16 dest_reg = ir->destinations[ir_idx];
     u16 false_val_reg = ir->GetOperand(ir_idx, 0); // First arg is false value
     u16 true_val_reg = ir->GetOperand(ir_idx, 1);  // Second arg is true value
-    u32 condition =
-        GetSpirvId(ir->GetOperand(ir_idx, 2)); // Third arg is condition
+    u16 cond_reg = ir->GetOperand(ir_idx, 2);
+    u32 condition = GetSpirvId(cond_reg); // Third arg is condition
     u32 true_val = GetSpirvId(true_val_reg);
     u32 false_val = GetSpirvId(false_val_reg);
 
@@ -2270,6 +2270,28 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       valType = CoreType::UINT; // Uint constant
     }
     u32 result_type = GetTypeId(valType);
+
+    auto GetComponentCount = [](CoreType type) -> u32 {
+      switch (type) {
+      case CoreType::FLOAT2:
+      case CoreType::INT2:
+      case CoreType::UINT2:
+      case CoreType::BOOL2:
+        return 2;
+      case CoreType::FLOAT3:
+      case CoreType::INT3:
+      case CoreType::UINT3:
+      case CoreType::BOOL3:
+        return 3;
+      case CoreType::FLOAT4:
+      case CoreType::INT4:
+      case CoreType::UINT4:
+      case CoreType::BOOL4:
+        return 4;
+      default:
+        return 1;
+      }
+    };
 
     // Check if result is a vector - if so, we need to splat scalar bool
     // condition to bool vector
@@ -2297,23 +2319,107 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       break; // Scalar result, no splatting needed
     }
 
-    if (numComponents > 0) {
-      // Splat scalar bool to bool vector
-      u32 bool_vec_type = GetTypeId(numComponents == 2   ? CoreType::BOOL2
-                                    : numComponents == 3 ? CoreType::BOOL3
-                                                         : CoreType::BOOL4);
-      u32 splatted_cond = AllocateId();
-      if (currentFunctionSize + 3 + numComponents > currentFunctionCapacity) {
+    CoreType condType = GetOperandType(cond_reg);
+    u32 condComponents = GetComponentCount(condType);
+    bool condIsBool = (condType == CoreType::BOOL || condType == CoreType::BOOL2 ||
+                       condType == CoreType::BOOL3 || condType == CoreType::BOOL4);
+
+    if (!condIsBool) {
+      // Convert numeric condition to bool (or bool vector) via != 0
+      CoreType condScalarType = GetScalarComponentType(condType);
+      CoreType boolType = CoreType::BOOL;
+      if (condComponents == 2) {
+        boolType = CoreType::BOOL2;
+      } else if (condComponents == 3) {
+        boolType = CoreType::BOOL3;
+      } else if (condComponents == 4) {
+        boolType = CoreType::BOOL4;
+      }
+
+      u32 bool_type = GetTypeId(boolType);
+      u32 zero = 0;
+      if (condComponents == 1) {
+        if (condScalarType == CoreType::FLOAT) {
+          zero = GetFloatConstantId(0.0f);
+        } else if (condScalarType == CoreType::UINT) {
+          zero = GetIntConstantId(0, true);
+        } else {
+          zero = GetIntConstantId(0, false);
+        }
+      } else {
+        u32 scalar_zero = 0;
+        if (condScalarType == CoreType::FLOAT) {
+          scalar_zero = GetFloatConstantId(0.0f);
+        } else if (condScalarType == CoreType::UINT) {
+          scalar_zero = GetIntConstantId(0, true);
+        } else {
+          scalar_zero = GetIntConstantId(0, false);
+        }
+        u32 vec_type = GetTypeId(condType);
+        u32 zero_constituents[4] = {scalar_zero, scalar_zero, scalar_zero,
+                                    scalar_zero};
+        zero = GetCompositeConstantId(vec_type, zero_constituents,
+                                      condComponents);
+      }
+
+      u32 bool_result = AllocateId();
+      if (condScalarType == CoreType::FLOAT) {
+        Emit(spv::OpFOrdNotEqual, bool_type, bool_result, condition, zero);
+      } else {
+        Emit(spv::OpINotEqual, bool_type, bool_result, condition, zero);
+      }
+      condition = bool_result;
+      condType = boolType;
+      condIsBool = true;
+    }
+
+    auto ExtractBoolComponent = [&](u32 composite_id, u32 index) -> u32 {
+      u32 extracted = AllocateId();
+      u32 bool_type = GetTypeId(CoreType::BOOL);
+      if (currentFunctionSize + 5 > currentFunctionCapacity) {
         GrowCurrentFunction();
       }
       currentFunction[currentFunctionSize++] =
-          ((3 + numComponents) << 16) | spv::OpCompositeConstruct;
-      currentFunction[currentFunctionSize++] = bool_vec_type;
-      currentFunction[currentFunctionSize++] = splatted_cond;
-      for (u32 i = 0; i < numComponents; i++) {
-        currentFunction[currentFunctionSize++] = condition;
+          (5 << 16) | spv::OpCompositeExtract;
+      currentFunction[currentFunctionSize++] = bool_type;
+      currentFunction[currentFunctionSize++] = extracted;
+      currentFunction[currentFunctionSize++] = composite_id;
+      currentFunction[currentFunctionSize++] = index;
+      return extracted;
+    };
+
+    if (numComponents == 0 && condComponents > 1) {
+      // Scalar select expects a scalar condition; use the first lane.
+      condition = ExtractBoolComponent(condition, 0);
+      condComponents = 1;
+    }
+
+    if (numComponents > 0) {
+      if (condComponents > 1 && condComponents != numComponents) {
+        // Mismatched vector condition - fall back to the first component.
+        condition = ExtractBoolComponent(condition, 0);
+        condComponents = 1;
       }
-      condition = splatted_cond;
+
+      if (condComponents == 1) {
+        // Splat scalar bool to bool vector
+        u32 bool_vec_type =
+            GetTypeId(numComponents == 2   ? CoreType::BOOL2
+                      : numComponents == 3 ? CoreType::BOOL3
+                                           : CoreType::BOOL4);
+        u32 splatted_cond = AllocateId();
+        if (currentFunctionSize + 3 + numComponents > currentFunctionCapacity) {
+          GrowCurrentFunction();
+        }
+        currentFunction[currentFunctionSize++] =
+            ((3 + numComponents) << 16) | spv::OpCompositeConstruct;
+        currentFunction[currentFunctionSize++] = bool_vec_type;
+        currentFunction[currentFunctionSize++] = splatted_cond;
+        for (u32 i = 0; i < numComponents; i++) {
+          currentFunction[currentFunctionSize++] = condition;
+        }
+        condition = splatted_cond;
+      }
     }
 
     // OpSelect: result_type result condition object1(true) object2(false)

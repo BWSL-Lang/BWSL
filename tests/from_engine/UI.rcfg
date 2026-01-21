@@ -44,15 +44,35 @@ uniform gradientStart float4 21 fragment
 uniform gradientEnd float4 22 fragment
 uniform shineEnabled int 23 fragment
 
-# Textures
-uniform atlasTexture sampler2D 24 fragment
-uniform sdfAtlas sampler2D 25 fragment
+# Color picker parameters
+# hue is only used by ColorSVPass (no conflict with rectSize)
+uniform hue float 24 fragment
+# baseColor/previewColor at slot 25, rectSize (slot 13) reused from RoundedRect
+uniform baseColor float4 25 fragment
+uniform previewColor float4 25 fragment
+
+# Textures - binding indices must be < 16 for Metal sampler limits
+uniform atlasTexture sampler2D 1 fragment
+uniform sdfAtlas sampler2D 2 fragment
 uniform atlasSampler sampler 0 fragment
 
 # MSDF Text parameters
 # Note: fontAtlas must be at low binding so SPIRV-Cross generates sampler index < 16
 uniform fontAtlas sampler2D 3 fragment
 uniform pxRange float 28 fragment
+
+# Textured UI Pass parameters (for render target preview)
+uniform texture sampler2D 4 fragment
+uniform textureSampler sampler 1 fragment
+
+# Focused Window Pass parameters (reuse bindings < 32 to avoid backend slot limit)
+uniform windowSize float2 30 fragment
+uniform shadowOffsetY float 31 fragment
+uniform shadowBlur float 29 fragment
+uniform borderColor1 float4 26 fragment
+uniform borderColor2 float4 27 fragment
+uniform shadowPadding float2 7 fragment
+uniform rotationSpeed float 8 fragment
 
 # ============= PASSES =============
 pass UIPass
@@ -80,7 +100,42 @@ pass RoundedRectPass
   color UIColor load store
   depends NineSlicePass
 
-pass ProgressBarPass
+pass TexturedPass
   type geometry
   color UIColor load store
   depends RoundedRectPass
+
+pass ProgressBarPass
+  type geometry
+  color UIColor load store
+  depends TexturedPass
+
+pass ColorSVPass
+  type geometry
+  color UIColor load store
+  depends ProgressBarPass
+
+pass ColorHuePass
+  type geometry
+  color UIColor load store
+  depends ColorSVPass
+
+pass ColorAlphaPass
+  type geometry
+  color UIColor load store
+  depends ColorHuePass
+
+pass CheckerboardPass
+  type geometry
+  color UIColor load store
+  depends ColorAlphaPass
+
+pass ColorPreviewPass
+  type geometry
+  color UIColor load store
+  depends CheckerboardPass
+
+pass FocusedWindowPass
+  type geometry
+  color UIColor load store
+  depends ColorPreviewPass

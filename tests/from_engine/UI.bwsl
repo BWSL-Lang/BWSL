@@ -246,6 +246,45 @@ pass "RoundedRectPass" {
 }
 
 // ============================================
+// Textured UI Pass
+// For rendering render targets, thumbnails, and other textures in UI
+// ============================================
+pass "TexturedPass" {
+    use attributes { position, texcoord, color }
+
+    vertex {
+        mat4 orthoProjection = mat4(
+            float4(2.0 / resources.screenSize.x, 0.0, 0.0, 0.0),
+            float4(0.0, 2.0 / resources.screenSize.y, 0.0, 0.0),
+            float4(0.0, 0.0, 1.0, 0.0),
+            float4(-1.0, -1.0, 0.0, 1.0)
+        );
+
+        output.position = orthoProjection * float4(attributes.position, 1.0);
+        output.texCoord = attributes.texcoord;
+        output.color = attributes.color;
+    }
+
+    fragment {
+        // Sample the texture (bound at slot 0)
+        float4 texColor = sample(resources.texture, resources.textureSampler, input.texCoord);
+        
+        // Apply tint color (vertex color)
+        float4 finalColor = texColor * input.color;
+        
+        // Apply global opacity
+        finalColor.a *= resources.opacity;
+        
+        // Discard fully transparent pixels
+        if (finalColor.a < 0.01) {
+            discard;
+        }
+        
+        output.color = finalColor;
+    }
+}
+
+// ============================================
 // Progress Bar Pass
 // ============================================
 pass "ProgressBarPass" {
@@ -278,5 +317,304 @@ pass "ProgressBarPass" {
     }
 }
 
+// ============================================
+// Color Picker - Saturation/Value Square Pass
+// Renders a square where X = Saturation, Y = Value (brightness)
+// for a given Hue value passed via resources.hue
+// ============================================
+pass "ColorSVPass" {
+    use attributes { position, texcoord, color }
+
+    vertex {
+        mat4 orthoProjection = mat4(
+            float4(2.0 / resources.screenSize.x, 0.0, 0.0, 0.0),
+            float4(0.0, 2.0 / resources.screenSize.y, 0.0, 0.0),
+            float4(0.0, 0.0, 1.0, 0.0),
+            float4(-1.0, -1.0, 0.0, 1.0)
+        );
+
+        output.position = orthoProjection * float4(attributes.position, 1.0);
+        output.texCoord = attributes.texcoord;
+        output.color = attributes.color;
+    }
+
+    fragment {
+        float2 uv = input.texCoord;
+        float hue = resources.hue;  // 0-360 degrees
+        
+        // UV.x = Saturation (0-1), UV.y = Value/Brightness (0-1)
+        float s = uv.x;
+        float v = uv.y;
+        
+        // HSV to RGB conversion
+        float h = hue / 60.0;  // Sector 0-5
+        float i = floor(h);
+        float f = h - i;
+        float p = v * (1.0 - s);
+        float q = v * (1.0 - s * f);
+        float t = v * (1.0 - s * (1.0 - f));
+        
+        float3 rgb;
+        float sector = mod(i, 6.0);
+        if (sector < 1.0) {
+            rgb = float3(v, t, p);
+        } else if (sector < 2.0) {
+            rgb = float3(q, v, p);
+        } else if (sector < 3.0) {
+            rgb = float3(p, v, t);
+        } else if (sector < 4.0) {
+            rgb = float3(p, q, v);
+        } else if (sector < 5.0) {
+            rgb = float3(t, p, v);
+        } else {
+            rgb = float3(v, p, q);
+        }
+        
+        output.color = float4(rgb, 1.0) * input.color;
+    }
 }
 
+// ============================================
+// Color Picker - Hue Slider Pass
+// Renders a horizontal rainbow gradient (full hue spectrum)
+// ============================================
+pass "ColorHuePass" {
+    use attributes { position, texcoord, color }
+
+    vertex {
+        mat4 orthoProjection = mat4(
+            float4(2.0 / resources.screenSize.x, 0.0, 0.0, 0.0),
+            float4(0.0, 2.0 / resources.screenSize.y, 0.0, 0.0),
+            float4(0.0, 0.0, 1.0, 0.0),
+            float4(-1.0, -1.0, 0.0, 1.0)
+        );
+
+        output.position = orthoProjection * float4(attributes.position, 1.0);
+        output.texCoord = attributes.texcoord;
+        output.color = attributes.color;
+    }
+
+    fragment {
+        float2 uv = input.texCoord;
+        
+        // Map UV.x to hue (0-360), full saturation and value
+        float hue = uv.x * 360.0;
+        float s = 1.0;
+        float v = 1.0;
+        
+        // HSV to RGB conversion
+        float h = hue / 60.0;
+        float i = floor(h);
+        float f = h - i;
+        float p = v * (1.0 - s);
+        float q = v * (1.0 - s * f);
+        float t = v * (1.0 - s * (1.0 - f));
+        
+        float3 rgb;
+        float sector = mod(i, 6.0);
+        if (sector < 1.0) {
+            rgb = float3(v, t, p);
+        } else if (sector < 2.0) {
+            rgb = float3(q, v, p);
+        } else if (sector < 3.0) {
+            rgb = float3(p, v, t);
+        } else if (sector < 4.0) {
+            rgb = float3(p, q, v);
+        } else if (sector < 5.0) {
+            rgb = float3(t, p, v);
+        } else {
+            rgb = float3(v, p, q);
+        }
+        
+        output.color = float4(rgb, 1.0) * input.color;
+    }
+}
+
+// ============================================
+// Color Picker - Alpha Slider Pass
+// Renders alpha gradient from transparent to solid color
+// over a checkerboard background pattern
+// ============================================
+pass "ColorAlphaPass" {
+    use attributes { position, texcoord, color }
+
+    vertex {
+        mat4 orthoProjection = mat4(
+            float4(2.0 / resources.screenSize.x, 0.0, 0.0, 0.0),
+            float4(0.0, 2.0 / resources.screenSize.y, 0.0, 0.0),
+            float4(0.0, 0.0, 1.0, 0.0),
+            float4(-1.0, -1.0, 0.0, 1.0)
+        );
+
+        output.position = orthoProjection * float4(attributes.position, 1.0);
+        output.texCoord = attributes.texcoord;
+        output.color = attributes.color;
+    }
+
+    fragment {
+        float2 uv = input.texCoord;
+        float3 baseColor = resources.baseColor.rgb;  // The RGB color (without alpha)
+        float2 rectSize = resources.rectSize;
+        
+        // Create checkerboard pattern for alpha visualization
+        float checkerSize = 8.0;  // Size of checker squares in pixels
+        float2 pixelPos = uv * rectSize;
+        float2 checker = floor(pixelPos / checkerSize);
+        float checkerPattern = mod(checker.x + checker.y, 2.0);
+        float3 checkerColor = lerp(float3(0.4, 0.4, 0.4), float3(0.6, 0.6, 0.6), checkerPattern);
+        
+        // Alpha gradient from left (transparent) to right (opaque)
+        float alpha = uv.x;
+        
+        // Blend color over checkerboard based on alpha
+        float3 finalColor = lerp(checkerColor, baseColor, alpha);
+        
+        output.color = float4(finalColor, 1.0) * input.color;
+    }
+}
+
+// ============================================
+// Color Picker - Checkerboard Pass
+// Renders a checkerboard pattern for alpha preview backgrounds
+// ============================================
+pass "CheckerboardPass" {
+    use attributes { position, texcoord, color }
+
+    vertex {
+        mat4 orthoProjection = mat4(
+            float4(2.0 / resources.screenSize.x, 0.0, 0.0, 0.0),
+            float4(0.0, 2.0 / resources.screenSize.y, 0.0, 0.0),
+            float4(0.0, 0.0, 1.0, 0.0),
+            float4(-1.0, -1.0, 0.0, 1.0)
+        );
+
+        output.position = orthoProjection * float4(attributes.position, 1.0);
+        output.texCoord = attributes.texcoord;
+        output.color = attributes.color;
+    }
+
+    fragment {
+        float2 uv = input.texCoord;
+        float2 rectSize = resources.rectSize;
+        
+        // Create checkerboard pattern
+        float checkerSize = 8.0;  // Size of checker squares in pixels
+        float2 pixelPos = uv * rectSize;
+        float2 checker = floor(pixelPos / checkerSize);
+        float checkerPattern = mod(checker.x + checker.y, 2.0);
+        
+        // Light and dark gray squares
+        float3 checkerColor = lerp(float3(0.3, 0.3, 0.3), float3(0.5, 0.5, 0.5), checkerPattern);
+        
+        output.color = float4(checkerColor, 1.0) * input.color;
+    }
+}
+
+// ============================================
+// Color Picker - Preview Swatch Pass
+// Renders a color preview with optional checkerboard for alpha
+// ============================================
+pass "ColorPreviewPass" {
+    use attributes { position, texcoord, color }
+
+    vertex {
+        mat4 orthoProjection = mat4(
+            float4(2.0 / resources.screenSize.x, 0.0, 0.0, 0.0),
+            float4(0.0, 2.0 / resources.screenSize.y, 0.0, 0.0),
+            float4(0.0, 0.0, 1.0, 0.0),
+            float4(-1.0, -1.0, 0.0, 1.0)
+        );
+
+        output.position = orthoProjection * float4(attributes.position, 1.0);
+        output.texCoord = attributes.texcoord;
+        output.color = attributes.color;
+    }
+
+    fragment {
+        float2 uv = input.texCoord;
+        float4 previewColor = resources.previewColor;  // RGBA color to preview
+        float2 rectSize = resources.rectSize;
+
+        // Create checkerboard pattern for alpha visualization
+        float checkerSize = 6.0;
+        float2 pixelPos = uv * rectSize;
+        float2 checker = floor(pixelPos / checkerSize);
+        float checkerPattern = mod(checker.x + checker.y, 2.0);
+        float3 checkerColor = lerp(float3(0.4, 0.4, 0.4), float3(0.6, 0.6, 0.6), checkerPattern);
+
+        // Blend preview color over checkerboard
+        float3 finalColor = lerp(checkerColor, previewColor.rgb, previewColor.a);
+
+        output.color = float4(finalColor, 1.0) * input.color;
+    }
+}
+
+// ============================================
+// Focused Window Pass (gradient stroke + soft drop shadow)
+// ============================================
+pass "FocusedWindowPass" {
+    use attributes { position, texcoord, color }
+
+    vertex {
+        mat4 orthoProjection = mat4(
+            float4(2.0 / resources.screenSize.x, 0.0, 0.0, 0.0),
+            float4(0.0, 2.0 / resources.screenSize.y, 0.0, 0.0),
+            float4(0.0, 0.0, 1.0, 0.0),
+            float4(-1.0, -1.0, 0.0, 1.0)
+        );
+
+        output.position = orthoProjection * float4(attributes.position, 1.0);
+        output.texCoord = attributes.texcoord;
+        output.color    = attributes.color;
+    }
+
+    fragment {
+        float borderWidth      = resources.borderWidth;
+        float2 windowSize      = resources.windowSize;
+        float radius           = resources.cornerRadii.x;
+        float2 shadowPadding   = resources.shadowPadding;
+        float2 expandedSize    = float2(windowSize.x + borderWidth * 2.0, windowSize.y + shadowPadding.y + borderWidth);
+        float2 posExpanded     = input.texCoord * expandedSize;
+        float2 posWindow       = posExpanded - float2(borderWidth, shadowPadding.y);
+
+        float2 halfSize        = windowSize * 0.5;
+        float2 centered        = posWindow - halfSize;
+        float2 q               = abs(centered) - halfSize + radius;
+        float dist             = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
+
+        float smoothing        = fwidth(dist);
+
+        float outerEdge        = smoothstep(-smoothing, smoothing, dist);
+        float innerEdge        = smoothstep(-smoothing, smoothing, dist - borderWidth);
+        float borderAlpha      = outerEdge - innerEdge;
+
+        float angle            = resources.time * resources.rotationSpeed;
+        float2 dir             = float2(cos(angle), sin(angle));
+        float2 safeWindowSize  = float2(max(windowSize.x, 1.0), max(windowSize.y, 1.0));
+        float2 gradPos         = (posWindow / safeWindowSize) - 0.5;
+        float t                = clamp(dot(gradPos, dir) + 0.5, 0.0, 1.0);
+        float4 borderColor     = lerp(resources.borderColor1, resources.borderColor2, t);
+
+        float2 shadowPos       = posWindow + float2(0.0, resources.shadowOffsetY);
+        float2 shadowCentered  = shadowPos - halfSize;
+        float2 shadowQ         = abs(shadowCentered) - halfSize + radius;
+        float distShadow       = min(max(shadowQ.x, shadowQ.y), 0.0) + length(max(shadowQ, 0.0)) - radius;
+
+        float shadowMask       = select(0.0, 1.0, distShadow >= 0.0);
+        float shadowAlpha      = (1.0 - smoothstep(0.0, resources.shadowBlur + smoothing, distShadow)) * shadowMask;
+        shadowAlpha            *= resources.shadowColor.a;
+
+        float borderAlphaFinal = borderAlpha * resources.opacity;
+        float finalAlpha       = borderAlphaFinal + shadowAlpha * (1.0 - borderAlphaFinal);
+        float3 premul          = borderColor.rgb * borderAlphaFinal + resources.shadowColor.rgb * shadowAlpha;
+        float3 finalColor      = finalAlpha > 0.0 ? premul / finalAlpha : float3(0.0, 0.0, 0.0);
+
+        if (finalAlpha < 0.01) {
+            discard;
+        }
+
+        output.color = float4(finalColor, finalAlpha);
+    }
+}
+
+}
