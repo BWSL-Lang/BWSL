@@ -192,15 +192,33 @@ PY
             "$PYTHON_BIN" - "$check_file" <<'PY'
 import json
 import sys
+import re
 
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
 
+ir = data.get("ir", "")
 spirv = data.get("spirv_dis", "")
-if "OpLogicalAnd" not in spirv:
-    print("Missing return guard logical AND in SPIR-V")
+if "OpLogicalAnd" in spirv:
+    sys.exit(0)
+
+spirv_unavailable = (
+    not spirv.strip()
+    or "command not found" in spirv
+    or "not recognized as an internal or external command" in spirv
+)
+
+if spirv_unavailable:
+    and_match = re.search(r"\bAND\s+(r\d+)\b", ir)
+    branch_match = re.search(r"\bBRANCH\s+.*\b(r\d+)\b", ir)
+    if and_match and branch_match and and_match.group(1) == branch_match.group(1):
+        sys.exit(0)
+    print("Missing return guard AND->BRANCH pattern in IR fallback")
     sys.exit(1)
+
+print("Missing return guard logical AND in SPIR-V")
+sys.exit(1)
 PY
             if [ $? -ne 0 ]; then
                 echo -e "[${RED}FAIL${NC}] $test_name"
