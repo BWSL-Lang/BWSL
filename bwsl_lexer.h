@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <string>
 #include <cstring>
 #include "bwsl_token_stream.h"
@@ -35,35 +36,30 @@ public:
 
     // For error reporting
     std::string GetLine(size_t lineNum) const;
-    
-    static constexpr bool IsIdentStart[256] = {
-        ['a' ... 'z'] = true,
-        ['A' ... 'Z'] = true,
-        ['_'] = true,
-    };
-    
-    static constexpr bool IsIdentCont[256] = {
-        ['a' ... 'z'] = true,
-        ['A' ... 'Z'] = true,
-        ['0' ... '9'] = true,
-        ['_'] = true,
-    };
-    
+
 private:
+    static constexpr auto IsIdentStart = [] {
+        std::array<bool, 256> table = {};
+        for (unsigned c = 'a'; c <= 'z'; ++c) table[c] = true;
+        for (unsigned c = 'A'; c <= 'Z'; ++c) table[c] = true;
+        table[static_cast<unsigned>('_')] = true;
+        return table;
+    }();
+
+    static constexpr auto IsIdentCont = [] {
+        std::array<bool, 256> table = IsIdentStart;
+        for (unsigned c = '0'; c <= '9'; ++c) table[c] = true;
+        return table;
+    }();
+
+    static constexpr auto char_table = IsIdentCont;
+
     std::string source;
     TokenStream& stream;  // Reference to TokenStream to populate
     LineTable lineTable;  // Precomputed line offsets for fast lookup
     u32 current = 0;  // Changed to uint32_t to match token offset
     u32 line = 1;     // These can be uint32_t too
     u32 column = 1;
-
-    // Lookup tables for character classification
-    static constexpr bool char_table[256] = {
-        ['0' ... '9'] = true,
-        ['A' ... 'Z'] = true,
-        ['a' ... 'z'] = true,
-        ['_'] = true
-    };
 
     TokenType FastKeywordLookup(const char* str, size_t len);
 

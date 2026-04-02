@@ -16,6 +16,7 @@
 #include "bwsl_defs.h"
 #include "bwsl_arena.h"
 
+#include <array>
 #include <cstring>
 #include <string_view>
 
@@ -40,157 +41,170 @@ class TokenLengthTable {
 public:
     static constexpr uint8_t VARIABLE_LENGTH = 0;
 
-    static constexpr uint8_t lengths[256] = {
+    static constexpr auto lengths = [] {
+        std::array<uint8_t, 256> table = {};
+
         // Single character tokens
-        [LEFT_BRACE] = 1,
-        [RIGHT_BRACE] = 1,
-        [LEFT_PAREN] = 1,
-        [RIGHT_PAREN] = 1,
-        [LEFT_BRACKET] = 1,
-        [RIGHT_BRACKET] = 1,
-        [SEMICOLON] = 1,
-        [COMMA] = 1,
-        [DOT] = 1,
-        [QUESTION] = 1,
-        [COLON] = 1,
-        [PLUS] = 1,
-        [MINUS] = 1,
-        [MULTIPLY] = 1,
-        [DIVIDE] = 1,
-        [MODULO] = 1,
-        [ASSIGN] = 1,
-        [NOT] = 1,
-        [LESS] = 1,
-        [GREATER] = 1,
-        [ERROR_TOKEN] = 1,
-        [T] = 1,
-        [U] = 1,
-        [V] = 1,
+        table[LEFT_BRACE] = 1;
+        table[RIGHT_BRACE] = 1;
+        table[LEFT_PAREN] = 1;
+        table[RIGHT_PAREN] = 1;
+        table[LEFT_BRACKET] = 1;
+        table[RIGHT_BRACKET] = 1;
+        table[SEMICOLON] = 1;
+        table[COMMA] = 1;
+        table[DOT] = 1;
+        table[QUESTION] = 1;
+        table[COLON] = 1;
+        table[PLUS] = 1;
+        table[MINUS] = 1;
+        table[MULTIPLY] = 1;
+        table[DIVIDE] = 1;
+        table[MODULO] = 1;
+        table[ASSIGN] = 1;
+        table[NOT] = 1;
+        table[LESS] = 1;
+        table[GREATER] = 1;
+        table[ERROR_TOKEN] = 1;
+        table[T] = 1;
+        table[U] = 1;
+        table[V] = 1;
+
         // Two character tokens
-        [DOUBLE_COLON] = 2,
-        [ARROW] = 2,
-        [PLUS_ASSIGN] = 2,
-        [MINUS_ASSIGN] = 2,
-        [MULTIPLY_ASSIGN] = 2,
-        [DIVIDE_ASSIGN] = 2,
-        [EQUALS] = 2,
-        [NOT_EQUALS] = 2,
-        [LESS_EQUAL] = 2,
-        [GREATER_EQUAL] = 2,
-        [AND] = 2,
-        [OR] = 2,
-        [BITWISE_AND] = 1,
-        [BITWISE_OR] = 1,
-        [BITWISE_XOR] = 1,
-        [BITWISE_NOT] = 1,
-        [LEFT_SHIFT] = 2,
-        [RIGHT_SHIFT] = 2,
-        [IF] = 2,
-        [IS] = 2,
-        [AS] = 2,
-        [IT] = 2,
-        [IN] = 2,
-        [DOT_DOT] = 2,
-        [INCREMENT] = 2,
-        [DECREMENT] = 2,
-        [BY] = 2,
+        table[DOUBLE_COLON] = 2;
+        table[ARROW] = 2;
+        table[PLUS_ASSIGN] = 2;
+        table[MINUS_ASSIGN] = 2;
+        table[MULTIPLY_ASSIGN] = 2;
+        table[DIVIDE_ASSIGN] = 2;
+        table[EQUALS] = 2;
+        table[NOT_EQUALS] = 2;
+        table[LESS_EQUAL] = 2;
+        table[GREATER_EQUAL] = 2;
+        table[AND] = 2;
+        table[OR] = 2;
+        table[BITWISE_AND] = 1;
+        table[BITWISE_OR] = 1;
+        table[BITWISE_XOR] = 1;
+        table[BITWISE_NOT] = 1;
+        table[LEFT_SHIFT] = 2;
+        table[RIGHT_SHIFT] = 2;
+        table[IF] = 2;
+        table[IS] = 2;
+        table[AS] = 2;
+        table[IT] = 2;
+        table[IN] = 2;
+        table[DOT_DOT] = 2;
+        table[INCREMENT] = 2;
+        table[DECREMENT] = 2;
+        table[BY] = 2;
+
         // Three character keywords
-        [DOT_DOT_EQUAL] = 3,
-        [FOR] = 3,
-        [INT] = 3,
-        [USE] = 3,
-        [MIX] = 3,
-        [OUT] = 3,
+        table[DOT_DOT_EQUAL] = 3;
+        table[FOR] = 3;
+        table[INT] = 3;
+        table[USE] = 3;
+        table[MIX] = 3;
+        table[OUT] = 3;
+
         // Four character keywords
-        [PASS] = 4,
-        [TRUE] = 4,
-        [BOOL] = 4,
-        [MAT2] = 4,
-        [MAT3] = 4,
-        [MAT4] = 4,
-        [INT2] = 4,
-        [INT3] = 4,
-        [INT4] = 4,
-        [UINT] = 4,
-        [ELSE] = 4,
-        [NULL_TOKEN] = 4,
-        [SLOT] = 4,
-        [ENUM] = 4,
-        [SELF] = 4,
-        [LOOP] = 4,
-        [NODE] = 4,
-        [SKIP] = 4,
-        [EVAL] = 4,
-        [CASE] = 4,
-        [VOID] = 4,
+        table[PASS] = 4;
+        table[TRUE] = 4;
+        table[BOOL] = 4;
+        table[MAT2] = 4;
+        table[MAT3] = 4;
+        table[MAT4] = 4;
+        table[INT2] = 4;
+        table[INT3] = 4;
+        table[INT4] = 4;
+        table[UINT] = 4;
+        table[ELSE] = 4;
+        table[NULL_TOKEN] = 4;
+        table[SLOT] = 4;
+        table[ENUM] = 4;
+        table[SELF] = 4;
+        table[LOOP] = 4;
+        table[NODE] = 4;
+        table[SKIP] = 4;
+        table[EVAL] = 4;
+        table[CASE] = 4;
+        table[VOID] = 4;
+
         // Five character keywords
-        [FLOAT] = 5,
-        [WHERE] = 5,
-        [FALSE] = 5,
-        [CONST] = 5,
-        [BREAK] = 5,
-        [UINT2] = 5,
-        [UINT3] = 5,
-        [UINT4] = 5,
-        [UNTIL] = 5,
-        [RANGE] = 5,
+        table[FLOAT] = 5;
+        table[WHERE] = 5;
+        table[FALSE] = 5;
+        table[CONST] = 5;
+        table[BREAK] = 5;
+        table[UINT2] = 5;
+        table[UINT3] = 5;
+        table[UINT4] = 5;
+        table[UNTIL] = 5;
+        table[RANGE] = 5;
+
         // Six character keywords
-        [VERTEX] = 6,
-        [SHADER] = 6,
-        [IMPORT] = 6,
-        [RETURN] = 6,
-        [SHARED] = 6,
-        [FLOAT2] = 6,
-        [FLOAT3] = 6,
-        [FLOAT4] = 6,
-        [MODULE] = 6,
-        [STRUCT] = 6,
-        [BUFFER] = 6,
-        [EXTEND] = 6,
-        [SWITCH] = 6,
-        [INPUTS] = 6,
+        table[VERTEX] = 6;
+        table[SHADER] = 6;
+        table[IMPORT] = 6;
+        table[RETURN] = 6;
+        table[SHARED] = 6;
+        table[FLOAT2] = 6;
+        table[FLOAT3] = 6;
+        table[FLOAT4] = 6;
+        table[MODULE] = 6;
+        table[STRUCT] = 6;
+        table[BUFFER] = 6;
+        table[EXTEND] = 6;
+        table[SWITCH] = 6;
+        table[INPUTS] = 6;
+
         // Seven character keywords
-        [CBUFFER] = 7,
-        [SAMPLER] = 7,
-        [COMPUTE] = 7,
-        [EXTENDS] = 7,
-        [FOREACH] = 7,
-        [DISCARD] = 7,
-        [DEFAULT] = 7,
-        [OUTPUTS] = 7,
+        table[CBUFFER] = 7;
+        table[SAMPLER] = 7;
+        table[COMPUTE] = 7;
+        table[EXTENDS] = 7;
+        table[FOREACH] = 7;
+        table[DISCARD] = 7;
+        table[DEFAULT] = 7;
+        table[OUTPUTS] = 7;
+
         // Eight character keywords
-        [PIPELINE] = 8,
-        [FRAGMENT] = 8,
-        [READONLY] = 8,
+        table[PIPELINE] = 8;
+        table[FRAGMENT] = 8;
+        table[READONLY] = 8;
+
         // Nine character keywords
-        [TEXTURE2D] = 9,
-        [TEXTURE3D] = 9,
-        [RESOURCES] = 9,
-        [READWRITE] = 9,
-        [WRITEONLY] = 9,
+        table[TEXTURE2D] = 9;
+        table[TEXTURE3D] = 9;
+        table[RESOURCES] = 9;
+        table[READWRITE] = 9;
+        table[WRITEONLY] = 9;
+
         // Ten character keywords
-        [ATTRIBUTES] = 10,
-        [PASS_BLOCK] = 10,
-        [CONSTRAINT] = 10,
+        table[ATTRIBUTES] = 10;
+        table[PASS_BLOCK] = 10;
+        table[CONSTRAINT] = 10;
+
         // Eleven character keywords
-        [TEXTURECUBE] = 11,
+        table[TEXTURECUBE] = 11;
+
         // Thirteen character keywords
-        [COMPUTE_GRAPH] = 13,
+        table[COMPUTE_GRAPH] = 13;
+
         // Fourteen character keywords
-        [TEXTURE2DARRAY] = 14,
+        table[TEXTURE2DARRAY] = 14;
+
         // Fifteen character keywords
-        [VERTEX_FUNCTION] = 15,
+        table[VERTEX_FUNCTION] = 15;
+
         // Sixteen character keywords
-        [COMPUTE_FUNCTION] = 16,
+        table[COMPUTE_FUNCTION] = 16;
+
         // Seventeen character keywords
-        [FRAGMENT_FUNCTION] = 17,
-        // Variable length tokens
-        [IDENTIFIER] = VARIABLE_LENGTH,
-        [NUMBER] = VARIABLE_LENGTH,
-        [STRING] = VARIABLE_LENGTH,
-        [AT] = VARIABLE_LENGTH,
-        [EOF_TOKEN] = VARIABLE_LENGTH,
-    };
+        table[FRAGMENT_FUNCTION] = 17;
+
+        return table;
+    }();
 
     static uint8_t get(uint8_t type) {
         return lengths[type];
@@ -351,12 +365,14 @@ inline const char* TokenTypeName(TokenType type) {
 // Identifier continuation character table
 //==============================================================================
 
-static constexpr bool IsIdentCont[256] = {
-    ['0' ... '9'] = true,
-    ['A' ... 'Z'] = true,
-    ['a' ... 'z'] = true,
-    ['_'] = true,
-};
+inline constexpr std::array<bool, 256> IsIdentCont = [] {
+    std::array<bool, 256> table = {};
+    for (unsigned c = '0'; c <= '9'; ++c) table[c] = true;
+    for (unsigned c = 'A'; c <= 'Z'; ++c) table[c] = true;
+    for (unsigned c = 'a'; c <= 'z'; ++c) table[c] = true;
+    table[static_cast<unsigned>('_')] = true;
+    return table;
+}();
 
 //==============================================================================
 // TokenStream - SoA token storage with SIMD search

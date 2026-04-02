@@ -149,7 +149,7 @@ for test_file in "$SCRIPT_DIR"/*.bwsl; do
         compile_flags="$compile_flags -metal"
     fi
 
-    output=$("$BWSLC" "$test_file" -o "$OUTPUT_DIR" $config_flag $compile_flags 2>&1)
+    output=$("$BWSLC" "$test_file" -o "$OUTPUT_DIR" -modules "$BWSL_ROOT/modules" $config_flag $compile_flags 2>&1)
     exit_code=$?
 
     if [ $exit_code -eq 0 ]; then
