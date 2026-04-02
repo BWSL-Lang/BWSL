@@ -59,6 +59,7 @@ u32 ModuleCache::AddModule(const char* name, const char* source, u32 sourceLen) 
     if (sourceCodeBufferUsed + sourceLen > sourceCodeBufferSize) return 0xFFFFFFFF;
     
     u32 nameHash = Utils::HashStr(name);
+    u32 slot = nameHash & (HASH_TABLE_SIZE - 1);
     
     // Check if already exists
     u32 existing = FindModuleByHash(nameHash);
@@ -85,6 +86,12 @@ u32 ModuleCache::AddModule(const char* name, const char* source, u32 sourceLen) 
         }
         
         return existing;
+    }
+
+    u32 chainIndex = INVALID_INDEX;
+    if (moduleHashTable[slot].moduleIndex != INVALID_INDEX) {
+        chainIndex = AllocateHashChain();
+        if (chainIndex == INVALID_INDEX) return INVALID_INDEX;
     }
     
     // Add new module
@@ -114,21 +121,23 @@ u32 ModuleCache::AddModule(const char* name, const char* source, u32 sourceLen) 
     moduleStatus[index] = 1;
     
     // Add to hash table
-    u32 slot = nameHash & (HASH_TABLE_SIZE - 1);
     if (moduleHashTable[slot].moduleIndex == 0xFFFFFFFF) {
         moduleHashTable[slot].moduleIndex = index;
         moduleHashTable[slot].nextIndex = 0xFFFFFFFF;
     } else {
         // Handle collision
-        u32 chainIndex = AllocateHashChain();
-        hashChainStorage[chainIndex] = index;
-        
-        // Find end of chain
-        u32 current = slot;
-        while (moduleHashTable[current].nextIndex != 0xFFFFFFFF) {
-            current = moduleHashTable[current].nextIndex;
+        hashChainStorage[chainIndex].moduleIndex = index;
+        hashChainStorage[chainIndex].nextIndex = INVALID_INDEX;
+
+        u32 currentChain = moduleHashTable[slot].nextIndex;
+        if (currentChain == INVALID_INDEX) {
+            moduleHashTable[slot].nextIndex = chainIndex;
+        } else {
+            while (hashChainStorage[currentChain].nextIndex != INVALID_INDEX) {
+                currentChain = hashChainStorage[currentChain].nextIndex;
+            }
+            hashChainStorage[currentChain].nextIndex = chainIndex;
         }
-        moduleHashTable[current].nextIndex = chainIndex;
     }
     
     // Copy name
@@ -210,6 +219,13 @@ u32 ModuleCache::AddExport(u32 moduleIndex, const char* symbolName, u8 type, u32
     if (exportCount >= MAX_EXPORTS) return 0xFFFFFFFF;
     
     u32 nameHash = Utils::HashStr(symbolName);
+    u32 slot = nameHash & (HASH_TABLE_SIZE - 1);
+    u32 chainIndex = INVALID_INDEX;
+    if (exportHashTable[slot].moduleIndex != INVALID_INDEX) {
+        chainIndex = AllocateHashChain();
+        if (chainIndex == INVALID_INDEX) return INVALID_INDEX;
+    }
+
     u32 index = exportCount++;
     
     ExportInfo& exp = exports[index];
@@ -228,20 +244,23 @@ u32 ModuleCache::AddExport(u32 moduleIndex, const char* symbolName, u8 type, u32
     mod.exportCount++;
     
     // Add to export hash table
-    u32 slot = nameHash & (HASH_TABLE_SIZE - 1);
     if (exportHashTable[slot].moduleIndex == 0xFFFFFFFF) {
         exportHashTable[slot].moduleIndex = index;
         exportHashTable[slot].nextIndex = 0xFFFFFFFF;
     } else {
         // Handle collision
-        u32 chainIndex = AllocateHashChain();
-        hashChainStorage[chainIndex] = index;
-        
-        u32 current = slot;
-        while (exportHashTable[current].nextIndex != 0xFFFFFFFF) {
-            current = exportHashTable[current].nextIndex;
+        hashChainStorage[chainIndex].moduleIndex = index;
+        hashChainStorage[chainIndex].nextIndex = INVALID_INDEX;
+
+        u32 currentChain = exportHashTable[slot].nextIndex;
+        if (currentChain == INVALID_INDEX) {
+            exportHashTable[slot].nextIndex = chainIndex;
+        } else {
+            while (hashChainStorage[currentChain].nextIndex != INVALID_INDEX) {
+                currentChain = hashChainStorage[currentChain].nextIndex;
+            }
+            hashChainStorage[currentChain].nextIndex = chainIndex;
         }
-        exportHashTable[current].nextIndex = chainIndex;
     }
     
     cacheGeneration++;
@@ -251,18 +270,32 @@ u32 ModuleCache::AddExport(u32 moduleIndex, const char* symbolName, u8 type, u32
 u32 ModuleCache::FindExport(const char* symbolName) const {
     u32 nameHash = Utils::HashStr(symbolName);
     u32 slot = nameHash & (HASH_TABLE_SIZE - 1);
+
     u32 index = exportHashTable[slot].moduleIndex;
-    
-    while (index != 0xFFFFFFFF) {
-        if (index < exportCount && exportNameHashes[index] == nameHash) {
+    if (index != INVALID_INDEX && index < exportCount &&
+        exportNameHashes[index] == nameHash) {
+        u32 moduleIndex = exports[index].moduleIndex;
+        if (moduleIndex < moduleCount && modules[moduleIndex].status != 0 &&
+            modules[moduleIndex].nameHash != 0) {
             return index;
         }
-        u32 nextChain = exportHashTable[slot].nextIndex;
-        if (nextChain == 0xFFFFFFFF) break;
-        index = hashChainStorage[nextChain];
     }
-    
-    return 0xFFFFFFFF;
+
+    u32 chainIndex = exportHashTable[slot].nextIndex;
+    while (chainIndex != INVALID_INDEX && chainIndex < hashChainUsed) {
+        index = hashChainStorage[chainIndex].moduleIndex;
+        if (index != INVALID_INDEX && index < exportCount &&
+            exportNameHashes[index] == nameHash) {
+            u32 moduleIndex = exports[index].moduleIndex;
+            if (moduleIndex < moduleCount && modules[moduleIndex].status != 0 &&
+                modules[moduleIndex].nameHash != 0) {
+                return index;
+            }
+        }
+        chainIndex = hashChainStorage[chainIndex].nextIndex;
+    }
+
+    return INVALID_INDEX;
 }
 
 void ModuleCache::GetModuleExports(u32 moduleIndex, ExportInfo* outExports, u32* outCount) const {
@@ -498,9 +531,9 @@ ModuleCache::CacheStats ModuleCache::GetStatistics() const {
 }
 
 u32 ModuleCache::AllocateHashChain() {
-    if (hashChainUsed >= MAX_MODULES * 4) {
+    if (hashChainUsed >= HASH_CHAIN_CAPACITY) {
         // TODO: Handle overflow
-        return 0xFFFFFFFF;
+        return INVALID_INDEX;
     }
     return hashChainUsed++;
 }
@@ -508,39 +541,20 @@ u32 ModuleCache::AllocateHashChain() {
 bool ModuleCache::RemoveModule(u32 moduleIndex) {
     if (moduleIndex >= moduleCount || moduleIndex == INVALID_INDEX) return false;
 
-    // Mark as invalid
-    modules[moduleIndex].status = 0;  // Empty
-    moduleStatus[moduleIndex] = 0;
-
     // Invalidate dependents before removal
     InvalidateDependents(moduleIndex);
 
-    // Remove from hash table
-    u32 nameHash = modules[moduleIndex].nameHash;
-    u32 slot = nameHash & (HASH_TABLE_SIZE - 1);
-
-    // Find and remove from hash chain
-    if (moduleHashTable[slot].moduleIndex == moduleIndex) {
-        // It's in the main slot
-        moduleHashTable[slot].moduleIndex = INVALID_INDEX;
-    } else {
-        // Search the chain
-        u32 currChain = moduleHashTable[slot].nextIndex;
-
-        while (currChain != INVALID_INDEX && currChain < hashChainUsed) {
-            if (hashChainStorage[currChain] == moduleIndex) {
-                // Found it, unlink from chain
-                hashChainStorage[currChain] = INVALID_INDEX;
-                break;
-            }
-            currChain++;
-        }
-    }
-
-    // Clear the module data (but don't deallocate - we're using arena)
-    modules[moduleIndex].nameHash = 0;
-    modules[moduleIndex].sourceHash = 0;
+    ModuleID& mod = modules[moduleIndex];
+    mod.status = 0;
+    mod.nameHash = 0;
+    mod.sourceHash = 0;
+    mod.exportCount = 0;
+    mod.dependencyCount = 0;
     moduleNameHashes[moduleIndex] = 0;
+    moduleStatus[moduleIndex] = 0;
+    moduleNames[moduleIndex][0] = '\0';
+
+    RebuildHashTable();
 
     cacheGeneration++;
     return true;
@@ -550,11 +564,13 @@ void ModuleCache::RebuildHashTable() {
     // Clear hash tables
     memset(moduleHashTable, 0xFF, sizeof(moduleHashTable));
     memset(exportHashTable, 0xFF, sizeof(exportHashTable));
+    memset(hashChainStorage, 0xFF, sizeof(hashChainStorage));
     hashChainUsed = 0;
     
     // Rebuild module hash table
     for (u32 i = 0; i < moduleCount; i++) {
         u32 nameHash = modules[i].nameHash;
+        if (modules[i].status == 0 || nameHash == 0) continue;
         u32 slot = nameHash & (HASH_TABLE_SIZE - 1);
         
         if (moduleHashTable[slot].moduleIndex == 0xFFFFFFFF) {
@@ -562,13 +578,19 @@ void ModuleCache::RebuildHashTable() {
             moduleHashTable[slot].nextIndex = 0xFFFFFFFF;
         } else {
             u32 chainIndex = AllocateHashChain();
-            hashChainStorage[chainIndex] = i;
-            
-            u32 current = slot;
-            while (moduleHashTable[current].nextIndex != 0xFFFFFFFF) {
-                current = moduleHashTable[current].nextIndex;
+            if (chainIndex == INVALID_INDEX) break;
+            hashChainStorage[chainIndex].moduleIndex = i;
+            hashChainStorage[chainIndex].nextIndex = INVALID_INDEX;
+
+            u32 currentChain = moduleHashTable[slot].nextIndex;
+            if (currentChain == INVALID_INDEX) {
+                moduleHashTable[slot].nextIndex = chainIndex;
+            } else {
+                while (hashChainStorage[currentChain].nextIndex != INVALID_INDEX) {
+                    currentChain = hashChainStorage[currentChain].nextIndex;
+                }
+                hashChainStorage[currentChain].nextIndex = chainIndex;
             }
-            moduleHashTable[current].nextIndex = chainIndex;
         }
         
         moduleNameHashes[i] = nameHash;
@@ -577,6 +599,11 @@ void ModuleCache::RebuildHashTable() {
     // Rebuild export hash table
     for (u32 i = 0; i < exportCount; i++) {
         u32 nameHash = exports[i].nameHash;
+        u32 moduleIndex = exports[i].moduleIndex;
+        if (nameHash == 0 || moduleIndex >= moduleCount ||
+            modules[moduleIndex].status == 0 || modules[moduleIndex].nameHash == 0) {
+            continue;
+        }
         u32 slot = nameHash & (HASH_TABLE_SIZE - 1);
         
         if (exportHashTable[slot].moduleIndex == 0xFFFFFFFF) {
@@ -584,13 +611,19 @@ void ModuleCache::RebuildHashTable() {
             exportHashTable[slot].nextIndex = 0xFFFFFFFF;
         } else {
             u32 chainIndex = AllocateHashChain();
-            hashChainStorage[chainIndex] = i;
-            
-            u32 current = slot;
-            while (exportHashTable[current].nextIndex != 0xFFFFFFFF) {
-                current = exportHashTable[current].nextIndex;
+            if (chainIndex == INVALID_INDEX) break;
+            hashChainStorage[chainIndex].moduleIndex = i;
+            hashChainStorage[chainIndex].nextIndex = INVALID_INDEX;
+
+            u32 currentChain = exportHashTable[slot].nextIndex;
+            if (currentChain == INVALID_INDEX) {
+                exportHashTable[slot].nextIndex = chainIndex;
+            } else {
+                while (hashChainStorage[currentChain].nextIndex != INVALID_INDEX) {
+                    currentChain = hashChainStorage[currentChain].nextIndex;
+                }
+                hashChainStorage[currentChain].nextIndex = chainIndex;
             }
-            exportHashTable[current].nextIndex = chainIndex;
         }
         
         exportNameHashes[i] = nameHash;

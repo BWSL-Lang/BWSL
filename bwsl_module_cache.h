@@ -19,6 +19,7 @@ struct ModuleCache {
     static constexpr u32 MAX_EXPORTS = 4096;
     static constexpr u32 MAX_SOURCE_SIZE = 1024 * 1024; // 1MB max per module
     static constexpr u32 HASH_TABLE_SIZE = 512; // Power of 2 for fast modulo
+    static constexpr u32 HASH_CHAIN_CAPACITY = MAX_MODULES + MAX_EXPORTS;
     
     // Module identification and metadata (hot data)
     struct ModuleID {
@@ -77,7 +78,7 @@ struct ModuleCache {
     // Hash tables for O(1) lookups
     alignas(64) HashEntry moduleHashTable[HASH_TABLE_SIZE];
     alignas(64) HashEntry exportHashTable[HASH_TABLE_SIZE];
-    alignas(64) u32 hashChainStorage[MAX_MODULES * 4]; // Collision chains
+    alignas(64) HashEntry hashChainStorage[HASH_CHAIN_CAPACITY]; // Collision chains
     
     // Cold data - accessed less frequently
     char* sourceCodeBuffer;      // Arena allocated buffer for all source code
@@ -179,16 +180,20 @@ extern ModuleCache g_moduleCache;
 inline u32 ModuleCache::FindModuleByHash(u32 nameHash) const {
     u32 slot = nameHash & (HASH_TABLE_SIZE - 1);
     u32 index = moduleHashTable[slot].moduleIndex;
-    
-    while (index != INVALID_INDEX) {
-        if (moduleNameHashes[index] == nameHash) {
+
+    if (index != INVALID_INDEX && moduleNameHashes[index] == nameHash) {
+        return index;
+    }
+
+    u32 chainIndex = moduleHashTable[slot].nextIndex;
+    while (chainIndex != INVALID_INDEX && chainIndex < hashChainUsed) {
+        index = hashChainStorage[chainIndex].moduleIndex;
+        if (index != INVALID_INDEX && moduleNameHashes[index] == nameHash) {
             return index;
         }
-        u32 nextChain = moduleHashTable[slot].nextIndex;
-        if (nextChain == INVALID_INDEX) break;
-        index = hashChainStorage[nextChain];
+        chainIndex = hashChainStorage[chainIndex].nextIndex;
     }
-    
+
     return INVALID_INDEX;
 }
 

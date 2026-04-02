@@ -110,10 +110,8 @@ void CFGBuilder::FindLeaders() {
                 }
             }
             else if (op == IR::OP_BRANCH) {
-                // Conditional branch: metadata = (falseTarget << 16) | trueTarget
-                u32 packed = ir->metadata[i];
-                u32 trueTarget = packed & 0xFFFF;
-                u32 falseTarget = packed >> 16;
+                u32 trueTarget = ir->GetBranchTrueTarget(i);
+                u32 falseTarget = ir->GetBranchFalseTarget(i);
                 
                 if (trueTarget < ir->instructionCount) {
                     isLeader[trueTarget] = true;
@@ -238,10 +236,8 @@ void CFGBuilder::ComputeSuccessors() {
             }
         }
         else if (op == IR::OP_BRANCH) {
-            // Conditional: metadata = (falseTarget << 16) | trueTarget
-            u32 packed = ir->metadata[lastInst];
-            u32 trueTarget = packed & 0xFFFF;
-            u32 falseTarget = packed >> 16;
+            u32 trueTarget = ir->GetBranchTrueTarget(lastInst);
+            u32 falseTarget = ir->GetBranchFalseTarget(lastInst);
             
             // Store true branch first, then false branch
             if (trueTarget < ir->instructionCount) {

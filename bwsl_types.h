@@ -161,14 +161,17 @@ inline bool IsArray(const TypeInfo& info) {
 }
 
     using TokenMask = uint64_t;
-    using TypeMask  = uint32_t;
+    using TypeMask  = uint64_t;
+
+    static_assert(static_cast<size_t>(CoreType::COUNT) <= 64,
+        "TypeMask must be wide enough to represent every CoreType");
 
      static constexpr TokenMask mask(TokenType type) {
         return 1ULL << static_cast<size_t>(type);
     }
 
     static constexpr TypeMask mask(CoreType type) {
-        return 1ULL << static_cast<size_t>(type);
+        return static_cast<TypeMask>(1ULL << static_cast<size_t>(type));
     }
 
      // Generics

@@ -1,0 +1,13 @@
+BWSL
+Copyright 2025-2026 Alexander Presthus
+
+This product includes software developed by Alexander Presthus and contributors.
+
+If you redistribute BWSL or derivative works of BWSL, preserve the LICENSE
+and this NOTICE file as required by the Apache License, Version 2.0.
+
+If you use BWSL in a game, engine, tool, article, talk, or presentation,
+an acknowledgment such as "Uses BWSL by Alexander Presthus" is appreciated.
+This request is not a condition of the Apache License.
+
+Third-party dependencies under vendor/ are covered by their own licenses.

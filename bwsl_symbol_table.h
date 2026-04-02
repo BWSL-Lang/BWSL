@@ -269,7 +269,7 @@ struct GenericFunctionData {
     // Check if a type satisfies a constraint mask
     static inline bool TypeSatisfiesConstraint(CoreType type, TypeMask constraintMask) {
         if (constraintMask == 0) return false;
-        return (constraintMask & (1u << static_cast<u32>(type))) != 0;
+        return (constraintMask & mask(type)) != 0;
     }
 };
 

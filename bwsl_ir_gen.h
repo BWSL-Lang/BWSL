@@ -21,6 +21,8 @@ struct IRProgram {
     alignas(64) u16* destinations;     // Destination registers
     alignas(64) u16* operands;         // Flattened 4*count array (supports float4 etc.)
     alignas(64) u32* metadata;         // Variable per-instruction data
+    alignas(64) u32* branchTrueTargets;
+    alignas(64) u32* branchFalseTargets;
     u32 instructionCount;
     u32 instructionCapacity;
     
@@ -166,6 +168,23 @@ struct IRProgram {
     
     void SetOperand(u32 inst, u32 op, u16 value) {
         operands[inst * 4 + op] = value;
+    }
+
+    u32 GetBranchTrueTarget(u32 inst) const {
+        return branchTrueTargets ? branchTrueTargets[inst] : NO_BLOCK;
+    }
+
+    u32 GetBranchFalseTarget(u32 inst) const {
+        return branchFalseTargets ? branchFalseTargets[inst] : NO_BLOCK;
+    }
+
+    void SetBranchTargets(u32 inst, u32 trueTarget, u32 falseTarget) {
+        if (branchTrueTargets) branchTrueTargets[inst] = trueTarget;
+        if (branchFalseTargets) branchFalseTargets[inst] = falseTarget;
+    }
+
+    void ClearBranchTargets(u32 inst) {
+        SetBranchTargets(inst, NO_BLOCK, NO_BLOCK);
     }
     
     u16 GetRegisterFirstUse(u32 reg) const {
@@ -551,6 +570,10 @@ struct IRBuilder {
         program->operands[idx * 4 + 3] = s3;
         program->types[idx] = 0;  // Set based on context
         program->flags[idx] = 0;
+        program->metadata[idx] = 0;
+        program->structureInfo[idx] = 0;
+        program->continueInfo[idx] = NO_BLOCK;
+        program->ClearBranchTargets(idx);
         
         program->instructionCount = currentInstruction;
     }
@@ -588,6 +611,7 @@ struct IRBuilder {
     }
 
     void GrowInstructionArrays() {
+        u32 oldCapacity = program->instructionCapacity;
         u32 newCapacity = program->instructionCapacity * 2;
         
         // Reallocate all instruction arrays
@@ -609,11 +633,19 @@ struct IRBuilder {
             64);
         program->operands = (u16*)pool->Reallocate(
             program->operands, 
-            newCapacity * 3 * sizeof(u16), 
+            newCapacity * 4 * sizeof(u16), 
             64);
         program->metadata = (u32*)pool->Reallocate(
             program->metadata, 
             newCapacity * sizeof(u32), 
+            64);
+        program->branchTrueTargets = (u32*)pool->Reallocate(
+            program->branchTrueTargets,
+            newCapacity * sizeof(u32),
+            64);
+        program->branchFalseTargets = (u32*)pool->Reallocate(
+            program->branchFalseTargets,
+            newCapacity * sizeof(u32),
             64);
         program->structureInfo = (u32*)pool->Reallocate(
             program->structureInfo, 
@@ -623,6 +655,17 @@ struct IRBuilder {
             program->continueInfo, 
             newCapacity * sizeof(u32), 
             64);
+
+        memset(program->metadata + oldCapacity, 0,
+               (newCapacity - oldCapacity) * sizeof(u32));
+        memset(program->branchTrueTargets + oldCapacity, 0xFF,
+               (newCapacity - oldCapacity) * sizeof(u32));
+        memset(program->branchFalseTargets + oldCapacity, 0xFF,
+               (newCapacity - oldCapacity) * sizeof(u32));
+        memset(program->structureInfo + oldCapacity, 0,
+               (newCapacity - oldCapacity) * sizeof(u32));
+        memset(program->continueInfo + oldCapacity, 0xFF,
+               (newCapacity - oldCapacity) * sizeof(u32));
             
         program->instructionCapacity = newCapacity;
     }
@@ -763,16 +806,19 @@ void EliminateDeadCode(IRProgram* prog) {
             if (op == OP_JUMP) {
                 u32 newTarget = (meta < oldCount) ? indexRemap[meta] : meta;
                 prog->metadata[writeIdx] = (newTarget != 0xFFFFFFFF) ? newTarget : writeIdx + 1;
+                prog->ClearBranchTargets(writeIdx);
             } else if (op == OP_BRANCH) {
-                u32 oldFalse = meta >> 16;
-                u32 oldTrue = meta & 0xFFFF;
+                u32 oldTrue = prog->GetBranchTrueTarget(i);
+                u32 oldFalse = prog->GetBranchFalseTarget(i);
                 u32 newFalse = (oldFalse < oldCount) ? indexRemap[oldFalse] : oldFalse;
                 u32 newTrue = (oldTrue < oldCount) ? indexRemap[oldTrue] : oldTrue;
                 if (newFalse == 0xFFFFFFFF) newFalse = writeIdx + 1;
                 if (newTrue == 0xFFFFFFFF) newTrue = writeIdx + 1;
-                prog->metadata[writeIdx] = (newFalse << 16) | (newTrue & 0xFFFF);
+                prog->metadata[writeIdx] = meta;
+                prog->SetBranchTargets(writeIdx, newTrue, newFalse);
             } else {
                 prog->metadata[writeIdx] = meta;
+                prog->ClearBranchTargets(writeIdx);
             }
 
             if (prog->structureInfo) {
@@ -812,7 +858,12 @@ void EliminateDeadCode(IRProgram* prog) {
                 u32 instIdx = prog->variantInstructionIndices[i];
                 // Convert to unconditional jump
                 prog->opcodes[instIdx] = OP_JUMP;
-                prog->operands[instIdx * 4] = prog->variantTrueBranches[i];
+                prog->metadata[instIdx] = prog->variantTrueBranches[i];
+                prog->SetOperand(instIdx, 0, 0);
+                prog->SetOperand(instIdx, 1, 0);
+                prog->SetOperand(instIdx, 2, 0);
+                prog->SetOperand(instIdx, 3, 0);
+                prog->ClearBranchTargets(instIdx);
             }
         }
     }
@@ -981,17 +1032,15 @@ void EliminateDeadCode(IRProgram* prog) {
                         // The branch condition depends on unavailable attribute
                         // Convert to unconditional jump to the false branch
                         // (conservative: assume condition is false when attribute unavailable)
-                        // 
-                        // Branch targets are stored in metadata:
-                        // metadata = (falseTarget << 16) | (trueTarget & 0xFFFF)
-                        u32 meta = prog->metadata[i];
-                        u32 falseTarget = meta >> 16;
+                        u32 falseTarget = prog->GetBranchFalseTarget(i);
                         
                         prog->opcodes[i] = OP_JUMP;
                         prog->metadata[i] = falseTarget;  // JUMP uses metadata for target
                         prog->SetOperand(i, 0, 0);
                         prog->SetOperand(i, 1, 0);
                         prog->SetOperand(i, 2, 0);
+                        prog->SetOperand(i, 3, 0);
+                        prog->ClearBranchTargets(i);
                         
                         // Mark branch condition as eliminated
                         eliminate[i] = false;  // Keep the JUMP
@@ -1034,18 +1083,20 @@ void EliminateDeadCode(IRProgram* prog) {
                         // JUMP: metadata is target instruction index
                         u32 newTarget = (meta < oldCount) ? indexRemap[meta] : meta;
                         prog->metadata[writeIdx] = (newTarget != 0xFFFFFFFF) ? newTarget : writeIdx + 1;
+                        prog->ClearBranchTargets(writeIdx);
                     } else if (op == OP_BRANCH) {
-                        // BRANCH: metadata = (falseTarget << 16) | trueTarget
-                        u32 oldFalse = meta >> 16;
-                        u32 oldTrue = meta & 0xFFFF;
+                        u32 oldTrue = prog->GetBranchTrueTarget(i);
+                        u32 oldFalse = prog->GetBranchFalseTarget(i);
                         u32 newFalse = (oldFalse < oldCount) ? indexRemap[oldFalse] : oldFalse;
                         u32 newTrue = (oldTrue < oldCount) ? indexRemap[oldTrue] : oldTrue;
                         // If target was eliminated, point to next instruction as fallback
                         if (newFalse == 0xFFFFFFFF) newFalse = writeIdx + 1;
                         if (newTrue == 0xFFFFFFFF) newTrue = writeIdx + 1;
-                        prog->metadata[writeIdx] = (newFalse << 16) | (newTrue & 0xFFFF);
+                        prog->metadata[writeIdx] = meta;
+                        prog->SetBranchTargets(writeIdx, newTrue, newFalse);
                     } else {
                         prog->metadata[writeIdx] = meta;
+                        prog->ClearBranchTargets(writeIdx);
                     }
                 } else {
                     // Even when not moving, may need to update targets
@@ -1054,14 +1105,15 @@ void EliminateDeadCode(IRProgram* prog) {
                     if (op == OP_JUMP) {
                         u32 newTarget = (meta < oldCount) ? indexRemap[meta] : meta;
                         prog->metadata[writeIdx] = (newTarget != 0xFFFFFFFF) ? newTarget : writeIdx + 1;
+                        prog->ClearBranchTargets(writeIdx);
                     } else if (op == OP_BRANCH) {
-                        u32 oldFalse = meta >> 16;
-                        u32 oldTrue = meta & 0xFFFF;
+                        u32 oldTrue = prog->GetBranchTrueTarget(writeIdx);
+                        u32 oldFalse = prog->GetBranchFalseTarget(writeIdx);
                         u32 newFalse = (oldFalse < oldCount) ? indexRemap[oldFalse] : oldFalse;
                         u32 newTrue = (oldTrue < oldCount) ? indexRemap[oldTrue] : oldTrue;
                         if (newFalse == 0xFFFFFFFF) newFalse = writeIdx + 1;
                         if (newTrue == 0xFFFFFFFF) newTrue = writeIdx + 1;
-                        prog->metadata[writeIdx] = (newFalse << 16) | (newTrue & 0xFFFF);
+                        prog->SetBranchTargets(writeIdx, newTrue, newFalse);
                     }
                 }
 

@@ -5,6 +5,9 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BWSL_ROOT="$(dirname "$SCRIPT_DIR")"
 BWSLC="$BWSL_ROOT/build/bwslc"
+if [ ! -f "$BWSLC" ] && [ -f "$BWSL_ROOT/build/bwslc.exe" ]; then
+    BWSLC="$BWSL_ROOT/build/bwslc.exe"
+fi
 OUTPUT_DIR="$SCRIPT_DIR/output"
 GOLDEN_DIR="$SCRIPT_DIR/golden"
 
@@ -29,6 +32,16 @@ GOLDEN_UPDATED=0
 METAL_VALIDATION=false
 UPDATE_GOLDEN=false
 VERBOSE=false
+
+PYTHON_BIN=""
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+else
+    echo "Python is required to validate inline-return internals checks."
+    exit 1
+fi
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -150,7 +163,7 @@ for test_file in "$SCRIPT_DIR"/*.bwsl; do
 
         if [ "$test_name" = "inline_return_jump" ] || [ "$test_name" = "inline_return_nested_if" ] || [ "$test_name" = "inline_return_enum" ] || [ "$test_name" = "inline_return_struct" ]; then
             check_file="$OUTPUT_DIR/${test_name}_pass0_vert.internals.json"
-            python3 - "$check_file" <<'PY'
+            "$PYTHON_BIN" - "$check_file" <<'PY'
 import json
 import sys
 
@@ -176,7 +189,7 @@ PY
         fi
         if [ "$test_name" = "inline_return_loop" ] || [ "$test_name" = "inline_return_nested_loops" ] || [ "$test_name" = "inline_return_nested_loops_skip_break" ] || [ "$test_name" = "inline_return_outer_skip_break" ] || [ "$test_name" = "inline_return_range_loop" ] || [ "$test_name" = "inline_return_count_loop" ] || [ "$test_name" = "inline_return_loop_until" ]; then
             check_file="$OUTPUT_DIR/${test_name}_pass0_vert.internals.json"
-            python3 - "$check_file" <<'PY'
+            "$PYTHON_BIN" - "$check_file" <<'PY'
 import json
 import sys
 

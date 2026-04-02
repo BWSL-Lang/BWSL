@@ -16,6 +16,7 @@ build/
 
 # Generated JSON files (IR dumps, internals)
 *.internals.json
+*_pass*.json
 
 # macOS
 .DS_Store

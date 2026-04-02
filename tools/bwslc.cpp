@@ -785,10 +785,11 @@ void DumpIR(const IRProgram& prog) {
             case IR::OP_RET:
                 break;
             case IR::OP_JUMP:
-                printf(" -> %u", op0);
+                printf(" -> %u", prog.metadata[i]);
                 break;
             case IR::OP_BRANCH:
-                printf(" %s ? -> %u : %u", FormatOperand(prog, op0).c_str(), op1, op2);
+                printf(" %s ? -> %u : %u", FormatOperand(prog, op0).c_str(),
+                       prog.GetBranchTrueTarget(i), prog.GetBranchFalseTarget(i));
                 break;
             case IR::OP_LOAD_CONST:
                 printf(" %s", FormatOperand(prog, op0).c_str());
@@ -939,11 +940,13 @@ std::string DumpIRToString(const IRProgram& prog) {
             case IR::OP_RET:
                 break;
             case IR::OP_JUMP:
-                snprintf(buf, sizeof(buf), " -> %u", op0);
+                snprintf(buf, sizeof(buf), " -> %u", prog.metadata[i]);
                 out += buf;
                 break;
             case IR::OP_BRANCH:
-                snprintf(buf, sizeof(buf), " %s ? -> %u : %u", FormatOperand(prog, op0).c_str(), op1, op2);
+                snprintf(buf, sizeof(buf), " %s ? -> %u : %u",
+                    FormatOperand(prog, op0).c_str(),
+                    prog.GetBranchTrueTarget(i), prog.GetBranchFalseTarget(i));
                 out += buf;
                 break;
             case IR::OP_LOAD_CONST:
@@ -1162,7 +1165,7 @@ CompileResult CompileShaderStage(
     // CFG Construction
     auto cfgStart = Clock::now();
     Memory::BWEMemoryArena cfgArena;
-    char cfgMem[128 * 1024];
+    char cfgMem[512 * 1024];
     cfgArena.Initialize(cfgMem, sizeof(cfgMem));
 
     CFGBuilder cfgBuilder;

@@ -4949,11 +4949,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   }
 
   case IR::OP_BRANCH: {
-    // metadata encoding: (falseTarget << 16) | trueTarget
     u16 cond_reg = ir->GetOperand(ir_idx, 0);
-    u32 metadata = ir->metadata[ir_idx];
-    u32 true_target = metadata & 0xFFFF;
-    u32 false_target = metadata >> 16;
+    u32 true_target = ir->GetBranchTrueTarget(ir_idx);
+    u32 false_target = ir->GetBranchFalseTarget(ir_idx);
 
     // Check if EmitBranch already converted this condition to bool
     u32 condition;
@@ -5476,9 +5474,8 @@ void SPIRVBuilder::EmitBranch(u32 ir_idx) {
     // Check if this is an empty if-block (both targets are the same)
     // In this case, we emit OpBranch instead of OpBranchConditional
     // and skip the OpSelectionMerge entirely (fixes SPIRV-Cross DCE bug)
-    u32 metadata = ir->metadata[ir_idx];
-    u32 true_target = metadata & 0xFFFF;
-    u32 false_target = metadata >> 16;
+    u32 true_target = ir->GetBranchTrueTarget(ir_idx);
+    u32 false_target = ir->GetBranchFalseTarget(ir_idx);
 
     if (true_target == false_target) {
       // Empty if-block: just emit unconditional branch, skip merge

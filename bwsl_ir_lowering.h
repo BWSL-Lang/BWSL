@@ -183,6 +183,13 @@ struct IRLowering {
       program.operands[i] = 0x3FFF;
     }
     program.metadata = (u32 *)pool->Allocate(initialSize * sizeof(u32), 64);
+    memset(program.metadata, 0, initialSize * sizeof(u32));
+    program.branchTrueTargets =
+        (u32 *)pool->Allocate(initialSize * sizeof(u32), 64);
+    program.branchFalseTargets =
+        (u32 *)pool->Allocate(initialSize * sizeof(u32), 64);
+    memset(program.branchTrueTargets, 0xFF, initialSize * sizeof(u32));
+    memset(program.branchFalseTargets, 0xFF, initialSize * sizeof(u32));
 
     // Allocate structure info arrays for control flow
     program.structureInfo =
@@ -471,7 +478,7 @@ struct IRLowering {
     u32 mergePoint = builder.currentInstruction;
     builder.EmitInstruction(OP_NOP, 0, 0);
 
-    program.metadata[branchIdx] = (falseTarget << 16) | (mergePoint & 0xFFFF);
+    program.SetBranchTargets(branchIdx, mergePoint, falseTarget);
     program.structureInfo[branchIdx] =
         IRProgram::PackStructure(IRProgram::STRUCT_IF_HEADER, mergePoint);
   }
@@ -596,10 +603,9 @@ struct IRLowering {
     // Patch break/skip jumps
     PopLoopContext(continueTarget, loopEnd);
 
-    // Patch branch: metadata = (falseTarget << 16) | trueTarget
-    // True = continue into body, False = exit loop
+    // Patch branch: true = continue into body, false = exit loop
     if (hasBranch) {
-      program.metadata[branchIdx] = (loopEnd << 16) | (bodyStart & 0xFFFF);
+      program.SetBranchTargets(branchIdx, bodyStart, loopEnd);
 
       // Annotate loop structure
       program.structureInfo[branchIdx] =
@@ -712,8 +718,8 @@ struct IRLowering {
     // Patch break/skip jumps
     PopLoopContext(continueTarget, loopEnd);
 
-    // Patch branch: metadata = (falseTarget << 16) | trueTarget
-    program.metadata[branchIdx] = (loopEnd << 16) | (bodyStart & 0xFFFF);
+    // Patch branch: true = continue into body, false = exit loop
+    program.SetBranchTargets(branchIdx, bodyStart, loopEnd);
 
     // Annotate loop structure
     program.structureInfo[branchIdx] =
@@ -790,8 +796,8 @@ struct IRLowering {
     // Patch break/skip jumps
     PopLoopContext(continueTarget, loopEnd);
 
-    // Patch branch: metadata = (falseTarget << 16) | trueTarget
-    program.metadata[branchIdx] = (loopEnd << 16) | (bodyStart & 0xFFFF);
+    // Patch branch: true = continue into body, false = exit loop
+    program.SetBranchTargets(branchIdx, bodyStart, loopEnd);
 
     // Annotate loop structure
     program.structureInfo[branchIdx] =
@@ -860,13 +866,12 @@ struct IRLowering {
       // Patch break/skip jumps
       PopLoopContext(continueTarget, loopEnd);
 
-      // Patch main loop branch: metadata = (falseTarget << 16) | trueTarget
-      program.metadata[branchIdx] = (loopEnd << 16) | (bodyStart & 0xFFFF);
+      // Patch main loop branch: true = continue into body, false = exit loop
+      program.SetBranchTargets(branchIdx, bodyStart, loopEnd);
 
       // Patch until branch if present: true = exit, false = continue
       if (!loop.untilCondition.IsNull()) {
-        program.metadata[untilBranchIdx] =
-            (continueTarget << 16) | (loopEnd & 0xFFFF);
+        program.SetBranchTargets(untilBranchIdx, loopEnd, continueTarget);
       }
 
       // Annotate loop structure
@@ -923,12 +928,11 @@ struct IRLowering {
 
       // Patch header branch: always enters body (true=body, false=exit for
       // structure)
-      program.metadata[branchIdx] = (loopEnd << 16) | (bodyStart & 0xFFFF);
+      program.SetBranchTargets(branchIdx, bodyStart, loopEnd);
 
       // Patch until branch if present
       if (!loop.untilCondition.IsNull()) {
-        program.metadata[untilBranchIdx] =
-            (continueTarget << 16) | (loopEnd & 0xFFFF);
+        program.SetBranchTargets(untilBranchIdx, loopEnd, continueTarget);
       }
 
       // Annotate loop structure
@@ -2747,8 +2751,8 @@ struct IRLowering {
       builder.EmitInstruction(OP_NOP, 0, 0, 0);
     }
 
-    // Patch branch: metadata = (falseTarget << 16) | trueTarget
-    program.metadata[branchIdx] = (falseTarget << 16) | (trueTarget & 0xFFFF);
+    // Patch branch: true = enter then-block, false = else/merge
+    program.SetBranchTargets(branchIdx, trueTarget, falseTarget);
 
     // ANNOTATE: This branch instruction is an if-header, merge at mergePoint
     program.structureInfo[branchIdx] =

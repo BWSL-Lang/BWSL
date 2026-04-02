@@ -12,13 +12,19 @@ git clone --recurse-submodules https://github.com/apresthus/BWSL.git
 git submodule update --init --recursive
 ```
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contributor setup, test expectations,
+and pull request guidelines.
+
 ## Building
 
 ### Prerequisites
 
 **For native CLI compiler:**
-- clang++ with C++20 support
-- macOS, Linux, or Windows (with appropriate toolchain)
+- macOS or Linux: `clang++` or another C++20 compiler
+- Windows: Visual Studio Build Tools / Developer Command Prompt (`cl.exe`)
+
+**For Windows cross-compilation from macOS/Linux:**
+- [Zig](https://ziglang.org/) (`zig` must be in PATH)
 
 **For WebAssembly module:**
 - [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) (`emcc` must be in PATH)
@@ -31,6 +37,17 @@ make bwslc
 
 # Build CLI compiler with debug symbols
 make bwslc-debug
+
+# Build the native Windows CLI compiler with MSVC
+# Run this from a Visual Studio Developer Command Prompt
+make bwslc-msvc
+
+# Cross-compile a Windows CLI compiler from macOS/Linux with Zig
+make bwslc-win-zig
+
+# Windows helper without GNU Make
+build.bat
+build.bat bwslc-debug
 
 # Build WebAssembly module
 make wasm
@@ -48,11 +65,15 @@ All build artifacts go into the `build/` directory:
 
 ```
 build/
-├── bwslc              # Native CLI compiler
+├── bwslc              # Native CLI compiler on macOS/Linux
+├── bwslc.exe          # Native CLI compiler on Windows
+├── bwslc-win.exe      # Windows cross-build from macOS/Linux via Zig
 └── wasm/
     ├── bwsl.js        # WASM JavaScript wrapper
     └── bwsl.wasm      # WebAssembly binary
 ```
+
+On Windows, the repo now also includes `build.bat` and `make.bat`. `build.bat` bootstraps the MSVC environment automatically, and `make bwslc` from `cmd.exe` or PowerShell will fall back to the local `make.bat` shim if `make.exe` is not installed.
 
 ## Usage
 
@@ -174,6 +195,15 @@ bwsl/
 └── *.cpp, *.h              # Compiler source
 ```
 
+## Attribution
+
+If you use BWSL in a game, engine, tool, article, or presentation, a short
+credit such as `Uses BWSL by Alexander Presthus` is appreciated. This is a
+request, not a condition of the license.
+
 ## License
 
-Copyright (c) Alexander Presthus. All rights reserved.
+BWSL is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE)
+and [NOTICE](NOTICE).
+
+Project name usage guidance is in [NAME_USAGE.md](NAME_USAGE.md).
