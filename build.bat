@@ -44,16 +44,16 @@ echo Built: build\bwslc-debug.exe
 exit /b 0
 
 :test
-where bash >nul 2>&1
-if errorlevel 1 (
-    echo Tests require bash. Install Git for Windows or run the test suite from Git Bash / WSL.
-    exit /b 1
-)
 if not exist "build\bwslc.exe" (
     call :build_release
     if errorlevel 1 exit /b 1
 )
-bash -lc "./tests/run_tests.sh"
+where python >nul 2>&1
+if errorlevel 1 (
+    echo Tests require Python on PATH.
+    exit /b 1
+)
+python tests\run_tests.py
 exit /b %errorlevel%
 
 :clean

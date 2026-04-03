@@ -207,10 +207,10 @@ wasm-debug: $(WASM_DIR)
 
 ifeq ($(HOST_OS),windows)
 test:
-	@if where bash >nul 2>&1; then \
-		bash -lc "./tests/run_tests.sh"; \
+	@if where python >nul 2>&1; then \
+		python tests/run_tests.py; \
 	else \
-		echo "Regression tests require bash on Windows. Install Git for Windows or use WSL." >&2; \
+		echo "Regression tests require Python on Windows." >&2; \
 		exit 1; \
 	fi
 else

@@ -45,5 +45,5 @@ jobs:
         run: build.bat bwslc
 
       - name: Run regression tests
-        shell: bash
-        run: ./tests/run_tests.sh
+        shell: cmd
+        run: build.bat test
