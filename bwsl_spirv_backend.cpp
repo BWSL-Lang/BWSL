@@ -2,6 +2,7 @@
 #include "bwsl_ir_analysis.h"
 #include "bwsl_utils.h"
 #include "vendor/SPIRV-Headers/include/spirv/unified1/GLSL.std.450.h"
+#include <array>
 #include <cstring>
 
 namespace BWSL {
@@ -12,159 +13,161 @@ namespace BWSL {
 // belongs to an extended instruction set (like GLSL.std.450).
 // The specific extended instruction must then be looked up in the parallel
 // table.
-static constexpr spv::Op IR_TO_SPV_OP_TABLE[256] = {
+constexpr std::array<spv::Op, 256> BuildIrToSpvOpTable() {
+    std::array<spv::Op, 256> table{};
+    for (auto& entry : table) entry = spv::OpNop;
 
     // ========== Control Flow ==========
-    [IR::OP_NOP] = spv::OpNop,
-    [IR::OP_JUMP] = spv::OpBranch,
-    [IR::OP_BRANCH] = spv::OpBranchConditional,
-    [IR::OP_CALL] = spv::OpFunctionCall,
-    [IR::OP_RET] = spv::OpReturn, // Can also be spv::OpReturnValue
-    [IR::OP_SELECT] = spv::OpSelect,
-    [IR::OP_PHI] = spv::OpPhi,
-    [IR::OP_SWITCH] = spv::OpSwitch,
+    table[IR::OP_NOP] = spv::OpNop;
+    table[IR::OP_JUMP] = spv::OpBranch;
+    table[IR::OP_BRANCH] = spv::OpBranchConditional;
+    table[IR::OP_CALL] = spv::OpFunctionCall;
+    table[IR::OP_RET] = spv::OpReturn; // Can also be spv::OpReturnValue
+    table[IR::OP_SELECT] = spv::OpSelect;
+    table[IR::OP_PHI] = spv::OpPhi;
+    table[IR::OP_SWITCH] = spv::OpSwitch;
 
-    // ========== Memory Operations (most map to Load/Store with different
-    // Storage Classes) ==========
-    [IR::OP_LOAD_CONST] =
-        spv::OpConstant, // This is a declaration, not a load instruction
-    [IR::OP_LOAD_REG] = spv::OpCopyObject, // Or often optimized away in SSA
-    [IR::OP_STORE_REG] = spv::OpStore,
-    [IR::OP_LOAD_ATTR] = spv::OpLoad,
-    [IR::OP_STORE_OUTPUT] = spv::OpStore,
-    [IR::OP_LOAD_OUTPUT] = spv::OpLoad,
-    [IR::OP_LOAD_UNIFORM] = spv::OpLoad,
-    [IR::OP_LOAD_BUFFER] = spv::OpLoad,
-    [IR::OP_STORE_BUFFER] = spv::OpStore,
-    [IR::OP_LOAD_LOCAL] = spv::OpLoad,
-    [IR::OP_STORE_LOCAL] = spv::OpStore,
-    [IR::OP_LOAD_SHARED] = spv::OpLoad,
-    [IR::OP_STORE_SHARED] = spv::OpStore,
-    [IR::OP_LOAD_INPUT] = spv::OpLoad, // Fragment input varying
+    // ========== Memory Operations ==========
+    table[IR::OP_LOAD_CONST] = spv::OpConstant;
+    table[IR::OP_LOAD_REG] = spv::OpCopyObject;
+    table[IR::OP_STORE_REG] = spv::OpStore;
+    table[IR::OP_LOAD_ATTR] = spv::OpLoad;
+    table[IR::OP_STORE_OUTPUT] = spv::OpStore;
+    table[IR::OP_LOAD_OUTPUT] = spv::OpLoad;
+    table[IR::OP_LOAD_UNIFORM] = spv::OpLoad;
+    table[IR::OP_LOAD_BUFFER] = spv::OpLoad;
+    table[IR::OP_STORE_BUFFER] = spv::OpStore;
+    table[IR::OP_LOAD_LOCAL] = spv::OpLoad;
+    table[IR::OP_STORE_LOCAL] = spv::OpStore;
+    table[IR::OP_LOAD_SHARED] = spv::OpLoad;
+    table[IR::OP_STORE_SHARED] = spv::OpStore;
+    table[IR::OP_LOAD_INPUT] = spv::OpLoad;
+
     // ========== Arithmetic (Float) ==========
-    [IR::OP_FADD] = spv::OpFAdd,
-    [IR::OP_FSUB] = spv::OpFSub,
-    [IR::OP_FMUL] = spv::OpFMul,
-    [IR::OP_FDIV] = spv::OpFDiv,
-    [IR::OP_FMOD] = spv::OpFMod,
-    [IR::OP_FNEG] = spv::OpFNegate,
-    [IR::OP_FABS] = spv::OpExtInst,   // Use GLSL.std.450 table
-    [IR::OP_FMIN] = spv::OpExtInst,   // Use GLSL.std.450 table
-    [IR::OP_FMAX] = spv::OpExtInst,   // Use GLSL.std.450 table
-    [IR::OP_FCLAMP] = spv::OpExtInst, // Use GLSL.std.450 table
-    [IR::OP_FLOOR] = spv::OpExtInst,  // Use GLSL.std.450 table
-    [IR::OP_CEIL] = spv::OpExtInst,   // Use GLSL.std.450 table
-    [IR::OP_ROUND] = spv::OpExtInst,  // Use GLSL.std.450 table
-    [IR::OP_TRUNC] = spv::OpExtInst,  // GLSLstd450Trunc
-    [IR::OP_FRACT] = spv::OpExtInst,  // Use GLSL.std.450 table
-    [IR::OP_FMA] = spv::OpExtInst,    // GLSLstd450Fma
+    table[IR::OP_FADD] = spv::OpFAdd;
+    table[IR::OP_FSUB] = spv::OpFSub;
+    table[IR::OP_FMUL] = spv::OpFMul;
+    table[IR::OP_FDIV] = spv::OpFDiv;
+    table[IR::OP_FMOD] = spv::OpFMod;
+    table[IR::OP_FNEG] = spv::OpFNegate;
+    table[IR::OP_FABS] = spv::OpExtInst;
+    table[IR::OP_FMIN] = spv::OpExtInst;
+    table[IR::OP_FMAX] = spv::OpExtInst;
+    table[IR::OP_FCLAMP] = spv::OpExtInst;
+    table[IR::OP_FLOOR] = spv::OpExtInst;
+    table[IR::OP_CEIL] = spv::OpExtInst;
+    table[IR::OP_ROUND] = spv::OpExtInst;
+    table[IR::OP_TRUNC] = spv::OpExtInst;
+    table[IR::OP_FRACT] = spv::OpExtInst;
+    table[IR::OP_FMA] = spv::OpExtInst;
 
     // ========== Arithmetic (Integer) ==========
-    [IR::OP_IADD] = spv::OpIAdd,
-    [IR::OP_ISUB] = spv::OpISub,
-    [IR::OP_IMUL] = spv::OpIMul,
-    [IR::OP_IDIV] = spv::OpSDiv,
-    [IR::OP_IMOD] = spv::OpSMod,
-    [IR::OP_INEG] = spv::OpSNegate,
-    [IR::OP_IABS] = spv::OpExtInst,   // Use GLSL.std.450 table
-    [IR::OP_IMIN] = spv::OpExtInst,   // Use GLSL.std.450 table
-    [IR::OP_IMAX] = spv::OpExtInst,   // Use GLSL.std.450 table
-    [IR::OP_ICLAMP] = spv::OpExtInst, // Use GLSL.std.450 table
-    [IR::OP_UMIN] = spv::OpExtInst,   // Use GLSL.std.450 table
-    [IR::OP_UMAX] = spv::OpExtInst,   // Use GLSL.std.450 table
-    [IR::OP_UCLAMP] = spv::OpExtInst, // Use GLSL.std.450 table
+    table[IR::OP_IADD] = spv::OpIAdd;
+    table[IR::OP_ISUB] = spv::OpISub;
+    table[IR::OP_IMUL] = spv::OpIMul;
+    table[IR::OP_IDIV] = spv::OpSDiv;
+    table[IR::OP_IMOD] = spv::OpSMod;
+    table[IR::OP_INEG] = spv::OpSNegate;
+    table[IR::OP_IABS] = spv::OpExtInst;
+    table[IR::OP_IMIN] = spv::OpExtInst;
+    table[IR::OP_IMAX] = spv::OpExtInst;
+    table[IR::OP_ICLAMP] = spv::OpExtInst;
+    table[IR::OP_UMIN] = spv::OpExtInst;
+    table[IR::OP_UMAX] = spv::OpExtInst;
+    table[IR::OP_UCLAMP] = spv::OpExtInst;
 
     // ========== Bitwise ==========
-    [IR::OP_CLZ] = spv::OpExtInst, // Use GLSL.std.450 table
-    [IR::OP_CTZ] = spv::OpExtInst, // Use GLSL.std.450 table
+    table[IR::OP_CLZ] = spv::OpExtInst;
+    table[IR::OP_CTZ] = spv::OpExtInst;
 
     // ========== Type Conversion ==========
-    [IR::OP_SIGN] = spv::OpExtInst, // Use GLSL.std.450 table
+    table[IR::OP_SIGN] = spv::OpExtInst;
 
     // ========== Math Functions ==========
-    [IR::OP_SQRT] = spv::OpExtInst, // this gets looked up via the bwsl std lib
-    [IR::OP_RSQRT] = spv::OpExtInst,
-    [IR::OP_POW] = spv::OpExtInst,
-    [IR::OP_EXP] = spv::OpExtInst,
-    [IR::OP_EXP2] = spv::OpExtInst,
-    [IR::OP_LOG] = spv::OpExtInst,
-    [IR::OP_LOG2] = spv::OpExtInst,
-    [IR::OP_SIN] = spv::OpExtInst,
-    [IR::OP_COS] = spv::OpExtInst,
-    [IR::OP_TAN] = spv::OpExtInst,
-    [IR::OP_ASIN] = spv::OpExtInst,
-    [IR::OP_ACOS] = spv::OpExtInst,
-    [IR::OP_ATAN] = spv::OpExtInst,
-    [IR::OP_ATAN2] = spv::OpExtInst,
-    [IR::OP_SINH] = spv::OpExtInst,
-    [IR::OP_COSH] = spv::OpExtInst,
+    table[IR::OP_SQRT] = spv::OpExtInst;
+    table[IR::OP_RSQRT] = spv::OpExtInst;
+    table[IR::OP_POW] = spv::OpExtInst;
+    table[IR::OP_EXP] = spv::OpExtInst;
+    table[IR::OP_EXP2] = spv::OpExtInst;
+    table[IR::OP_LOG] = spv::OpExtInst;
+    table[IR::OP_LOG2] = spv::OpExtInst;
+    table[IR::OP_SIN] = spv::OpExtInst;
+    table[IR::OP_COS] = spv::OpExtInst;
+    table[IR::OP_TAN] = spv::OpExtInst;
+    table[IR::OP_ASIN] = spv::OpExtInst;
+    table[IR::OP_ACOS] = spv::OpExtInst;
+    table[IR::OP_ATAN] = spv::OpExtInst;
+    table[IR::OP_ATAN2] = spv::OpExtInst;
+    table[IR::OP_SINH] = spv::OpExtInst;
+    table[IR::OP_COSH] = spv::OpExtInst;
 
     // ========== Geometric ==========
-    [IR::OP_DOT] = spv::OpDot,
-    [IR::OP_CROSS] = spv::OpExtInst,
-    [IR::OP_LENGTH] = spv::OpExtInst,
-    [IR::OP_NORMALIZE] = spv::OpExtInst,
-    [IR::OP_DISTANCE] = spv::OpExtInst,
-    [IR::OP_REFLECT] = spv::OpExtInst,
-    [IR::OP_REFRACT] = spv::OpExtInst,
-    [IR::OP_FACEFORWARD] = spv::OpExtInst,
+    table[IR::OP_DOT] = spv::OpDot;
+    table[IR::OP_CROSS] = spv::OpExtInst;
+    table[IR::OP_LENGTH] = spv::OpExtInst;
+    table[IR::OP_NORMALIZE] = spv::OpExtInst;
+    table[IR::OP_DISTANCE] = spv::OpExtInst;
+    table[IR::OP_REFLECT] = spv::OpExtInst;
+    table[IR::OP_REFRACT] = spv::OpExtInst;
+    table[IR::OP_FACEFORWARD] = spv::OpExtInst;
 
     // ========== Matrix ==========
-    [IR::OP_MAT_MUL] = spv::OpMatrixTimesMatrix,
-    [IR::OP_MAT_TRANSPOSE] = spv::OpTranspose,
-    [IR::OP_MAT_INVERSE] = spv::OpExtInst,
-    [IR::OP_MAT_DET] = spv::OpExtInst,
-    [IR::OP_MAT_CONSTRUCT] = spv::OpCompositeConstruct,
-    [IR::OP_MAT_VEC_MUL] = spv::OpMatrixTimesVector,
-    [IR::OP_VEC_MAT_MUL] = spv::OpVectorTimesMatrix,
-    [IR::OP_MAT_SCALE] = spv::OpMatrixTimesScalar,
+    table[IR::OP_MAT_MUL] = spv::OpMatrixTimesMatrix;
+    table[IR::OP_MAT_TRANSPOSE] = spv::OpTranspose;
+    table[IR::OP_MAT_INVERSE] = spv::OpExtInst;
+    table[IR::OP_MAT_DET] = spv::OpExtInst;
+    table[IR::OP_MAT_CONSTRUCT] = spv::OpCompositeConstruct;
+    table[IR::OP_MAT_VEC_MUL] = spv::OpMatrixTimesVector;
+    table[IR::OP_VEC_MAT_MUL] = spv::OpVectorTimesMatrix;
+    table[IR::OP_MAT_SCALE] = spv::OpMatrixTimesScalar;
 
     // ========== Interpolation ==========
-    [IR::OP_LERP] = spv::OpExtInst,
-    [IR::OP_SMOOTHSTEP] = spv::OpExtInst,
-    [IR::OP_STEP] = spv::OpExtInst,
-    [IR::OP_SATURATE] = spv::OpExtInst, // Maps to FClamp(x, 0, 1)
-    [IR::OP_DEGREES] = spv::OpExtInst,
-    [IR::OP_RADIANS] = spv::OpExtInst,
+    table[IR::OP_LERP] = spv::OpExtInst;
+    table[IR::OP_SMOOTHSTEP] = spv::OpExtInst;
+    table[IR::OP_STEP] = spv::OpExtInst;
+    table[IR::OP_SATURATE] = spv::OpExtInst;
+    table[IR::OP_DEGREES] = spv::OpExtInst;
+    table[IR::OP_RADIANS] = spv::OpExtInst;
 
     // ========== Atomics ==========
-    [IR::OP_ATOMIC_ADD] = spv::OpAtomicIAdd,
-    [IR::OP_ATOMIC_SUB] = spv::OpAtomicISub,
-    [IR::OP_ATOMIC_MIN] = spv::OpAtomicSMin, // Or UMin
-    [IR::OP_ATOMIC_MAX] = spv::OpAtomicSMax, // Or UMax
-    [IR::OP_ATOMIC_AND] = spv::OpAtomicAnd,
-    [IR::OP_ATOMIC_OR] = spv::OpAtomicOr,
-    [IR::OP_ATOMIC_XOR] = spv::OpAtomicXor,
-    [IR::OP_ATOMIC_XCHG] = spv::OpAtomicExchange,
-    [IR::OP_ATOMIC_CMP_XCHG] = spv::OpAtomicCompareExchange,
+    table[IR::OP_ATOMIC_ADD] = spv::OpAtomicIAdd;
+    table[IR::OP_ATOMIC_SUB] = spv::OpAtomicISub;
+    table[IR::OP_ATOMIC_MIN] = spv::OpAtomicSMin;
+    table[IR::OP_ATOMIC_MAX] = spv::OpAtomicSMax;
+    table[IR::OP_ATOMIC_AND] = spv::OpAtomicAnd;
+    table[IR::OP_ATOMIC_OR] = spv::OpAtomicOr;
+    table[IR::OP_ATOMIC_XOR] = spv::OpAtomicXor;
+    table[IR::OP_ATOMIC_XCHG] = spv::OpAtomicExchange;
+    table[IR::OP_ATOMIC_CMP_XCHG] = spv::OpAtomicCompareExchange;
 
     // ========== Synchronization ==========
-    [IR::OP_BARRIER] = spv::OpControlBarrier,
-    [IR::OP_MEM_FENCE] = spv::OpMemoryBarrier,
+    table[IR::OP_BARRIER] = spv::OpControlBarrier;
+    table[IR::OP_MEM_FENCE] = spv::OpMemoryBarrier;
 
-    // ========== Derivatives (Fragment only) ==========
-    [IR::OP_DDX] = spv::OpDPdx,
-    [IR::OP_DDY] = spv::OpDPdy,
-    [IR::OP_DDX_FINE] = spv::OpDPdxFine,
-    [IR::OP_DDY_FINE] = spv::OpDPdyFine,
-    [IR::OP_DDX_COARSE] = spv::OpDPdxCoarse,
-    [IR::OP_DDY_COARSE] = spv::OpDPdyCoarse,
-    [IR::OP_FWIDTH] = spv::OpFwidth,
+    // ========== Derivatives ==========
+    table[IR::OP_DDX] = spv::OpDPdx;
+    table[IR::OP_DDY] = spv::OpDPdy;
+    table[IR::OP_DDX_FINE] = spv::OpDPdxFine;
+    table[IR::OP_DDY_FINE] = spv::OpDPdyFine;
+    table[IR::OP_DDX_COARSE] = spv::OpDPdxCoarse;
+    table[IR::OP_DDY_COARSE] = spv::OpDPdyCoarse;
+    table[IR::OP_FWIDTH] = spv::OpFwidth;
 
-    // ========== Wave/SIMD/Subgroup Operations (SPIR-V 1.3+) ==========
-    // Using raw opcode values since these are not in SPIR-V 1.2 header
-    [IR::OP_WAVE_MIN] = static_cast<spv::Op>(358),    // OpGroupNonUniformSMin
-    [IR::OP_WAVE_MAX] = static_cast<spv::Op>(359),    // OpGroupNonUniformSMax
-    [IR::OP_WAVE_ALL] = static_cast<spv::Op>(334),    // OpGroupNonUniformAll
-    [IR::OP_WAVE_ANY] = static_cast<spv::Op>(335),    // OpGroupNonUniformAny
-    [IR::OP_WAVE_BALLOT] = static_cast<spv::Op>(333), // OpGroupNonUniformBallot
-    [IR::OP_WAVE_READ_FIRST] =
-        static_cast<spv::Op>(339), // OpGroupNonUniformBroadcastFirst
-    [IR::OP_WAVE_READ_LANE] =
-        static_cast<spv::Op>(337),                 // OpGroupNonUniformBroadcast
-    [IR::OP_WAVE_SUM] = static_cast<spv::Op>(349), // OpGroupNonUniformIAdd
-    [IR::OP_WAVE_MUL] = static_cast<spv::Op>(353), // OpGroupNonUniformIMul
-};
+    // ========== Wave/SIMD/Subgroup Operations ==========
+    table[IR::OP_WAVE_MIN] = static_cast<spv::Op>(358);
+    table[IR::OP_WAVE_MAX] = static_cast<spv::Op>(359);
+    table[IR::OP_WAVE_ALL] = static_cast<spv::Op>(334);
+    table[IR::OP_WAVE_ANY] = static_cast<spv::Op>(335);
+    table[IR::OP_WAVE_BALLOT] = static_cast<spv::Op>(333);
+    table[IR::OP_WAVE_READ_FIRST] = static_cast<spv::Op>(339);
+    table[IR::OP_WAVE_READ_LANE] = static_cast<spv::Op>(337);
+    table[IR::OP_WAVE_SUM] = static_cast<spv::Op>(349);
+    table[IR::OP_WAVE_MUL] = static_cast<spv::Op>(353);
+
+    return table;
+}
+
+static constexpr auto IR_TO_SPV_OP_TABLE = BuildIrToSpvOpTable();
 
 // A sentinel value to indicate that an IR OpCode does not map to a
 // GLSL.std.450 extended instruction.
@@ -173,76 +176,79 @@ constexpr u32 NO_EXT_INST = 0xFFFFFFFF;
 // This table maps BWSL IR Opcodes to their corresponding GLSL.std.450 enum
 // value. It should only be accessed if the IR_TO_SPV_OP_TABLE entry for the
 // same opcode is `spv::OpExtInst`.
-static constexpr u32 IR_TO_GLSL_STD_450_TABLE[256] = {
-    // Default all to no-op
-    NO_EXT_INST,
+constexpr std::array<u32, 256> BuildIrToGlslStd450Table() {
+    std::array<u32, 256> table{};
+    for (auto& entry : table) entry = NO_EXT_INST;
 
     // ========== Arithmetic (Float) ==========
-    [IR::OP_FABS] = GLSLstd450FAbs,
-    [IR::OP_FMIN] = GLSLstd450FMin,
-    [IR::OP_FMAX] = GLSLstd450FMax,
-    [IR::OP_FCLAMP] = GLSLstd450FClamp,
-    [IR::OP_FLOOR] = GLSLstd450Floor,
-    [IR::OP_CEIL] = GLSLstd450Ceil,
-    [IR::OP_ROUND] = GLSLstd450RoundEven,
-    [IR::OP_FRACT] = GLSLstd450Fract,
+    table[IR::OP_FABS] = GLSLstd450FAbs;
+    table[IR::OP_FMIN] = GLSLstd450FMin;
+    table[IR::OP_FMAX] = GLSLstd450FMax;
+    table[IR::OP_FCLAMP] = GLSLstd450FClamp;
+    table[IR::OP_FLOOR] = GLSLstd450Floor;
+    table[IR::OP_CEIL] = GLSLstd450Ceil;
+    table[IR::OP_ROUND] = GLSLstd450RoundEven;
+    table[IR::OP_FRACT] = GLSLstd450Fract;
 
     // ========== Arithmetic (Integer) ==========
-    [IR::OP_IABS] = GLSLstd450SAbs,
-    [IR::OP_IMIN] = GLSLstd450SMin,
-    [IR::OP_IMAX] = GLSLstd450SMax,
-    [IR::OP_ICLAMP] = GLSLstd450SClamp,
-    [IR::OP_UMIN] = GLSLstd450UMin,
-    [IR::OP_UMAX] = GLSLstd450UMax,
-    [IR::OP_UCLAMP] = GLSLstd450UClamp,
+    table[IR::OP_IABS] = GLSLstd450SAbs;
+    table[IR::OP_IMIN] = GLSLstd450SMin;
+    table[IR::OP_IMAX] = GLSLstd450SMax;
+    table[IR::OP_ICLAMP] = GLSLstd450SClamp;
+    table[IR::OP_UMIN] = GLSLstd450UMin;
+    table[IR::OP_UMAX] = GLSLstd450UMax;
+    table[IR::OP_UCLAMP] = GLSLstd450UClamp;
 
     // ========== Bitwise ==========
-    [IR::OP_CLZ] = GLSLstd450FindUMsb, // Note: FindUMsb gives position, needs
-                                       // conversion for CLZ.
-    [IR::OP_CTZ] = GLSLstd450FindILsb,
+    table[IR::OP_CLZ] = GLSLstd450FindUMsb;
+    table[IR::OP_CTZ] = GLSLstd450FindILsb;
 
     // ========== Type Conversion ==========
-    [IR::OP_SIGN] = GLSLstd450FSign,
+    table[IR::OP_SIGN] = GLSLstd450FSign;
 
     // ========== Math Functions ==========
-    [IR::OP_SQRT] = GLSLstd450Sqrt,
-    [IR::OP_RSQRT] = GLSLstd450InverseSqrt,
-    [IR::OP_POW] = GLSLstd450Pow,
-    [IR::OP_EXP] = GLSLstd450Exp,
-    [IR::OP_EXP2] = GLSLstd450Exp2,
-    [IR::OP_LOG] = GLSLstd450Log,
-    [IR::OP_LOG2] = GLSLstd450Log2,
-    [IR::OP_SIN] = GLSLstd450Sin,
-    [IR::OP_COS] = GLSLstd450Cos,
-    [IR::OP_TAN] = GLSLstd450Tan,
-    [IR::OP_ASIN] = GLSLstd450Asin,
-    [IR::OP_ACOS] = GLSLstd450Acos,
-    [IR::OP_ATAN] = GLSLstd450Atan,
-    [IR::OP_ATAN2] = GLSLstd450Atan2,
-    [IR::OP_SINH] = GLSLstd450Sinh,
-    [IR::OP_COSH] = GLSLstd450Cosh,
+    table[IR::OP_SQRT] = GLSLstd450Sqrt;
+    table[IR::OP_RSQRT] = GLSLstd450InverseSqrt;
+    table[IR::OP_POW] = GLSLstd450Pow;
+    table[IR::OP_EXP] = GLSLstd450Exp;
+    table[IR::OP_EXP2] = GLSLstd450Exp2;
+    table[IR::OP_LOG] = GLSLstd450Log;
+    table[IR::OP_LOG2] = GLSLstd450Log2;
+    table[IR::OP_SIN] = GLSLstd450Sin;
+    table[IR::OP_COS] = GLSLstd450Cos;
+    table[IR::OP_TAN] = GLSLstd450Tan;
+    table[IR::OP_ASIN] = GLSLstd450Asin;
+    table[IR::OP_ACOS] = GLSLstd450Acos;
+    table[IR::OP_ATAN] = GLSLstd450Atan;
+    table[IR::OP_ATAN2] = GLSLstd450Atan2;
+    table[IR::OP_SINH] = GLSLstd450Sinh;
+    table[IR::OP_COSH] = GLSLstd450Cosh;
 
     // ========== Geometric ==========
-    [IR::OP_CROSS] = GLSLstd450Cross,
-    [IR::OP_LENGTH] = GLSLstd450Length,
-    [IR::OP_NORMALIZE] = GLSLstd450Normalize,
-    [IR::OP_DISTANCE] = GLSLstd450Distance,
-    [IR::OP_REFLECT] = GLSLstd450Reflect,
-    [IR::OP_REFRACT] = GLSLstd450Refract,
-    [IR::OP_FACEFORWARD] = GLSLstd450FaceForward,
+    table[IR::OP_CROSS] = GLSLstd450Cross;
+    table[IR::OP_LENGTH] = GLSLstd450Length;
+    table[IR::OP_NORMALIZE] = GLSLstd450Normalize;
+    table[IR::OP_DISTANCE] = GLSLstd450Distance;
+    table[IR::OP_REFLECT] = GLSLstd450Reflect;
+    table[IR::OP_REFRACT] = GLSLstd450Refract;
+    table[IR::OP_FACEFORWARD] = GLSLstd450FaceForward;
 
     // ========== Matrix ==========
-    [IR::OP_MAT_INVERSE] = GLSLstd450MatrixInverse,
-    [IR::OP_MAT_DET] = GLSLstd450Determinant,
+    table[IR::OP_MAT_INVERSE] = GLSLstd450MatrixInverse;
+    table[IR::OP_MAT_DET] = GLSLstd450Determinant;
 
     // ========== Interpolation ==========
-    [IR::OP_LERP] = GLSLstd450FMix,
-    [IR::OP_SMOOTHSTEP] = GLSLstd450SmoothStep,
-    [IR::OP_STEP] = GLSLstd450Step,
-    [IR::OP_SATURATE] = GLSLstd450FClamp, // Special case: emit with (x, 0, 1)
-    [IR::OP_DEGREES] = GLSLstd450Degrees,
-    [IR::OP_RADIANS] = GLSLstd450Radians,
-};
+    table[IR::OP_LERP] = GLSLstd450FMix;
+    table[IR::OP_SMOOTHSTEP] = GLSLstd450SmoothStep;
+    table[IR::OP_STEP] = GLSLstd450Step;
+    table[IR::OP_SATURATE] = GLSLstd450FClamp;
+    table[IR::OP_DEGREES] = GLSLstd450Degrees;
+    table[IR::OP_RADIANS] = GLSLstd450Radians;
+
+    return table;
+}
+
+static constexpr auto IR_TO_GLSL_STD_450_TABLE = BuildIrToGlslStd450Table();
 
 // ============= Initialization =============
 void SPIRVBuilder::Initialize(BWSL_Arena *arena, IR::IRProgram *ir,

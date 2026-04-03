@@ -3,6 +3,7 @@
 #include "bwsl_defs.h"
 #include "bwsl_ir_gen.h"
 #include "bwsl_utils.h"  // For Utils::HashStr
+#include <bit>
 
 namespace BWSL {
 
@@ -81,14 +82,14 @@ struct IRAnalysis {
     void Set(CapabilityFlags cap) { capabilityFlags |= cap; }
     
     // Resource counts (derived from popcount of masks)
-    u32 UniformCount() const { return __builtin_popcount(usedUniformMask); }
-    u32 TextureCount() const { return __builtin_popcount(usedTextureMask); }
-    u32 SamplerCount() const { return __builtin_popcount(usedSamplerMask); }
-    u32 StorageBufferCount() const { return __builtin_popcount(usedStorageBufferMask); }
-    u32 StorageImageCount() const { return __builtin_popcount(usedStorageImageMask); }
-    u32 AttributeCount() const { return __builtin_popcount(usedAttributeMask); }
-    u32 OutputCount() const { return __builtin_popcount(usedOutputMask); }
-    u32 InputCount() const { return __builtin_popcount(usedInputMask); }
+    u32 UniformCount() const { return static_cast<u32>(std::popcount(usedUniformMask)); }
+    u32 TextureCount() const { return static_cast<u32>(std::popcount(usedTextureMask)); }
+    u32 SamplerCount() const { return static_cast<u32>(std::popcount(usedSamplerMask)); }
+    u32 StorageBufferCount() const { return static_cast<u32>(std::popcount(usedStorageBufferMask)); }
+    u32 StorageImageCount() const { return static_cast<u32>(std::popcount(usedStorageImageMask)); }
+    u32 AttributeCount() const { return static_cast<u32>(std::popcount(usedAttributeMask)); }
+    u32 OutputCount() const { return static_cast<u32>(std::popcount(usedOutputMask)); }
+    u32 InputCount() const { return static_cast<u32>(std::popcount(usedInputMask)); }
     
     // Iteration helpers - get binding index from mask
     // Returns next set bit index starting from 'start', or 32 if none
@@ -96,7 +97,7 @@ struct IRAnalysis {
         if (start >= 32) return 32;
         u32 shifted = mask >> start;
         if (shifted == 0) return 32;
-        return start + __builtin_ctz(shifted);
+        return start + static_cast<u32>(std::countr_zero(shifted));
     }
 };
 
@@ -151,4 +152,3 @@ void AnalyzeIR(IRAnalysis* analysis, const IR::IRProgram* ir);
 u32 OutputHashToSlot(u32 nameHash);
 
 } // namespace BWSL
-
