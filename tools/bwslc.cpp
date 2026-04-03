@@ -317,7 +317,12 @@ bool WriteTextFile(const std::string& path, const std::string& content) {
 }
 
 std::string RunCommand(const std::string& cmd) {
-    FILE* pipe = popen(cmd.c_str(), "r");
+    FILE* pipe = nullptr;
+#if defined(_WIN32)
+    pipe = _popen(cmd.c_str(), "r");
+#else
+    pipe = popen(cmd.c_str(), "r");
+#endif
     if (!pipe) return "";
 
     char buffer[512];
@@ -326,7 +331,11 @@ std::string RunCommand(const std::string& cmd) {
         result += buffer;
     }
 
+#if defined(_WIN32)
+    _pclose(pipe);
+#else
     pclose(pipe);
+#endif
     return result;
 }
 
