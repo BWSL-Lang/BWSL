@@ -200,24 +200,23 @@ with open(path, "r", encoding="utf-8") as f:
 
 ir = data.get("ir", "")
 spirv = data.get("spirv_dis", "")
-if "OpLogicalAnd" in spirv:
-    sys.exit(0)
-
-spirv_unavailable = (
-    not spirv.strip()
-    or "command not found" in spirv
-    or "not recognized as an internal or external command" in spirv
+has_spirv_disassembly = any(
+    marker in spirv
+    for marker in ("OpCapability", "OpMemoryModel", "OpEntryPoint", "OpFunction")
 )
 
-if spirv_unavailable:
-    and_match = re.search(r"\bAND\s+(r\d+)\b", ir)
-    branch_match = re.search(r"\bBRANCH\s+.*\b(r\d+)\b", ir)
-    if and_match and branch_match and and_match.group(1) == branch_match.group(1):
+if has_spirv_disassembly:
+    if "OpLogicalAnd" in spirv:
         sys.exit(0)
-    print("Missing return guard AND->BRANCH pattern in IR fallback")
+    print("Missing return guard logical AND in SPIR-V")
     sys.exit(1)
 
-print("Missing return guard logical AND in SPIR-V")
+and_match = re.search(r"\bAND\s+(r\d+)\s+<-", ir)
+branch_match = re.search(r"\bBRANCH\s+(r\d+)\s+\? ->", ir)
+if and_match and branch_match and and_match.group(1) == branch_match.group(1):
+    sys.exit(0)
+
+print("Missing return guard AND->BRANCH pattern in IR fallback")
 sys.exit(1)
 PY
             if [ $? -ne 0 ]; then
