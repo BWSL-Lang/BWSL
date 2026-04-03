@@ -233,8 +233,12 @@ def main() -> int:
         )
 
         if result.returncode != 0:
+            error_text = result.stdout.strip()
+            if not error_text:
+                unsigned_code = result.returncode & 0xFFFFFFFF
+                error_text = f"process exited with code {result.returncode} (0x{unsigned_code:08X})"
             print(f"[{RED}FAIL{NC}] {test_name}")
-            print(f"       Error: {result.stdout.strip()}")
+            print(f"       Error: {error_text}")
             failed += 1
             continue
 

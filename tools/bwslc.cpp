@@ -321,7 +321,16 @@ std::string BuildOutputBasePath(const std::string& outputDir, const std::string&
 }
 
 std::string GetTempSpirvPath() {
-    return (fs::temp_directory_path() / "bwslc_temp.spv").string();
+    std::error_code ec;
+    fs::path tempDir = fs::temp_directory_path(ec);
+    if (ec || tempDir.empty()) {
+        ec.clear();
+        tempDir = fs::current_path(ec);
+    }
+    if (ec || tempDir.empty()) {
+        tempDir = ".";
+    }
+    return (tempDir / "bwslc_temp.spv").string();
 }
 
 std::string RunCommand(const std::string& cmd) {
@@ -1313,6 +1322,10 @@ CompileResult CompileShaderStage(
 // ============= Main Entry Point =============
 
 int main(int argc, char* argv[]) {
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+
+    try {
     CompilerConfig config;
 
     // Parse command line arguments
@@ -2227,4 +2240,11 @@ int main(int argc, char* argv[]) {
     }
 
     return errorCount > 0 ? 1 : 0;
+    } catch (const std::exception& e) {
+        fprintf(stderr, "Unhandled exception: %s\n", e.what());
+        return 1;
+    } catch (...) {
+        fprintf(stderr, "Unhandled unknown exception\n");
+        return 1;
+    }
 }
