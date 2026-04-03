@@ -227,8 +227,8 @@ void PrintUsage(const char* programName) {
     printf("  %s shader.bwsl -config render.rcfg -gles  # Use render config with WebGL output\n", programName);
 }
 
-std::string ReadFile(const std::string& path) {
-    std::ifstream file(path);
+std::string ReadFile(const fs::path& path) {
+    std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) {
         return "";
     }
@@ -298,7 +298,7 @@ void PrintErrorWithContext(const ParseError& err, const std::vector<std::string>
     fprintf(stderr, "  └─\n");
 }
 
-bool WriteBinaryFile(const std::string& path, const std::vector<u32>& data) {
+bool WriteBinaryFile(const fs::path& path, const std::vector<u32>& data) {
     std::ofstream file(path, std::ios::binary);
     if (!file.is_open()) {
         return false;
@@ -307,13 +307,21 @@ bool WriteBinaryFile(const std::string& path, const std::vector<u32>& data) {
     return file.good();
 }
 
-bool WriteTextFile(const std::string& path, const std::string& content) {
+bool WriteTextFile(const fs::path& path, const std::string& content) {
     std::ofstream file(path);
     if (!file.is_open()) {
         return false;
     }
     file << content;
     return file.good();
+}
+
+std::string BuildOutputBasePath(const std::string& outputDir, const std::string& stem) {
+    return (fs::path(outputDir) / stem).string();
+}
+
+std::string GetTempSpirvPath() {
+    return (fs::temp_directory_path() / "bwslc_temp.spv").string();
 }
 
 std::string RunCommand(const std::string& cmd) {
@@ -1575,10 +1583,10 @@ int main(int argc, char* argv[]) {
                 // Record timing for this shader
                 timing.shaderTimings.push_back({passName + "_vert", result.timing});
                 ShaderTiming& shaderTime = timing.shaderTimings.back().second;
-                std::string outBase = config.outputDir + "/" + baseName + "_" + passName + "_vert";
+                std::string outBase = BuildOutputBasePath(config.outputDir, baseName + "_" + passName + "_vert");
 
                 // Always write SPIR-V (to temp if not requested as output)
-                std::string spvPath = config.outputSpirv ? (outBase + ".spv") : "/tmp/bwslc_temp.spv";
+                std::string spvPath = config.outputSpirv ? (outBase + ".spv") : GetTempSpirvPath();
                 if (WriteBinaryFile(spvPath, result.spirv)) {
                     if (config.outputSpirv) {
                         printf("    -> %s\n", spvPath.c_str());
@@ -1841,10 +1849,10 @@ int main(int argc, char* argv[]) {
                 // Record timing for this shader
                 timing.shaderTimings.push_back({passName + "_frag", result.timing});
                 ShaderTiming& shaderTime = timing.shaderTimings.back().second;
-                std::string outBase = config.outputDir + "/" + baseName + "_" + passName + "_frag";
+                std::string outBase = BuildOutputBasePath(config.outputDir, baseName + "_" + passName + "_frag");
 
                 // Always write SPIR-V (to temp if not requested as output)
-                std::string spvPath = config.outputSpirv ? (outBase + ".spv") : "/tmp/bwslc_temp.spv";
+                std::string spvPath = config.outputSpirv ? (outBase + ".spv") : GetTempSpirvPath();
                 if (WriteBinaryFile(spvPath, result.spirv)) {
                     if (config.outputSpirv) {
                         printf("    -> %s\n", spvPath.c_str());
@@ -2060,10 +2068,10 @@ int main(int argc, char* argv[]) {
                 // Record timing for this shader
                 timing.shaderTimings.push_back({passName + "_comp", result.timing});
                 ShaderTiming& shaderTime = timing.shaderTimings.back().second;
-                std::string outBase = config.outputDir + "/" + baseName + "_" + passName + "_comp";
+                std::string outBase = BuildOutputBasePath(config.outputDir, baseName + "_" + passName + "_comp");
 
                 // Always write SPIR-V (to temp if not requested as output)
-                std::string spvPath = config.outputSpirv ? (outBase + ".spv") : "/tmp/bwslc_temp.spv";
+                std::string spvPath = config.outputSpirv ? (outBase + ".spv") : GetTempSpirvPath();
                 if (WriteBinaryFile(spvPath, result.spirv)) {
                     if (config.outputSpirv) {
                         printf("    -> %s\n", spvPath.c_str());
