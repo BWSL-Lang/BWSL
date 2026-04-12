@@ -1,0 +1,618 @@
+// ============================================
+// Character Pipeline - Skinned PBR Rendering
+// Based on World.bwsl with GPU skinning added
+// ============================================
+pipeline Character {
+
+import Math
+import Compression
+import Color
+import PBR
+
+// ============================================
+// Per-Draw Metadata Structure
+// ============================================
+struct DrawMetadata {
+    uint2 pipelineState    // void* placeholder (8 bytes)
+    uint sectionId
+    uint transformIndex
+    uint materialIndex
+    float morphStrength
+    float morphCenterY
+    float morphHalfHeight
+}
+
+// GPU Material Data structure (160 bytes, matches C++ GPUMaterialData)
+struct GPUMaterialData {
+    // Texture array indices (-1 = no texture, use scalar fallback)
+    int albedoTextureIndex
+    int normalTextureIndex
+    int roughnessTextureIndex
+    int metallicTextureIndex
+    int aoTextureIndex
+    int heightTextureIndex
+    int emissiveTextureIndex
+    int skinMaskTextureIndex
+    int thicknessTextureIndex
+    int sssLutTextureIndex
+    uint flags
+    uint reservedFlags0
+
+    // Base color (sRGB, alpha for transparency)
+    float4 baseColor
+
+    // Emissive color (w unused)
+    float4 emissiveColor
+
+    // Character skin controls (linear)
+    float4 skinTint
+    float4 subsurfaceTint
+
+    // Scalar PBR values
+    float roughnessValue
+    float metallicValue
+    float aoValue
+    float heightScale
+
+    float skinScatterStrength
+    float skinRoughnessBias
+    uint skinVariationSeed
+    float skinMaskStrength
+
+    // UV transform
+    float2 uvScale
+    float2 uvOffset
+}
+
+// Material flag constants
+const uint MAT_HAS_ALBEDO    = 0x01u;
+const uint MAT_HAS_NORMAL    = 0x02u;
+const uint MAT_HAS_ROUGHNESS = 0x04u;
+const uint MAT_HAS_METALLIC  = 0x08u;
+const uint MAT_HAS_AO        = 0x10u;
+const uint MAT_HAS_SKIN_MASK = 0x400u;
+const uint MAT_HAS_THICKNESS = 0x800u;
+const uint MAT_HAS_SSS_LUT  = 0x1000u;
+
+// ============================================
+// Light Types (matches Aurora::LightTypes)
+// ============================================
+const uint LIGHT_POINT       = 0u;
+const uint LIGHT_DIRECTIONAL = 1u;
+const uint LIGHT_LINE        = 2u;
+const uint LIGHT_SPOT        = 3u;
+const uint LIGHT_PROBE       = 4u;
+const uint LIGHT_AREA        = 5u;
+
+const uint MAX_LIGHTS = 16u;
+const uint MAX_POINT_SHADOW_LIGHTS = 2u;
+
+// ============================================
+// Light Sources SoA (matches Aurora::LightSourcesSoA)
+// ============================================
+struct LightSourcesSoA {
+    float3[16] positions
+    float3[16] directions
+    float3[16] colors
+    float[16] intensities
+    float[16] constantAttenuations
+    float[16] linearAttenuations
+    float[16] quadraticAttenuations
+    float[16] innerCutoffs
+    float[16] outerCutoffs
+    float[16] lengths
+    float[16] radii
+    uint[16] types
+    uint version
+}
+
+// ============================================
+// Shadow System Structures
+// ============================================
+struct CascadeData {
+    mat4 viewProjMatrix
+    float splitDistance
+    float _pad1
+    float _pad2
+    float _pad3
+    float4 _gpuArrayPadding
+}
+
+struct ShadowData {
+    CascadeData[4] cascades
+    float4 lightDirection
+    uint numCascades
+    uint shadowMapSize
+    float cascadeSplitLambda
+    float shadowBias
+    float shadowSlopeBias
+    float shadowFilterRadius
+    float2 _padding
+}
+
+// ============================================
+// Vertex Attributes (with skinning)
+// ============================================
+attributes {
+    position: float3
+    normal: float3
+    texcoord: float2
+    tangent: float3
+    bitangent: float3
+    boneIndices: int4      // Up to 4 bone influences per vertex
+    boneWeights: float4    // Weights for each bone (normalized to sum to 1.0)
+}
+
+// ============================================
+// Shadow Sampling Functions
+// ============================================
+
+// Sample shadow map with PCF filtering
+sampleShadowPCF :: (float3 shadowCoords, uint cascadeIndex, float bias) -> float {
+    float shadow = 0.0;
+    float texelSize = 1.0 / float(resources.shadowData.shadowMapSize);
+    float filterRadius = resources.shadowData.shadowFilterRadius;
+
+    // 3x3 PCF kernel
+    for (int x = -1; x <= 1; x = x + 1) {
+        for (int y = -1; y <= 1; y = y + 1) {
+            float2 offset = float2(float(x), float(y)) * texelSize * filterRadius;
+            float3 samplePos = float3(shadowCoords.xy + offset, float(cascadeIndex));
+            float shadowDepth = sample(resources.shadowMapArray, resources.shadowSampler, samplePos).r;
+            shadow = shadow + ((shadowCoords.z + bias < shadowDepth) ? 1.0 : 0.0);
+        }
+    }
+    return shadow / 9.0;
+}
+
+// Find cascade and sample CSM
+sampleCascadedShadow :: (float3 worldPos, float3 N, float3 L) -> float {
+    float4 viewPos = resources.viewMatrix * float4(worldPos, 1.0);
+    float viewDepth = -viewPos.z;
+    ShadowData shadow = resources.shadowData;
+
+    if (shadow.numCascades == 0u) {
+        return 1.0;
+    }
+
+    uint cascadeIndex = shadow.numCascades - 1u;
+    for (uint j = 0u; j < shadow.numCascades; j = j + 1u) {
+        if (viewDepth < shadow.cascades[j].splitDistance) {
+            cascadeIndex = j;
+            break;
+        }
+    }
+
+    float NdotL = dot(N, L);
+    float normalOffsetScale = clamp(1.0 - NdotL, 0.0, 1.0) * 0.05;
+    float3 offsetWorldPos = worldPos + N * normalOffsetScale;
+
+    float4 shadowPos = shadow.cascades[cascadeIndex].viewProjMatrix * float4(offsetWorldPos, 1.0);
+    shadowPos.xyz = shadowPos.xyz / shadowPos.w;
+
+    float3 shadowCoords = float3(
+        shadowPos.x * 0.5 + 0.5,
+        -shadowPos.y * 0.5 + 0.5,
+        shadowPos.z
+    );
+
+    if (shadowCoords.x < 0.0 || shadowCoords.x > 1.0 ||
+        shadowCoords.y < 0.0 || shadowCoords.y > 1.0 ||
+        shadowCoords.z < 0.0 || shadowCoords.z > 1.0) {
+        return 1.0;
+    }
+
+    float bias = max(shadow.shadowBias * (1.0 - dot(N, L)), shadow.shadowBias);
+    bias = bias * (1.0 + float(cascadeIndex) * 0.5);
+
+    return sampleShadowPCF(shadowCoords, cascadeIndex, bias);
+}
+
+// Sample point light shadow from cubemap
+samplePointShadow :: (float3 worldPos, float3 lightPos, uint lightIndex) -> float {
+    float3 fragToLight = worldPos - lightPos;
+    float currentDepth = length(fragToLight);
+    float farPlane = resources.pointShadowFarPlane;
+    float bias = resources.shadowData.shadowBias * currentDepth;
+
+    float closestDepthNorm;
+    if (lightIndex == 0u) {
+        closestDepthNorm = sample(resources.pointShadowCube0, resources.shadowSampler, fragToLight).r;
+    } else {
+        closestDepthNorm = sample(resources.pointShadowCube1, resources.shadowSampler, fragToLight).r;
+    }
+
+    float closestDepth = closestDepthNorm * farPlane;
+    return (currentDepth - bias < closestDepth) ? 1.0 : 0.0;
+}
+
+// ============================================
+// Shadow Pass - Depth Only (with skinning)
+// ============================================
+pass "ShadowPass" {
+    use attributes { position, boneIndices, boneWeights }
+
+    vertex {
+        uint drawIndex = input.instance_id;
+        DrawMetadata meta = resources.drawMetadata[drawIndex];
+        mat4 modelMatrix = resources.transformBuffer[meta.transformIndex];
+
+        float3 pos = attributes.position;
+
+        float morphStrength = meta.morphStrength;
+        if (abs(morphStrength) > 0.0001) {
+            float halfHeight = max(meta.morphHalfHeight, 0.001);
+            float t = (pos.y - meta.morphCenterY) / halfHeight;
+            float falloff = clamp(1.0 - abs(t), 0.0, 1.0);
+            float scaleXZ = max(0.1, 1.0 + morphStrength * falloff);
+            pos.x = pos.x * scaleXZ;
+            pos.z = pos.z * scaleXZ;
+        }
+
+        // Apply skinning - blend transformed positions directly
+        float4 pos4 = float4(pos, 1.0);
+        int4 boneIdx = attributes.boneIndices;
+        float4 boneWgt = attributes.boneWeights;
+
+        float4 skinnedPos = resources.boneMatrices[boneIdx.x] * pos4 * boneWgt.x;
+        skinnedPos = skinnedPos + resources.boneMatrices[boneIdx.y] * pos4 * boneWgt.y;
+        skinnedPos = skinnedPos + resources.boneMatrices[boneIdx.z] * pos4 * boneWgt.z;
+        skinnedPos = skinnedPos + resources.boneMatrices[boneIdx.w] * pos4 * boneWgt.w;
+
+        float4 worldPos = modelMatrix * skinnedPos;
+        output.position = resources.lightViewProjMatrix * worldPos;
+    }
+
+    fragment = null
+}
+
+// ============================================
+// Opaque Pass - PBR Rendering (with skinning)
+// ============================================
+pass "OpaquePass" {
+    use attributes { position, normal, texcoord, tangent, bitangent, boneIndices, boneWeights }
+
+    vertex {
+        uint drawIndex = input.instance_id;
+        DrawMetadata meta = resources.drawMetadata[drawIndex];
+        mat4 modelMatrix = resources.transformBuffer[meta.transformIndex];
+
+        float3 pos = attributes.position;
+        float3 norm = attributes.normal;
+        float2 uv = attributes.texcoord;
+        float3 tang = attributes.tangent;
+        float3 bitang = attributes.bitangent;
+
+        float morphStrength = meta.morphStrength;
+        if (abs(morphStrength) > 0.0001) {
+            float halfHeight = max(meta.morphHalfHeight, 0.001);
+            float t = (pos.y - meta.morphCenterY) / halfHeight;
+            float falloff = clamp(1.0 - abs(t), 0.0, 1.0);
+            float scaleXZ = max(0.1, 1.0 + morphStrength * falloff);
+            float invScaleXZ = 1.0 / scaleXZ;
+
+            pos.x = pos.x * scaleXZ;
+            pos.z = pos.z * scaleXZ;
+            norm.x = norm.x * invScaleXZ;
+            norm.z = norm.z * invScaleXZ;
+            tang.x = tang.x * invScaleXZ;
+            tang.z = tang.z * invScaleXZ;
+            bitang.x = bitang.x * invScaleXZ;
+            bitang.z = bitang.z * invScaleXZ;
+        }
+
+        // Apply skinning - blend transformed positions/normals directly
+        int4 boneIdx = attributes.boneIndices;
+        float4 boneWgt = attributes.boneWeights;
+
+        float4 pos4 = float4(pos, 1.0);
+        float4 norm4 = float4(norm, 0.0);
+        float4 tang4 = float4(tang, 0.0);
+        float4 bitang4 = float4(bitang, 0.0);
+
+        // Position skinning
+        float4 skinnedPos = resources.boneMatrices[boneIdx.x] * pos4 * boneWgt.x;
+        skinnedPos = skinnedPos + resources.boneMatrices[boneIdx.y] * pos4 * boneWgt.y;
+        skinnedPos = skinnedPos + resources.boneMatrices[boneIdx.z] * pos4 * boneWgt.z;
+        skinnedPos = skinnedPos + resources.boneMatrices[boneIdx.w] * pos4 * boneWgt.w;
+
+        // Normal skinning
+        float4 skinnedNorm = resources.boneMatrices[boneIdx.x] * norm4 * boneWgt.x;
+        skinnedNorm = skinnedNorm + resources.boneMatrices[boneIdx.y] * norm4 * boneWgt.y;
+        skinnedNorm = skinnedNorm + resources.boneMatrices[boneIdx.z] * norm4 * boneWgt.z;
+        skinnedNorm = skinnedNorm + resources.boneMatrices[boneIdx.w] * norm4 * boneWgt.w;
+
+        // Tangent skinning
+        float4 skinnedTang = resources.boneMatrices[boneIdx.x] * tang4 * boneWgt.x;
+        skinnedTang = skinnedTang + resources.boneMatrices[boneIdx.y] * tang4 * boneWgt.y;
+        skinnedTang = skinnedTang + resources.boneMatrices[boneIdx.z] * tang4 * boneWgt.z;
+        skinnedTang = skinnedTang + resources.boneMatrices[boneIdx.w] * tang4 * boneWgt.w;
+
+        // Bitangent skinning
+        float4 skinnedBitang = resources.boneMatrices[boneIdx.x] * bitang4 * boneWgt.x;
+        skinnedBitang = skinnedBitang + resources.boneMatrices[boneIdx.y] * bitang4 * boneWgt.y;
+        skinnedBitang = skinnedBitang + resources.boneMatrices[boneIdx.z] * bitang4 * boneWgt.z;
+        skinnedBitang = skinnedBitang + resources.boneMatrices[boneIdx.w] * bitang4 * boneWgt.w;
+
+        // Transform to world space
+        output.worldPos = (modelMatrix * skinnedPos).xyz;
+        output.normal = normalize((modelMatrix * float4(skinnedNorm.xyz, 0.0)).xyz);
+        output.tangent = normalize((modelMatrix * float4(skinnedTang.xyz, 0.0)).xyz);
+        output.bitangent = normalize((modelMatrix * float4(skinnedBitang.xyz, 0.0)).xyz);
+        output.texCoord = uv;
+        output.materialIndex = meta.materialIndex;
+
+        float4 worldPos4 = float4(output.worldPos, 1.0);
+        output.position = resources.projectionMatrix * resources.viewMatrix * worldPos4;
+        output.previousPosition = resources.previousViewProjMatrix * worldPos4;
+        output.position.xy = output.position.xy + resources.taaJitter * output.position.w;
+    }
+
+    fragment {
+        // Look up material data from buffer
+        GPUMaterialData mat = resources.materialBuffer[input.materialIndex];
+
+        // Apply UV transform from material
+        float2 uv = input.texCoord * mat.uvScale + mat.uvOffset;
+
+        // Get material flags
+        uint flags = mat.flags;
+
+        // Sample albedo
+        float3 albedo;
+        bool hasAlbedoTex = (flags & MAT_HAS_ALBEDO) > 0u;
+        if (hasAlbedoTex) {
+            float4 albedoSample = sample(resources.materialTextureArray, resources.materialSampler, float3(uv, float(mat.albedoTextureIndex)));
+            albedo = Color::sRGBToLinear(albedoSample.rgb);
+        } else {
+            albedo = Color::sRGBToLinear(mat.baseColor.rgb);
+        }
+
+        // Sample normal
+        float3 tangentNormal;
+        bool hasNormalTex = (flags & MAT_HAS_NORMAL) > 0u;
+        if (hasNormalTex) {
+            tangentNormal = sample(resources.materialTextureArray, resources.materialSampler, float3(uv, float(mat.normalTextureIndex))).xyz * 2.0 - 1.0;
+        } else {
+            tangentNormal = float3(0.0, 0.0, 1.0);
+        }
+
+        // Sample roughness
+        float roughness;
+        bool hasRoughnessTex = (flags & MAT_HAS_ROUGHNESS) > 0u;
+        if (hasRoughnessTex) {
+            roughness = sample(resources.materialTextureArray, resources.materialSampler, float3(uv, float(mat.roughnessTextureIndex))).r;
+        } else {
+            roughness = mat.roughnessValue;
+        }
+
+        // Sample metallic
+        float metallic;
+        bool hasMetallicTex = (flags & MAT_HAS_METALLIC) > 0u;
+        if (hasMetallicTex) {
+            metallic = sample(resources.materialTextureArray, resources.materialSampler, float3(uv, float(mat.metallicTextureIndex))).r;
+        } else {
+            metallic = mat.metallicValue;
+        }
+
+        // Sample AO
+        float ao;
+        bool hasAOTex = (flags & MAT_HAS_AO) > 0u;
+        if (hasAOTex) {
+            ao = sample(resources.materialTextureArray, resources.materialSampler, float3(uv, float(mat.aoTextureIndex))).r;
+        } else {
+            ao = mat.aoValue;
+        }
+
+        float skinMask = 0.0;
+        bool hasSkinMaskTex = (flags & MAT_HAS_SKIN_MASK) > 0u;
+        if (hasSkinMaskTex) {
+            skinMask = sample(resources.materialTextureArray, resources.materialSampler, float3(uv, float(mat.skinMaskTextureIndex))).r;
+            skinMask = clamp(skinMask * mat.skinMaskStrength, 0.0, 1.0);
+        }
+
+        // Sample thickness for subsurface transmittance
+        float thickness = 0.0;
+        bool hasThicknessTex = (flags & MAT_HAS_THICKNESS) > 0u;
+        if (hasThicknessTex) {
+            thickness = sample(resources.materialTextureArray, resources.materialSampler, float3(uv, float(mat.thicknessTextureIndex))).r;
+        }
+
+        bool hasSkinEffect = skinMask > 0.001;
+        if (hasSkinEffect) {
+            float seed = float(mat.skinVariationSeed & 65535u);
+            float noise = fract(
+                sin(dot(
+                    uv * (11.37 + seed * 0.00013),
+                    float2(12.9898 + seed * 0.0011, 78.233 + seed * 0.0017))) * 43758.5453);
+            float variation = 0.94 + (noise - 0.5) * 0.12;
+            float3 skinAlbedo = albedo * mat.skinTint.rgb * variation;
+            albedo = albedo + (skinAlbedo - albedo) * skinMask;
+            roughness = clamp(roughness + mat.skinRoughnessBias * skinMask, 0.03, 1.0);
+        }
+
+        // Apply TBN transform
+        float3 N = normalize(
+            input.tangent * tangentNormal.x +
+            input.bitangent * tangentNormal.y +
+            input.normal * tangentNormal.z
+        );
+        float3 V = normalize(resources.cameraPosition - input.worldPos);
+
+        // Screen-space curvature estimation for pre-integrated SSS
+        float curvature = 0.0;
+        bool hasSssLut = (flags & MAT_HAS_SSS_LUT) > 0u;
+        bool useSkinShading = hasSkinEffect && hasSssLut;
+        if (useSkinShading) {
+            float3 dndu = ddx(N);
+            float3 dndv = ddy(N);
+            float worldScale = max(length(fwidth(input.worldPos)), 0.0001);
+            curvature = clamp(length(dndu + dndv) / worldScale, 0.0, 1.0);
+        }
+
+        // Build PBR material struct
+        PBR::PBRMaterial pbrMat;
+        pbrMat.albedo = albedo;
+        pbrMat.roughness = roughness;
+        pbrMat.metallic = metallic;
+        pbrMat.ao = ao;
+
+        // Get light count
+        uint numLights = resources.lightCount;
+
+        // Accumulated direct lighting
+        float3 Lo = float3(0.0);
+        uint pointLightIndex = 0u;
+
+        // Loop over all lights
+        for (uint i = 0u; i < numLights; i = i + 1u) {
+            uint lightType = resources.lightBuffer.types[i];
+            float3 lightColor = resources.lightBuffer.colors[i];
+            float intensity = resources.lightBuffer.intensities[i];
+
+            float3 L = float3(0.0);
+            float attenuation = 1.0;
+            float shadowFactor = 1.0;
+
+            if (lightType == LIGHT_DIRECTIONAL) {
+                L = normalize(resources.lightBuffer.directions[i]);
+                shadowFactor = sampleCascadedShadow(input.worldPos, N, L);
+            }
+            else if (lightType == LIGHT_POINT) {
+                float3 lightPos = resources.lightBuffer.positions[i];
+                float3 toLight = lightPos - input.worldPos;
+                float dist = length(toLight);
+                L = toLight / dist;
+
+                float c = resources.lightBuffer.constantAttenuations[i];
+                float l = resources.lightBuffer.linearAttenuations[i];
+                float q = resources.lightBuffer.quadraticAttenuations[i];
+                attenuation = 1.0 / (c + l * dist + q * dist * dist);
+
+                if (pointLightIndex < MAX_POINT_SHADOW_LIGHTS) {
+                    shadowFactor = samplePointShadow(input.worldPos, lightPos, pointLightIndex);
+                    pointLightIndex = pointLightIndex + 1u;
+                }
+            }
+            else if (lightType == LIGHT_SPOT) {
+                float3 lightPos = resources.lightBuffer.positions[i];
+                float3 toLight = lightPos - input.worldPos;
+                float dist = length(toLight);
+                L = toLight / dist;
+
+                float3 spotDir = normalize(resources.lightBuffer.directions[i]);
+                float theta = dot(L, spotDir);
+                float inner = resources.lightBuffer.innerCutoffs[i];
+                float outer = resources.lightBuffer.outerCutoffs[i];
+                float epsilon = inner - outer;
+                float spotIntensity = clamp((theta - outer) / epsilon, 0.0, 1.0);
+
+                float c = resources.lightBuffer.constantAttenuations[i];
+                float l = resources.lightBuffer.linearAttenuations[i];
+                float q = resources.lightBuffer.quadraticAttenuations[i];
+                attenuation = spotIntensity / (c + l * dist + q * dist * dist);
+            }
+            else if (lightType == LIGHT_AREA) {
+                float3 lightPos = resources.lightBuffer.positions[i];
+                float3 toLight = lightPos - input.worldPos;
+                float dist = length(toLight);
+                L = toLight / dist;
+
+                float radius = resources.lightBuffer.radii[i];
+                float sinTMax = clamp(radius / dist, 0.0, 1.0);
+                float cosTMax = sqrt(1.0 - sinTMax * sinTMax);
+                float coverage = 1.0 - cosTMax;
+
+                attenuation = coverage / (1.0 + dist * dist);
+            }
+            else if (lightType == LIGHT_LINE) {
+                float3 lineStart = resources.lightBuffer.positions[i];
+                float3 lineDir = normalize(resources.lightBuffer.directions[i]);
+                float lineLength = resources.lightBuffer.lengths[i];
+
+                float3 startToFrag = input.worldPos - lineStart;
+                float t = clamp(dot(startToFrag, lineDir), 0.0, lineLength);
+                float3 closestPoint = lineStart + lineDir * t;
+
+                float3 toLight = closestPoint - input.worldPos;
+                float dist = length(toLight);
+                L = toLight / max(dist, 0.001);
+
+                attenuation = 1.0 / (1.0 + dist * dist);
+            }
+            else {
+                L = float3(0.0, 1.0, 0.0);
+            }
+
+            float3 radiance = lightColor * intensity * attenuation * shadowFactor;
+
+            // Standard PBR lighting (always computed)
+            float3 lightContrib = PBR::calculateDirectLighting(pbrMat, N, V, L, radiance);
+
+            // Skin-aware lighting: blend SSS diffuse + transmittance over PBR
+            if (useSkinShading) {
+                float NdotL_raw = dot(N, L);
+
+                // Pre-integrated SSS diffuse (replaces Lambertian for skin)
+                float2 sssUV = float2(NdotL_raw * 0.5 + 0.5, curvature);
+                float3 sssDiffuse = sample(resources.materialTextureArray, resources.materialSampler,
+                                           float3(sssUV, float(mat.sssLutTextureIndex))).rgb;
+                float3 skinDiffuse = sssDiffuse * albedo * radiance;
+
+                // Cook-Torrance specular (manual expansion to avoid excess inlining)
+                float3 H = normalize(V + L);
+                float NdotH = max(dot(N, H), 0.0);
+                float NdotV = max(dot(N, V), 0.0);
+                float NdotL_clamped = max(NdotL_raw, 0.0);
+                float VdotH = max(dot(V, H), 0.0);
+                float3 F0 = lerp(float3(0.04), albedo, metallic);
+                float3 F = F0 + (1.0 - F0) * pow(2.0, (-5.55473 * VdotH - 6.98316) * VdotH);
+
+                float alpha = roughness * roughness;
+                float alphaSqr = alpha * alpha;
+                float denom = NdotH * NdotH * (alphaSqr - 1.0) + 1.0;
+                float D = alphaSqr / (Math::PI * denom * denom);
+
+                float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+                float G1 = NdotV / (NdotV * (1.0 - k) + k);
+                float G2 = NdotL_clamped / (NdotL_clamped * (1.0 - k) + k);
+                float G = G1 * G2;
+
+                float3 specNum = D * F * G;
+                float specDenom = 4.0 * NdotV * NdotL_clamped + 0.001;
+                float3 specular = specNum / specDenom;
+                float3 skinSpecular = specular * radiance * NdotL_clamped;
+
+                // Thickness-based transmittance (light through ears/thin areas)
+                float3 H_trans = normalize(L + N * 0.3);
+                float VdotH_trans = pow(clamp(dot(V, -H_trans), 0.0, 1.0), 12.0);
+                float backNdotL = clamp(dot(-N, L), 0.0, 1.0);
+                float transmittance = (VdotH_trans + backNdotL) * thickness;
+                float3 transColor = mat.subsurfaceTint.rgb * transmittance * radiance * 0.15;
+
+                float3 skinResult = skinDiffuse + skinSpecular + transColor;
+                lightContrib = lerp(lightContrib, skinResult, skinMask);
+            }
+            Lo = Lo + lightContrib;
+        }
+
+        // Ambient + subsurface ambient
+        float3 ambient = float3(0.03) * albedo * ao;
+        float3 ambientSSS = mat.subsurfaceTint.rgb * ao * skinMask *
+                            mat.skinScatterStrength * 0.02;
+        float3 finalColor = ambient + Lo + ambientSSS;
+
+        // Tone mapping and gamma correction
+        finalColor = Color::ACESFilm(finalColor);
+        finalColor = Color::linearToSRGB(finalColor);
+
+        output.color = float4(finalColor, 1.0);
+
+        // Velocity output
+        float2 currentNDC = input.position.xy / input.position.w;
+        float2 previousNDC = input.previousPosition.xy / input.previousPosition.w;
+        output.velocity = (currentNDC - previousNDC) * 0.5;
+    }
+}
+
+}

@@ -606,7 +606,7 @@ private:
         
         // --- CFG Construction ---
         Memory::BWEMemoryArena cfgArena;
-        char cfgMem[128 * 1024];
+        char cfgMem[512 * 1024];
         cfgArena.Initialize(cfgMem, sizeof(cfgMem));
         
         CFGBuilder cfgBuilder;

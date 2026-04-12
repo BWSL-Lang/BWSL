@@ -1,48 +1,40 @@
 # BWSL Test Report
 
-Run: `./tests/run_tests.sh`
+Snapshot from a local run of:
 
-Summary: 31 passed, 1 failed, 2 skipped.
+```bash
+python3 tests/run_tests.py
+```
 
-## High (missing or rejected core features)
+on April 9, 2026.
 
-- compute_workgroups: `shared` storage syntax not supported in compute blocks.
+## Summary
 
-## Low (not executed)
+- `129 passed`
+- `0 failed`
+- `2 skipped`
 
-- modules_basic: skipped (module file).
-- modules_structs: skipped (module file).
+## Skipped
 
-## Passed (compiled + validated)
+- `modules_basic`
+- `modules_structs`
 
-- constants_folding
-- control_if_else
-- control_ternary
-- compute_basic
-- edge_cases
-- functions_basic
-- functions_overloading
-- functions_scoping
-- intrinsics_bit
-- intrinsics_exp_trig
-- intrinsics_math
-- loops_for_cstyle
-- loops_range
-- loops_special
-- matrices_intrinsics
-- multipass
-- operators_arithmetic
-- operators_assignment
-- operators_comparison
-- operators_logical
-- operators_unary
-- shader_io
-- ssa_basic
-- ssa_complex
-- ssa_control_flow
-- ssa_loops
-- type_conversions
-- types_basic
-- types_matrices
-- vectors_operations
-- vectors_swizzle
+These are skipped because they are module files, not pipeline entry files. The
+test runner treats files starting with `module` as support files rather than
+standalone compile targets.
+
+## Coverage Highlights
+
+The current regression suite covers:
+
+- graphics passes, multipass pipelines, and render-config-backed resources
+- compute shaders, workgroup sizes, shared memory, barriers, atomics, and wave operations
+- structs, arrays, matrix and vector construction, swizzles, and member access
+- overloads, scoped functions, inline returns, and stage-function selection
+- modules, module-qualified access, and engine-style imported libraries
+- constraint-based generics and type-pattern dispatch
+- enums, flag enums, payload enums, and enum `eval` methods
+- pointer syntax and pointer control flow
+- storage buffers, sampled textures, storage images, and texture writes
+
+For the current state, rerun `python3 tests/run_tests.py`.

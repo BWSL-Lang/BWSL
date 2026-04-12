@@ -104,7 +104,7 @@ endif
 EMCC = emcc
 WASM_COMMON_FLAGS = \
 	-DUSE_SPIRV_CROSS_LIB \
-	-std=c++17 \
+	-std=c++20 \
 	-s WASM=1 \
 	-s MODULARIZE=1 \
 	-s EXPORT_ES6=1 \

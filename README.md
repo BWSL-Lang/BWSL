@@ -1,6 +1,6 @@
 # BWSL - Shader Language Compiler
 
-BWSL (Brawl Shading Language) is a shader language and compiler that generates SPIR-V and cross-compiles to Metal, HLSL, GLSL, and GLSL ES (WebGL).
+BWSL (Brawl Shading Language) is a graphics and compute shader language with a compiler that generates SPIR-V and cross-compiles to Metal, HLSL, GLSL, and GLSL ES (WebGL).
 
 ## Getting Started
 
@@ -13,7 +13,8 @@ git submodule update --init --recursive
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contributor setup, test expectations,
-and pull request guidelines.
+and pull request guidelines. See [CHANGELOG.md](CHANGELOG.md) for notable
+language and tooling changes.
 
 ## Building
 
@@ -103,6 +104,12 @@ On Windows, the repo now also includes `build.bat` and `make.bat`. `build.bat` b
 
 # Compile specific pass or stage
 ./build/bwslc shader.bwsl -pass MainPass -stage fragment
+
+# Compile a compute stage only
+./build/bwslc shader.bwsl -pass ComputePass -stage compute
+
+# Generate GLSL ES directly from BWSL IR
+./build/bwslc shader.bwsl -gles-direct
 ```
 
 ### CLI Options
@@ -113,11 +120,12 @@ On Windows, the repo now also includes `build.bat` and `make.bat`. `build.bat` b
 | `-modules <dir>` | Add module search path (can be used multiple times) |
 | `-config <file>` | Render config file path |
 | `-pass <name>` | Compile specific pass (default: all) |
-| `-stage <name>` | Compile specific stage: vertex, fragment (default: both) |
+| `-stage <name>` | Compile specific stage: vertex, fragment, compute (default: all) |
 | `-metal` | Generate Metal Shading Language output |
 | `-hlsl` | Generate HLSL output |
 | `-glsl` | Generate GLSL output (version 450) |
 | `-gles` / `-webgl` | Generate GLSL ES output (version 300 es) |
+| `-gles-direct` | Generate GLSL ES directly from BWSL IR |
 | `-all` | Generate all output formats |
 | `-v` | Verbose output |
 | `-timing` | Print timing information |
@@ -137,10 +145,11 @@ const bwsl = await initBWSL();
 const version = bwsl.ccall('getVersion', 'string', [], []);
 
 // Compile shader
-const result = bwsl.ccall('compile', 'string', ['string', 'string'], [
-    shaderSource,  // BWSL source code
-    configSource   // Render config (optional, can be empty string)
-]);        
+const result = bwsl.ccall('compile', 'string', ['string', 'string', 'string'], [
+    shaderSource,               // BWSL source code
+    configSource || '',         // Render config source (optional)
+    '-internals -modules ./modules' // Optional flags
+]);
 
 const output = JSON.parse(result);
 if (output.success) {
@@ -148,7 +157,108 @@ if (output.success) {
 } else {
     // output.errors contains error messages
 }
+
+// Get symbols for autocomplete / editor tooling
+const symbolsJson = bwsl.ccall('getSymbols', 'string', ['string', 'string', 'string'], [
+    shaderSource,
+    configSource || '',
+    '-modules ./modules'
+]);
+const symbols = JSON.parse(symbolsJson);
 ```
+
+Supported WASM flags:
+
+- `-internals`
+- `-modules <path>` (repeatable)
+
+See [docs/language.md](docs/language.md) for the language reference and
+[docs/render-config.md](docs/render-config.md) for `.rcfg` syntax and examples.
+
+## Language Overview
+
+BWSL is organized around `pipeline` blocks containing passes, helper declarations, and optional imports. The current language surface includes:
+
+- Graphics and compute passes.
+- Pipeline attributes plus `use attributes { ... }` pass declarations.
+- Attribute decorators such as `@compressed(...)` and `@instance`.
+- `input`, `output`, `attributes`, and `resources` access patterns.
+- Vertex and compute built-ins including `input.vertex_id`, `input.instance_id`, `input.global_id`, `input.local_id`, `input.workgroup_id`, `input.num_workgroups`, and `input.local_index`.
+- Structs, fixed-size arrays, array indexing, and module-qualified custom types.
+- Module files with `module Foo { ... }`, `import Foo`, and `Foo::member` access.
+- Function overloading and pass-scoped helper functions.
+- Constraint-based generic functions such as `constraint FloatVectors = float2 | float3 | float4;`.
+- Type-pattern dispatch in constrained functions.
+- Enums with explicit underlying integer types, flag-style values, payload variants, and `eval` methods.
+- Compile-time control flow and expansion via `eval if`, `eval for`, `eval loop`, and `eval { ... }` blocks.
+- Pointer syntax using `^` for address-of and dereference.
+- Shader-stage composition with `vertex = someStageFunc()`, compile-time ternary stage selection, pass-stage reuse via `"OtherPass".vertex`, and `fragment = null` for depth-only passes.
+- Compute features including workgroup sizes, `shared` memory, `barrier()`, atomics, storage image writes, and wave/subgroup intrinsics.
+
+Current examples for these features live in `tests/`, especially:
+
+- `tests/compute_basic.bwsl`
+- `tests/compute_workgroups.bwsl`
+- `tests/atomic_operations.bwsl`
+- `tests/wave_operations.bwsl`
+- `tests/modules_basic.bwsl`
+- `tests/generics_basic.bwsl`
+- `tests/generics_type_pattern.bwsl`
+- `tests/enums_sumtype_sdf.bwsl`
+- `tests/pointers_basic.bwsl`
+
+### Notes
+
+- In `attributes { ... }`, the first declared attribute must be `position`.
+- Module files are regular `.bwsl` files that begin with `module` instead of `pipeline`.
+- Angle-bracket generic parameter syntax and `where` clauses are not part of the current supported surface. Constraint-based generics are the active form.
+- `eval { ... }` currently expands at parse time into an ordinary block. It supports compile-time locals and compile-time statement expansion, but runtime declarations inside an `eval` block should not currently reuse a visible compile-time name.
+
+## Planned Changes
+
+BWSL's compile-time features are moving toward a more explicit `comptime` model rather than staying as parser-driven conveniences.
+
+Near-term planned work:
+
+- Move `eval { ... }` execution and expansion logic out of the parser and into the compile-time evaluator layer (`bwsl_eval_soa.cpp`, cache code, or a dedicated comptime module).
+- Keep the parser responsible for syntax and AST construction, while a dedicated compile-time expander/interpreter owns statement execution, block scoping, and AST emission.
+- Make compile-time contexts stricter so constructs like `eval if` and `eval { ... }` fail clearly when they depend on runtime data.
+- Support hygienic shadowing and block-local compile-time bindings inside `eval { ... }` without accidental identifier substitution.
+- Extend compile-time evaluation beyond scalar literals toward richer compile-time data and, eventually, compile-time parameters / const-generic style specialization.
+
+## Render Config Overview
+
+External render configuration files (`.rcfg`) define resources, render targets, pass metadata, and compute dispatch details that BWSL shaders access through `resources.*`.
+
+Top-level `.rcfg` entries currently include:
+
+- `pipeline <name>`
+- `pass <name>`
+- `target <name> <format> <viewport|WxH> [array N]`
+- `uniform <name> <type> <binding> <stage>`
+- `texture <name> <binding> [array] [cubemap] [vertex|fragment|both]`
+- `sampler <name> <binding> [vertex|fragment|both]`
+- `buffer <name> <type> <binding> [readonly|readwrite] [vertex|fragment|both]`
+- `image <name> <binding> [readonly|writeonly|readwrite] [compute|fragment|vertex]`
+- `instanced <count>`
+
+Indented pass properties include:
+
+- `type geometry|standard|shadow|fullscreen|postprocess|compute|ui|editor|custom`
+- `color ...`
+- `depth ...`
+- `depends ...`
+- `bind <uniform_name> <target_name>`
+- `dispatch <x> <y> <z>`
+- `pipeline <name>`
+
+Examples:
+
+- `tests/MaterialPreview_min.rcfg`
+- `tests/from_engine/World.rcfg`
+- `tests/texture_write.rcfg`
+
+Full reference: [docs/render-config.md](docs/render-config.md)
 
 ## Example Shader
 

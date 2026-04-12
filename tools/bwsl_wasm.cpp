@@ -97,11 +97,11 @@ static const char* PixelFormatToString(PixelFormat format) {
     }
 }
 
-static const char* AccessModeToString(ResourceAccessMode mode) {
+static const char* AccessModeToString(BWSL::ResourceAccessMode mode) {
     switch (mode) {
-        case ResourceAccessMode::ReadOnly: return "readonly";
-        case ResourceAccessMode::ReadWrite: return "readwrite";
-        case ResourceAccessMode::WriteOnly: return "writeonly";
+        case BWSL::ResourceAccessMode::ReadOnly: return "readonly";
+        case BWSL::ResourceAccessMode::ReadWrite: return "readwrite";
+        case BWSL::ResourceAccessMode::WriteOnly: return "writeonly";
         default: return "readonly";
     }
 }

@@ -1301,6 +1301,9 @@ NodeRef Parser::ParseStatement() {
     u32 col = loc.column;
 
     if (Match(TokenType::EVAL)) {
+        if (Check(TokenType::LEFT_BRACE)) {
+            return ParseEvalBlock();
+        }
         if (Check(TokenType::FOR) || Check(TokenType::FOREACH)) {
             Advance();
             return ParseForStatement(true);
@@ -3145,6 +3148,593 @@ void Parser::ParseFunctionsBlockBody(NodeRef block) {
 //==============================================================================
 // Eval statement parsing
 //==============================================================================
+
+void Parser::PushEvalBindingScope() {
+    evalBindingScopeStarts.push_back(static_cast<u32>(evalBindings.size()));
+}
+
+void Parser::PopEvalBindingScope() {
+    if (evalBindingScopeStarts.empty()) return;
+    evalBindings.resize(evalBindingScopeStarts.back());
+    evalBindingScopeStarts.pop_back();
+}
+
+void Parser::AddEvalBinding(u32 nameHash, const LiteralValue& value) {
+    EvalBinding binding{};
+    binding.nameHash = nameHash;
+    binding.isShadow = false;
+    binding.value = value;
+    evalBindings.push_back(binding);
+}
+
+void Parser::AddEvalShadow(u32 nameHash) {
+    EvalBinding binding{};
+    binding.nameHash = nameHash;
+    binding.isShadow = true;
+    evalBindings.push_back(binding);
+}
+
+bool Parser::LookupEvalBinding(u32 nameHash, LiteralValue* outValue) const {
+    for (size_t i = evalBindings.size(); i > 0; --i) {
+        const EvalBinding& binding = evalBindings[i - 1];
+        if (binding.nameHash != nameHash) continue;
+        if (binding.isShadow) return false;
+        if (outValue) *outValue = binding.value;
+        return true;
+    }
+    return false;
+}
+
+void Parser::UpdateEvalBinding(u32 nameHash, const LiteralValue& value) {
+    for (size_t i = evalBindings.size(); i > 0; --i) {
+        EvalBinding& binding = evalBindings[i - 1];
+        if (binding.nameHash != nameHash) continue;
+        if (!binding.isShadow) {
+            binding.value = value;
+            return;
+        }
+        break;
+    }
+    AddEvalBinding(nameHash, value);
+}
+
+void Parser::BuildVisibleEvalSubstitutions(std::vector<ParamSubstitution>& outSubs) const {
+    outSubs.clear();
+    outSubs.reserve(evalBindings.size());
+
+    std::vector<u32> seen;
+    seen.reserve(evalBindings.size());
+
+    for (size_t i = evalBindings.size(); i > 0; --i) {
+        const EvalBinding& binding = evalBindings[i - 1];
+        bool alreadySeen = false;
+        for (u32 hash : seen) {
+            if (hash == binding.nameHash) {
+                alreadySeen = true;
+                break;
+            }
+        }
+        if (alreadySeen) continue;
+
+        seen.push_back(binding.nameHash);
+        if (!binding.isShadow) {
+            outSubs.push_back({binding.nameHash, binding.value});
+        }
+    }
+}
+
+bool Parser::ConvertLiteralToBool(const LiteralValue& value, bool* outBool) const {
+    switch (value.type) {
+        case LiteralValue::BOOL:
+            *outBool = value.boolValue;
+            return true;
+        case LiteralValue::INT:
+            *outBool = value.intValue != 0;
+            return true;
+        case LiteralValue::UINT:
+            *outBool = value.uintValue != 0;
+            return true;
+        case LiteralValue::FLOAT:
+            *outBool = value.floatValue != 0.0f;
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool Parser::CoerceLiteralToType(const TypeInfo& typeInfo, LiteralValue* value) const {
+    switch (typeInfo.coreType) {
+        case CoreType::FLOAT:
+            if (value->type == LiteralValue::INT) {
+                value->floatValue = static_cast<float>(value->intValue);
+                value->type = LiteralValue::FLOAT;
+            } else if (value->type == LiteralValue::UINT) {
+                value->floatValue = static_cast<float>(value->uintValue);
+                value->type = LiteralValue::FLOAT;
+            }
+            return value->type == LiteralValue::FLOAT;
+
+        case CoreType::INT:
+            if (value->type == LiteralValue::UINT) {
+                if (value->uintValue > static_cast<unsigned int>(INT_MAX)) {
+                    return false;
+                }
+                value->intValue = static_cast<int>(value->uintValue);
+                value->type = LiteralValue::INT;
+            }
+            return value->type == LiteralValue::INT;
+
+        case CoreType::UINT:
+            if (value->type == LiteralValue::INT) {
+                if (value->intValue < 0) {
+                    return false;
+                }
+                value->uintValue = static_cast<unsigned int>(value->intValue);
+                value->type = LiteralValue::UINT;
+            }
+            return value->type == LiteralValue::UINT;
+
+        case CoreType::BOOL:
+            return value->type == LiteralValue::BOOL;
+
+        case CoreType::FLOAT2:
+            return value->type == LiteralValue::FLOAT2;
+        case CoreType::FLOAT3:
+            return value->type == LiteralValue::FLOAT3;
+        case CoreType::FLOAT4:
+            return value->type == LiteralValue::FLOAT4;
+        case CoreType::INT2:
+            return value->type == LiteralValue::INT2;
+        case CoreType::INT3:
+            return value->type == LiteralValue::INT3;
+        case CoreType::INT4:
+            return value->type == LiteralValue::INT4;
+
+        default:
+            return false;
+    }
+}
+
+NodeRef Parser::MakeLiteralNodeFromValue(const LiteralValue& value, u32 line, u32 col) {
+    switch (value.type) {
+        case LiteralValue::FLOAT:
+            return ASTFactory::MakeLiteralFloat(ast, value.floatValue, line, col);
+        case LiteralValue::INT:
+            return ASTFactory::MakeLiteralInt(ast, value.intValue, line, col);
+        case LiteralValue::UINT:
+            return ASTFactory::MakeLiteralUint(ast, value.uintValue, line, col);
+        case LiteralValue::BOOL:
+            return ASTFactory::MakeLiteralBool(ast, value.boolValue, line, col);
+        case LiteralValue::FLOAT2:
+        case LiteralValue::FLOAT3:
+        case LiteralValue::FLOAT4:
+        case LiteralValue::INT2:
+        case LiteralValue::INT3:
+        case LiteralValue::INT4: {
+            const char* constructorName = nullptr;
+            u8 componentCount = 0;
+            bool isFloat = true;
+            switch (value.type) {
+                case LiteralValue::FLOAT2: constructorName = "float2"; componentCount = 2; break;
+                case LiteralValue::FLOAT3: constructorName = "float3"; componentCount = 3; break;
+                case LiteralValue::FLOAT4: constructorName = "float4"; componentCount = 4; break;
+                case LiteralValue::INT2: constructorName = "int2"; componentCount = 2; isFloat = false; break;
+                case LiteralValue::INT3: constructorName = "int3"; componentCount = 3; isFloat = false; break;
+                case LiteralValue::INT4: constructorName = "int4"; componentCount = 4; isFloat = false; break;
+                default: break;
+            }
+
+            NodeRef vecCall = ASTFactory::MakeFunctionCall(ast, ArenaString::MakeHashOnly(constructorName), line, col);
+            FunctionCallData& callData = ast->GetFunctionCall(vecCall);
+            for (u8 c = 0; c < componentCount; c++) {
+                NodeRef arg = isFloat
+                    ? ASTFactory::MakeLiteralFloat(ast, value.floatVec[c], line, col)
+                    : ASTFactory::MakeLiteralInt(ast, value.intVec[c], line, col);
+                callData.arguments.Push(arena, arg);
+            }
+            return vecCall;
+        }
+        default:
+            return NodeRef::Null();
+    }
+}
+
+bool Parser::EvaluateNodeWithEvalBindings(NodeRef node, LiteralValue* outValue) {
+    if (node.IsNull()) return false;
+
+    std::vector<ParamSubstitution> substitutions;
+    BuildVisibleEvalSubstitutions(substitutions);
+    NodeRef substituted = CloneNodeWithParams(node, substitutions.data(),
+                                              static_cast<u32>(substitutions.size()));
+    if (substituted.IsNull()) return false;
+
+    EvalStateSoA evalState;
+    CompileTimeEvaluatorSoA::Init(&evalState, this, ast, &context->evalCache, ast->arena);
+
+    if (!CompileTimeEvaluatorSoA::CanEvaluateNode(&evalState, substituted)) {
+        return false;
+    }
+    return CompileTimeEvaluatorSoA::EvaluateNode(&evalState, substituted, outValue);
+}
+
+bool Parser::BindCompileTimeVariable(NodeRef varDecl) {
+    const VariableDeclData& decl = ast->GetVariableDecl(varDecl);
+    Symbol* sym = SymbolTable::LookupAny(&symbolTable, decl.name);
+    if (!sym || sym->kind != SymbolKind::VARIABLE) {
+        Error("Failed to resolve compile-time declaration");
+        return false;
+    }
+
+    VariableData& varData = symbolTable.variables[sym->index];
+
+    if (decl.initializer.IsNull()) {
+        if (!varData.isEval) {
+            Error("Compile-time declarations in eval blocks must be initialized");
+            return false;
+        }
+
+        varData.isConst = true;
+        UpdateEvalBinding(decl.name.nameHash, varData.evalValue);
+        return true;
+    }
+
+    LiteralValue value;
+    if (!EvaluateNodeWithEvalBindings(decl.initializer, &value)) {
+        Error("Compile-time declarations in eval blocks must have compile-time constant initializers");
+        return false;
+    }
+
+    if (!CoerceLiteralToType(varData.typeInfo, &value)) {
+        Error("Type mismatch in compile-time declaration");
+        return false;
+    }
+
+    varData.isConst = true;
+    varData.isEval = true;
+    varData.evalValue = value;
+    UpdateEvalBinding(decl.name.nameHash, value);
+    return true;
+}
+
+bool Parser::ExecuteCompileTimeAssignment(NodeRef assignment) {
+    const AssignmentData& assign = ast->GetAssignment(assignment);
+    if (assign.target.Type() != ASTNodeType::IDENTIFIER) {
+        return false;
+    }
+
+    const IdentifierData& ident = ast->GetIdentifier(assign.target);
+    LiteralValue currentValue;
+    if (!LookupEvalBinding(ident.name.nameHash, &currentValue)) {
+        return false;
+    }
+
+    LiteralValue newValue;
+    if (!EvaluateNodeWithEvalBindings(assign.value, &newValue)) {
+        Error("Compile-time assignments in eval blocks must use compile-time values");
+        return false;
+    }
+
+    Symbol* sym = SymbolTable::LookupAny(&symbolTable, ident.name);
+    if (sym && sym->kind == SymbolKind::VARIABLE) {
+        VariableData& varData = symbolTable.variables[sym->index];
+        if (!CoerceLiteralToType(varData.typeInfo, &newValue)) {
+            Error("Type mismatch in compile-time assignment");
+            return false;
+        }
+        varData.isEval = true;
+        varData.evalValue = newValue;
+    }
+
+    UpdateEvalBinding(ident.name.nameHash, newValue);
+    return true;
+}
+
+bool Parser::ExpandEvalStatementsFromBlock(NodeRef blockNode, BlockData& outBlock) {
+    if (blockNode.IsNull()) return true;
+
+    const BlockData& block = ast->GetBlock(blockNode);
+    PushEvalBindingScope();
+    for (u32 i = 0; i < block.statements.count; i++) {
+        if (!ExpandEvalStatement(block.statements[i], outBlock)) {
+            PopEvalBindingScope();
+            return false;
+        }
+    }
+    PopEvalBindingScope();
+    return true;
+}
+
+bool Parser::ExpandEvalStatement(NodeRef stmt, BlockData& outBlock) {
+    if (stmt.IsNull()) return true;
+
+    auto cloneWithBindings = [&](NodeRef node) -> NodeRef {
+        std::vector<ParamSubstitution> substitutions;
+        BuildVisibleEvalSubstitutions(substitutions);
+        return CloneNodeWithParams(node, substitutions.data(),
+                                   static_cast<u32>(substitutions.size()));
+    };
+
+    auto literalToInt = [&](const LiteralValue& value, s32* outInt) -> bool {
+        switch (value.type) {
+            case LiteralValue::INT:
+                *outInt = static_cast<s32>(value.intValue);
+                return true;
+            case LiteralValue::UINT:
+                if (value.uintValue > static_cast<unsigned int>(INT_MAX)) {
+                    return false;
+                }
+                *outInt = static_cast<s32>(value.uintValue);
+                return true;
+            default:
+                return false;
+        }
+    };
+
+    switch (stmt.Type()) {
+        case ASTNodeType::BLOCK:
+            return ExpandEvalStatementsFromBlock(stmt, outBlock);
+
+        case ASTNodeType::VARIABLE_DECL: {
+            const VariableDeclData& decl = ast->GetVariableDecl(stmt);
+            if (decl.isConst) {
+                return BindCompileTimeVariable(stmt);
+            }
+
+            if (LookupEvalBinding(decl.name.nameHash, nullptr)) {
+                Error("Runtime declarations in eval blocks cannot shadow compile-time bindings");
+                return false;
+            }
+
+            NodeRef cloned = cloneWithBindings(stmt);
+            if (cloned.IsValid()) {
+                outBlock.statements.Push(arena, cloned);
+            }
+            AddEvalShadow(decl.name.nameHash);
+            return true;
+        }
+
+        case ASTNodeType::ASSIGNMENT:
+            if (ExecuteCompileTimeAssignment(stmt)) {
+                return true;
+            }
+            break;
+
+        case ASTNodeType::IF_STATEMENT: {
+            const BlockData& ifData = ast->GetBlock(stmt);
+            if (ifData.statements.count == 0) return true;
+
+            LiteralValue condValue;
+            if (!EvaluateNodeWithEvalBindings(ifData.statements[0], &condValue)) {
+                Error("Conditions in eval blocks must be compile-time constants");
+                return false;
+            }
+
+            bool conditionTrue = false;
+            if (!ConvertLiteralToBool(condValue, &conditionTrue)) {
+                Error("Eval block conditions must resolve to bool, int, uint, or float");
+                return false;
+            }
+
+            if (conditionTrue && ifData.statements.count >= 2) {
+                return ExpandEvalStatement(ifData.statements[1], outBlock);
+            }
+            if (!conditionTrue && ifData.statements.count >= 3) {
+                return ExpandEvalStatement(ifData.statements[2], outBlock);
+            }
+            return true;
+        }
+
+        case ASTNodeType::FOR_RANGE: {
+            const ForRangeData& loop = ast->GetForRange(stmt);
+            LiteralValue startValue, endValue, stepValue;
+            if (!EvaluateNodeWithEvalBindings(loop.rangeStart, &startValue) ||
+                !EvaluateNodeWithEvalBindings(loop.rangeEnd, &endValue)) {
+                Error("Eval for ranges must be compile-time constants");
+                return false;
+            }
+
+            s32 start = 0;
+            s32 end = 0;
+            s32 step = 1;
+            if (!literalToInt(startValue, &start) || !literalToInt(endValue, &end)) {
+                Error("Eval for ranges must resolve to integers");
+                return false;
+            }
+
+            if (!loop.step.IsNull()) {
+                if (!EvaluateNodeWithEvalBindings(loop.step, &stepValue) ||
+                    !literalToInt(stepValue, &step)) {
+                    Error("Eval for steps must resolve to integers");
+                    return false;
+                }
+            }
+
+            if (step == 0) {
+                Error("Eval for step must not be zero");
+                return false;
+            }
+
+            if (loop.iteratorVar.Type() != ASTNodeType::IDENTIFIER) {
+                Error("Eval for iterator must be an identifier");
+                return false;
+            }
+
+            const IdentifierData& iteratorIdent = ast->GetIdentifier(loop.iteratorVar);
+            u32 iterationCount = 0;
+            constexpr u32 MAX_EVAL_ITERATIONS = 10000;
+
+            auto continueLoop = [&](s32 value) -> bool {
+                if (step > 0) {
+                    return loop.inclusive ? value <= end : value < end;
+                }
+                return loop.inclusive ? value >= end : value > end;
+            };
+
+            for (s32 i = start; continueLoop(i); i += step) {
+                if (++iterationCount > MAX_EVAL_ITERATIONS) {
+                    Error("Eval for exceeded iteration limit");
+                    return false;
+                }
+
+                LiteralValue iteratorValue{};
+                iteratorValue.type = LiteralValue::INT;
+                iteratorValue.intValue = static_cast<int>(i);
+
+                PushEvalBindingScope();
+                AddEvalBinding(iteratorIdent.name.nameHash, iteratorValue);
+                if (!ExpandEvalStatement(loop.body, outBlock)) {
+                    PopEvalBindingScope();
+                    return false;
+                }
+                PopEvalBindingScope();
+            }
+            return true;
+        }
+
+        case ASTNodeType::FOR_COLLECTION: {
+            const ForCollectionData& loop = ast->GetForCollection(stmt);
+            if (loop.iteratorVar.Type() != ASTNodeType::IDENTIFIER) {
+                Error("Eval collection iterator must be an identifier");
+                return false;
+            }
+
+            const IdentifierData& iteratorIdent = ast->GetIdentifier(loop.iteratorVar);
+            for (u32 i = 0; i < loop.length; i++) {
+                LiteralValue iteratorValue{};
+                iteratorValue.type = LiteralValue::INT;
+                iteratorValue.intValue = static_cast<int>(i);
+
+                PushEvalBindingScope();
+                AddEvalBinding(iteratorIdent.name.nameHash, iteratorValue);
+                if (!ExpandEvalStatement(loop.body, outBlock)) {
+                    PopEvalBindingScope();
+                    return false;
+                }
+                PopEvalBindingScope();
+            }
+            return true;
+        }
+
+        case ASTNodeType::FOR_CSTYLE:
+            Error("C-style for loops are not yet supported inside eval blocks");
+            return false;
+
+        case ASTNodeType::LOOP: {
+            const LoopData& loop = ast->GetLoop(stmt);
+            constexpr u32 MAX_EVAL_ITERATIONS = 10000;
+            u32 iterationCount = 0;
+
+            auto checkUntilCondition = [&](bool* outDone) -> bool {
+                *outDone = false;
+                if (loop.untilCondition.IsNull()) return true;
+                LiteralValue untilValue;
+                if (!EvaluateNodeWithEvalBindings(loop.untilCondition, &untilValue)) {
+                    Error("Eval loop until conditions must be compile-time constants");
+                    return false;
+                }
+
+                if (!ConvertLiteralToBool(untilValue, outDone)) {
+                    Error("Eval loop until conditions must resolve to bool, int, uint, or float");
+                    return false;
+                }
+                return true;
+            };
+
+            if (!loop.count.IsNull()) {
+                LiteralValue countValue;
+                s32 count = 0;
+                if (!EvaluateNodeWithEvalBindings(loop.count, &countValue) ||
+                    !literalToInt(countValue, &count)) {
+                    Error("Eval loop counts must resolve to integers");
+                    return false;
+                }
+                if (count < 0) {
+                    Error("Eval loop count must not be negative");
+                    return false;
+                }
+
+                for (s32 i = 0; i < count; i++) {
+                    if (++iterationCount > MAX_EVAL_ITERATIONS) {
+                        Error("Eval loop exceeded iteration limit");
+                        return false;
+                    }
+                    if (!ExpandEvalStatement(loop.body, outBlock)) {
+                        return false;
+                    }
+                    bool done = false;
+                    if (!loop.untilCondition.IsNull()) {
+                        if (!checkUntilCondition(&done)) {
+                            return false;
+                        }
+                        if (done) break;
+                    }
+                }
+                return true;
+            }
+
+            if (loop.untilCondition.IsNull()) {
+                Error("Infinite eval loops require an until condition");
+                return false;
+            }
+
+            while (true) {
+                if (++iterationCount > MAX_EVAL_ITERATIONS) {
+                    Error("Eval loop exceeded iteration limit");
+                    return false;
+                }
+                if (!ExpandEvalStatement(loop.body, outBlock)) {
+                    return false;
+                }
+                bool done = false;
+                if (!checkUntilCondition(&done)) {
+                    return false;
+                }
+                if (done) {
+                    return true;
+                }
+            }
+        }
+
+        default:
+            break;
+    }
+
+    NodeRef cloned = cloneWithBindings(stmt);
+    if (cloned.IsValid()) {
+        outBlock.statements.Push(arena, cloned);
+    }
+    return true;
+}
+
+NodeRef Parser::ParseEvalBlock() {
+    SourceLocation loc = getLocation(stream->GetOffset(current));
+    u32 line = loc.line;
+    u32 col = loc.column;
+
+    Consume(TokenType::LEFT_BRACE, "Expected '{' after 'eval'");
+
+    NodeRef block = ASTFactory::MakeBlock(ast, line, col);
+    BlockData& outBlock = ast->GetBlock(block);
+
+    SymbolTable::EnterScope(&symbolTable);
+    PushEvalBindingScope();
+
+    while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        NodeRef stmt = ParseStatement();
+        if (stmt.IsValid() && !ExpandEvalStatement(stmt, outBlock)) {
+            while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+                Advance();
+            }
+            break;
+        }
+    }
+
+    Consume(TokenType::RIGHT_BRACE, "Expected '}' after eval block");
+
+    PopEvalBindingScope();
+    SymbolTable::ExitScope(&symbolTable);
+    return block;
+}
 
 NodeRef Parser::ParseEvalStatement() {
     SourceLocation loc = getLocation(stream->GetOffset(previous));
@@ -5389,52 +5979,7 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
             // Check if this identifier should be substituted
             for (u32 i = 0; i < subCount; i++) {
                 if (subs[i].nameHash == src.name.nameHash) {
-                    // Replace with literal value
-                    switch (subs[i].value.type) {
-                        case LiteralValue::FLOAT:
-                            return ASTFactory::MakeLiteralFloat(ast, subs[i].value.floatValue, line, col);
-                        case LiteralValue::INT:
-                            return ASTFactory::MakeLiteralInt(ast, subs[i].value.intValue, line, col);
-                        case LiteralValue::UINT:
-                            return ASTFactory::MakeLiteralUint(ast, subs[i].value.uintValue, line, col);
-                        case LiteralValue::BOOL:
-                            return ASTFactory::MakeLiteralBool(ast, subs[i].value.boolValue, line, col);
-                        case LiteralValue::FLOAT2:
-                        case LiteralValue::FLOAT3:
-                        case LiteralValue::FLOAT4:
-                        case LiteralValue::INT2:
-                        case LiteralValue::INT3:
-                        case LiteralValue::INT4: {
-                            // Create a vector constructor call
-                            const char* constructorName = nullptr;
-                            u8 componentCount = 0;
-                            bool isFloat = true;
-                            switch (subs[i].value.type) {
-                                case LiteralValue::FLOAT2: constructorName = "float2"; componentCount = 2; break;
-                                case LiteralValue::FLOAT3: constructorName = "float3"; componentCount = 3; break;
-                                case LiteralValue::FLOAT4: constructorName = "float4"; componentCount = 4; break;
-                                case LiteralValue::INT2: constructorName = "int2"; componentCount = 2; isFloat = false; break;
-                                case LiteralValue::INT3: constructorName = "int3"; componentCount = 3; isFloat = false; break;
-                                case LiteralValue::INT4: constructorName = "int4"; componentCount = 4; isFloat = false; break;
-                                default: break;
-                            }
-                            ArenaString ctorName = ArenaString::MakeHashOnly(constructorName);
-                            NodeRef vecCall = ASTFactory::MakeFunctionCall(ast, ctorName, line, col);
-                            FunctionCallData& callData = ast->GetFunctionCall(vecCall);
-                            for (u8 c = 0; c < componentCount; c++) {
-                                NodeRef arg;
-                                if (isFloat) {
-                                    arg = ASTFactory::MakeLiteralFloat(ast, subs[i].value.floatVec[c], line, col);
-                                } else {
-                                    arg = ASTFactory::MakeLiteralInt(ast, subs[i].value.intVec[c], line, col);
-                                }
-                                callData.arguments.Push(arena, arg);
-                            }
-                            return vecCall;
-                        }
-                        default:
-                            break;
-                    }
+                    return MakeLiteralNodeFromValue(subs[i].value, line, col);
                 }
             }
             // Not a parameter - clone as-is
@@ -5555,8 +6100,37 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
             NodeRef condition = CloneNodeWithParams(src.condition, subs, subCount);
             NodeRef increment = CloneNodeWithParams(src.increment, subs, subCount);
             NodeRef body = CloneNodeWithParams(src.body, subs, subCount);
-            NodeRef newFor = ASTFactory::MakeForCStyle(ast, init, condition, increment, body, line, col);
+            NodeRef newFor = ASTFactory::MakeForCStyle(ast, init, condition, increment, body,
+                                                       src.isEval, line, col);
             return newFor;
+        }
+
+        case ASTNodeType::FOR_RANGE: {
+            const ForRangeData& src = ast->GetForRange(node);
+            NodeRef iteratorVar = CloneNodeWithParams(src.iteratorVar, subs, subCount);
+            NodeRef rangeStart = CloneNodeWithParams(src.rangeStart, subs, subCount);
+            NodeRef rangeEnd = CloneNodeWithParams(src.rangeEnd, subs, subCount);
+            NodeRef step = CloneNodeWithParams(src.step, subs, subCount);
+            NodeRef body = CloneNodeWithParams(src.body, subs, subCount);
+            return ASTFactory::MakeForRange(ast, iteratorVar, rangeStart, rangeEnd, step,
+                                            body, src.inclusive, src.isEval, line, col);
+        }
+
+        case ASTNodeType::FOR_COLLECTION: {
+            const ForCollectionData& src = ast->GetForCollection(node);
+            NodeRef iteratorVar = CloneNodeWithParams(src.iteratorVar, subs, subCount);
+            NodeRef collection = CloneNodeWithParams(src.collection, subs, subCount);
+            NodeRef body = CloneNodeWithParams(src.body, subs, subCount);
+            return ASTFactory::MakeForCollection(ast, iteratorVar, collection, body,
+                                                 src.isEval, src.length, line, col);
+        }
+
+        case ASTNodeType::LOOP: {
+            const LoopData& src = ast->GetLoop(node);
+            NodeRef count = CloneNodeWithParams(src.count, subs, subCount);
+            NodeRef body = CloneNodeWithParams(src.body, subs, subCount);
+            NodeRef untilCondition = CloneNodeWithParams(src.untilCondition, subs, subCount);
+            return ASTFactory::MakeLoop(ast, count, body, untilCondition, src.isEval, line, col);
         }
 
         case ASTNodeType::RETURN: {

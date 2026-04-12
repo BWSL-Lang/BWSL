@@ -142,6 +142,8 @@ struct Parser {
         hasLookahead = false;
         has3TokenLookahead = false;
         multiDimArrayDims.clear();
+        evalBindings.clear();
+        evalBindingScopeStarts.clear();
         SymbolTable::Init(&symbolTable, arena);
         currentShaderStage = ShaderStage::Fragment;
         inShaderStage = false;
@@ -283,8 +285,33 @@ private:
         u32 nameHash;
         LiteralValue value;
     };
+    struct EvalBinding {
+        u32 nameHash;
+        bool isShadow;
+        LiteralValue value;
+    };
+    std::vector<EvalBinding> evalBindings;
+    std::vector<u32> evalBindingScopeStarts;
+
+    void PushEvalBindingScope();
+    void PopEvalBindingScope();
+    void AddEvalBinding(u32 nameHash, const LiteralValue& value);
+    void AddEvalShadow(u32 nameHash);
+    bool LookupEvalBinding(u32 nameHash, LiteralValue* outValue) const;
+    void UpdateEvalBinding(u32 nameHash, const LiteralValue& value);
+    void BuildVisibleEvalSubstitutions(std::vector<ParamSubstitution>& outSubs) const;
+    bool EvaluateNodeWithEvalBindings(NodeRef node, LiteralValue* outValue);
+    bool CoerceLiteralToType(const TypeInfo& typeInfo, LiteralValue* value) const;
+    bool ConvertLiteralToBool(const LiteralValue& value, bool* outBool) const;
+    NodeRef MakeLiteralNodeFromValue(const LiteralValue& value, u32 line, u32 col);
+    bool BindCompileTimeVariable(NodeRef varDecl);
+    bool ExecuteCompileTimeAssignment(NodeRef assignment);
+    bool ExpandEvalStatement(NodeRef stmt, BlockData& outBlock);
+    bool ExpandEvalStatementsFromBlock(NodeRef blockNode, BlockData& outBlock);
+
     NodeRef CloneShaderStageWithParams(NodeRef stageNode, const ParamSubstitution* subs, u32 subCount);
     NodeRef CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs, u32 subCount);
+    NodeRef ParseEvalBlock();
 
     inline TypeInfo ResolveTypeFromToken(TokenType token);
 };

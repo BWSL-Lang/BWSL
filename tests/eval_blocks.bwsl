@@ -1,0 +1,59 @@
+// Test: Eval block expansion
+// Tests: eval block locals, compile-time control flow, compile-time assignments, runtime emission
+
+pipeline EvalBlocks {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float sum = 0.0;
+            float runtimeValue = 0.0;
+            float nested = 0.0;
+
+            eval {
+                const int taps = 3;
+                eval int accumulator = 0;
+
+                if (taps > 2) {
+                    sum += 1.0;
+                } else {
+                    sum += 100.0;
+                }
+
+                for (i in 0..taps) {
+                    accumulator = accumulator + i;
+                    sum += float(i);
+                }
+
+                loop (2) {
+                    accumulator = accumulator + 1;
+                }
+
+                sum += float(accumulator);
+
+                {
+                    const int inner = taps + 2;
+                    nested += float(inner);
+                }
+
+                {
+                    float3 weights = float3(1.0, 2.0, 3.0);
+                    runtimeValue += weights.x + weights.y + weights.z;
+                }
+            }
+
+            output.position = float4(
+                attributes.position + float3(sum * 0.001, runtimeValue * 0.001, nested * 0.001),
+                1.0
+            );
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}
