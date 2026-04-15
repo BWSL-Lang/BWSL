@@ -70,6 +70,39 @@ VARIANT_REFLECTION_TESTS = {
         "override_args": ["-variant", "skinning=true", "-variant", "lighting=Clustered"],
         "illegal_args": ["-variant", "skinning=true", "-variant", "lighting=Unlit"],
         "illegal_error": "violates rule: conflict",
+        "specialization": {
+            "default": {
+                "vert_metal_contains": ["float4(0.5, 0.0, 0.0, 1.0)"],
+                "vert_metal_not_contains": ["float4(0.25, 0.0, 0.0, 1.0)"],
+                "vert_hlsl_contains": ["float4(0.5f, 0.0f, 0.0f, 1.0f)"],
+                "vert_hlsl_not_contains": ["float4(0.25f, 0.0f, 0.0f, 1.0f)"],
+                "vert_ir_contains": ["Instructions: 3", "[0] = 0.5"],
+                "vert_ir_not_contains": ["BRANCH", "[0] = 0.25"],
+                "frag_ir_contains": [
+                    "[  0] STORE_REG        r0           <- 0.5",
+                    "FADD             r1           <- r0, 0.25",
+                    "[  3] STORE_REG        r2           <- 0.5",
+                ],
+                "frag_ir_not_contains": ["BRANCH", "0.75"],
+                "frag_spirv_contains": ["OpFAdd %float %float_0_5 %float_0_25"],
+                "frag_spirv_not_contains": ["OpBranchConditional", "%float_0_75"],
+            },
+            "override": {
+                "vert_metal_contains": ["float4(0.25, 0.0, 0.0, 1.0)"],
+                "vert_metal_not_contains": ["float4(0.5, 0.0, 0.0, 1.0)"],
+                "vert_hlsl_contains": ["float4(0.25f, 0.0f, 0.0f, 1.0f)"],
+                "vert_hlsl_not_contains": ["float4(0.5f, 0.0f, 0.0f, 1.0f)"],
+                "vert_ir_contains": ["Instructions: 3", "[0] = 0.25"],
+                "vert_ir_not_contains": ["BRANCH", "[0] = 0.5"],
+                "frag_ir_contains": [
+                    "[  1] STORE_REG        r0           <- 0.75",
+                    "[  4] STORE_REG        r2           <- 1",
+                ],
+                "frag_ir_not_contains": ["BRANCH", "[  3] STORE_REG        r2           <- 0.5"],
+                "frag_spirv_contains": ["OpFAdd %float %float_0_75 %float_0_25"],
+                "frag_spirv_not_contains": ["OpBranchConditional", "OpFAdd %float %float_0_5 %float_0_25"],
+            },
+        },
     }
 }
 
@@ -226,6 +259,84 @@ def check_variant_reflection(data: dict, expected_declared: dict[str, tuple[str,
             return False, f"missing selected variant '{name}'"
         if entry.get("value") != expected_value:
             return False, f"selected variant '{name}' has value '{entry.get('value')}', expected '{expected_value}'"
+
+    return True, ""
+
+
+def compile_variant_outputs(bwslc: Path, root: Path, test_file: Path, modules_dir: Path,
+                            output_dir: Path, config_args: list[str],
+                            extra_args: list[str] | None = None) -> subprocess.CompletedProcess[str]:
+    shutil.rmtree(output_dir, ignore_errors=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    args = [
+        str(bwslc),
+        str(test_file),
+        "-o",
+        str(output_dir),
+        "-modules",
+        str(modules_dir),
+        *config_args,
+        "-all",
+        "-internals",
+    ]
+    if extra_args:
+        args.extend(extra_args)
+    return run_command(args, cwd=root)
+
+
+def find_variant_stage_file(output_dir: Path, test_name: str, stage: str, suffix: str) -> tuple[Path | None, str]:
+    matches = sorted(output_dir.glob(f"{test_name}_*_{stage}.{suffix}"))
+    if not matches:
+        return None, f"missing {stage}.{suffix} output"
+    if len(matches) > 1:
+        names = ", ".join(path.name for path in matches)
+        return None, f"expected one {stage}.{suffix} output, found: {names}"
+    return matches[0], ""
+
+
+def check_text_patterns(label: str, text: str,
+                        contains: list[str] | None = None,
+                        not_contains: list[str] | None = None) -> tuple[bool, str]:
+    for pattern in contains or []:
+        if pattern not in text:
+            return False, f"{label} missing '{pattern}'"
+    for pattern in not_contains or []:
+        if pattern in text:
+            return False, f"{label} unexpectedly contains '{pattern}'"
+    return True, ""
+
+
+def check_variant_specialization(output_dir: Path, test_name: str, expectations: dict[str, list[str]]) -> tuple[bool, str]:
+    vert_metal_path, message = find_variant_stage_file(output_dir, test_name, "vert", "metal")
+    if vert_metal_path is None:
+        return False, message
+    vert_hlsl_path, message = find_variant_stage_file(output_dir, test_name, "vert", "hlsl")
+    if vert_hlsl_path is None:
+        return False, message
+    vert_internals_path, message = find_variant_stage_file(output_dir, test_name, "vert", "internals.json")
+    if vert_internals_path is None:
+        return False, message
+    frag_internals_path, message = find_variant_stage_file(output_dir, test_name, "frag", "internals.json")
+    if frag_internals_path is None:
+        return False, message
+
+    vert_metal = vert_metal_path.read_text(encoding="utf-8")
+    vert_hlsl = vert_hlsl_path.read_text(encoding="utf-8")
+    vert_internals = json.loads(vert_internals_path.read_text(encoding="utf-8"))
+    frag_internals = json.loads(frag_internals_path.read_text(encoding="utf-8"))
+
+    checks = [
+        ("vertex metal", vert_metal, expectations.get("vert_metal_contains"), expectations.get("vert_metal_not_contains")),
+        ("vertex hlsl", vert_hlsl, expectations.get("vert_hlsl_contains"), expectations.get("vert_hlsl_not_contains")),
+        ("vertex ir", vert_internals.get("ir", ""), expectations.get("vert_ir_contains"), expectations.get("vert_ir_not_contains")),
+        ("fragment ir", frag_internals.get("ir", ""), expectations.get("frag_ir_contains"), expectations.get("frag_ir_not_contains")),
+        ("fragment spirv", frag_internals.get("spirv_dis", ""), expectations.get("frag_spirv_contains"), expectations.get("frag_spirv_not_contains")),
+    ]
+
+    for label, text, contains, not_contains in checks:
+        ok, message = check_text_patterns(label, text, contains, not_contains)
+        if not ok:
+            return False, message
 
     return True, ""
 
@@ -443,6 +554,67 @@ def main() -> int:
                 failed += 1
                 passed -= 1
                 continue
+
+            specialization = variant_expectations.get("specialization")
+            if specialization:
+                default_output_dir = output_dir / "variant_default"
+                default_result = compile_variant_outputs(
+                    bwslc,
+                    root,
+                    test_file,
+                    modules_dir,
+                    default_output_dir,
+                    config_args,
+                )
+                if default_result.returncode != 0:
+                    error_text = default_result.stdout.strip() or f"variant default compile exited with code {default_result.returncode}"
+                    print(f"[{RED}FAIL{NC}] {test_name}")
+                    print(f"       Error: default variant specialization compile failed: {error_text}")
+                    failed += 1
+                    passed -= 1
+                    continue
+
+                ok, message = check_variant_specialization(
+                    default_output_dir,
+                    test_name,
+                    specialization["default"],
+                )
+                if not ok:
+                    print(f"[{RED}FAIL{NC}] {test_name}")
+                    print(f"       Error: default variant specialization mismatch: {message}")
+                    failed += 1
+                    passed -= 1
+                    continue
+
+                override_output_dir = output_dir / "variant_override"
+                override_result = compile_variant_outputs(
+                    bwslc,
+                    root,
+                    test_file,
+                    modules_dir,
+                    override_output_dir,
+                    config_args,
+                    variant_expectations["override_args"],
+                )
+                if override_result.returncode != 0:
+                    error_text = override_result.stdout.strip() or f"variant override compile exited with code {override_result.returncode}"
+                    print(f"[{RED}FAIL{NC}] {test_name}")
+                    print(f"       Error: override variant specialization compile failed: {error_text}")
+                    failed += 1
+                    passed -= 1
+                    continue
+
+                ok, message = check_variant_specialization(
+                    override_output_dir,
+                    test_name,
+                    specialization["override"],
+                )
+                if not ok:
+                    print(f"[{RED}FAIL{NC}] {test_name}")
+                    print(f"       Error: override variant specialization mismatch: {message}")
+                    failed += 1
+                    passed -= 1
+                    continue
 
         if not metal_validation:
             continue
