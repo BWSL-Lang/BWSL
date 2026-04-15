@@ -5,6 +5,7 @@
 #include "bwsl_arena.h"
 #include "bwsl_symbol_table.h"
 #include "bwsl_eval_soa.h"
+#include "bwsl_variant_system.h"
 #include <cstddef>
 #include <unordered_map>
 #include <string>
@@ -54,6 +55,8 @@ struct CompilationContext {
 };
 
 struct Parser {
+    friend class CompileTimeEvaluatorSoA;
+
     Lexer* lexer;
     TokenStream* stream;  // TokenStream for SoA token access
     CompilationContext* context;
@@ -144,6 +147,8 @@ struct Parser {
         multiDimArrayDims.clear();
         evalBindings.clear();
         evalBindingScopeStarts.clear();
+        activeVariantBindings.clear();
+        allowBareVariantLookup = false;
         SymbolTable::Init(&symbolTable, arena);
         currentShaderStage = ShaderStage::Fragment;
         inShaderStage = false;
@@ -173,6 +178,17 @@ struct Parser {
     }
 
     TypeInfo GetExpressionType(NodeRef expr);
+    bool BuildVariantSelection(NodeRef pipeline, const VariantSelectionData* baseSelection,
+                               u32 attributeMask, bool hasAttributeMask,
+                               const std::vector<VariantOverride>& overrides,
+                               VariantSelectionData* outSelection,
+                               std::string* outError = nullptr);
+    bool BuildVariantReflection(NodeRef pipeline, const VariantSelectionData* selection,
+                                VariantReflectionData* outReflection,
+                                std::string* outError = nullptr);
+    NodeRef SpecializePipelineForVariants(NodeRef pipeline,
+                                          const VariantSelectionData& selection,
+                                          std::string* outError = nullptr);
 
 private:
     //----------------- Token management ---------------------------//
@@ -198,6 +214,8 @@ private:
     //------------------ Parsing functions ------------------------//
     void ParseImports(NodeRef pipeline);
     void ParseAttributes(NodeRef pipeline);
+    void ParseVariants(NodeRef pipeline);
+    void ParseVariantRules(NodeRef pipeline);
     void ParsePassBody(NodeRef pass);
     void ParseComputeBody(NodeRef compute);
     void ParseUseAttributes(NodeRef pass);
@@ -279,6 +297,21 @@ private:
     void ResolveShaderStageExpressions(NodeRef pipeline);
     NodeRef ResolveShaderStageExpr(NodeRef stageNode, const PassData& pass, ASTNodeType expectedType);
     NodeRef LookupShaderFunction(u32 nameHash, const PassData& pass, CoreType expectedReturnType);
+    bool ResolvePipelineVariants(NodeRef pipeline, std::string* outError = nullptr);
+    bool IsOptionalAttributeFeature(NodeRef pipeline, u8 attributeIndex) const;
+    bool LookupVariantType(NodeRef pipeline, u32 nameHash, TypeInfo* outType,
+                           u32* outEnumTypeHash = nullptr,
+                           bool* outImplicit = nullptr,
+                           u8* outAttributeIndex = nullptr) const;
+    bool LookupActiveVariantBinding(u32 nameHash, LiteralValue* outValue = nullptr,
+                                    TypeInfo* outType = nullptr,
+                                    u32* outEnumTypeHash = nullptr,
+                                    bool* outImplicit = nullptr,
+                                    u8* outAttributeIndex = nullptr) const;
+    void SetActiveVariantSelection(const VariantSelectionData& selection, bool allowBareLookup);
+    void ClearActiveVariantSelection();
+    std::string FormatVariantExpression(NodeRef expr) const;
+    NodeRef ClonePassWithActiveVariants(NodeRef passRef);
 
     // Parameter substitution for shader functions
     struct ParamSubstitution {
@@ -292,6 +325,16 @@ private:
     };
     std::vector<EvalBinding> evalBindings;
     std::vector<u32> evalBindingScopeStarts;
+    struct ActiveVariantBinding {
+        u32 nameHash;
+        TypeInfo typeInfo;
+        u32 enumTypeHash;
+        LiteralValue value;
+        bool isImplicit;
+        u8 attributeIndex;
+    };
+    std::vector<ActiveVariantBinding> activeVariantBindings;
+    bool allowBareVariantLookup = false;
 
     void PushEvalBindingScope();
     void PopEvalBindingScope();

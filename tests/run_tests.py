@@ -50,6 +50,36 @@ INLINE_RETURN_LOOP_TESTS = {
     "inline_return_loop_until",
 }
 
+VARIANT_REFLECTION_TESTS = {
+    "variants_basic": {
+        "declared": {
+            "skinning": ("bool", "false"),
+            "lighting": ("LightingMode", "Forward"),
+        },
+        "implicit": {"has_normal"},
+        "default_selected": {
+            "skinning": "false",
+            "lighting": "Forward",
+            "has_normal": "true",
+        },
+        "override_selected": {
+            "skinning": "true",
+            "lighting": "Clustered",
+            "has_normal": "true",
+        },
+        "override_args": ["-variant", "skinning=true", "-variant", "lighting=Clustered"],
+        "illegal_args": ["-variant", "skinning=true", "-variant", "lighting=Unlit"],
+        "illegal_error": "violates rule: conflict",
+    }
+}
+
+VARIANT_ERROR_TESTS = {
+    "duplicate_names.bwsl": "Variant already declared in this pipeline",
+    "unknown_type.bwsl": "Variant type must be 'bool' or an enum type",
+    "invalid_default.bwsl": "Variant default does not match declared type",
+    "invalid_rule_ref.bwsl": "Variant rule left-hand side must be a compile-time boolean expression",
+}
+
 
 def run_command(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -148,6 +178,56 @@ def find_metal_outputs(output_dir: Path, test_name: str) -> list[Path]:
     if exact.exists():
         files.add(exact)
     return sorted(files)
+
+
+def run_variant_dump(bwslc: Path, root: Path, test_file: Path, modules_dir: Path,
+                     extra_args: list[str] | None = None) -> tuple[bool, dict | None, str]:
+    args = [
+        str(bwslc),
+        str(test_file),
+        "-modules",
+        str(modules_dir),
+        "-dump-variant-space",
+    ]
+    if extra_args:
+        args.extend(extra_args)
+    result = run_command(args, cwd=root)
+    if result.returncode != 0:
+        return False, None, result.stdout.strip() or f"variant dump exited with code {result.returncode}"
+    try:
+        return True, json.loads(result.stdout), ""
+    except json.JSONDecodeError as exc:
+        return False, None, f"invalid variant reflection JSON: {exc}"
+
+
+def check_variant_reflection(data: dict, expected_declared: dict[str, tuple[str, str]],
+                             expected_implicit: set[str],
+                             expected_selected: dict[str, str]) -> tuple[bool, str]:
+    declared = {entry["name"]: entry for entry in data.get("declared", [])}
+    implicit = {entry["name"]: entry for entry in data.get("implicit", [])}
+    selected = {entry["name"]: entry for entry in data.get("selected", [])}
+
+    for name, (type_name, default_value) in expected_declared.items():
+        entry = declared.get(name)
+        if entry is None:
+            return False, f"missing declared variant '{name}'"
+        if entry.get("type") != type_name:
+            return False, f"declared variant '{name}' has type '{entry.get('type')}', expected '{type_name}'"
+        if entry.get("default") != default_value:
+            return False, f"declared variant '{name}' has default '{entry.get('default')}', expected '{default_value}'"
+
+    for name in expected_implicit:
+        if name not in implicit:
+            return False, f"missing implicit variant '{name}'"
+
+    for name, expected_value in expected_selected.items():
+        entry = selected.get(name)
+        if entry is None:
+            return False, f"missing selected variant '{name}'"
+        if entry.get("value") != expected_value:
+            return False, f"selected variant '{name}' has value '{entry.get('value')}', expected '{expected_value}'"
+
+    return True, ""
 
 
 def main() -> int:
@@ -270,6 +350,100 @@ def main() -> int:
                 passed -= 1
                 continue
 
+        if test_name in VARIANT_REFLECTION_TESTS:
+            variant_expectations = VARIANT_REFLECTION_TESTS[test_name]
+
+            ok, data, message = run_variant_dump(bwslc, root, test_file, modules_dir)
+            if not ok:
+                print(f"[{RED}FAIL{NC}] {test_name}")
+                print(f"       Error: variant reflection dump failed: {message}")
+                failed += 1
+                passed -= 1
+                continue
+
+            ok, message = check_variant_reflection(
+                data,
+                variant_expectations["declared"],
+                variant_expectations["implicit"],
+                variant_expectations["default_selected"],
+            )
+            if not ok:
+                print(f"[{RED}FAIL{NC}] {test_name}")
+                print(f"       Error: variant reflection mismatch: {message}")
+                failed += 1
+                passed -= 1
+                continue
+
+            ok, data, message = run_variant_dump(
+                bwslc,
+                root,
+                test_file,
+                modules_dir,
+                variant_expectations["override_args"],
+            )
+            if not ok:
+                print(f"[{RED}FAIL{NC}] {test_name}")
+                print(f"       Error: overridden variant reflection dump failed: {message}")
+                failed += 1
+                passed -= 1
+                continue
+
+            ok, message = check_variant_reflection(
+                data,
+                variant_expectations["declared"],
+                variant_expectations["implicit"],
+                variant_expectations["override_selected"],
+            )
+            if not ok:
+                print(f"[{RED}FAIL{NC}] {test_name}")
+                print(f"       Error: overridden variant reflection mismatch: {message}")
+                failed += 1
+                passed -= 1
+                continue
+
+            override_result = run_command(
+                [
+                    str(bwslc),
+                    str(test_file),
+                    "-o",
+                    str(output_dir),
+                    "-modules",
+                    str(modules_dir),
+                    *variant_expectations["override_args"],
+                ],
+                cwd=root,
+            )
+            if override_result.returncode != 0:
+                print(f"[{RED}FAIL{NC}] {test_name}")
+                print(f"       Error: legal variant override failed: {override_result.stdout.strip()}")
+                failed += 1
+                passed -= 1
+                continue
+
+            illegal_result = run_command(
+                [
+                    str(bwslc),
+                    str(test_file),
+                    "-modules",
+                    str(modules_dir),
+                    *variant_expectations["illegal_args"],
+                ],
+                cwd=root,
+            )
+            illegal_error = illegal_result.stdout.strip()
+            if illegal_result.returncode == 0:
+                print(f"[{RED}FAIL{NC}] {test_name}")
+                print("       Error: illegal variant selection unexpectedly succeeded")
+                failed += 1
+                passed -= 1
+                continue
+            if variant_expectations["illegal_error"] not in illegal_error:
+                print(f"[{RED}FAIL{NC}] {test_name}")
+                print(f"       Error: illegal variant selection returned unexpected message: {illegal_error}")
+                failed += 1
+                passed -= 1
+                continue
+
         if not metal_validation:
             continue
 
@@ -309,6 +483,39 @@ def main() -> int:
                         for line in list(diff_lines)[:20]:
                             print(f"         {line}")
                     golden_failed += 1
+
+    variant_error_dir = script_dir / "variant_errors"
+    if variant_error_dir.exists():
+        for test_file in sorted(variant_error_dir.glob("*.bwsl")):
+            expected_error = VARIANT_ERROR_TESTS.get(test_file.name)
+            if expected_error is None:
+                continue
+
+            result = run_command(
+                [
+                    str(bwslc),
+                    str(test_file),
+                    "-modules",
+                    str(modules_dir),
+                    "-dump-variant-space",
+                ],
+                cwd=root,
+            )
+
+            if result.returncode == 0:
+                print(f"[{RED}FAIL{NC}] variant_errors/{test_file.stem}")
+                print("       Error: invalid variant test unexpectedly succeeded")
+                failed += 1
+                continue
+
+            if expected_error not in result.stdout:
+                print(f"[{RED}FAIL{NC}] variant_errors/{test_file.stem}")
+                print(f"       Error: expected '{expected_error}' in error output, got: {result.stdout.strip()}")
+                failed += 1
+                continue
+
+            print(f"[{GREEN}PASS{NC}] variant_errors/{test_file.stem}")
+            passed += 1
 
     print()
     print("========================================")

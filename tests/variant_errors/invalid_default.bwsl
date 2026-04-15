@@ -1,0 +1,11 @@
+pipeline VariantInvalidDefault {
+    variants {
+        enabled: bool = 2;
+    }
+
+    pass "Main" {
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+        }
+    }
+}

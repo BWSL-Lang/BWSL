@@ -133,7 +133,8 @@ enum class SpecialIdentifier : u8 {
     RESOURCES = 2,
     OUTPUT = 3,
     INPUT = 4,      // For fragment shader reading interpolated varyings
-    SELF = 5        // For enum methods referencing self
+    SELF = 5,       // For enum methods referencing self
+    VARIANTS = 6    // Compiler-defined variant namespace
 };
 
 enum class BackendType {
@@ -308,6 +309,12 @@ inline bool IsArray(const TypeInfo& info) {
         TYPE_INFO(CoreType::INVALID, 0, false),  // UNDERSCORE
         TYPE_INFO(CoreType::INVALID, 0, false),  // SWITCH
         TYPE_INFO(CoreType::INVALID, 0, false),  // CASE
+        TYPE_INFO(CoreType::INVALID, 0, false),  // BREAK
+        TYPE_INFO(CoreType::INVALID, 0, false),  // DISCARD
+        TYPE_INFO(CoreType::INVALID, 0, false),  // VARIANTS
+        TYPE_INFO(CoreType::INVALID, 0, false),  // RULES
+        TYPE_INFO(CoreType::INVALID, 0, false),  // REQUIRE
+        TYPE_INFO(CoreType::INVALID, 0, false),  // CONFLICT
         
         // Special
         TYPE_INFO(CoreType::INVALID, 0, false),  // ERROR_TOKEN

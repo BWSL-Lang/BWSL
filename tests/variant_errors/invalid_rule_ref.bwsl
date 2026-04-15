@@ -1,0 +1,21 @@
+pipeline VariantInvalidRuleRef {
+    attributes {
+        position: float3
+    }
+
+    variants {
+        enabled: bool = false;
+
+        rules {
+            require missing -> has_position;
+        }
+    }
+
+    pass "Main" {
+        use attributes { position? }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+    }
+}

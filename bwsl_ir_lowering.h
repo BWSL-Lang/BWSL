@@ -5128,42 +5128,7 @@ struct IRLowering {
 
   // Get type name hash for a CoreType using TypeHashes constants
   static u32 GetCoreTypeNameHash(CoreType type) {
-    switch (type) {
-    case CoreType::FLOAT:
-      return TypeHashes::FLOAT;
-    case CoreType::FLOAT2:
-      return TypeHashes::FLOAT2;
-    case CoreType::FLOAT3:
-      return TypeHashes::FLOAT3;
-    case CoreType::FLOAT4:
-      return TypeHashes::FLOAT4;
-    case CoreType::INT:
-      return TypeHashes::INT;
-    case CoreType::INT2:
-      return TypeHashes::INT2;
-    case CoreType::INT3:
-      return TypeHashes::INT3;
-    case CoreType::INT4:
-      return TypeHashes::INT4;
-    case CoreType::UINT:
-      return TypeHashes::UINT;
-    case CoreType::UINT2:
-      return TypeHashes::UINT2;
-    case CoreType::UINT3:
-      return TypeHashes::UINT3;
-    case CoreType::UINT4:
-      return TypeHashes::UINT4;
-    case CoreType::BOOL:
-      return TypeHashes::BOOL;
-    case CoreType::MAT2:
-      return TypeHashes::MAT2;
-    case CoreType::MAT3:
-      return TypeHashes::MAT3;
-    case CoreType::MAT4:
-      return TypeHashes::MAT4;
-    default:
-      return 0;
-    }
+    return SymbolTable::GetCoreTypeNameHash(type);
   }
 
   // Try to resolve a generic function call by finding or instantiating a

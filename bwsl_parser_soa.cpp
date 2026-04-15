@@ -4,6 +4,7 @@
 #include "bwsl_utils.h"
 #include <cstring>
 #include <algorithm>
+#include <cctype>
 #include <climits>
 #include <cstdlib>
 #include <string>
@@ -518,6 +519,13 @@ NodeRef Parser::ParsePipeline() {
             ParseImports(pipeline);
         } else if (Match(TokenType::ATTRIBUTES)) {
             ParseAttributes(pipeline);
+        } else if (Match(TokenType::VARIANTS)) {
+            if (ast->GetPipeline(pipeline).variantDecls.count > 0 ||
+                ast->GetPipeline(pipeline).variantRules.count > 0) {
+                Error("Only one variants block is allowed per pipeline");
+                continue;
+            }
+            ParseVariants(pipeline);
         } else if (Match(TokenType::COMPUTE_GRAPH)) {
             if (!ast->GetPipeline(pipeline).computeGraph.IsNull()) {
                 Error("Only one compute_graph block is allowed per pipeline");
@@ -629,7 +637,7 @@ NodeRef Parser::ParsePipeline() {
                 ast->GetPipeline(pipeline).functions.Push(arena, function);
             }
         } else {
-            ErrorAtCurrent("Expected 'import', 'attributes', 'compute_graph', 'constraint', 'enum', 'eval', 'module', 'struct', or 'pass'");
+            ErrorAtCurrent("Expected 'import', 'attributes', 'variants', 'compute_graph', 'constraint', 'enum', 'eval', 'module', 'struct', or 'pass'");
             Advance();
         }
         
@@ -639,6 +647,7 @@ NodeRef Parser::ParsePipeline() {
 
     Consume(TokenType::RIGHT_BRACE, "Expected '}' after pipeline body");
 
+    ResolvePipelineVariants(pipeline);
     // Resolve deferred shader stage expressions before returning
     ResolveShaderStageExpressions(pipeline);
 
@@ -761,6 +770,108 @@ void Parser::ParseAttributes(NodeRef pipeline) {
             Error("First attribute must be 'position'");
         }
     }
+}
+
+void Parser::ParseVariants(NodeRef pipeline) {
+    Consume(TokenType::LEFT_BRACE, "Expected '{' after 'variants'");
+
+    while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        if (Match(TokenType::RULES)) {
+            ParseVariantRules(pipeline);
+            continue;
+        }
+
+        Consume(TokenType::IDENTIFIER, "Expected variant name");
+        ArenaString variantName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
+
+        bool duplicate = false;
+        for (u32 i = 0; i < ast->GetPipeline(pipeline).variantDecls.count; i++) {
+            if (ast->GetPipeline(pipeline).variantDecls[i].name.nameHash == variantName.nameHash) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            Error("Variant already declared in this pipeline");
+        }
+
+        Consume(TokenType::COLON, "Expected ':' after variant name");
+
+        ArenaString typeName;
+        TypeInfo typeInfo = TYPE_INFO(CoreType::INVALID, 0, false);
+        u32 enumTypeHash = 0;
+
+        if (Match(TokenType::BOOL)) {
+            typeName = ArenaString::MakeHashOnly("bool");
+            typeInfo = TYPE_INFO(CoreType::BOOL, 1, false);
+        } else {
+            Consume(TokenType::IDENTIFIER, "Expected 'bool' or enum type name");
+            u32 typeOffset = stream->GetOffset(previous);
+            u16 typeLength = stream->GetLength(previous);
+            std::string typeNameStr(stream->GetValue(previous));
+            bool isQualified = false;
+            if (Match(TokenType::DOUBLE_COLON)) {
+                Consume(TokenType::IDENTIFIER, "Expected enum type after '::'");
+                typeNameStr += "::";
+                typeNameStr += std::string(stream->GetValue(previous));
+                isQualified = true;
+            }
+            if (isQualified) {
+                typeName = ArenaString::MakeHashOnly(typeNameStr);
+            } else {
+                typeName = ArenaString::Make(sourceBase(), typeOffset, typeLength);
+            }
+            enumTypeHash = typeName.nameHash;
+        }
+
+        Consume(TokenType::ASSIGN, "Expected '=' after variant type");
+        NodeRef defaultExpr = ParseExpression();
+        if (defaultExpr.IsNull()) {
+            Error("Expected compile-time default value for variant");
+        }
+        Consume(TokenType::SEMICOLON, "Expected ';' after variant declaration");
+
+        PipelineVariantDeclData decl{};
+        decl.name = variantName;
+        decl.typeName = typeName;
+        decl.typeInfo = typeInfo;
+        decl.enumTypeHash = enumTypeHash;
+        decl.defaultExpr = defaultExpr;
+        decl.defaultResolved = false;
+        ast->GetPipeline(pipeline).variantDecls.Push(arena, decl);
+    }
+
+    Consume(TokenType::RIGHT_BRACE, "Expected '}' after variants block");
+}
+
+void Parser::ParseVariantRules(NodeRef pipeline) {
+    Consume(TokenType::LEFT_BRACE, "Expected '{' after 'rules'");
+
+    while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        VariantRuleData rule{};
+
+        if (Match(TokenType::REQUIRE)) {
+            rule.type = VariantRuleType::Require;
+            rule.lhs = ParseExpression();
+            Consume(TokenType::ARROW, "Expected '->' in require rule");
+            rule.rhs = ParseExpression();
+            Consume(TokenType::SEMICOLON, "Expected ';' after require rule");
+        } else if (Match(TokenType::CONFLICT)) {
+            rule.type = VariantRuleType::Conflict;
+            rule.lhs = ParseExpression();
+            Consume(TokenType::COMMA, "Expected ',' in conflict rule");
+            rule.rhs = ParseExpression();
+            Consume(TokenType::SEMICOLON, "Expected ';' after conflict rule");
+        } else {
+            ErrorAtCurrent("Expected 'require' or 'conflict' inside variant rules");
+            Advance();
+            continue;
+        }
+
+        ast->GetPipeline(pipeline).variantRules.Push(arena, rule);
+    }
+
+    Consume(TokenType::RIGHT_BRACE, "Expected '}' after rules block");
 }
 
 NodeRef Parser::ParseAttributeDecl() {
@@ -2365,6 +2476,12 @@ NodeRef Parser::ParsePrimary() {
         return node;
     }
 
+    if (Match(TokenType::VARIANTS)) {
+        NodeRef node = ASTFactory::MakeIdentifier(ast, "variants", line, col);
+        ast->GetIdentifier(node).identifierKind = SpecialIdentifier::VARIANTS;
+        return node;
+    }
+
     // self keyword - used in enum methods
     if (Match(TokenType::SELF)) {
         NodeRef node = ASTFactory::MakeIdentifier(ast, "self", line, col);
@@ -2585,6 +2702,14 @@ NodeRef Parser::ParseMemberAccess(NodeRef object) {
                     ErrorAtPrevious("Attribute not declared in 'use attributes' for this pass");
                 }
                 break;
+
+            case SpecialIdentifier::VARIANTS: {
+                TypeInfo variantType;
+                if (!LookupVariantType(currentPipeline, memberName.nameHash, &variantType)) {
+                    ErrorAtPrevious("Unknown variant or implicit variant feature");
+                }
+                break;
+            }
 
             default:
                 break;
@@ -3221,6 +3346,471 @@ void Parser::BuildVisibleEvalSubstitutions(std::vector<ParamSubstitution>& outSu
             outSubs.push_back({binding.nameHash, binding.value});
         }
     }
+}
+
+bool Parser::IsOptionalAttributeFeature(NodeRef pipeline, u8 attributeIndex) const {
+    if (pipeline.IsNull() || attributeIndex >= 32) return false;
+    const u32 bit = (1u << attributeIndex);
+
+    if (currentPass.IsValid() && currentPipeline == pipeline) {
+        if (ast->GetPass(currentPass).optionalAttributesMask & bit) {
+            return true;
+        }
+    }
+
+    const PipelineData& pipelineData = ast->GetPipeline(pipeline);
+    for (u32 i = 0; i < pipelineData.passes.count; i++) {
+        if (ast->GetPass(pipelineData.passes[i]).optionalAttributesMask & bit) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Parser::LookupVariantType(NodeRef pipeline, u32 nameHash, TypeInfo* outType,
+                               u32* outEnumTypeHash,
+                               bool* outImplicit,
+                               u8* outAttributeIndex) const {
+    if (outType) *outType = TYPE_INFO(CoreType::INVALID, 0, false);
+    if (outEnumTypeHash) *outEnumTypeHash = 0;
+    if (outImplicit) *outImplicit = false;
+    if (outAttributeIndex) *outAttributeIndex = 0xFF;
+
+    if (pipeline.IsNull()) return false;
+    const PipelineData& pipelineData = ast->GetPipeline(pipeline);
+
+    for (u32 i = 0; i < pipelineData.variantDecls.count; i++) {
+        const PipelineVariantDeclData& decl = pipelineData.variantDecls[i];
+        if (decl.name.nameHash != nameHash) continue;
+        if (outType) *outType = decl.typeInfo;
+        if (outEnumTypeHash) *outEnumTypeHash = decl.enumTypeHash;
+        return true;
+    }
+
+    static const u32 HAS_PREFIX = Utils::HashStr("has_");
+    (void)HAS_PREFIX;
+    const PipelineData& pipelineRef = ast->GetPipeline(pipeline);
+    for (u32 i = 0; i < pipelineRef.attributes.count; i++) {
+        const AttributeDeclData& attr = ast->GetAttributeDecl(pipelineRef.attributes[i]);
+        if (!IsOptionalAttributeFeature(pipeline, attr.attributeIndex)) continue;
+        std::string implicitName = std::string("has_") + attr.name.ToString(sourceBase());
+        if (Utils::HashStr(implicitName.c_str()) != nameHash) continue;
+        if (outType) *outType = TYPE_INFO(CoreType::BOOL, 1, false);
+        if (outImplicit) *outImplicit = true;
+        if (outAttributeIndex) *outAttributeIndex = attr.attributeIndex;
+        return true;
+    }
+
+    return false;
+}
+
+bool Parser::LookupActiveVariantBinding(u32 nameHash, LiteralValue* outValue,
+                                        TypeInfo* outType,
+                                        u32* outEnumTypeHash,
+                                        bool* outImplicit,
+                                        u8* outAttributeIndex) const {
+    for (size_t i = activeVariantBindings.size(); i > 0; --i) {
+        const ActiveVariantBinding& binding = activeVariantBindings[i - 1];
+        if (binding.nameHash != nameHash) continue;
+        if (outValue) *outValue = binding.value;
+        if (outType) *outType = binding.typeInfo;
+        if (outEnumTypeHash) *outEnumTypeHash = binding.enumTypeHash;
+        if (outImplicit) *outImplicit = binding.isImplicit;
+        if (outAttributeIndex) *outAttributeIndex = binding.attributeIndex;
+        return true;
+    }
+    return false;
+}
+
+void Parser::SetActiveVariantSelection(const VariantSelectionData& selection, bool allowBareLookup) {
+    activeVariantBindings.clear();
+    activeVariantBindings.reserve(selection.values.size());
+    for (const auto& value : selection.values) {
+        ActiveVariantBinding binding{};
+        binding.nameHash = value.name.nameHash;
+        binding.typeInfo = value.typeInfo;
+        binding.enumTypeHash = value.enumTypeHash;
+        binding.value = value.value;
+        binding.isImplicit = value.isImplicit;
+        binding.attributeIndex = value.attributeIndex;
+        activeVariantBindings.push_back(binding);
+    }
+    this->allowBareVariantLookup = allowBareLookup;
+}
+
+void Parser::ClearActiveVariantSelection() {
+    activeVariantBindings.clear();
+    allowBareVariantLookup = false;
+}
+
+bool Parser::ResolvePipelineVariants(NodeRef pipeline, std::string* outError) {
+    if (pipeline.IsNull()) return true;
+
+    auto fail = [&](const std::string& msg) -> bool {
+        if (outError) *outError = msg;
+        Error(msg);
+        return false;
+    };
+
+    const PipelineData& pipelineData = ast->GetPipeline(pipeline);
+
+    activeVariantBindings.clear();
+    allowBareVariantLookup = true;
+
+    for (u32 i = 0; i < pipelineData.variantDecls.count; i++) {
+        PipelineVariantDeclData& decl = ast->GetPipeline(pipeline).variantDecls[i];
+
+        if (decl.enumTypeHash != 0) {
+            Symbol* sym = SymbolTable::LookupByHash(&symbolTable, decl.enumTypeHash);
+            if (!sym || (sym->kind != SymbolKind::ENUM && sym->kind != SymbolKind::ENUM_SYMBOL)) {
+                ClearActiveVariantSelection();
+                return fail("Variant type must be 'bool' or an enum type");
+            }
+            EnumData& enumData = symbolTable.enums[sym->index];
+            if (enumData.flags & EnumData::IS_SUM_TYPE) {
+                ClearActiveVariantSelection();
+                return fail("Sum-type enums are not supported as variant types");
+            }
+            CoreType baseType = enumData.underlyingType;
+            if (baseType == CoreType::INVALID) baseType = CoreType::INT;
+            decl.typeInfo = TYPE_INFO(baseType, 1, false);
+        }
+
+        LiteralValue value;
+        if (!EvaluateNodeWithEvalBindings(decl.defaultExpr, &value)) {
+            std::string msg = "Variant default must be a compile-time constant";
+            ClearActiveVariantSelection();
+            return fail(msg);
+        }
+
+        if (!CoerceLiteralToType(decl.typeInfo, &value)) {
+            ClearActiveVariantSelection();
+            return fail("Variant default does not match declared type");
+        }
+
+        decl.defaultValue = value;
+        decl.defaultResolved = true;
+
+        ActiveVariantBinding binding{};
+        binding.nameHash = decl.name.nameHash;
+        binding.typeInfo = decl.typeInfo;
+        binding.enumTypeHash = decl.enumTypeHash;
+        binding.value = value;
+        binding.isImplicit = false;
+        binding.attributeIndex = 0xFF;
+        activeVariantBindings.push_back(binding);
+    }
+
+    for (u32 i = 0; i < pipelineData.attributes.count; i++) {
+        const AttributeDeclData& attr = ast->GetAttributeDecl(pipelineData.attributes[i]);
+        if (!IsOptionalAttributeFeature(pipeline, attr.attributeIndex)) continue;
+
+        ActiveVariantBinding binding{};
+        std::string implicitName = std::string("has_") + attr.name.ToString(sourceBase());
+        u32 implicitHash = Utils::HashStr(implicitName.c_str());
+        ReverseLookup::Register(implicitHash, implicitName.c_str());
+        binding.nameHash = implicitHash;
+        binding.typeInfo = TYPE_INFO(CoreType::BOOL, 1, false);
+        binding.enumTypeHash = 0;
+        binding.value.type = LiteralValue::BOOL;
+        binding.value.boolValue = false;
+        binding.isImplicit = true;
+        binding.attributeIndex = attr.attributeIndex;
+        activeVariantBindings.push_back(binding);
+    }
+
+    for (u32 i = 0; i < pipelineData.variantRules.count; i++) {
+        const VariantRuleData& rule = pipelineData.variantRules[i];
+        LiteralValue lhsValue;
+        LiteralValue rhsValue;
+        if (!EvaluateNodeWithEvalBindings(rule.lhs, &lhsValue)) {
+            ClearActiveVariantSelection();
+            return fail("Variant rule left-hand side must be a compile-time boolean expression");
+        }
+        if (!EvaluateNodeWithEvalBindings(rule.rhs, &rhsValue)) {
+            ClearActiveVariantSelection();
+            return fail("Variant rule right-hand side must be a compile-time boolean expression");
+        }
+        bool lhsBool = false;
+        bool rhsBool = false;
+        if (!ConvertLiteralToBool(lhsValue, &lhsBool) || !ConvertLiteralToBool(rhsValue, &rhsBool)) {
+            ClearActiveVariantSelection();
+            return fail("Variant rules must evaluate to booleans");
+        }
+    }
+
+    ClearActiveVariantSelection();
+    return true;
+}
+
+std::string Parser::FormatVariantExpression(NodeRef expr) const {
+    if (expr.IsNull()) return "<null>";
+
+    switch (expr.Type()) {
+        case ASTNodeType::IDENTIFIER: {
+            const IdentifierData& ident = ast->GetIdentifier(expr);
+            return ident.name.isHashOnly() ? ReverseLookup::GetString(ident.name.nameHash)
+                                           : ident.name.ToString(sourceBase());
+        }
+        case ASTNodeType::LITERAL:
+            return SymbolTable::FormatLiteralValue(ast->GetLiteral(expr).value, &symbolTable, sourceBase());
+        case ASTNodeType::MEMBER_ACCESS: {
+            const MemberAccessData& access = ast->GetMemberAccess(expr);
+            std::string base = FormatVariantExpression(access.object);
+            std::string member = access.member.isHashOnly()
+                ? ReverseLookup::GetString(access.member.nameHash)
+                : access.member.ToString(sourceBase());
+            return access.isModuleQualified ? (base + "::" + member) : (base + "." + member);
+        }
+        case ASTNodeType::UNARY_OP: {
+            const UnaryOpData& unary = ast->GetUnaryOp(expr);
+            const char* op = "?";
+            switch (unary.op) {
+                case UnaryOpType::NOT: op = "!"; break;
+                case UnaryOpType::NEGATE: op = "-"; break;
+                case UnaryOpType::BITWISE_NOT: op = "~"; break;
+                default: break;
+            }
+            return std::string(op) + FormatVariantExpression(unary.operand);
+        }
+        case ASTNodeType::BINARY_OP: {
+            const BinaryOpData& bin = ast->GetBinaryOp(expr);
+            const char* op = "?";
+            switch (bin.op) {
+                case BinaryOpType::AND: op = "&&"; break;
+                case BinaryOpType::OR: op = "||"; break;
+                case BinaryOpType::EQUALS: op = "=="; break;
+                case BinaryOpType::NOT_EQUALS: op = "!="; break;
+                case BinaryOpType::LESS: op = "<"; break;
+                case BinaryOpType::GREATER: op = ">"; break;
+                case BinaryOpType::LESS_EQUAL: op = "<="; break;
+                case BinaryOpType::GREATER_EQUAL: op = ">="; break;
+                case BinaryOpType::ADD: op = "+"; break;
+                case BinaryOpType::SUBTRACT: op = "-"; break;
+                case BinaryOpType::MULTIPLY: op = "*"; break;
+                case BinaryOpType::DIVIDE: op = "/"; break;
+                default: break;
+            }
+            return FormatVariantExpression(bin.left) + " " + op + " " + FormatVariantExpression(bin.right);
+        }
+        case ASTNodeType::TERNARY_EXPRESSION: {
+            const TernaryExprData& ternary = ast->GetTernaryExpression(expr);
+            return FormatVariantExpression(ternary.condition) + " ? " +
+                   FormatVariantExpression(ternary.trueExpr) + " : " +
+                   FormatVariantExpression(ternary.falseExpr);
+        }
+        default:
+            return "<expr>";
+    }
+}
+
+bool Parser::BuildVariantSelection(NodeRef pipeline, const VariantSelectionData* baseSelection,
+                                   u32 attributeMask, bool hasAttributeMask,
+                                   const std::vector<VariantOverride>& overrides,
+                                   VariantSelectionData* outSelection,
+                                   std::string* outError) {
+    (void)baseSelection;
+    if (!outSelection) return false;
+    outSelection->values.clear();
+    outSelection->attributeMask = attributeMask;
+    outSelection->hasAttributeMask = hasAttributeMask;
+
+    if (!ResolvePipelineVariants(pipeline, outError)) {
+        return false;
+    }
+
+    auto fail = [&](const std::string& msg) -> bool {
+        if (outError) *outError = msg;
+        return false;
+    };
+
+    const PipelineData& pipelineData = ast->GetPipeline(pipeline);
+
+    for (u32 i = 0; i < pipelineData.variantDecls.count; i++) {
+        const PipelineVariantDeclData& decl = pipelineData.variantDecls[i];
+        VariantSelectionValue value{};
+        value.name = decl.name;
+        value.typeInfo = decl.typeInfo;
+        value.enumTypeHash = decl.enumTypeHash;
+        value.value = decl.defaultValue;
+        outSelection->values.push_back(value);
+    }
+
+    for (const auto& overrideValue : overrides) {
+        u32 nameHash = Utils::HashStr(overrideValue.name.c_str());
+        VariantSelectionValue* target = nullptr;
+        for (auto& value : outSelection->values) {
+            if (value.name.nameHash == nameHash) {
+                target = &value;
+                break;
+            }
+        }
+        if (!target) {
+            if (overrideValue.name.rfind("has_", 0) == 0) {
+                return fail("Implicit variant facts cannot be overridden explicitly");
+            }
+            return fail("Unknown variant override '" + overrideValue.name + "'");
+        }
+
+        std::string raw = overrideValue.value;
+        std::string lower = raw;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        LiteralValue parsed{};
+        if (target->typeInfo.coreType == CoreType::BOOL) {
+            if (lower == "true" || lower == "1") {
+                parsed.type = LiteralValue::BOOL;
+                parsed.boolValue = true;
+            } else if (lower == "false" || lower == "0") {
+                parsed.type = LiteralValue::BOOL;
+                parsed.boolValue = false;
+            } else {
+                return fail("Boolean variant override must be true/false/1/0");
+            }
+        } else {
+            Symbol* enumSym = SymbolTable::LookupByHash(&symbolTable, target->enumTypeHash);
+            if (!enumSym || (enumSym->kind != SymbolKind::ENUM && enumSym->kind != SymbolKind::ENUM_SYMBOL)) {
+                return fail("Variant enum type could not be resolved");
+            }
+            const EnumData& enumData = symbolTable.enums[enumSym->index];
+
+            std::string variantName = raw;
+            size_t lastScope = variantName.rfind("::");
+            if (lastScope != std::string::npos) {
+                variantName = variantName.substr(lastScope + 2);
+            }
+            u32 variantHash = Utils::HashStr(variantName.c_str());
+            bool found = false;
+            for (u32 i = 0; i < enumData.variants.count; i++) {
+                if (enumData.variants[i].name.nameHash != variantHash) continue;
+                if (target->typeInfo.coreType == CoreType::UINT) {
+                    parsed.type = LiteralValue::UINT;
+                    parsed.uintValue = enumData.variants[i].value;
+                } else {
+                    parsed.type = LiteralValue::INT;
+                    parsed.intValue = static_cast<int>(enumData.variants[i].value);
+                }
+                found = true;
+                break;
+            }
+            if (!found) {
+                return fail("Unknown enum variant override '" + raw + "'");
+            }
+        }
+        target->value = parsed;
+    }
+
+    for (u32 i = 0; i < pipelineData.attributes.count; i++) {
+        const AttributeDeclData& attr = ast->GetAttributeDecl(pipelineData.attributes[i]);
+        if (!IsOptionalAttributeFeature(pipeline, attr.attributeIndex)) continue;
+
+        VariantSelectionValue value{};
+        std::string implicitName = std::string("has_") + attr.name.ToString(sourceBase());
+        value.name = ArenaString::MakeHashOnly(implicitName);
+        ReverseLookup::Register(value.name.nameHash, implicitName.c_str());
+        value.typeInfo = TYPE_INFO(CoreType::BOOL, 1, false);
+        value.enumTypeHash = 0;
+        value.value.type = LiteralValue::BOOL;
+        value.value.boolValue = hasAttributeMask
+            ? ((attributeMask & (1u << attr.attributeIndex)) != 0)
+            : true;
+        value.isImplicit = true;
+        value.attributeIndex = attr.attributeIndex;
+        outSelection->values.push_back(value);
+    }
+
+    SetActiveVariantSelection(*outSelection, true);
+    for (u32 i = 0; i < pipelineData.variantRules.count; i++) {
+        const VariantRuleData& rule = pipelineData.variantRules[i];
+        LiteralValue lhsValue;
+        LiteralValue rhsValue;
+        if (!EvaluateNodeWithEvalBindings(rule.lhs, &lhsValue) ||
+            !EvaluateNodeWithEvalBindings(rule.rhs, &rhsValue)) {
+            ClearActiveVariantSelection();
+            return fail("Failed to evaluate variant legality rules for the requested selection");
+        }
+        bool lhsBool = false;
+        bool rhsBool = false;
+        if (!ConvertLiteralToBool(lhsValue, &lhsBool) || !ConvertLiteralToBool(rhsValue, &rhsBool)) {
+            ClearActiveVariantSelection();
+            return fail("Variant legality rules must evaluate to booleans");
+        }
+        if (rule.type == VariantRuleType::Require) {
+            if (lhsBool && !rhsBool) {
+                ClearActiveVariantSelection();
+                return fail("Variant selection violates rule: require " +
+                            FormatVariantExpression(rule.lhs) + " -> " +
+                            FormatVariantExpression(rule.rhs));
+            }
+        } else if (lhsBool && rhsBool) {
+            ClearActiveVariantSelection();
+            return fail("Variant selection violates rule: conflict " +
+                        FormatVariantExpression(rule.lhs) + ", " +
+                        FormatVariantExpression(rule.rhs));
+        }
+    }
+    ClearActiveVariantSelection();
+
+    return true;
+}
+
+bool Parser::BuildVariantReflection(NodeRef pipeline, const VariantSelectionData* selection,
+                                    VariantReflectionData* outReflection,
+                                    std::string* outError) {
+    if (!outReflection) return false;
+    outReflection->declared.clear();
+    outReflection->implicit.clear();
+    outReflection->selected.clear();
+    outReflection->rules.clear();
+    outReflection->symbolTable = &symbolTable;
+    outReflection->sourceBase = sourceBase();
+    outReflection->attributeMask = selection ? selection->attributeMask : 0;
+    outReflection->hasAttributeMask = selection ? selection->hasAttributeMask : false;
+
+    if (!ResolvePipelineVariants(pipeline, outError)) {
+        return false;
+    }
+
+    const PipelineData& pipelineData = ast->GetPipeline(pipeline);
+    for (u32 i = 0; i < pipelineData.variantDecls.count; i++) {
+        const PipelineVariantDeclData& decl = pipelineData.variantDecls[i];
+        VariantDeclarationReflection reflection{};
+        reflection.name = decl.name;
+        reflection.typeInfo = decl.typeInfo;
+        reflection.enumTypeHash = decl.enumTypeHash;
+        reflection.defaultValue = decl.defaultValue;
+        outReflection->declared.push_back(reflection);
+    }
+
+    for (u32 i = 0; i < pipelineData.attributes.count; i++) {
+        const AttributeDeclData& attr = ast->GetAttributeDecl(pipelineData.attributes[i]);
+        if (!IsOptionalAttributeFeature(pipeline, attr.attributeIndex)) continue;
+        VariantDeclarationReflection reflection{};
+        std::string implicitName = std::string("has_") + attr.name.ToString(sourceBase());
+        reflection.name = ArenaString::MakeHashOnly(implicitName);
+        ReverseLookup::Register(reflection.name.nameHash, implicitName.c_str());
+        reflection.typeInfo = TYPE_INFO(CoreType::BOOL, 1, false);
+        reflection.enumTypeHash = 0;
+        reflection.isImplicit = true;
+        reflection.attributeIndex = attr.attributeIndex;
+        outReflection->implicit.push_back(reflection);
+    }
+
+    for (u32 i = 0; i < pipelineData.variantRules.count; i++) {
+        const VariantRuleData& rule = pipelineData.variantRules[i];
+        VariantRuleReflection reflection{};
+        reflection.kind = (rule.type == VariantRuleType::Require) ? "require" : "conflict";
+        reflection.lhs = FormatVariantExpression(rule.lhs);
+        reflection.rhs = FormatVariantExpression(rule.rhs);
+        outReflection->rules.push_back(reflection);
+    }
+
+    if (selection) {
+        outReflection->selected = selection->values;
+    }
+
+    return true;
 }
 
 bool Parser::ConvertLiteralToBool(const LiteralValue& value, bool* outBool) const {
@@ -4363,33 +4953,11 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
 
     Consume(TokenType::SEMICOLON, "Expected ';' after array declaration");
 
-    auto HashFromCoreType = [](CoreType t) -> u32 {
-        switch (t) {
-            case CoreType::BOOL:   return TypeHashes::BOOL;
-            case CoreType::INT:    return TypeHashes::INT;
-            case CoreType::UINT:   return TypeHashes::UINT;
-            case CoreType::FLOAT:  return TypeHashes::FLOAT;
-            case CoreType::INT2:   return TypeHashes::INT2;
-            case CoreType::INT3:   return TypeHashes::INT3;
-            case CoreType::INT4:   return TypeHashes::INT4;
-            case CoreType::UINT2:  return TypeHashes::UINT2;
-            case CoreType::UINT3:  return TypeHashes::UINT3;
-            case CoreType::UINT4:  return TypeHashes::UINT4;
-            case CoreType::FLOAT2: return TypeHashes::FLOAT2;
-            case CoreType::FLOAT3: return TypeHashes::FLOAT3;
-            case CoreType::FLOAT4: return TypeHashes::FLOAT4;
-            case CoreType::MAT2:   return TypeHashes::MAT2;
-            case CoreType::MAT3:   return TypeHashes::MAT3;
-            case CoreType::MAT4:   return TypeHashes::MAT4;
-            default:               return 0;
-        }
-    };
-
     NodeRef varDecl = ASTFactory::MakeVariableDecl(ast,
         ArenaString::MakeHashOnly(varName),
         ArenaString::MakeHashOnly("array"),
         initializer, false, line, col, storageClass, static_cast<u8>(arrayDims.size()),
-        static_cast<u32>(totalSize), HashFromCoreType(elementType));
+        static_cast<u32>(totalSize), SymbolTable::GetCoreTypeNameHash(elementType));
 
     // Add to symbol table
     Symbol* sym = SymbolTable::AddSymbol(&symbolTable, ArenaString::MakeHashOnly(varName), SymbolKind::VARIABLE);
@@ -4566,6 +5134,14 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
                         break;
                     }
 
+                    case SpecialIdentifier::VARIANTS: {
+                        TypeInfo variantType;
+                        if (LookupVariantType(currentPipeline, memberData.member.nameHash, &variantType)) {
+                            return variantType;
+                        }
+                        break;
+                    }
+
                     case SpecialIdentifier::NONE:
                     default: {
                         // Regular member access on user types
@@ -4590,6 +5166,11 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
 
         case ASTNodeType::IDENTIFIER: {
             const IdentifierData& ident = ast->GetIdentifier(expr);
+            TypeInfo activeVariantType;
+            if (allowBareVariantLookup &&
+                LookupActiveVariantBinding(ident.name.nameHash, nullptr, &activeVariantType)) {
+                return activeVariantType;
+            }
             Symbol* sym = SymbolTable::LookupAny(&symbolTable, ident.name);
             if (sym) {
                 switch (sym->kind) {
@@ -4738,6 +5319,8 @@ NodeRef Parser::ParseEnum() {
     Consume(TokenType::IDENTIFIER, "Expected enum name");
 
     std::string enumName(stream->GetValue(previous));
+    u32 enumNameOffset = stream->GetOffset(previous);
+    u16 enumNameLength = stream->GetLength(previous);
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     u32 line = loc.line;
     u32 col = loc.column;
@@ -4752,7 +5335,8 @@ NodeRef Parser::ParseEnum() {
         }
     }
 
-    NodeRef enumNode = ASTFactory::MakeEnumDecl(ast, ArenaString::MakeHashOnly(enumName), underlyingType, line, col);
+    ArenaString enumNameStr = ArenaString::Make(sourceBase(), enumNameOffset, enumNameLength);
+    NodeRef enumNode = ASTFactory::MakeEnumDecl(ast, enumNameStr, underlyingType, line, col);
 
     Consume(TokenType::LEFT_BRACE, "Expected '{'");
 
@@ -4785,11 +5369,11 @@ NodeRef Parser::ParseEnum() {
 
     // Add to symbol table
     Symbol* sym = SymbolTable::AddSymbol(&symbolTable,
-        ArenaString::MakeHashOnly(enumName), SymbolKind::ENUM_SYMBOL);
+        enumNameStr, SymbolKind::ENUM_SYMBOL);
 
     if (sym) {
         EnumData& enumData = symbolTable.enums[sym->index];
-        enumData.name = ArenaString::MakeHashOnly(enumName);
+        enumData.name = enumNameStr;
         enumData.underlyingType = underlyingType;
         enumData.variants.Init(arena, ast->GetEnumDecl(enumNode).variants.count);
         enumData.methodIndices.Init(arena, ast->GetEnumDecl(enumNode).methods.count);
@@ -4861,12 +5445,19 @@ NodeRef Parser::ParseEnum() {
 NodeRef Parser::ParseEnumVariant() {
     Consume(TokenType::IDENTIFIER, "Expected variant name");
     std::string variantName(stream->GetValue(previous));
+    u32 variantOffset = stream->GetOffset(previous);
+    u16 variantLength = stream->GetLength(previous);
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     u32 line = loc.line;
     u32 col = loc.column;
 
     // Start with auto-value marker (0xFFFFFFFF)
-    NodeRef variant = ASTFactory::MakeVariantDecl(ast, ArenaString::MakeHashOnly(variantName), 0xFFFFFFFF, line, col);
+    NodeRef variant = ASTFactory::MakeVariantDecl(
+        ast,
+        ArenaString::Make(sourceBase(), variantOffset, variantLength),
+        0xFFFFFFFF,
+        line,
+        col);
 
     // Check for associated types (sum type variant)
     // e.g., `Constant(float4)` or `Sampled(Texture2D, float2)`
@@ -5871,18 +6462,15 @@ NodeRef Parser::ResolveShaderStageExpr(NodeRef stageNode, const PassData& pass, 
 
         LiteralValue condValue;
         if (!CompileTimeEvaluatorSoA::CanEvaluateNode(&evalState, ternary.condition)) {
-            Error("Shader stage selection condition must be compile-time constant");
-            return NodeRef::Null();
+            return stageNode;
         }
 
         if (!CompileTimeEvaluatorSoA::EvaluateNode(&evalState, ternary.condition, &condValue)) {
-            Error("Failed to evaluate shader stage selection condition");
-            return NodeRef::Null();
+            return stageNode;
         }
 
         if (condValue.type != LiteralValue::BOOL) {
-            Error("Shader stage selection condition must be boolean");
-            return NodeRef::Null();
+            return stageNode;
         }
 
         // Select the branch and recursively resolve
@@ -5937,12 +6525,10 @@ NodeRef Parser::ResolveShaderStageExpr(NodeRef stageNode, const PassData& pass, 
             for (u32 i = 0; i < func.parameters.count && i < 16; i++) {
                 LiteralValue argValue;
                 if (!CompileTimeEvaluatorSoA::CanEvaluateNode(&evalState, call.arguments[i])) {
-                    Error("Shader function arguments must be compile-time constants");
-                    return NodeRef::Null();
+                    return stageNode;
                 }
                 if (!CompileTimeEvaluatorSoA::EvaluateNode(&evalState, call.arguments[i], &argValue)) {
-                    Error("Failed to evaluate shader function argument");
-                    return NodeRef::Null();
+                    return stageNode;
                 }
                 paramSubs[paramSubCount].nameHash = func.parameters[i].first.nameHash;
                 paramSubs[paramSubCount].value = argValue;
@@ -5982,6 +6568,11 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
                     return MakeLiteralNodeFromValue(subs[i].value, line, col);
                 }
             }
+            LiteralValue variantValue;
+            if (allowBareVariantLookup &&
+                LookupActiveVariantBinding(src.name.nameHash, &variantValue)) {
+                return MakeLiteralNodeFromValue(variantValue, line, col);
+            }
             // Not a parameter - clone as-is
             return ASTFactory::MakeIdentifier(ast, src.name, line, col);
         }
@@ -6017,8 +6608,21 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
 
         case ASTNodeType::MEMBER_ACCESS: {
             const MemberAccessData& src = ast->GetMemberAccess(node);
+            if (src.object.Type() == ASTNodeType::IDENTIFIER) {
+                const IdentifierData& objectIdent = ast->GetIdentifier(src.object);
+                if (objectIdent.identifierKind == SpecialIdentifier::VARIANTS) {
+                    LiteralValue variantValue;
+                    if (LookupActiveVariantBinding(src.member.nameHash, &variantValue)) {
+                        return MakeLiteralNodeFromValue(variantValue, line, col);
+                    }
+                }
+            }
             NodeRef object = CloneNodeWithParams(src.object, subs, subCount);
-            return ASTFactory::MakeMemberAccess(ast, object, src.member, line, col);
+            NodeRef memberNode = ASTFactory::MakeMemberAccess(ast, object, src.member, line, col);
+            MemberAccessData& memberData = ast->GetMemberAccess(memberNode);
+            memberData.isModuleQualified = src.isModuleQualified;
+            memberData.qualifiedNameHash = src.qualifiedNameHash;
+            return memberNode;
         }
 
         case ASTNodeType::ARRAY_ACCESS: {
@@ -6075,6 +6679,18 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
         case ASTNodeType::TERNARY_EXPRESSION: {
             const TernaryExprData& src = ast->GetTernaryExpression(node);
             NodeRef condition = CloneNodeWithParams(src.condition, subs, subCount);
+            if (!activeVariantBindings.empty()) {
+                EvalStateSoA evalState;
+                CompileTimeEvaluatorSoA::Init(&evalState, this, ast, &context->evalCache, ast->arena);
+                LiteralValue condValue;
+                if (CompileTimeEvaluatorSoA::CanEvaluateNode(&evalState, condition) &&
+                    CompileTimeEvaluatorSoA::EvaluateNode(&evalState, condition, &condValue)) {
+                    bool conditionTrue = false;
+                    if (ConvertLiteralToBool(condValue, &conditionTrue)) {
+                        return CloneNodeWithParams(conditionTrue ? src.trueExpr : src.falseExpr, subs, subCount);
+                    }
+                }
+            }
             NodeRef trueExpr = CloneNodeWithParams(src.trueExpr, subs, subCount);
             NodeRef falseExpr = CloneNodeWithParams(src.falseExpr, subs, subCount);
             return ASTFactory::MakeTernaryExpr(ast, condition, trueExpr, falseExpr, line, col);
@@ -6083,9 +6699,32 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
         case ASTNodeType::IF_STATEMENT: {
             // IF_STATEMENT uses BlockData: [condition, thenBranch, elseBranch?]
             const BlockData& src = ast->GetBlock(node);
+            if (!src.statements.count) {
+                return ASTFactory::MakeBlock(ast, line, col);
+            }
+            NodeRef condition = CloneNodeWithParams(src.statements[0], subs, subCount);
+            if (!activeVariantBindings.empty()) {
+                EvalStateSoA evalState;
+                CompileTimeEvaluatorSoA::Init(&evalState, this, ast, &context->evalCache, ast->arena);
+                LiteralValue condValue;
+                if (CompileTimeEvaluatorSoA::CanEvaluateNode(&evalState, condition) &&
+                    CompileTimeEvaluatorSoA::EvaluateNode(&evalState, condition, &condValue)) {
+                    bool conditionTrue = false;
+                    if (ConvertLiteralToBool(condValue, &conditionTrue)) {
+                        if (conditionTrue && src.statements.count >= 2) {
+                            return CloneNodeWithParams(src.statements[1], subs, subCount);
+                        }
+                        if (!conditionTrue && src.statements.count >= 3) {
+                            return CloneNodeWithParams(src.statements[2], subs, subCount);
+                        }
+                        return ASTFactory::MakeBlock(ast, line, col);
+                    }
+                }
+            }
             NodeRef newIf = ASTFactory::MakeIfStatement(ast, line, col);
             BlockData& dst = ast->GetBlock(newIf);
-            for (u32 i = 0; i < src.statements.count; i++) {
+            dst.statements.Push(arena, condition);
+            for (u32 i = 1; i < src.statements.count; i++) {
                 NodeRef cloned = CloneNodeWithParams(src.statements[i], subs, subCount);
                 if (cloned.IsValid()) {
                     dst.statements.Push(arena, cloned);
@@ -6169,6 +6808,136 @@ NodeRef Parser::CloneShaderStageWithParams(NodeRef stageNode, const ParamSubstit
     // Don't copy inheritsFrom/isInherited/isDeferred - this is a fresh resolved stage
 
     return newStage;
+}
+
+NodeRef Parser::ClonePassWithActiveVariants(NodeRef passRef) {
+    const PassData& srcPass = ast->GetPass(passRef);
+    std::string passName = srcPass.name.isHashOnly()
+        ? ReverseLookup::GetString(srcPass.name.nameHash)
+        : srcPass.name.ToString(sourceBase());
+    NodeRef newPass = ASTFactory::MakePass(ast, passName, ast->GetLine(passRef), ast->GetColumn(passRef));
+    PassData& dstPass = ast->GetPass(newPass);
+
+    dstPass.usedAttributes = srcPass.usedAttributes;
+    dstPass.optionalAttributesMask = srcPass.optionalAttributesMask;
+
+    for (u32 i = 0; i < srcPass.consts.count; i++) {
+        dstPass.consts.Push(arena, CloneNodeWithParams(srcPass.consts[i], nullptr, 0));
+    }
+
+    for (u32 i = 0; i < srcPass.functions.count; i++) {
+        NodeRef fnRef = srcPass.functions[i];
+        const FunctionDeclData& srcFn = ast->GetFunction(fnRef);
+        std::string fnName = srcFn.name.isHashOnly()
+            ? ReverseLookup::GetString(srcFn.name.nameHash)
+            : srcFn.name.ToString(sourceBase());
+        NodeRef newFn = ASTFactory::MakeFunction(ast, fnName, srcFn.returnType,
+                                                ast->GetLine(fnRef), ast->GetColumn(fnRef));
+        FunctionDeclData& dstFn = ast->GetFunction(newFn);
+        dstFn.parameters = srcFn.parameters;
+        dstFn.isEval = srcFn.isEval;
+        dstFn.body = CloneNodeWithParams(srcFn.body, nullptr, 0);
+        dstPass.functions.Push(arena, newFn);
+    }
+
+    auto cloneStage = [&](NodeRef stageRef) -> NodeRef {
+        if (stageRef.IsNull()) return stageRef;
+        const ShaderStageData& srcStage = ast->GetShaderStage(stageRef);
+        if (srcStage.isDeferred) {
+            NodeRef stage = ASTFactory::MakeShaderStage(ast, stageRef.Type(), NodeRef::Null(),
+                                                        ast->GetLine(stageRef), ast->GetColumn(stageRef));
+            ShaderStageData& dstStage = ast->GetShaderStage(stage);
+            dstStage.isDeferred = true;
+            dstStage.deferredExpr = CloneNodeWithParams(srcStage.deferredExpr, nullptr, 0);
+            dstStage.isInherited = srcStage.isInherited;
+            dstStage.inheritsFrom = srcStage.inheritsFrom;
+            dstStage.name = srcStage.name;
+            dstStage.workgroupSizeX = srcStage.workgroupSizeX;
+            dstStage.workgroupSizeY = srcStage.workgroupSizeY;
+            dstStage.workgroupSizeZ = srcStage.workgroupSizeZ;
+            return stage;
+        }
+        NodeRef stage = CloneShaderStageWithParams(stageRef, nullptr, 0);
+        ShaderStageData& dstStage = ast->GetShaderStage(stage);
+        dstStage.isInherited = srcStage.isInherited;
+        dstStage.inheritsFrom = srcStage.inheritsFrom;
+        return stage;
+    };
+
+    dstPass.vertexShader = cloneStage(srcPass.vertexShader);
+    dstPass.fragmentShader = cloneStage(srcPass.fragmentShader);
+    dstPass.computeShader = cloneStage(srcPass.computeShader);
+
+    return newPass;
+}
+
+NodeRef Parser::SpecializePipelineForVariants(NodeRef pipeline,
+                                              const VariantSelectionData& selection,
+                                              std::string* outError) {
+    if (pipeline.IsNull()) return NodeRef::Null();
+
+    const PipelineData& srcPipeline = ast->GetPipeline(pipeline);
+    if (srcPipeline.variantDecls.count == 0 && srcPipeline.variantRules.count == 0) {
+        (void)selection;
+        return pipeline;
+    }
+
+    std::string pipelineName = srcPipeline.name.isHashOnly()
+        ? ReverseLookup::GetString(srcPipeline.name.nameHash)
+        : srcPipeline.name.ToString(sourceBase());
+
+    SetActiveVariantSelection(selection, false);
+
+    NodeRef newPipeline = ASTFactory::MakePipeline(ast, pipelineName, ast->GetLine(pipeline), ast->GetColumn(pipeline));
+    PipelineData& dstPipeline = ast->GetPipeline(newPipeline);
+    dstPipeline.imports = srcPipeline.imports;
+    dstPipeline.attributes = srcPipeline.attributes;
+    dstPipeline.resources = srcPipeline.resources;
+    dstPipeline.variantDecls = srcPipeline.variantDecls;
+    dstPipeline.variantRules = srcPipeline.variantRules;
+    dstPipeline.enums = srcPipeline.enums;
+    dstPipeline.constraints = srcPipeline.constraints;
+    dstPipeline.computeGraph = srcPipeline.computeGraph;
+
+    for (u32 i = 0; i < srcPipeline.functions.count; i++) {
+        NodeRef fnRef = srcPipeline.functions[i];
+        const FunctionDeclData& srcFn = ast->GetFunction(fnRef);
+        std::string fnName = srcFn.name.isHashOnly()
+            ? ReverseLookup::GetString(srcFn.name.nameHash)
+            : srcFn.name.ToString(sourceBase());
+        NodeRef newFn = ASTFactory::MakeFunction(ast, fnName, srcFn.returnType,
+                                                ast->GetLine(fnRef), ast->GetColumn(fnRef));
+        FunctionDeclData& dstFn = ast->GetFunction(newFn);
+        dstFn.parameters = srcFn.parameters;
+        dstFn.isEval = srcFn.isEval;
+        dstFn.body = CloneNodeWithParams(srcFn.body, nullptr, 0);
+        dstPipeline.functions.Push(arena, newFn);
+    }
+
+    for (u32 i = 0; i < srcPipeline.passes.count; i++) {
+        dstPipeline.passes.Push(arena, ClonePassWithActiveVariants(srcPipeline.passes[i]));
+    }
+
+    NodeRef savedPipeline = currentPipeline;
+    currentPipeline = newPipeline;
+    ResolveShaderStageExpressions(newPipeline);
+    currentPipeline = savedPipeline;
+    ClearActiveVariantSelection();
+
+    for (u32 i = 0; i < dstPipeline.passes.count; i++) {
+        const PassData& pass = ast->GetPass(dstPipeline.passes[i]);
+        auto unresolved = [&](NodeRef stageRef) -> bool {
+            return stageRef.IsValid() && ast->GetShaderStage(stageRef).isDeferred;
+        };
+        if (unresolved(pass.vertexShader) || unresolved(pass.fragmentShader) || unresolved(pass.computeShader)) {
+            if (outError) {
+                *outError = "Shader stage selection did not resolve for the requested variant selection";
+            }
+            return NodeRef::Null();
+        }
+    }
+
+    return newPipeline;
 }
 
 void Parser::ResolveShaderStageExpressions(NodeRef pipeline) {

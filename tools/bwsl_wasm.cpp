@@ -61,6 +61,7 @@ static constexpr bool USE_DIRECT_GLES = false;
 #include "../bwsl_parser_soa.h"
 #include "../bwsl_lexer.h"
 #include "../bwsl_eval_soa.h"
+#include "../bwsl_variant_system.h"
 #include "../bwsl_arena.h"
 #include "../bwsl_mem_pool.h"
 #include "../bwsl_render_config.h"
@@ -78,6 +79,7 @@ static constexpr bool USE_DIRECT_GLES = false;
 #include "../bwsl_ssa.cpp"
 #include "../bwsl_spirv_backend.cpp"
 #include "../bwsl_compute_graph.cpp"
+#include "../bwsl_variant_system.cpp"
 #include "../bwsl_custom_type_registry.cpp"
 #include "../bwsl_gles_backend.cpp"
 
@@ -630,7 +632,12 @@ static ShaderOutput CompileShaderStage(
 
 // ============= Main Compile Function =============
 
-static std::string CompileToJson(const char* bwslSource, const char* rcfgSource, bool emitInternals = false, const std::vector<std::string>& modulePaths = {}) {
+static std::string CompileToJson(const char* bwslSource,
+                                 const char* rcfgSource,
+                                 bool emitInternals = false,
+                                 const std::vector<std::string>& modulePaths = {},
+                                 const std::vector<VariantOverride>& variantOverrides = {},
+                                 bool dumpVariantSpace = false) {
     std::string source(bwslSource);
 
     // Parse render config
@@ -713,10 +720,37 @@ static std::string CompileToJson(const char* bwslSource, const char* rcfgSource,
         return "{\"success\":false,\"errors\":[\"No pipeline found in source\"]}";
     }
 
-    const PipelineData& pipeline = context.ast.pipelines[0];
+    NodeRef originalPipelineRef = context.root;
+    VariantSelectionData variantSelection;
+    VariantReflectionData variantReflection;
+    std::string variantError;
+
+    if (!parser.BuildVariantSelection(originalPipelineRef, nullptr, 0, false,
+                                      variantOverrides, &variantSelection, &variantError)) {
+        return "{\"success\":false,\"errors\":[\"" + EscapeJsonString(variantError) + "\"]}";
+    }
+    if (!parser.BuildVariantReflection(originalPipelineRef, &variantSelection,
+                                       &variantReflection, &variantError)) {
+        return "{\"success\":false,\"errors\":[\"" + EscapeJsonString(variantError) + "\"]}";
+    }
+    if (dumpVariantSpace) {
+        return SerializeVariantReflectionJson(variantReflection);
+    }
+
+    NodeRef specializedPipelineRef = parser.SpecializePipelineForVariants(originalPipelineRef,
+                                                                         variantSelection,
+                                                                         &variantError);
+    if (specializedPipelineRef.IsNull()) {
+        return "{\"success\":false,\"errors\":[\"" + EscapeJsonString(variantError) + "\"]}";
+    }
+
+    const PipelineData& pipeline = context.ast.GetPipeline(specializedPipelineRef);
     const char* sourceBase = lexer.GetSourceBase();
     const ComputeGraphData* graphData = nullptr;
-    ComputeGraphCompileResult graphResult = CompileComputeGraph(context.ast, pipeline, renderConfig, sourceBase);
+    ComputeGraphCompileResult graphResult = CompileComputeGraph(context.ast,
+                                                               context.ast.GetPipeline(originalPipelineRef),
+                                                               renderConfig,
+                                                               sourceBase);
     if (!graphResult.success) {
         return "{\"success\":false,\"errors\":[\"" + EscapeJsonString(graphResult.error) + "\"]}";
     }
@@ -752,7 +786,7 @@ static std::string CompileToJson(const char* bwslSource, const char* rcfgSource,
         if (isComputePass) {
             compResult = CompileShaderStage(
                 context, parser, pass, ShaderStage::Compute,
-                renderConfig, context.root, nullptr, sourceBase, emitInternals
+                renderConfig, specializedPipelineRef, nullptr, sourceBase, emitInternals
             );
             if (!compResult.success) {
                 return "{\"success\":false,\"errors\":[\"Compute shader: " + EscapeJsonString(compResult.error) + "\"]}";
@@ -761,7 +795,7 @@ static std::string CompileToJson(const char* bwslSource, const char* rcfgSource,
             // Compile vertex shader
             vertResult = CompileShaderStage(
                 context, parser, pass, ShaderStage::Vertex,
-                renderConfig, context.root, &passVaryings, sourceBase, emitInternals
+                renderConfig, specializedPipelineRef, &passVaryings, sourceBase, emitInternals
             );
 
             if (!vertResult.success) {
@@ -771,7 +805,7 @@ static std::string CompileToJson(const char* bwslSource, const char* rcfgSource,
             // Compile fragment shader
             fragResult = CompileShaderStage(
                 context, parser, pass, ShaderStage::Fragment,
-                renderConfig, context.root, &passVaryings, sourceBase, emitInternals
+                renderConfig, specializedPipelineRef, &passVaryings, sourceBase, emitInternals
             );
 
             if (!fragResult.success) {
@@ -853,6 +887,8 @@ static std::string CompileToJson(const char* bwslSource, const char* rcfgSource,
 
         json << "}";
     }
+
+    json << ",\"variants\":" << SerializeVariantReflectionJson(variantReflection);
 
     json << "},";
 
@@ -1026,7 +1062,7 @@ static std::string CompileToJson(const char* bwslSource, const char* rcfgSource,
             if (isComputePass) {
                 ShaderOutput compResult = CompileShaderStage(
                     context, parser, pass, ShaderStage::Compute,
-                    renderConfig, context.root, nullptr, sourceBase, true
+                    renderConfig, specializedPipelineRef, nullptr, sourceBase, true
                 );
                 if (compResult.success) {
                     if (!firstInternal) json << ",";
@@ -1038,7 +1074,7 @@ static std::string CompileToJson(const char* bwslSource, const char* rcfgSource,
             } else {
                 ShaderOutput vertResult = CompileShaderStage(
                     context, parser, pass, ShaderStage::Vertex,
-                    renderConfig, context.root, &passVaryings, sourceBase, true
+                    renderConfig, specializedPipelineRef, &passVaryings, sourceBase, true
                 );
                 if (vertResult.success) {
                     if (!firstInternal) json << ",";
@@ -1050,7 +1086,7 @@ static std::string CompileToJson(const char* bwslSource, const char* rcfgSource,
 
                 ShaderOutput fragResult = CompileShaderStage(
                     context, parser, pass, ShaderStage::Fragment,
-                    renderConfig, context.root, &passVaryings, sourceBase, true
+                    renderConfig, specializedPipelineRef, &passVaryings, sourceBase, true
                 );
                 if (fragResult.success) {
                     if (!firstInternal) json << ",";
@@ -1079,12 +1115,15 @@ extern "C" {
 // Main compile function - takes BWSL source, optional render config, and optional flags
 // flags: "-internals" to include IR dump and SPIR-V disassembly in output
 //        "-modules <path>" to add module search path (can be used multiple times)
+//        "-variant name=value" to specialize one named variant (can be used multiple times)
+//        "-dump-variant-space" to return variant reflection JSON without shader output
 // Returns JSON string with compiled shaders and metadata
 const char* compile(const char* bwslSource, const char* rcfgSource, const char* flags) {
     bool emitInternals = flags && strstr(flags, "-internals") != nullptr;
+    bool dumpVariantSpace = flags && strstr(flags, "-dump-variant-space") != nullptr;
 
-    // Parse -modules flags
     std::vector<std::string> modulePaths;
+    std::vector<VariantOverride> variantOverrides;
     if (flags) {
         const char* p = flags;
         while ((p = strstr(p, "-modules ")) != nullptr) {
@@ -1097,9 +1136,33 @@ const char* compile(const char* bwslSource, const char* rcfgSource, const char* 
             }
             p = end;
         }
+
+        p = flags;
+        while ((p = strstr(p, "-variant ")) != nullptr) {
+            p += 9;  // Skip "-variant "
+            while (*p == ' ') p++;
+            const char* end = p;
+            while (*end && *end != ' ' && *end != '\0') end++;
+            if (end > p) {
+                std::string assignment(p, end - p);
+                size_t equals = assignment.find('=');
+                if (equals != std::string::npos && equals > 0 && equals + 1 < assignment.size()) {
+                    VariantOverride overrideValue;
+                    overrideValue.name = assignment.substr(0, equals);
+                    overrideValue.value = assignment.substr(equals + 1);
+                    variantOverrides.push_back(std::move(overrideValue));
+                }
+            }
+            p = end;
+        }
     }
 
-    g_resultBuffer = CompileToJson(bwslSource, rcfgSource ? rcfgSource : "", emitInternals, modulePaths);
+    g_resultBuffer = CompileToJson(bwslSource,
+                                   rcfgSource ? rcfgSource : "",
+                                   emitInternals,
+                                   modulePaths,
+                                   variantOverrides,
+                                   dumpVariantSpace);
     return g_resultBuffer.c_str();
 }
 

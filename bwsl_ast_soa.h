@@ -224,6 +224,29 @@ struct ConstraintDeclData {
     TypeMask allowedTypes;
 };
 
+enum class VariantRuleType : u8 {
+    Require = 0,
+    Conflict = 1,
+};
+
+struct PipelineVariantDeclData {
+    ArenaString name;
+    ArenaString typeName;
+    TypeInfo typeInfo;
+    u32 enumTypeHash;
+    NodeRef defaultExpr;
+    LiteralValue defaultValue;
+    bool defaultResolved;
+    u8 _pad[3];
+};
+
+struct VariantRuleData {
+    VariantRuleType type;
+    u8 _pad[3];
+    NodeRef lhs;
+    NodeRef rhs;
+};
+
 // Pass - 32 bytes + ArenaArrays
 struct PassData {
     ArenaString name;
@@ -351,6 +374,8 @@ struct PipelineData {
     ArenaArray<ArenaString> imports;
     ArenaArray<NodeRef> attributes;
     ArenaArray<NodeRef> resources;
+    ArenaArray<PipelineVariantDeclData> variantDecls;
+    ArenaArray<VariantRuleData> variantRules;
     ArenaArray<NodeRef> passes;
     ArenaArray<NodeRef> functions;
     ArenaArray<NodeRef> enums;
@@ -1020,9 +1045,12 @@ namespace ASTFactory {
         data.imports.Init(ast->arena, 4);
         data.attributes.Init(ast->arena, 16);
         data.resources.Init(ast->arena, 16);
+        data.variantDecls.Init(ast->arena, 4);
+        data.variantRules.Init(ast->arena, 4);
         data.passes.Init(ast->arena, 8);
         data.functions.Init(ast->arena, 16);
         data.enums.Init(ast->arena, 8);
+        data.constraints.Init(ast->arena, 8);
         data.computeGraph = NodeRef::Null();
         ast->pipelines.Push(ast->arena, data);
 

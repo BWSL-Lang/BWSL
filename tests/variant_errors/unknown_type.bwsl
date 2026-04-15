@@ -1,0 +1,11 @@
+pipeline VariantUnknownType {
+    variants {
+        lighting: MissingMode = MissingMode::Forward;
+    }
+
+    pass "Main" {
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+        }
+    }
+}

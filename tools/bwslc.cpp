@@ -46,6 +46,7 @@ namespace spirv_cross_wrapper {
 #include "../bwsl_parser_soa.h"
 #include "../bwsl_lexer.h"
 #include "../bwsl_eval_soa.h"
+#include "../bwsl_variant_system.h"
 #include "../bwsl_arena.h"
 #include "../bwsl_mem_pool.h"
 #include "../bwsl_render_config.h"
@@ -65,6 +66,7 @@ namespace spirv_cross_wrapper {
 #include "../bwsl_gles_backend.cpp"
 #include "../bwsl_compute_graph.cpp"
 #include "../bwsl_custom_type_registry.cpp"
+#include "../bwsl_variant_system.cpp"
 
 // Note: SPIRV-Cross is compiled separately (spirv_cross_wrapper.cpp) to avoid
 // macro conflicts with defs.h (u32, f32, f64 macros)
@@ -107,6 +109,8 @@ struct CompilerConfig {
     bool showTiming  = false;              // Print timing information
     bool skipValidation = false;           // Skip SPIR-V validation (faster but less safe)
     bool outputInternals = false;          // Output IR dump + SPIR-V disassembly to JSON file
+    bool dumpVariantSpace = false;         // Dump variant schema/reflection JSON
+    std::vector<VariantOverride> variantOverrides;
 };
 
 struct ShaderTiming {
@@ -198,6 +202,8 @@ void PrintUsage(const char* programName) {
     printf("  -o <dir>       Output directory (default: current directory)\n");
     printf("  -modules <dir> Add module search path (can be used multiple times)\n");
     printf("  -config <file> Add render config path\n");
+    printf("  -variant <k=v> Set a named variant value (repeatable)\n");
+    printf("  -dump-variant-space  Print variant reflection JSON and exit\n");
     printf("  -pass <name>   Compile specific pass (default: all passes)\n");
     printf("  -stage <name>  Compile specific stage: vertex, fragment, compute (default: all)\n");
     printf("\n");
@@ -225,6 +231,7 @@ void PrintUsage(const char* programName) {
     printf("  %s shader.bwsl -metal -hlsl -gles   # SPIR-V + Metal + HLSL + WebGL\n", programName);
     printf("  %s shader.bwsl -format all          # All formats\n", programName);
     printf("  %s shader.bwsl -config render.rcfg -gles  # Use render config with WebGL output\n", programName);
+    printf("  %s shader.bwsl -variant lighting=Clustered -variant skinning=true\n", programName);
 }
 
 std::string ReadFile(const fs::path& path) {
@@ -1363,6 +1370,19 @@ int main(int argc, char* argv[]) {
             config.modulePaths.push_back(argv[++i]);
         } else if (arg == "-config" && i + 1 < argc) {
             config.renderConfigPath = argv[++i];
+        } else if (arg == "-variant" && i + 1 < argc) {
+            std::string spec = argv[++i];
+            size_t eq = spec.find('=');
+            if (eq == std::string::npos || eq == 0 || eq == spec.size() - 1) {
+                fprintf(stderr, "Error: -variant expects name=value\n");
+                return 1;
+            }
+            VariantOverride overrideValue;
+            overrideValue.name = spec.substr(0, eq);
+            overrideValue.value = spec.substr(eq + 1);
+            config.variantOverrides.push_back(std::move(overrideValue));
+        } else if (arg == "-dump-variant-space") {
+            config.dumpVariantSpace = true;
         } else if (arg[0] != '-') {
             config.inputFile = arg;
         } else if (arg == "-dump-ir") {
@@ -1523,13 +1543,43 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    const PipelineData& pipeline = context.ast.pipelines[0];
+    NodeRef originalPipelineRef = context.root;
+    VariantSelectionData variantSelection;
+    std::string variantError;
+    if (!parser.BuildVariantSelection(originalPipelineRef, nullptr, 0, false,
+                                      config.variantOverrides, &variantSelection,
+                                      &variantError)) {
+        fprintf(stderr, "Error: %s\n", variantError.c_str());
+        return 1;
+    }
+
+    VariantReflectionData variantReflection;
+    if (!parser.BuildVariantReflection(originalPipelineRef, &variantSelection,
+                                       &variantReflection, &variantError)) {
+        fprintf(stderr, "Error: %s\n", variantError.c_str());
+        return 1;
+    }
+
+    if (config.dumpVariantSpace) {
+        printf("%s\n", SerializeVariantReflectionJson(variantReflection).c_str());
+        return 0;
+    }
+
+    NodeRef specializedPipelineRef = parser.SpecializePipelineForVariants(originalPipelineRef,
+                                                                          variantSelection,
+                                                                          &variantError);
+    if (specializedPipelineRef.IsNull()) {
+        fprintf(stderr, "Error: %s\n", variantError.c_str());
+        return 1;
+    }
+
+    const PipelineData& pipeline = context.ast.GetPipeline(specializedPipelineRef);
 
     // Get source base for string lookups
     const char* sourceBase = lexer.GetSourceBase();
 
     ComputeGraphCompileResult graphResult = CompileComputeGraph(
-        context.ast, pipeline, config.renderConfig, sourceBase);
+        context.ast, context.ast.GetPipeline(originalPipelineRef), config.renderConfig, sourceBase);
     if (!graphResult.success) {
         fprintf(stderr, "Error: %s\n", graphResult.error.c_str());
         return 1;
@@ -1585,7 +1635,7 @@ int main(int argc, char* argv[]) {
             printf("  Vertex shader:\n");
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Vertex, config.verbose, config.dumpIr, config.debugNames,
-                                                       config.outputGlsl || config.outputGlslEs, config.outputGlslEs, context.root,
+                                                       config.outputGlsl || config.outputGlslEs, config.outputGlslEs, specializedPipelineRef,
                                                        pipeline.passes[passIdx], &passVaryings, config.outputInternals,
                                                        config.useDirectGles, &config.renderConfig);
 
@@ -1851,7 +1901,7 @@ int main(int argc, char* argv[]) {
             fflush(stdout);
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Fragment, config.verbose, config.dumpIr, config.debugNames,
-                                                       config.outputGlsl || config.outputGlslEs, false, context.root,
+                                                       config.outputGlsl || config.outputGlslEs, false, specializedPipelineRef,
                                                        pipeline.passes[passIdx], &passVaryings, config.outputInternals,
                                                        config.useDirectGles, &config.renderConfig);  // Use same varying context populated by vertex shader
 
@@ -2070,7 +2120,7 @@ int main(int argc, char* argv[]) {
             fflush(stdout);
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Compute, config.verbose, config.dumpIr, config.debugNames,
-                                                       config.outputGlsl || config.outputGlslEs, false, context.root,
+                                                       config.outputGlsl || config.outputGlslEs, false, specializedPipelineRef,
                                                        pipeline.passes[passIdx], nullptr, config.outputInternals,
                                                        config.useDirectGles, &config.renderConfig);
 

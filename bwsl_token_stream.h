@@ -141,6 +141,7 @@ public:
         table[UINT4] = 5;
         table[UNTIL] = 5;
         table[RANGE] = 5;
+        table[RULES] = 5;
 
         // Six character keywords
         table[VERTEX] = 6;
@@ -167,11 +168,14 @@ public:
         table[DISCARD] = 7;
         table[DEFAULT] = 7;
         table[OUTPUTS] = 7;
+        table[REQUIRE] = 7;
 
         // Eight character keywords
         table[PIPELINE] = 8;
         table[FRAGMENT] = 8;
         table[READONLY] = 8;
+        table[VARIANTS] = 8;
+        table[CONFLICT] = 8;
 
         // Nine character keywords
         table[TEXTURE2D] = 9;
@@ -341,6 +345,10 @@ inline const char* TokenTypeName(TokenType type) {
         case DECREMENT: return "DECREMENT";
         case BREAK: return "BREAK";
         case DISCARD: return "DISCARD";
+        case VARIANTS: return "variants";
+        case RULES: return "rules";
+        case REQUIRE: return "require";
+        case CONFLICT: return "conflict";
         case CASE: return "CASE";
         case SWITCH: return "SWITCH";
         case DEFAULT: return "DEFAULT";

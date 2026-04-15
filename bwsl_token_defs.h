@@ -157,6 +157,10 @@ enum TokenType : uint8_t {
     CASE,
     BREAK,
     DISCARD,
+    VARIANTS,
+    RULES,
+    REQUIRE,
+    CONFLICT,
 
     // Special
     ERROR_TOKEN,

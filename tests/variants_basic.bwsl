@@ -1,0 +1,60 @@
+// Test: First-class named variants
+// Tests: variants block declarations, rules, variants.* specialization, stage selection, dump reflection
+
+pipeline VariantsBasic {
+    enum LightingMode {
+        Unlit
+        Forward
+        Clustered
+    }
+
+    attributes {
+        position: float3
+        normal: float3
+    }
+
+    variants {
+        skinning: bool = false;
+        lighting: LightingMode = LightingMode::Forward;
+
+        rules {
+            require skinning -> has_normal;
+            conflict lighting == LightingMode::Unlit, skinning;
+        }
+    }
+
+    skinnedVertex :: () -> vertex_function {
+        vertex {
+            output.position = float4(0.25, 0.0, 0.0, 1.0);
+        }
+    }
+
+    staticVertex :: () -> vertex_function {
+        vertex {
+            output.position = float4(0.5, 0.0, 0.0, 1.0);
+        }
+    }
+
+    pass "Main" {
+        use attributes { position, normal? }
+
+        vertex = variants.skinning ? skinnedVertex() : staticVertex()
+
+        fragment {
+            float brightness = 0.5;
+            if (variants.skinning) {
+                brightness = 0.75;
+            }
+            if (variants.has_normal) {
+                brightness = brightness + 0.25;
+            }
+
+            if (variants.lighting == LightingMode::Unlit) {
+                output.color = float4(1.0, 0.0, 0.0, 1.0);
+            } else {
+                float blue = variants.lighting == LightingMode::Clustered ? 1.0 : 0.5;
+                output.color = float4(brightness, 0.0, blue, 1.0);
+            }
+        }
+    }
+}

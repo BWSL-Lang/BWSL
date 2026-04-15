@@ -166,6 +166,10 @@ bool CompileTimeEvaluatorSoA::CanEvaluateNode(EvalStateSoA* state, NodeRef node)
         case ASTNodeType::IDENTIFIER: {
             // Check if identifier refers to an eval constant
             const IdentifierData& ident = state->ast->GetIdentifier(node);
+            if (state->parser->allowBareVariantLookup &&
+                state->parser->LookupActiveVariantBinding(ident.name.nameHash)) {
+                return true;
+            }
             Symbol* sym = SymbolTable::LookupAny(&state->parser->symbolTable, ident.name);
             if (sym) {
                 if (sym->kind == SymbolKind::EVAL_CONSTANT) return true;
@@ -224,10 +228,23 @@ bool CompileTimeEvaluatorSoA::CanEvaluateNode(EvalStateSoA* state, NodeRef node)
         case ASTNodeType::MEMBER_ACCESS: {
             // Check if this is a module-qualified constant access (e.g., Math::PI)
             const MemberAccessData& access = state->ast->GetMemberAccess(node);
+            if (access.object.Type() == ASTNodeType::IDENTIFIER) {
+                const IdentifierData& objectIdent = state->ast->GetIdentifier(access.object);
+                if (objectIdent.identifierKind == SpecialIdentifier::VARIANTS &&
+                    state->parser->LookupActiveVariantBinding(access.member.nameHash)) {
+                    return true;
+                }
+            }
             if (access.isModuleQualified) {
                 // Get the module name from the object (should be an identifier)
                 if (access.object.Type() != ASTNodeType::IDENTIFIER) return false;
                 const IdentifierData& moduleIdent = state->ast->GetIdentifier(access.object);
+
+                // Local enum access that remained deferred until parse completed
+                Symbol* enumSym = SymbolTable::LookupByHash(&state->parser->symbolTable, moduleIdent.name.nameHash);
+                if (enumSym && (enumSym->kind == SymbolKind::ENUM || enumSym->kind == SymbolKind::ENUM_SYMBOL)) {
+                    return true;
+                }
 
                 // Look up as a qualified name (Module::member)
                 std::string moduleName = moduleIdent.name.ToString(state->parser->sourceBase());
@@ -633,6 +650,10 @@ bool CompileTimeEvaluatorSoA::EvaluateNode(EvalStateSoA* state, NodeRef node, Li
 
         case ASTNodeType::IDENTIFIER: {
             const IdentifierData& ident = state->ast->GetIdentifier(node);
+            if (state->parser->allowBareVariantLookup &&
+                state->parser->LookupActiveVariantBinding(ident.name.nameHash, outValue)) {
+                return true;
+            }
             Symbol* sym = SymbolTable::LookupAny(&state->parser->symbolTable, ident.name);
             if (!sym) {
                 SetError(state, "Unknown identifier in eval");
@@ -667,6 +688,13 @@ bool CompileTimeEvaluatorSoA::EvaluateNode(EvalStateSoA* state, NodeRef node, Li
 
         case ASTNodeType::MEMBER_ACCESS: {
             const MemberAccessData& access = state->ast->GetMemberAccess(node);
+            if (access.object.Type() == ASTNodeType::IDENTIFIER) {
+                const IdentifierData& objectIdent = state->ast->GetIdentifier(access.object);
+                if (objectIdent.identifierKind == SpecialIdentifier::VARIANTS &&
+                    state->parser->LookupActiveVariantBinding(access.member.nameHash, outValue)) {
+                    return true;
+                }
+            }
             if (access.isModuleQualified) {
                 // Get the module name from the object (should be an identifier)
                 if (access.object.Type() != ASTNodeType::IDENTIFIER) {
@@ -674,6 +702,26 @@ bool CompileTimeEvaluatorSoA::EvaluateNode(EvalStateSoA* state, NodeRef node, Li
                     return false;
                 }
                 const IdentifierData& moduleIdent = state->ast->GetIdentifier(access.object);
+
+                Symbol* enumSym = SymbolTable::LookupByHash(&state->parser->symbolTable, moduleIdent.name.nameHash);
+                if (enumSym && (enumSym->kind == SymbolKind::ENUM || enumSym->kind == SymbolKind::ENUM_SYMBOL)) {
+                    const EnumData& enumData = state->parser->symbolTable.enums[enumSym->index];
+                    if (!(enumData.flags & EnumData::IS_SUM_TYPE)) {
+                        for (u32 i = 0; i < enumData.variants.count; i++) {
+                            if (enumData.variants[i].name.nameHash == access.member.nameHash) {
+                                CoreType baseType = enumData.underlyingType;
+                                if (baseType == CoreType::UINT) {
+                                    outValue->type = LiteralValue::UINT;
+                                    outValue->uintValue = enumData.variants[i].value;
+                                } else {
+                                    outValue->type = LiteralValue::INT;
+                                    outValue->intValue = static_cast<int>(enumData.variants[i].value);
+                                }
+                                return true;
+                            }
+                        }
+                    }
+                }
 
                 // Look up as a qualified name (Module::member)
                 // Use the pre-computed hash since member may be hash-only ArenaString

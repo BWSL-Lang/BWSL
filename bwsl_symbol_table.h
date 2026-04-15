@@ -8,6 +8,7 @@
 #include "bwsl_module_cache.h"
 #include <cassert>
 #include <cstring>
+#include <cstdio>
 
 #include "bwsl_defs.h"
 #include "bwsl_render_config.h"
@@ -440,6 +441,88 @@ namespace SymbolTable {
             }
         }
         return nullptr;
+    }
+
+    inline u32 GetCoreTypeNameHash(CoreType type) {
+        switch (type) {
+            case CoreType::BOOL:   return TypeHashes::BOOL;
+            case CoreType::INT:    return TypeHashes::INT;
+            case CoreType::UINT:   return TypeHashes::UINT;
+            case CoreType::FLOAT:  return TypeHashes::FLOAT;
+            case CoreType::INT2:   return TypeHashes::INT2;
+            case CoreType::INT3:   return TypeHashes::INT3;
+            case CoreType::INT4:   return TypeHashes::INT4;
+            case CoreType::UINT2:  return TypeHashes::UINT2;
+            case CoreType::UINT3:  return TypeHashes::UINT3;
+            case CoreType::UINT4:  return TypeHashes::UINT4;
+            case CoreType::FLOAT2: return TypeHashes::FLOAT2;
+            case CoreType::FLOAT3: return TypeHashes::FLOAT3;
+            case CoreType::FLOAT4: return TypeHashes::FLOAT4;
+            case CoreType::MAT2:   return TypeHashes::MAT2;
+            case CoreType::MAT3:   return TypeHashes::MAT3;
+            case CoreType::MAT4:   return TypeHashes::MAT4;
+            default:               return 0;
+        }
+    }
+
+    inline std::string FormatTypeInfo(const TypeInfo& typeInfo, u32 enumTypeHash = 0,
+                                      const SymbolTableData* table = nullptr,
+                                      const char* sourceBase = nullptr) {
+        if (enumTypeHash != 0 && table) {
+            Symbol* enumSym = LookupByHash(const_cast<SymbolTableData*>(table), enumTypeHash);
+            if (enumSym && (enumSym->kind == SymbolKind::ENUM || enumSym->kind == SymbolKind::ENUM_SYMBOL)) {
+                return table->enums[enumSym->index].name.ToString(sourceBase);
+            }
+        }
+
+        u32 coreTypeHash = GetCoreTypeNameHash(typeInfo.coreType);
+        if (coreTypeHash != 0) {
+            return ReverseLookup::GetString(coreTypeHash);
+        }
+
+        if (typeInfo.customTypeHash != 0) {
+            return ReverseLookup::GetString(typeInfo.customTypeHash);
+        }
+
+        return "invalid";
+    }
+
+    inline std::string FormatLiteralValue(const LiteralValue& value,
+                                          const SymbolTableData* table = nullptr,
+                                          const char* sourceBase = nullptr,
+                                          u32 enumTypeHash = 0) {
+        if (enumTypeHash != 0 && table) {
+            Symbol* enumSym = LookupByHash(const_cast<SymbolTableData*>(table), enumTypeHash);
+            if (enumSym && (enumSym->kind == SymbolKind::ENUM || enumSym->kind == SymbolKind::ENUM_SYMBOL)) {
+                const EnumData& enumData = table->enums[enumSym->index];
+                u32 rawValue = (value.type == LiteralValue::UINT)
+                    ? value.uintValue
+                    : static_cast<u32>(value.intValue);
+                for (u32 i = 0; i < enumData.variants.count; i++) {
+                    if (enumData.variants[i].value == rawValue) {
+                        return enumData.variants[i].name.ToString(sourceBase);
+                    }
+                }
+            }
+        }
+
+        switch (value.type) {
+            case LiteralValue::BOOL:
+                return value.boolValue ? "true" : "false";
+            case LiteralValue::INT:
+                return std::to_string(value.intValue);
+            case LiteralValue::UINT:
+                return std::to_string(value.uintValue);
+            case LiteralValue::FLOAT: {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "%.6g", value.floatValue);
+                return buf;
+            }
+            case LiteralValue::STRING:
+                return value.stringValue.ToString(sourceBase);
+            default:
+                return "<value>";
+        }
     }
 
     inline Symbol* LookupResource(SymbolTableData* table, const ArenaString& name) {

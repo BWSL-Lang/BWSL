@@ -1,0 +1,12 @@
+pipeline VariantDuplicateNames {
+    variants {
+        enabled: bool = false;
+        enabled: bool = true;
+    }
+
+    pass "Main" {
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+        }
+    }
+}

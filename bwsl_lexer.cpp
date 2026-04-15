@@ -385,6 +385,7 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             if (memcmp(str, "until", 5) == 0) return TokenType::UNTIL;
             if (memcmp(str, "range", 5) == 0) return TokenType::RANGE;
             if (memcmp(str, "break", 5) == 0) return TokenType::BREAK;
+            if (memcmp(str, "rules", 5) == 0) return TokenType::RULES;
             break;
             
         case 6:
@@ -413,12 +414,15 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             if (memcmp(str, "foreach", 7) == 0) return TokenType::FOREACH;
             if (memcmp(str, "default", 7) == 0) return TokenType::DEFAULT;
             if (memcmp(str, "discard", 7) == 0) return TokenType::DISCARD;
+            if (memcmp(str, "require", 7) == 0) return TokenType::REQUIRE;
             break;
             
         case 8:
             if (memcmp(str, "pipeline", 8) == 0) return TokenType::PIPELINE;
             if (memcmp(str, "fragment", 8) == 0) return TokenType::FRAGMENT;
             if (memcmp(str, "readonly", 8) == 0) return TokenType::READONLY;
+            if (memcmp(str, "variants", 8) == 0) return TokenType::VARIANTS;
+            if (memcmp(str, "conflict", 8) == 0) return TokenType::CONFLICT;
             break;
             
         case 9:
