@@ -103,7 +103,28 @@ VARIANT_REFLECTION_TESTS = {
                 "frag_spirv_not_contains": ["OpBranchConditional", "OpFAdd %float %float_0_5 %float_0_25"],
             },
         },
-    }
+    },
+    "variants_module_enum": {
+        "declared": {
+            "mode": ("TestVariantEnums::Mode", "A"),
+            "enabled": ("bool", "false"),
+            "strict": ("bool", "false"),
+        },
+        "implicit": set(),
+        "default_selected": {
+            "mode": "A",
+            "enabled": "false",
+            "strict": "false",
+        },
+        "override_selected": {
+            "mode": "B",
+            "enabled": "true",
+            "strict": "true",
+        },
+        "override_args": ["-variant", "mode=B", "-variant", "enabled=true", "-variant", "strict=true"],
+        "illegal_args": ["-variant", "strict=true"],
+        "illegal_error": "violates rule: require",
+    },
 }
 
 VARIANT_ERROR_TESTS = {

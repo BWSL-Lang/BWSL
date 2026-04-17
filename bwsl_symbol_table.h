@@ -443,6 +443,62 @@ namespace SymbolTable {
         return nullptr;
     }
 
+    inline u32 FindModuleByHash(SymbolTableData* table, u32 hash);
+
+    inline const EnumData* ResolveEnumDataByHash(const SymbolTableData* table, u32 enumTypeHash) {
+        if (!table || enumTypeHash == 0) return nullptr;
+
+        Symbol* enumSym = LookupByHash(const_cast<SymbolTableData*>(table), enumTypeHash);
+        if (enumSym && (enumSym->kind == SymbolKind::ENUM || enumSym->kind == SymbolKind::ENUM_SYMBOL)) {
+            return &table->enums[enumSym->index];
+        }
+
+        std::string qualifiedName = ReverseLookup::GetString(enumTypeHash);
+        if (qualifiedName.rfind("<hash:", 0) == 0) {
+            return nullptr;
+        }
+
+        size_t lastScope = qualifiedName.rfind("::");
+        if (lastScope == std::string::npos) {
+            return nullptr;
+        }
+
+        std::string moduleName = qualifiedName.substr(0, lastScope);
+        std::string enumName = qualifiedName.substr(lastScope + 2);
+        u32 moduleHash = Utils::HashStr(moduleName.c_str());
+        u32 enumHash = Utils::HashStr(enumName.c_str());
+
+        std::string syntheticQualifiedName;
+        syntheticQualifiedName.reserve(2 + 10 + 10);
+        syntheticQualifiedName.append("m").append(std::to_string(moduleHash));
+        syntheticQualifiedName.append("::");
+        syntheticQualifiedName.append("e").append(std::to_string(enumHash));
+
+        enumSym = LookupByHash(const_cast<SymbolTableData*>(table),
+                               Utils::HashStr(syntheticQualifiedName.c_str()));
+        if (enumSym && (enumSym->kind == SymbolKind::ENUM || enumSym->kind == SymbolKind::ENUM_SYMBOL)) {
+            return &table->enums[enumSym->index];
+        }
+
+        u32 moduleIdx = FindModuleByHash(const_cast<SymbolTableData*>(table),
+                                         moduleHash);
+        if (moduleIdx == INVALID_INDEX) {
+            return nullptr;
+        }
+
+        const ModuleData& mod = table->modules[moduleIdx];
+        for (u32 i = 0; i < mod.enumIndices.count; i++) {
+            u32 enumIdx = mod.enumIndices[i];
+            if (enumIdx >= table->enums.count) continue;
+            const EnumData& enumData = table->enums[enumIdx];
+            if (enumData.name.nameHash == enumHash) {
+                return &enumData;
+            }
+        }
+
+        return nullptr;
+    }
+
     inline u32 GetCoreTypeNameHash(CoreType type) {
         switch (type) {
             case CoreType::BOOL:   return TypeHashes::BOOL;
@@ -469,9 +525,12 @@ namespace SymbolTable {
                                       const SymbolTableData* table = nullptr,
                                       const char* sourceBase = nullptr) {
         if (enumTypeHash != 0 && table) {
-            Symbol* enumSym = LookupByHash(const_cast<SymbolTableData*>(table), enumTypeHash);
-            if (enumSym && (enumSym->kind == SymbolKind::ENUM || enumSym->kind == SymbolKind::ENUM_SYMBOL)) {
-                return table->enums[enumSym->index].name.ToString(sourceBase);
+            if (const EnumData* enumData = ResolveEnumDataByHash(table, enumTypeHash)) {
+                std::string qualifiedName = ReverseLookup::GetString(enumTypeHash);
+                if (qualifiedName.rfind("<hash:", 0) != 0) {
+                    return qualifiedName;
+                }
+                return enumData->name.ToString(sourceBase);
             }
         }
 
@@ -492,15 +551,17 @@ namespace SymbolTable {
                                           const char* sourceBase = nullptr,
                                           u32 enumTypeHash = 0) {
         if (enumTypeHash != 0 && table) {
-            Symbol* enumSym = LookupByHash(const_cast<SymbolTableData*>(table), enumTypeHash);
-            if (enumSym && (enumSym->kind == SymbolKind::ENUM || enumSym->kind == SymbolKind::ENUM_SYMBOL)) {
-                const EnumData& enumData = table->enums[enumSym->index];
+            if (const EnumData* enumData = ResolveEnumDataByHash(table, enumTypeHash)) {
                 u32 rawValue = (value.type == LiteralValue::UINT)
                     ? value.uintValue
                     : static_cast<u32>(value.intValue);
-                for (u32 i = 0; i < enumData.variants.count; i++) {
-                    if (enumData.variants[i].value == rawValue) {
-                        return enumData.variants[i].name.ToString(sourceBase);
+                for (u32 i = 0; i < enumData->variants.count; i++) {
+                    if (enumData->variants[i].value == rawValue) {
+                        std::string variantName = ReverseLookup::GetString(enumData->variants[i].name.nameHash);
+                        if (variantName.rfind("<hash:", 0) != 0) {
+                            return variantName;
+                        }
+                        return enumData->variants[i].name.ToString(sourceBase);
                     }
                 }
             }

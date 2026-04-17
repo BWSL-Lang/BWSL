@@ -818,6 +818,7 @@ void Parser::ParseVariants(NodeRef pipeline) {
             }
             if (isQualified) {
                 typeName = ArenaString::MakeHashOnly(typeNameStr);
+                ReverseLookup::Register(typeName.nameHash, typeNameStr.c_str());
             } else {
                 typeName = ArenaString::Make(sourceBase(), typeOffset, typeLength);
             }
@@ -838,7 +839,9 @@ void Parser::ParseVariants(NodeRef pipeline) {
         decl.enumTypeHash = enumTypeHash;
         decl.defaultExpr = defaultExpr;
         decl.defaultResolved = false;
-        ast->GetPipeline(pipeline).variantDecls.Push(arena, decl);
+        if (!duplicate) {
+            ast->GetPipeline(pipeline).variantDecls.Push(arena, decl);
+        }
     }
 
     Consume(TokenType::RIGHT_BRACE, "Expected '}' after variants block");
@@ -2285,33 +2288,28 @@ NodeRef Parser::ParsePostfix() {
                     return NodeRef::Null();
                 }
 
-                // Look up the enum in the module's enumIndices
-                const ModuleData& mod = symbolTable.modules[moduleIdx];
-                EnumData* enumData = nullptr;
-                for (u32 i = 0; i < mod.enumIndices.count; i++) {
-                    u32 enumIdx = mod.enumIndices[i];
-                    if (enumIdx < symbolTable.enums.count) {
-                        EnumData& ed = symbolTable.enums[enumIdx];
-                        if (ed.name.nameHash == enumName.nameHash) {
-                            enumData = &ed;
-                            break;
-                        }
-                    }
-                }
-
-                if (!enumData) {
+                std::string syntheticQualifiedName;
+                syntheticQualifiedName.reserve(2 + 10 + 10);
+                syntheticQualifiedName.append("m").append(std::to_string(moduleName.nameHash));
+                syntheticQualifiedName.append("::");
+                syntheticQualifiedName.append("e").append(std::to_string(enumName.nameHash));
+                Symbol* enumSym = SymbolTable::LookupByHash(&symbolTable,
+                    Utils::HashStr(syntheticQualifiedName.c_str()));
+                if (!enumSym || (enumSym->kind != SymbolKind::ENUM &&
+                                 enumSym->kind != SymbolKind::ENUM_SYMBOL)) {
                     Error("'" + enumName.ToString(sourceBase()) + "' is not an enum type in module");
                     return NodeRef::Null();
                 }
+                const EnumData& enumData = symbolTable.enums[enumSym->index];
 
                 // Find the variant in the enum
                 u32 variantHash = Utils::HashStr(variantName.c_str());
                 bool found = false;
                 u32 variantValue = 0;
 
-                for (u32 i = 0; i < enumData->variants.count; i++) {
-                    if (enumData->variants[i].name.nameHash == variantHash) {
-                        variantValue = enumData->variants[i].value;
+                for (u32 i = 0; i < enumData.variants.count; i++) {
+                    if (enumData.variants[i].name.nameHash == variantHash) {
+                        variantValue = enumData.variants[i].value;
                         found = true;
                         break;
                     }
@@ -2322,7 +2320,10 @@ NodeRef Parser::ParsePostfix() {
                     return NodeRef::Null();
                 }
 
-                // Replace with literal value
+                CoreType baseType = enumData.underlyingType;
+                if (baseType == CoreType::UINT) {
+                    return ASTFactory::MakeLiteralUint(ast, variantValue, loc.line, loc.column);
+                }
                 return ASTFactory::MakeLiteralInt(ast, static_cast<int64_t>(variantValue), loc.line, loc.column);
             }
             else {
@@ -3461,17 +3462,16 @@ bool Parser::ResolvePipelineVariants(NodeRef pipeline, std::string* outError) {
         PipelineVariantDeclData& decl = ast->GetPipeline(pipeline).variantDecls[i];
 
         if (decl.enumTypeHash != 0) {
-            Symbol* sym = SymbolTable::LookupByHash(&symbolTable, decl.enumTypeHash);
-            if (!sym || (sym->kind != SymbolKind::ENUM && sym->kind != SymbolKind::ENUM_SYMBOL)) {
+            const EnumData* enumData = SymbolTable::ResolveEnumDataByHash(&symbolTable, decl.enumTypeHash);
+            if (!enumData) {
                 ClearActiveVariantSelection();
                 return fail("Variant type must be 'bool' or an enum type");
             }
-            EnumData& enumData = symbolTable.enums[sym->index];
-            if (enumData.flags & EnumData::IS_SUM_TYPE) {
+            if (enumData->flags & EnumData::IS_SUM_TYPE) {
                 ClearActiveVariantSelection();
                 return fail("Sum-type enums are not supported as variant types");
             }
-            CoreType baseType = enumData.underlyingType;
+            CoreType baseType = enumData->underlyingType;
             if (baseType == CoreType::INVALID) baseType = CoreType::INT;
             decl.typeInfo = TYPE_INFO(baseType, 1, false);
         }
@@ -3669,11 +3669,10 @@ bool Parser::BuildVariantSelection(NodeRef pipeline, const VariantSelectionData*
                 return fail("Boolean variant override must be true/false/1/0");
             }
         } else {
-            Symbol* enumSym = SymbolTable::LookupByHash(&symbolTable, target->enumTypeHash);
-            if (!enumSym || (enumSym->kind != SymbolKind::ENUM && enumSym->kind != SymbolKind::ENUM_SYMBOL)) {
+            const EnumData* enumData = SymbolTable::ResolveEnumDataByHash(&symbolTable, target->enumTypeHash);
+            if (!enumData) {
                 return fail("Variant enum type could not be resolved");
             }
-            const EnumData& enumData = symbolTable.enums[enumSym->index];
 
             std::string variantName = raw;
             size_t lastScope = variantName.rfind("::");
@@ -3682,14 +3681,14 @@ bool Parser::BuildVariantSelection(NodeRef pipeline, const VariantSelectionData*
             }
             u32 variantHash = Utils::HashStr(variantName.c_str());
             bool found = false;
-            for (u32 i = 0; i < enumData.variants.count; i++) {
-                if (enumData.variants[i].name.nameHash != variantHash) continue;
+            for (u32 i = 0; i < enumData->variants.count; i++) {
+                if (enumData->variants[i].name.nameHash != variantHash) continue;
                 if (target->typeInfo.coreType == CoreType::UINT) {
                     parsed.type = LiteralValue::UINT;
-                    parsed.uintValue = enumData.variants[i].value;
+                    parsed.uintValue = enumData->variants[i].value;
                 } else {
                     parsed.type = LiteralValue::INT;
-                    parsed.intValue = static_cast<int>(enumData.variants[i].value);
+                    parsed.intValue = static_cast<int>(enumData->variants[i].value);
                 }
                 found = true;
                 break;
@@ -5458,6 +5457,7 @@ NodeRef Parser::ParseEnumVariant() {
         0xFFFFFFFF,
         line,
         col);
+    ReverseLookup::Register(ast->GetEnumDecl(variant).currentVariant.name.nameHash, variantName.c_str());
 
     // Check for associated types (sum type variant)
     // e.g., `Constant(float4)` or `Sampled(Texture2D, float2)`
@@ -6059,10 +6059,21 @@ NodeRef Parser::ParseModule() {
             NodeRef enumDecl = ParseEnum();
             if (enumDecl.IsValid()) {
                 ast->GetModule(module).enums.Push(arena, enumDecl);
-                
+
+                std::string qualifiedEnumName = moduleName + "::" +
+                    ast->GetEnumDecl(enumDecl).name.ToString(sourceBase());
+                ReverseLookup::Register(Utils::HashStr(qualifiedEnumName.c_str()),
+                                        qualifiedEnumName.c_str());
+
                 // Register enum type with module prefix
-                SymbolTable::AddModuleEnum(&symbolTable,
+                Symbol* qualifiedEnumSym = SymbolTable::AddModuleEnum(&symbolTable,
                     ast->GetEnumDecl(enumDecl).name, moduleNameArena);
+                Symbol* enumSym = SymbolTable::LookupByHash(&symbolTable,
+                    ast->GetEnumDecl(enumDecl).name.nameHash);
+                if (qualifiedEnumSym && enumSym &&
+                    (enumSym->kind == SymbolKind::ENUM || enumSym->kind == SymbolKind::ENUM_SYMBOL)) {
+                    symbolTable.enums[qualifiedEnumSym->index] = symbolTable.enums[enumSym->index];
+                }
             }
         } else if (Match(TokenType::CONST)) {
             // Module constant declaration (e.g., const float PI = 3.14)
@@ -6818,7 +6829,9 @@ NodeRef Parser::ClonePassWithActiveVariants(NodeRef passRef) {
     NodeRef newPass = ASTFactory::MakePass(ast, passName, ast->GetLine(passRef), ast->GetColumn(passRef));
     PassData& dstPass = ast->GetPass(newPass);
 
-    dstPass.usedAttributes = srcPass.usedAttributes;
+    for (u32 i = 0; i < srcPass.usedAttributes.count; i++) {
+        dstPass.usedAttributes.Push(arena, srcPass.usedAttributes[i]);
+    }
     dstPass.optionalAttributesMask = srcPass.optionalAttributesMask;
 
     for (u32 i = 0; i < srcPass.consts.count; i++) {
@@ -6834,7 +6847,9 @@ NodeRef Parser::ClonePassWithActiveVariants(NodeRef passRef) {
         NodeRef newFn = ASTFactory::MakeFunction(ast, fnName, srcFn.returnType,
                                                 ast->GetLine(fnRef), ast->GetColumn(fnRef));
         FunctionDeclData& dstFn = ast->GetFunction(newFn);
-        dstFn.parameters = srcFn.parameters;
+        for (u32 j = 0; j < srcFn.parameters.count; j++) {
+            dstFn.parameters.Push(arena, srcFn.parameters[j]);
+        }
         dstFn.isEval = srcFn.isEval;
         dstFn.body = CloneNodeWithParams(srcFn.body, nullptr, 0);
         dstPass.functions.Push(arena, newFn);
@@ -6890,13 +6905,27 @@ NodeRef Parser::SpecializePipelineForVariants(NodeRef pipeline,
 
     NodeRef newPipeline = ASTFactory::MakePipeline(ast, pipelineName, ast->GetLine(pipeline), ast->GetColumn(pipeline));
     PipelineData& dstPipeline = ast->GetPipeline(newPipeline);
-    dstPipeline.imports = srcPipeline.imports;
-    dstPipeline.attributes = srcPipeline.attributes;
-    dstPipeline.resources = srcPipeline.resources;
-    dstPipeline.variantDecls = srcPipeline.variantDecls;
-    dstPipeline.variantRules = srcPipeline.variantRules;
-    dstPipeline.enums = srcPipeline.enums;
-    dstPipeline.constraints = srcPipeline.constraints;
+    for (u32 i = 0; i < srcPipeline.imports.count; i++) {
+        dstPipeline.imports.Push(arena, srcPipeline.imports[i]);
+    }
+    for (u32 i = 0; i < srcPipeline.attributes.count; i++) {
+        dstPipeline.attributes.Push(arena, srcPipeline.attributes[i]);
+    }
+    for (u32 i = 0; i < srcPipeline.resources.count; i++) {
+        dstPipeline.resources.Push(arena, srcPipeline.resources[i]);
+    }
+    for (u32 i = 0; i < srcPipeline.variantDecls.count; i++) {
+        dstPipeline.variantDecls.Push(arena, srcPipeline.variantDecls[i]);
+    }
+    for (u32 i = 0; i < srcPipeline.variantRules.count; i++) {
+        dstPipeline.variantRules.Push(arena, srcPipeline.variantRules[i]);
+    }
+    for (u32 i = 0; i < srcPipeline.enums.count; i++) {
+        dstPipeline.enums.Push(arena, srcPipeline.enums[i]);
+    }
+    for (u32 i = 0; i < srcPipeline.constraints.count; i++) {
+        dstPipeline.constraints.Push(arena, srcPipeline.constraints[i]);
+    }
     dstPipeline.computeGraph = srcPipeline.computeGraph;
 
     for (u32 i = 0; i < srcPipeline.functions.count; i++) {
@@ -6908,7 +6937,9 @@ NodeRef Parser::SpecializePipelineForVariants(NodeRef pipeline,
         NodeRef newFn = ASTFactory::MakeFunction(ast, fnName, srcFn.returnType,
                                                 ast->GetLine(fnRef), ast->GetColumn(fnRef));
         FunctionDeclData& dstFn = ast->GetFunction(newFn);
-        dstFn.parameters = srcFn.parameters;
+        for (u32 j = 0; j < srcFn.parameters.count; j++) {
+            dstFn.parameters.Push(arena, srcFn.parameters[j]);
+        }
         dstFn.isEval = srcFn.isEval;
         dstFn.body = CloneNodeWithParams(srcFn.body, nullptr, 0);
         dstPipeline.functions.Push(arena, newFn);

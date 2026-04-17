@@ -1,0 +1,6 @@
+module TestVariantEnums {
+    enum Mode : uint {
+        A = 0,
+        B = 1
+    }
+}

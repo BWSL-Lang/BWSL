@@ -1,0 +1,33 @@
+pipeline VariantsModuleEnum {
+    import TestVariantEnums
+
+    attributes {
+        position: float3
+    }
+
+    variants {
+        mode: TestVariantEnums::Mode = TestVariantEnums::Mode::A;
+        enabled: bool = false;
+        strict: bool = false;
+
+        rules {
+            require strict -> enabled;
+        }
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            if (variants.mode == TestVariantEnums::Mode::B && variants.enabled) {
+                output.color = float4(1.0, 0.0, 0.0, 1.0);
+            } else {
+                output.color = float4(0.0, 1.0, 0.0, 1.0);
+            }
+        }
+    }
+}
