@@ -1,0 +1,12 @@
+pipeline InvalidIntrinsicArity {
+    pass "Main" {
+        vertex {
+            float x = sin(1.0, 2.0);
+            output.position = float4(x, x, x, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

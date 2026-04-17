@@ -1,0 +1,41 @@
+// Test: Live exp/trig intrinsics that must survive into generated code
+// Tests: sin, cos, tan, atan2, radians, degrees, exp2, log2, pow, sqrt, rsqrt
+
+pipeline IntrinsicsExpTrigLive {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float angle = radians(attributes.position.x * 45.0 + attributes.texcoord.x * 90.0);
+            float wave = sin(angle) + cos(angle * 0.5);
+            float spiral = atan2(attributes.position.y + 0.1, attributes.position.x + 0.2);
+            float energy = exp2(attributes.texcoord.y + 1.0) * 0.125;
+            float scale = sqrt(abs(attributes.position.z) + 1.0) * rsqrt(energy + 1.0);
+            float bend = tan(angle * 0.25) * 0.05;
+
+            output.position = float4(
+                attributes.position + float3(wave * 0.08, bend, spiral * 0.03) * scale,
+                1.0
+            );
+            output.angle = angle;
+            output.energy = energy;
+        }
+
+        fragment {
+            float trig = sin(input.angle) * cos(input.angle) + tan(input.angle * 0.25) * 0.1;
+            float expo = log2(input.energy + 1.0);
+            float curve = pow(abs(trig) + 0.1, 1.5);
+            float degreesValue = degrees(input.angle) / 180.0;
+
+            output.color = float4(
+                saturate(float3(curve, expo, degreesValue)),
+                1.0
+            );
+        }
+    }
+}

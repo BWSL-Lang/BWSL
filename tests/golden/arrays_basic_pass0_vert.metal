@@ -44,94 +44,94 @@ struct spvUnsafeArray
     }
 };
 
-struct _9
-{
-    packed_float3 _m0[1];
-};
-
-constant int _35 = {};
+constant int _30 = {};
 
 struct main0_out
 {
     float4 gl_Position [[position]];
 };
 
-vertex main0_out main0(const device _9& _11 [[buffer(0)]], uint gl_VertexIndex [[vertex_id]])
+struct main0_in
+{
+    float3 m_6 [[attribute(0)]];
+};
+
+vertex main0_out main0(main0_in in [[stage_in]])
 {
     main0_out out = {};
-    spvUnsafeArray<float, 4> _49;
-    _49[0] = 1.0;
-    _49[1] = 2.0;
-    _49[2] = 3.0;
-    _49[3] = 4.0;
-    spvUnsafeArray<int, 4> _53;
-    _53[0] = 10;
-    _53[1] = 20;
-    _53[2] = 30;
-    _53[3] = 40;
-    spvUnsafeArray<float3, 3> _58;
-    _58[0] = float3(1.0, 0.0, 0.0);
-    _58[1] = float3(0.0, 1.0, 0.0);
-    _58[2] = float3(0.0, 0.0, 1.0);
-    _49[0] *= 2.0;
-    _53[1] += 5;
-    float _27 = 0.0;
-    int _29 = 0;
-    float _28;
-    float _17 = _27;
-    int _18 = _29;
-    for (; _18 < 4; _17 = _28, _18++)
+    spvUnsafeArray<float, 4> _45;
+    _45[0] = 1.0;
+    _45[1] = 2.0;
+    _45[2] = 3.0;
+    _45[3] = 4.0;
+    spvUnsafeArray<int, 4> _49;
+    _49[0] = 10;
+    _49[1] = 20;
+    _49[2] = 30;
+    _49[3] = 40;
+    spvUnsafeArray<float3, 3> _54;
+    _54[0] = float3(1.0, 0.0, 0.0);
+    _54[1] = float3(0.0, 1.0, 0.0);
+    _54[2] = float3(0.0, 0.0, 1.0);
+    _45[0] *= 2.0;
+    _49[1] += 5;
+    float _22 = 0.0;
+    int _24 = 0;
+    float _23;
+    float _12 = _22;
+    int _13 = _24;
+    for (; _13 < 4; _12 = _23, _13++)
     {
-        _28 = _17 + _49[_18];
+        _23 = _12 + _45[_13];
     }
-    float _32 = 0.0;
-    int _33 = 0;
-    float _19;
-    int _23;
-    float _20 = _32;
-    int _21 = _33;
-    int _22;
-    for (; _21 < 3; _20 = _19, _21++, _22 = _23)
+    float _27 = 0.0;
+    int _28 = 0;
+    float _14;
+    int _18;
+    float _15 = _27;
+    int _16 = _28;
+    int _17;
+    for (; _16 < 3; _15 = _14, _16++, _17 = _18)
     {
-        int _37 = 0;
-        _19 = _20;
-        _23 = _37;
-        float _31;
-        for (; _23 < 3; _19 = _31, _23++)
+        int _32 = 0;
+        _14 = _15;
+        _18 = _32;
+        float _26;
+        for (; _18 < 3; _14 = _26, _18++)
         {
-            _31 = _19 + dot(_58[_21], _58[_23]);
+            _26 = _14 + dot(_54[_16], _54[_18]);
         }
     }
-    spvUnsafeArray<float, 4> _62;
-    _62[0] = 1.0;
-    _62[1] = 2.0;
-    _62[2] = 3.0;
-    _62[3] = 4.0;
-    bool _172 = false;
-    float _39 = 0.0;
-    int _41 = 0;
-    float _40;
-    float _24 = _39;
-    int _25 = _41;
-    for (; (_25 < 4) && (!_172); _24 = _40, _25++)
+    spvUnsafeArray<float, 4> _58;
+    _58[0] = 1.0;
+    _58[1] = 2.0;
+    _58[2] = 3.0;
+    _58[3] = 4.0;
+    bool _168 = false;
+    float _34 = 0.0;
+    int _36 = 0;
+    float _35;
+    float _19 = _34;
+    int _20 = _36;
+    for (; (_20 < 4) && (!_168); _19 = _35, _20++)
     {
-        _40 = _24 + _62[_25];
+        _35 = _19 + _58[_20];
     }
-    bool _187 = true;
-    float _43 = 0.0;
-    float _26;
+    bool _183 = true;
+    float _38 = 0.0;
+    float _21;
     if (2 < 4)
     {
-        _26 = _49[2];
+        _21 = _45[2];
     }
     else
     {
-        _26 = _43;
+        _21 = _38;
     }
-    spvUnsafeArray<float4x4, 2> _67;
-    _67[0] = float4x4(float4(1.0), float4(0.0), float4(0.0), float4(0.0));
-    _67[1] = float4x4(float4(2.0), float4(0.0), float4(0.0), float4(0.0));
-    out.gl_Position = float4(_11._m0[gl_VertexIndex][0], _11._m0[gl_VertexIndex][1], _11._m0[gl_VertexIndex][2], 1.0);
+    spvUnsafeArray<float4x4, 2> _63;
+    _63[0] = float4x4(float4(1.0), float4(0.0), float4(0.0), float4(0.0));
+    _63[1] = float4x4(float4(2.0), float4(0.0), float4(0.0), float4(0.0));
+    out.gl_Position = float4(in.m_6, 1.0);
     return out;
 }
 

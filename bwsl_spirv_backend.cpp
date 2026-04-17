@@ -2863,6 +2863,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_UCLAMP: // Unsigned clamp (UClamp in GLSL.std.450)
   case IR::OP_SMOOTHSTEP:
   case IR::OP_FMA:
+  case IR::OP_FACEFORWARD:
   case IR::OP_REFRACT: {
     u16 dest_reg = ir->destinations[ir_idx];
     u16 op1_reg = ir->GetOperand(ir_idx, 0);

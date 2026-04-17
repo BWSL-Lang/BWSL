@@ -1,0 +1,37 @@
+// Test: PBR stdlib module imported from modules/
+// Tests: PBR material struct, direct-lighting helpers, module-to-module dependency on Math
+
+pipeline ModulesPBRLighting {
+    attributes {
+        position: float3
+        normal: float3
+    }
+
+    import PBR
+
+    pass "Main" {
+        use attributes { position, normal }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.worldPos = attributes.position;
+            output.normal = normalize(attributes.normal);
+        }
+
+        fragment {
+            float3 N = normalize(input.normal);
+            float3 V = normalize(float3(0.1, 0.2, 1.0));
+            float3 L = normalize(float3(-0.4, 0.7, 0.6));
+            float3 radiance = float3(2.0, 1.6, 1.2);
+
+            PBR::PBRMaterial mat;
+            mat.albedo = float3(0.8, 0.45, 0.2);
+            mat.roughness = 0.35;
+            mat.metallic = 0.2;
+            mat.ao = 1.0;
+
+            float3 lit = PBR::calculateDirectLighting(mat, N, V, L, radiance);
+            output.color = float4(lit, 1.0);
+        }
+    }
+}

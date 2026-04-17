@@ -1,0 +1,36 @@
+// Test: Math stdlib module imported from modules/
+// Tests: Math import, safe_normalize, easing, wave shaping, constants
+
+pipeline ModuleMathLive {
+    import Math
+
+    attributes {
+        position: float3
+        normal: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, normal, texcoord }
+
+        vertex {
+            float3 safeNormal = Math::safe_normalize(attributes.normal + float3(0.1, 0.0, 0.2));
+            float angle = attributes.texcoord.x * Math::PI;
+            float eased = Math::ease_in_out_cubic(saturate(attributes.texcoord.y));
+            float wobble = Math::triangle_wave(angle * Math::INV_PI);
+
+            output.position = float4(
+                attributes.position + safeNormal * (eased * 0.1 + wobble * 0.05),
+                1.0
+            );
+            output.normal = safeNormal;
+            output.value = Math::fast_sin(angle) + wobble;
+        }
+
+        fragment {
+            float lit = saturate(dot(Math::safe_normalize(input.normal), normalize(float3(0.4, 0.6, 1.0))));
+            float shaped = Math::smootherstep(-0.5, 1.5, input.value);
+            output.color = float4(shaped, lit, Math::ease_out_quad(lit), 1.0);
+        }
+    }
+}

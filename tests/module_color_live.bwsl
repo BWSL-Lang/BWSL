@@ -1,0 +1,27 @@
+// Test: Color stdlib module imported from modules/
+// Tests: Color import, color-space conversion, tone mapping
+
+pipeline ModuleColorLive {
+    import Color
+
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.baseColor = float3(attributes.texcoord, 0.35);
+        }
+
+        fragment {
+            float3 linear = Color::sRGBToLinear(input.baseColor);
+            float3 lit = linear * float3(2.0, 1.5, 1.25);
+            float3 mapped = Color::ACESFilm(lit);
+            output.color = float4(Color::linearToSRGB(mapped), 1.0);
+        }
+    }
+}

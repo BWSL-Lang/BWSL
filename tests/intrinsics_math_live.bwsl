@@ -1,0 +1,48 @@
+// Test: Live math intrinsics that must survive into generated code
+// Tests: abs, fract, clamp, saturate, smoothstep, lerp, mod, sign
+
+pipeline IntrinsicsMathLive {
+    attributes {
+        position: float3
+        texcoord: float2
+        normal: float3
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord, normal }
+
+        vertex {
+            float2 uv = attributes.texcoord * 2.0 - 1.0;
+            float3 n = normalize(attributes.normal);
+
+            float absX = abs(attributes.position.x);
+            float fracY = fract(attributes.position.y * 1.75);
+            float clampedZ = clamp(attributes.position.z, -0.5, 0.5);
+            float satLen = saturate(length(uv));
+            float ramp = smoothstep(0.1, 0.9, satLen);
+            float signedMix = sign(dot(n, float3(0.0, 0.0, 1.0)));
+            float wrapped = mod(absX + fracY + ramp, 1.25);
+            float offset = lerp(-0.15, 0.15, saturate(wrapped * 0.8));
+
+            output.position = float4(
+                attributes.position + n * (offset * signedMix + clampedZ * 0.05),
+                1.0
+            );
+            output.uv = uv;
+            output.normal = n;
+            output.mathValue = ramp + wrapped;
+        }
+
+        fragment {
+            float edge = abs(input.uv.x);
+            float pulse = smoothstep(0.2, 0.8, fract(input.mathValue + edge));
+            float band = clamp(mod(input.mathValue * 1.7, 1.0), 0.1, 0.9);
+            float lit = saturate(dot(normalize(input.normal), normalize(float3(0.4, 0.6, 1.0))));
+
+            output.color = float4(
+                lerp(float3(0.15, 0.2, 0.3), float3(band, pulse, lit), pulse),
+                1.0
+            );
+        }
+    }
+}

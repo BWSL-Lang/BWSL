@@ -1,0 +1,50 @@
+// Test: Live vector and matrix math across translated backends
+// Tests: vector SSA in loops, mat3 construction, faceforward/reflect/refract, matrix-vector multiply
+
+pipeline BackendVectorMath {
+    attributes {
+        position: float3
+        normal: float3
+        tangent: float3
+    }
+
+    pass "Main" {
+        use attributes { position, normal, tangent }
+
+        vertex {
+            float3 N = normalize(attributes.normal);
+            float3 T = normalize(attributes.tangent);
+            float3 B = normalize(cross(N, T));
+            mat3 tbn = mat3(T, B, N);
+
+            float3 carried = tbn * float3(0.1, 0.2, 0.3);
+            for (int i = 0; i < 2; i++) {
+                if (i == 0) {
+                    carried = carried + T * 0.05;
+                } else {
+                    carried = carried + B * 0.05;
+                }
+            }
+
+            output.position = float4(attributes.position + carried, 1.0);
+            output.normal = tbn * float3(0.0, 0.0, 1.0);
+            output.tangent = T;
+        }
+
+        fragment {
+            float3 N = normalize(input.normal);
+            float3 T = normalize(input.tangent);
+            float3 B = normalize(cross(N, T));
+            float3 V = normalize(float3(0.25, 0.5, 1.0));
+            float3 L = normalize(float3(-0.4, 0.8, 0.6));
+
+            float3 facing = faceforward(N, -V, N);
+            float3 reflected = reflect(-L, facing);
+            float3 refracted = refract(-V, facing, 1.0 / 1.33);
+            mat3 shadingBasis = mat3(T, B, facing);
+            float3 combined = shadingBasis * (reflected * 0.5 + refracted * 0.25 + facing * 0.25);
+
+            output.color = float4(combined * 0.5 + 0.5, 1.0);
+        }
+    }
+}

@@ -1,0 +1,37 @@
+// Test: Random stdlib module imported from modules/
+// Tests: Random import, scalar/vector/direction generation
+
+pipeline ModuleRandomLive {
+    import Random
+
+    attributes {
+        position: float3
+        normal: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, normal, texcoord }
+
+        vertex {
+            float randomScalar = Random::rand(11u);
+            float3 randomVector = Random::rand_float3(29u) * 0.05;
+            float3 randomDirection = Random::rand_direction(41u);
+
+            output.position = float4(
+                attributes.position + randomVector + randomDirection * (randomScalar * 0.05),
+                1.0
+            );
+            output.normal = normalize(attributes.normal + randomDirection * 0.1);
+            output.seedValue = randomScalar;
+        }
+
+        fragment {
+            float2 randomUv = Random::rand_float2(17u);
+            float chanceValue = Random::rand_range(23u, 0.2, 0.8);
+            float lit = saturate(dot(normalize(input.normal), Random::rand_hemisphere(31u, normalize(input.normal))));
+
+            output.color = float4(randomUv.x, chanceValue, lit + input.seedValue * 0.25, 1.0);
+        }
+    }
+}
