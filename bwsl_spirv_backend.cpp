@@ -153,6 +153,10 @@ constexpr std::array<spv::Op, 256> BuildIrToSpvOpTable() {
     table[IR::OP_DDY_COARSE] = spv::OpDPdyCoarse;
     table[IR::OP_FWIDTH] = spv::OpFwidth;
 
+    // ========== Boolean reductions ==========
+    table[IR::OP_ANY] = spv::OpAny;
+    table[IR::OP_ALL] = spv::OpAll;
+
     // ========== Wave/SIMD/Subgroup Operations ==========
     table[IR::OP_WAVE_MIN] = static_cast<spv::Op>(358);
     table[IR::OP_WAVE_MAX] = static_cast<spv::Op>(359);
@@ -1848,6 +1852,29 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     break;
   }
 
+  case IR::OP_MAT_INVERSE: {
+    u16 dest_reg = ir->destinations[ir_idx];
+    u32 op1 = GetSpirvId(ir->GetOperand(ir_idx, 0));
+    u32 result_type = GetTypeId(CoreType::MAT4);
+    if (ir->registerTypes && dest_reg < ir->registerCount) {
+      CoreType regType = static_cast<CoreType>(ir->registerTypes[dest_reg]);
+      if (regType == CoreType::MAT2 || regType == CoreType::MAT3 ||
+          regType == CoreType::MAT4) {
+        result_type = GetTypeId(regType);
+      }
+    }
+    if (currentFunctionSize + 6 > currentFunctionCapacity) {
+      GrowCurrentFunction();
+    }
+    currentFunction[currentFunctionSize++] = (6 << 16) | spv::OpExtInst;
+    currentFunction[currentFunctionSize++] = result_type;
+    currentFunction[currentFunctionSize++] = dest;
+    currentFunction[currentFunctionSize++] = glslStd450Id;
+    currentFunction[currentFunctionSize++] = GLSLstd450MatrixInverse;
+    currentFunction[currentFunctionSize++] = op1;
+    break;
+  }
+
   // ========== Bitwise/Logical Operations ==========
   // Note: For bitwise ops, int constants need to match the type of the other
   // operand For booleans, use OpLogicalAnd/OpLogicalOr instead of bitwise ops
@@ -1956,6 +1983,17 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u16 op_reg = ir->GetOperand(ir_idx, 0);
     u32 operand = GetSpirvId(op_reg);
     u32 result_type = GetResultType(dest_reg, op_reg);
+    spv::Op spv_op = IR_TO_SPV_OP_TABLE[static_cast<u32>(op)];
+    Emit(spv_op, result_type, dest, operand);
+    break;
+  }
+
+  // any(bvec) / all(bvec) — reduce a bool vector to a scalar bool.
+  case IR::OP_ANY:
+  case IR::OP_ALL: {
+    u16 op_reg = ir->GetOperand(ir_idx, 0);
+    u32 operand = GetSpirvId(op_reg);
+    u32 result_type = GetTypeId(CoreType::BOOL);
     spv::Op spv_op = IR_TO_SPV_OP_TABLE[static_cast<u32>(op)];
     Emit(spv_op, result_type, dest, operand);
     break;
@@ -2539,9 +2577,20 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_DEGREES:
   case IR::OP_RADIANS: {
     u16 dest_reg = ir->destinations[ir_idx];
-    u32 result_type = GetResultType(dest_reg, ir->GetOperand(ir_idx, 0));
-    u32 operand = GetSpirvId(ir->GetOperand(ir_idx, 0));
+    u16 operand_reg = ir->GetOperand(ir_idx, 0);
+    u32 result_type = GetResultType(dest_reg, operand_reg);
+    u32 operand = GetSpirvId(operand_reg);
     u32 glsl_op = IR_TO_GLSL_STD_450_TABLE[static_cast<u32>(op)];
+
+    // sign() is polymorphic: FSign for float, SSign for signed int.
+    if (op == IR::OP_SIGN && ir->registerTypes &&
+        operand_reg < ir->registerCount) {
+      CoreType t = static_cast<CoreType>(ir->registerTypes[operand_reg]);
+      if (t == CoreType::INT || t == CoreType::INT2 ||
+          t == CoreType::INT3 || t == CoreType::INT4) {
+        glsl_op = GLSLstd450SSign;
+      }
+    }
 
     // OpExtInst: result_type, result_id, set_id, instruction, operands...
     if (currentFunctionSize + 6 > currentFunctionCapacity) {
@@ -3316,16 +3365,19 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       case CoreType::FLOAT2:
       case CoreType::INT2:
       case CoreType::UINT2:
+      case CoreType::BOOL2:
         requiredComponents = 2;
         break;
       case CoreType::FLOAT3:
       case CoreType::INT3:
       case CoreType::UINT3:
+      case CoreType::BOOL3:
         requiredComponents = 3;
         break;
       case CoreType::FLOAT4:
       case CoreType::INT4:
       case CoreType::UINT4:
+      case CoreType::BOOL4:
         requiredComponents = 4;
         break;
       default:
@@ -3365,16 +3417,19 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       case CoreType::FLOAT2:
       case CoreType::INT2:
       case CoreType::UINT2:
+      case CoreType::BOOL2:
         requiredComponents = 2;
         break;
       case CoreType::FLOAT3:
       case CoreType::INT3:
       case CoreType::UINT3:
+      case CoreType::BOOL3:
         requiredComponents = 3;
         break;
       case CoreType::FLOAT4:
       case CoreType::INT4:
       case CoreType::UINT4:
+      case CoreType::BOOL4:
         requiredComponents = 4;
         break;
       default:
@@ -4291,7 +4346,24 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       }
       u32 elem_ptr_type = GetPointerTypeId(elem_type_id, storageClass);
       u32 ptr_id = AllocateId();
-      Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, index_id);
+
+      bool isStorageBufferVar = false;
+      if (storageClass == spv::StorageClassStorageBuffer) {
+        for (u32 b = 0; b < 32; b++) {
+          if (storageBufferIds[b] == base_id) {
+            isStorageBufferVar = true;
+            break;
+          }
+        }
+      }
+
+      if (isStorageBufferVar) {
+        u32 zero_id = GetIntConstantId(0, true);
+        Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, zero_id,
+             index_id);
+      } else {
+        Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, index_id);
+      }
       Emit(spv::OpLoad, elem_type_id, dest, ptr_id);
     } else {
       // Check if base is a struct field array (not a matrix/vector)
@@ -4379,10 +4451,47 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
           currentFunction[currentFunctionSize++] = base_id;
           currentFunction[currentFunctionSize++] = index_val;
         } else {
-          // Dynamic index - use OpVectorExtractDynamic on each row and
-          // reconstruct For simplicity, emit OpUndef for now (dynamic matrix
-          // indexing is rare)
-          Emit(spv::OpUndef, column_type_id, dest);
+          // Dynamic column index: extract each column with a constant index
+          // then chain OpSelect to pick the right one. SPIR-V has no direct
+          // "dynamic matrix column" op, and Function-local variables must be
+          // declared in the entry block, so this inline chain is simplest.
+          u32 columnCount = (baseType == CoreType::MAT2)   ? 2
+                            : (baseType == CoreType::MAT3) ? 3
+                                                           : 4;
+          u32 col_ids[4];
+          for (u32 c = 0; c < columnCount; ++c) {
+            col_ids[c] = AllocateId();
+            Emit(spv::OpCompositeExtract, column_type_id, col_ids[c], base_id,
+                 c);
+          }
+          u32 bool_type = GetTypeId(CoreType::BOOL);
+          // OpSelect with a vector result in SPIR-V <1.4 requires a vector
+          // condition of matching component count; broadcast the scalar bool.
+          CoreType bvecType = (baseType == CoreType::MAT2)   ? CoreType::BOOL2
+                              : (baseType == CoreType::MAT3) ? CoreType::BOOL3
+                                                             : CoreType::BOOL4;
+          u32 bvec_type_id = GetTypeId(bvecType);
+          u32 result = col_ids[columnCount - 1];
+          for (u32 c = columnCount - 1; c > 0; --c) {
+            u32 const_id = GetIntConstantId(c - 1, true);
+            u32 eq_id = AllocateId();
+            Emit(spv::OpIEqual, bool_type, eq_id, index_id, const_id);
+            u32 eq_vec_id = AllocateId();
+            if (columnCount == 2) {
+              Emit(spv::OpCompositeConstruct, bvec_type_id, eq_vec_id, eq_id,
+                   eq_id);
+            } else if (columnCount == 3) {
+              Emit(spv::OpCompositeConstruct, bvec_type_id, eq_vec_id, eq_id,
+                   eq_id, eq_id);
+            } else {
+              Emit(spv::OpCompositeConstruct, bvec_type_id, eq_vec_id, eq_id,
+                   eq_id, eq_id, eq_id);
+            }
+            u32 sel_id = (c == 1) ? dest : AllocateId();
+            Emit(spv::OpSelect, column_type_id, sel_id, eq_vec_id,
+                 col_ids[c - 1], result);
+            result = sel_id;
+          }
         }
       } else if (baseType == CoreType::FLOAT2 || baseType == CoreType::FLOAT3 ||
                  baseType == CoreType::FLOAT4) {
@@ -4537,7 +4646,24 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       u32 value_id = GetSpirvId(value_reg);
 
       u32 ptr_id = AllocateId();
-      Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, index_id);
+
+      bool isStorageBufferVar = false;
+      if (storageClass == spv::StorageClassStorageBuffer) {
+        for (u32 b = 0; b < 32; b++) {
+          if (storageBufferIds[b] == base_id) {
+            isStorageBufferVar = true;
+            break;
+          }
+        }
+      }
+
+      if (isStorageBufferVar) {
+        u32 zero_id = GetIntConstantId(0, true);
+        Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, zero_id,
+             index_id);
+      } else {
+        Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, index_id);
+      }
       Emit(spv::OpStore, ptr_id, value_id);
     } else {
       // For local arrays (not storage), define the base register as a simple

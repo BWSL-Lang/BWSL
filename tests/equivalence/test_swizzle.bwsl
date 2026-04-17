@@ -1,0 +1,13 @@
+pipeline EquivSwizzle {
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float f = float(idx);
+            float4 v = float4(f, f + 1.0, f + 2.0, f + 3.0);
+            float4 w = v.wzyx;
+            float2 a = w.xy + v.zw;
+            float4 r = float4(w.x, a.x, v.y, a.y);
+            resources.output[idx] = r.x + r.y * 2.0 + r.z * 4.0 + r.w * 8.0;
+        }
+    }
+}

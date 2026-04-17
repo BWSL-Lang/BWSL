@@ -1,0 +1,21 @@
+pipeline EquivWhileLoop {
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            int n = int(idx) + 1;
+
+            int acc = 0;
+            int i = 0;
+            loop {
+                if (i % 5 == 0) {
+                    acc = acc + i * i;
+                } else {
+                    acc = acc - i;
+                }
+                i = i + 1;
+            } until (i >= n * 3);
+
+            resources.output[idx] = acc;
+        }
+    }
+}

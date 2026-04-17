@@ -449,7 +449,12 @@ enum OpCode : u16 {
     OP_ATOMIC_XOR      = 0xE6,
     OP_ATOMIC_XCHG     = 0xE7,  // Exchange
     OP_ATOMIC_CMP_XCHG = 0xE8,  // Compare exchange
-    
+
+    // ========== Boolean vector reductions ==========
+    OP_ANY             = 0xEA,  // any(bvec) -> bool
+    OP_ALL             = 0xEB,  // all(bvec) -> bool
+
+
     // ========== Synchronization ==========
     OP_BARRIER         = 0xF0,  // Workgroup barrier
     OP_MEM_FENCE       = 0xF1,  // Memory fence

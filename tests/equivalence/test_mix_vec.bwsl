@@ -1,0 +1,21 @@
+pipeline EquivMixVec {
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.3;
+
+            float3 a = float3(0.0, 1.0, 2.0);
+            float3 b = float3(3.0, 4.0, 5.0);
+
+            float3 m = lerp(a, b, t);
+            float3 ss = smoothstep(float3(0.1, 0.2, 0.3), float3(0.9, 0.8, 0.7), float3(t, t, t));
+            float3 st = step(float3(0.5), float3(t + 0.1, t - 0.1, t));
+            float3 c = clamp(b * t, float3(0.0), float3(4.0));
+
+            resources.output[idx] = m.x + m.y + m.z
+                                  + ss.x * 2.0 + ss.y * 3.0 + ss.z * 4.0
+                                  + st.x + st.y + st.z
+                                  + c.x * 0.5 + c.y + c.z * 1.5;
+        }
+    }
+}

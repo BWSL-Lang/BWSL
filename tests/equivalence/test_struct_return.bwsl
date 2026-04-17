@@ -1,0 +1,34 @@
+pipeline EquivStructReturn {
+
+struct Pair {
+    float3 v;
+    float s;
+};
+
+    build :: (float t) -> Pair {
+        Pair p;
+        p.v = float3(t, t + 1.0, t - 0.5);
+        p.s = t * 2.0;
+        return p;
+    }
+
+    blend :: (Pair a, Pair b) -> Pair {
+        Pair r;
+        r.v = a.v * a.s + b.v * b.s;
+        r.s = a.s + b.s;
+        return r;
+    }
+
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.25;
+
+            Pair a = build(t);
+            Pair b = build(t + 1.0);
+            Pair c = blend(a, b);
+
+            resources.output[idx] = c.v.x + c.v.y + c.v.z + c.s;
+        }
+    }
+}

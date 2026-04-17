@@ -1,0 +1,22 @@
+pipeline EquivBitShift {
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int si = int(idx) - 4;
+            uint ui = idx + 1u;
+
+            int ls = si << 2;
+            int rs = si >> 1;
+            uint uls = ui << 3;
+            uint urs = (ui * 1000u) >> 2;
+            int masked = si & 0xF;
+            int unmasked = si | 0x20;
+            int xored = si ^ 0x3;
+            int notted = ~si;
+
+            int result = ls + rs * 10 + int(uls) * 100 + int(urs) * 1000
+                       + masked * 10000 + unmasked * 100000 + xored + notted;
+            resources.output[idx] = result;
+        }
+    }
+}

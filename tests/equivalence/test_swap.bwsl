@@ -1,0 +1,30 @@
+pipeline EquivSwap {
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            float4 v = float4(t, t + 1.0, t + 2.0, t + 3.0);
+
+            float tmp = v.x;
+            v.x = v.w;
+            v.w = tmp;
+
+            float2 tmp2 = v.xy;
+            v.xy = v.zw;
+            v.zw = tmp2;
+
+            float accum = 0.0;
+            for (int i = 0; i < 3; i = i + 1) {
+                float rotated = v.x;
+                v.x = v.y;
+                v.y = v.z;
+                v.z = v.w;
+                v.w = rotated;
+                accum = accum + v.x * float(i + 1);
+            }
+
+            resources.output[idx] = v.x + v.y * 2.0 + v.z * 4.0 + v.w * 8.0 + accum;
+        }
+    }
+}

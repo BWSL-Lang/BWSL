@@ -1,0 +1,23 @@
+pipeline EquivGeometric {
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.25 + 0.1;
+
+            float3 a = normalize(float3(t + 1.0, t * 2.0, 1.0));
+            float3 b = normalize(float3(1.0, t + 1.0, t * 3.0));
+            float3 c = cross(a, b);
+            float3 n = normalize(float3(0.0, 1.0, 0.0));
+            float3 r = reflect(a, n);
+            float3 rf = refract(a, n, 0.9);
+
+            float len = length(a - b);
+            float dst = distance(a, b);
+            float d = dot(c, r);
+
+            resources.output[idx] = c.x + c.y + c.z
+                                  + r.x * 2.0 + rf.y * 3.0
+                                  + len + dst * 0.5 + d * 0.25;
+        }
+    }
+}

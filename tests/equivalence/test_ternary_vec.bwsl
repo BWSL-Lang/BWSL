@@ -1,0 +1,23 @@
+pipeline EquivTernaryVec {
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int i = int(idx);
+
+            float4 a = float4(1.0, 2.0, 3.0, 4.0);
+            float4 b = float4(10.0, 20.0, 30.0, 40.0);
+
+            float4 pick = (i % 2 == 0) ? a : b;
+            float3 subset = (i < 4) ? pick.xyz : pick.wzy;
+            float scale = (i > 2 && i < 6) ? 2.0 : 0.5;
+            float4 scaled = pick * scale;
+            int3 labels = (i < 3) ? int3(1, 2, 3) : int3(10, 20, 30);
+
+            float result = scaled.x + scaled.y + scaled.z + scaled.w
+                         + subset.x + subset.y * 2.0 + subset.z * 3.0
+                         + float(labels.x) * 0.1 + float(labels.y) * 0.01 + float(labels.z) * 0.001;
+
+            resources.output[idx] = result;
+        }
+    }
+}

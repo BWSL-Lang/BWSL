@@ -1,0 +1,19 @@
+pipeline EquivIntrinsicChain {
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.3 + 0.1;
+
+            float3 a = float3(t, t * 2.0, t + 1.0);
+            float3 b = float3(t + 0.5, t - 0.25, t * 3.0);
+
+            float3 r = normalize(cross(normalize(a), normalize(b)));
+            float score = dot(r, normalize(a - b));
+            float shaped = smoothstep(-1.0, 1.0, clamp(score, -1.0, 1.0));
+            float wrapped = saturate(pow(max(0.001, shaped), 1.5));
+            float final = wrapped + length(reflect(a, r)) * 0.1;
+
+            resources.output[idx] = final;
+        }
+    }
+}

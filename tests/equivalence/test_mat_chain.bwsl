@@ -1,0 +1,33 @@
+pipeline EquivMatChain {
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.2 + 0.1;
+
+            mat4 A = mat4(
+                float4(1.0, t, 0.0, 0.0),
+                float4(-t, 1.0, 0.0, 0.0),
+                float4(0.0, 0.0, 1.0, 0.0),
+                float4(0.0, 0.0, 0.0, 1.0)
+            );
+            mat4 B = mat4(
+                float4(1.0 + t, 0.0, 0.0, 0.0),
+                float4(0.0, 1.0 + t, 0.0, 0.0),
+                float4(0.0, 0.0, 1.0 + t, 0.0),
+                float4(0.0, 0.0, 0.0, 1.0)
+            );
+            mat4 C = mat4(
+                float4(1.0, 0.0, 0.0, t),
+                float4(0.0, 1.0, 0.0, t * 2.0),
+                float4(0.0, 0.0, 1.0, t * 3.0),
+                float4(0.0, 0.0, 0.0, 1.0)
+            );
+
+            mat4 M = A * B * C;
+            float4 p = float4(0.5, 0.75, 1.0, 1.0);
+            float4 r = M * p;
+
+            resources.output[idx] = r.x + r.y * 2.0 + r.z * 3.0 + r.w * 4.0;
+        }
+    }
+}

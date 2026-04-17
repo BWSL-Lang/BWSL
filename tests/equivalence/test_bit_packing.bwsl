@@ -1,0 +1,23 @@
+pipeline EquivBitPacking {
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+
+            uint r = (idx * 37u) & 0xFFu;
+            uint g = (idx * 73u) & 0xFFu;
+            uint b = (idx * 113u) & 0xFFu;
+            uint a = (idx * 191u) & 0xFFu;
+
+            uint packed = (a << 24) | (b << 16) | (g << 8) | r;
+            uint ur = packed & 0xFFu;
+            uint ug = (packed >> 8) & 0xFFu;
+            uint ub = (packed >> 16) & 0xFFu;
+            uint ua = (packed >> 24) & 0xFFu;
+
+            int diff = int(ur) - int(r) + int(ug) - int(g) + int(ub) - int(b) + int(ua) - int(a);
+            int result = int(packed ^ 0xDEADBEEFu) + diff * 1000;
+
+            resources.output[idx] = result;
+        }
+    }
+}

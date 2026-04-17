@@ -1,0 +1,20 @@
+pipeline EquivDynVecIndex {
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            int i = int(idx);
+
+            float4 v = float4(10.0, 20.0, 30.0, 40.0);
+            float pick = v[i];
+            float next = v[(i + 1) % 4];
+
+            float4 w = float4(1.0, 2.0, 3.0, 4.0);
+            float sum = 0.0;
+            for (int k = 0; k < 4; k = k + 1) {
+                sum = sum + w[k] * float(k + 1);
+            }
+
+            resources.output[idx] = pick + next * 0.1 + sum;
+        }
+    }
+}

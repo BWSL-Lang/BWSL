@@ -48,6 +48,22 @@ BWSLC_DEBUG_OUT = $(BUILD_DIR)/bwslc-debug$(EXE_EXT)
 BWSLC_WIN_ZIG_OUT = $(BUILD_DIR)/bwslc-win.exe
 BWSLC_WIN_ZIG_DEBUG_OUT = $(BUILD_DIR)/bwslc-win-debug.exe
 
+EQUIV_RUNNER_SRC = tools/equiv_runner.cpp
+EQUIV_RUNNER_OUT = $(BUILD_DIR)/equiv_runner$(EXE_EXT)
+
+# Vulkan SDK location (override by exporting VULKAN_SDK)
+ifeq ($(HOST_OS),macos)
+VULKAN_SDK ?= $(HOME)/VulkanSDK/1.3.243.0/macOS
+VULKAN_INCLUDE = -I$(VULKAN_SDK)/include
+VULKAN_LIBS = -L$(VULKAN_SDK)/lib -lvulkan -Wl,-rpath,$(VULKAN_SDK)/lib
+else ifeq ($(HOST_OS),linux)
+VULKAN_INCLUDE = $(if $(VULKAN_SDK),-I$(VULKAN_SDK)/include,)
+VULKAN_LIBS = $(if $(VULKAN_SDK),-L$(VULKAN_SDK)/lib,) -lvulkan
+else
+VULKAN_INCLUDE =
+VULKAN_LIBS =
+endif
+
 # SPIRV-Cross integration for cross-compilation
 SPIRV_CROSS_DIR = vendor/SPIRV-Cross
 SPIRV_CROSS_INCLUDES = -I$(SPIRV_CROSS_DIR)
@@ -128,7 +144,8 @@ WASM_SPIRV_INCLUDES = -I. -Itools
 # ============================================================================
 
 .PHONY: all help bwslc bwslc-debug bwslc-msvc bwslc-msvc-debug \
-	bwslc-win-zig bwslc-win-zig-debug clean wasm wasm-debug test install
+	bwslc-win-zig bwslc-win-zig-debug clean wasm wasm-debug test install \
+	equiv_runner
 
 all: bwslc
 
@@ -150,6 +167,11 @@ bwslc: $(BUILD_DIR)
 bwslc-debug: $(BUILD_DIR)
 	$(NATIVE_BWSLC_DEBUG_CMD)
 	@echo "Built: $(BWSLC_DEBUG_OUT)"
+
+equiv_runner: $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) $(VULKAN_INCLUDE) -o $(EQUIV_RUNNER_OUT) \
+		$(EQUIV_RUNNER_SRC) $(VULKAN_LIBS)
+	@echo "Built: $(EQUIV_RUNNER_OUT)"
 
 ifeq ($(HOST_OS),windows)
 bwslc-msvc: bwslc

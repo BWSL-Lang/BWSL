@@ -1,0 +1,25 @@
+pipeline EquivFunctionCall {
+
+    square :: (float x) -> float {
+        return x * x;
+    }
+
+    weighted :: (float a, float b, float w) -> float {
+        return a * w + b * (1.0 - w);
+    }
+
+    compute_pair :: (int i) -> float2 {
+        float x = float(i);
+        return float2(square(x), weighted(x, x * 2.0, 0.25));
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int i = int(idx);
+            float2 pair = compute_pair(i);
+            float combined = square(pair.x - pair.y) + weighted(pair.x, pair.y, 0.75);
+            resources.output[idx] = combined;
+        }
+    }
+}

@@ -1,0 +1,30 @@
+pipeline EquivNestedStruct {
+
+struct Inner {
+    float2 uv;
+    float factor;
+};
+
+struct Outer {
+    float3 pos;
+    Inner inner;
+};
+
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.5;
+
+            Outer o;
+            o.pos = float3(t, t + 1.0, t * 2.0);
+            o.inner.uv = float2(t * 0.1, t * 0.2);
+            o.inner.factor = t + 3.0;
+
+            float result = o.pos.x + o.pos.y + o.pos.z
+                         + o.inner.uv.x * 10.0 + o.inner.uv.y * 20.0
+                         + o.inner.factor * 0.5;
+
+            resources.output[idx] = result;
+        }
+    }
+}

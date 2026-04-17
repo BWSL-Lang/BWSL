@@ -1,0 +1,23 @@
+pipeline EquivSharedMemory {
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            shared float tile[8];
+
+            uint idx = input.global_id.x;
+            uint lid = input.local_index;
+
+            tile[lid] = float(lid) + 1.0;
+            barrier();
+
+            uint neighbor = (lid + 1u) % 8u;
+            float sum = tile[lid] + tile[neighbor];
+            barrier();
+
+            tile[lid] = sum;
+            barrier();
+
+            float result = tile[lid] + tile[(lid + 4u) % 8u] * 0.25;
+            resources.output[idx] = result;
+        }
+    }
+}

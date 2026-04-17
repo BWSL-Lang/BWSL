@@ -1,0 +1,36 @@
+pipeline EquivDeepNesting {
+
+    classify :: (int v) -> int {
+        if (v < 0) {
+            return -1;
+        }
+        int acc = 0;
+        for (int i = 0; i < 5; i = i + 1) {
+            for (int j = 0; j < 5; j = j + 1) {
+                if (j == v) {
+                    if ((i + j) % 2 == 0) {
+                        acc = acc + (i * 10 + j);
+                        continue;
+                    } else {
+                        return acc + 7;
+                    }
+                }
+                if (i == v) {
+                    break;
+                }
+                acc = acc + 1;
+            }
+            if (i >= v && v > 0) {
+                return acc;
+            }
+        }
+        return acc;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            resources.output[idx] = classify(int(idx) - 2);
+        }
+    }
+}

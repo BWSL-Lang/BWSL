@@ -159,26 +159,81 @@ std::string CompileToHLSL(const std::vector<uint32_t>& spirv, int shaderModel) {
 #endif
 }
 
+// Returns non-empty error string if the SPIR-V module uses features that
+// require GLSL ES 3.10+ when the target is below 310.
+static std::string CheckGLSLESCompat(spirv_cross::CompilerGLSL& compiler,
+                                     int glslVersion, bool es) {
+    if (!es || glslVersion >= 310) return {};
+    auto resources = compiler.get_shader_resources();
+    if (!resources.storage_buffers.empty()) {
+        return "error: GLSL ES " + std::to_string(glslVersion) +
+               " does not support storage buffers (requires ES 310+)";
+    }
+    if (!resources.storage_images.empty()) {
+        return "error: GLSL ES " + std::to_string(glslVersion) +
+               " does not support storage images (requires ES 310+)";
+    }
+    for (const auto& ep : compiler.get_entry_points_and_stages()) {
+        if (ep.execution_model == spv::ExecutionModelGLCompute) {
+            return "error: GLSL ES " + std::to_string(glslVersion) +
+                   " does not support compute shaders (requires ES 310+)";
+        }
+    }
+    return {};
+}
+
+// Inspects emitted GLSL ES source for builtins that require ES 310+.
+static std::string CheckGLSLESEmittedCompat(const std::string& source,
+                                            int glslVersion, bool es) {
+    if (!es || glslVersion >= 310) return {};
+    static const char* es310_only[] = {
+        "findMSB(", "findLSB(", "bitCount(", "bitfieldReverse(",
+        "bitfieldExtract(", "bitfieldInsert(",
+        "uaddCarry(", "usubBorrow(", "umulExtended(", "imulExtended(",
+    };
+    for (const char* kw : es310_only) {
+        if (source.find(kw) != std::string::npos) {
+            return std::string("error: GLSL ES ") + std::to_string(glslVersion) +
+                   " does not support builtin '" + kw + ")' (requires ES 310+)";
+        }
+    }
+    return {};
+}
+
 std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, bool es) {
 #ifdef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
     spirv_cross::CompilerGLSL compiler(spirv);
+    if (auto err = CheckGLSLESCompat(compiler, glslVersion, es); !err.empty()) {
+        return err;
+    }
     spirv_cross::CompilerGLSL::Options glslOpts;
     glslOpts.version = glslVersion;
     glslOpts.es = es;
     glslOpts.vulkan_semantics = false;
     glslOpts.separate_shader_objects = true;
     compiler.set_common_options(glslOpts);
-    return compiler.compile();
+    std::string result = compiler.compile();
+    if (auto err = CheckGLSLESEmittedCompat(result, glslVersion, es); !err.empty()) {
+        return err;
+    }
+    return result;
 #else
     try {
         spirv_cross::CompilerGLSL compiler(spirv);
+        if (auto err = CheckGLSLESCompat(compiler, glslVersion, es); !err.empty()) {
+            return err;
+        }
         spirv_cross::CompilerGLSL::Options glslOpts;
         glslOpts.version = glslVersion;
         glslOpts.es = es;
         glslOpts.vulkan_semantics = false;
         glslOpts.separate_shader_objects = true;
         compiler.set_common_options(glslOpts);
-        return compiler.compile();
+        std::string result = compiler.compile();
+        if (auto err = CheckGLSLESEmittedCompat(result, glslVersion, es); !err.empty()) {
+            return err;
+        }
+        return result;
     } catch (const spirv_cross::CompilerError& e) {
         return std::string("error: ") + e.what();
     } catch (const std::exception& e) {

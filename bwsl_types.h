@@ -551,9 +551,12 @@ namespace TokenMasks {
         mask(CoreType::INT2) | 
         mask(CoreType::INT3) | mask(CoreType::INT4);
     
-        static constexpr TypeMask UINT_VECTORS = 
-        mask(CoreType::UINT2) | 
+        static constexpr TypeMask UINT_VECTORS =
+        mask(CoreType::UINT2) |
         mask(CoreType::UINT3) | mask(CoreType::UINT4);
+
+        static constexpr TypeMask BOOL_VECTORS =
+        mask(CoreType::BOOL2) | mask(CoreType::BOOL3) | mask(CoreType::BOOL4);
     
         static constexpr TypeMask GENERIC_TYPES = 
         mask(CoreType::GENERIC_T) | mask(CoreType::GENERIC_U) | mask(CoreType::GENERIC_V);
@@ -578,6 +581,9 @@ namespace TypeHashes {
     
     // Pre-computed hashes for all core types
     constexpr u32 BOOL        = Utils::HashStr("bool");
+    constexpr u32 BOOL2       = Utils::HashStr("bool2");
+    constexpr u32 BOOL3       = Utils::HashStr("bool3");
+    constexpr u32 BOOL4       = Utils::HashStr("bool4");
     constexpr u32 INT         = Utils::HashStr("int");
     constexpr u32 UINT        = Utils::HashStr("uint");
     constexpr u32 FLOAT       = Utils::HashStr("float");
@@ -616,6 +622,9 @@ namespace TypeHashes {
     // Sorted by hash for potential binary search if we ever have enough to matter.
     constexpr HashEntry HASH_TABLE[] = {
         {BOOL,   TYPE_INFO(CoreType::BOOL,   1,  false)},
+        {BOOL2,  TYPE_INFO(CoreType::BOOL2,  2,  true)},
+        {BOOL3,  TYPE_INFO(CoreType::BOOL3,  3,  true)},
+        {BOOL4,  TYPE_INFO(CoreType::BOOL4,  4,  true)},
         {INT,    TYPE_INFO(CoreType::INT,    1,  false)},
         {UINT,   TYPE_INFO(CoreType::UINT,   1,  false)},
         {FLOAT,  TYPE_INFO(CoreType::FLOAT,  1,  false)},

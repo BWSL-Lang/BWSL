@@ -1,0 +1,27 @@
+pipeline EquivEarlyReturn {
+
+    classify :: (int v) -> float {
+        if (v < 0) {
+            return -1.0;
+        }
+
+        for (int i = 0; i < 10; i = i + 1) {
+            if (i > v) {
+                return float(i) * 0.25;
+            }
+            if (i == 3 && v > 5) {
+                return 99.0;
+            }
+        }
+
+        return 7.0;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int v = int(idx) - 2;
+            resources.output[idx] = classify(v);
+        }
+    }
+}

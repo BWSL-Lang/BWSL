@@ -123,6 +123,10 @@ enum class Intrinsic : u16 {
     // Control flow
     SELECT,  // Ternary select: select(false_val, true_val, condition)
 
+    // Boolean reductions
+    ANY,
+    ALL,
+
     COUNT,
     INVALID = 0xFFFF
 };
@@ -251,6 +255,10 @@ constexpr BackendNames BACKEND_NAMES[] = {
 
     // Control flow
     {"select", "select", "mix"},                        // SELECT (GLSL uses mix for component-wise select)
+
+    // Boolean reductions
+    {"any", "any", "any"},                              // ANY
+    {"all", "all", "all"},                              // ALL
 };
 
 struct IntrinsicData {
@@ -428,6 +436,10 @@ constexpr IntrinsicData INTRINSICS[] = {
     // Control flow
     // select(false_val, true_val, condition) - returns true_val where condition is true, false_val otherwise
     INTRINSIC_FIXED(SELECT, "select", TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, mask(CoreType::BOOL), 0, 0, SPV_MAP(spv::OpSelect, SPV_EXT_NONE)),
+
+    // Boolean reductions — any(bvec) / all(bvec) -> bool. Core SPIR-V ops.
+    INTRINSIC_FIXED(ANY, "any", mask(CoreType::BOOL), TypeMasks::BOOL_VECTORS, 0, 0, 0, 0, SPV_MAP(spv::OpAny, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(ALL, "all", mask(CoreType::BOOL), TypeMasks::BOOL_VECTORS, 0, 0, 0, 0, SPV_MAP(spv::OpAll, SPV_EXT_NONE)),
 };
 #undef INTRINSIC_ENTRY
 

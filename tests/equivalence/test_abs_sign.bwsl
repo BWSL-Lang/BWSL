@@ -1,0 +1,23 @@
+pipeline EquivAbsSign {
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int i = int(idx) - 4;
+            float f = float(i) * 0.5;
+
+            int ai = abs(i);
+            float af = abs(f);
+            float sf = sign(f);
+            int si = sign(i);
+
+            float mn = min(f, -f * 2.0);
+            float mx = max(f, f * 2.0);
+            int imin = min(i, -i);
+            int imax = max(i, i * 2);
+
+            resources.output[idx] = float(ai) + af + sf * 10.0 + float(si) * 100.0
+                                  + mn + mx * 0.25
+                                  + float(imin) * 0.1 + float(imax) * 0.01;
+        }
+    }
+}

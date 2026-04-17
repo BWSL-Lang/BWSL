@@ -1,0 +1,25 @@
+pipeline EquivBoolCombos {
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            float3 a = float3(t, t - 2.0, t - 5.0);
+            float3 b = float3(1.0, 2.0, 3.0);
+
+            bool gt0 = a.x > b.x;
+            bool gt1 = a.y > b.y;
+            bool gt2 = a.z > b.z;
+            bool eq0 = a.x == b.x;
+            bool eq1 = a.y == b.y;
+
+            float r = 0.0;
+            if (gt0 || gt1 || gt2) r = r + 10.0;
+            if (gt0 && gt1 && gt2) r = r + 100.0;
+            if (eq0 || eq1) r = r + 1000.0;
+            if (!(gt0 && gt1 && gt2) && (gt0 || gt1 || gt2)) r = r + 5.0;
+
+            resources.output[idx] = r;
+        }
+    }
+}

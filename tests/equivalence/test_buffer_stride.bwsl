@@ -1,0 +1,13 @@
+pipeline EquivBufferStride {
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float v = resources.inbuf[idx];
+            float accum = 0.0;
+            for (uint k = 0u; k < 4u; k = k + 1u) {
+                accum = accum + resources.inbuf[(idx + k) % 8u] * float(k + 1u);
+            }
+            resources.output[idx] = v * 2.0 + accum * 0.25;
+        }
+    }
+}

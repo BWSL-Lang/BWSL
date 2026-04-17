@@ -1,0 +1,23 @@
+pipeline EquivArrayOfStructs {
+
+struct Vertex {
+    float3 position;
+    float life;
+    float3 normal;
+    float pad;
+};
+
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            Vertex mine = resources.verts[idx];
+            Vertex neighbor = resources.verts[(idx + 1u) % 4u];
+
+            float blended = mine.life * 0.75 + neighbor.life * 0.25;
+            float3 avgPos = (mine.position + neighbor.position) * 0.5;
+            float3 avgN = (mine.normal + neighbor.normal) * 0.5;
+
+            resources.output[idx] = blended + dot(avgPos, avgN);
+        }
+    }
+}

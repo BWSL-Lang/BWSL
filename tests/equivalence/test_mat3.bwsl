@@ -1,0 +1,21 @@
+pipeline EquivMat3 {
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.1;
+
+            mat3 M = mat3(
+                float3(1.0 + t, 2.0, 3.0),
+                float3(4.0, 5.0 + t, 6.0),
+                float3(7.0, 8.0, 9.0 + t)
+            );
+            mat3 T = transpose(M);
+            mat3 P = M * T;
+
+            float3 v = float3(1.0, 0.5, 0.25);
+            float3 r = P * v;
+
+            resources.output[idx] = r.x + r.y + r.z;
+        }
+    }
+}

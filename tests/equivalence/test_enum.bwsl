@@ -1,0 +1,33 @@
+pipeline EquivEnum {
+
+    enum LightType {
+        Directional = 0,
+        Point = 1,
+        Spot = 2,
+        Area = 3
+    }
+
+    attenuate :: (LightType t, float distance) -> float {
+        if (t == LightType::Directional) {
+            return 1.0;
+        } else if (t == LightType::Point) {
+            return 1.0 / (distance * distance + 0.01);
+        } else if (t == LightType::Spot) {
+            return max(0.0, 1.0 - distance * 0.5);
+        }
+        return 0.5;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float d = float(idx) * 0.5 + 0.1;
+            LightType t = LightType::Directional;
+            if (idx % 4u == 1u) t = LightType::Point;
+            else if (idx % 4u == 2u) t = LightType::Spot;
+            else if (idx % 4u == 3u) t = LightType::Area;
+
+            resources.output[idx] = attenuate(t, d);
+        }
+    }
+}

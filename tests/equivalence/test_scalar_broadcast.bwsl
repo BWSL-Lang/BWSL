@@ -1,0 +1,19 @@
+pipeline EquivScalarBroadcast {
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            float3 all_t = float3(t);
+            float4 ones = float4(1.0);
+            float3 mixed = float3(t, 0.5, -1.0);
+
+            float3 scaled = all_t * 2.0 + mixed;
+            float4 broadcast = ones * t - float4(0.25);
+
+            float result = scaled.x + scaled.y + scaled.z
+                         + broadcast.x + broadcast.y + broadcast.z + broadcast.w;
+            resources.output[idx] = result;
+        }
+    }
+}

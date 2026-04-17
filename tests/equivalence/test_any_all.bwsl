@@ -1,0 +1,22 @@
+pipeline EquivAnyAll {
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            float3 a = float3(t, t - 2.0, t - 5.0);
+            float3 b = float3(1.0, 2.0, 3.0);
+
+            bool3 gt = bool3(a.x > b.x, a.y > b.y, a.z > b.z);
+            bool3 eq = bool3(a.x == b.x, a.y == b.y, a.z == b.z);
+
+            float r = 0.0;
+            if (any(gt)) r = r + 10.0;
+            if (all(gt)) r = r + 100.0;
+            if (any(eq)) r = r + 1000.0;
+            if (!all(gt) && any(gt)) r = r + 5.0;
+
+            resources.output[idx] = r;
+        }
+    }
+}

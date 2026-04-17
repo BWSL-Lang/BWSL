@@ -1,0 +1,11 @@
+pipeline EquivInputDriven {
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float v = resources.inbuf[idx];
+            float prev = resources.inbuf[(idx + 7u) % 8u];
+            float transformed = v * v - prev * 0.5 + 1.0;
+            resources.output[idx] = transformed;
+        }
+    }
+}

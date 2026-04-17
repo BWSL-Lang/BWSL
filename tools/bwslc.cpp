@@ -702,6 +702,8 @@ const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_ATOMIC_XOR:      return "ATOMIC_XOR";
         case IR::OP_ATOMIC_XCHG:     return "ATOMIC_XCHG";
         case IR::OP_ATOMIC_CMP_XCHG: return "ATOMIC_CMP_XCHG";
+        case IR::OP_ANY:             return "ANY";
+        case IR::OP_ALL:             return "ALL";
         // Synchronization
         case IR::OP_BARRIER:       return "BARRIER";
         case IR::OP_MEM_FENCE:     return "MEM_FENCE";

@@ -332,6 +332,7 @@ inline u8 ParseStage(const std::string& s) {
     if (s == "vertex") return 1;
     if (s == "fragment") return 2;
     if (s == "both") return 3;
+    if (s == "compute") return 4;
     return 0;
 }
 
@@ -544,6 +545,7 @@ inline ParseResult Parse(const std::string& content) {
                     else if (tokens[i] == "vertex") desc.stages |= 1;
                     else if (tokens[i] == "fragment") desc.stages |= 2;
                     else if (tokens[i] == "both") desc.stages = 3;
+                    else if (tokens[i] == "compute") desc.stages |= 4;
                 }
                 if (desc.stages == 0) desc.stages = 1;
 

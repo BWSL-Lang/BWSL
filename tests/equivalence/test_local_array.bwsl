@@ -1,0 +1,24 @@
+pipeline EquivLocalArray {
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+
+            float table[6];
+            table[0] = 1.0;
+            table[1] = 2.0;
+            table[2] = 4.0;
+            table[3] = 8.0;
+            table[4] = 16.0;
+            table[5] = 32.0;
+
+            uint k = idx + 1u;
+            float acc = 0.0;
+            for (uint i = 0u; i < k; i = i + 1u) {
+                acc = acc + table[i];
+            }
+
+            float direct = table[idx];
+            resources.output[idx] = acc + direct * 0.5;
+        }
+    }
+}

@@ -1,0 +1,28 @@
+pipeline EquivStructArrayField {
+
+struct Poly {
+    float4 vertices[4];
+    float weight;
+};
+
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.5;
+
+            Poly p;
+            p.vertices[0] = float4(t, 0.0, 0.0, 1.0);
+            p.vertices[1] = float4(0.0, t, 0.0, 1.0);
+            p.vertices[2] = float4(0.0, 0.0, t, 1.0);
+            p.vertices[3] = float4(t, t, t, 1.0);
+            p.weight = t + 0.5;
+
+            float sum = 0.0;
+            for (int i = 0; i < 4; i = i + 1) {
+                sum = sum + p.vertices[i].x + p.vertices[i].y + p.vertices[i].z;
+            }
+
+            resources.output[idx] = sum * p.weight;
+        }
+    }
+}

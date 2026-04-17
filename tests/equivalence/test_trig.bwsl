@@ -1,0 +1,17 @@
+pipeline EquivTrig {
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.4;
+
+            float s = sin(t);
+            float c = cos(t);
+            float tn = tan(t * 0.2);
+            float a = atan2(s, c + 0.5);
+            float d = degrees(t);
+            float r = radians(d * 0.5);
+
+            resources.output[idx] = s + c * 2.0 + tn * 3.0 + a * 4.0 + r * 5.0;
+        }
+    }
+}

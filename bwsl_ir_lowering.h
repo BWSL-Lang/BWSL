@@ -577,9 +577,14 @@ struct IRLowering {
     // Body - track loop depth for nested if-statement merge handling
     loopDepth++;
     PushLoopContext();
+    // Snapshot variable→register mapping so body-scoped declarations
+    // (including shadowed iterators in nested for-loops) don't leak into
+    // the increment clause or subsequent outer code.
+    auto savedVariableRegisters = variableRegisters;
     if (!forLoop.body.IsNull()) {
       LowerStatement(forLoop.body);
     }
+    variableRegisters = std::move(savedVariableRegisters);
     loopDepth--;
 
     // Continue target = start of increment
@@ -3622,83 +3627,56 @@ struct IRLowering {
         return dest;
       }
 
-      // Check for multi-component swizzle (rgb, xyz, etc.)
-      struct SwizzlePattern {
-        const char *name;
-        u8 indices[4];
-        u8 count;
-      };
-      static const SwizzlePattern swizzlePatterns[] = {
-          // 2-component swizzles
-          {"xy", {0, 1, 0, 0}, 2},
-          {"xz", {0, 2, 0, 0}, 2},
-          {"xw", {0, 3, 0, 0}, 2},
-          {"yx", {1, 0, 0, 0}, 2},
-          {"yz", {1, 2, 0, 0}, 2},
-          {"yw", {1, 3, 0, 0}, 2},
-          {"zx", {2, 0, 0, 0}, 2},
-          {"zy", {2, 1, 0, 0}, 2},
-          {"zw", {2, 3, 0, 0}, 2},
-          {"wx", {3, 0, 0, 0}, 2},
-          {"wy", {3, 1, 0, 0}, 2},
-          {"wz", {3, 2, 0, 0}, 2},
-          {"xx", {0, 0, 0, 0}, 2},
-          {"yy", {1, 1, 0, 0}, 2},
-          {"zz", {2, 2, 0, 0}, 2},
-          {"ww", {3, 3, 0, 0}, 2},
-          // 3-component swizzles
-          {"xyz", {0, 1, 2, 0}, 3},
-          {"xzy", {0, 2, 1, 0}, 3},
-          {"yxz", {1, 0, 2, 0}, 3},
-          {"yzx", {1, 2, 0, 0}, 3},
-          {"zxy", {2, 0, 1, 0}, 3},
-          {"zyx", {2, 1, 0, 0}, 3},
-          {"xyw", {0, 1, 3, 0}, 3},
-          {"xzw", {0, 2, 3, 0}, 3},
-          {"yzw", {1, 2, 3, 0}, 3},
-          // 4-component swizzles
-          {"xyzw", {0, 1, 2, 3}, 4},
-          {"wzyx", {3, 2, 1, 0}, 4},
-          // Color aliases
-          {"rg", {0, 1, 0, 0}, 2},
-          {"rb", {0, 2, 0, 0}, 2},
-          {"ra", {0, 3, 0, 0}, 2},
-          {"gr", {1, 0, 0, 0}, 2},
-          {"gb", {1, 2, 0, 0}, 2},
-          {"ga", {1, 3, 0, 0}, 2},
-          {"br", {2, 0, 0, 0}, 2},
-          {"bg", {2, 1, 0, 0}, 2},
-          {"ba", {2, 3, 0, 0}, 2},
-          {"rgb", {0, 1, 2, 0}, 3},
-          {"bgr", {2, 1, 0, 0}, 3},
-          {"rgba", {0, 1, 2, 3}, 4},
-          {"bgra", {2, 1, 0, 3}, 4},
-      };
-
-      for (const auto &pattern : swizzlePatterns) {
-        if (access.member.nameHash == Utils::HashStr(pattern.name)) {
-          // If objectReg is a storage pointer, load it first before swizzle
-          u16 srcReg = objectReg;
-          if (objectReg < MAX_REGISTERS &&
-              (program.registerStorageInfo[objectReg] &
-               IR::IRProgram::STORAGE_IS_PTR)) {
-            srcReg = AllocateRegister();
-            CoreType loadType = GetRegisterType(objectReg);
-            SetRegisterType(srcReg, loadType);
-            builder.EmitInstruction(OP_STORAGE_LOAD, srcReg, objectReg);
+      // Multi-component swizzle (.xyz/.rgb/.wzy/etc): parse each character
+      // from the member name. Supports any 2-, 3-, or 4-character combination
+      // of x/y/z/w or r/g/b/a.
+      if (sourceBase && !access.member.isHashOnly()) {
+        auto sv = access.member.view(sourceBase);
+        u32 swizzleLen = static_cast<u32>(sv.size());
+        if (swizzleLen >= 2 && swizzleLen <= 4) {
+          u8 indices[4] = {0, 0, 0, 0};
+          bool valid = true;
+          bool seenXyzw = false;
+          bool seenRgba = false;
+          for (u32 i = 0; i < swizzleLen; i++) {
+            char c = sv[i];
+            switch (c) {
+            case 'x': indices[i] = 0; seenXyzw = true; break;
+            case 'y': indices[i] = 1; seenXyzw = true; break;
+            case 'z': indices[i] = 2; seenXyzw = true; break;
+            case 'w': indices[i] = 3; seenXyzw = true; break;
+            case 'r': indices[i] = 0; seenRgba = true; break;
+            case 'g': indices[i] = 1; seenRgba = true; break;
+            case 'b': indices[i] = 2; seenRgba = true; break;
+            case 'a': indices[i] = 3; seenRgba = true; break;
+            default: valid = false; break;
+            }
+            if (!valid) break;
           }
-          u16 dest = AllocateRegister();
-          u32 shuffleMask = 0;
-          for (u32 i = 0; i < pattern.count; i++) {
-            shuffleMask |= (pattern.indices[i] & 0xF) << (i * 4);
-          }
-          builder.EmitInstruction(OP_VEC_SHUFFLE, dest, srcReg, srcReg);
-          program.metadata[builder.currentInstruction - 1] = shuffleMask;
 
-          CoreType vectorType = GetRegisterType(srcReg);
-          CoreType scalarType = GetScalarComponentType(vectorType);
-          SetRegisterType(dest, GetVectorType(scalarType, pattern.count));
-          return dest;
+          if (valid && !(seenXyzw && seenRgba)) {
+            u16 srcReg = objectReg;
+            if (objectReg < MAX_REGISTERS &&
+                (program.registerStorageInfo[objectReg] &
+                 IR::IRProgram::STORAGE_IS_PTR)) {
+              srcReg = AllocateRegister();
+              CoreType loadType = GetRegisterType(objectReg);
+              SetRegisterType(srcReg, loadType);
+              builder.EmitInstruction(OP_STORAGE_LOAD, srcReg, objectReg);
+            }
+            u16 dest = AllocateRegister();
+            u32 shuffleMask = 0;
+            for (u32 i = 0; i < swizzleLen; i++) {
+              shuffleMask |= (indices[i] & 0xF) << (i * 4);
+            }
+            builder.EmitInstruction(OP_VEC_SHUFFLE, dest, srcReg, srcReg);
+            program.metadata[builder.currentInstruction - 1] = shuffleMask;
+
+            CoreType vectorType = GetRegisterType(srcReg);
+            CoreType scalarType = GetScalarComponentType(vectorType);
+            SetRegisterType(dest, GetVectorType(scalarType, swizzleLen));
+            return dest;
+          }
         }
       }
 
@@ -4097,82 +4075,48 @@ struct IRLowering {
         return dest;
       }
 
-      // Check for multi-component swizzle reads (xy, yx, xyz, etc.)
-      // These produce a new vector by shuffling components
-      struct SwizzlePattern {
-        const char *name;
-        u8 indices[4]; // Component indices to extract
-        u8 count;      // Number of components
-      };
-      static const SwizzlePattern swizzlePatterns[] = {
-          // 2-component swizzles
-          {"xy", {0, 1, 0, 0}, 2},
-          {"xz", {0, 2, 0, 0}, 2},
-          {"xw", {0, 3, 0, 0}, 2},
-          {"yx", {1, 0, 0, 0}, 2},
-          {"yz", {1, 2, 0, 0}, 2},
-          {"yw", {1, 3, 0, 0}, 2},
-          {"zx", {2, 0, 0, 0}, 2},
-          {"zy", {2, 1, 0, 0}, 2},
-          {"zw", {2, 3, 0, 0}, 2},
-          {"wx", {3, 0, 0, 0}, 2},
-          {"wy", {3, 1, 0, 0}, 2},
-          {"wz", {3, 2, 0, 0}, 2},
-          {"xx", {0, 0, 0, 0}, 2},
-          {"yy", {1, 1, 0, 0}, 2},
-          {"zz", {2, 2, 0, 0}, 2},
-          {"ww", {3, 3, 0, 0}, 2},
-          // 3-component swizzles
-          {"xyz", {0, 1, 2, 0}, 3},
-          {"xzy", {0, 2, 1, 0}, 3},
-          {"yxz", {1, 0, 2, 0}, 3},
-          {"yzx", {1, 2, 0, 0}, 3},
-          {"zxy", {2, 0, 1, 0}, 3},
-          {"zyx", {2, 1, 0, 0}, 3},
-          {"xyw", {0, 1, 3, 0}, 3},
-          {"xzw", {0, 2, 3, 0}, 3},
-          {"yzw", {1, 2, 3, 0}, 3},
-          // 4-component swizzles
-          {"xyzw", {0, 1, 2, 3}, 4},
-          {"wzyx", {3, 2, 1, 0}, 4},
-          // Color aliases (rg, rgb, rgba, etc.)
-          {"rg", {0, 1, 0, 0}, 2},
-          {"rb", {0, 2, 0, 0}, 2},
-          {"ra", {0, 3, 0, 0}, 2},
-          {"gr", {1, 0, 0, 0}, 2},
-          {"gb", {1, 2, 0, 0}, 2},
-          {"ga", {1, 3, 0, 0}, 2},
-          {"br", {2, 0, 0, 0}, 2},
-          {"bg", {2, 1, 0, 0}, 2},
-          {"ba", {2, 3, 0, 0}, 2},
-          {"rgb", {0, 1, 2, 0}, 3},
-          {"bgr", {2, 1, 0, 0}, 3},
-          {"rgba", {0, 1, 2, 3}, 4},
-          {"bgra", {2, 1, 0, 3}, 4},
-      };
-
-      for (const auto &pattern : swizzlePatterns) {
-        if (access.member.nameHash == Utils::HashStr(pattern.name)) {
-          u16 dest = AllocateRegister();
-
-          // Build shuffle mask for OpVectorShuffle
-          // Since we're reading from a single vector, indices are 0-3
-          u32 shuffleMask = 0;
-          for (u32 i = 0; i < pattern.count; i++) {
-            shuffleMask |= (pattern.indices[i] & 0xF) << (i * 4);
+      // Multi-component swizzle reads: parse each character of the member
+      // name. Accepts any 2/3/4-character combination of x/y/z/w or r/g/b/a
+      // (mixing the two sets is rejected).
+      if (sourceBase && !access.member.isHashOnly()) {
+        auto sv = access.member.view(sourceBase);
+        u32 swizzleLen = static_cast<u32>(sv.size());
+        if (swizzleLen >= 2 && swizzleLen <= 4) {
+          u8 indices[4] = {0, 0, 0, 0};
+          bool valid = true;
+          bool seenXyzw = false;
+          bool seenRgba = false;
+          for (u32 i = 0; i < swizzleLen; i++) {
+            char c = sv[i];
+            switch (c) {
+            case 'x': indices[i] = 0; seenXyzw = true; break;
+            case 'y': indices[i] = 1; seenXyzw = true; break;
+            case 'z': indices[i] = 2; seenXyzw = true; break;
+            case 'w': indices[i] = 3; seenXyzw = true; break;
+            case 'r': indices[i] = 0; seenRgba = true; break;
+            case 'g': indices[i] = 1; seenRgba = true; break;
+            case 'b': indices[i] = 2; seenRgba = true; break;
+            case 'a': indices[i] = 3; seenRgba = true; break;
+            default: valid = false; break;
+            }
+            if (!valid) break;
           }
 
-          // Emit shuffle: dest = shuffle(objReg, objReg, indices...)
-          // We use the same vector for both inputs since we're just reordering
-          builder.EmitInstruction(OP_VEC_SHUFFLE, dest, objReg, objReg);
-          program.metadata[builder.currentInstruction - 1] = shuffleMask;
+          if (valid && !(seenXyzw && seenRgba)) {
+            u16 dest = AllocateRegister();
+            u32 shuffleMask = 0;
+            for (u32 i = 0; i < swizzleLen; i++) {
+              shuffleMask |= (indices[i] & 0xF) << (i * 4);
+            }
+            builder.EmitInstruction(OP_VEC_SHUFFLE, dest, objReg, objReg);
+            program.metadata[builder.currentInstruction - 1] = shuffleMask;
 
-          // Set result type based on component count and source scalar type
-          CoreType vectorType = GetRegisterType(objReg);
-          CoreType scalarType = GetScalarComponentType(vectorType);
-          CoreType resultType = GetVectorType(scalarType, pattern.count);
-          SetRegisterType(dest, resultType);
-          return dest;
+            CoreType vectorType = GetRegisterType(objReg);
+            CoreType scalarType = GetScalarComponentType(vectorType);
+            CoreType resultType = GetVectorType(scalarType, swizzleLen);
+            SetRegisterType(dest, resultType);
+            return dest;
+          }
         }
       }
 
@@ -4677,6 +4621,10 @@ struct IRLowering {
         case Intrinsic::DISTANCE:
         case Intrinsic::DOT:
           resultType = CoreType::FLOAT;
+          break;
+        case Intrinsic::ANY:
+        case Intrinsic::ALL:
+          resultType = CoreType::BOOL;
           break;
         default:
           // Most intrinsics return the same type as first arg
@@ -6076,6 +6024,12 @@ struct IRLowering {
     // Control flow
     case Intrinsic::SELECT:
       return OP_SELECT;
+
+    // Boolean reductions
+    case Intrinsic::ANY:
+      return OP_ANY;
+    case Intrinsic::ALL:
+      return OP_ALL;
 
     default:
       return OP_NOP;

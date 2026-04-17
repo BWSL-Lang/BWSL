@@ -1,0 +1,9 @@
+{
+    "input_binding": 0,
+    "input_type": "float",
+    "input_values": [1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0],
+    "output_binding": 1,
+    "output_size": 32,
+    "output_type": "float",
+    "tolerance": 1e-5
+}

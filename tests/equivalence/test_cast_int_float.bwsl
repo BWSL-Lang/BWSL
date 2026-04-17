@@ -1,0 +1,16 @@
+pipeline EquivCastIntFloat {
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+
+            float f = float(idx) * 2.5;
+            int i = int(f);
+            uint u = uint(i);
+            float back = float(u) * 0.5;
+            int sign_diff = int(-3.7);
+            float pow_ish = float(int(f * 2.0)) * 0.25;
+
+            resources.output[idx] = back + float(sign_diff) + pow_ish + float(i) * 0.1;
+        }
+    }
+}

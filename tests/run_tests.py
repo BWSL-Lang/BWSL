@@ -142,6 +142,8 @@ ERROR_CASE_TESTS = {
 
 TEXT_GOLDEN_SUFFIXES = {".metal", ".hlsl", ".glsl", ".gles"}
 
+EQUIV_BACKENDS = ("spirv", "hlsl", "glsl")
+
 TRANSLATION_EXPECTATION_TESTS = {
     "ssa_complex": {
         "vert": {
@@ -280,6 +282,26 @@ def compiler_path(root: Path) -> Path:
 
 def has_metal_tooling() -> bool:
     return sys.platform == "darwin" and shutil.which("xcrun") is not None
+
+
+def has_hlsl_tooling() -> bool:
+    return shutil.which("dxc") is not None
+
+
+def has_glsl_tooling() -> bool:
+    return shutil.which("glslangValidator") is not None
+
+
+HLSL_PROFILE = {"vert": "vs_6_0", "frag": "ps_6_0", "comp": "cs_6_0"}
+GLSLANG_STAGE = {"vert": "vert", "frag": "frag", "comp": "comp"}
+
+
+def stage_from_filename(path: Path) -> str | None:
+    parts = path.stem.rsplit("_", 1)
+    if len(parts) != 2:
+        return None
+    stage = parts[1]
+    return stage if stage in ("vert", "frag", "comp") else None
 
 
 def is_module_file(path: Path) -> bool:
@@ -558,6 +580,43 @@ def run_metal_compile(metal_file: Path, module_cache_dir: Path) -> subprocess.Co
     )
 
 
+def run_hlsl_compile(hlsl_file: Path) -> subprocess.CompletedProcess[str]:
+    stage = stage_from_filename(hlsl_file) or "frag"
+    profile = HLSL_PROFILE[stage]
+    return run_command(
+        [
+            "dxc",
+            "-T",
+            profile,
+            "-E",
+            "main",
+            str(hlsl_file),
+            "-Fo",
+            os.devnull,
+        ]
+    )
+
+
+def run_glslang_compile(glsl_file: Path) -> subprocess.CompletedProcess[str]:
+    stage = stage_from_filename(glsl_file) or "frag"
+    return run_command(
+        [
+            "glslangValidator",
+            "-S",
+            GLSLANG_STAGE[stage],
+            str(glsl_file),
+        ]
+    )
+
+
+def find_backend_outputs(output_dir: Path, test_name: str, ext: str) -> list[Path]:
+    files = {path for path in output_dir.glob(f"{test_name}*.{ext}")}
+    exact = output_dir / f"{test_name}.{ext}"
+    if exact.exists():
+        files.add(exact)
+    return sorted(files)
+
+
 def check_wave_operations(output_dir: Path) -> tuple[bool, str]:
     expectations = {
         "wave_operations_pass0_comp.internals.json": [
@@ -635,19 +694,246 @@ def check_variant_specialization(output_dir: Path, test_name: str, expectations:
     return True, ""
 
 
+def equiv_runner_path(root: Path) -> Path:
+    return root / "build" / ("equiv_runner.exe" if os.name == "nt" else "equiv_runner")
+
+
+def convert_hlsl_to_spirv(hlsl_file: Path, out_spv: Path) -> tuple[bool, str]:
+    result = run_command([
+        "dxc", "-spirv", "-T", "cs_6_0", "-E", "main",
+        "-fvk-use-dx-layout",
+        str(hlsl_file), "-Fo", str(out_spv),
+    ])
+    if result.returncode != 0:
+        return False, result.stdout.strip()
+    return True, ""
+
+
+def convert_glsl_to_spirv(glsl_file: Path, out_spv: Path) -> tuple[bool, str]:
+    result = run_command([
+        "glslangValidator", "-V", "-S", "comp",
+        str(glsl_file), "-o", str(out_spv),
+    ])
+    if result.returncode != 0:
+        return False, result.stdout.strip()
+    return True, ""
+
+
+def pack_input_values(spec: dict, out_path: Path) -> None:
+    import struct
+    values = spec["input_values"]
+    itype = spec.get("input_type", "float")
+    fmt_char = {"float": "f", "int": "i", "uint": "I"}.get(itype)
+    if fmt_char is None:
+        raise ValueError(f"unsupported input_type: {itype}")
+    packed = struct.pack(f"{len(values)}{fmt_char}", *values)
+    out_path.write_bytes(packed)
+
+
+def dispatch_equiv(runner: Path, spv_file: Path, output_bin: Path,
+                   spec: dict, input_bin: Path | None) -> tuple[bool, str]:
+    groups = spec.get("groups", [1, 1, 1])
+    args = [
+        str(runner),
+        "--spirv", str(spv_file),
+        "--output", str(output_bin),
+        "--output-size", str(spec["output_size"]),
+        "--output-binding", str(spec.get("output_binding", 0)),
+        "--set", str(spec.get("descriptor_set", 1)),
+        "--groups", str(groups[0]), str(groups[1]), str(groups[2]),
+    ]
+    if input_bin is not None:
+        args += [
+            "--input", str(input_bin),
+            "--input-binding", str(spec.get("input_binding", 0)),
+        ]
+    result = run_command(args)
+    if result.returncode != 0:
+        return False, result.stdout.strip()
+    return True, ""
+
+
+def compare_bytes(reference: bytes, actual: bytes, spec: dict) -> tuple[bool, str]:
+    if len(reference) != len(actual):
+        return False, f"size mismatch: ref={len(reference)} actual={len(actual)}"
+
+    tolerance = float(spec.get("tolerance", 0.0))
+    output_type = spec.get("output_type", "bytes")
+
+    if tolerance == 0.0 or output_type == "bytes":
+        if reference != actual:
+            for i, (r, a) in enumerate(zip(reference, actual)):
+                if r != a:
+                    return False, f"byte {i}: ref=0x{r:02x} actual=0x{a:02x}"
+        return True, ""
+
+    import struct
+    if output_type == "float":
+        count = len(reference) // 4
+        ref_vals = struct.unpack(f"{count}f", reference)
+        act_vals = struct.unpack(f"{count}f", actual)
+    else:
+        return False, f"unsupported output_type for tolerance: {output_type}"
+
+    for i, (r, a) in enumerate(zip(ref_vals, act_vals)):
+        if abs(r - a) > tolerance:
+            return False, f"element {i}: ref={r:.6f} actual={a:.6f} diff={abs(r-a):.6g}"
+    return True, ""
+
+
+def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
+                          modules_dir: Path, verbose: bool) -> tuple[int, int]:
+    equiv_dir = root / "tests" / "equivalence"
+    if not equiv_dir.exists():
+        return 0, 0
+
+    output_root = equiv_dir / "output"
+    shutil.rmtree(output_root, ignore_errors=True)
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    passed = 0
+    failed = 0
+
+    print()
+    print("========================================")
+    print("Equivalence Test Suite")
+    print("========================================")
+
+    for spec_file in sorted(equiv_dir.glob("*.json")):
+        test_name = spec_file.stem
+        shader_file = equiv_dir / f"{test_name}.bwsl"
+        config_file = equiv_dir / f"{test_name}.rcfg"
+
+        if not shader_file.exists() or not config_file.exists():
+            print(f"[{YELLOW}SKIP{NC}] {test_name} (missing shader or rcfg)")
+            continue
+
+        with spec_file.open("r", encoding="utf-8") as f:
+            spec = json.load(f)
+
+        test_out = output_root / test_name
+        test_out.mkdir(exist_ok=True)
+
+        compile_result = run_command(
+            [
+                str(bwslc),
+                str(shader_file),
+                "-config", str(config_file),
+                "-o", str(test_out),
+                "-modules", str(modules_dir),
+                "-all",
+            ],
+            cwd=root,
+        )
+        if compile_result.returncode != 0:
+            print(f"[{RED}FAIL{NC}] {test_name} (compile)")
+            if verbose:
+                print(compile_result.stdout)
+            failed += 1
+            continue
+
+        native_spv, _ = find_stage_file(test_out, test_name, "comp", "spv")
+        if native_spv is None:
+            print(f"[{RED}FAIL{NC}] {test_name} (no native .spv produced)")
+            failed += 1
+            continue
+
+        backends_spv: dict[str, Path] = {"spirv": native_spv}
+
+        hlsl_file, _ = find_stage_file(test_out, test_name, "comp", "hlsl")
+        if hlsl_file is not None:
+            hlsl_spv = test_out / f"{test_name}_hlsl.spv"
+            ok, msg = convert_hlsl_to_spirv(hlsl_file, hlsl_spv)
+            if ok:
+                backends_spv["hlsl"] = hlsl_spv
+            elif verbose:
+                print(f"       {YELLOW}HLSL -> SPIR-V skipped{NC}: {msg}")
+
+        glsl_file, _ = find_stage_file(test_out, test_name, "comp", "glsl")
+        if glsl_file is not None:
+            glsl_spv = test_out / f"{test_name}_glsl.spv"
+            ok, msg = convert_glsl_to_spirv(glsl_file, glsl_spv)
+            if ok:
+                backends_spv["glsl"] = glsl_spv
+            elif verbose:
+                print(f"       {YELLOW}GLSL -> SPIR-V skipped{NC}: {msg}")
+
+        input_bin: Path | None = None
+        if "input_values" in spec:
+            input_bin = test_out / f"{test_name}_input.bin"
+            pack_input_values(spec, input_bin)
+        elif "input_bytes" in spec:
+            input_bin = Path(spec["input_bytes"])
+
+        outputs: dict[str, bytes] = {}
+        dispatch_errors: list[str] = []
+        for backend, spv_file in backends_spv.items():
+            out_bin = test_out / f"{test_name}_{backend}.bin"
+            ok, msg = dispatch_equiv(runner, spv_file, out_bin, spec, input_bin)
+            if not ok:
+                dispatch_errors.append(f"{backend}: {msg}")
+                continue
+            outputs[backend] = out_bin.read_bytes()
+
+        if "spirv" not in outputs:
+            print(f"[{RED}FAIL{NC}] {test_name} (native dispatch failed)")
+            for e in dispatch_errors:
+                print(f"       {e}")
+            failed += 1
+            continue
+
+        reference = outputs["spirv"]
+        test_failed = False
+        details: list[str] = []
+        for backend, data in outputs.items():
+            if backend == "spirv":
+                continue
+            ok, msg = compare_bytes(reference, data, spec)
+            if not ok:
+                test_failed = True
+                details.append(f"{backend}: {msg}")
+
+        for e in dispatch_errors:
+            test_failed = True
+            details.append(e)
+
+        if test_failed:
+            print(f"[{RED}FAIL{NC}] {test_name}")
+            for d in details:
+                print(f"       {d}")
+            failed += 1
+        else:
+            backend_names = ", ".join(sorted(outputs.keys()))
+            print(f"[{GREEN}PASS{NC}] {test_name} ({backend_names})")
+            passed += 1
+
+    print("----------------------------------------")
+    print(f"Equivalence: {passed} passed, {failed} failed")
+
+    return passed, failed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="BWSL Regression Test Runner")
     parser.add_argument("--metal", "-m", action="store_true", help="Enable Metal shader validation (macOS only)")
+    parser.add_argument("--hlsl", action="store_true", help="Enable HLSL validation via dxc")
+    parser.add_argument("--glsl", action="store_true", help="Enable GLSL validation via glslangValidator")
+    parser.add_argument("--gles", action="store_true", help="Enable GLES validation via glslangValidator")
+    parser.add_argument("--all-validators", "-A", action="store_true", help="Enable Metal/HLSL/GLSL/GLES validators")
+    parser.add_argument("--equivalence", "-E", action="store_true", help="Run cross-backend equivalence compute tests via Vulkan")
     parser.add_argument(
         "--update-golden",
         "-u",
         action="store_true",
-        help="Update golden files with current Metal output",
+        help="Update golden files with current backend output",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed output")
     args = parser.parse_args()
 
-    metal_validation = args.metal or args.update_golden
+    metal_validation = args.metal or args.all_validators or args.update_golden
+    hlsl_validation = args.hlsl or args.all_validators
+    glsl_validation = args.glsl or args.all_validators
+    gles_validation = args.gles or args.all_validators
     update_golden = args.update_golden
     verbose = args.verbose
 
@@ -661,6 +947,15 @@ def main() -> int:
     if metal_validation and not has_metal_tooling():
         print(f"{YELLOW}Warning: Metal validation requested but not available (requires macOS with Xcode){NC}")
         metal_validation = False
+
+    if hlsl_validation and not has_hlsl_tooling():
+        print(f"{YELLOW}Warning: HLSL validation requested but `dxc` not found on PATH{NC}")
+        hlsl_validation = False
+
+    if (glsl_validation or gles_validation) and not has_glsl_tooling():
+        print(f"{YELLOW}Warning: GLSL/GLES validation requested but `glslangValidator` not found on PATH{NC}")
+        glsl_validation = False
+        gles_validation = False
 
     output_dir.mkdir(parents=True, exist_ok=True)
     golden_dir.mkdir(parents=True, exist_ok=True)
@@ -678,6 +973,9 @@ def main() -> int:
 
     passed = failed = skipped = 0
     metal_passed = metal_failed = 0
+    hlsl_passed = hlsl_failed = 0
+    glsl_passed = glsl_failed = 0
+    gles_passed = gles_failed = 0
     golden_passed = golden_failed = golden_updated = 0
 
     print("========================================")
@@ -685,6 +983,12 @@ def main() -> int:
     print("========================================")
     if metal_validation:
         print(f"Metal validation: {GREEN}enabled{NC}")
+    if hlsl_validation:
+        print(f"HLSL validation:  {GREEN}enabled{NC}")
+    if glsl_validation:
+        print(f"GLSL validation:  {GREEN}enabled{NC}")
+    if gles_validation:
+        print(f"GLES validation:  {GREEN}enabled{NC}")
     if update_golden:
         print(f"Mode: {BLUE}updating golden files{NC}")
     print()
@@ -706,7 +1010,12 @@ def main() -> int:
             translation_expectations is not None or
             test_name == "wave_operations"
         )
-        needs_all_outputs = bool(text_goldens) or translation_expectations is not None
+        multi_backend_validation = hlsl_validation or glsl_validation or gles_validation
+        needs_all_outputs = (
+            bool(text_goldens)
+            or translation_expectations is not None
+            or multi_backend_validation
+        )
 
         if needs_all_outputs:
             compile_args.append("-all")
@@ -955,6 +1264,60 @@ def main() -> int:
 
                 metal_passed += 1
 
+        if hlsl_validation:
+            for hlsl_file in find_backend_outputs(output_dir, test_name, "hlsl"):
+                hlsl_result = run_hlsl_compile(hlsl_file)
+
+                if hlsl_result.returncode != 0:
+                    print(f"       {RED}HLSL FAIL{NC}: {hlsl_file.name}")
+                    if verbose:
+                        for line in hlsl_result.stdout.splitlines()[:10]:
+                            print(f"         {line}")
+                    hlsl_failed += 1
+                    continue
+
+                hlsl_passed += 1
+
+        if glsl_validation:
+            for glsl_file in find_backend_outputs(output_dir, test_name, "glsl"):
+                glsl_result = run_glslang_compile(glsl_file)
+
+                if glsl_result.returncode != 0:
+                    print(f"       {RED}GLSL FAIL{NC}: {glsl_file.name}")
+                    if verbose:
+                        for line in glsl_result.stdout.splitlines()[:10]:
+                            print(f"         {line}")
+                    glsl_failed += 1
+                    continue
+
+                glsl_passed += 1
+
+        if gles_validation:
+            for gles_file in find_backend_outputs(output_dir, test_name, "gles"):
+                gles_result = run_glslang_compile(gles_file)
+
+                if gles_result.returncode != 0:
+                    print(f"       {RED}GLES FAIL{NC}: {gles_file.name}")
+                    if verbose:
+                        for line in gles_result.stdout.splitlines()[:10]:
+                            print(f"         {line}")
+                    gles_failed += 1
+                    continue
+
+                gles_passed += 1
+
+        if update_golden and text_goldens:
+            base_names = {path.stem for path in text_goldens}
+            for base in sorted(base_names):
+                for ext in ("metal", "hlsl", "glsl", "gles"):
+                    generated_file = output_dir / f"{base}.{ext}"
+                    golden_file = golden_dir / f"{base}.{ext}"
+                    if generated_file.exists() and not golden_file.exists():
+                        shutil.copyfile(generated_file, golden_file)
+                        print(f"       {BLUE}Golden created{NC}: {golden_file.name}")
+                        golden_updated += 1
+            text_goldens = find_text_golden_files(golden_dir, test_name)
+
         for golden_file in text_goldens:
             generated_file = output_dir / golden_file.name
             if not generated_file.exists():
@@ -1042,18 +1405,40 @@ def main() -> int:
             print(f"[{GREEN}PASS{NC}] error_cases/{test_file.stem}")
             passed += 1
 
+    equiv_passed = equiv_failed = 0
+    if args.equivalence:
+        runner = equiv_runner_path(root)
+        if not runner.exists():
+            print(f"{YELLOW}Warning: equiv_runner not found at {runner}. Build with `make equiv_runner`.{NC}")
+        elif not has_hlsl_tooling() or not has_glsl_tooling():
+            print(f"{YELLOW}Warning: equivalence tests require both dxc and glslangValidator on PATH{NC}")
+        else:
+            equiv_passed, equiv_failed = run_equivalence_suite(
+                root, bwslc, runner, modules_dir, verbose
+            )
+
     print()
     print("========================================")
     print(f"Results: {passed} passed, {failed} failed, {skipped} skipped")
     if metal_validation:
         print(f"Metal:   {metal_passed} compiled, {metal_failed} failed")
+    if hlsl_validation:
+        print(f"HLSL:    {hlsl_passed} compiled, {hlsl_failed} failed")
+    if glsl_validation:
+        print(f"GLSL:    {glsl_passed} compiled, {glsl_failed} failed")
+    if gles_validation:
+        print(f"GLES:    {gles_passed} compiled, {gles_failed} failed")
     if update_golden:
         print(f"Golden:  {golden_updated} files updated")
     elif (golden_passed + golden_failed) > 0:
         print(f"Golden:  {golden_passed} matched, {golden_failed} differ")
     print("========================================")
 
-    return 1 if failed > 0 or metal_failed > 0 or golden_failed > 0 else 0
+    if args.equivalence:
+        print(f"Equiv:   {equiv_passed} passed, {equiv_failed} failed")
+
+    backend_failed = metal_failed + hlsl_failed + glsl_failed + gles_failed
+    return 1 if failed > 0 or backend_failed > 0 or golden_failed > 0 or equiv_failed > 0 else 0
 
 
 if __name__ == "__main__":

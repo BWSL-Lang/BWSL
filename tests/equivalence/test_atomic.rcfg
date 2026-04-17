@@ -1,0 +1,7 @@
+pipeline EquivAtomic
+
+buffer output int 0 readwrite compute
+
+pass Compute
+  type compute
+  depends none

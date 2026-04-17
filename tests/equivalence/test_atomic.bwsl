@@ -1,0 +1,24 @@
+pipeline EquivAtomic {
+    pass "Compute" {
+        compute "Main" [16, 1, 1] {
+            shared uint counter[1];
+
+            uint idx = input.global_id.x;
+            uint lid = input.local_index;
+
+            if (lid == 0u) {
+                counter[0] = 0u;
+            }
+            barrier();
+
+            if ((lid % 2u) == 0u) {
+                atomic_add(counter[0], lid + 1u);
+            }
+            barrier();
+
+            if (lid == 0u) {
+                resources.output[0] = int(counter[0]);
+            }
+        }
+    }
+}

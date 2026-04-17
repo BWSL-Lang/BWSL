@@ -1,0 +1,8 @@
+pipeline EquivStructBuffer
+
+buffer particles Particle 0 readonly compute
+buffer output float 1 readwrite compute
+
+pass Compute
+  type compute
+  depends none
