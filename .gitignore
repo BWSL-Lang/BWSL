@@ -34,7 +34,14 @@ build/
 
 # Test output files (keep .bwsl and .rcfg source files)
 tests/output/
+tests/equivalence/output/
 
 # Golden files should be tracked (un-ignore)
 !tests/golden/
 !tests/golden/*.metal
+
+# Fuzzer artifacts (grown corpus + raw crashes). Seeds live in tests/; verified
+# minimized reproducers live in tests/fuzz_regressions/ and ARE tracked.
+fuzz/corpus/
+fuzz/crashes/
+crash-*

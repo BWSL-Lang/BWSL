@@ -1,0 +1,8 @@
+// Regression: libFuzzer, 2026-04-17. Numeric literal `0x` (hex prefix with no
+// digits after) was accepted by the lexer as TokenType::NUMBER but rejected
+// by std::stoul with std::invalid_argument — unhandled → process abort.
+// Fix: SafeParseU32 helper wraps stoul with try/catch (bwsl_parser_soa.cpp).
+// Expected: compiler exits cleanly with a parse error, not a crash.
+pipeline P {
+    enum E { V = 0x }
+}

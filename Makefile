@@ -173,6 +173,34 @@ equiv_runner: $(BUILD_DIR)
 		$(EQUIV_RUNNER_SRC) $(VULKAN_LIBS)
 	@echo "Built: $(EQUIV_RUNNER_OUT)"
 
+# libFuzzer build. Apple's bundled clang ships without libclang_rt.fuzzer on
+# some Xcode versions, so default to Homebrew LLVM when it's installed.
+# Override with e.g. `make bwslc-fuzz FUZZ_CXX=/path/to/clang++`.
+FUZZ_SRC = tools/bwslc_fuzz.cpp
+FUZZ_OUT = $(BUILD_DIR)/bwslc-fuzz$(EXE_EXT)
+FUZZ_CXX ?= $(shell if [ -x /opt/homebrew/opt/llvm/bin/clang++ ]; then \
+	echo /opt/homebrew/opt/llvm/bin/clang++; \
+	elif [ -x /usr/local/opt/llvm/bin/clang++ ]; then \
+	echo /usr/local/opt/llvm/bin/clang++; \
+	else echo clang++; fi)
+FUZZ_FLAGS = -fsanitize=fuzzer,address,undefined -g -O1 -std=c++20 \
+	-fno-omit-frame-pointer -Wall
+# Homebrew LLVM's fuzzer runtime links against its own libc++; match that
+# with stdlib + rpath so we don't collide with the system libc++.
+FUZZ_LINK_FLAGS =
+ifeq ($(FUZZ_CXX),/opt/homebrew/opt/llvm/bin/clang++)
+FUZZ_LINK_FLAGS = -stdlib=libc++ -L/opt/homebrew/opt/llvm/lib/c++ \
+	-Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++
+endif
+ifeq ($(FUZZ_CXX),/usr/local/opt/llvm/bin/clang++)
+FUZZ_LINK_FLAGS = -stdlib=libc++ -L/usr/local/opt/llvm/lib/c++ \
+	-Wl,-rpath,/usr/local/opt/llvm/lib/c++
+endif
+
+bwslc-fuzz: $(BUILD_DIR)
+	$(FUZZ_CXX) $(FUZZ_FLAGS) $(FUZZ_LINK_FLAGS) -I. -o $(FUZZ_OUT) $(FUZZ_SRC)
+	@echo "Built: $(FUZZ_OUT)"
+
 ifeq ($(HOST_OS),windows)
 bwslc-msvc: bwslc
 

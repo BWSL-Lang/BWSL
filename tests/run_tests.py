@@ -1405,6 +1405,39 @@ def main() -> int:
             print(f"[{GREEN}PASS{NC}] error_cases/{test_file.stem}")
             passed += 1
 
+    # Fuzzer-found regressions. Each file was a crash or hang until the
+    # referenced fix landed. Pass = bwslc exits in bounded time with code 0 or
+    # 1. Fail = signal death (negative code), timeout, or other non-zero exit.
+    fuzz_regr_dir = script_dir / "fuzz_regressions"
+    if fuzz_regr_dir.exists():
+        for test_file in sorted(fuzz_regr_dir.glob("*.bwsl")):
+            try:
+                result = subprocess.run(
+                    [str(bwslc), str(test_file), "-modules", str(modules_dir)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    cwd=root,
+                    timeout=5,
+                )
+            except subprocess.TimeoutExpired:
+                print(f"[{RED}FAIL{NC}] fuzz_regressions/{test_file.stem}")
+                print("       Error: bwslc hung — fix likely reverted")
+                failed += 1
+                continue
+
+            if result.returncode not in (0, 1):
+                unsigned_code = result.returncode & 0xFFFFFFFF
+                print(f"[{RED}FAIL{NC}] fuzz_regressions/{test_file.stem}")
+                print(f"       Error: unexpected exit {result.returncode} (0x{unsigned_code:08X}) — regression in fuzzer-found bug")
+                failed += 1
+                continue
+
+            print(f"[{GREEN}PASS{NC}] fuzz_regressions/{test_file.stem}")
+            passed += 1
+
     equiv_passed = equiv_failed = 0
     if args.equivalence:
         runner = equiv_runner_path(root)

@@ -1,0 +1,12 @@
+// Regression: libFuzzer, 2026-04-17. Integer literal exceeding u32 range in
+// workgroup size position caused std::stoul to throw std::out_of_range,
+// which was unhandled and aborted the process.
+// Fix: SafeParseU32 helper wraps stoul with try/catch (bwsl_parser_soa.cpp).
+// Expected: compiler exits cleanly with a parse error, not a crash.
+pipeline P {
+    pass "C" {
+        compute "M" [0xFFFFFFFFFFFF, 1, 1] {
+            uint i = input.global_id.x;
+        }
+    }
+}

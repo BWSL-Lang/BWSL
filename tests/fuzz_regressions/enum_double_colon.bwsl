@@ -1,0 +1,6 @@
+// Regression: libFuzzer, 2026-04-17. Input `enum::` caused ParseEnum's
+// variant loop to spin forever — Consume(IDENTIFIER) failed without advancing
+// current, every iteration allocated a variant node, arena exhausted.
+// Fix: progress guard in ParseEnum's variant loop (bwsl_parser_soa.cpp).
+// Expected: compiler exits cleanly with a parse error, not a crash or hang.
+enum::

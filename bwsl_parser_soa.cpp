@@ -14,6 +14,21 @@
 #include <stdexcept>
 #include "bwsl_custom_type_registry.h"
 
+namespace {
+// Fuzzer-proof integer parser: returns 0 on empty / malformed / out-of-range
+// input instead of throwing. The lexer's number rules are not strict enough to
+// guarantee std::stoul success (e.g. "0x" with no digits, "0b2", trailing
+// garbage); this helper keeps the parser safe against adversarial input.
+inline u32 SafeParseU32(std::string_view s, int base = 0) {
+    if (s.empty()) return 0;
+    try {
+        return static_cast<u32>(std::stoul(std::string(s), nullptr, base));
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+}
+
 // Parser timing instrumentation - define BWSL_PARSER_TIMING to enable
 #ifdef BWSL_PARSER_TIMING
 #include <chrono>
@@ -1270,7 +1285,7 @@ NodeRef Parser::ParseComputeStage() {
             Error("Workgroup size must be an integer literal");
             return 1;
         }
-        return static_cast<u32>(std::stoul(std::string(num), nullptr, 0));
+        return SafeParseU32(num, 0);
     };
 
     u32 sizeX = parseSize("Expected workgroup size X");
@@ -2431,9 +2446,10 @@ NodeRef Parser::ParsePrimary() {
                 parseStr.pop_back();  // Remove the 'u' suffix for parsing
             }
 
-            // Use stoul with base 0 to auto-detect hex (0x), octal (0), or decimal
-            // This handles the full uint32 range for hex literals like 0x9E3779B9u
-            unsigned long parsed = std::stoul(parseStr, nullptr, 0);
+            // Use SafeParseU32 with base 0 to auto-detect hex (0x), octal (0),
+            // or decimal. Handles the full uint32 range for hex literals like
+            // 0x9E3779B9u and returns 0 on malformed input (fuzzer-safe).
+            unsigned long parsed = SafeParseU32(parseStr, 0);
 
             if (isUnsigned) {
                 return ASTFactory::MakeLiteralUint(ast, static_cast<uint32_t>(parsed), line, col);
@@ -5339,8 +5355,12 @@ NodeRef Parser::ParseEnum() {
 
     Consume(TokenType::LEFT_BRACE, "Expected '{'");
 
-    // Parse variants and methods
+    // Parse variants and methods.
+    // A progress guard keeps malformed input (e.g. `enum::` after a parse
+    // error) from trapping us in an allocation-bomb infinite loop: if a full
+    // iteration consumes no tokens we force an Advance and bail.
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        TokenRef loopStart = current;
         bool isCompileTime = Match(TokenType::EVAL);
 
         if (Check(TokenType::IDENTIFIER) && stream->GetType(PeekNext()) == TokenType::DOUBLE_COLON) {
@@ -5361,6 +5381,11 @@ NodeRef Parser::ParseEnum() {
                 ast->GetEnumDecl(enumNode).variants.Push(arena, variant);
             }
             Match(TokenType::COMMA);
+        }
+
+        if (current == loopStart) {
+            if (stream->GetType(current) == TokenType::EOF_TOKEN) break;
+            Advance();
         }
     }
 
@@ -5495,18 +5520,14 @@ NodeRef Parser::ParseEnumVariant() {
             if (numStr.length() >= 2 && numStr[0] == '0') {
                 char prefix = numStr[1];
                 if (prefix == 'b' || prefix == 'B') {
-                    // Binary literal - use stoul for full u32 range
-                    value = static_cast<u32>(std::stoul(std::string(numStr.substr(2)), nullptr, 2));
+                    value = SafeParseU32(numStr.substr(2), 2);
                 } else if (prefix == 'x' || prefix == 'X') {
-                    // Hex literal - use stoul for full u32 range (e.g., 0x9E3779B9u)
-                    value = static_cast<u32>(std::stoul(std::string(numStr.substr(2)), nullptr, 16));
+                    value = SafeParseU32(numStr.substr(2), 16);
                 } else {
-                    // Octal or decimal starting with 0
-                    value = static_cast<u32>(std::stoul(std::string(numStr), nullptr, 0));
+                    value = SafeParseU32(numStr, 0);
                 }
             } else {
-                // Decimal - use stoul for consistency and full u32 range
-                value = static_cast<u32>(std::stoul(std::string(numStr), nullptr, 0));
+                value = SafeParseU32(numStr, 0);
             }
 
             ast->GetEnumDecl(variant).currentVariant.value = value;
@@ -5775,7 +5796,7 @@ NodeRef Parser::ParseStruct() {
             if (Match(TokenType::NUMBER)) {
                 // Literal number size
                 std::string_view numStr = stream->GetValue(previous);
-                sizeValue = static_cast<u32>(std::stoul(std::string(numStr), nullptr, 0));
+                sizeValue = SafeParseU32(numStr, 0);
             } else if (Match(TokenType::IDENTIFIER)) {
                 // Constant name (e.g., MAX_LIGHTS)
                 std::string constName(stream->GetValue(previous));
