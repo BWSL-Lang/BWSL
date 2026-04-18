@@ -15,16 +15,33 @@
 #include "bwsl_custom_type_registry.h"
 
 namespace {
-// Fuzzer-proof integer parser: returns 0 on empty / malformed / out-of-range
-// input instead of throwing. The lexer's number rules are not strict enough to
-// guarantee std::stoul success (e.g. "0x" with no digits, "0b2", trailing
-// garbage); this helper keeps the parser safe against adversarial input.
+// Fuzzer-proof integer parsers: return 0 on empty / malformed / out-of-range
+// input instead of throwing. The lexer's number rules are not strict enough
+// to guarantee std::stoul / std::stoi success (e.g. "0x" with no digits,
+// "0b2", trailing garbage); these helpers keep the parser safe against
+// adversarial input.
 inline u32 SafeParseU32(std::string_view s, int base = 0) {
     if (s.empty()) return 0;
     try {
         return static_cast<u32>(std::stoul(std::string(s), nullptr, base));
     } catch (const std::exception&) {
         return 0;
+    }
+}
+inline int SafeParseInt(std::string_view s, int base = 0) {
+    if (s.empty()) return 0;
+    try {
+        return std::stoi(std::string(s), nullptr, base);
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+inline float SafeParseFloat(std::string_view s) {
+    if (s.empty()) return 0.0f;
+    try {
+        return std::stof(std::string(s));
+    } catch (const std::exception&) {
+        return 0.0f;
     }
 }
 }
@@ -530,6 +547,7 @@ NodeRef Parser::ParsePipeline() {
     Consume(TokenType::LEFT_BRACE, "Expected '{' after pipeline name");
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         if (Match(TokenType::IMPORT)) {
             ParseImports(pipeline);
         } else if (Match(TokenType::ATTRIBUTES)) {
@@ -755,6 +773,7 @@ void Parser::ParseAttributes(NodeRef pipeline) {
     u8 attrIndex = 0;  // Assign indices by declaration order
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         NodeRef attr = ParseAttributeDecl();
         if (attr.IsValid()) {
             ast->GetAttributeDecl(attr).attributeIndex = attrIndex++;
@@ -791,6 +810,7 @@ void Parser::ParseVariants(NodeRef pipeline) {
     Consume(TokenType::LEFT_BRACE, "Expected '{' after 'variants'");
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         if (Match(TokenType::RULES)) {
             ParseVariantRules(pipeline);
             continue;
@@ -866,6 +886,7 @@ void Parser::ParseVariantRules(NodeRef pipeline) {
     Consume(TokenType::LEFT_BRACE, "Expected '{' after 'rules'");
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         VariantRuleData rule{};
 
         if (Match(TokenType::REQUIRE)) {
@@ -930,6 +951,7 @@ NodeRef Parser::ParseAttributeDecl() {
 
             std::string compressionValue;
             while (!Check(TokenType::RIGHT_PAREN) && !Check(TokenType::EOF_TOKEN)) {
+                ProgressGuard _pg_(this);
                 std::string_view segment = stream->GetValue(current);
                 compressionValue.append(segment.data(), segment.size());
                 Advance();
@@ -988,6 +1010,7 @@ NodeRef Parser::ParsePass() {
 
 void Parser::ParsePassBody(NodeRef pass) {
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         if (Match(TokenType::USE)) {
             if (!ast->GetPass(pass).computeShader.IsNull()) {
                 Error("Compute passes cannot use attributes");
@@ -1139,6 +1162,7 @@ void Parser::ParseUseAttributes(NodeRef pass) {
     Consume(TokenType::LEFT_BRACE, "Expected '{'");
 
     while (!Check(TokenType::RIGHT_BRACE)) {
+        ProgressGuard _pg_(this);
         Consume(TokenType::IDENTIFIER, "Expected attribute name");
         ArenaString attrName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
         bool isOptional = Match(TokenType::QUESTION);
@@ -1183,6 +1207,7 @@ NodeRef Parser::ParseComputeGraph() {
     Consume(TokenType::LEFT_BRACE, "Expected '{' after compute_graph");
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         if (Match(TokenType::NODE)) {
             ComputeGraphNode node = ParseComputeGraphNode();
             ast->GetComputeGraph(graph).nodes.Push(arena, node);
@@ -1208,6 +1233,7 @@ ComputeGraphNode Parser::ParseComputeGraphNode() {
     Consume(TokenType::LEFT_BRACE, "Expected '{' after node name");
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         if (Match(TokenType::INPUTS)) {
             ParseComputeGraphInputs(node);
         } else if (Match(TokenType::OUTPUTS)) {
@@ -1226,6 +1252,7 @@ void Parser::ParseComputeGraphInputs(ComputeGraphNode& node) {
     Consume(TokenType::LEFT_BRACE, "Expected '{' after inputs");
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         Consume(TokenType::IDENTIFIER, "Expected resource name in inputs");
         ArenaString name = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
 
@@ -1255,6 +1282,7 @@ void Parser::ParseComputeGraphOutputs(ComputeGraphNode& node) {
     Consume(TokenType::LEFT_BRACE, "Expected '{' after outputs");
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         Consume(TokenType::IDENTIFIER, "Expected resource name in outputs");
         ArenaString name = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
         node.outputs.Push(arena, name);
@@ -1328,6 +1356,7 @@ NodeRef Parser::ParseShaderStage(ASTNodeType stageType) {
     NodeRef body = ASTFactory::MakeBlock(ast, loc.line, loc.column);
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         NodeRef stmt = ParseStatement();
         if (stmt.IsValid()) {
             ast->GetBlock(body).statements.Push(arena, stmt);
@@ -1412,6 +1441,7 @@ NodeRef Parser::ParseBlock() {
     NodeRef block = ASTFactory::MakeBlock(ast, loc.line, loc.column);
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         NodeRef stmt = ParseStatement();
         if (stmt.IsValid()) {
             ast->GetBlock(block).statements.Push(arena, stmt);
@@ -1743,7 +1773,7 @@ NodeRef Parser::ParseStatement() {
             }
             size = static_cast<int>(parsed);
 #else
-            size = std::stoi(std::string(sizeStr));
+            size = SafeParseInt(sizeStr);
 #endif
 
             if (size <= 0 || static_cast<u32>(size) > MAX_ARRAY_SIZE) {
@@ -1860,7 +1890,7 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
         do {
             Consume(TokenType::NUMBER, "Expected array size");
             std::string_view sizeStr = PreviousValue();
-            int size = std::stoi(std::string(sizeStr));
+            int size = SafeParseInt(sizeStr);
             if (size <= 0 || static_cast<u32>(size) > MAX_ARRAY_SIZE) {
                 Error("Invalid array size. Max 256k elements");
                 return false;
@@ -2436,7 +2466,7 @@ NodeRef Parser::ParsePrimary() {
                            (numStr.find('e') != std::string::npos ||
                             numStr.find('E') != std::string::npos);
         if (hasDecimal || hasFloatSuffix || hasExponent) {
-            float value = std::stof(std::string(numStr));
+            float value = SafeParseFloat(numStr);
             return ASTFactory::MakeLiteralFloat(ast, value, line, col);
         } else {
             // Check for unsigned suffix 'u' or 'U'
@@ -3263,6 +3293,7 @@ void Parser::ParseComputeBody(NodeRef compute) {
     NodeRef body = ASTFactory::MakeBlock(ast, loc.line, loc.column);
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         NodeRef stmt = ParseStatement();
         if (stmt.IsValid()) {
             ast->GetBlock(body).statements.Push(arena, stmt);
@@ -3275,6 +3306,7 @@ void Parser::ParseComputeBody(NodeRef compute) {
 void Parser::ParseFunctionsBlockBody(NodeRef block) {
     // Parse a block of function definitions
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         if (Check(TokenType::IDENTIFIER) && stream->GetType(PeekNext()) == TokenType::DOUBLE_COLON) {
             NodeRef func = ParseFunction();
             if (func.IsValid()) {
@@ -4052,6 +4084,14 @@ bool Parser::ExpandEvalStatementsFromBlock(NodeRef blockNode, BlockData& outBloc
 bool Parser::ExpandEvalStatement(NodeRef stmt, BlockData& outBlock) {
     if (stmt.IsNull()) return true;
 
+    if (evalExpansionBudget == 0) {
+        Error("Eval expansion exceeded total budget "
+              "(100000 statements). Check for combinatorially nested "
+              "eval loops.");
+        return false;
+    }
+    evalExpansionBudget--;
+
     auto cloneWithBindings = [&](NodeRef node) -> NodeRef {
         std::vector<ParamSubstitution> substitutions;
         BuildVisibleEvalSubstitutions(substitutions);
@@ -4325,9 +4365,11 @@ NodeRef Parser::ParseEvalBlock() {
     PushEvalBindingScope();
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         NodeRef stmt = ParseStatement();
         if (stmt.IsValid() && !ExpandEvalStatement(stmt, outBlock)) {
             while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+                ProgressGuard _pg_(this);
                 Advance();
             }
             break;
@@ -4819,6 +4861,7 @@ NodeRef Parser::ParseSwitch() {
     Consume(TokenType::LEFT_BRACE, "Expected '{' after switch expression");
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         if (Match(TokenType::CASE)) {
             // Parse comma-separated case values
             ArenaArray<NodeRef> caseValues;
@@ -4895,7 +4938,7 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
     Consume(TokenType::NUMBER, "Expected array size");
 
     std::string_view sizeStr = PreviousValue();
-    int size = std::stoi(std::string(sizeStr));
+    int size = SafeParseInt(sizeStr);
 
     if (size <= 0 || static_cast<u32>(size) > MAX_ARRAY_SIZE) {
         Error("Invalid array size. Max 256k elements");
@@ -4908,7 +4951,7 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
     while (Match(TokenType::LEFT_BRACKET)) {
         Consume(TokenType::NUMBER, "Expected array size");
         std::string_view dimStr = PreviousValue();
-        int dimSize = std::stoi(std::string(dimStr));
+        int dimSize = SafeParseInt(dimStr);
         if (dimSize <= 0 || static_cast<u32>(dimSize) > MAX_ARRAY_SIZE) {
             Error("Invalid array size. Max 256k elements");
             return NodeRef::Null();
@@ -5360,6 +5403,7 @@ NodeRef Parser::ParseEnum() {
     // error) from trapping us in an allocation-bomb infinite loop: if a full
     // iteration consumes no tokens we force an Advance and bail.
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         TokenRef loopStart = current;
         bool isCompileTime = Match(TokenType::EVAL);
 
@@ -5631,6 +5675,7 @@ NodeRef Parser::ParsePatternMatch(NodeRef scrutinee) {
 
     // Parse pattern arms until we hit closing brace
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         ArenaString variantName;
         bool isDefault = false;
 
@@ -5709,6 +5754,7 @@ NodeRef Parser::ParseTypePatternMatch() {
     NodeRef matchNode = ASTFactory::MakeTypePatternMatch(ast, line, col);
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         bool isDefault = false;
         CoreType armType = CoreType::VOID;
 
@@ -5765,7 +5811,14 @@ NodeRef Parser::ParseStruct() {
     structData.fields.Init(arena, 8);
     structData.isIndexable = false;
 
+    // Progress guard against malformed struct bodies that could otherwise
+    // trap the parser in an allocation-bomb infinite loop (e.g. a field
+    // with an embedded `.` like `float3 a.b = ...;`). Same pattern as the
+    // variant loop in ParseEnum.
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
+        TokenRef loopStart = current;
+
         // Parse field type (core or custom/module-qualified)
         TypeInfo fieldType = TYPE_INFO(CoreType::INVALID, 0, false);
         std::string fieldTypeName;
@@ -5782,12 +5835,20 @@ NodeRef Parser::ParseStruct() {
         } else {
             Error("Expected field type");
             Synchronize();
+            if (current == loopStart) {
+                if (stream->GetType(current) == TokenType::EOF_TOKEN) break;
+                Advance();
+            }
             continue;
         }
 
         if (fieldType.coreType == CoreType::INVALID) {
             Error("Unknown field type '" + fieldTypeName + "'");
             Synchronize();
+            if (current == loopStart) {
+                if (stream->GetType(current) == TokenType::EOF_TOKEN) break;
+                Advance();
+            }
             continue;
         }
 
@@ -5887,6 +5948,11 @@ NodeRef Parser::ParseStruct() {
         structData.fields.Push(arena, field);
 
         Match(TokenType::SEMICOLON); // Optional semicolon
+
+        if (current == loopStart) {
+            if (stream->GetType(current) == TokenType::EOF_TOKEN) break;
+            Advance();
+        }
     }
 
     Consume(TokenType::RIGHT_BRACE, "Expected '}'");
@@ -5896,7 +5962,9 @@ NodeRef Parser::ParseStruct() {
     // Registration happens below after storing in symbol table.
 
     // Register in symbol table
-    if (symbolTable.inModuleScope) {
+    if (symbolTable.inModuleScope &&
+        symbolTable.currentModuleIndex != INVALID_INDEX &&
+        symbolTable.currentModuleIndex < symbolTable.modules.count) {
         // Module struct - create human-readable qualified name (e.g., "Globals::LightSourcesSoA")
         const ModuleData& currentModule = symbolTable.modules[symbolTable.currentModuleIndex];
         // Use ReverseLookup to get the actual module name string
@@ -5960,10 +6028,16 @@ NodeRef Parser::ParseModule() {
     // Register module name in reverse lookup for qualified type name resolution
     ReverseLookup::Register(moduleNameArena.nameHash, moduleName.c_str());
 
-    // Create module in symbol table
+    // Create module in symbol table. AddModule returns INVALID_INDEX on
+    // duplicate declarations; in that case we stay out of module scope so
+    // subsequent struct/enum/function parsing doesn't OOB-read modules[].
     u32 moduleIndex = SymbolTable::AddModule(&symbolTable, moduleNameArena);
-    symbolTable.currentModuleIndex = moduleIndex;
-    symbolTable.inModuleScope = true;
+    if (moduleIndex == INVALID_INDEX) {
+        Error("Duplicate module declaration");
+    } else {
+        symbolTable.currentModuleIndex = moduleIndex;
+        symbolTable.inModuleScope = true;
+    }
 
     // Create module AST node
     NodeRef module = ASTFactory::MakeModule(ast, moduleName, line, col);
@@ -5972,6 +6046,7 @@ NodeRef Parser::ParseModule() {
 
     // Parse module contents (imports, functions, and structs)
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
         if (Match(TokenType::IMPORT)) {
             // Parse module imports
             static constexpr u32 MAX_IMPORTS = 32;
@@ -6587,6 +6662,27 @@ NodeRef Parser::ResolveShaderStageExpr(NodeRef stageNode, const PassData& pass, 
 
 NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs, u32 subCount) {
     if (node.IsNull()) return NodeRef::Null();
+
+    if (cloneDepth >= MAX_CLONE_DEPTH) {
+        Error("Expression nesting too deep to clone (exceeded 2048 levels)");
+        return NodeRef::Null();
+    }
+
+    // Share the eval-expansion budget with node-level cloning. A single
+    // CloneNodeWithParams call can build a huge tree (deep ternary
+    // expressions, wide function calls), and without a node-count cap a
+    // clone inside an eval loop can exhaust the arena even when the outer
+    // expansion budget isn't yet depleted.
+    if (evalExpansionBudget == 0) {
+        return NodeRef::Null();
+    }
+    evalExpansionBudget--;
+
+    struct DepthGuard {
+        u32& d;
+        DepthGuard(u32& d_) : d(d_) { ++d; }
+        ~DepthGuard() { --d; }
+    } _depth_guard_(cloneDepth);
 
     u32 line = ast->GetLine(node);
     u32 col = ast->GetColumn(node);

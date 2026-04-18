@@ -1,0 +1,10 @@
+// Regression: libFuzzer, 2026-04-18. Input `/module}module{struct` caused a
+// BUS error in Parser::ParseStruct — SymbolTable::AddModule returns
+// INVALID_INDEX on duplicate module names, but ParseModule stored that
+// sentinel into currentModuleIndex while setting inModuleScope=true. A
+// subsequent struct parsed inside the failed module scope then OOB-read
+// symbolTable.modules[INVALID_INDEX] at bwsl_parser_soa.cpp:5961.
+// Fix: ParseModule only enters module scope when AddModule succeeded; and
+// ParseStruct's inModuleScope branch bounds-checks currentModuleIndex.
+// Expected: compiler exits cleanly with parse errors, not a crash.
+/module}module{struct

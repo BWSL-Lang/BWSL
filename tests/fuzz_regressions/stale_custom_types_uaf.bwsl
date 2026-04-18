@@ -1,0 +1,30 @@
+// Regression: libFuzzer, 2026-04-18. Under the fuzzer's repeated-run
+// harness, IRLowering::LookupOrRegisterStructType dereferenced a
+// StructData* pointer left in the g_customTypes static-global registry
+// by the *previous* compilation iteration — the arena owning that
+// StructData had been freed when the prior CompilationContext was
+// destroyed. heap-use-after-free at bwsl_ir_lowering.h:1967.
+// Fix: CompilationContext's constructor now calls g_customTypes.Init()
+// so each new compilation starts with a clean registry.
+// This test is a smoke check that a typical shader using custom struct
+// types compiles cleanly; the UAF only manifests across multiple
+// in-process compilations (fuzzer / test harness / batch builds), so the
+// real verification happens under ASan in the fuzzer binary.
+pipeline StaleCustomTypes {
+    attributes { position: float3 }
+
+    struct Material {
+        float3 albedo;
+        float roughness;
+    }
+
+    pass "Main" {
+        use attributes { position }
+        vertex {
+            Material m;
+            m.albedo = float3(1.0, 0.5, 0.2);
+            m.roughness = 0.4;
+            output.position = float4(attributes.position, 1.0);
+        }
+    }
+}

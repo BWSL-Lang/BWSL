@@ -35,12 +35,13 @@ struct IRMemoryPool {
         return (value + align - 1) & ~(align - 1);
     }
 
-    void AllocateChunk() {
-        void* raw = ::operator new(CHUNK_SIZE, std::align_val_t(MAX_ALIGNMENT));
+    void AllocateChunk(size_t requestedSize = CHUNK_SIZE) {
+        size_t actualSize = std::max(requestedSize, CHUNK_SIZE);
+        void* raw = ::operator new(actualSize, std::align_val_t(MAX_ALIGNMENT));
         currentChunk = static_cast<u8*>(raw);
         chunks.push_back({currentChunk});
         chunkUsed = 0;
-        chunkCapacity = CHUNK_SIZE;
+        chunkCapacity = actualSize;
     }
 
     void* Allocate(size_t size, size_t align = 16) {
@@ -58,7 +59,12 @@ struct IRMemoryPool {
         size_t alignedOffset = AlignUp(reinterpret_cast<size_t>(currentChunk + chunkUsed), align) -
                                reinterpret_cast<size_t>(currentChunk);
         if (alignedOffset + size > chunkCapacity) {
-            AllocateChunk();
+            // Request a chunk large enough for this allocation. Without
+            // this, allocations larger than CHUNK_SIZE (e.g. IR opcodes
+            // array after several doublings — 32k u16 = 64k, next grow is
+            // 128k) wrote past the newly-allocated chunk -> heap overflow.
+            size_t needed = size + (align > 1 ? align : 0);
+            AllocateChunk(needed);
             alignedOffset = AlignUp(reinterpret_cast<size_t>(currentChunk), align) -
                             reinterpret_cast<size_t>(currentChunk);
         }

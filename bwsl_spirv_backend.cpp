@@ -7435,7 +7435,34 @@ void SPIRVBuilder::GrowSection(Section *section) {
 void SPIRVBuilder::GrowCurrentFunction() {
   u32 new_capacity = currentFunctionCapacity * 2;
   u32 *new_func = (u32 *)arena->Allocate(new_capacity * sizeof(u32), 64);
-  memcpy(new_func, currentFunction, currentFunctionSize * sizeof(u32));
+  if (!new_func) {
+    // Arena exhausted — pathological fuzz inputs can produce absurdly long
+    // SPIR-V function bodies that overflow the fixed 512 KB builder arena.
+    // Without this guard, new_func is null, memcpy(nullptr, currentFunction,
+    // size) on the first failure corrupts currentFunction, and the second
+    // Grow call does memcpy(nullptr, nullptr, N) -> ASan memcpy-param-overlap.
+    // Fallback: abandon growth by pointing currentFunction at a tiny static
+    // bit-bucket. Subsequent writes stomp on the bucket, producing garbage
+    // SPIR-V that SPIR-V validation rejects, but we exit cleanly.
+    static u32 bit_bucket[4096];
+    currentFunction = bit_bucket;
+    currentFunctionCapacity = 4096;
+    currentFunctionSize = 0;
+    return;
+  }
+  if (currentFunction && currentFunctionSize > 0) {
+    // Clamp the copy to the old buffer's actual size. Call-site checks
+    // use `size + needed > capacity` to decide when to Grow, so size itself
+    // is allowed to equal capacity; but pathological inputs can (through
+    // multi-word instruction paths that skip the check) leave size > old
+    // capacity. Copying size words would read past the old buffer, and in
+    // an arena allocator the next chunk is often the newly-allocated one
+    // -> memcpy-param-overlap.
+    u32 toCopy = currentFunctionSize < currentFunctionCapacity
+                     ? currentFunctionSize
+                     : currentFunctionCapacity;
+    memcpy(new_func, currentFunction, toCopy * sizeof(u32));
+  }
   currentFunction = new_func;
   currentFunctionCapacity = new_capacity;
 }

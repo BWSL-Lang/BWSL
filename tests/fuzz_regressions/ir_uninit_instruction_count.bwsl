@@ -1,0 +1,15 @@
+// Regression: fuzz 2026-04-18. IRProgram::instructionCount wasn't zeroed in
+// IRLowering::Initialize. When the fuzz/test harness compiles an input whose
+// shader stage produces no IR instructions, the post-lowering loop
+// `for (i=0; i < instructionCount; i++)` walked off the end of the opcodes
+// buffer reading stack garbage — heap-buffer-overflow. Fix zeroes
+// instructionCount alongside instructionCapacity in Initialize.
+// Expected: compiler exits cleanly (parse error), not a crash.
+pipeline ZeroInstructions {
+    attributes { position: float3 }
+    pass "Main" {
+        use attributes { position }
+        vertex {
+        }
+    }
+}

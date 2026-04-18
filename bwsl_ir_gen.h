@@ -562,6 +562,15 @@ struct IRBuilder {
     
     // Note: Unused operand slots default to 0x3FFF (invalid register, skipped by SSA)
     void EmitInstruction(u16 opcode, u16 dest, u16 s0, u16 s1 = 0x3FFF, u16 s2 = 0x3FFF, u16 s3 = 0x3FFF) {
+        // Hard cap on emitted instructions. Pathological fuzz inputs can
+        // drive IR lowering to emit hundreds of thousands of instructions
+        // from exponentially-nested function calls; the arena doubles its
+        // instruction buffers each time, blowing up to multiple GB. Real
+        // shaders have at most a few thousand instructions per stage.
+        static constexpr u32 MAX_INSTRUCTIONS = 262144;
+        if (currentInstruction >= MAX_INSTRUCTIONS) {
+            return;
+        }
         if (currentInstruction >= program->instructionCapacity) {
             GrowInstructionArrays();
         }

@@ -1,0 +1,7 @@
+// Regression: libFuzzer, 2026-04-17. Float literals exceeding float range
+// (e.g. `1e99999`) threw std::out_of_range from std::stof, which was
+// unhandled and aborted the process. Same bug class as the earlier stoi /
+// stoul families — fixed with SafeParseFloat (bwsl_parser_soa.cpp).
+pipeline P {
+    const float X = 1e99999;
+}

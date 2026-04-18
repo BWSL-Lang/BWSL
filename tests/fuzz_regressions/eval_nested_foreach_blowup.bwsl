@@ -1,0 +1,11 @@
+// Regression: libFuzzer, 2026-04-18. Nested `foreach` inside `eval {}`
+// blew up combinatorially: outer N iterations * inner M iterations *
+// deep cloned AST per iteration = arena exhausted. ASTFactory::Make*
+// then called memcpy into a nullptr arena result, crashing at
+// _platform_memmove. Per-loop MAX_EVAL_ITERATIONS=10000 only bounded a
+// single loop, not the product.
+// Fix: added shared evalExpansionBudget (100k) covering both statement
+// expansions and CloneNodeWithParams invocations, plus a clone recursion
+// depth guard (MAX_CLONE_DEPTH=2048) for pathologically nested trees.
+// Expected: compiler exits cleanly with a parse/eval error, not a crash.
+pass compute""eval{foreach 0..1000 foreach 0..100t u?

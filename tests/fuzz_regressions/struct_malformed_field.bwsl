@@ -1,0 +1,13 @@
+// Regression: libFuzzer, 2026-04-17. Malformed struct field declaration like
+// `float3 per.uv = float2(...)` (dot-accessor used as a field name) drove
+// ParseStruct's field loop into an infinite allocation loop: Synchronize()
+// could advance without making the loop state change, so each iteration
+// pushed new field-parsing allocations without progress.
+// Fix: progress guard in ParseStruct's field loop (bwsl_parser_soa.cpp),
+// same pattern as the ParseEnum variant loop.
+// Expected: compiler exits cleanly with a parse error, not a hang.
+pipeline P {
+    struct S {
+        float3 a.b = float3(0.0);
+    };
+}

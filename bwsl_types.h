@@ -172,7 +172,14 @@ inline bool IsArray(const TypeInfo& info) {
     }
 
     static constexpr TypeMask mask(CoreType type) {
-        return static_cast<TypeMask>(1ULL << static_cast<size_t>(type));
+        // Bounds-check: fuzz inputs can end up with a CoreType cast from
+        // garbage storage (e.g. uninitialized registerTypes[reg]) which makes
+        // the shift count >= 64 -> undefined behavior (caught by UBSan).
+        size_t idx = static_cast<size_t>(type);
+        if (idx >= 64) {
+            return 0;
+        }
+        return static_cast<TypeMask>(1ULL << idx);
     }
 
      // Generics

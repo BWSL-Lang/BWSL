@@ -1,15 +1,17 @@
-// libFuzzer harness for bwslc. Feeds raw bytes as BWSL source to the
-// lex+parse pipeline, swallowing expected errors so libFuzzer only surfaces
-// crashes / ASan / UBSan violations.
+// libFuzzer harness for bwslc. Feeds raw bytes as BWSL source through the
+// whole lex → parse → IR lowering → CFG/SSA → SPIR-V pipeline. Cross-compile
+// to text backends (Metal/HLSL/GLSL/GLES) is intentionally skipped here —
+// those are exercised by the regression / equivalence suites and would add
+// link-time complexity without much fuzzing signal.
 //
-// Scope: lex+parse only. That's where the "weird input bytes" bugs live and
-// where the existing equivalence/regression suites have the weakest coverage.
-// Backend codegen has dedicated test harnesses already.
+// ASan + UBSan catch memory and UB bugs; libFuzzer's coverage instrumentation
+// guides mutation toward new code paths.
 //
-// Build:
-//   make bwslc-fuzz
-// Run (seed corpus is tests/*.bwsl):
-//   ./build/bwslc-fuzz -max_len=8192 fuzz/corpus/
+// Build:  make bwslc-fuzz
+// Run:    ./build/bwslc-fuzz -max_len=4096 -timeout=5 \
+//                -dict=fuzz/bwsl.dict \
+//                -artifact_prefix=fuzz/crashes/ \
+//                fuzz/corpus/
 
 #include <cstddef>
 #include <cstdint>
@@ -24,6 +26,12 @@
 #include "../bwsl_render_config.h"
 #include "../bwsl_parser_soa.h"
 #include "../bwsl_lexer.h"
+#include "../bwsl_ir_gen.h"
+#include "../bwsl_ir_lowering.h"
+#include "../bwsl_cfg.h"
+#include "../bwsl_ssa.h"
+#include "../bwsl_ir_analysis.h"
+#include "../bwsl_spirv_backend.h"
 
 #include "../bwsl_lexer.cpp"
 #include "../bwsl_parser_soa.cpp"
@@ -31,10 +39,16 @@
 #include "../bwsl_module_cache.cpp"
 #include "../bwsl_custom_type_registry.cpp"
 #include "../bwsl_variant_system.cpp"
+#include "../bwsl_ir_gen.cpp"
+#include "../bwsl_ir_analysis.cpp"
+#include "../bwsl_cfg.cpp"
+#include "../bwsl_ssa.cpp"
+#include "../bwsl_spirv_backend.cpp"
 
 using namespace BWSL;
+using namespace BWSL::IR;
 
-// Redirect stdout+stderr to /dev/null only for the duration of the compile.
+// Redirect stdout+stderr to /dev/null only for the duration of each compile.
 // Global redirection would also hide libFuzzer's own progress / crash output.
 struct ScopedSilence {
     int saved_out = -1;
@@ -57,6 +71,82 @@ struct ScopedSilence {
         if (devnull >= 0) close(devnull);
     }
 };
+
+// Run the full compile pipeline on one shader stage. Returns silently on any
+// expected failure (missing stage, empty body); crashes / ASan / UBSan
+// violations propagate to libFuzzer naturally.
+static void CompileOneStage(CompilationContext& context, Parser& parser,
+                            NodeRef pipelineRef, NodeRef passRef,
+                            const PassData& pass, ShaderStage stage,
+                            NodeRef shaderRef) {
+    if (shaderRef.IsNull()) return;
+    const ShaderStageData& stageData = context.ast.GetShaderStage(shaderRef);
+    if (stageData.body.IsNull()) return;
+
+    IRMemoryPool irPool;
+    IRLowering lowering;
+    lowering.Initialize(&irPool,
+                        const_cast<SymbolTableData*>(&parser.symbolTable),
+                        &context.ast, parser.sourceBase());
+    lowering.currentStage = stage;
+    lowering.currentPipeline = pipelineRef;
+    lowering.currentPass = passRef;
+
+    for (u32 i = 0; i < pass.consts.count; i++) {
+        lowering.LowerStatement(pass.consts[i]);
+    }
+
+    const BlockData& block = context.ast.GetBlock(stageData.body);
+    for (u32 i = 0; i < block.statements.count; i++) {
+        lowering.LowerStatement(block.statements[i]);
+    }
+
+    // CFG + SSA (only if control flow is present — matches bwslc's behavior).
+    // Static scratch buffers reused across iterations; each iteration calls
+    // Initialize() which resets the arena bookkeeping.
+    static char cfgMem[1 * 1024 * 1024];
+    Memory::BWEMemoryArena cfgArena;
+    cfgArena.Initialize(cfgMem, sizeof(cfgMem));
+    CFGBuilder cfgBuilder;
+    CFG* cfgPtr = nullptr;
+
+    bool hasControlFlow = false;
+    for (u32 i = 0; i < lowering.program.instructionCount; i++) {
+        u16 op = lowering.program.opcodes[i];
+        if (op == OP_BRANCH || op == OP_JUMP || op == OP_SWITCH) {
+            hasControlFlow = true;
+            break;
+        }
+    }
+    if (hasControlFlow) {
+        cfgBuilder.Init(&lowering.program, &cfgArena);
+        cfgBuilder.Build();
+        cfgPtr = &cfgBuilder.cfg;
+        if (cfgBuilder.cfg.blockCount > 1) {
+            SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder,
+                              &cfgArena);
+        }
+    }
+
+    // SPIR-V emit. 16 MB covers pathological fuzz inputs that emit tens of
+    // thousands of IR instructions; real shaders use well under 1 MB. The
+    // arena is reused across iterations via reset-by-reinitialize.
+    static char spirvMem[16 * 1024 * 1024];
+    Memory::BWEMemoryArena spirvArena;
+    spirvArena.Initialize(spirvMem, sizeof(spirvMem));
+
+    SPIRVBuilder builder;
+    builder.Initialize(&spirvArena, &lowering.program, stage,
+                       const_cast<SymbolTableData*>(&parser.symbolTable),
+                       cfgPtr);
+    if (stage == ShaderStage::Compute) {
+        builder.SetComputeWorkgroupSize(stageData.workgroupSizeX,
+                                        stageData.workgroupSizeY,
+                                        stageData.workgroupSizeZ);
+    }
+    builder.EmitFunction();
+    (void) builder.Finalize();
+}
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     // Skip empty and pathologically large inputs. 32 KiB is well above any
@@ -83,8 +173,27 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     bool isModule = (parser.CurrentTokenType() == TokenType::MODULE);
     if (isModule) {
         (void) parser.ParseModuleFile();
-    } else {
-        (void) parser.ParsePipeline();
+        return 0;
+    }
+    (void) parser.ParsePipeline();
+
+    if (parser.hadError) return 0;
+    if (context.ast.pipelines.count == 0) return 0;
+
+    // Only the first pipeline is compiled — the point is to cover backend
+    // paths, not reproduce the full CLI driver. All three shader stages
+    // (vertex, fragment, compute) that exist get lowered and emitted.
+    NodeRef pipelineRef = context.root;
+    const PipelineData& pipeline = context.ast.GetPipeline(pipelineRef);
+    for (u32 p = 0; p < pipeline.passes.count; p++) {
+        NodeRef passRef = pipeline.passes[p];
+        const PassData& pass = context.ast.GetPass(passRef);
+        CompileOneStage(context, parser, pipelineRef, passRef, pass,
+                        ShaderStage::Vertex, pass.vertexShader);
+        CompileOneStage(context, parser, pipelineRef, passRef, pass,
+                        ShaderStage::Fragment, pass.fragmentShader);
+        CompileOneStage(context, parser, pipelineRef, passRef, pass,
+                        ShaderStage::Compute, pass.computeShader);
     }
 
     return 0;

@@ -287,6 +287,18 @@ struct ParseResult {
     GeometryConfig geometry;
 };
 
+// Fuzzer-safe integer / float parsers: return a default on malformed or
+// out-of-range input instead of throwing. The rcfg text format has no strict
+// lexer guarantee, so std::sto* calls can't be trusted with adversarial input.
+inline int SafeStoi(const std::string& s, int fallback = 0) {
+    if (s.empty()) return fallback;
+    try { return std::stoi(s); } catch (const std::exception&) { return fallback; }
+}
+inline float SafeStof(const std::string& s, float fallback = 0.0f) {
+    if (s.empty()) return fallback;
+    try { return std::stof(s); } catch (const std::exception&) { return fallback; }
+}
+
 inline std::string Trim(const std::string& str) {
     size_t start = str.find_first_not_of(" \t\r\n");
     if (start == std::string::npos) return "";
@@ -423,8 +435,8 @@ inline ParseResult Parse(const std::string& content) {
                 } else {
                     size_t xPos = sizeStr.find('x');
                     if (xPos != std::string::npos) {
-                        desc.absoluteWidth = std::stoi(sizeStr.substr(0, xPos));
-                        desc.absoluteHeight = std::stoi(sizeStr.substr(xPos + 1));
+                        desc.absoluteWidth = SafeStoi(sizeStr.substr(0, xPos));
+                        desc.absoluteHeight = SafeStoi(sizeStr.substr(xPos + 1));
                         desc.widthScale = 0.0f;
                         desc.heightScale = 0.0f;
                     }
@@ -432,7 +444,7 @@ inline ParseResult Parse(const std::string& content) {
 
                 for (size_t i = 4; i + 1 < tokens.size(); i++) {
                     if (tokens[i] == "array" && i + 1 < tokens.size()) {
-                        desc.arrayLength = std::stoi(tokens[i + 1]);
+                        desc.arrayLength = SafeStoi(tokens[i + 1]);
                         i++;
                     }
                 }
@@ -448,7 +460,7 @@ inline ParseResult Parse(const std::string& content) {
 
                 std::string name = tokens[1];
                 std::string typeName = tokens[2];
-                u32 binding = std::stoi(tokens[3]);
+                u32 binding = SafeStoi(tokens[3]);
                 u8 stages = ParseStage(tokens[4]);
                 if (stages == 0) stages = 1;
 
@@ -488,7 +500,7 @@ inline ParseResult Parse(const std::string& content) {
 
                 TextureBinding desc;
                 desc.name = tokens[1];
-                desc.bindingIndex = std::stoi(tokens[2]);
+                desc.bindingIndex = SafeStoi(tokens[2]);
                 desc.stages = 0;
                 desc.isArray = false;
                 desc.isCubemap = false;
@@ -513,7 +525,7 @@ inline ParseResult Parse(const std::string& content) {
 
                 SamplerBinding desc;
                 desc.name = tokens[1];
-                desc.bindingIndex = std::stoi(tokens[2]);
+                desc.bindingIndex = SafeStoi(tokens[2]);
                 desc.stages = 0;
 
                 for (size_t i = 3; i < tokens.size(); i++) {
@@ -535,7 +547,7 @@ inline ParseResult Parse(const std::string& content) {
                 StorageBufferBinding desc;
                 desc.name = tokens[1];
                 desc.typeName = tokens[2];
-                desc.bindingIndex = std::stoi(tokens[3]);
+                desc.bindingIndex = SafeStoi(tokens[3]);
                 desc.readOnly = true;
                 desc.stages = 0;
 
@@ -561,7 +573,7 @@ inline ParseResult Parse(const std::string& content) {
 
                 StorageImageBinding desc;
                 desc.name = tokens[1];
-                desc.bindingIndex = std::stoi(tokens[2]);
+                desc.bindingIndex = SafeStoi(tokens[2]);
                 desc.accessMode = ResourceAccessMode::WriteOnly;  // Default to write-only
                 desc.stages = 0;
 
@@ -584,7 +596,7 @@ inline ParseResult Parse(const std::string& content) {
                     return result;
                 }
                 result.geometry.type = GeometryConfig::Type::Instanced;
-                result.geometry.instanceCount = std::stoi(tokens[1]);
+                result.geometry.instanceCount = SafeStoi(tokens[1]);
             }
         }
         else {
@@ -625,10 +637,10 @@ inline ParseResult Parse(const std::string& content) {
                 if (attachment.loadAction == LoadAction::Clear && tokens.size() >= 8) {
                     if (IsFloat(tokens[3]) && IsFloat(tokens[4]) &&
                         IsFloat(tokens[5]) && IsFloat(tokens[6])) {
-                        attachment.clearColor[0] = std::stof(tokens[3]);
-                        attachment.clearColor[1] = std::stof(tokens[4]);
-                        attachment.clearColor[2] = std::stof(tokens[5]);
-                        attachment.clearColor[3] = std::stof(tokens[6]);
+                        attachment.clearColor[0] = SafeStof(tokens[3]);
+                        attachment.clearColor[1] = SafeStof(tokens[4]);
+                        attachment.clearColor[2] = SafeStof(tokens[5]);
+                        attachment.clearColor[3] = SafeStof(tokens[6]);
                         storeIdx = 7;
                     }
                 }
@@ -654,7 +666,7 @@ inline ParseResult Parse(const std::string& content) {
                 size_t storeIdx = 3;
                 if (currentPass->descriptor.depthStencilAttachment.depthLoadAction == LoadAction::Clear &&
                     tokens.size() >= 5 && IsFloat(tokens[3])) {
-                    currentPass->descriptor.depthStencilAttachment.clearDepth = std::stof(tokens[3]);
+                    currentPass->descriptor.depthStencilAttachment.clearDepth = SafeStof(tokens[3]);
                     storeIdx = 4;
                 } else {
                     currentPass->descriptor.depthStencilAttachment.clearDepth = 1.0f;
@@ -701,9 +713,9 @@ inline ParseResult Parse(const std::string& content) {
                     return result;
                 }
 
-                currentPass->dispatch.groupCountX = std::stoi(tokens[1]);
-                currentPass->dispatch.groupCountY = std::stoi(tokens[2]);
-                currentPass->dispatch.groupCountZ = std::stoi(tokens[3]);
+                currentPass->dispatch.groupCountX = SafeStoi(tokens[1]);
+                currentPass->dispatch.groupCountY = SafeStoi(tokens[2]);
+                currentPass->dispatch.groupCountZ = SafeStoi(tokens[3]);
             }
             else if (tokens[0] == "type") {
                 if (tokens.size() < 2) {

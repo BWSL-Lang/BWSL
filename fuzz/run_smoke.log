@@ -1,0 +1,37 @@
+Dictionary: 151 entries
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 2128191650
+INFO: Loaded 1 modules   (46738 inline 8-bit counters): 46738 [0x1045856a8, 0x104590d3a), 
+INFO: Loaded 1 PC tables (46738 PCs): 46738 [0x104590d40,0x104647660), 
+INFO: -fork=1: fuzzing in separate process(s)
+sh: line 1:  6763 Abort trap: 6           ./build/bwslc-fuzz -ignore_crashes=1 -ignore_timeouts=1 -max_total_time=300 -max_len=4096 -timeout=5 -dict=fuzz/bwsl.dict -artifact_prefix=fuzz/crashes/ fuzz/corpus/ -merge_control_file=/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork6761.dir/merge.txt -merge_inner=1 > /dev/null 2>&1
+sh: line 1:  6768 Abort trap: 6           ./build/bwslc-fuzz -ignore_crashes=1 -ignore_timeouts=1 -max_total_time=300 -max_len=4096 -timeout=5 -dict=fuzz/bwsl.dict -artifact_prefix=fuzz/crashes/ fuzz/corpus/ -merge_control_file=/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork6761.dir/merge.txt -merge_inner=1 > /dev/null 2>&1
+INFO: -fork=1: 2665 seed inputs, starting to fuzz in /var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork6761.dir
+#512: cov: 18306 ft: 84592 corp: 2665 exec/s: 256 oom/timeout/crash: 0/0/0 time: 16s job: 1 dft_time: 0
+#2488: cov: 18306 ft: 84596 corp: 2666 exec/s: 658 oom/timeout/crash: 0/0/0 time: 19s job: 2 dft_time: 0
+#3956: cov: 18310 ft: 84946 corp: 2670 exec/s: 367 oom/timeout/crash: 0/0/0 time: 23s job: 3 dft_time: 0
+#7390: cov: 18311 ft: 85002 corp: 2675 exec/s: 686 oom/timeout/crash: 0/0/0 time: 28s job: 4 dft_time: 0
+#12309: cov: 18311 ft: 85010 corp: 2679 exec/s: 819 oom/timeout/crash: 0/0/0 time: 35s job: 5 dft_time: 0
+#14912: cov: 18313 ft: 85110 corp: 2686 exec/s: 371 oom/timeout/crash: 0/0/0 time: 42s job: 6 dft_time: 0
+#17189: cov: 18313 ft: 85112 corp: 2687 exec/s: 284 oom/timeout/crash: 0/0/0 time: 50s job: 7 dft_time: 0
+#23665: cov: 18313 ft: 85117 corp: 2690 exec/s: 719 oom/timeout/crash: 0/0/0 time: 59s job: 8 dft_time: 0
+#32511: cov: 18317 ft: 85150 corp: 2696 exec/s: 884 oom/timeout/crash: 0/0/0 time: 69s job: 9 dft_time: 0
+#39912: cov: 18325 ft: 85311 corp: 2709 exec/s: 672 oom/timeout/crash: 0/0/0 time: 81s job: 10 dft_time: 0
+#46256: cov: 18325 ft: 85469 corp: 2718 exec/s: 528 oom/timeout/crash: 0/0/0 time: 93s job: 11 dft_time: 0
+sh: line 1:  9686 Abort trap: 6           ./build/bwslc-fuzz -ignore_crashes=1 -ignore_timeouts=1 -max_total_time=300 -max_len=4096 -timeout=5 -dict=fuzz/bwsl.dict -artifact_prefix=fuzz/crashes/ -reload=0 -print_final_stats=1 -print_funcs=0 -max_total_time=12 -stop_file=/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork6761.dir/STOP -seed_inputs=@/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork6761.dir/12.seeds /var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork6761.dir/C12 -features_dir=/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork6761.dir/F12 > /var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork6761.dir/12.log 2>&1
+#46256: cov: 18327 ft: 85647 corp: 2730 exec/s: 0 oom/timeout/crash: 0/0/0 time: 101s job: 12 dft_time: 0
+#52228: cov: 18327 ft: 85683 corp: 2735 exec/s: 426 oom/timeout/crash: 0/0/1 time: 115s job: 13 dft_time: 0
+#59004: cov: 18328 ft: 85733 corp: 2743 exec/s: 451 oom/timeout/crash: 0/0/1 time: 131s job: 14 dft_time: 0
+#64957: cov: 18328 ft: 85767 corp: 2746 exec/s: 372 oom/timeout/crash: 0/0/1 time: 147s job: 15 dft_time: 0
+#78942: cov: 18328 ft: 85784 corp: 2748 exec/s: 822 oom/timeout/crash: 0/0/1 time: 165s job: 16 dft_time: 0
+#97447: cov: 18334 ft: 85819 corp: 2752 exec/s: 1028 oom/timeout/crash: 0/0/1 time: 183s job: 17 dft_time: 0
+sh: line 1: 12435 Abort trap: 6           ./build/bwslc-fuzz -ignore_crashes=1 -ignore_timeouts=1 -max_total_time=300 -max_len=4096 -timeout=5 -dict=fuzz/bwsl.dict -artifact_prefix=fuzz/crashes/ -reload=0 -print_final_stats=1 -print_funcs=0 -max_total_time=18 -stop_file=/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork6761.dir/STOP -seed_inputs=@/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork6761.dir/18.seeds /var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork6761.dir/C18 -features_dir=/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork6761.dir/F18 > /var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork6761.dir/18.log 2>&1
+#97447: cov: 18359 ft: 85877 corp: 2768 exec/s: 0 oom/timeout/crash: 0/0/1 time: 185s job: 18 dft_time: 0
+#112310: cov: 18359 ft: 85877 corp: 2768 exec/s: 743 oom/timeout/crash: 0/0/2 time: 205s job: 19 dft_time: 0
+#122527: cov: 18361 ft: 85952 corp: 2781 exec/s: 486 oom/timeout/crash: 0/0/2 time: 226s job: 20 dft_time: 0
+#139499: cov: 18363 ft: 86013 corp: 2790 exec/s: 771 oom/timeout/crash: 0/0/2 time: 249s job: 21 dft_time: 0
+#151227: cov: 18363 ft: 86063 corp: 2799 exec/s: 509 oom/timeout/crash: 0/0/2 time: 272s job: 22 dft_time: 0
+#166012: cov: 18363 ft: 86213 corp: 2811 exec/s: 616 oom/timeout/crash: 0/0/2 time: 296s job: 23 dft_time: 0
+#175707: cov: 18364 ft: 86279 corp: 2827 exec/s: 387 oom/timeout/crash: 0/0/2 time: 322s job: 24 dft_time: 0
+INFO: fuzzed for 322 seconds, wrapping up soon
+INFO: exiting: 0 time: 322s

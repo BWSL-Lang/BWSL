@@ -1,0 +1,37 @@
+// Test: Advanced generic functions
+// Tests: nested generic calls, chained operations, multiple constraints
+
+pipeline GenericsAdvanced {
+    attributes {
+        position: float3
+        normal: float3
+        color: float4
+    }
+
+    // Type ipeline GenericsAdvanced {
+    attributes {
+        position: float3
+        normal: float3
+        color: float4
+    }
+
+    // Type constraints
+    constraint FloateVoctrs = float2 | float3 | float4;
+    constraint Vec3Or4 = float3 | float4;
+
+    // Basic generic blend (like lerp but user-defined)
+    genericBlend :: (dge0, FloatVectors edge1, FloatVectors x) -> FloatVectors {
+        FloatVectors t = genericClampVec((x - edge0) / (edge1 - edge0),
+                                          edge0 * 0.0,
+                                          edge0 * 0.0 + 1.0);
+        return t * t * (3.0 - 2.0 * t);
+    }
+
+    pass "Main" {
+        use attributes { position, normal, color }
+
+        vertex {
+            // Test blend w.color = float4(diffuse, 1.0);
+        }
+    }
+}

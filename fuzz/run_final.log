@@ -1,0 +1,32 @@
+Dictionary: 151 entries
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 2312986674
+INFO: Loaded 1 modules   (46743 inline 8-bit counters): 46743 [0x1030816a8, 0x10308cd3f), 
+INFO: Loaded 1 PC tables (46743 PCs): 46743 [0x10308cd40,0x1031436b0), 
+INFO: -fork=1: fuzzing in separate process(s)
+INFO: -fork=1: 3679 seed inputs, starting to fuzz in /var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork77852.dir
+#609: cov: 19048 ft: 96031 corp: 3679 exec/s: 304 oom/timeout/crash: 0/0/0 time: 25s job: 1 dft_time: 0
+#2017: cov: 19049 ft: 96136 corp: 3681 exec/s: 469 oom/timeout/crash: 0/0/0 time: 28s job: 2 dft_time: 0
+#3416: cov: 19049 ft: 96136 corp: 3681 exec/s: 349 oom/timeout/crash: 0/0/0 time: 32s job: 3 dft_time: 0
+#6628: cov: 19051 ft: 96196 corp: 3684 exec/s: 642 oom/timeout/crash: 0/0/0 time: 37s job: 4 dft_time: 0
+#9614: cov: 19059 ft: 96204 corp: 3686 exec/s: 497 oom/timeout/crash: 0/0/0 time: 43s job: 5 dft_time: 0
+#13928: cov: 19059 ft: 96251 corp: 3690 exec/s: 616 oom/timeout/crash: 0/0/0 time: 51s job: 6 dft_time: 0
+#18976: cov: 19075 ft: 96324 corp: 3699 exec/s: 631 oom/timeout/crash: 0/0/0 time: 59s job: 7 dft_time: 0
+#23787: cov: 19076 ft: 96331 corp: 3703 exec/s: 534 oom/timeout/crash: 0/0/0 time: 68s job: 8 dft_time: 0
+#29970: cov: 19076 ft: 96334 corp: 3704 exec/s: 618 oom/timeout/crash: 0/0/0 time: 78s job: 9 dft_time: 0
+#38188: cov: 19078 ft: 96368 corp: 3709 exec/s: 747 oom/timeout/crash: 0/0/0 time: 89s job: 10 dft_time: 0
+#47483: cov: 19078 ft: 96388 corp: 3714 exec/s: 774 oom/timeout/crash: 0/0/0 time: 101s job: 11 dft_time: 0
+#55412: cov: 19078 ft: 96400 corp: 3719 exec/s: 609 oom/timeout/crash: 0/0/0 time: 115s job: 12 dft_time: 0
+#68096: cov: 19078 ft: 96400 corp: 3719 exec/s: 906 oom/timeout/crash: 0/0/0 time: 129s job: 13 dft_time: 0
+  NEW_FUNC: 0x000102ec75a8 in void BWSL::SPIRVBuilder::Emit<unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int>(spv::Op, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int) bwsl_spirv_backend.h:275
+#71977: cov: 19132 ft: 96506 corp: 3724 exec/s: 258 oom/timeout/crash: 0/0/0 time: 145s job: 14 dft_time: 0
+#85091: cov: 19132 ft: 96508 corp: 3726 exec/s: 819 oom/timeout/crash: 0/0/0 time: 161s job: 15 dft_time: 0
+#88700: cov: 19133 ft: 96748 corp: 3733 exec/s: 212 oom/timeout/crash: 0/0/0 time: 179s job: 16 dft_time: 0
+#97070: cov: 19133 ft: 96749 corp: 3734 exec/s: 465 oom/timeout/crash: 0/0/0 time: 197s job: 17 dft_time: 0
+#105896: cov: 19133 ft: 96824 corp: 3743 exec/s: 464 oom/timeout/crash: 0/0/0 time: 216s job: 18 dft_time: 0
+#111638: cov: 19133 ft: 96831 corp: 3746 exec/s: 287 oom/timeout/crash: 0/0/0 time: 237s job: 19 dft_time: 0
+#122685: cov: 19136 ft: 96834 corp: 3747 exec/s: 526 oom/timeout/crash: 0/0/0 time: 258s job: 20 dft_time: 0
+#138775: cov: 19137 ft: 96859 corp: 3749 exec/s: 731 oom/timeout/crash: 0/0/0 time: 280s job: 21 dft_time: 0
+#149950: cov: 19137 ft: 96897 corp: 3755 exec/s: 485 oom/timeout/crash: 0/0/0 time: 303s job: 22 dft_time: 0
+INFO: fuzzed for 303 seconds, wrapping up soon
+INFO: exiting: 0 time: 304s

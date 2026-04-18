@@ -1,0 +1,11 @@
+// Regression: libFuzzer, 2026-04-18. `variants[` (9 bytes) drove ParseVariants
+// into an allocation-bomb infinite loop — Consume() failures on the bracket
+// token left `current` unchanged every iteration while still allocating a
+// PipelineVariantDeclData per cycle. This represented 83% of the 226 hang
+// artifacts in the 1-hour fuzz run.
+//
+// Fix: Parser::ProgressGuard RAII helper (bwsl_parser_soa.h) applied to all
+// 23 recovery-prone parser loops. If a full iteration consumes no tokens,
+// the destructor forces a single Advance() so the loop always makes progress.
+// Expected: compiler exits cleanly with a parse error, not a hang.
+variants[

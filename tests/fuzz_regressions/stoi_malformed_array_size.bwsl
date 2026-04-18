@@ -1,0 +1,11 @@
+// Regression: libFuzzer, 2026-04-17. Array size position parsed with
+// std::stoi; malformed NUMBER tokens (e.g. a hex literal like `0x` with no
+// digits, or a decimal overflowing int) threw std::invalid_argument /
+// std::out_of_range which was unhandled and aborted the process.
+// Fix: SafeParseInt helper wraps stoi with try/catch (bwsl_parser_soa.cpp).
+// Expected: compiler exits cleanly with a parse error, not a crash.
+pipeline P {
+    struct S {
+        float values[0xFFFFFFFFFFFF];
+    };
+}

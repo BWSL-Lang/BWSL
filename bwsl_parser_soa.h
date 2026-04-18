@@ -6,6 +6,7 @@
 #include "bwsl_symbol_table.h"
 #include "bwsl_eval_soa.h"
 #include "bwsl_variant_system.h"
+#include "bwsl_custom_type_registry.h"
 #include <cstddef>
 #include <unordered_map>
 #include <string>
@@ -39,6 +40,11 @@ struct CompilationContext {
         arena.Initialize(memory, DEFAULT_ARENA_SIZE);
         ast.Init(&arena, 2048);  // Larger initial capacity for modules
         evalCache.Init();
+        // g_customTypes is a static global that stores raw pointers into the
+        // previous compilation's arena. Without this reset, a second
+        // compilation in the same process (fuzzer, batch, tests) dereferences
+        // freed StructData. Reset here so every new context starts clean.
+        g_customTypes.Init();
     }
 
     ~CompilationContext() {
@@ -56,6 +62,23 @@ struct CompilationContext {
 
 struct Parser {
     friend class CompileTimeEvaluatorSoA;
+
+    // RAII helper: snapshots the current token on construction and, at
+    // scope exit, forces Advance() if the loop body made no progress.
+    // Drop one at the top of any recovery-prone parser loop to guarantee
+    // termination even on adversarial input (the common pattern where
+    // Consume() / Synchronize() fail to move `current`).
+    struct ProgressGuard {
+        Parser* p;
+        TokenRef saved;
+        ProgressGuard(Parser* parser) : p(parser), saved(parser->current) {}
+        ~ProgressGuard() {
+            if (p->current == saved &&
+                p->stream->GetType(p->current) != TokenType::EOF_TOKEN) {
+                p->Advance();
+            }
+        }
+    };
 
     Lexer* lexer;
     TokenStream* stream;  // TokenStream for SoA token access
@@ -325,6 +348,25 @@ private:
     };
     std::vector<EvalBinding> evalBindings;
     std::vector<u32> evalBindingScopeStarts;
+
+    // Global budget for eval-statement expansion. Nested eval loops
+    // multiply combinatorially (outer N * inner M body expansions), and
+    // each expansion clones AST nodes into the arena. Without a total
+    // cap, a pathological input like `eval { foreach 0..1000 foreach
+    // 0..100 ... }` exhausts the arena and the next AST allocation
+    // returns nullptr, crashing the compiler at memmove. The per-loop
+    // MAX_EVAL_ITERATIONS check only bounds a single loop.
+    static constexpr u32 MAX_EVAL_EXPANSIONS = 100000;
+    u32 evalExpansionBudget = MAX_EVAL_EXPANSIONS;
+
+    // Recursion-depth guard for CloneNodeWithParams. Pathological inputs
+    // can produce deeply nested ternary / binary expression trees
+    // (`a?b?c?...:x:y:z` of arbitrary depth). Cloning recurses on every
+    // child, so a 10k-deep tree costs 10k stack frames *and* arena
+    // allocations; the latter runs out before the former and crashes
+    // inside an unchecked memcpy in MakeTernaryExpr / MakeBinaryOp.
+    static constexpr u32 MAX_CLONE_DEPTH = 2048;
+    u32 cloneDepth = 0;
     struct ActiveVariantBinding {
         u32 nameHash;
         TypeInfo typeInfo;

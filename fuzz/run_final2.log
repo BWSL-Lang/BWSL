@@ -1,0 +1,31 @@
+Dictionary: 151 entries
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 696331104
+INFO: Loaded 1 modules   (46803 inline 8-bit counters): 46803 [0x1049a5688, 0x1049b0d5b), 
+INFO: Loaded 1 PC tables (46803 PCs): 46803 [0x1049b0d60,0x104a67a90), 
+INFO: -fork=1: fuzzing in separate process(s)
+INFO: -fork=1: 4060 seed inputs, starting to fuzz in /var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork94213.dir
+#1243: cov: 19400 ft: 100129 corp: 4060 exec/s: 621 oom/timeout/crash: 0/0/0 time: 29s job: 1 dft_time: 0
+#2846: cov: 19400 ft: 100129 corp: 4060 exec/s: 534 oom/timeout/crash: 0/0/0 time: 32s job: 2 dft_time: 0
+#4141: cov: 19402 ft: 100163 corp: 4061 exec/s: 323 oom/timeout/crash: 0/0/0 time: 36s job: 3 dft_time: 0
+#7202: cov: 19402 ft: 100163 corp: 4061 exec/s: 612 oom/timeout/crash: 0/0/0 time: 41s job: 4 dft_time: 0
+#11166: cov: 19407 ft: 100170 corp: 4063 exec/s: 660 oom/timeout/crash: 0/0/0 time: 47s job: 5 dft_time: 0
+#14477: cov: 19407 ft: 100170 corp: 4063 exec/s: 473 oom/timeout/crash: 0/0/0 time: 54s job: 6 dft_time: 0
+#15833: cov: 19408 ft: 100192 corp: 4064 exec/s: 150 oom/timeout/crash: 0/0/0 time: 64s job: 7 dft_time: 0
+#17782: cov: 19408 ft: 100192 corp: 4064 exec/s: 216 oom/timeout/crash: 0/0/0 time: 73s job: 8 dft_time: 0
+#19364: cov: 19408 ft: 100227 corp: 4066 exec/s: 158 oom/timeout/crash: 0/0/0 time: 83s job: 9 dft_time: 0
+#25527: cov: 19408 ft: 100227 corp: 4066 exec/s: 560 oom/timeout/crash: 0/0/0 time: 94s job: 10 dft_time: 0
+#37317: cov: 19409 ft: 100232 corp: 4069 exec/s: 982 oom/timeout/crash: 0/0/0 time: 106s job: 11 dft_time: 0
+#42157: cov: 19409 ft: 100237 corp: 4070 exec/s: 372 oom/timeout/crash: 0/0/0 time: 119s job: 12 dft_time: 0
+#46994: cov: 19409 ft: 100237 corp: 4070 exec/s: 345 oom/timeout/crash: 0/0/0 time: 134s job: 13 dft_time: 0
+#52990: cov: 19409 ft: 100237 corp: 4070 exec/s: 399 oom/timeout/crash: 0/0/0 time: 149s job: 14 dft_time: 0
+#62537: cov: 19409 ft: 100243 corp: 4071 exec/s: 596 oom/timeout/crash: 0/0/0 time: 165s job: 15 dft_time: 0
+#69763: cov: 19409 ft: 100245 corp: 4072 exec/s: 425 oom/timeout/crash: 0/0/0 time: 182s job: 16 dft_time: 0
+#72793: cov: 19409 ft: 100309 corp: 4074 exec/s: 159 oom/timeout/crash: 0/0/0 time: 201s job: 17 dft_time: 0
+#77850: cov: 19409 ft: 100311 corp: 4075 exec/s: 266 oom/timeout/crash: 0/0/0 time: 221s job: 18 dft_time: 0
+#86149: cov: 19411 ft: 100336 corp: 4079 exec/s: 414 oom/timeout/crash: 0/0/0 time: 241s job: 19 dft_time: 0
+#89745: cov: 19411 ft: 100378 corp: 4083 exec/s: 171 oom/timeout/crash: 0/0/0 time: 262s job: 20 dft_time: 0
+#104827: cov: 19411 ft: 100380 corp: 4085 exec/s: 685 oom/timeout/crash: 0/0/0 time: 284s job: 21 dft_time: 0
+#116444: cov: 19412 ft: 100392 corp: 4089 exec/s: 505 oom/timeout/crash: 0/0/0 time: 307s job: 22 dft_time: 0
+INFO: fuzzed for 308 seconds, wrapping up soon
+INFO: exiting: 0 time: 308s

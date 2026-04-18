@@ -1,0 +1,21 @@
+// Regression: libFuzzer, 2026-04-18. Taking the address (`^`) of an
+// integer literal caused a heap-buffer-overflow inside
+// IRLowering::LowerUnaryOp at bwsl_ir_lowering.h:1346. The operand of
+// ADDRESS_OF was a constant-encoded register (e.g. 16384 = 0x4000),
+// which was used as an index into registerStorageInfo[MAX_REGISTERS=4096],
+// reading/writing ~12KB past the allocated array. Same hazard in
+// DEREFERENCE (bwsl_ir_lowering.h:1353).
+// Fix: reject operands with constant-encoding bits (0xC000) or
+// operand/dest >= MAX_REGISTERS before indexing registerStorageInfo.
+// Expected: compiler exits cleanly (warning + SPIR-V validation error),
+// not a crash.
+pipeline AddrOfConst {
+    attributes { position: float3 }
+    pass "Main" {
+        use attributes { position }
+        vertex {
+            int^ p = ^5;
+            output.position = float4(attributes.position, 1.0);
+        }
+    }
+}

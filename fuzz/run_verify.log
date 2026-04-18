@@ -1,0 +1,55 @@
+Dictionary: 151 entries
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 978910455
+INFO: Loaded 1 modules   (46743 inline 8-bit counters): 46743 [0x1027816a8, 0x10278cd3f), 
+INFO: Loaded 1 PC tables (46743 PCs): 46743 [0x10278cd40,0x1028436b0), 
+INFO: -fork=1: fuzzing in separate process(s)
+sh: line 1: 34605 Abort trap: 6           ./build/bwslc-fuzz -ignore_crashes=1 -ignore_timeouts=1 -max_total_time=900 -max_len=4096 -timeout=5 -dict=fuzz/bwsl.dict -artifact_prefix=fuzz/crashes/ fuzz/corpus/ -merge_control_file=/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/merge.txt -merge_inner=1 > /dev/null 2>&1
+sh: line 1: 34615 Abort trap: 6           ./build/bwslc-fuzz -ignore_crashes=1 -ignore_timeouts=1 -max_total_time=900 -max_len=4096 -timeout=5 -dict=fuzz/bwsl.dict -artifact_prefix=fuzz/crashes/ fuzz/corpus/ -merge_control_file=/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/merge.txt -merge_inner=1 > /dev/null 2>&1
+INFO: -fork=1: 3573 seed inputs, starting to fuzz in /var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir
+#693: cov: 19021 ft: 94744 corp: 3573 exec/s: 346 oom/timeout/crash: 0/0/0 time: 29s job: 1 dft_time: 0
+#2354: cov: 19021 ft: 94746 corp: 3574 exec/s: 553 oom/timeout/crash: 0/0/0 time: 32s job: 2 dft_time: 0
+#3914: cov: 19021 ft: 94746 corp: 3574 exec/s: 390 oom/timeout/crash: 0/0/0 time: 36s job: 3 dft_time: 0
+#5865: cov: 19021 ft: 94750 corp: 3576 exec/s: 390 oom/timeout/crash: 0/0/0 time: 42s job: 4 dft_time: 0
+#6658: cov: 19021 ft: 94750 corp: 3576 exec/s: 132 oom/timeout/crash: 0/0/0 time: 48s job: 5 dft_time: 0
+#10973: cov: 19021 ft: 94750 corp: 3576 exec/s: 616 oom/timeout/crash: 0/0/0 time: 55s job: 6 dft_time: 0
+#14428: cov: 19025 ft: 94764 corp: 3582 exec/s: 431 oom/timeout/crash: 0/0/0 time: 64s job: 7 dft_time: 0
+#18630: cov: 19026 ft: 94769 corp: 3584 exec/s: 466 oom/timeout/crash: 0/0/0 time: 73s job: 8 dft_time: 0
+#25831: cov: 19032 ft: 94776 corp: 3585 exec/s: 720 oom/timeout/crash: 0/0/0 time: 83s job: 9 dft_time: 0
+#32234: cov: 19033 ft: 94798 corp: 3590 exec/s: 582 oom/timeout/crash: 0/0/0 time: 94s job: 10 dft_time: 0
+#37870: cov: 19033 ft: 94808 corp: 3593 exec/s: 469 oom/timeout/crash: 0/0/0 time: 106s job: 11 dft_time: 0
+#48055: cov: 19033 ft: 94818 corp: 3596 exec/s: 783 oom/timeout/crash: 0/0/0 time: 120s job: 12 dft_time: 0
+#49236: cov: 19033 ft: 94976 corp: 3603 exec/s: 84 oom/timeout/crash: 0/0/0 time: 135s job: 13 dft_time: 0
+#53698: cov: 19033 ft: 94984 corp: 3604 exec/s: 297 oom/timeout/crash: 0/0/0 time: 150s job: 14 dft_time: 0
+#64238: cov: 19033 ft: 94991 corp: 3607 exec/s: 658 oom/timeout/crash: 0/0/0 time: 166s job: 15 dft_time: 0
+sh: line 1: 40021 Abort trap: 6           ./build/bwslc-fuzz -ignore_crashes=1 -ignore_timeouts=1 -max_total_time=900 -max_len=4096 -timeout=5 -dict=fuzz/bwsl.dict -artifact_prefix=fuzz/crashes/ -reload=0 -print_final_stats=1 -print_funcs=0 -max_total_time=16 -stop_file=/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/STOP -seed_inputs=@/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/16.seeds /var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/C16 -features_dir=/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/F16 > /var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/16.log 2>&1
+#64238: cov: 19033 ft: 95076 corp: 3616 exec/s: 0 oom/timeout/crash: 0/0/0 time: 181s job: 16 dft_time: 0
+#73824: cov: 19033 ft: 95077 corp: 3617 exec/s: 532 oom/timeout/crash: 0/0/1 time: 199s job: 17 dft_time: 0
+#81952: cov: 19033 ft: 95082 corp: 3619 exec/s: 427 oom/timeout/crash: 0/0/1 time: 219s job: 18 dft_time: 0
+sh: line 1: 41640 Abort trap: 6           ./build/bwslc-fuzz -ignore_crashes=1 -ignore_timeouts=1 -max_total_time=900 -max_len=4096 -timeout=5 -dict=fuzz/bwsl.dict -artifact_prefix=fuzz/crashes/ -reload=0 -print_final_stats=1 -print_funcs=0 -max_total_time=19 -stop_file=/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/STOP -seed_inputs=@/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/19.seeds /var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/C19 -features_dir=/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/F19 > /var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/19.log 2>&1
+#81952: cov: 19033 ft: 95105 corp: 3624 exec/s: 0 oom/timeout/crash: 0/0/1 time: 220s job: 19 dft_time: 0
+#91445: cov: 19033 ft: 95105 corp: 3624 exec/s: 452 oom/timeout/crash: 0/0/2 time: 241s job: 20 dft_time: 0
+#99774: cov: 19033 ft: 95147 corp: 3629 exec/s: 378 oom/timeout/crash: 0/0/2 time: 263s job: 21 dft_time: 0
+#109109: cov: 19033 ft: 95168 corp: 3631 exec/s: 405 oom/timeout/crash: 0/0/2 time: 287s job: 22 dft_time: 0
+#117014: cov: 19033 ft: 95171 corp: 3633 exec/s: 329 oom/timeout/crash: 0/0/2 time: 311s job: 23 dft_time: 0
+#118284: cov: 19035 ft: 95215 corp: 3643 exec/s: 50 oom/timeout/crash: 0/0/2 time: 336s job: 24 dft_time: 0
+#124548: cov: 19035 ft: 95220 corp: 3645 exec/s: 240 oom/timeout/crash: 0/0/2 time: 363s job: 25 dft_time: 0
+#136248: cov: 19035 ft: 95234 corp: 3647 exec/s: 433 oom/timeout/crash: 0/0/2 time: 390s job: 26 dft_time: 0
+#148626: cov: 19039 ft: 95249 corp: 3652 exec/s: 442 oom/timeout/crash: 0/0/2 time: 418s job: 27 dft_time: 0
+#167030: cov: 19039 ft: 95265 corp: 3655 exec/s: 634 oom/timeout/crash: 0/0/2 time: 448s job: 28 dft_time: 0
+#178148: cov: 19039 ft: 95289 corp: 3661 exec/s: 370 oom/timeout/crash: 0/0/2 time: 478s job: 29 dft_time: 0
+#183704: cov: 19039 ft: 95300 corp: 3663 exec/s: 179 oom/timeout/crash: 0/0/2 time: 509s job: 30 dft_time: 0
+#199448: cov: 19042 ft: 95347 corp: 3669 exec/s: 492 oom/timeout/crash: 0/0/2 time: 542s job: 31 dft_time: 0
+sh: line 1: 51627 Abort trap: 6           ./build/bwslc-fuzz -ignore_crashes=1 -ignore_timeouts=1 -max_total_time=900 -max_len=4096 -timeout=5 -dict=fuzz/bwsl.dict -artifact_prefix=fuzz/crashes/ -reload=0 -print_final_stats=1 -print_funcs=0 -max_total_time=32 -stop_file=/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/STOP -seed_inputs=@/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/32.seeds /var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/C32 -features_dir=/var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/F32 > /var/folders/lm/s5v5lgy16ds72q6412sv6rv00000gn/T//libFuzzerTemp.FuzzWithFork34599.dir/32.log 2>&1
+#199448: cov: 19051 ft: 95376 corp: 3677 exec/s: 0 oom/timeout/crash: 0/0/2 time: 551s job: 32 dft_time: 0
+#211344: cov: 19051 ft: 95413 corp: 3678 exec/s: 349 oom/timeout/crash: 0/0/3 time: 586s job: 33 dft_time: 0
+#224319: cov: 19051 ft: 95448 corp: 3684 exec/s: 370 oom/timeout/crash: 0/0/3 time: 621s job: 34 dft_time: 0
+#242656: cov: 19085 ft: 95681 corp: 3695 exec/s: 509 oom/timeout/crash: 0/0/3 time: 658s job: 35 dft_time: 0
+#263016: cov: 19103 ft: 95769 corp: 3702 exec/s: 550 oom/timeout/crash: 0/0/3 time: 695s job: 36 dft_time: 0
+#284534: cov: 19106 ft: 96105 corp: 3715 exec/s: 566 oom/timeout/crash: 0/0/3 time: 734s job: 37 dft_time: 0
+#310944: cov: 19106 ft: 96132 corp: 3724 exec/s: 677 oom/timeout/crash: 0/0/3 time: 773s job: 38 dft_time: 0
+#320010: cov: 19106 ft: 96152 corp: 3733 exec/s: 226 oom/timeout/crash: 0/0/3 time: 814s job: 39 dft_time: 0
+#329683: cov: 19106 ft: 96165 corp: 3736 exec/s: 235 oom/timeout/crash: 0/0/3 time: 855s job: 40 dft_time: 0
+#335423: cov: 19110 ft: 96210 corp: 3741 exec/s: 117 oom/timeout/crash: 0/0/3 time: 905s job: 41 dft_time: 0
+INFO: fuzzed for 905 seconds, wrapping up soon
+INFO: exiting: 0 time: 905s

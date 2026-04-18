@@ -1,0 +1,35 @@
+// Regression: libFuzzer, 2026-04-18. Deeply nested function-call and
+// binary-op expression trees caused unbounded recursion through
+// IRLowering::LowerExpression -> LowerFunctionCall -> LowerExpression ...
+// blowing the thread stack (ASan: stack-overflow at
+// bwsl_ir_lowering.h:4155). A subsequent run with the recursion bounded
+// then revealed a related register-exhaustion path
+// (registerStorageInfo indexing past MAX_REGISTERS), an IRMemoryPool
+// allocation larger than CHUNK_SIZE writing past the fresh chunk, and
+// runaway instruction emission OOMing the arena.
+//
+// Fix bundle:
+// - bwsl_ir_lowering.h: LowerExpression recursion depth guard
+//   (MAX_LOWER_DEPTH = 1024) + AllocateRegister clamp to MAX_REGISTERS.
+// - bwsl_ir_gen.h: EmitInstruction hard cap (MAX_INSTRUCTIONS = 262144).
+// - bwsl_mem_pool.h: Allocate now grows a fresh oversized chunk when a
+//   single allocation exceeds CHUNK_SIZE (otherwise the pointer is valid
+//   but writes past the chunk end).
+//
+// Expected: compiler exits cleanly in bounded time, not a crash.
+pipeline DeepNested {
+    attributes { position: float3 }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float x = float(int(float(int(float(int(float(int(float(int(
+                       float(int(float(int(float(int(float(int(float(int(
+                       float(int(float(int(float(int(float(int(float(int(
+                       float(int(float(int(float(int(float(int(float(int(
+                       1.0))))))))))))))))))))))))))))))))))))))));
+            output.position = float4(attributes.position, x);
+        }
+    }
+}

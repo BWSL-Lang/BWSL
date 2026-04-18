@@ -97,6 +97,11 @@ struct IRLowering {
   ShaderStage currentStage;
   u32 currentFunction;
 
+  // LowerExpression recursion depth — pathological AST (deeply nested
+  // binary/function-call trees from fuzzer inputs) blows the thread stack
+  // without a cap. Guarded in LowerExpression with MAX_LOWER_DEPTH.
+  u32 lowerDepth = 0;
+
   // Map AST node refs to registers (keyed by packed NodeRef value)
   std::unordered_map<u32, u16> nodeRegisters;
 
@@ -168,8 +173,12 @@ struct IRLowering {
     builder.currentInstruction = 0;
     builder.nextRegister = 0;
 
-    // Allocate IR arrays
+    // Allocate IR arrays. instructionCount must be zeroed explicitly — it's
+    // a plain u32 field with no inline initializer, and the enclosing
+    // IRLowering is stack-allocated in the fuzz/test harnesses, so without
+    // this we read stack garbage if no instructions end up being emitted.
     u32 initialSize = 1024;
+    program.instructionCount = 0;
     program.instructionCapacity = initialSize;
     program.opcodes = (u16 *)pool->Allocate(initialSize * sizeof(u16), 64);
     program.types = (u16 *)pool->Allocate(initialSize * sizeof(u16), 64);
@@ -1156,9 +1165,26 @@ struct IRLowering {
   // Expression lowering
   //==========================================================================
 
+  struct LowerDepthGuard {
+    u32 &d;
+    LowerDepthGuard(u32 &d_) : d(d_) { ++d; }
+    ~LowerDepthGuard() { --d; }
+  };
+
   u16 LowerExpression(NodeRef ref) {
     if (ref.IsNull())
       return 0;
+
+    // Recursion guard. Nested function-call / binary-op / ternary AST can
+    // cycle or reach extreme depth from pathological inputs, blowing the
+    // thread stack inside LowerFunctionCall -> LowerExpression -> ...
+    // MAX_LOWER_DEPTH well exceeds any reasonable shader nesting but is
+    // far below the ~1MB thread stack (each frame ~200 bytes).
+    static constexpr u32 MAX_LOWER_DEPTH = 1024;
+    if (lowerDepth >= MAX_LOWER_DEPTH) {
+      return 0;
+    }
+    LowerDepthGuard _guard(lowerDepth);
 
     // Check if we already computed this (keyed by packed NodeRef)
     auto it = nodeRegisters.find(ref.packed);
@@ -1330,7 +1356,16 @@ struct IRLowering {
       return dest; // Return old value
     }
     case UnaryOpType::ADDRESS_OF: {
-      // ^x: Get pointer to variable
+      // ^x: Get pointer to variable. Rejects constants (bits 0x4000/0x8000),
+      // out-of-range register indices, and registers past MAX_REGISTERS —
+      // registerStorageInfo has only MAX_REGISTERS entries, and indexing with
+      // a constant-encoded operand (>= 0x4000) reads/writes far OOB.
+      if ((operand & 0xC000) != 0 || operand >= MAX_REGISTERS ||
+          dest >= MAX_REGISTERS) {
+        builder.EmitInstruction(OP_LOCAL_VAR_PTR, dest, operand);
+        SetRegisterType(dest, CoreType::CUSTOM);
+        return dest;
+      }
       builder.EmitInstruction(OP_LOCAL_VAR_PTR, dest, operand);
       // Mark as pointer type - store pointee type and source register in
       // storage info Format: bits 0-7: flags, bits 8-15: pointee type, bits
@@ -1349,7 +1384,11 @@ struct IRLowering {
     }
     case UnaryOpType::DEREFERENCE: {
       // x^: Dereference pointer
-      // Get pointee type from storage info
+      // Get pointee type from storage info (skip if operand isn't a real reg)
+      if ((operand & 0xC000) != 0 || operand >= MAX_REGISTERS) {
+        builder.EmitInstruction(OP_LOCAL_LOAD, dest, operand);
+        return dest;
+      }
       u32 storageInfo = builder.program->registerStorageInfo[operand];
       CoreType pointeeType = static_cast<CoreType>((storageInfo >> 8) & 0xFF);
       builder.EmitInstruction(OP_LOCAL_LOAD, dest, operand);
@@ -5275,6 +5314,13 @@ struct IRLowering {
   }
 
   u16 AllocateRegister() {
+    // Cap at MAX_REGISTERS - 1. Pathological inputs can exhaust u16 register
+    // space; once past MAX_REGISTERS, registerStorageInfo / registerTypes
+    // indexing OOBs. Returning the same sentinel repeatedly produces bad
+    // SPIR-V (SPIR-V validation will reject it) but avoids the crash.
+    if (builder.nextRegister >= MAX_REGISTERS - 1) {
+      return MAX_REGISTERS - 1;
+    }
     u16 reg = builder.nextRegister++;
     if (reg >= program.registerCount) {
       program.registerCount = reg + 1;
