@@ -72,9 +72,17 @@ void SSAConstructor::IdentifyVariables() {
     for (u32 i = 0; i < ir->instructionCount; i++) {
         u16 op = ir->opcodes[i];
 
-        // Skip instructions that don't define registers
+        // Skip instructions that don't define registers. OP_LOCAL_STORE /
+        // OP_ARRAY_STORE / OP_STORE_OUTPUT / OP_STORE_BUFFER emit with
+        // `dest` set to a *use* register (array base, value, or a dummy 0)
+        // — not a new definition. Without skipping them, SSA treats the
+        // dest slot as a fresh definition, which corrupts later uses of
+        // that register (confirmed: OP_LOCAL_STORE with dest=0 caused
+        // r0 = idx to be renamed away at resources.output[idx] writes).
         if (op == IR::OP_NOP || op == IR::OP_JUMP || op == IR::OP_RET ||
-            op == IR::OP_BRANCH || op == IR::OP_SWITCH) {
+            op == IR::OP_BRANCH || op == IR::OP_SWITCH ||
+            op == IR::OP_LOCAL_STORE || op == IR::OP_ARRAY_STORE ||
+            op == IR::OP_STORE_OUTPUT || op == IR::OP_STORE_BUFFER) {
             continue;
         }
 
@@ -348,9 +356,25 @@ void SSAConstructor::Rename() {
     // Start new register numbers after the existing ones
     state.Init(variableCount, arena, stackCaps, static_cast<u16>(ir->registerCount));
 
-    // Expand registerTypes array to accommodate new SSA registers
-    // Estimate: PHI count + variable count * 4 for redefinitions
-    u32 estimatedNewRegs = phiCount + variableCount * 4 + 16;
+    // Expand registerTypes array to accommodate new SSA registers.
+    // Each variable definition becomes a fresh SSA register in Rename,
+    // each phi has a result register, and the post-Rename unfilled-
+    // phi-operand fix-up can allocate up to one undef per phi
+    // operand. The `*4` heuristic undercounted functions with many
+    // inline calls to the same helper (each call creates its own
+    // {returnReg, flagReg} variable with N defs), letting
+    // AllocateNewRegister return indices past the capacity — those
+    // writes then fall OOB and the backend reads the default
+    // CoreType::FLOAT for a bool/int slot.
+    u32 totalDefs = 0;
+    for (u32 v = 0; v < variableCount; v++) {
+        totalDefs += variables[v].definitionCount;
+    }
+    u32 estimatedPhiOperands = 0;
+    for (u32 p = 0; p < phiCount; p++) {
+        estimatedPhiOperands += cfg->PredecessorCount(phiBlocks[p]);
+    }
+    u32 estimatedNewRegs = totalDefs + phiCount + estimatedPhiOperands + 64;
     u32 newCapacity = ir->registerCount + estimatedNewRegs;
     u32 oldRegisterCount = ir->registerCount;
     if (ir->registerTypes) {
@@ -474,16 +498,85 @@ void SSAConstructor::Rename() {
     // Reset blockPhiCount for use as "next PHI index" during second pass
     memset(blockPhiCount, 0, cfg->blockCount * sizeof(u32));
     
+    // Track which blocks got visited by the dominator-tree rename.
+    // Blocks missed here are unreachable (e.g. the latch of a loop
+    // whose body unconditionally `break`s) and need two kinds of
+    // cleanup below:
+    //   - phi operand slots from these blocks into reachable phis
+    //     stay at the 0xFFFF placeholder, which has the float-const
+    //     marker bit set and breaks the backend. We substitute an
+    //     undef register of the variable's type.
+    //   - Instructions inside the unreachable block reference raw
+    //     pre-SSA operands (never renamed). The SPIR-V backend still
+    //     emits these, producing "ID not defined" validator errors.
+    //     NOP them out so the block is vacuous.
+    bool* blockVisited = (bool*)arena->Allocate(cfg->blockCount * sizeof(bool), 64);
+    memset(blockVisited, 0, cfg->blockCount * sizeof(bool));
+
+    renameVisited = blockVisited;
+    renameVisitedCapacity = cfg->blockCount;
+
     // Traverse dominator tree starting from entry, renaming variables
     RenameBlock(cfg->entryBlock, state, blockFirstPhi, blockPhiCount);
-    
+
+    renameVisited = nullptr;
+    renameVisitedCapacity = 0;
+
+    for (u32 p = 0; p < phiCount; p++) {
+        u32 varIdx = phiVariables[p];
+        u16 varType = variables[varIdx].type;
+        u32 opStart = ir->phiOperandOffsets[p];
+        u32 opEnd = ir->phiOperandOffsets[p + 1];
+        for (u32 opIdx = opStart; opIdx < opEnd; opIdx++) {
+            if (ir->phiOperandValues[opIdx] != 0xFFFF) continue;
+
+            u16 undefReg = state.AllocateNewRegister();
+            if (ir->registerTypes && undefReg < ir->registerCount) {
+                ir->registerTypes[undefReg] = varType;
+            }
+            if (ir->registerStructTypes && undefReg < ir->registerCount) {
+                u16 origReg = variables[varIdx].originalReg;
+                if (origReg < ir->registerCount) {
+                    ir->registerStructTypes[undefReg] = ir->registerStructTypes[origReg];
+                }
+            }
+            if (ir->undefRegCount < ir->undefRegCapacity) {
+                ir->undefRegs[ir->undefRegCount] = undefReg;
+                ir->undefRegTypes[ir->undefRegCount] = varType;
+                ir->undefRegCount++;
+            }
+            ir->phiOperandValues[opIdx] = undefReg;
+        }
+    }
+
+    for (u32 b = 0; b < cfg->blockCount; b++) {
+        if (blockVisited[b]) continue;
+        u32 firstInst = cfg->firstInst[b];
+        u32 lastInst = cfg->lastInst[b];
+        for (u32 i = firstInst; i <= lastInst && i < ir->instructionCount; i++) {
+            u16 op = ir->opcodes[i];
+            // Keep block terminators — the backend still needs a valid
+            // branch to wire up the unreachable-block label.
+            if (op == IR::OP_JUMP || op == IR::OP_BRANCH ||
+                op == IR::OP_RET || op == IR::OP_SWITCH) {
+                continue;
+            }
+            ir->opcodes[i] = IR::OP_NOP;
+            ir->destinations[i] = 0;
+            for (u32 j = 0; j < 4; j++) ir->SetOperand(i, j, 0xFFFF);
+        }
+    }
+
     // Update IR register count with new SSA registers
     // Note: We're keeping original registers and adding new ones for PHI results
     // A more complete implementation would remap all registers
 }
 
-void SSAConstructor::RenameBlock(u32 block, RenameState& state, 
+void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                                   u32* blockFirstPhi, u32* blockPhiCount) {
+    if (renameVisited && block < renameVisitedCapacity) {
+        renameVisited[block] = true;
+    }
     // Track which variables we push registers for, so we can pop them on exit
     u32 pushedCount = 0;
     u16* pushedVars = nullptr;
@@ -567,7 +660,8 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             (op >= IR::OP_F2I && op <= IR::OP_SIGN) ||      // Type conversions
             op == IR::OP_VEC_CONSTRUCT ||                   // Vector construction
             op == IR::OP_VEC_EXTRACT ||                     // Vector extract
-            op == IR::OP_VEC_INSERT ||                      // Vector component insert
+            op == IR::OP_VEC_INSERT ||                      // Vector component insert (literal index)
+            op == IR::OP_VEC_INSERT_DYNAMIC ||              // Vector insert with runtime index
             op == IR::OP_VEC_SHUFFLE ||                     // Vector shuffle/swizzle
             op == IR::OP_STRUCT_EXTRACT ||                  // Struct extract
             op == IR::OP_STRUCT_INSERT ||                   // Struct insert
@@ -577,8 +671,10 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             op == IR::OP_ENUM_TAG ||                        // Enum tag extraction
             op == IR::OP_ENUM_FIELD ||                      // Enum field extraction
             op == IR::OP_ENUM_CONSTRUCT ||                  // Enum construction
+            op == IR::OP_STRUCT_CONSTRUCT ||                // Struct positional constructor
             op == IR::OP_STORAGE_FIELD || op == IR::OP_STORAGE_INDEX || op == IR::OP_STORAGE_LOAD ||
             op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_LOAD || op == IR::OP_LOCAL_STORE ||  // Pointer operations
+            op == IR::OP_LOCAL_FIELD_PTR ||                                                     // Struct-field pointer
             op == IR::OP_ARRAY_LOAD || op == IR::OP_ARRAY_STORE) {  // Array operations with register indices
             shouldRenameOperands = true;
         }
@@ -591,7 +687,8 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                 // component index (0, 1, 2, 3), NOT a variable reference. Skip it.
                 // ENUM_FIELD also uses operand 1 as a literal field index.
                 if ((op == IR::OP_VEC_INSERT || op == IR::OP_VEC_EXTRACT || op == IR::OP_ENUM_FIELD ||
-                     op == IR::OP_STRUCT_INSERT || op == IR::OP_STRUCT_EXTRACT) && opIdx == 1) {
+                     op == IR::OP_STRUCT_INSERT || op == IR::OP_STRUCT_EXTRACT ||
+                     op == IR::OP_LOCAL_FIELD_PTR) && opIdx == 1) {
                     continue;
                 }
 

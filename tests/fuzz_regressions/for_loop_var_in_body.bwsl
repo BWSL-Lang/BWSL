@@ -1,0 +1,25 @@
+// Loop variable used in various ways inside the body: array index,
+// arithmetic, cast to float, comparison. Each use site must pick up
+// the SSA-renamed version of the loop counter at the loop header phi.
+pipeline ForLoopVarInBody {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float arr[8];
+            for (int i = 0; i < 8; i = i + 1) {
+                arr[i] = float(i) * 0.5;
+            }
+
+            int total = 0;
+            float ftotal = 0.0;
+            for (int k = 0; k < 8; k = k + 1) {
+                total = total + k;
+                ftotal = ftotal + float(k) + arr[k];
+                if (k == 5) {
+                    ftotal = ftotal * 0.5;
+                }
+            }
+
+            int result = total + int(ftotal);
+        }
+    }
+}

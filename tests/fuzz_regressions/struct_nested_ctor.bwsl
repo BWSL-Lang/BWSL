@@ -1,0 +1,29 @@
+// Nested struct with inner struct field. Assign inner struct fields
+// piecemeal, then copy inner wholesale. Exercises STRUCT_INSERT with
+// a struct value.
+pipeline StructNestedCtor {
+    struct RGB { float r; float g; float b; };
+    struct Material { RGB color; float roughness; float metallic; };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            RGB c;
+            c.r = 0.9;
+            c.g = 0.5;
+            c.b = 0.1;
+
+            Material m;
+            m.color = c;
+            m.roughness = 0.7;
+            m.metallic = 0.2;
+
+            // Modify inner-struct field via chained access
+            m.color.r = 1.0;
+
+            // Copy the inner struct back out
+            RGB reread = m.color;
+
+            float sum = reread.r + reread.g + reread.b + m.roughness + m.metallic;
+        }
+    }
+}

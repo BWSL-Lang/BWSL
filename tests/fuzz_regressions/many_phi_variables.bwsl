@@ -1,0 +1,29 @@
+// A dozen variables all defined in both branches of an if. SSA has to
+// generate a phi for each, and the phi-operand-offset allocator needs
+// to grow correctly. Previously at certain variable counts the
+// operand-blocks array fell out of sync with the operand-values array.
+pipeline ManyPhiVariables {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint idx = input.global_id.x;
+
+            int a = 0; int b = 0; int c = 0; int d = 0;
+            int e = 0; int f = 0; int g = 0; int h = 0;
+            float x = 0.0; float y = 0.0; float z = 0.0; float w = 0.0;
+
+            if ((idx & 1u) == 0u) {
+                a = 1; b = 2; c = 3; d = 4;
+                e = 5; f = 6; g = 7; h = 8;
+                x = 0.1; y = 0.2; z = 0.3; w = 0.4;
+            } else {
+                a = -1; b = -2; c = -3; d = -4;
+                e = -5; f = -6; g = -7; h = -8;
+                x = -0.1; y = -0.2; z = -0.3; w = -0.4;
+            }
+
+            int isum = a + b + c + d + e + f + g + h;
+            float fsum = x + y + z + w;
+            float total = float(isum) + fsum;
+        }
+    }
+}

@@ -157,6 +157,10 @@ constexpr std::array<spv::Op, 256> BuildIrToSpvOpTable() {
     table[IR::OP_ANY] = spv::OpAny;
     table[IR::OP_ALL] = spv::OpAll;
 
+    // ========== Float classification ==========
+    table[IR::OP_ISNAN] = spv::OpIsNan;
+    table[IR::OP_ISINF] = spv::OpIsInf;
+
     // ========== Wave/SIMD/Subgroup Operations ==========
     table[IR::OP_WAVE_MIN] = static_cast<spv::Op>(358);
     table[IR::OP_WAVE_MAX] = static_cast<spv::Op>(359);
@@ -1875,6 +1879,25 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     break;
   }
 
+  case IR::OP_MAT_DET: {
+    // Determinant returns a scalar float regardless of matrix
+    // dimension — the generic 1-operand ext-inst path used the
+    // operand's matrix type as the result type, which failed
+    // validation downstream because the consumer expected a float.
+    u32 op1 = GetSpirvId(ir->GetOperand(ir_idx, 0));
+    u32 result_type = GetTypeId(CoreType::FLOAT);
+    if (currentFunctionSize + 6 > currentFunctionCapacity) {
+      GrowCurrentFunction();
+    }
+    currentFunction[currentFunctionSize++] = (6 << 16) | spv::OpExtInst;
+    currentFunction[currentFunctionSize++] = result_type;
+    currentFunction[currentFunctionSize++] = dest;
+    currentFunction[currentFunctionSize++] = glslStd450Id;
+    currentFunction[currentFunctionSize++] = GLSLstd450Determinant;
+    currentFunction[currentFunctionSize++] = op1;
+    break;
+  }
+
   // ========== Bitwise/Logical Operations ==========
   // Note: For bitwise ops, int constants need to match the type of the other
   // operand For booleans, use OpLogicalAnd/OpLogicalOr instead of bitwise ops
@@ -1886,8 +1909,12 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
     CoreType op1_type = GetOperandType(op1_reg);
 
-    // Booleans require OpLogicalAnd, integers use OpBitwiseAnd
-    if (op1_type == CoreType::BOOL) {
+    // Booleans require OpLogicalAnd, integers use OpBitwiseAnd. Vector
+    // bool (bvec2/3/4) operands also go through the logical path — SPIR-V
+    // rejects OpBitwiseAnd on a bvec result type.
+    bool isBool = (op1_type == CoreType::BOOL || op1_type == CoreType::BOOL2 ||
+                   op1_type == CoreType::BOOL3 || op1_type == CoreType::BOOL4);
+    if (isBool) {
       u32 op1 = GetSpirvId(op1_reg);
       u32 op2 = GetSpirvId(op2_reg);
       Emit(spv::OpLogicalAnd, result_type, dest, op1, op2);
@@ -1907,8 +1934,11 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u32 result_type = GetResultType(dest_reg, op1_reg);
     CoreType op1_type = GetOperandType(op1_reg);
 
-    // Booleans require OpLogicalOr, integers use OpBitwiseOr
-    if (op1_type == CoreType::BOOL) {
+    // Booleans require OpLogicalOr, integers use OpBitwiseOr. Vector
+    // bool (bvec2/3/4) operands also go through the logical path.
+    bool isBool = (op1_type == CoreType::BOOL || op1_type == CoreType::BOOL2 ||
+                   op1_type == CoreType::BOOL3 || op1_type == CoreType::BOOL4);
+    if (isBool) {
       u32 op1 = GetSpirvId(op1_reg);
       u32 op2 = GetSpirvId(op2_reg);
       Emit(spv::OpLogicalOr, result_type, dest, op1, op2);
@@ -1956,9 +1986,19 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_FNEG: {
     // Float negation: -x
     u16 dest_reg = ir->destinations[ir_idx];
-    u32 operand = GetSpirvId(ir->GetOperand(ir_idx, 0));
-    u32 result_type = GetResultType(dest_reg, ir->GetOperand(ir_idx, 0));
-    Emit(spv::OpFNegate, result_type, dest, operand);
+    u16 op_reg = ir->GetOperand(ir_idx, 0);
+    u32 operand = GetSpirvId(op_reg);
+    u32 result_type = GetResultType(dest_reg, op_reg);
+    CoreType opType = GetOperandType(op_reg);
+    // OpFNegate only works on scalar/vector float. For matrices, multiply
+    // by -1.0 via OpMatrixTimesScalar.
+    if (opType == CoreType::MAT2 || opType == CoreType::MAT3 ||
+        opType == CoreType::MAT4) {
+      u32 neg_one = GetFloatConstantId(-1.0f);
+      Emit(spv::OpMatrixTimesScalar, result_type, dest, operand, neg_one);
+    } else {
+      Emit(spv::OpFNegate, result_type, dest, operand);
+    }
     break;
   }
 
@@ -1994,6 +2034,20 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u16 op_reg = ir->GetOperand(ir_idx, 0);
     u32 operand = GetSpirvId(op_reg);
     u32 result_type = GetTypeId(CoreType::BOOL);
+    spv::Op spv_op = IR_TO_SPV_OP_TABLE[static_cast<u32>(op)];
+    Emit(spv_op, result_type, dest, operand);
+    break;
+  }
+
+  // isnan(x) / isinf(x) — result type is bool scalar or bvecN matching the
+  // input vector width. IR lowering already set the dest register's type
+  // correctly; fetch it via GetResultType so matching works for all widths.
+  case IR::OP_ISNAN:
+  case IR::OP_ISINF: {
+    u16 dest_reg = ir->destinations[ir_idx];
+    u16 op_reg = ir->GetOperand(ir_idx, 0);
+    u32 operand = GetSpirvId(op_reg);
+    u32 result_type = GetResultType(dest_reg, op_reg);
     spv::Op spv_op = IR_TO_SPV_OP_TABLE[static_cast<u32>(op)];
     Emit(spv_op, result_type, dest, operand);
     break;
@@ -2194,21 +2248,48 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u16 op2_reg = ir->GetOperand(ir_idx, 1);
     u32 op1 = GetSpirvId(op1_reg);
     u32 op2 = GetSpirvId(op2_reg);
-    u32 bool_type = GetTypeId(CoreType::BOOL);
 
-    // Check if operands are booleans - use OpLogicalEqual/OpLogicalNotEqual
+    // Detect operand type (scalar vs vector, for sizing the bvec result).
     CoreType op1_type = CoreType::INT;
     if (ir->registerTypes && (op1_reg & 0xE000) == 0 &&
         op1_reg < ir->registerCount) {
       op1_type = static_cast<CoreType>(ir->registerTypes[op1_reg]);
     } else if ((op1_reg & 0xC000) == 0xC000) {
-      // Bool constant flag (0xC000)
       op1_type = CoreType::BOOL;
     }
+    CoreType op2_type = CoreType::INT;
+    if (ir->registerTypes && (op2_reg & 0xE000) == 0 &&
+        op2_reg < ir->registerCount) {
+      op2_type = static_cast<CoreType>(ir->registerTypes[op2_reg]);
+    } else if ((op2_reg & 0xC000) == 0xC000) {
+      op2_type = CoreType::BOOL;
+    }
+
+    // Pick result vector width from whichever operand is a vector.
+    u32 numComponents = 1;
+    CoreType bvecType = CoreType::BOOL;
+    auto vecWidth = [](CoreType t) -> u32 {
+      if (t == CoreType::INT2 || t == CoreType::UINT2 ||
+          t == CoreType::BOOL2) return 2;
+      if (t == CoreType::INT3 || t == CoreType::UINT3 ||
+          t == CoreType::BOOL3) return 3;
+      if (t == CoreType::INT4 || t == CoreType::UINT4 ||
+          t == CoreType::BOOL4) return 4;
+      return 1;
+    };
+    u32 w = vecWidth(op1_type);
+    if (w == 1) w = vecWidth(op2_type);
+    if (w == 2) { numComponents = 2; bvecType = CoreType::BOOL2; }
+    else if (w == 3) { numComponents = 3; bvecType = CoreType::BOOL3; }
+    else if (w == 4) { numComponents = 4; bvecType = CoreType::BOOL4; }
+    u32 bool_type = GetTypeId(bvecType);
 
     spv::Op cmp_op;
-    if (op1_type == CoreType::BOOL) {
-      // Use logical operations for booleans
+    bool op1IsBool =
+        (op1_type == CoreType::BOOL || op1_type == CoreType::BOOL2 ||
+         op1_type == CoreType::BOOL3 || op1_type == CoreType::BOOL4);
+    if (op1IsBool) {
+      // Use logical operations for booleans (scalar or vector).
       switch (op) {
       case IR::OP_IEQ:
         cmp_op = spv::OpLogicalEqual;
@@ -2257,9 +2338,40 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_ULE:
   case IR::OP_UGT:
   case IR::OP_UGE: {
-    u32 op1 = GetSpirvId(ir->GetOperand(ir_idx, 0));
-    u32 op2 = GetSpirvId(ir->GetOperand(ir_idx, 1));
-    u32 bool_type = GetTypeId(CoreType::BOOL);
+    u16 op1_reg = ir->GetOperand(ir_idx, 0);
+    u16 op2_reg = ir->GetOperand(ir_idx, 1);
+    u32 op1 = GetSpirvId(op1_reg);
+    u32 op2 = GetSpirvId(op2_reg);
+
+    // Pick result vector width — uvec comparisons return a bvec of
+    // matching size. Without this the result type fell back to bool
+    // scalar and SPIR-V rejected the emit.
+    CoreType op1_type = CoreType::UINT;
+    if (ir->registerTypes && (op1_reg & 0xE000) == 0 &&
+        op1_reg < ir->registerCount) {
+      op1_type = static_cast<CoreType>(ir->registerTypes[op1_reg]);
+    }
+    CoreType op2_type = CoreType::UINT;
+    if (ir->registerTypes && (op2_reg & 0xE000) == 0 &&
+        op2_reg < ir->registerCount) {
+      op2_type = static_cast<CoreType>(ir->registerTypes[op2_reg]);
+    }
+    auto vecWidthU = [](CoreType t) -> u32 {
+      if (t == CoreType::UINT2 || t == CoreType::INT2 ||
+          t == CoreType::BOOL2) return 2;
+      if (t == CoreType::UINT3 || t == CoreType::INT3 ||
+          t == CoreType::BOOL3) return 3;
+      if (t == CoreType::UINT4 || t == CoreType::INT4 ||
+          t == CoreType::BOOL4) return 4;
+      return 1;
+    };
+    u32 wu = vecWidthU(op1_type);
+    if (wu == 1) wu = vecWidthU(op2_type);
+    CoreType bvecTy = CoreType::BOOL;
+    if (wu == 2) bvecTy = CoreType::BOOL2;
+    else if (wu == 3) bvecTy = CoreType::BOOL3;
+    else if (wu == 4) bvecTy = CoreType::BOOL4;
+    u32 bool_type = GetTypeId(bvecTy);
 
     spv::Op cmp_op;
     switch (op) {
@@ -3693,6 +3805,23 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     currentFunction[currentFunctionSize++] = dest;
     currentFunction[currentFunctionSize++] = src_id;
     currentFunction[currentFunctionSize++] = component_idx;
+    break;
+  }
+
+  case IR::OP_VEC_INSERT_DYNAMIC: {
+    // Insert a scalar into a vector at a RUNTIME component index.
+    // operand 0: source vector register
+    // operand 1: value to insert
+    // operand 2: index register (runtime-known)
+    u16 src_vec_reg = ir->GetOperand(ir_idx, 0);
+    u16 value_reg = ir->GetOperand(ir_idx, 1);
+    u16 index_reg = ir->GetOperand(ir_idx, 2);
+    u32 src_vec_id = GetSpirvId(src_vec_reg);
+    u32 value_id = GetSpirvId(value_reg);
+    u32 index_id = GetSpirvId(index_reg);
+    u32 result_type = GetResultType(ir->destinations[ir_idx], src_vec_reg);
+    Emit(spv::OpVectorInsertDynamic, result_type, dest, src_vec_id, value_id,
+         index_id);
     break;
   }
 
@@ -5238,23 +5367,52 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     if (ir->registerStorageInfo && ptr_reg < ir->registerCount) {
       storageInfo = ir->registerStorageInfo[ptr_reg];
     }
+    bool isFieldPtr = (storageInfo & IR::IRProgram::STORAGE_IS_FIELD_PTR) != 0;
     // Extract source register (bits 16-31) and pointee type (bits 8-15)
     u16 src_reg = static_cast<u16>((storageInfo >> 16) & 0xFFFF);
     CoreType pointeeType = static_cast<CoreType>((storageInfo >> 8) & 0xFF);
     if (pointeeType == CoreType::INVALID || pointeeType == CoreType::VOID) {
       pointeeType = CoreType::FLOAT; // Fallback
     }
-    // Get the OpVariable for the source register
     u32 var_id = 0;
-    if (src_reg < idCapacity) {
-      var_id = localVarIds[src_reg];
-    }
-    if (var_id == 0) {
-      // Fallback: use the pointer register's SPIR-V ID
+    if (isFieldPtr) {
+      // Field pointers route through the access chain we stored in
+      // spirvIds[ptr_reg]. The base struct's OpVariable still needs an
+      // OpStore at the ADDRESS_OF site to keep memory coherent with
+      // register-level struct writes (handled by OP_LOCAL_FIELD_PTR).
       var_id = GetSpirvId(ptr_reg);
+    } else {
+      // Get the OpVariable for the source register
+      if (src_reg < idCapacity) {
+        var_id = localVarIds[src_reg];
+      }
+      if (var_id == 0) {
+        // Fallback: use the pointer register's SPIR-V ID
+        var_id = GetSpirvId(ptr_reg);
+      }
     }
     u32 result_type_id = GetTypeId(pointeeType);
+    // For struct pointees, resolve the struct type id from the hash stored on
+    // the pointer register. Without this, loading from a struct pointer emits
+    // OpLoad with result type 0 and fails SPIR-V validation.
+    if (pointeeType == CoreType::CUSTOM && ir->registerStructTypes &&
+        ptr_reg < ir->registerCount) {
+      u32 structHash = ir->registerStructTypes[ptr_reg];
+      if (structHash != 0) {
+        result_type_id = GetStructTypeId(structHash);
+      }
+    }
     Emit(spv::OpLoad, result_type_id, dest, var_id);
+    // Track the loaded register's struct type so subsequent OpCompositeExtract
+    // on it emits with the correct member type.
+    if (pointeeType == CoreType::CUSTOM && ir->registerStructTypes &&
+        ptr_reg < ir->registerCount && dest < idCapacity) {
+      u32 structHash = ir->registerStructTypes[ptr_reg];
+      if (structHash != 0) {
+        // Propagation happens at IR level already, but make sure the loaded
+        // register's type is propagated for backends that rely on it.
+      }
+    }
     break;
   }
 
@@ -5269,19 +5427,90 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     if (ir->registerStorageInfo && ptr_reg < ir->registerCount) {
       storageInfo = ir->registerStorageInfo[ptr_reg];
     }
+    bool isFieldPtr = (storageInfo & IR::IRProgram::STORAGE_IS_FIELD_PTR) != 0;
     // Extract source register (bits 16-31)
     u16 src_reg = static_cast<u16>((storageInfo >> 16) & 0xFFFF);
-    // Get the OpVariable for the source register
     u32 var_id = 0;
-    if (src_reg < idCapacity) {
-      var_id = localVarIds[src_reg];
-    }
-    if (var_id == 0) {
-      // Fallback: use the pointer register's SPIR-V ID
+    if (isFieldPtr) {
       var_id = GetSpirvId(ptr_reg);
+    } else {
+      // Get the OpVariable for the source register
+      if (src_reg < idCapacity) {
+        var_id = localVarIds[src_reg];
+      }
+      if (var_id == 0) {
+        // Fallback: use the pointer register's SPIR-V ID
+        var_id = GetSpirvId(ptr_reg);
+      }
     }
     u32 val_id = GetSpirvId(val_reg);
     Emit(spv::OpStore, var_id, val_id);
+    break;
+  }
+
+  case IR::OP_LOCAL_FIELD_PTR: {
+    // dest = &base.field
+    // operand0 = base struct variable register
+    // operand1 = field index (literal)
+    // metadata = struct type hash
+    u16 base_reg = ir->GetOperand(ir_idx, 0);
+    u16 field_idx = ir->GetOperand(ir_idx, 1);
+    u16 dest_reg = ir->destinations[ir_idx];
+    u32 struct_type_hash = ir->metadata[ir_idx];
+
+    // Ensure the base struct OpVariable holds the current SSA value so the
+    // subsequent access chain sees the same data that register code sees.
+    u32 var_id = (base_reg < idCapacity) ? localVarIds[base_reg] : 0;
+    if (var_id == 0) {
+      fprintf(stderr,
+              "Error: OP_LOCAL_FIELD_PTR without pre-allocated variable for "
+              "base reg %u\n",
+              base_reg);
+      break;
+    }
+    u32 base_val_id = GetSpirvId(base_reg);
+    if (base_val_id != 0) {
+      Emit(spv::OpStore, var_id, base_val_id);
+    }
+
+    // Resolve the field's SPIR-V type.
+    CoreType fieldType = CoreType::FLOAT;
+    u32 fieldStructHash = 0;
+    if (struct_type_hash != 0 && ir->structTypes) {
+      for (u32 i = 0; i < ir->structTypeCount; i++) {
+        if (ir->structTypes[i].nameHash == struct_type_hash) {
+          const IR::IRProgram::StructTypeInfo &info = ir->structTypes[i];
+          if (field_idx < info.fieldCount) {
+            fieldType = static_cast<CoreType>(
+                ir->structFieldTypes[info.fieldOffset + field_idx]);
+            if (ir->structFieldTypeHashes) {
+              fieldStructHash =
+                  ir->structFieldTypeHashes[info.fieldOffset + field_idx];
+            }
+          }
+          break;
+        }
+      }
+    }
+    u32 field_type_id = 0;
+    if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
+        fieldStructHash != 0) {
+      field_type_id = GetStructTypeId(fieldStructHash);
+    }
+    if (field_type_id == 0) {
+      field_type_id = GetTypeId(fieldType);
+    }
+    if (field_type_id == 0) {
+      field_type_id = GetTypeId(CoreType::FLOAT);
+    }
+    u32 ptr_type_id =
+        GetPointerTypeId(field_type_id, spv::StorageClassFunction);
+    u32 field_const_id = GetIntConstantId(field_idx, false);
+
+    Emit(spv::OpAccessChain, ptr_type_id, dest, var_id, field_const_id);
+    if (dest_reg < idCapacity) {
+      spirvIds[dest_reg] = dest;
+    }
     break;
   }
 
@@ -6047,7 +6276,9 @@ void SPIRVBuilder::EmitFunctionBody() {
   }
 
   for (u32 i = 0; i < ir->instructionCount; i++) {
-    if (ir->opcodes[i] == IR::OP_LOCAL_VAR_PTR) {
+    bool isVarPtr = (ir->opcodes[i] == IR::OP_LOCAL_VAR_PTR);
+    bool isFieldPtr = (ir->opcodes[i] == IR::OP_LOCAL_FIELD_PTR);
+    if (isVarPtr || isFieldPtr) {
       u16 var_reg = ir->GetOperand(i, 0);
 
       // Check if we already created a variable for this source register
@@ -6071,7 +6302,9 @@ void SPIRVBuilder::EmitFunctionBody() {
   // Helper lambda to emit all local pointer OpVariables
   auto emitLocalPointerVars = [&]() {
     for (u32 i = 0; i < ir->instructionCount; i++) {
-      if (ir->opcodes[i] == IR::OP_LOCAL_VAR_PTR) {
+      bool isVarPtr = (ir->opcodes[i] == IR::OP_LOCAL_VAR_PTR);
+      bool isFieldPtr = (ir->opcodes[i] == IR::OP_LOCAL_FIELD_PTR);
+      if (isVarPtr || isFieldPtr) {
         u16 var_reg = ir->GetOperand(i, 0);
         if (var_reg < idCapacity && localVarIds[var_reg] != 0 &&
             emittedLocalVars && !emittedLocalVars[var_reg]) {
@@ -6082,7 +6315,24 @@ void SPIRVBuilder::EmitFunctionBody() {
           if (varType == CoreType::INVALID || varType == CoreType::VOID) {
             varType = CoreType::INT;
           }
-          u32 elem_type_id = GetTypeId(varType);
+          // Struct-field pointers keep the base variable's struct type —
+          // resolve via the struct type hash stored in registerStructTypes
+          // (GetTypeId returns 0 for CoreType::CUSTOM).
+          u32 elem_type_id = 0;
+          if (varType == CoreType::CUSTOM || varType == CoreType::ENUM) {
+            u32 structHash = (ir->registerStructTypes && var_reg < ir->registerCount)
+                                 ? ir->registerStructTypes[var_reg]
+                                 : 0;
+            if (structHash != 0) {
+              elem_type_id = GetStructTypeId(structHash);
+            }
+          }
+          if (elem_type_id == 0) {
+            elem_type_id = GetTypeId(varType);
+          }
+          if (elem_type_id == 0) {
+            elem_type_id = GetTypeId(CoreType::FLOAT);
+          }
           u32 ptr_type_id =
               GetPointerTypeId(elem_type_id, spv::StorageClassFunction);
           u32 var_id = localVarIds[var_reg];

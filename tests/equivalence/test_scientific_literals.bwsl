@@ -1,0 +1,31 @@
+pipeline EquivScientificLiterals {
+
+    // Scientific-notation float literal parsing + backend emission. The
+    // compiler could emit these as decimal expansions, hex bit patterns,
+    // or the original literal form — all must round-trip to the same
+    // runtime value.
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            float a = 1e-2  * t;     // lowercase e
+            float b = 5E-1  * t;     // uppercase E
+            float c = 2e+1  * t;     // explicit positive exponent
+            float d = 1.5e3;         // decimal + exponent
+            float e = 7e-5  * t;     // very small
+            float f = 1.23e4 * t;    // mixed fractional + exponent
+
+            float score =
+                a +
+                b * 0.1 +
+                c * 0.01 +
+                d * 0.001 +
+                e * 10.0 +
+                f * 0.0001;
+
+            resources.output[idx] = score;
+        }
+    }
+}

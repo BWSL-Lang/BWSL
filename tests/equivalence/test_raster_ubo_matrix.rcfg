@@ -1,0 +1,10 @@
+pipeline EquivRasterUboMatrix
+
+target MainColor RGBA32Float 16 16
+
+uniform xform mat4 0 vertex
+
+pass Main
+  type geometry
+  color MainColor clear 0.0 0.0 0.0 0.0 store
+  depends none

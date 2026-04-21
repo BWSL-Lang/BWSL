@@ -350,21 +350,26 @@ inline u32 SPIRVBuilder::GetSpirvId(u16 ir_register) {
     if ((ir_register & 0xC000) == 0xC000) {
         // Bool constant (0xC000 prefix)
         u32 idx = ir_register & 0x3FFF;
+        // Guard against malformed IR (fuzzed / error-recovery inputs) that
+        // reference a constant index outside the pool. Falling back to a 0
+        // id here keeps emission moving; the surrounding validation layer
+        // will reject the module.
+        if (idx >= ir->boolCount) return 0;
         return GetBoolConstantId(ir->boolConstants[idx] != 0);
     }
     if (ir_register & 0x8000) {
-        // Float constant
         u32 idx = ir_register & 0x7FFF;
+        if (idx >= ir->floatCount) return 0;
         return GetFloatConstantId(ir->floatConstants[idx]);
     }
     if (ir_register & 0x4000) {
-        // Int constant (default to signed)
         u32 idx = ir_register & 0x3FFF;
+        if (idx >= ir->intCount) return 0;
         return GetIntConstantId(ir->intConstants[idx], false);
     }
     if (ir_register & 0x2000) {
-        // Uint constant (always unsigned)
         u32 idx = ir_register & 0x1FFF;
+        if (idx >= ir->uintCount) return 0;
         return GetIntConstantId(ir->uintConstants[idx], true);
     }
 

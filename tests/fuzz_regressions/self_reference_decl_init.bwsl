@@ -1,0 +1,17 @@
+// Discovered 2026-04-20. `int x = x + 1` in an inner scope is
+// supposed to declare a new `x` initialized from the outer one,
+// but BWSL's parser adds the new symbol to the scope BEFORE
+// parsing the initializer, so the RHS resolves to the (undefined)
+// inner slot and SPIR-V validation fails. GLSL accepts this
+// pattern; pin it here for visibility until the parser delays
+// the symbol-table insertion until after the initializer.
+pipeline SelfReferenceDeclInit {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int x = 10;
+            {
+                int x = x + 1;
+            }
+        }
+    }
+}

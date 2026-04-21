@@ -122,6 +122,7 @@ struct IRProgram {
     static constexpr u32 STORAGE_IS_SHARED = 0x2;
     static constexpr u32 STORAGE_IS_ADDRESS_TAKEN = 0x4;  // Variable has its address taken (&var)
     static constexpr u32 STORAGE_IS_LOCAL_ARRAY = 0x8;    // Function-local array with initializer
+    static constexpr u32 STORAGE_IS_FIELD_PTR = 0x10;     // Pointer targets a field of a local struct via access chain
     static constexpr u32 STORAGE_BINDING_SHIFT = 16;
     static constexpr u32 STORAGE_DEPTH_SHIFT = 1;
     static constexpr u32 STORAGE_DEPTH_MASK = 0x7F << 1;
@@ -438,6 +439,9 @@ enum OpCode : u16 {
     OP_LOCAL_VAR_PTR   = 0xD9,  // Get pointer to local variable: dest = ^var (operand0=var_reg)
     OP_LOCAL_LOAD      = 0xDA,  // Load from local pointer: dest = ptr^ (operand0=ptr_reg)
     OP_LOCAL_STORE     = 0xDB,  // Store to local pointer: ptr^ = value (operand0=ptr_reg, operand1=value_reg)
+    OP_LOCAL_FIELD_PTR = 0xDC,  // Get pointer to struct field in a local: dest = ^base.field
+                                // (operand0=base_struct_reg, operand1=field_index,
+                                //  metadata=structTypeHash)
 
     // ========== Atomics ==========
     OP_ATOMIC_ADD      = 0xE0,
@@ -453,6 +457,16 @@ enum OpCode : u16 {
     // ========== Boolean vector reductions ==========
     OP_ANY             = 0xEA,  // any(bvec) -> bool
     OP_ALL             = 0xEB,  // all(bvec) -> bool
+
+    // ========== Float classification ==========
+    OP_ISNAN           = 0xEC,  // isnan(x) -> bool / bvec
+    OP_ISINF           = 0xED,  // isinf(x) -> bool / bvec
+
+    // ========== Dynamic vector indexing ==========
+    // dest = insert(src_vec, value_reg, index_reg) where index is a runtime
+    // register (not a literal like OP_VEC_INSERT). Lowers to
+    // OpVectorInsertDynamic in SPIR-V.
+    OP_VEC_INSERT_DYNAMIC = 0xAA,
 
 
     // ========== Synchronization ==========

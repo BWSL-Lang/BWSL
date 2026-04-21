@@ -1,0 +1,16 @@
+// Captured 2026-04-20 as a pre-existing bug. As of 2026-04-20 (same
+// day fix) `LowerMemberAccess` returns the source register unchanged
+// when `.x` / `.r` is applied to an already-scalar value — previously
+// it emitted OP_VEC_EXTRACT on the scalar and SPIR-V validation
+// rejected the resulting OpCompositeExtract. All three swizzle
+// dispatch paths (chained member access, any-expression, NONE) now
+// guard against the scalar case.
+pipeline SwizzleOnScalar {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float4 v = float4(1.0, 2.0, 3.0, 4.0);
+            float  d = v.r.r;
+            float  e = v.x.x.x;
+        }
+    }
+}

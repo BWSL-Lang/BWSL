@@ -1,0 +1,25 @@
+// Long swizzle + arithmetic chain on the same expression. Each
+// swizzle returns a vec which feeds into the next operation. The
+// backend must keep track of the result types for OpVectorShuffle
+// and OpFAdd across the chain.
+pipeline LongSwizzleArithmetic {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float4 v = float4(1.0, 2.0, 3.0, 4.0);
+
+            // swizzle reads chained with arithmetic
+            float3 a = v.xyz + v.yzw;
+            float3 b = v.wzy * v.xyz;
+            float3 c = (v.xxx + v.yyy) * 0.5;
+
+            // 4-component swizzles with different patterns
+            float4 d = v.wzyx + v.xyzw;
+            float4 e = v.xxxx * 2.0 - v.wwww;
+
+            // Read a single component of a swizzle expression
+            float f = (v.xyz * v.yzw).x;
+
+            float sum = a.x + b.y + c.z + d.w + e.x + f;
+        }
+    }
+}

@@ -1,0 +1,32 @@
+pipeline EquivSincosPair {
+
+    // `sincos` has a different implementation on each backend (HLSL native,
+    // Metal packed result, GLSL two separate calls). This verifies that
+    // calling sin(x) and cos(x) separately — which is what compute shaders
+    // typically do — produces consistent results across backends.
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.78539;  // ~pi/4 steps
+
+            float s = sin(t);
+            float c = cos(t);
+
+            // sin^2 + cos^2 == 1 (within FP tolerance) — a semantic identity
+            // that each backend should preserve.
+            float unit = s * s + c * c;
+
+            // tan = sin/cos (avoid near-poles where idx gives us that)
+            float tn = tan(t * 0.1);
+
+            float score =
+                s +
+                c       * 0.1 +
+                unit    * 10.0 +
+                tn      * 0.01;
+
+            resources.output[idx] = score;
+        }
+    }
+}

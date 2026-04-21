@@ -1,0 +1,20 @@
+// Discovered 2026-04-20. Matrix-matrix addition (and subtraction / divide)
+// used to lower to OP_NOP, leaving downstream ops with an undefined
+// register. As of 2026-04-20 (same day fix) `LowerBinaryOp` decomposes
+// mat+mat/mat-mat/mat/mat into per-column extract + column-op +
+// OP_MAT_CONSTRUCT, matching what glslang emits for the same source.
+// This file exercises the successful path; if it ever regresses the
+// harness fails because downstream SPIR-V validation rejects OpNop as
+// a composite.
+pipeline MatMatAddNop {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            mat3 A = mat3(float3(1.0, 0.0, 0.0), float3(0.0, 1.0, 0.0), float3(0.0, 0.0, 1.0));
+            mat3 B = mat3(float3(2.0, 0.0, 0.0), float3(0.0, 2.0, 0.0), float3(0.0, 0.0, 2.0));
+            mat3 sum = A + B;
+            mat3 diff = A - B;
+            float3 col = sum[0] + diff[1];
+            float s = col.x + col.y + col.z;
+        }
+    }
+}

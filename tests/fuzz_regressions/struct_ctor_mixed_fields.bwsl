@@ -1,0 +1,28 @@
+// Positional struct constructor with a mix of scalar / vector / nested
+// struct field initializers. Exercises OP_STRUCT_CONSTRUCT ordering
+// and field-type propagation.
+pipeline StructCtorMixedFields {
+    struct Inner { float2 uv; float scale; };
+    struct Outer { int id; float3 pos; Inner inn; float w; };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Inner inner;
+            inner.uv = float2(0.25, 0.75);
+            inner.scale = 2.0;
+
+            Outer o;
+            o.id = 42;
+            o.pos = float3(1.0, 2.0, 3.0);
+            o.inn = inner;
+            o.w = 0.5;
+
+            // Read every field back
+            float sum =
+                float(o.id) +
+                o.pos.x + o.pos.y + o.pos.z +
+                o.inn.uv.x + o.inn.uv.y + o.inn.scale +
+                o.w;
+        }
+    }
+}

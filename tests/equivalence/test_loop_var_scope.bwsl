@@ -1,0 +1,29 @@
+// Loop-iterator variables must not leak out of the loop or shadow
+// outer variables of a different type. Previously an inner `int i`
+// kept its hash mapped to the int register after the loop, causing
+// later reads of the outer `float i` to be wrong-typed.
+pipeline EquivLoopVarScope {
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float x = 10.0;
+            float acc = 0.0;
+
+            for (int x = 0; x < 3; x = x + 1) {
+                acc = acc + float(x);
+            }
+
+            // After the loop, the outer float x must still be in scope.
+            acc = acc + x;
+
+            for (uint y = 0u; y < 2u; y = y + 1u) {
+                for (int x = 0; x < 2; x = x + 1) {
+                    acc = acc + float(x) * 0.1;
+                }
+            }
+
+            acc = acc + x;
+            resources.output[idx] = acc + float(idx) * 0.001;
+        }
+    }
+}

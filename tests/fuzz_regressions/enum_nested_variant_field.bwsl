@@ -1,0 +1,30 @@
+// Sum-type enum with mixed scalar/vector variants. Pattern-matching
+// by tag after construction exercises OP_ENUM_CONSTRUCT,
+// OP_ENUM_TAG, and the flattened-field representation in SPIR-V.
+// Struct-typed variant fields (e.g. `Sphere(Sphere s)`) hit a
+// separate pre-existing bug in the composite-construct constituent
+// decomposition — kept out of this test.
+pipeline EnumNestedVariantField {
+    enum Shape {
+        Empty,
+        SphereV(float radius, float3 center),
+        Plane(float3 n, float d)
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Shape s1 = Shape::Empty;
+            Shape s2 = Shape::SphereV(2.5, float3(1.0, 0.0, 0.0));
+            Shape s3 = Shape::Plane(float3(0.0, 1.0, 0.0), 0.5);
+
+            float res;
+            if (s2.tag == 1u) {
+                res = 1.0;
+            } else if (s3.tag == 2u) {
+                res = 2.0;
+            } else {
+                res = 0.0;
+            }
+        }
+    }
+}

@@ -1,0 +1,33 @@
+// Complex if conditions — vector compares, logical combinations,
+// short-circuit-like patterns. Each condition must lower to a
+// scalar bool via reduce operations.
+pipeline IfCondComplex {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint idx = input.global_id.x;
+            float3 v = float3(float(idx), float(idx) + 1.0, float(idx) + 2.0);
+
+            int result = 0;
+
+            // Condition: any component > 5
+            if (any(v > float3(5.0))) {
+                result = 1;
+            }
+
+            // Condition: all components positive
+            if (all(v > float3(0.0))) {
+                result = result + 2;
+            }
+
+            // Condition: scalar && vector-reduce
+            if (idx > 0u && any(v > float3(3.0))) {
+                result = result + 4;
+            }
+
+            // Chained condition with parens
+            if (((idx & 1u) == 0u) || (idx > 10u && idx < 20u)) {
+                result = result + 8;
+            }
+        }
+    }
+}

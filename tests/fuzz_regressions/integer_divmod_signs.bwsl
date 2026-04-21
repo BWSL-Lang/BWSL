@@ -1,0 +1,31 @@
+// Integer division and modulo with negative operands. SPIR-V's
+// OpSMod and OpSDiv have well-defined signed semantics that differ
+// from C's truncation. Each backend should agree with itself.
+pipeline IntegerDivmodSigns {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int a = 17;
+            int b = 5;
+            int c = -17;
+            int d = -5;
+
+            int div1 = a / b;       //  3
+            int div2 = c / b;       // -4 (OpSDiv truncates toward zero)
+            int div3 = a / d;       // -4
+            int div4 = c / d;       //  3
+
+            int mod1 = a % b;       //  2
+            int mod2 = c % b;       //  3 (OpSMod follows divisor sign)
+            int mod3 = a % d;       // -3
+            int mod4 = c % d;       // -2
+
+            uint u1 = 23u;
+            uint u2 = 5u;
+            uint udiv = u1 / u2;    //  4
+            uint umod = u1 % u2;    //  3
+
+            int signSum = div1 + div2 + div3 + div4 + mod1 + mod2 + mod3 + mod4;
+            uint usum = udiv + umod;
+        }
+    }
+}

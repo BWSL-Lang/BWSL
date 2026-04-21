@@ -1,0 +1,13 @@
+// Minimal shader with no-op function and compact body. Tests the
+// degenerate case where most of the IR is boilerplate.
+pipeline EmptyStructAndFn {
+    noOp :: () -> float {
+        return 0.0;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = noOp();
+        }
+    }
+}

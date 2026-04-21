@@ -1,0 +1,32 @@
+// Variable defined in one if-branch but read after the if. Without
+// an else, the SSA phi needs to merge the if-branch value with the
+// pre-if value (or undef). Fix #5 last session was about this class.
+pipeline IfNoElsePhi {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int a = 10;
+            int b;  // Uninitialized
+            int c = 20;
+
+            if (input.global_id.x == 0u) {
+                b = 99;
+                c = c * 2;
+            }
+            // b and c read after if — phi merges the two paths
+
+            int sum = a + b + c;
+
+            // Nested: if with else, then another if reading both paths
+            int x;
+            if (input.global_id.x > 0u) {
+                x = 1;
+            } else {
+                x = 2;
+            }
+
+            if (x == 2) {
+                sum = sum + 100;
+            }
+        }
+    }
+}

@@ -1,0 +1,31 @@
+// Switch with many dense cases + default. Exercises the CSR switch
+// case arrays in IRProgram (switchCaseValues / switchCaseTargets) at
+// realistic size. Previously only short switches were tested.
+pipeline SwitchLargeDense {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int k = int(input.global_id.x) & 15;
+            float r;
+            switch (k) {
+                case 0:  r = 0.0;  break;
+                case 1:  r = 1.1;  break;
+                case 2:  r = 2.2;  break;
+                case 3:  r = 3.3;  break;
+                case 4:  r = 4.4;  break;
+                case 5:  r = 5.5;  break;
+                case 6:  r = 6.6;  break;
+                case 7:  r = 7.7;  break;
+                case 8:  r = 8.8;  break;
+                case 9:  r = 9.9;  break;
+                case 10: r = 10.1; break;
+                case 11: r = 11.1; break;
+                case 12: r = 12.1; break;
+                case 13: r = 13.1; break;
+                case 14: r = 14.1; break;
+                case 15: r = 15.1; break;
+                default: r = -1.0; break;
+            }
+            float result = r * 2.0;
+        }
+    }
+}

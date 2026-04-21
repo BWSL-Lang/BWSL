@@ -1,0 +1,31 @@
+pipeline EquivXorBitwise {
+
+    // Exercises the parser disambiguation of `^` as XOR operator in integer
+    // bitwise expressions (distinct from address-of/dereference contexts).
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int a = int(idx) + 5;
+            int b = int(idx) + 3;
+            int c = int(idx);
+
+            int xor1 = a ^ b;
+            int xor2 = 0xFF ^ 0x0F;
+            int xor3 = a ^ b ^ c;
+            int xor4 = (a + b) ^ (c - 1);
+            int xor6 = (a ^ b) ^ (c ^ a);
+            // `a ^ -1` (bitwise NOT via xor with negative literal) currently
+            // miscompiles; tracked by fuzz_regressions/xor_negative_literal.
+
+            float score =
+                float(xor1) +
+                float(xor2) * 0.001 +
+                float(xor3) * 0.01 +
+                float(xor4) * 0.0001 +
+                float(xor6) * 0.000001;
+
+            resources.output[idx] = score;
+        }
+    }
+}

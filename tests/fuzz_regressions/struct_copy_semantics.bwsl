@@ -1,0 +1,26 @@
+// Struct assignment creates a copy (value semantics). Modifying the
+// destination should not affect the source. Tests OP_STORE_REG
+// behavior on struct-typed registers.
+pipeline StructCopySemantics {
+    struct Vec3 {
+        float3 v;
+        float w;
+    };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Vec3 a;
+            a.v = float3(1.0, 2.0, 3.0);
+            a.w = 4.0;
+
+            Vec3 b = a;            // copy
+            b.v = float3(10.0, 20.0, 30.0);
+            b.w = 40.0;
+
+            // a should still have its original values
+            float asum = a.v.x + a.v.y + a.v.z + a.w;
+            float bsum = b.v.x + b.v.y + b.v.z + b.w;
+            float total = asum + bsum;
+        }
+    }
+}

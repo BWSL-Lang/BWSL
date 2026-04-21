@@ -1,0 +1,25 @@
+// 5-level struct field chain. Each level is itself a struct. Tests
+// that STRUCT_EXTRACT propagates the field struct-type-hash correctly
+// at every depth so downstream access finds the right field.
+pipeline DeepChainedMember {
+    struct L5 { float value; };
+    struct L4 { L5 inner; };
+    struct L3 { L4 inner; };
+    struct L2 { L3 inner; };
+    struct L1 { L2 inner; };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            L1 x;
+            x.inner.inner.inner.inner.value = 3.14;
+
+            float a = x.inner.inner.inner.inner.value;
+
+            // Read and write at different depths
+            x.inner.inner.inner.inner.value = a * 2.0;
+
+            float b = x.inner.inner.inner.inner.value;
+            float sum = a + b;
+        }
+    }
+}

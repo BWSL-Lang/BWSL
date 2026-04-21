@@ -1,0 +1,31 @@
+// Chain field access on a function call result: `buildV().inner.field`.
+// Exercises the "any-expression object" path of LowerMemberAccess —
+// struct-field extraction where the object came from a FUNCTION_CALL.
+pipeline ChainedFnFieldAccess {
+    struct Inner { float3 dir; float mag; };
+    struct Outer { Inner inn; int tag; };
+
+    makeOuter :: (float t) -> Outer {
+        Outer o;
+        o.inn.dir = float3(t, t + 1.0, t + 2.0);
+        o.inn.mag = t * 10.0;
+        o.tag = int(t * 100.0);
+        return o;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float u = float(input.global_id.x) * 0.5;
+
+            // Direct field chain on the call result
+            float a = makeOuter(u).inn.dir.x;
+            float b = makeOuter(u).inn.mag;
+            int   c = makeOuter(u).tag;
+
+            // Swizzle on call-result field
+            float2 s = makeOuter(u).inn.dir.xy;
+
+            float sum = a + b + float(c) + s.x + s.y;
+        }
+    }
+}

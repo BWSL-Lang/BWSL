@@ -1,0 +1,30 @@
+// Equivalence: raster pipeline with a storage buffer read in the fragment
+// stage. The SSBO holds 16 floats (one per pixel row); the fragment looks
+// them up by floor(gl_FragCoord.y). This validates that cross-compiled
+// HLSL/GLSL descriptor-set plumbing for raster SSBOs matches native.
+pipeline EquivRasterSsboRead {
+    attributes {
+    }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            int row = int(input.position.y);
+            if (row < 0) { row = 0; }
+            if (row > 15) { row = 15; }
+            float row_val = resources.lut[row];
+            output.color = float4(row_val, uv.x, uv.y, 1.0);
+        }
+    }
+}

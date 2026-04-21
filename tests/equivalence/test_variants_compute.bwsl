@@ -1,0 +1,34 @@
+pipeline EquivVariantsCompute {
+
+    enum Mode {
+        Low,
+        Medium,
+        High
+    }
+
+    // Both variants use defaults; we test that the IR lowering substitutes
+    // variant reads with the variant's default value so the same shader
+    // produces identical results across backends.
+    variants {
+        quality: Mode = Mode::Medium;
+        fast: bool = false;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            float qScale = 1.0;
+            if (variants.quality == Mode::Low) {
+                qScale = 0.5;
+            } else if (variants.quality == Mode::High) {
+                qScale = 2.0;
+            }
+
+            float fastBonus = select(0.0, 10.0, variants.fast);
+
+            resources.output[idx] = t * qScale + fastBonus;
+        }
+    }
+}

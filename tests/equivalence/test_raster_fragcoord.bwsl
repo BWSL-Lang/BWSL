@@ -1,0 +1,25 @@
+// Equivalence: read input.position (FragCoord) in the fragment stage and
+// derive color from window-space pixel coords. Exercises the cross-backend
+// mapping of input.position (gl_FragCoord / SV_Position) to pixel coords.
+pipeline EquivRasterFragCoord {
+    attributes { }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.5, 1.0);
+        }
+
+        fragment {
+            float4 fc = input.position;
+            float r = fc.x / 16.0;
+            float g = fc.y / 16.0;
+            float b = fc.z;
+            output.color = float4(r, g, b, 1.0);
+        }
+    }
+}

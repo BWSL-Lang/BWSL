@@ -1,0 +1,31 @@
+pipeline EquivPointersBasic {
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+
+            int x = int(idx) * 2;
+            int^ ptr = ^x;
+            int readBack = ptr^;
+
+            ptr^ = int(idx) * 3 + 1;
+            int afterWrite = x;
+
+            float f = float(idx) + 0.5;
+            float^ fptr = ^f;
+            fptr^ = f * 2.0;
+            float fResult = f;
+
+            uint u = idx * 7u;
+            uint^ uptr = ^u;
+            uptr^ = u + 100u;
+            uint uResult = u;
+
+            resources.output[idx] =
+                float(readBack) +
+                float(afterWrite) * 0.1 +
+                fResult * 0.01 +
+                float(uResult) * 0.001;
+        }
+    }
+}

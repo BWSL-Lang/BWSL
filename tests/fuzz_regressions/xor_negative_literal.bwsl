@@ -1,0 +1,28 @@
+// Regression: libFuzzer, 2026-04-19. `int_var ^ -N` used to silently
+// miscompile because the parser treats `^` followed by a MINUS token as
+// postfix dereference (`int_var^`) followed by binary subtract, not as
+// XOR. With a non-pointer left side the codegen then emitted OpLoad on a
+// non-pointer and the SPIR-V validator rejected it with a confusing
+// type-mismatch error.
+//
+// Fix: IRLowering::LowerUnaryOp's DEREFERENCE case now checks
+// STORAGE_IS_PTR on the operand and emits a clear error message pointing
+// at the parser ambiguity, instead of silently producing bad SPIR-V. See
+// bwsl_ir_lowering.h near line 1385.
+//
+// Expected behavior today: bwslc exits with code 1 (parse/codegen error)
+// printing a diagnostic pointing at the fix (`a ^ (-1)`). The harness
+// accepts exit 0 or 1 as a pass, so this file exercises the guard.
+pipeline XorNegLiteral {
+    attributes {
+        position: float3
+    }
+    pass "Main" {
+        use attributes { position }
+        vertex {
+            int a = int(attributes.position.x) + 5;
+            int r = a ^ -1;
+            output.position = float4(attributes.position, float(r));
+        }
+    }
+}

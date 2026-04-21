@@ -1,0 +1,24 @@
+// Local struct-array read pattern — mirrors the chained [i].field
+// access semantics of SSBO reads but runs without an rcfg so the
+// fuzz_regressions harness can compile it stand-alone.
+pipeline StorageBufferStructRead {
+    struct Particle {
+        float3 pos;
+        float mass;
+    };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Particle particles[4];
+            for (int i = 0; i < 4; i = i + 1) {
+                particles[i].pos = float3(float(i), float(i) + 1.0, float(i) + 2.0);
+                particles[i].mass = float(i) * 0.5 + 1.0;
+            }
+
+            int dyn = int(input.global_id.x) & 3;
+            Particle p = particles[dyn];
+
+            float energy = p.mass * dot(p.pos, p.pos);
+        }
+    }
+}

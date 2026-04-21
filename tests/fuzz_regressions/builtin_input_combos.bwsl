@@ -1,0 +1,19 @@
+// Read every compute builtin that should be available in compute
+// stages: global_id, local_id, workgroup_id, num_workgroups,
+// local_index. Exercises each BuiltinInputSlot plumbing.
+pipeline BuiltinInputCombos {
+    pass "Compute" {
+        compute "Main" [4, 4, 1] {
+            uint3 gid = input.global_id;
+            uint3 lid = input.local_id;
+            uint3 wgid = input.workgroup_id;
+            uint3 nwg = input.num_workgroups;
+            uint  lidx = input.local_index;
+
+            // Combine them all
+            uint sum = gid.x + gid.y + lid.x + lid.y +
+                       wgid.x + wgid.y + nwg.x + nwg.y + lidx;
+            float f = float(sum) * 0.125;
+        }
+    }
+}

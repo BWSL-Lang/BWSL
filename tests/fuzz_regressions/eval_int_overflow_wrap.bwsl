@@ -1,0 +1,33 @@
+// Regression: the constant-time evaluator used plain signed `+`, `-`, `*`
+// and `<<` on `int`. Hostile or auto-generated constant expressions that
+// overflowed INT_MAX or shifted by 32+ bits were undefined behaviour and
+// tripped UBSan during fuzzing. Fix: fold with unsigned wrap semantics
+// for the arithmetic ops, and refuse to fold when the shift count is
+// outside [0, 32).
+//
+// This input constant-folds a chain of signed overflow / over-range shifts.
+// Expected behaviour: bwslc exits with code 0 or 1 (no SIGABRT, no UBSan
+// runtime error).
+pipeline EvalIntOverflow {
+    attributes {
+        color: float4
+    }
+
+    pass "Main" {
+        fragment {
+            // Compile-time chained multiplies overflow INT_MAX.
+            int overflow_mul = 2147483647 * 3;
+            // Over-range shift would have been 1 << 40.
+            int overshift = 1 << 40;
+            int neg_shift = 1 << -2;
+            int add_wrap = 2147483647 + 2;
+            int sub_wrap = -2147483648 - 2;
+            // Arithmetic right shift by bit-width.
+            int rshift_range = -1 >> 33;
+
+            float v = float(overflow_mul + overshift + neg_shift +
+                            add_wrap + sub_wrap + rshift_range);
+            output.color = float4(v, 0.0, 0.0, 1.0);
+        }
+    }
+}

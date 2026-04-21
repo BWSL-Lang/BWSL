@@ -1,0 +1,24 @@
+// Range-based for with an ending bound smaller than the start.
+// BWSL's range `0..n` is ascending; `10..0` either loops zero
+// times or is rejected. Whichever, it shouldn't crash.
+pipeline ForRangeReverse {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int acc = 0;
+            int start = 5;
+            int end = 2;
+
+            // Should loop 0 times (descending range not supported)
+            for (i in start..end) {
+                acc = acc + i;
+            }
+
+            // Forward range works
+            for (j in 0..5) {
+                acc = acc + j;
+            }
+
+            int result = acc;
+        }
+    }
+}

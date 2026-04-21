@@ -1,0 +1,27 @@
+// Chained intrinsic calls where each result feeds the next. Tests
+// that result-type propagation works across the ext-inst dispatch.
+pipeline IntrinsicChaining {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float3 a = float3(1.0, 2.0, 3.0);
+            float3 b = float3(4.0, 5.0, 6.0);
+
+            float len = length(normalize(a + b));
+            float d = distance(normalize(a), normalize(b));
+            float3 c = cross(normalize(a), normalize(b));
+
+            // Clamp → mix → step
+            float t = clamp(len, 0.0, 1.0);
+            float m = lerp(0.5, 1.5, t);
+            float st = step(m, 1.0);
+
+            // Saturate a dot product
+            float sat = saturate(dot(a, b));
+
+            // Smoothstep into saturate
+            float sm = saturate(smoothstep(0.0, 1.0, t));
+
+            float total = len + d + c.x + m + st + sat + sm;
+        }
+    }
+}

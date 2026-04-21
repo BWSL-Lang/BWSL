@@ -1,0 +1,65 @@
+pipeline EquivTernaryStructDeep {
+
+    // Struct-typed ternary, nested three levels deep (`a ? (b ? s1 : s2) : (c ? s3 : s4)`).
+    // The per-field decomposition pass fires once per ternary node; this pins
+    // down that nested struct selects produce the same value across backends.
+    // HANDOFF.md short-term item #2.
+
+    struct State {
+        float3 pos;
+        float  w;
+        float2 uv;
+    };
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            State s1;
+            s1.pos = float3(t, t + 0.1, t + 0.2);
+            s1.w = 1.0;
+            s1.uv = float2(0.01, 0.02);
+
+            State s2;
+            s2.pos = float3(-t, -(t + 0.1), -(t + 0.2));
+            s2.w = 2.0;
+            s2.uv = float2(0.03, 0.04);
+
+            State s3;
+            s3.pos = float3(t * 2.0, t * 3.0, t * 4.0);
+            s3.w = 3.0;
+            s3.uv = float2(0.05, 0.06);
+
+            State s4;
+            s4.pos = float3(t + 10.0, t + 20.0, t + 30.0);
+            s4.w = 4.0;
+            s4.uv = float2(0.07, 0.08);
+
+            // Nested selects: the outer condition picks between two nested ternaries.
+            bool outer = (idx & 1u) == 0u;
+            bool innerA = (idx % 3u) == 0u;
+            bool innerB = (idx % 4u) == 0u;
+
+            State picked = outer
+                ? (innerA ? s1 : s2)
+                : (innerB ? s3 : s4);
+
+            // Also chain member access directly on the nested ternary result.
+            float chainX = (outer
+                ? (innerA ? s1 : s2)
+                : (innerB ? s3 : s4)).pos.x;
+
+            float score =
+                picked.pos.x +
+                picked.pos.y * 0.1 +
+                picked.pos.z * 0.01 +
+                picked.w * 0.001 +
+                picked.uv.x * 10.0 +
+                picked.uv.y * 100.0 +
+                chainX * 0.0001;
+
+            resources.output[idx] = score;
+        }
+    }
+}

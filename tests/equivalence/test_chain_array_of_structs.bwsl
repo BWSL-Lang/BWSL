@@ -1,0 +1,58 @@
+pipeline EquivChainArrayOfStructs {
+
+    // Local array-of-structs indexed by a runtime value, then chained
+    // field/swizzle/math access on the result. Also a struct holding an
+    // array indexed dynamically.
+
+    struct Vertex {
+        float3 pos;
+        float2 uv;
+        float  w;
+    };
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            // Local array of struct, initialized manually.
+            Vertex verts[4];
+            verts[0].pos = float3(0.0, 0.0, 0.0);
+            verts[0].uv  = float2(0.0, 0.0);
+            verts[0].w   = 1.0;
+            verts[1].pos = float3(t,   t,   t);
+            verts[1].uv  = float2(0.5, 0.0);
+            verts[1].w   = 2.0;
+            verts[2].pos = float3(t * 2.0, t * 2.0, 0.0);
+            verts[2].uv  = float2(1.0, 0.5);
+            verts[2].w   = 3.0;
+            verts[3].pos = float3(-t, t, -t);
+            verts[3].uv  = float2(0.0, 1.0);
+            verts[3].w   = 4.0;
+
+            // Dynamic index (depends on idx)
+            int i0 = int(idx) % 4;
+            int i1 = (int(idx) + 1) % 4;
+
+            // Chain 1: arr[dyn].field.swizzle * scalar
+            float a = verts[i0].pos.y * verts[i1].w;
+
+            // Chain 2: arr[dyn].field + arr[other].field.swizzle
+            float2 b = verts[i0].uv + verts[i1].pos.xy;
+
+            // Chain 3: deeper combination: (arr[a].pos + arr[b].pos).x * scalar
+            float c = (verts[i0].pos + verts[i1].pos).x * verts[i0].w;
+
+            // Chain 4: arr[literal].field — static index
+            float d = verts[2].pos.z + verts[3].uv.x;
+
+            float score =
+                a +
+                b.x * 10.0 + b.y * 100.0 +
+                c * 0.1 +
+                d * 1000.0;
+
+            resources.output[idx] = score;
+        }
+    }
+}

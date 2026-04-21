@@ -1,0 +1,30 @@
+pipeline EquivInlineReturnNestedLoopsSkipBreak {
+
+    chooseNested :: (int limit) -> int {
+        for (int i = 0; i < limit; i = i + 1) {
+            if (i == 0) {
+                skip;
+            }
+            for (int j = 0; j < limit; j = j + 1) {
+                if (j == 0) {
+                    skip;
+                }
+                if (j == limit - 1) {
+                    break;
+                }
+                return 5;
+            }
+            break;
+        }
+        return 8;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int limit = int(idx);  // varies 0..7 exercising all skip/break/return paths
+            int v = chooseNested(limit);
+            resources.output[idx] = float(v);
+        }
+    }
+}

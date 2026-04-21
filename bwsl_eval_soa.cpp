@@ -1,9 +1,21 @@
 #include "bwsl_eval_soa.h"
 #include "bwsl_parser_soa.h"
+#include <climits>
 #include <cstring>
 #include <cmath>
 
 namespace BWSL {
+
+// Saturating float-to-int conversion. Plain `(int)x` is undefined behaviour
+// when x is NaN or outside the representable range; this clamps into a
+// well-defined range so the constant folder never trips UBSan on crafted
+// input.
+static inline int SafeFloatToInt(float x) {
+    if (std::isnan(x)) return 0;
+    if (x >= (float)INT_MAX) return INT_MAX;
+    if (x <= (float)INT_MIN) return INT_MIN;
+    return (int)x;
+}
 
 // Pre-computed hashes for vector constructor names
 static const u32 kFloat2Hash = Utils::HashStr("float2");
@@ -102,16 +114,25 @@ bool CompileTimeEvaluatorSoA::PopValue(EvalStateSoA* state, LiteralValue* value)
 }
 
 bool CompileTimeEvaluatorSoA::PerformIntOp(BinaryOpType op, int left, int right, int* result) {
+    // Use unsigned arithmetic for +, -, *, << so signed overflow (which is
+    // undefined behaviour in C++) cannot be triggered by hostile or malformed
+    // inputs. This matches the modular wrap semantics that SPIR-V, HLSL and
+    // GLSL use for integer ops at run time.
+    unsigned uleft  = static_cast<unsigned>(left);
+    unsigned uright = static_cast<unsigned>(right);
     switch (op) {
-        case BinaryOpType::ADD: *result = left + right; return true;
-        case BinaryOpType::SUBTRACT: *result = left - right; return true;
-        case BinaryOpType::MULTIPLY: *result = left * right; return true;
+        case BinaryOpType::ADD:      *result = (int)(uleft + uright); return true;
+        case BinaryOpType::SUBTRACT: *result = (int)(uleft - uright); return true;
+        case BinaryOpType::MULTIPLY: *result = (int)(uleft * uright); return true;
         case BinaryOpType::DIVIDE:
+            // INT_MIN / -1 overflows; treat as invalid fold (runtime will wrap).
             if (right == 0) return false;
+            if (left == INT_MIN && right == -1) return false;
             *result = left / right;
             return true;
         case BinaryOpType::MODULO:
             if (right == 0) return false;
+            if (left == INT_MIN && right == -1) { *result = 0; return true; }
             *result = left % right;
             return true;
         case BinaryOpType::EQUALS: *result = (left == right) ? 1 : 0; return true;
@@ -123,8 +144,23 @@ bool CompileTimeEvaluatorSoA::PerformIntOp(BinaryOpType op, int left, int right,
         case BinaryOpType::BITWISE_AND: *result = left & right; return true;
         case BinaryOpType::BITWISE_OR: *result = left | right; return true;
         case BinaryOpType::BITWISE_XOR: *result = left ^ right; return true;
-        case BinaryOpType::LEFT_SHIFT: *result = left << right; return true;
-        case BinaryOpType::RIGHT_SHIFT: *result = left >> right; return true;
+        case BinaryOpType::LEFT_SHIFT: {
+            // Refuse to fold when the shift count is out of range. Runtime
+            // behaviour in every target backend is "undefined" here, so the
+            // safest option is to not constant-fold it.
+            if (right < 0 || right >= 32) return false;
+            *result = (int)(uleft << (unsigned)right);
+            return true;
+        }
+        case BinaryOpType::RIGHT_SHIFT: {
+            if (right < 0 || right >= 32) return false;
+            // Arithmetic right shift: SPIR-V OpShiftRightArithmetic, HLSL
+            // signed `>>` and GLSL `>>` on signed types all sign-extend.
+            // Implementation-defined in C++, but GCC/Clang both sign-extend,
+            // which matches target semantics.
+            *result = left >> right;
+            return true;
+        }
         default: return false;
     }
 }
@@ -473,7 +509,7 @@ bool CompileTimeEvaluatorSoA::EvaluateFunctionCall(EvalStateSoA* state, NodeRef 
                     if (isFloat) {
                         outValue->floatVec[componentIndex++] = srcIsFloat ? args[i].floatVec[j] : (float)args[i].intVec[j];
                     } else {
-                        outValue->intVec[componentIndex++] = srcIsFloat ? (int)args[i].floatVec[j] : args[i].intVec[j];
+                        outValue->intVec[componentIndex++] = srcIsFloat ? SafeFloatToInt(args[i].floatVec[j]) : args[i].intVec[j];
                     }
                 }
             } else {
@@ -481,7 +517,7 @@ bool CompileTimeEvaluatorSoA::EvaluateFunctionCall(EvalStateSoA* state, NodeRef 
                 float fval = 0.0f;
                 int ival = 0;
                 switch (args[i].type) {
-                    case LiteralValue::FLOAT: fval = args[i].floatValue; ival = (int)fval; break;
+                    case LiteralValue::FLOAT: fval = args[i].floatValue; ival = SafeFloatToInt(fval); break;
                     case LiteralValue::INT: ival = args[i].intValue; fval = (float)ival; break;
                     case LiteralValue::UINT: ival = (int)args[i].uintValue; fval = (float)args[i].uintValue; break;
                     default: break;

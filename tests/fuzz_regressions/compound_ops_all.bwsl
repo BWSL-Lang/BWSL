@@ -1,0 +1,26 @@
+// Every compound-assign operator on scalar, vector, and matrix
+// operands. Each `+=` / `-=` / `*=` / `/=` / `%=` has its own lowering
+// branch and a history of regressing when the IR-gen rules for the
+// base op change.
+pipeline CompoundOpsAll {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            // Scalars
+            int  i = 10;
+            i += 3; i -= 1; i *= 2; i /= 2;
+            uint u = 100u;
+            u += 1u; u -= 3u; u *= 2u; u /= 4u;
+            float f = 2.5;
+            f += 0.25; f -= 0.1; f *= 3.0; f /= 2.0;
+
+            // Vectors
+            float3 v = float3(1.0, 2.0, 3.0);
+            v += float3(0.1, 0.2, 0.3);
+            v -= float3(0.05, 0.1, 0.15);
+            v *= 2.0;
+            v /= 3.0;
+
+            float sum = f + v.x + v.y + v.z + float(i) + float(u);
+        }
+    }
+}

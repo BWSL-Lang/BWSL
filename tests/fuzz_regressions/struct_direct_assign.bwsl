@@ -1,0 +1,29 @@
+// Direct struct-to-struct assignment (`a = b`). Should produce a deep
+// copy via OP_STORE_REG on the whole composite value.
+pipeline StructDirectAssign {
+    struct Frame {
+        float3 pos;
+        float3 normal;
+        float2 uv;
+        float  w;
+    };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Frame a;
+            a.pos = float3(1.0, 2.0, 3.0);
+            a.normal = float3(0.0, 1.0, 0.0);
+            a.uv = float2(0.25, 0.75);
+            a.w = 5.0;
+
+            Frame b;
+            b = a;
+            b.pos = b.pos * 2.0;
+
+            Frame c = a;
+            c.uv = float2(0.1, 0.9);
+
+            float sum = a.pos.x + b.pos.x + c.pos.x + a.uv.x + b.uv.x + c.uv.x;
+        }
+    }
+}

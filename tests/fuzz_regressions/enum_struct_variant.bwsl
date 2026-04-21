@@ -1,0 +1,28 @@
+// Discovered 2026-04-20. Sum-type enum with a struct-typed variant
+// field hits SPIR-V validation: OP_ENUM_CONSTRUCT in the backend
+// decomposes vectors into scalars but treats struct operands as
+// single scalar constituents, mismatching the enum's flattened
+// field layout. Fix path: either also decompose struct operands
+// per-field, or reshape the enum storage to hold a nested struct
+// directly. Pre-existing issue — captured here so the harness
+// notices the day it's fixed.
+pipeline EnumStructVariant {
+    struct Sphere {
+        float radius;
+        float3 center;
+    };
+    enum Shape {
+        Empty,
+        SphereV(Sphere s),
+        Plane(float3 n, float d)
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Sphere sph;
+            sph.radius = 2.5;
+            sph.center = float3(1.0, 0.0, 0.0);
+            Shape s = Shape::SphereV(sph);
+        }
+    }
+}

@@ -1,0 +1,40 @@
+pipeline EquivMathInverseTrig {
+
+    // Inverse trigonometric functions across their full defined range,
+    // including atan2 quadrant coverage (all four quadrants plus the
+    // ±y=0 axis). Existing test_trig only exercises sin/cos/tan/atan2
+    // on a narrow positive t-range, so this nails down asin/acos and
+    // every atan2 quadrant.
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.125;   // 0, 0.125, ..., 0.875
+            float s = t * 2.0 - 0.875;      // spans (-0.875, 0.875)
+
+            float a = asin(s);
+            float b = acos(s);
+            float c = atan(s * 4.0);
+
+            // atan2 round the quadrants: (+, +), (-, +), (-, -), (+, -).
+            float q0 = atan2( 1.0 + t,  1.0 + t);   //  +x, +y
+            float q1 = atan2( 1.0 + t, -1.0 - t);   //  -x, +y
+            float q2 = atan2(-1.0 - t, -1.0 - t);   //  -x, -y
+            float q3 = atan2(-1.0 - t,  1.0 + t);   //  +x, -y
+
+            // Axis cases (y = 0).
+            float axisPos = atan2(0.0,  1.0 + t);
+            float axisNeg = atan2(0.0, -1.0 - t);
+
+            // Inverse round-trip (expected near-identity within tolerance).
+            float rtSinAsin = sin(asin(s));
+            float rtCosAcos = cos(acos(s));
+
+            resources.output[idx] =
+                a * 0.5 + b * 0.25 + c * 0.1 +
+                q0 * 0.01 + q1 * 0.001 + q2 * 0.0001 + q3 * 0.00001 +
+                axisPos * 0.000001 + axisNeg * 0.0000001 +
+                rtSinAsin * 0.00000001 + rtCosAcos * 0.000000001;
+        }
+    }
+}

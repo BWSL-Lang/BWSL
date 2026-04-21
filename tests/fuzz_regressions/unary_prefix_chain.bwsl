@@ -1,0 +1,23 @@
+// Stacked unary prefix operators: `!!b`, `--x`, `-+f`, `~~i`, etc.
+// Each operator has its own lowering branch in LowerUnaryOp; stacking
+// exercises the recursive LowerExpression call.
+pipeline UnaryPrefixChain {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int i = 5;
+            int a = -(-i);         // double negate
+            int b = ~(~i);         // double bitwise-not
+            int c = -(~i);         // negate of bitwise-not
+
+            float f = 2.5;
+            float g = -(-f);
+            float h = -(f * -1.0);
+
+            bool t = true;
+            bool u = !(!t);
+            bool v = !(t && !t);
+
+            int result = a + b + c + int(g + h) + (u ? 1 : 0) + (v ? 2 : 0);
+        }
+    }
+}

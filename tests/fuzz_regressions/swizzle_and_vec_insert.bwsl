@@ -1,0 +1,28 @@
+// Mix of swizzle-reads, single-component writes, and dynamic
+// vector-insert in one sequence. Each operation uses a different
+// SPIR-V op.
+pipeline SwizzleAndVecInsert {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float4 v = float4(1.0, 2.0, 3.0, 4.0);
+
+            // Read swizzle
+            float3 rgb = v.rgb;
+
+            // Write single component
+            v.w = 100.0;
+
+            // Dynamic index write
+            int idx = int(input.global_id.x) & 3;
+            v[idx] = 77.0;
+
+            // Dynamic read
+            float dyn = v[idx];
+
+            // Multi-write via swizzle
+            v.xy = float2(0.5, 0.75);
+
+            float result = v.x + v.y + v.z + v.w + rgb.x + dyn;
+        }
+    }
+}

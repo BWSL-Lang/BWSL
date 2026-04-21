@@ -1,0 +1,33 @@
+// Merge point with many predecessors (5+ branches feeding into one
+// block). Each predecessor writes a different value — the phi has
+// N operands.
+pipeline PhiManyPredecessors {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint idx = input.global_id.x;
+            int k = int(idx) & 7;
+
+            int v;
+            if (k == 0) {
+                v = 10;
+            } else if (k == 1) {
+                v = 20;
+            } else if (k == 2) {
+                v = 30;
+            } else if (k == 3) {
+                v = 40;
+            } else if (k == 4) {
+                v = 50;
+            } else if (k == 5) {
+                v = 60;
+            } else if (k == 6) {
+                v = 70;
+            } else {
+                v = 80;
+            }
+
+            // v has 8 phi predecessors
+            int result = v * 2;
+        }
+    }
+}

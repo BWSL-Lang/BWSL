@@ -1,0 +1,24 @@
+// Mixing vector component reads and writes in interleaved expressions.
+// Each write modifies the vector; subsequent reads must see the latest
+// value. SSA + per-component write lowering has to track this.
+pipeline ComplexSwizzleAssignMix {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float4 v = float4(0.0, 0.0, 0.0, 0.0);
+
+            v.x = 1.0;
+            v.y = v.x + 1.0;          // 2.0
+            v.z = v.x + v.y;          // 3.0
+            v.w = v.x * v.y * v.z;    // 6.0
+
+            // Multi-component writes
+            v.xy = v.zw;              // v = (3.0, 6.0, 3.0, 6.0)
+            v.zw = v.xy * 2.0;        // v = (3.0, 6.0, 6.0, 12.0)
+
+            // Component write from a call
+            v.x = dot(v.xyz, v.yzx);
+
+            float sum = v.x + v.y + v.z + v.w;
+        }
+    }
+}

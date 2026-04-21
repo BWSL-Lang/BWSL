@@ -1,0 +1,32 @@
+pipeline EquivStepSmoothstep {
+
+    // Exact-boundary behavior of step / smoothstep / lerp. When x == edge
+    // step() returns 1.0 (per GLSL spec), smoothstep() returns 0.0 at the
+    // low edge and 1.0 at the high edge. Backends sometimes use an FMA
+    // approximation that drifts near boundaries — tight tolerance catches
+    // that.
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float x = float(idx) * 0.25;  // 0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75
+
+            float s = step(0.5, x);                 // 0 for x<0.5, 1 otherwise
+            float ss = smoothstep(0.0, 1.0, x);     // Hermite between 0 and 1
+            float m = lerp(10.0, 20.0, x);          // linear interp
+
+            // Exact boundary checks
+            float sAtEdge = step(x, x);             // x == x -> 1.0
+            float ssAtLow = smoothstep(x, x + 1.0, x);  // at low edge -> 0.0
+
+            float score =
+                s +
+                ss       * 10.0 +
+                m        * 0.1 +
+                sAtEdge  * 100.0 +
+                ssAtLow  * 1000.0;
+
+            resources.output[idx] = score;
+        }
+    }
+}

@@ -1,0 +1,18 @@
+// Code after an unconditional return in a user function. Should be
+// treated as dead by the inliner / validator. If the parser / IR
+// keeps it in the AST, SSA should NOP it or the cleanup should
+// catch it.
+pipeline UnreachableAfterReturn {
+    dummy :: (int x) -> int {
+        return x * 2;
+        // Dead code below — never executes
+        int unused = x + 100;
+        return unused;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int a = dummy(5);   // Should be 10, not 105
+        }
+    }
+}

@@ -1,0 +1,23 @@
+// Float literals at extreme ranges: very small (denormalized), very
+// large, scientific notation, negative zero. Each goes through
+// EmitConstant's dedup + the SPIR-V OpConstant encoding.
+pipeline FloatSpecialConstants {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float tiny = 1e-38;
+            float huge = 1e38;
+            float sci = 1.5e-5;
+            float neg = -0.0;
+            float one = 1.0;
+            float trailing = 10.;
+
+            // Arithmetic preserves the constants through optimizations
+            float a = tiny * 2.0;
+            float b = huge * 0.5;
+            float c = sci + neg;
+            float d = one - trailing;
+
+            float sum = a + b + c + d;
+        }
+    }
+}

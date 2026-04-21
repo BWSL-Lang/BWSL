@@ -1,0 +1,25 @@
+// Pointer assigned conditionally, then dereferenced. SSA phi must
+// merge the two pointer paths. Previously this was the SSA/OP_LOCAL_*
+// class of bugs — this is a sharper test than test_pointers_control_flow.
+pipeline ConditionalPtrAssign {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int a = 10;
+            int b = 20;
+            int c = 30;
+
+            uint idx = input.global_id.x;
+            int^ p;
+            if (idx == 0u) {
+                p = ^a;
+            } else if (idx == 1u) {
+                p = ^b;
+            } else {
+                p = ^c;
+            }
+            p^ = p^ + 100;
+
+            int sum = a + b + c;
+        }
+    }
+}

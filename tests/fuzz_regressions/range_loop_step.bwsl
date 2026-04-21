@@ -1,0 +1,26 @@
+// Range-based for loop `for (i in 0..N)`. Exercises the range-loop
+// lowering path (OP_ALLOC_ARRAY or direct loop-counter path).
+pipeline RangeLoopStep {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int total = 0;
+            for (i in 0..10) {
+                total = total + i;
+            }
+
+            float fsum = 0.0;
+            for (j in 0..5) {
+                fsum = fsum + float(j) * 0.5;
+            }
+
+            // Range with expression bounds
+            int n = 7;
+            int acc = 0;
+            for (k in 0..n) {
+                acc = acc + k * k;
+            }
+
+            int result = total + int(fsum) + acc;
+        }
+    }
+}

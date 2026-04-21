@@ -1,0 +1,18 @@
+pipeline EquivInlineReturnRangeLoop {
+
+    chooseRange :: (int limit) -> int {
+        for (i in 0..limit) {
+            return 1;
+        }
+        return 2;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int limit = int(idx) - 1;  // spans <=0 (takes fallthrough) and >0 (early return)
+            int v = chooseRange(limit);
+            resources.output[idx] = float(v);
+        }
+    }
+}

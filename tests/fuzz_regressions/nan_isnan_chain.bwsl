@@ -1,0 +1,26 @@
+// isnan / isinf checks chained into conditionals. NaN comparison
+// semantics: `NaN != NaN`, `NaN < x` is false, etc.
+pipeline NanIsnanChain {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float a = 1.0;
+            float b = 0.0;
+            float c = a / b;     // +inf (in IEEE)
+            float d = b / b;     // NaN (in IEEE)
+
+            bool nanA = isnan(a);
+            bool nanD = isnan(d);
+            bool infC = isinf(c);
+            bool infA = isinf(a);
+
+            // Also on vectors
+            float3 v = float3(1.0, 0.0, -1.0);
+            bool3 vNan = isnan(v);
+            bool3 vInf = isinf(v);
+
+            int total = (nanA ? 1 : 0) + (nanD ? 2 : 0) +
+                        (infC ? 4 : 0) + (infA ? 8 : 0) +
+                        (any(vNan) ? 16 : 0) + (any(vInf) ? 32 : 0);
+        }
+    }
+}

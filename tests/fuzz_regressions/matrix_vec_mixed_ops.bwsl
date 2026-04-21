@@ -1,0 +1,33 @@
+// Mixed matrix-vector-scalar operations in one expression. Each
+// binary op picks a different SPIR-V op (MatrixTimesVector,
+// VectorTimesScalar, FMul, etc.).
+pipeline MatrixVecMixedOps {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            mat3 M = mat3(
+                float3(1.0, 0.5, 0.0),
+                float3(0.5, 1.0, 0.0),
+                float3(0.0, 0.0, 1.0)
+            );
+            float3 v = float3(2.0, 3.0, 4.0);
+            float s = 1.5;
+
+            // mat * vec → vec
+            float3 mv = M * v;
+            // mat * scalar → mat
+            mat3 Ms = M * s;
+            // vec * scalar → vec
+            float3 vs = v * s;
+            // vec * vec (component-wise) → vec
+            float3 vv = v * float3(1.0, 2.0, 3.0);
+            // scalar * vec
+            float3 sv = s * v;
+            // scalar * mat
+            mat3 sM = s * M;
+
+            // Combine
+            float3 result = mv + vs + vv + sv;
+            float final = result.x + Ms[0].x + sM[1].y;
+        }
+    }
+}

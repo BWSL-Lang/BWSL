@@ -1,0 +1,42 @@
+// Struct with both mat3 and mat4 fields, plus nested structs.
+// Chained access at every depth including matrix column and element.
+pipeline NestedMatrixFields {
+    struct Inner {
+        mat3 rot;
+        float scale;
+    };
+    struct Outer {
+        Inner inn;
+        mat4 world;
+    };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Outer o;
+
+            o.inn.rot = mat3(
+                float3(1.0, 0.0, 0.0),
+                float3(0.0, 2.0, 0.0),
+                float3(0.0, 0.0, 3.0)
+            );
+            o.inn.scale = 0.5;
+            o.world = mat4(
+                float4(1.0, 0.0, 0.0, 0.0),
+                float4(0.0, 1.0, 0.0, 0.0),
+                float4(0.0, 0.0, 1.0, 0.0),
+                float4(0.0, 0.0, 0.0, 1.0)
+            );
+
+            // Read chained: outer.inn.rot[1].y
+            float a = o.inn.rot[1].y;
+            float b = o.inn.rot[2][2];
+            float c = o.world[3].w;
+
+            // Multiply matrix field by a vector
+            float3 v = float3(1.0, 2.0, 3.0);
+            float3 transformed = o.inn.rot * v;
+
+            float result = a + b + c + o.inn.scale + transformed.x;
+        }
+    }
+}

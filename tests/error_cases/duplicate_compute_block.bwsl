@@ -1,0 +1,8 @@
+// Only one compute block per pass is allowed — backends model one
+// dispatch per pass. Parser must reject, not silently drop extras.
+pipeline DuplicateCompute {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {}
+        compute "Again" [1, 1, 1] {}
+    }
+}

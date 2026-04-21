@@ -1,0 +1,39 @@
+// Generic functions constrained to vectors. Each instantiation picks
+// the right SPIR-V op (FADD for float vec, IADD for int vec).
+pipeline GenericOverVecTypes {
+    constraint AnyFloatVec = float2 | float3 | float4;
+    constraint AnyIntVec = int2 | int3 | int4;
+
+    sumVec :: (AnyFloatVec v) -> float {
+        return dot(v, v);
+    }
+
+    negIt :: (AnyFloatVec v) -> AnyFloatVec {
+        return v * -1.0;
+    }
+
+    iaddOne :: (AnyIntVec v) -> AnyIntVec {
+        return v + 1;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float2 v2 = float2(1.0, 2.0);
+            float3 v3 = float3(1.0, 2.0, 3.0);
+            float4 v4 = float4(1.0, 2.0, 3.0, 4.0);
+
+            float s2 = sumVec(v2);
+            float s3 = sumVec(v3);
+            float s4 = sumVec(v4);
+
+            float3 n3 = negIt(v3);
+
+            int2 i2 = int2(10, 20);
+            int3 i3 = int3(1, 2, 3);
+            int2 i2p = iaddOne(i2);
+            int3 i3p = iaddOne(i3);
+
+            float total = s2 + s3 + s4 + n3.x + float(i2p.x + i3p.x);
+        }
+    }
+}

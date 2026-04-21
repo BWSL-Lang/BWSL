@@ -1,0 +1,28 @@
+// Variant-specialization paths in compute. `variants.X` references
+// resolve to the declared default at IR-lowering time. Tests both
+// bool and enum-valued variants referenced from a single shader.
+pipeline VariantsSpecialize {
+    enum Mode { Fast, Accurate, Reference }
+
+    variants {
+        useFast: bool = true;
+        mode: Mode = Mode::Fast;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float s = variants.useFast ? 1.0 : 10.0;
+
+            float weight;
+            if (variants.mode == Mode::Fast) {
+                weight = 0.1;
+            } else if (variants.mode == Mode::Accurate) {
+                weight = 0.5;
+            } else {
+                weight = 1.0;
+            }
+
+            float result = s * weight;
+        }
+    }
+}

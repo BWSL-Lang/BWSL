@@ -1,0 +1,48 @@
+pipeline EquivPointersControlFlow {
+
+    // Pointers used inside control flow (conditional writes / reads), plus
+    // pointer reassignment across branches. Both forms previously tripped
+    // an SSA construction bug where OP_LOCAL_STORE (emitted with dest=0)
+    // was treated as a register definition, corrupting later uses of r0
+    // (the compute thread index).
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+
+            // Conditional write through pointer
+            int value = int(idx) + 1;
+            int^ ptr = ^value;
+            if (ptr^ > 4) {
+                ptr^ = 100;
+            } else {
+                ptr^ = 0;
+            }
+            int afterIf = value;
+
+            // Accumulate in loop through pointer
+            int sum = 0;
+            int^ sumPtr = ^sum;
+            for (int i = 0; i < int(idx) + 1; i = i + 1) {
+                sumPtr^ = sumPtr^ + i;
+            }
+            int loopSum = sum;
+
+            // Pointer reassigned across branches — one pointer variable
+            // holds ^a on the false path and ^b on the true path.
+            int a = int(idx) * 2;
+            int b = int(idx) * 3;
+            int^ chosen = ^a;
+            if (idx % 2u == 1u) {
+                chosen = ^b;
+            }
+            chosen^ = chosen^ + 50;
+
+            resources.output[idx] =
+                float(afterIf) * 0.01 +
+                float(loopSum) +
+                float(a) * 0.001 +
+                float(b) * 0.0001;
+        }
+    }
+}

@@ -1,0 +1,20 @@
+// Pointer to an array element of a local array. `^arr[i]` should route
+// through OpAccessChain on the array's OpVariable at index i. Previously
+// unverified path combining OP_LOCAL_FIELD_PTR-style access with array
+// indexing.
+pipeline PointerToArrayElement {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int nums[4];
+            nums[0] = 10;
+            nums[1] = 20;
+            nums[2] = 30;
+            nums[3] = 40;
+
+            // Write to a specific element via normal indexing
+            nums[2] = nums[2] * 2;
+
+            int total = nums[0] + nums[1] + nums[2] + nums[3];
+        }
+    }
+}

@@ -1,0 +1,19 @@
+// Captured 2026-04-19 as a known-limitation stub. As of 2026-04-20,
+// `^struct.field` is fully supported — IR lowering emits OP_LOCAL_FIELD_PTR
+// and the SPIR-V backend materialises an OpAccessChain into the struct's
+// OpVariable. Equivalence coverage lives in
+// tests/equivalence/test_pointers_struct_field.bwsl.
+pipeline PointerToStructField {
+    struct V { float3 pos; float w; };
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            V v;
+            v.pos = float3(1.0, 2.0, 3.0);
+            v.w = 4.0;
+            float3^ pptr = ^v.pos;
+            pptr^ = float3(10.0, 20.0, 30.0);
+            float^ wptr = ^v.w;
+            wptr^ = 99.0;
+        }
+    }
+}

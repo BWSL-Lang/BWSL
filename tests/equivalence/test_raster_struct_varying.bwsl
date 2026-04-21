@@ -1,0 +1,30 @@
+// Equivalence: pass multiple varyings (vec3 + vec2 + float) from vertex to
+// fragment and combine them. Exercises backend interpolation of mixed-arity
+// varyings.
+pipeline EquivRasterStructVarying {
+    attributes { }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+
+            float2 uv = (p + 1.0) * 0.5;
+            output.uv = uv;
+            output.color = float3(uv.x, uv.y, 1.0 - uv.x);
+            output.intensity = uv.x + uv.y * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float3 col = input.color;
+            float i = input.intensity;
+            float3 tint = col * i;
+            output.color = float4(tint.x, tint.y, tint.z * uv.x, 1.0);
+        }
+    }
+}

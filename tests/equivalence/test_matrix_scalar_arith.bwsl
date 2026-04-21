@@ -1,0 +1,28 @@
+// Verifies matrix +/- // scalar arithmetic, both directions.
+// Previously emitted mat OP scalar as FAdd/FSub/FDiv between
+// composite and scalar, failing SPIR-V validation.
+pipeline EquivMatrixScalarArith {
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            mat3 m = mat3(
+                float3(1.0, 2.0, 3.0),
+                float3(4.0, 5.0, 6.0),
+                float3(7.0, 8.0, 9.0)
+            );
+
+            mat3 a = m + 0.5;      // matrix + scalar
+            mat3 b = 2.0 + m;      // scalar + matrix
+            mat3 c = m - 1.0;      // matrix - scalar
+            mat3 d = 10.0 - m;     // scalar - matrix
+            mat3 e = m / 2.0;      // matrix / scalar
+            mat3 f = 36.0 / m;     // scalar / matrix
+
+            float s = a[0][0] + b[1][1] + c[2][2]
+                    + d[0][1] + e[1][2] + f[2][0];
+            resources.output[idx] = s + t * 0.01;
+        }
+    }
+}

@@ -1,0 +1,33 @@
+pipeline EquivReflectRefract {
+
+    // Vector reflection / refraction math. Common divergence point: the
+    // GLSL `refract` spec says total internal reflection returns 0,
+    // Metal/HLSL match, but custom implementations sometimes differ. Also
+    // exercises `faceforward`, which negates N based on dot(I, Nref).
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.125;  // 0..0.875
+
+            float3 N = normalize(float3(0.1 + t, 1.0, 0.3));
+            float3 I = normalize(float3(0.5, -1.0, 0.2 + t * 0.1));
+
+            float3 R = reflect(I, N);
+            float3 Rf = refract(I, N, 0.66);  // air -> water-ish
+            float3 Ff = faceforward(N, I, N);
+
+            // `dot` invariants: R and I mirror across N
+            float dotI_N = dot(I, N);
+            float dotR_N = dot(R, N);
+
+            float score =
+                R.x + R.y * 0.1 + R.z * 0.01 +
+                Rf.x * 0.001 + Rf.y * 0.0001 + Rf.z * 0.00001 +
+                Ff.x * 10.0 + Ff.y * 100.0 + Ff.z * 1000.0 +
+                dotI_N * 10000.0 + dotR_N * 100000.0;
+
+            resources.output[idx] = score;
+        }
+    }
+}

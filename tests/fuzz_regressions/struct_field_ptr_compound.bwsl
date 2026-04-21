@@ -1,0 +1,28 @@
+// Struct-field pointer (new OP_LOCAL_FIELD_PTR) with compound-style
+// use: nested field, read-modify-write through the pointer, and
+// alternating between field pointers and whole-struct pointers.
+pipeline StructFieldPtrCompound {
+    struct Inner { float3 v; float s; };
+    struct Outer { Inner inn; int tag; };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Outer o;
+            o.inn.v = float3(1.0, 2.0, 3.0);
+            o.inn.s = 4.0;
+            o.tag = 7;
+
+            // Field pointer directly on the inner struct's vector field.
+            // Note: we take ^o.inn (whole inner struct) so the field
+            // pointer is one level deeper via the local-var of Inner.
+            float3^ vp = ^o.inn.v;
+            vp^ = vp^ * 2.0 + float3(0.1, 0.2, 0.3);
+
+            float^ sp = ^o.inn.s;
+            sp^ = sp^ + 100.0;
+
+            int^ tp = ^o.tag;
+            tp^ = tp^ * 3;
+        }
+    }
+}

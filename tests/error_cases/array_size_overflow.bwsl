@@ -1,0 +1,11 @@
+// Array size over the 256k hard cap must be rejected instead of
+// triggering an allocation storm (the parser-arena otherwise doubles
+// repeatedly and can exhaust memory).
+pipeline ArraySizeOverflow {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float arr[999999999];
+            arr[0] = 1.0;
+        }
+    }
+}

@@ -1,0 +1,12 @@
+// A pass containing both vertex/fragment and compute stages is not
+// expressible in any backend's pipeline model. Must be rejected at
+// parse time.
+pipeline ComputeWithVertex {
+    pass "Main" {
+        vertex {
+            output.position = float4(1.0);
+        }
+        compute "Main" [1, 1, 1] {
+        }
+    }
+}

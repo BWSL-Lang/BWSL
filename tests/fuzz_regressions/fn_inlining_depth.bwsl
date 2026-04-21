@@ -1,0 +1,19 @@
+// Function inlining at the maximum allowed depth (MAX_INLINE_DEPTH=8).
+// Each function calls the previous one, forming a chain. Must inline
+// successfully without hitting the depth limit.
+pipeline FnInliningDepth {
+    f1 :: (int x) -> int { return x + 1; }
+    f2 :: (int x) -> int { return f1(x) * 2; }
+    f3 :: (int x) -> int { return f2(x) - 1; }
+    f4 :: (int x) -> int { return f3(x) + 3; }
+    f5 :: (int x) -> int { return f4(x) * 2; }
+    f6 :: (int x) -> int { return f5(x) + 5; }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int a = f6(1);   // 6 levels deep
+            int b = f6(f6(2)); // compose two 6-deep chains
+            int total = a + b;
+        }
+    }
+}

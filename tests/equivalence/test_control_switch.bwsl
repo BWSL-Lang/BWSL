@@ -1,0 +1,48 @@
+pipeline EquivControlSwitch {
+
+    enum RenderMode {
+        Solid,
+        Wireframe,
+        Points,
+        Transparent
+    }
+
+    getMultiplier :: (int level) -> float {
+        float result = 1.0;
+        switch (level) {
+            case 0: { result = 0.5; }
+            case 1: { result = 1.0; }
+            case 2: { result = 2.0; }
+            case 3: { result = 4.0; }
+            default: { result = -1.0; }
+        }
+        return result;
+    }
+
+    classifyMode :: (RenderMode m) -> float {
+        switch (m) {
+            case RenderMode::Solid: { return 1.0; }
+            case RenderMode::Wireframe: { return 2.0; }
+            case RenderMode::Points: { return 3.0; }
+            case RenderMode::Transparent: { return 4.0; }
+        }
+        return 0.0;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+
+            int level = int(idx) - 1;  // -1, 0..6 — hits cases + default
+            float intResult = getMultiplier(level);
+
+            RenderMode mode = RenderMode::Solid;
+            if (idx % 4u == 1u) mode = RenderMode::Wireframe;
+            else if (idx % 4u == 2u) mode = RenderMode::Points;
+            else if (idx % 4u == 3u) mode = RenderMode::Transparent;
+            float enumResult = classifyMode(mode);
+
+            resources.output[idx] = intResult + enumResult * 10.0;
+        }
+    }
+}

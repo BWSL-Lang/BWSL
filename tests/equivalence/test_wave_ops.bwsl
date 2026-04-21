@@ -1,0 +1,50 @@
+pipeline EquivWaveOps {
+
+    // Wave/subgroup operations — results depend on the hardware subgroup
+    // size, but since all three backends (native SPIR-V, HLSL→SPIR-V,
+    // GLSL→SPIR-V) compile to the same Vulkan subgroup ops and run on the
+    // same device under the equivalence harness, the values must match
+    // across backends byte-for-byte.
+    //
+    // To keep the test deterministic we combine a subgroup-size-
+    // independent portion (wave_all/wave_any over constants, wave_broadcast
+    // from lane 0) with a subgroup-size-dependent portion (wave_sum) that
+    // still matches across backends since they share a driver.
+
+    pass "Compute" {
+        compute "Main" [32, 1, 1] {
+            uint idx = input.global_id.x;
+            uint lid = input.local_index;
+
+            float v = float(lid) + 1.0;
+            int si = int(lid) - 16;
+
+            // Reductions
+            float waveSum = wave_sum(v);
+            int   waveMinI = wave_min(si);
+            int   waveMaxI = wave_max(si);
+            float waveMaxF = wave_max(v);
+
+            // Boolean ops — these are subgroup-size independent because the
+            // predicates have well-defined all-true / all-false properties.
+            bool allPositive = wave_all(v > 0.0);       // true: every thread positive
+            bool anyFirst    = wave_any(lid == 0u);     // true: lane 0 exists
+
+            // Broadcast from lane 0 — deterministic regardless of subgroup size.
+            float lane0Value = wave_broadcast(v, 0);
+
+            float score =
+                waveSum                             * 0.00001 +
+                float(waveMinI)                     * 0.1 +
+                float(waveMaxI)                     * 0.01 +
+                waveMaxF                            * 0.001 +
+                select(0.0, 1.0, allPositive)       * 100.0 +
+                select(0.0, 1.0, anyFirst)          * 1000.0 +
+                lane0Value                          * 10000.0;
+
+            if (idx < 8u) {
+                resources.output[idx] = score;
+            }
+        }
+    }
+}

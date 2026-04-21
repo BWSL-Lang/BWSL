@@ -1,0 +1,25 @@
+// Pass-scope `const` declarations of various types used inside the
+// compute shader body. Parser stores const values in symbol table;
+// IR lowering substitutes them at use sites. Mixed int/float/uint
+// and array consts.
+pipeline ConstExpressionsScopes {
+    pass "Compute" {
+        const int N = 5;
+        const float PI = 3.14159;
+        const uint MASK = 0xFFu;
+
+        compute "Main" [1, 1, 1] {
+            float angle = float(N) * PI;
+            uint  masked = input.global_id.x & MASK;
+            int   scaled = N * 2;
+
+            // Use const in array declaration size (compile-time only)
+            float scratch[5];  // N is 5, but array size literal here
+            for (int i = 0; i < N; i = i + 1) {
+                scratch[i] = float(i) * PI;
+            }
+
+            float sum = scratch[0] + scratch[N - 1] + angle + float(scaled);
+        }
+    }
+}

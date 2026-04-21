@@ -1,0 +1,30 @@
+// Array of arrays: `float[N][M]` / nested access patterns via struct
+// with array fields. Each element access combines STRUCT_EXTRACT +
+// ARRAY_LOAD at multiple levels.
+pipeline ArrayOfArraysAccess {
+    struct Row {
+        float cells[4];
+    };
+    struct Grid {
+        Row rows[3];
+    };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Grid g;
+            for (int r = 0; r < 3; r = r + 1) {
+                for (int c = 0; c < 4; c = c + 1) {
+                    g.rows[r].cells[c] = float(r * 4 + c);
+                }
+            }
+
+            // Read back through nested indexing
+            float sum = 0.0;
+            for (int r = 0; r < 3; r = r + 1) {
+                for (int c = 0; c < 4; c = c + 1) {
+                    sum = sum + g.rows[r].cells[c];
+                }
+            }
+        }
+    }
+}

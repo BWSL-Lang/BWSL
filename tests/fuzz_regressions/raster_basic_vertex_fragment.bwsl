@@ -1,0 +1,22 @@
+// Minimal raster pipeline with vertex + fragment stages. Tests the
+// vertex→fragment varying plumbing, attribute reads, output writes.
+pipeline RasterBasicVertexFragment {
+    attributes {
+        position: float3
+        normal: float3
+    }
+
+    pass "Main" {
+        use attributes { position, normal }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.vnormal = attributes.normal;
+        }
+
+        fragment {
+            float3 n = normalize(input.vnormal);
+            output.color = float4(n * 0.5 + 0.5, 1.0);
+        }
+    }
+}

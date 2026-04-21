@@ -1,0 +1,73 @@
+pipeline EquivPointersInLoop {
+
+    // HANDOFF.md short-term item #3: pointer + loop + phi cross-product.
+    // Exercises a pointer variable that is (a) assigned once and (b)
+    // reassigned across branches, with writes both inside the loop
+    // body and after a conditional break, over scalar/vector/struct
+    // pointee types.
+
+    struct Counts {
+        int  ia;
+        int  ib;
+        float3 v;
+    };
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int n = int(idx) + 1;
+
+            // (1) scalar pointer, single assignment, write inside loop
+            int acc = 0;
+            int^ accPtr = ^acc;
+            for (int i = 0; i < n; i = i + 1) {
+                accPtr^ = accPtr^ + i;
+            }
+            int loopSum = acc;
+
+            // (2) scalar pointer with branchy reassignment inside the loop.
+            int a = 0;
+            int b = 0;
+            int^ chosen = ^a;
+            for (int j = 0; j < n; j = j + 1) {
+                if ((j & 1) == 0) {
+                    chosen = ^a;
+                } else {
+                    chosen = ^b;
+                }
+                chosen^ = chosen^ + j;
+            }
+
+            // (3) vector pointer; write after a conditional break.
+            float3 v = float3(0.0, 0.0, 0.0);
+            float3^ vPtr = ^v;
+            for (int k = 0; k < 16; k = k + 1) {
+                if (k > n) {
+                    vPtr^ = float3(float(k), float(k) * 2.0, float(k) * 3.0);
+                    break;
+                }
+            }
+
+            // (4) struct-field pointer written inside the loop. Exercises
+            // the OP_LOCAL_FIELD_PTR path under phi pressure.
+            Counts c;
+            c.ia = 0;
+            c.ib = 0;
+            c.v = float3(0.0, 0.0, 0.0);
+            int^ iaPtr = ^c.ia;
+            float3^ cvPtr = ^c.v;
+            for (int m = 0; m < n; m = m + 1) {
+                iaPtr^ = iaPtr^ + 1;
+                cvPtr^ = cvPtr^ + float3(0.5, 0.25, 0.125);
+            }
+
+            resources.output[idx] =
+                float(loopSum) +
+                float(a) * 0.1 +
+                float(b) * 0.01 +
+                v.x * 0.001 + v.y * 0.0001 + v.z * 0.00001 +
+                float(c.ia) * 0.000001 +
+                c.v.x * 0.0000001 + c.v.y * 0.00000001 + c.v.z * 0.000000001;
+        }
+    }
+}

@@ -1,0 +1,41 @@
+pipeline EquivEnumSumtypeSdf {
+
+    enum SDFShape {
+        Sphere(float radius),
+        Box(float3 size),
+        Torus(float major, float minor),
+
+        eval distance :: (float3 p) -> float {
+            Sphere(r): length(p) - r
+            Box(size): {
+                float3 d = abs(p) - size;
+                float outside = length(max(d, 0.0));
+                float inside = min(max(d.x, max(d.y, d.z)), 0.0);
+                return outside + inside;
+            }
+            Torus(major, minor): {
+                float2 q = float2(length(p.xz) - major, p.y);
+                return length(q) - minor;
+            }
+        }
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.3;
+
+            SDFShape shape = SDFShape::Sphere(1.0);
+            if (idx % 3u == 1u) {
+                shape = SDFShape::Box(float3(0.5, 0.8, 0.6));
+            } else if (idx % 3u == 2u) {
+                shape = SDFShape::Torus(1.5, 0.3);
+            }
+
+            float3 p = float3(t * 0.5, t * 0.3, t * 0.1);
+            float d = shape.distance(p);
+
+            resources.output[idx] = d;
+        }
+    }
+}

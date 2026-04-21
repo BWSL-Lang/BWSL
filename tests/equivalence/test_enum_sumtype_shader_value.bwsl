@@ -1,0 +1,45 @@
+pipeline EquivEnumSumtypeShaderValue {
+
+    enum ShaderValue {
+        Constant(float4),
+        Sampled(float2),
+        Computed,
+
+        isStatic :: () -> bool {
+            Constant(_): true
+            default: false
+        }
+
+        luma :: () -> float {
+            Constant(c): dot(c.rgb, float3(0.2126, 0.7152, 0.0722))
+            Sampled(uv): uv.x + uv.y
+            Computed: 0.0
+        }
+    }
+
+    scoreValue :: (ShaderValue v) -> float {
+        return v.luma();
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            ShaderValue v;
+            if (idx % 3u == 0u) {
+                v = ShaderValue::Constant(float4(t * 0.1, t * 0.2, t * 0.3, 1.0));
+            } else if (idx % 3u == 1u) {
+                v = ShaderValue::Sampled(float2(t * 0.05, t * 0.07));
+            } else {
+                v = ShaderValue::Computed();
+            }
+
+            float s = scoreValue(v);
+            bool stat = v.isStatic();
+            float staticBoost = select(0.0, 1.0, stat);
+
+            resources.output[idx] = s + staticBoost * 10.0;
+        }
+    }
+}

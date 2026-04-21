@@ -1,0 +1,24 @@
+// Generic function whose argument is itself a call to another
+// generic function. Each instantiation must propagate types
+// through the composed call.
+pipeline NestedGenericCall {
+    constraint AnyF = float | float2 | float3 | float4;
+
+    doubleIt :: (AnyF x) -> AnyF {
+        return x + x;
+    }
+
+    tripleIt :: (AnyF x) -> AnyF {
+        return x + x + x;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float a = tripleIt(doubleIt(1.5));           // 9.0
+            float3 b = doubleIt(doubleIt(float3(1.0, 2.0, 3.0)));  // (4, 8, 12)
+            float4 c = tripleIt(doubleIt(tripleIt(float4(1.0, 1.0, 1.0, 1.0))));
+
+            float total = a + b.x + c.x;
+        }
+    }
+}

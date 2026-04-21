@@ -1,0 +1,24 @@
+// Function with a `return` inside nested loops. The inlining path
+// must emit return-guard branches at each statement after the
+// return, threading through loop continues.
+pipeline LoopNestedWithReturn {
+    findFirst :: (int target) -> int {
+        for (int i = 0; i < 10; i = i + 1) {
+            for (int j = 0; j < 10; j = j + 1) {
+                if (i * j == target) {
+                    return i * 100 + j;
+                }
+            }
+        }
+        return -1;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int a = findFirst(6);
+            int b = findFirst(1000);
+            int c = findFirst(0);
+            int total = a + b + c;
+        }
+    }
+}

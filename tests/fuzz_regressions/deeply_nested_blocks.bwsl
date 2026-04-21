@@ -1,0 +1,30 @@
+// Many levels of nested blocks to stress the scope stack and the
+// new variableRegisters save/restore in LowerBlock.
+pipeline DeeplyNestedBlocks {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int a = 1;
+            {
+                int b = 2;
+                {
+                    int c = 3;
+                    {
+                        int d = 4;
+                        {
+                            int e = 5;
+                            {
+                                int f = 6;
+                                int sum6 = a + b + c + d + e + f;
+                            }
+                            int sum5 = a + b + c + d + e;
+                        }
+                        int sum4 = a + b + c + d;
+                    }
+                    int sum3 = a + b + c;
+                }
+                int sum2 = a + b;
+            }
+            int sum1 = a;
+        }
+    }
+}

@@ -1,0 +1,26 @@
+// Matrix column accessed by dynamic index. `M[i]` where i is a
+// runtime value. SPIR-V has no direct op; backend inlines a select
+// chain.
+pipeline MatrixIndexedDynamic {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            mat3 M = mat3(
+                float3(1.0, 0.0, 0.0),
+                float3(0.0, 2.0, 0.0),
+                float3(0.0, 0.0, 3.0)
+            );
+
+            int idx = int(input.global_id.x) & 2;
+
+            // Dynamic column read
+            float3 col = M[idx];
+            float sum = col.x + col.y + col.z;
+
+            // Dynamic column + static element
+            float element = M[idx][0];
+
+            // Combine
+            float result = sum + element;
+        }
+    }
+}

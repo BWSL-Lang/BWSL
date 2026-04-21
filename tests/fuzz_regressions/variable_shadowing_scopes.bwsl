@@ -1,0 +1,23 @@
+// Variables shadowing across nested scopes. Each inner `int x` / `float y`
+// redeclaration creates a fresh slot; outer values must remain readable
+// by the outer-scope code that follows the inner block. Parser's scope
+// stack + IR lowering's variableRegisters map must agree.
+pipeline VariableShadowingScopes {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int x = 1;
+            float y = 10.0;
+            {
+                int x = 2;
+                float y = 20.0;
+                {
+                    int x = 3;
+                    y = y + 5.0;
+                }
+                int sum_inner = x;
+            }
+            int sum_outer = x;
+            float yo = y;
+        }
+    }
+}

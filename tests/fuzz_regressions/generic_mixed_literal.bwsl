@@ -1,0 +1,22 @@
+// Discovered 2026-04-20. A generic function's body uses a literal
+// of a specific type (`return x + 1` where x is the generic
+// parameter). When instantiated with float, the `1` int literal
+// stays int and the lowering emits `OpFAdd %float … %int_1`, which
+// fails SPIR-V validation ("arithmetic operands to be of Result
+// Type"). Fix path: during inline-instantiation of a generic, walk
+// the body's literal nodes and coerce them to the resolved concrete
+// type (or emit explicit convert instructions at binop sites).
+pipeline GenericMixedLiteral {
+    constraint Scalar = float | int;
+
+    addOne :: (Scalar x) -> Scalar {
+        return x + 1;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float a = addOne(1.5);
+            int b = addOne(10);
+        }
+    }
+}

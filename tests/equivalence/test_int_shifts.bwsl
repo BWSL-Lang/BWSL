@@ -1,0 +1,41 @@
+pipeline EquivIntShifts {
+
+    // Integer shifts: SPIR-V's OpShiftRightArithmetic vs Logical, and
+    // shift-by-width behavior (undefined in C, well-defined in SPIR-V as
+    // zero). Also mixes signed/unsigned shifts in const-folded and
+    // runtime paths so the backend's int type tracking has to stay sharp.
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int a = int(idx) * 0x01010101;     // 0, 0x01010101, 0x02020202, ...
+            int neg = -int(idx) - 1;            // -1, -2, ...
+
+            // Logical right shift on unsigned preserves high bits=0
+            uint ua = uint(a);
+            uint ursh1 = ua >> 1u;
+            uint ursh4 = ua >> 4u;
+
+            // Arithmetic right shift on signed sign-extends
+            int sSh1 = neg >> 1;
+            int sSh4 = neg >> 4;
+
+            // Left shift (wraps in u32)
+            int lSh = int(idx) << 28;           // 0, 0x10000000, ...
+
+            // Runtime shift amount (not const-foldable)
+            uint dynAmt = idx & 7u;
+            uint ushDyn = 0xFFu << dynAmt;
+
+            float score =
+                float(int(ursh1))  * 0.000001 +
+                float(int(ursh4))  * 0.0000001 +
+                float(sSh1)        * 0.00000001 +
+                float(sSh4)        * 0.000000001 +
+                float(lSh)         * 0.0000000001 +
+                float(int(ushDyn)) * 0.01;
+
+            resources.output[idx] = score;
+        }
+    }
+}

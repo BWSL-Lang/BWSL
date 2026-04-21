@@ -1,0 +1,10 @@
+pipeline EquivRasterUboTint
+
+target MainColor RGBA32Float 16 16
+
+uniform tint float4 0 fragment
+
+pass Main
+  type geometry
+  color MainColor clear 0.0 0.0 0.0 0.0 store
+  depends none

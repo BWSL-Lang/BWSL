@@ -1,0 +1,18 @@
+pipeline EquivInlineReturnCountLoop {
+
+    chooseCount :: (int limit) -> int {
+        loop (limit) {
+            return 3;
+        }
+        return 4;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int limit = int(idx) - 2;  // spans -2..5 so hits zero-iteration path
+            int v = chooseCount(limit);
+            resources.output[idx] = float(v);
+        }
+    }
+}

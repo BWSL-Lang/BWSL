@@ -127,6 +127,10 @@ enum class Intrinsic : u16 {
     ANY,
     ALL,
 
+    // Float classification
+    IS_NAN,
+    IS_INF,
+
     COUNT,
     INVALID = 0xFFFF
 };
@@ -259,6 +263,10 @@ constexpr BackendNames BACKEND_NAMES[] = {
     // Boolean reductions
     {"any", "any", "any"},                              // ANY
     {"all", "all", "all"},                              // ALL
+
+    // Float classification
+    {"isnan", "isnan", "isnan"},                        // IS_NAN
+    {"isinf", "isinf", "isinf"},                        // IS_INF
 };
 
 struct IntrinsicData {
@@ -440,6 +448,13 @@ constexpr IntrinsicData INTRINSICS[] = {
     // Boolean reductions — any(bvec) / all(bvec) -> bool. Core SPIR-V ops.
     INTRINSIC_FIXED(ANY, "any", mask(CoreType::BOOL), TypeMasks::BOOL_VECTORS, 0, 0, 0, 0, SPV_MAP(spv::OpAny, SPV_EXT_NONE)),
     INTRINSIC_FIXED(ALL, "all", mask(CoreType::BOOL), TypeMasks::BOOL_VECTORS, 0, 0, 0, 0, SPV_MAP(spv::OpAll, SPV_EXT_NONE)),
+
+    // Float classification — isnan/isinf return bool (or bvec matching input
+    // width). All three backends spell them the same way. Return-type mask
+    // permits the scalar bool and bvec2/3/4; actual result shape tracks
+    // input shape at type-check time.
+    INTRINSIC_FIXED(IS_NAN, "isnan", mask(CoreType::BOOL) | TypeMasks::BOOL_VECTORS, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(spv::OpIsNan, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(IS_INF, "isinf", mask(CoreType::BOOL) | TypeMasks::BOOL_VECTORS, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(spv::OpIsInf, SPV_EXT_NONE)),
 };
 #undef INTRINSIC_ENTRY
 

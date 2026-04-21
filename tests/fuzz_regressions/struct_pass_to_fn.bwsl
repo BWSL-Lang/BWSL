@@ -1,0 +1,32 @@
+// Pass struct by value to a function. Inlining must bind the
+// parameter's fields correctly and propagate struct-type hash info.
+pipeline StructPassToFn {
+    struct Vec3Wrap {
+        float3 v;
+        float w;
+    };
+
+    length3w :: (Vec3Wrap x) -> float {
+        return length(x.v) + x.w;
+    }
+
+    scaleIt :: (Vec3Wrap x, float k) -> Vec3Wrap {
+        Vec3Wrap r;
+        r.v = x.v * k;
+        r.w = x.w * k;
+        return r;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Vec3Wrap a;
+            a.v = float3(1.0, 2.0, 3.0);
+            a.w = 0.5;
+
+            float  la = length3w(a);
+            Vec3Wrap b = scaleIt(a, 2.0);
+
+            float total = la + length3w(b);
+        }
+    }
+}

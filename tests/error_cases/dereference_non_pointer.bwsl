@@ -1,0 +1,12 @@
+// `a ^ -1` parses as `(a^) - 1`; when `a` isn't a pointer this is
+// diagnostic-worthy (the user almost certainly meant XOR with a
+// negative literal). The compiler must print the actionable
+// workaround suggestion before any downstream validator noise.
+pipeline DereferenceNonPointer {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int a = 5;
+            int b = a ^ -1;
+        }
+    }
+}

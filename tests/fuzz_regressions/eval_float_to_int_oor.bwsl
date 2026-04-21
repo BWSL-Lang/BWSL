@@ -1,0 +1,29 @@
+// Regression: the constant-time evaluator's vector constructor path cast
+// floats to ints with plain `(int)fval`. When a constant expression
+// produced NaN, +inf, -inf, or a magnitude beyond INT_MAX, the cast was
+// undefined behaviour and tripped UBSan during fuzzing. Fix: route all
+// float-to-int conversions through SafeFloatToInt(), which clamps NaN
+// to 0 and saturates at [INT_MIN, INT_MAX].
+//
+// Expected behaviour: bwslc exits with code 0 or 1 (no SIGABRT, no UBSan
+// runtime error).
+pipeline EvalFloatToIntOOR {
+    attributes {
+        color: float4
+    }
+
+    pass "Main" {
+        fragment {
+            // Compile-time evaluated float-to-int casts that previously
+            // produced undefined values.
+            int huge = int(1.0e30);
+            int tiny = int(-1.0e30);
+            int inf  = int(1.0 / 0.0);
+            int ninf = int(-1.0 / 0.0);
+            int nan  = int(0.0 / 0.0);
+
+            int  mix = huge + tiny + inf + ninf + nan;
+            output.color = float4(float(mix), 0.0, 0.0, 1.0);
+        }
+    }
+}

@@ -1,0 +1,25 @@
+// Generic function taking a generic numeric type plus a fixed
+// struct type. The constraint-vs-struct distinction must survive
+// overload resolution.
+pipeline GenericStructParam {
+    constraint FloatScalar = float;
+
+    struct Point { float3 v; float w; };
+
+    // Mix generic and non-generic params
+    weighted :: (FloatScalar x, Point p) -> float {
+        return x * p.w + p.v.x;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Point p;
+            p.v = float3(1.0, 2.0, 3.0);
+            p.w = 5.0;
+
+            float a = weighted(0.5, p);
+            float b = weighted(2.0, p);
+            float total = a + b;
+        }
+    }
+}

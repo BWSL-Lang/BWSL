@@ -1,0 +1,25 @@
+// Vector component accessed by dynamic index in arithmetic
+// expression. OpVectorExtractDynamic vs literal-index OpCompositeExtract.
+pipeline VectorIndexedInExpr {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float3 v = float3(1.0, 2.0, 3.0);
+
+            int idx = int(input.global_id.x) & 2;
+
+            // Dynamic index read
+            float a = v[idx];
+            float b = v[idx] * 2.0 + 1.0;
+
+            // Chained: dynamic index arithmetic result used as another index
+            int idx2 = int(input.global_id.x + 1u) & 2;
+            float c = v[idx2] + v[idx];
+
+            // Dynamic index write
+            float3 w = v;
+            w[idx] = 99.0;
+
+            float sum = a + b + c + w.x;
+        }
+    }
+}

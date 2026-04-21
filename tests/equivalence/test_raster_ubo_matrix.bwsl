@@ -1,0 +1,28 @@
+// Equivalence: raster with a mat4 uniform used to transform the fullscreen
+// triangle in the vertex stage. Validates that matrix UBO decoding
+// (std140 vs HLSL cbuffer vs GLSL std140) produces identical output across
+// all three backends.
+pipeline EquivRasterUboMatrix {
+    attributes {
+    }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            float4 pos = float4(p, 0.0, 1.0);
+            float4 transformed = resources.xform * pos;
+            output.position = transformed;
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            output.color = float4(uv.x, uv.y, 0.5, 1.0);
+        }
+    }
+}

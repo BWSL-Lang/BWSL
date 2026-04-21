@@ -1,0 +1,27 @@
+// Equivalence: simplest raster test. Fullscreen triangle vertex + linear
+// UV gradient fragment. Validates that backend-neutral UV interpolation
+// and a trivial fragment that echoes uv.x/uv.y produces identical pixels
+// across native SPIR-V, HLSL->SPIR-V, and GLSL->SPIR-V.
+pipeline EquivRasterUvGradient {
+    attributes {
+        // Fullscreen triangle synthesized from vertex_id - no attributes.
+    }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            output.color = float4(uv.x, uv.y, 0.25, 1.0);
+        }
+    }
+}

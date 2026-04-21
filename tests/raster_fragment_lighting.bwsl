@@ -1,0 +1,176 @@
+// Test: Fragment-stage lighting models.
+// Tests: Lambert, Blinn-Phong, Fresnel/rim, anisotropic, and toon/ramp
+// lighting expressed as pure fragment-shader math with shared varyings.
+
+pipeline RasterFragmentLighting {
+    attributes {
+        position: float3
+        normal:   float3
+        tangent:  float4
+        texcoord: float2
+    }
+
+    pass "Lambert" {
+        use attributes { position, normal, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.worldPos = attributes.position;
+            output.worldN   = attributes.normal;
+            output.uv       = attributes.texcoord;
+        }
+
+        fragment {
+            float3 N = normalize(input.worldN);
+            float3 L = normalize(float3(0.3, 0.9, 0.4));
+            float NdotL = max(dot(N, L), 0.0);
+
+            float3 albedo = float3(0.9, 0.5, 0.3);
+            float3 diffuse = albedo * NdotL;
+
+            output.color = float4(diffuse, 1.0);
+        }
+    }
+
+    pass "BlinnPhong" {
+        use attributes { position, normal, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.worldPos = attributes.position;
+            output.worldN   = attributes.normal;
+            output.uv       = attributes.texcoord;
+        }
+
+        fragment {
+            float3 P = input.worldPos;
+            float3 N = normalize(input.worldN);
+
+            float3 lightPos = float3(2.0, 3.0, 1.5);
+            float3 L = normalize(lightPos - P);
+            float3 V = normalize(float3(0.0, 0.0, 5.0) - P);
+            float3 H = normalize(L + V);
+
+            float NdotL = max(dot(N, L), 0.0);
+            float NdotH = max(dot(N, H), 0.0);
+
+            float shininess = 64.0;
+            float spec = pow(NdotH, shininess);
+
+            float3 albedo = float3(0.2, 0.6, 0.9);
+            float3 ambient = albedo * 0.08;
+            float3 diffuse = albedo * NdotL;
+            float3 specular = float3(1.0) * spec;
+
+            // Inverse-square-ish attenuation.
+            float dist = length(lightPos - P);
+            float atten = 1.0 / (1.0 + 0.1 * dist + 0.02 * dist * dist);
+
+            float3 color = ambient + (diffuse + specular) * atten;
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "Fresnel" {
+        use attributes { position, normal }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.worldPos = attributes.position;
+            output.worldN   = attributes.normal;
+        }
+
+        fragment {
+            float3 N = normalize(input.worldN);
+            float3 V = normalize(float3(0.0, 0.0, 3.0) - input.worldPos);
+
+            float NdotV = max(dot(N, V), 0.0);
+            // Schlick's approximation.
+            float F0 = 0.04;
+            float fresnel = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);
+
+            float3 baseColor = float3(0.1, 0.2, 0.4);
+            float3 rimColor  = float3(0.8, 0.9, 1.0);
+            float3 color = lerp(baseColor, rimColor, fresnel);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "Anisotropic" {
+        use attributes { position, normal, tangent }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.worldPos = attributes.position;
+            output.worldN   = attributes.normal;
+            output.worldT   = attributes.tangent.xyz;
+        }
+
+        fragment {
+            float3 N = normalize(input.worldN);
+            float3 T = normalize(input.worldT);
+            float3 B = normalize(cross(N, T));
+
+            float3 L = normalize(float3(0.4, 0.6, 0.9));
+            float3 V = normalize(float3(0.0, 0.0, 4.0) - input.worldPos);
+            float3 H = normalize(L + V);
+
+            // Ward-like anisotropic term.
+            float HdotT = dot(H, T);
+            float HdotB = dot(H, B);
+            float HdotN = max(dot(H, N), 1e-4);
+
+            float ax = 0.25;
+            float ay = 0.75;
+
+            float exponent = -((HdotT * HdotT) / (ax * ax)
+                             + (HdotB * HdotB) / (ay * ay)) / (HdotN * HdotN);
+            float spec = exp(exponent);
+
+            float NdotL = max(dot(N, L), 0.0);
+
+            float3 albedo = float3(0.7, 0.5, 0.2);
+            float3 color = albedo * NdotL + float3(1.0, 0.9, 0.7) * spec;
+
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "Toon" {
+        use attributes { position, normal }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.worldPos = attributes.position;
+            output.worldN   = attributes.normal;
+        }
+
+        fragment {
+            float3 N = normalize(input.worldN);
+            float3 L = normalize(float3(0.3, 0.8, 0.5));
+
+            float NdotL = dot(N, L);
+
+            // 3-step ramp.
+            float ramp;
+            if (NdotL < 0.1) {
+                ramp = 0.2;
+            } else if (NdotL < 0.5) {
+                ramp = 0.55;
+            } else {
+                ramp = 1.0;
+            }
+
+            // Rim for silhouette emphasis.
+            float3 V = normalize(float3(0.0, 0.0, 3.0) - input.worldPos);
+            float rim = 1.0 - max(dot(N, V), 0.0);
+            float rimBand = smoothstep(0.7, 0.9, rim);
+
+            float3 base = float3(0.85, 0.35, 0.45) * ramp;
+            float3 color = base + float3(1.0) * rimBand;
+
+            output.color = float4(color, 1.0);
+        }
+    }
+}

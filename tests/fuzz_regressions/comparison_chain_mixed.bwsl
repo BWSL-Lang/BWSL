@@ -1,0 +1,27 @@
+// Comparison chains with type mixing — uint vs int, float vs int
+// (requires cast). GLSL doesn't support chained comparisons like
+// `a < b < c`, but individual comparisons combined with && / || are
+// common.
+pipeline ComparisonChainMixed {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int i = 7;
+            uint u = 3u;
+            float f = 2.5;
+
+            bool a = i > 0 && i < 10;
+            bool b = (int(u) >= 0) && (int(u) <= 255);
+            bool c = (f > 1.0) || (f < 0.5);
+            bool d = i == 7 && u != 0u;
+            bool e = float(i) < 10.0 || f > 100.0;
+
+            // Nested logical ops with parens
+            bool f1 = (a && b) || (c && d);
+            bool f2 = !((i == 0) || (u == 0u));
+
+            int result = (a ? 1 : 0) + (b ? 2 : 0) + (c ? 4 : 0) +
+                         (d ? 8 : 0) + (e ? 16 : 0) + (f1 ? 32 : 0) +
+                         (f2 ? 64 : 0);
+        }
+    }
+}

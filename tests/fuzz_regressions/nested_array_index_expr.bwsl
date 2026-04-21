@@ -1,0 +1,26 @@
+// Array indexed by a complex expression: `arr[b[c[d] & 3]]`. Each
+// array load is nested inside the next index computation. Exercises
+// OP_ARRAY_LOAD chaining and register liveness tracking.
+pipeline NestedArrayIndexExpr {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int a[4];
+            int b[4];
+            int c[4];
+
+            for (int i = 0; i < 4; i = i + 1) {
+                a[i] = i * 10;
+                b[i] = i + 1;
+                c[i] = 3 - i;
+            }
+
+            int idx = int(input.global_id.x) & 3;
+            int k = a[b[c[idx] & 3]];
+
+            // Also: chained-indexed write
+            a[b[idx] & 3] = k + 100;
+
+            int total = a[0] + a[1] + a[2] + a[3] + k;
+        }
+    }
+}

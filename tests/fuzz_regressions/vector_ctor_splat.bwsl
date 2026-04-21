@@ -1,0 +1,28 @@
+// Vector construction with scalar broadcast: `float3(1.0)` =
+// `float3(1.0, 1.0, 1.0)`. Each backend and each arity must
+// produce the splat correctly.
+pipeline VectorCtorSplat {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float2 a = float2(0.5);        // (0.5, 0.5)
+            float3 b = float3(1.0);        // (1, 1, 1)
+            float4 c = float4(2.0);        // (2, 2, 2, 2)
+
+            int2  d = int2(7);
+            int3  e = int3(-3);
+            int4  f = int4(42);
+
+            uint2 g = uint2(99u);
+            uint3 h = uint3(0xFFu);
+            uint4 i = uint4(256u);
+
+            // Mixed: 3-arg float4 with scalar+vec3
+            float4 j = float4(0.25, float3(1.0, 2.0, 3.0));
+            float4 k = float4(float3(1.0), 4.0);
+            float4 l = float4(float2(1.0, 2.0), float2(3.0, 4.0));
+
+            float sum = a.x + b.x + c.x + float(d.x + e.x + f.x) +
+                        float(g.x + h.x + i.x) + j.x + k.x + l.x;
+        }
+    }
+}

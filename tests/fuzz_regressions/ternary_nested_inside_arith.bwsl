@@ -1,0 +1,23 @@
+// Ternary result used directly as operand in arithmetic, combined
+// with another ternary. Tests that nested ternary nodes get unique
+// SSA names and the phi network is correct.
+pipeline TernaryNestedInsideArith {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int idx = int(input.global_id.x);
+            int n = idx & 7;
+
+            // Ternary inside addition
+            int a = (n > 3 ? 10 : 20) + 5;
+
+            // Two ternaries multiplied
+            int b = (n > 0 ? 2 : 1) * (n < 5 ? 3 : 4);
+
+            // Ternary with vector result, used in vec arithmetic
+            float3 v = (n > 0) ? float3(1.0, 2.0, 3.0) : float3(0.0, 0.0, 0.0);
+            float3 w = v + (n < 5 ? float3(0.5) : float3(-0.5));
+
+            float total = float(a + b) + w.x + w.y + w.z;
+        }
+    }
+}

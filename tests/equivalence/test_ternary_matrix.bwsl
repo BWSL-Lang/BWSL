@@ -1,0 +1,28 @@
+// Matrix-typed ternary must decompose into per-column selects
+// (OpSelect doesn't support composite matrix types pre-SPIRV-1.4).
+pipeline EquivTernaryMatrix {
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            mat3 A = mat3(
+                float3(1.0, 2.0, 3.0),
+                float3(4.0, 5.0, 6.0),
+                float3(7.0, 8.0, 9.0)
+            );
+            mat3 B = mat3(
+                float3(-1.0, -2.0, -3.0),
+                float3(-4.0, -5.0, -6.0),
+                float3(-7.0, -8.0, -9.0)
+            );
+
+            bool c = (idx & 1u) == 0u;
+            mat3 M = c ? A : B;
+
+            float s = M[0][0] + M[1][1] * 0.1 + M[2][2] * 0.01
+                    + M[0][1] * 0.001 + M[1][2] * 0.0001;
+            resources.output[idx] = s + t * 0.00001;
+        }
+    }
+}

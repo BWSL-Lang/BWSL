@@ -1,0 +1,17 @@
+pipeline EquivInlineReturnJump {
+
+    chooseValue :: (float v) -> float {
+        if (v > 0.0) {
+            return 1.0;
+        }
+        return 2.0;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float v = float(idx) - 3.5;  // spans negative, zero-ish, positive
+            resources.output[idx] = chooseValue(v);
+        }
+    }
+}

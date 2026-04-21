@@ -1,0 +1,30 @@
+// Long sequence of writes to the same variable mixed with reads.
+// Each write is an SSA definition; the final read should see the
+// last definition.
+pipeline SequenceComplexWrites {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int x = 0;
+            x = 10;
+            int a = x;
+            x = x + 5;
+            int b = x;
+            x = x * 2;
+            int c = x;
+            x = x - 10;
+            int d = x;
+
+            // Branch-then-merge with writes in every branch
+            if (input.global_id.x == 0u) {
+                x = 100;
+            } else {
+                x = 200;
+            }
+            int e = x;
+            x = x + 1;
+            int f = x;
+
+            int total = a + b + c + d + e + f + x;
+        }
+    }
+}

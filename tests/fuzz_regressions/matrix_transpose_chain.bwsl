@@ -1,0 +1,34 @@
+// Chained matrix operations: transpose(inverse(M * N)) etc.
+// Each nested call must thread the matrix type through.
+pipeline MatrixTransposeChain {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            mat3 A = mat3(
+                float3(1.0, 0.2, 0.1),
+                float3(0.0, 1.0, 0.3),
+                float3(0.0, 0.0, 1.0)
+            );
+            mat3 B = mat3(
+                float3(1.0, 0.0, 0.0),
+                float3(0.4, 1.0, 0.0),
+                float3(0.0, 0.5, 1.0)
+            );
+
+            mat3 tA = transpose(A);
+            mat3 tAB = transpose(A * B);
+            mat3 tBA = transpose(B) * transpose(A);
+
+            mat4 M = mat4(
+                float4(2.0, 0.0, 0.0, 0.0),
+                float4(0.0, 3.0, 0.0, 0.0),
+                float4(0.0, 0.0, 4.0, 0.0),
+                float4(0.0, 0.0, 0.0, 1.0)
+            );
+            mat4 Minv = inverse(M);
+            mat4 Mid = M * Minv;
+
+            float sum = tA[0].x + tAB[1].y + tBA[2].z +
+                        Mid[0].x + Mid[1].y + Mid[2].z + Mid[3].w;
+        }
+    }
+}

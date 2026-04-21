@@ -1,0 +1,25 @@
+// Struct initialized inside different branches of an if/else.
+// The merge point phis the two struct-typed paths.
+pipeline StructConditionalInit {
+    struct Info {
+        float3 vec;
+        int kind;
+    };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint idx = input.global_id.x;
+            Info info;
+
+            if ((idx & 1u) == 0u) {
+                info.vec = float3(1.0, 0.0, 0.0);
+                info.kind = 1;
+            } else {
+                info.vec = float3(0.0, 1.0, 0.0);
+                info.kind = 2;
+            }
+
+            float sum = info.vec.x + info.vec.y + info.vec.z + float(info.kind);
+        }
+    }
+}

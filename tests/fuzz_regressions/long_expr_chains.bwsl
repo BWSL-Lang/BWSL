@@ -1,0 +1,29 @@
+// Really long expressions (many operands + chaining) to stress-test
+// the parser stack and IR lowering's recursive LowerExpression.
+pipeline LongExprChains {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float a = 1.0;
+            float b = 2.0;
+            float c = 3.0;
+            float d = 4.0;
+
+            // Very long arithmetic expression
+            float r1 = a + b * c - d / (a + 0.5) * b - c + d * a +
+                       (a - b) * (c + d) + a * (b + c * (d - a)) -
+                       (b + c) / (d + 1.0) + a * 2.0 - b * 3.0;
+
+            // Deep parenthesized nesting
+            float r2 = (((((a + b) * c) + d) * a) + b);
+
+            // Chained method-like calls
+            float r3 = sqrt(abs(sin(cos(tan(a + b)))));
+
+            // Vector arithmetic chain
+            float3 v = float3(1.0, 2.0, 3.0);
+            float3 r4 = normalize(v + v * 2.0 - v * 0.5 + cross(v, float3(1.0, 0.0, 0.0)));
+
+            float total = r1 + r2 + r3 + r4.x;
+        }
+    }
+}

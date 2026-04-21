@@ -138,6 +138,15 @@ ERROR_CASE_TESTS = {
     "invalid_intrinsic_arity.bwsl": "'sin' accepts at most 1 arguments, got 2",
     "missing_semicolon.bwsl": "Expected ';' after expression",
     "unknown_module_import.bwsl": "Unknown module 'DoesNotExist'",
+    "workgroup_id_wrong_stage.bwsl": "input.workgroup_id is only available in compute shaders",
+    "local_id_wrong_stage.bwsl": "input.local_id is only available in compute shaders",
+    "dereference_non_pointer.bwsl": "dereference (`^` postfix) applied to a non-pointer value",
+    "pointer_in_ternary.bwsl": "ternary expression with pointer operands is not supported",
+    "recursion_not_supported.bwsl": "recursion is not supported",
+    "const_redeclared.bwsl": "Variable already declared in this scope",
+    "compute_with_vertex_stage.bwsl": "Compute passes cannot include vertex/fragment stages",
+    "duplicate_compute_block.bwsl": "Only one compute block is allowed per pass",
+    "array_size_overflow.bwsl": "Invalid array size. Max 256k elements",
 }
 
 TEXT_GOLDEN_SUFFIXES = {".metal", ".hlsl", ".glsl", ".gles"}
@@ -698,9 +707,17 @@ def equiv_runner_path(root: Path) -> Path:
     return root / "build" / ("equiv_runner.exe" if os.name == "nt" else "equiv_runner")
 
 
-def convert_hlsl_to_spirv(hlsl_file: Path, out_spv: Path) -> tuple[bool, str]:
+_HLSL_PROFILE = {"comp": "cs_6_0", "vert": "vs_6_0", "frag": "ps_6_0"}
+_GLSL_STAGE = {"comp": "comp", "vert": "vert", "frag": "frag"}
+
+
+def convert_hlsl_to_spirv(hlsl_file: Path, out_spv: Path,
+                          stage: str = "comp") -> tuple[bool, str]:
+    profile = _HLSL_PROFILE.get(stage)
+    if profile is None:
+        return False, f"unsupported stage for dxc: {stage}"
     result = run_command([
-        "dxc", "-spirv", "-T", "cs_6_0", "-E", "main",
+        "dxc", "-spirv", "-T", profile, "-E", "main",
         "-fvk-use-dx-layout",
         str(hlsl_file), "-Fo", str(out_spv),
     ])
@@ -709,10 +726,29 @@ def convert_hlsl_to_spirv(hlsl_file: Path, out_spv: Path) -> tuple[bool, str]:
     return True, ""
 
 
-def convert_glsl_to_spirv(glsl_file: Path, out_spv: Path) -> tuple[bool, str]:
+def convert_glsl_to_spirv(glsl_file: Path, out_spv: Path,
+                          stage: str = "comp") -> tuple[bool, str]:
+    gstage = _GLSL_STAGE.get(stage)
+    if gstage is None:
+        return False, f"unsupported stage for glslangValidator: {stage}"
+
+    # BWSL's GLSL emission targets desktop-GL semantics (gl_VertexID /
+    # gl_InstanceID), but compiling to Vulkan SPIR-V with -V requires
+    # gl_VertexIndex / gl_InstanceIndex. For vertex/fragment stages, patch
+    # the source on the fly. Compute shaders use gl_GlobalInvocationID which
+    # is unchanged between GL and Vulkan, so no substitution is needed.
+    input_path = glsl_file
+    if stage in ("vert", "frag"):
+        src = glsl_file.read_text(encoding="utf-8")
+        patched = src.replace("gl_VertexID", "gl_VertexIndex") \
+                     .replace("gl_InstanceID", "gl_InstanceIndex")
+        if patched != src:
+            input_path = glsl_file.with_suffix(glsl_file.suffix + ".vk")
+            input_path.write_text(patched, encoding="utf-8")
+
     result = run_command([
-        "glslangValidator", "-V", "-S", "comp",
-        str(glsl_file), "-o", str(out_spv),
+        "glslangValidator", "-V", "-S", gstage,
+        str(input_path), "-o", str(out_spv),
     ])
     if result.returncode != 0:
         return False, result.stdout.strip()
@@ -730,22 +766,74 @@ def pack_input_values(spec: dict, out_path: Path) -> None:
     out_path.write_bytes(packed)
 
 
-def dispatch_equiv(runner: Path, spv_file: Path, output_bin: Path,
-                   spec: dict, input_bin: Path | None) -> tuple[bool, str]:
-    groups = spec.get("groups", [1, 1, 1])
+def pack_values(itype: str, values: list, out_path: Path) -> None:
+    """Generic typed-value packer (float/int/uint) for raster resources."""
+    import struct
+    fmt_char = {"float": "f", "int": "i", "uint": "I"}.get(itype)
+    if fmt_char is None:
+        raise ValueError(f"unsupported resource type: {itype}")
+    packed = struct.pack(f"{len(values)}{fmt_char}", *values)
+    out_path.write_bytes(packed)
+
+
+def dispatch_raster(runner: Path, vert_spv: Path, frag_spv: Path,
+                    output_bin: Path, spec: dict,
+                    resource_bins: list[tuple[str, int, Path]] | None = None
+                    ) -> tuple[bool, str]:
+    """Run the raster equivalence dispatcher.
+
+    resource_bins: list of (kind, binding, path) tuples, where kind is one of
+    "ssbo" or "ubo". Each contributes an upload of `path` into the matching
+    descriptor binding, visible to both vertex and fragment stages.
+    """
     args = [
         str(runner),
-        "--spirv", str(spv_file),
+        "--raster",
+        "--vert-spirv", str(vert_spv),
+        "--frag-spirv", str(frag_spv),
+        "--width", str(spec["width"]),
+        "--height", str(spec["height"]),
+        "--output", str(output_bin),
+        "--output-size", str(spec["output_size"]),
+        "--set", str(spec.get("descriptor_set", 1)),
+    ]
+    for kind, binding, path in (resource_bins or []):
+        flag = "--raster-ssbo" if kind == "ssbo" else "--raster-ubo"
+        args += [flag, str(path), str(binding)]
+    result = run_command(args)
+    if result.returncode != 0:
+        return False, result.stdout.strip()
+    return True, ""
+
+
+def dispatch_equiv(runner: Path, spv_files: list[Path], output_bin: Path,
+                   spec: dict, input_bin: Path | None) -> tuple[bool, str]:
+    # Per-pass groups: spec["passes"][i]["groups"] for multi-pass; otherwise
+    # a single entry from spec["groups"] applied to the sole pass.
+    pass_specs = spec.get("passes")
+    if pass_specs is None:
+        pass_specs = [{"groups": spec.get("groups", [1, 1, 1])}]
+    if len(pass_specs) != len(spv_files):
+        return False, (f"spec has {len(pass_specs)} passes but "
+                       f"{len(spv_files)} spv files were found")
+
+    args = [
+        str(runner),
         "--output", str(output_bin),
         "--output-size", str(spec["output_size"]),
         "--output-binding", str(spec.get("output_binding", 0)),
         "--set", str(spec.get("descriptor_set", 1)),
-        "--groups", str(groups[0]), str(groups[1]), str(groups[2]),
     ]
     if input_bin is not None:
         args += [
             "--input", str(input_bin),
             "--input-binding", str(spec.get("input_binding", 0)),
+        ]
+    for spv, ps in zip(spv_files, pass_specs):
+        g = ps.get("groups", [1, 1, 1])
+        args += [
+            "--pass-spirv", str(spv),
+            "--pass-groups", str(g[0]), str(g[1]), str(g[2]),
         ]
     result = run_command(args)
     if result.returncode != 0:
@@ -779,6 +867,109 @@ def compare_bytes(reference: bytes, actual: bytes, spec: dict) -> tuple[bool, st
         if abs(r - a) > tolerance:
             return False, f"element {i}: ref={r:.6f} actual={a:.6f} diff={abs(r-a):.6g}"
     return True, ""
+
+
+def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
+                          runner: Path, verbose: bool) -> bool:
+    """Dispatch a single raster-mode equivalence test across backends.
+
+    Expects a single-pass pipeline with a vertex + fragment stage. Looks for
+    *_vert.spv + *_frag.spv (native SPIR-V), *_vert.hlsl + *_frag.hlsl (dxc
+    cross-compile), and *_vert.glsl + *_frag.glsl (glslang cross-compile).
+    """
+    native_vert = list(test_out.glob(f"{test_name}_*_vert.spv"))
+    native_frag = list(test_out.glob(f"{test_name}_*_frag.spv"))
+    if len(native_vert) != 1 or len(native_frag) != 1:
+        print(f"[{RED}FAIL{NC}] {test_name} (raster: need exactly 1 vert/frag pair, got "
+              f"{len(native_vert)}/{len(native_frag)})")
+        return False
+
+    # Backend -> (vert_spv_path, frag_spv_path) pair.
+    backends: dict[str, tuple[Path, Path]] = {
+        "spirv": (native_vert[0], native_frag[0]),
+    }
+
+    for cross_name, vert_suffix, frag_suffix, converter, stage_vert, stage_frag in (
+        ("hlsl", "vert.hlsl", "frag.hlsl", convert_hlsl_to_spirv, "vert", "frag"),
+        ("glsl", "vert.glsl", "frag.glsl", convert_glsl_to_spirv, "vert", "frag"),
+    ):
+        vert_src = list(test_out.glob(f"{test_name}_*_{vert_suffix}"))
+        frag_src = list(test_out.glob(f"{test_name}_*_{frag_suffix}"))
+        if len(vert_src) != 1 or len(frag_src) != 1:
+            if verbose:
+                print(f"       {YELLOW}{cross_name.upper()} raster skipped{NC}: "
+                      f"vert={len(vert_src)} frag={len(frag_src)}")
+            continue
+        vert_spv = test_out / f"{test_name}_{cross_name}_vert.spv"
+        frag_spv = test_out / f"{test_name}_{cross_name}_frag.spv"
+        ok_v, msg_v = converter(vert_src[0], vert_spv, stage=stage_vert)
+        if not ok_v:
+            if verbose:
+                print(f"       {YELLOW}{cross_name.upper()} vert -> SPIR-V skipped{NC}: {msg_v}")
+            continue
+        ok_f, msg_f = converter(frag_src[0], frag_spv, stage=stage_frag)
+        if not ok_f:
+            if verbose:
+                print(f"       {YELLOW}{cross_name.upper()} frag -> SPIR-V skipped{NC}: {msg_f}")
+            continue
+        backends[cross_name] = (vert_spv, frag_spv)
+
+    # Materialize raster resource bindings (SSBO / UBO) if requested. The same
+    # on-disk buffer is reused by every backend since contents are identical.
+    resource_bins: list[tuple[str, int, Path]] = []
+    for i, res in enumerate(spec.get("resources", [])):
+        kind = res.get("kind", "ssbo")
+        binding = int(res["binding"])
+        if "values" in res:
+            res_path = test_out / f"{test_name}_res{i}.bin"
+            pack_values(res.get("type", "float"), res["values"], res_path)
+        elif "bytes_path" in res:
+            res_path = Path(res["bytes_path"])
+        else:
+            print(f"[{RED}FAIL{NC}] {test_name} (resource {i} has no values/bytes_path)")
+            return False
+        resource_bins.append((kind, binding, res_path))
+
+    outputs: dict[str, bytes] = {}
+    dispatch_errors: list[str] = []
+    for backend, (vs, fs) in backends.items():
+        out_bin = test_out / f"{test_name}_{backend}.bin"
+        ok, msg = dispatch_raster(runner, vs, fs, out_bin, spec,
+                                  resource_bins=resource_bins)
+        if not ok:
+            dispatch_errors.append(f"{backend}: {msg}")
+            continue
+        outputs[backend] = out_bin.read_bytes()
+
+    if "spirv" not in outputs:
+        print(f"[{RED}FAIL{NC}] {test_name} (native raster dispatch failed)")
+        for e in dispatch_errors:
+            print(f"       {e}")
+        return False
+
+    reference = outputs["spirv"]
+    test_failed = False
+    details: list[str] = []
+    for backend, data in outputs.items():
+        if backend == "spirv":
+            continue
+        ok, msg = compare_bytes(reference, data, spec)
+        if not ok:
+            test_failed = True
+            details.append(f"{backend}: {msg}")
+    for e in dispatch_errors:
+        test_failed = True
+        details.append(e)
+
+    if test_failed:
+        print(f"[{RED}FAIL{NC}] {test_name}")
+        for d in details:
+            print(f"       {d}")
+        return False
+
+    backend_names = ", ".join(sorted(outputs.keys()))
+    print(f"[{GREEN}PASS{NC}] {test_name} ({backend_names}, raster)")
+    return True
 
 
 def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
@@ -832,31 +1023,58 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
             failed += 1
             continue
 
-        native_spv, _ = find_stage_file(test_out, test_name, "comp", "spv")
-        if native_spv is None:
+        if spec.get("mode") == "raster":
+            ok = run_raster_equiv_test(test_name, test_out, spec, runner, verbose)
+            if ok:
+                passed += 1
+            else:
+                failed += 1
+            continue
+
+        # Discover native compute .spv files. Multi-pass tests produce
+        # pass0, pass1, ... suffixes in filename order; sorted() keeps them
+        # in that order since bwslc emits zero-padded suffix-less indices.
+        native_spvs = sorted(test_out.glob(f"{test_name}_*_comp.spv"))
+        if not native_spvs:
             print(f"[{RED}FAIL{NC}] {test_name} (no native .spv produced)")
             failed += 1
             continue
 
-        backends_spv: dict[str, Path] = {"spirv": native_spv}
+        # Backend -> list of per-pass .spv paths.
+        backends_spv: dict[str, list[Path]] = {"spirv": list(native_spvs)}
 
-        hlsl_file, _ = find_stage_file(test_out, test_name, "comp", "hlsl")
-        if hlsl_file is not None:
-            hlsl_spv = test_out / f"{test_name}_hlsl.spv"
-            ok, msg = convert_hlsl_to_spirv(hlsl_file, hlsl_spv)
-            if ok:
-                backends_spv["hlsl"] = hlsl_spv
-            elif verbose:
-                print(f"       {YELLOW}HLSL -> SPIR-V skipped{NC}: {msg}")
+        # HLSL / GLSL cross-compile: one per pass, converted individually.
+        hlsl_files = sorted(test_out.glob(f"{test_name}_*_comp.hlsl"))
+        if hlsl_files and len(hlsl_files) == len(native_spvs):
+            converted = []
+            all_ok = True
+            for idx, f in enumerate(hlsl_files):
+                spv = test_out / f"{test_name}_pass{idx}_hlsl.spv"
+                ok, msg = convert_hlsl_to_spirv(f, spv)
+                if not ok:
+                    if verbose:
+                        print(f"       {YELLOW}HLSL -> SPIR-V skipped{NC}: {msg}")
+                    all_ok = False
+                    break
+                converted.append(spv)
+            if all_ok:
+                backends_spv["hlsl"] = converted
 
-        glsl_file, _ = find_stage_file(test_out, test_name, "comp", "glsl")
-        if glsl_file is not None:
-            glsl_spv = test_out / f"{test_name}_glsl.spv"
-            ok, msg = convert_glsl_to_spirv(glsl_file, glsl_spv)
-            if ok:
-                backends_spv["glsl"] = glsl_spv
-            elif verbose:
-                print(f"       {YELLOW}GLSL -> SPIR-V skipped{NC}: {msg}")
+        glsl_files = sorted(test_out.glob(f"{test_name}_*_comp.glsl"))
+        if glsl_files and len(glsl_files) == len(native_spvs):
+            converted = []
+            all_ok = True
+            for idx, f in enumerate(glsl_files):
+                spv = test_out / f"{test_name}_pass{idx}_glsl.spv"
+                ok, msg = convert_glsl_to_spirv(f, spv)
+                if not ok:
+                    if verbose:
+                        print(f"       {YELLOW}GLSL -> SPIR-V skipped{NC}: {msg}")
+                    all_ok = False
+                    break
+                converted.append(spv)
+            if all_ok:
+                backends_spv["glsl"] = converted
 
         input_bin: Path | None = None
         if "input_values" in spec:
@@ -867,9 +1085,9 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
 
         outputs: dict[str, bytes] = {}
         dispatch_errors: list[str] = []
-        for backend, spv_file in backends_spv.items():
+        for backend, spv_files in backends_spv.items():
             out_bin = test_out / f"{test_name}_{backend}.bin"
-            ok, msg = dispatch_equiv(runner, spv_file, out_bin, spec, input_bin)
+            ok, msg = dispatch_equiv(runner, spv_files, out_bin, spec, input_bin)
             if not ok:
                 dispatch_errors.append(f"{backend}: {msg}")
                 continue

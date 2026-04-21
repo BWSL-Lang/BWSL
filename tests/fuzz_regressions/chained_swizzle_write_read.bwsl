@@ -1,0 +1,22 @@
+// Interleaved swizzle-read and swizzle-write on the same variable
+// inside a tight loop. SSA has to keep phi'd vector values
+// consistent, and each read must see the latest write's effect.
+pipeline ChainedSwizzleWriteRead {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float4 v = float4(1.0, 2.0, 3.0, 4.0);
+            float4 acc = float4(0.0, 0.0, 0.0, 0.0);
+
+            for (int i = 0; i < 4; i = i + 1) {
+                acc.x = acc.x + v.x;
+                acc.y = acc.y + v.y;
+                acc.zw = acc.zw + v.zw;
+
+                v.xy = v.yx;           // swap x <-> y
+                v.zw = v.wz;           // swap z <-> w
+            }
+
+            float sum = acc.x + acc.y + acc.z + acc.w;
+        }
+    }
+}

@@ -1,0 +1,24 @@
+// Loop where the carried state is a struct. SSA phis must be
+// placed for struct-typed registers, and the backend has to wire
+// up the struct-typed phi with the correct type ID.
+pipeline LoopCarryStruct {
+    struct Accum {
+        float3 pos;
+        float  w;
+    };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Accum a;
+            a.pos = float3(0.0, 0.0, 0.0);
+            a.w = 0.0;
+
+            for (int i = 0; i < 10; i = i + 1) {
+                a.pos = a.pos + float3(float(i), float(i) * 0.5, float(i) * 0.25);
+                a.w = a.w + 1.0;
+            }
+
+            float total = a.pos.x + a.pos.y + a.pos.z + a.w;
+        }
+    }
+}

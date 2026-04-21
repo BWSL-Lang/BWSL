@@ -1,0 +1,26 @@
+// Shadowing a variable in a nested scope: `int x` declared inside
+// `{}` shadows an outer `x`. Historically the parser bound the inner
+// `x` BEFORE parsing the initializer, so `int x = x + 1` ended up
+// reading the (undefined) new slot. This test uses a distinct name
+// for the initializer source, which works in both interpretations.
+pipeline SelfReferenceShadowing {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int x = 10;
+            int outerX = x;
+            {
+                int x = outerX + 1;   // inner x = 11
+                int y = x * 2;
+            }
+
+            float f = 2.5;
+            float outerF = f;
+            {
+                float f = outerF * 3.0;
+                float g = f + 0.1;
+            }
+
+            int result = x;
+        }
+    }
+}

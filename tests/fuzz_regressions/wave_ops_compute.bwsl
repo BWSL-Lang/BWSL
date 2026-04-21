@@ -1,0 +1,26 @@
+// Subgroup / wave intrinsics in a compute shader. Each maps to a
+// different OpGroupNonUniform* opcode.
+pipeline WaveOpsCompute {
+    pass "Compute" {
+        compute "Main" [32, 1, 1] {
+            uint idx = input.local_index;
+            float val = float(idx) * 2.0;
+
+            // Reductions
+            float s = wave_sum(val);
+            float mn = wave_min(val);
+            float mx = wave_max(val);
+            float pr = wave_product(val);
+
+            // Vote
+            bool allP = wave_all(val > 0.0);
+            bool anyP = wave_any(val > 10.0);
+
+            // Broadcast
+            float first = wave_read_first(val);
+
+            float total = s + mn + mx + pr + first +
+                          (allP ? 1.0 : 0.0) + (anyP ? 2.0 : 0.0);
+        }
+    }
+}

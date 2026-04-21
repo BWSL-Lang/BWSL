@@ -1,0 +1,28 @@
+// Equivalence: raster SSBO consumed in the vertex stage. Each vertex reads
+// its own per-vertex offset from a storage buffer indexed by vertex_id.
+// Validates that vertex-stage SSBO descriptor plumbing is identical across
+// native SPIR-V, HLSL->SPIR-V, and GLSL->SPIR-V.
+pipeline EquivRasterVertexSsbo {
+    attributes {
+    }
+
+    pass "Main" {
+        vertex {
+            // Base fullscreen triangle positions.
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 base = positions[input.vertex_id];
+            float  off  = resources.offsets[input.vertex_id];
+            output.position = float4(base.x + off, base.y + off, 0.0, 1.0);
+            output.uv = (base + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            output.color = float4(uv.x, uv.y, uv.x * uv.y, 1.0);
+        }
+    }
+}

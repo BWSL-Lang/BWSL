@@ -1,0 +1,25 @@
+// Multi-component swizzle write: `v.xy = other`. Lowers to a single
+// OP_VEC_SHUFFLE with the shuffleMask picking components from the
+// value and passing through the rest. Edge cases: out-of-order swizzles
+// like .wz, mixing rg/xy sets, and partial writes.
+pipeline SwizzleMultiWrite {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float4 v = float4(1.0, 2.0, 3.0, 4.0);
+
+            // Straight write to xy
+            v.xy = float2(10.0, 20.0);
+
+            // Out-of-order swizzle write to wz
+            v.wz = float2(99.0, 88.0);
+
+            // Write xyz as a 3-component block
+            v.xyz = float3(5.5, 6.6, 7.7);
+
+            // Per-component single-slot write
+            v.w = 123.0;
+
+            float sum = v.x + v.y + v.z + v.w;
+        }
+    }
+}

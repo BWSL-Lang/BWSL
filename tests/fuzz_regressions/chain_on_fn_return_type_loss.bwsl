@@ -1,0 +1,35 @@
+// Regression: 2026-04-19, fixed same day. Member access on a function-call
+// struct return value in the same expression (e.g., `fn().field`,
+// `fn().field.xy`, `outer(fn().v, ...)`) produced invalid SPIR-V:
+//
+//   error: Index is out of bounds, can not find index 1 in the structure
+//   %M = OpCompositeExtract %float %N 1
+//
+// Root cause: LowerMemberAccess's "any expression object" path only handled
+// swizzles — unknown member names returned the whole object, so later
+// access chains extracted from a struct as if it were a vector.
+//
+// Fix: in that path, consult program.registerStructTypes[objectReg] and
+// emit OP_STRUCT_EXTRACT for struct fields before falling through to
+// swizzle handling. See bwsl_ir_lowering.h near line 3774.
+//
+// Direct-chain form is covered by tests/equivalence/test_chain_fn_return.bwsl.
+pipeline ChainOnFnReturnTypeLoss {
+    struct F {
+        float3 v;
+    };
+    makeF :: (float t) -> F {
+        F f;
+        f.v = float3(t, t + 1.0, t + 2.0);
+        return f;
+    }
+    scale :: (float3 a, float3 b) -> float3 {
+        return a * b;
+    }
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float3 r = scale(makeF(1.0).v, float3(2.0));
+            resources.output[0] = r.x;
+        }
+    }
+}

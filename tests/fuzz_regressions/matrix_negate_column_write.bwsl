@@ -1,0 +1,20 @@
+// Matrix negation emitted OpSNegate on a float matrix until fix #12
+// last session. Composing it with column assignment (OpCompositeInsert
+// on the full matrix) exercises both in one lowering. Reading a single
+// column after the write is fine — `N[0] + N[1] + N[2]` triggers a
+// separate pre-existing codegen bug with mat-column arithmetic; that
+// is captured in fuzz_regressions/mat_mat_add_nop.bwsl's neighbourhood.
+pipeline MatrixNegateColumnWrite {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            mat3 M = mat3(
+                float3(1.0, 0.0, 0.0),
+                float3(0.0, 2.0, 0.0),
+                float3(0.0, 0.0, 3.0)
+            );
+            mat3 N = -M;
+            N[1] = float3(9.0, 9.0, 9.0);
+            float3 col = N[1];
+        }
+    }
+}

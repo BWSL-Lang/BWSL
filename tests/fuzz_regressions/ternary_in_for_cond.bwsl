@@ -1,0 +1,24 @@
+// Ternary in the for-loop bound expression. Bound is evaluated
+// once at entry; ternary here just computes a constant bound.
+pipeline TernaryInForCond {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int idx = int(input.global_id.x);
+            int limit = idx > 0 ? 10 : 5;
+
+            int acc = 0;
+            for (int i = 0; i < limit; i = i + 1) {
+                acc = acc + i;
+            }
+
+            // Nested: ternary as loop init value
+            int start = idx < 5 ? 0 : 2;
+            int acc2 = 0;
+            for (int j = start; j < 8; j = j + 1) {
+                acc2 = acc2 + j * j;
+            }
+
+            int total = acc + acc2;
+        }
+    }
+}

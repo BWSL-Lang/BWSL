@@ -1,0 +1,29 @@
+// Scalar enum values used as bit flags: bitwise OR to combine,
+// AND to test. Exercises the enum-as-underlying-int semantics.
+pipeline EnumFlagsBitwise {
+    enum Flags : uint {
+        None = 0,
+        Red = 1,
+        Green = 2,
+        Blue = 4,
+        All = 7
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint combined = uint(Flags::Red) | uint(Flags::Blue);
+            bool hasRed = (combined & uint(Flags::Red)) != 0u;
+            bool hasGreen = (combined & uint(Flags::Green)) != 0u;
+            bool hasAll = (combined & uint(Flags::All)) == uint(Flags::All);
+
+            // Toggle a flag
+            combined = combined ^ uint(Flags::Green);
+            bool hasGreen2 = (combined & uint(Flags::Green)) != 0u;
+
+            int sum = (hasRed ? 1 : 0) +
+                      (hasGreen ? 2 : 0) +
+                      (hasAll ? 4 : 0) +
+                      (hasGreen2 ? 8 : 0);
+        }
+    }
+}

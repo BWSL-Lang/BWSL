@@ -1,0 +1,25 @@
+// Integer cast edge cases: u32 max to int, negative to uint,
+// large float to int. Each is an OpBitcast or OpConvertFToS.
+pipeline IntCastEdges {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint u_max = 0xFFFFFFFFu;
+            int  i_neg = int(u_max);          // bitcast: -1
+
+            int  i = -5;
+            uint u_from_neg = uint(i);        // bitcast: 0xFFFFFFFB
+
+            // Through arithmetic
+            int sum = int(u_max) + 1;         // wraps or 0
+
+            // Float to int: positive and negative
+            float f_pos = 2.5e6;
+            int i_from_f = int(f_pos);        // 2500000
+
+            float f_neg = -1.5e3;
+            int i_from_nf = int(f_neg);       // -1500
+
+            int total = i_neg + int(u_from_neg & 0xFFFFu) + sum + i_from_f + i_from_nf;
+        }
+    }
+}

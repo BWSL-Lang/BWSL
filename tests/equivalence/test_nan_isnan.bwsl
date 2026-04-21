@@ -1,0 +1,34 @@
+pipeline EquivNanIsnan {
+
+    // NaN detection via isnan() intrinsic. We never compare raw NaN floats
+    // across backends (NaN != NaN anywhere); only the bool result folded
+    // to 0.0/1.0.
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            // 0/0 should yield NaN
+            float zero = t - t;          // guaranteed +0.0 at runtime
+            float nanA = zero / zero;
+
+            // sqrt of a negative value produces NaN on all SPIR-V targets
+            float negv = -1.0 - t;
+            float nanB = sqrt(negv);
+
+            // inf - inf is NaN
+            float infv = 1.0 / zero;
+            float nanC = infv - infv;
+
+            float score =
+                select(0.0, 1.0, isnan(nanA)) * 1.0 +
+                select(0.0, 1.0, isnan(nanB)) * 10.0 +
+                select(0.0, 1.0, isnan(nanC)) * 100.0 +
+                // Sanity: a normal float is not NaN
+                select(0.0, 1.0, isnan(t + 1.0)) * 1000.0;
+
+            resources.output[idx] = score;
+        }
+    }
+}

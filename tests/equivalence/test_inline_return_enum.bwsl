@@ -1,0 +1,23 @@
+pipeline EquivInlineReturnEnum {
+
+    enum Mode {
+        Low,
+        High
+    }
+
+    chooseMode :: (float v) -> Mode {
+        if (v > 0.0) {
+            return Mode::High;
+        }
+        return Mode::Low;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float v = float(idx) - 3.5;  // negative and positive
+            Mode mode = chooseMode(v);
+            resources.output[idx] = select(0.0, 1.0, mode == Mode::High);
+        }
+    }
+}

@@ -1,0 +1,24 @@
+// Enum values in ternary. Result type must be the enum's underlying
+// int, not a bool or float.
+pipeline EnumInTernary {
+    enum Phase : int {
+        Init = 0,
+        Run = 1,
+        Done = 2
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint idx = input.global_id.x;
+
+            Phase p = (idx == 0u) ? Phase::Init :
+                      (idx == 1u) ? Phase::Run :
+                                    Phase::Done;
+
+            float result;
+            if (p == Phase::Init) { result = 0.0; }
+            else if (p == Phase::Run) { result = 1.0; }
+            else { result = 2.0; }
+        }
+    }
+}

@@ -1,0 +1,27 @@
+pipeline EquivVecDynamicIndex {
+
+    // Writing to a vector component via a runtime index (`v[i] = x`).
+    // Previously miscompiled — emitted OpCompositeInsert with a runtime
+    // register as the literal index. Now routed through
+    // OpVectorInsertDynamic. Paired with a read via runtime index
+    // (`v[i]` RHS, already supported via OpVectorExtractDynamic).
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+
+            float4 v = float4(0.0, 0.0, 0.0, 0.0);
+            for (int i = 0; i < 4; i = i + 1) {
+                v[i] = float(i) * 2.0 + float(idx);
+            }
+
+            // Read via runtime index (already worked) for variety
+            int ri = int(idx & 3u);
+            float readBack = v[ri];
+
+            float score = v.x + v.y * 0.1 + v.z * 0.01 + v.w * 0.001 +
+                          readBack * 0.0001;
+            resources.output[idx] = score;
+        }
+    }
+}

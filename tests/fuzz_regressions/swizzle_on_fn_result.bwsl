@@ -1,0 +1,34 @@
+// Swizzle applied directly to a function-call result that returns
+// a vector/struct. No intermediate variable — the swizzle must
+// propagate through the inlined function's final result register.
+pipeline SwizzleOnFnResult {
+    makeVec :: (float t) -> float4 {
+        return float4(t, t * 2.0, t * 3.0, t * 4.0);
+    }
+
+    struct Triple {
+        float3 v;
+        float  w;
+    };
+
+    makeTriple :: (float t) -> Triple {
+        Triple r;
+        r.v = float3(t, t + 0.5, t + 1.0);
+        r.w = t + 10.0;
+        return r;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float a = makeVec(2.0).x;
+            float2 b = makeVec(3.0).xy;
+            float3 c = makeVec(4.0).xyz;
+
+            float d = makeTriple(5.0).v.x;
+            float2 e = makeTriple(6.0).v.xy;
+            float f = makeTriple(7.0).w;
+
+            float total = a + b.x + c.x + d + e.x + f;
+        }
+    }
+}

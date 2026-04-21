@@ -1,0 +1,17 @@
+// Captured 2026-04-20. User functions that call themselves (directly or
+// indirectly) used to lower to OP_CALL with undefined operands, which
+// then surfaced a cryptic SPIR-V validator error far from the root
+// cause (e.g., "Expected int scalar or vector type as operand: IMul").
+// IR lowering now detects in-flight function inlining and emits a
+// clean diagnostic, exiting 1 before SPIR-V emission.
+pipeline RecursionNotSupported {
+    factorial :: (int n) -> int {
+        if (n <= 1) return 1;
+        return n * factorial(n - 1);
+    }
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int x = factorial(5);
+        }
+    }
+}

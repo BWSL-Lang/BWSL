@@ -1,0 +1,29 @@
+pipeline EquivInlineReturnStruct {
+
+    struct Payload {
+        float2 uv;
+        float value;
+    };
+
+    buildPayload :: (float v) -> Payload {
+        Payload p;
+        p.uv = float2(v, v + 1.0);
+        if (v > 0.5) {
+            p.value = v;
+            return p;
+        }
+        p.value = v * 2.0;
+        return p;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float v = float(idx) * 0.25;  // 0, 0.25, 0.5, 0.75, ... — spans both branches
+            Payload payload = buildPayload(v);
+            // Fold all three fields into a single float so backends must produce
+            // the same struct-return values.
+            resources.output[idx] = payload.value + payload.uv.x * 10.0 + payload.uv.y * 100.0;
+        }
+    }
+}

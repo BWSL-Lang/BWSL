@@ -1,0 +1,30 @@
+pipeline EquivSignedZero {
+
+    // Signed-zero behavior: `1.0 / +0.0` is +inf, `1.0 / -0.0` is -inf.
+    // Backends with fast-math / no-signed-zeros optimizations may collapse
+    // these — this equivalence test asserts they don't.
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            // Runtime-produced zeros — backend can't const-fold away.
+            float pos_zero = t - t;
+            float neg_zero = -pos_zero;
+
+            float inf_pos = 1.0 / pos_zero;  // +inf
+            float inf_neg = 1.0 / neg_zero;  // -inf
+
+            // Ordered comparisons: +inf > 0, -inf < 0.
+            float score =
+                select(0.0, 1.0, inf_pos > 0.0)      * 1.0 +
+                select(0.0, 1.0, inf_neg < 0.0)      * 10.0 +
+                select(0.0, 1.0, inf_pos != inf_neg) * 100.0 +
+                // +0.0 compares equal to -0.0 (IEEE 754)
+                select(0.0, 1.0, pos_zero == neg_zero) * 1000.0;
+
+            resources.output[idx] = score;
+        }
+    }
+}

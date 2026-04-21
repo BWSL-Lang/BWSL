@@ -1,0 +1,15 @@
+// Function recursion (direct or indirect) is not supported by SPIR-V.
+// The IR lowering must emit a single clean diagnostic and short-circuit
+// the stage compilation so the cryptic validator error ("Expected int
+// scalar or vector type as operand") doesn't reach stdout.
+pipeline RecursionNotSupportedError {
+    factorial :: (int n) -> int {
+        if (n <= 1) return 1;
+        return n * factorial(n - 1);
+    }
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int x = factorial(5);
+        }
+    }
+}

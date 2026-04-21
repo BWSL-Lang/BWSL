@@ -1,0 +1,27 @@
+// Equivalence: raster pipeline with a uniform buffer read in the fragment
+// stage. The UBO holds a single float4 tint value; the fragment multiplies
+// a UV gradient by its rgb. Verifies that cross-compiled HLSL/GLSL UBO
+// descriptor plumbing matches the native SPIR-V path.
+pipeline EquivRasterUboTint {
+    attributes {
+    }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float4 t = resources.tint;
+            output.color = float4(uv.x * t.x, uv.y * t.y, t.z, t.w);
+        }
+    }
+}

@@ -1,0 +1,25 @@
+// Two different struct types each with a field named `x` / `y`.
+// Field-name hashes are namespaced within their struct; cross-struct
+// access through the wrong type should be rejected, but accessing
+// each through its own type should work cleanly.
+pipeline StructFieldSameNames {
+    struct A { float x; float y; };
+    struct B { int   x; int   y; };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            A a;
+            a.x = 1.5;
+            a.y = 2.5;
+
+            B b;
+            b.x = 7;
+            b.y = 9;
+
+            float sa = a.x + a.y;
+            int sb = b.x + b.y;
+
+            float total = sa + float(sb);
+        }
+    }
+}

@@ -1,0 +1,26 @@
+// Fragment-only derivative intrinsics. Compute stages reject them;
+// fragment stages emit OpDPdx / OpDPdy / OpFwidth. Only run in a
+// raster pipeline.
+pipeline FragmentDerivatives {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.coord = attributes.position.xy;
+        }
+
+        fragment {
+            float2 uv = input.coord;
+            float2 dx = ddx(uv);
+            float2 dy = ddy(uv);
+            float width = fwidth(uv.x) + fwidth(uv.y);
+
+            output.color = float4(dx.x, dy.y, width, 1.0);
+        }
+    }
+}

@@ -1,0 +1,42 @@
+// Struct containing an array field of enum type. Index into array
+// returns enum value; pattern-match on tag.
+pipeline EnumInStructArray {
+    enum Kind : int {
+        Alpha = 0,
+        Beta = 1,
+        Gamma = 2
+    }
+
+    struct Meta {
+        Kind kinds[4];
+        float weights[4];
+    };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Meta m;
+            m.kinds[0] = Kind::Alpha;
+            m.kinds[1] = Kind::Beta;
+            m.kinds[2] = Kind::Gamma;
+            m.kinds[3] = Kind::Alpha;
+            m.weights[0] = 0.1;
+            m.weights[1] = 0.2;
+            m.weights[2] = 0.3;
+            m.weights[3] = 0.4;
+
+            float sum = 0.0;
+            for (int i = 0; i < 4; i = i + 1) {
+                Kind k = m.kinds[i];
+                float factor;
+                if (k == Kind::Alpha) {
+                    factor = 1.0;
+                } else if (k == Kind::Beta) {
+                    factor = 2.0;
+                } else {
+                    factor = 3.0;
+                }
+                sum = sum + m.weights[i] * factor;
+            }
+        }
+    }
+}

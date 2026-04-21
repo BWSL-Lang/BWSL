@@ -1,0 +1,17 @@
+// Pointer-typed ternary expressions produce SPIR-V that can't lower
+// cleanly without VariablePointers, and silently miscompiles on most
+// backends. The lowering should reject these inputs with an actionable
+// diagnostic pointing at the dereferenced-value alternative.
+pipeline PointerInTernary {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float a = 1.0;
+            float b = 2.0;
+            float^ pa = ^a;
+            float^ pb = ^b;
+            bool c = true;
+            float^ sel = c ? pa : pb;
+            sel^ = 10.0;
+        }
+    }
+}

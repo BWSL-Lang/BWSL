@@ -1,0 +1,26 @@
+pipeline EquivComputeWorkgroup2D {
+
+    // Exercises 2D workgroup dispatch: local_id/workgroup_id/global_id in
+    // the .xy components, with workgroup size that isn't 1D.
+
+    pass "Compute" {
+        compute "Main" [4, 2, 1] {
+            uint2 coord = input.global_id.xy;
+            uint2 localCoord = input.local_id.xy;
+            uint2 tileCoord = input.workgroup_id.xy;
+
+            uint idx = coord.y * 4u + coord.x;
+            if (idx >= 8u) return;
+
+            float fx = float(coord.x);
+            float fy = float(coord.y);
+            float fl = float(localCoord.x) + float(localCoord.y) * 10.0;
+            float ft = float(tileCoord.x) + float(tileCoord.y) * 10.0;
+
+            resources.output[idx] =
+                fx + fy * 0.1 +
+                fl * 0.01 +
+                ft * 0.001;
+        }
+    }
+}

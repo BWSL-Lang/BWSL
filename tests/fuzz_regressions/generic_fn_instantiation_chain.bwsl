@@ -1,0 +1,26 @@
+// Generic function called with multiple distinct type instantiations
+// in the same shader. Each instantiation must produce a separate
+// inlined body with the parameter type correctly propagated through
+// generic -> concrete ops (FADD for floats, IADD for ints).
+pipeline GenericFnInstantiationChain {
+    constraint Numeric = float | float2 | float3 | int | uint;
+
+    doubleIt :: (Numeric x) -> Numeric {
+        return x + x;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float  a = doubleIt(2.5);
+            float3 b = doubleIt(float3(1.0, 2.0, 3.0));
+            int    c = doubleIt(7);
+            uint   d = doubleIt(100u);
+
+            // Composed: double, then double again, mixing types
+            float  e = doubleIt(doubleIt(a));
+            int    f = doubleIt(doubleIt(c));
+
+            float total = a + b.x + float(c) + float(d) + e + float(f);
+        }
+    }
+}

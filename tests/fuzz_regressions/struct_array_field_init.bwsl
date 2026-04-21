@@ -1,0 +1,36 @@
+// Struct with a fixed-size array field. Initialize each slot via
+// assignment, then read through chained `.field[i]`. Pre-existing
+// test_struct_array_field covers this but I want more patterns:
+// reassigning at a dynamic index, partial updates, and reading a
+// specific element after multiple writes.
+pipeline StructArrayFieldInit {
+    struct Buffer {
+        float data[8];
+        int count;
+    };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint idx = input.global_id.x;
+
+            Buffer b;
+            b.count = 8;
+            for (int i = 0; i < 8; i = i + 1) {
+                b.data[i] = float(i) * 0.5;
+            }
+
+            // Dynamic-index read and write
+            int dyn = int(idx) & 7;
+            b.data[dyn] = b.data[dyn] * 2.0 + 100.0;
+
+            // Re-read via chained access
+            float sum = 0.0;
+            for (int i = 0; i < 8; i = i + 1) {
+                sum = sum + b.data[i];
+            }
+
+            float spot = b.data[(dyn + 3) & 7];
+            float final = sum + spot + float(b.count);
+        }
+    }
+}

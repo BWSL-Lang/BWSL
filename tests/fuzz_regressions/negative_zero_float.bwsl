@@ -1,0 +1,25 @@
+// Negative zero and IEEE quirks. `-0.0 == 0.0` is true; `1.0 / -0.0`
+// is -inf; sign(-0.0) is -0 or 0 depending on implementation.
+pipeline NegativeZeroFloat {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float nz = -0.0;
+            float pz =  0.0;
+
+            bool eq = nz == pz;         // true
+            bool ne = nz != pz;         // false
+            bool lt = nz < pz;          // false
+
+            float s_nz = sign(nz);      // 0 or -0
+            float s_pz = sign(pz);      // 0
+
+            float abs_nz = abs(nz);     // 0.0
+            float abs_pz = abs(pz);     // 0.0
+
+            // Operations preserve/lose the sign bit depending on
+            // backend; do arithmetic that works uniformly.
+            float sum = nz + pz + abs_nz + abs_pz + s_nz + s_pz +
+                        (eq ? 1.0 : 0.0) + (ne ? 0.5 : 0.0) + (lt ? 0.25 : 0.0);
+        }
+    }
+}

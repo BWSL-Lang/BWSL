@@ -1,0 +1,29 @@
+// Two nested loops where the inner loop uses a struct-typed phi
+// carried from the outer. The SSA phi for a struct-typed register
+// must have the correct struct type ID.
+pipeline LoopNestedPhiStruct {
+    struct State {
+        float v;
+        int counter;
+    };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            State s;
+            s.v = 0.0;
+            s.counter = 0;
+
+            for (int i = 0; i < 5; i = i + 1) {
+                s.counter = s.counter + 1;
+                for (int j = 0; j < 3; j = j + 1) {
+                    s.v = s.v + float(j) * 0.1;
+                    if (s.v > 100.0) {
+                        break;
+                    }
+                }
+            }
+
+            float result = s.v + float(s.counter);
+        }
+    }
+}

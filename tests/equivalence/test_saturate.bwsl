@@ -1,0 +1,38 @@
+pipeline EquivSaturate {
+
+    // `saturate` is a Metal/HLSL native, emitted as clamp(x, 0.0, 1.0) on
+    // GLSL and as GLSLstd450FClamp(x, 0, 1) in SPIR-V. Three different
+    // lowerings — this test pins down that they produce the same result
+    // on boundary values (including +/-inf, NaN, and values past both
+    // ends).
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) - 3.5;     // spans [-3.5, 4.5]
+
+            float s1 = saturate(t);
+            float s2 = saturate(t * 0.1);   // values inside [0, 1] that shouldn't clip
+            float s3 = saturate(t + 2.0);   // mostly positive
+            float s4 = saturate(-t);        // negative of a negative
+
+            // Vec variants
+            float3 v = float3(t, t * 2.0, t * 0.5);
+            float3 sv = saturate(v);
+
+            // Edge: exactly 0.0 and exactly 1.0
+            float edge0 = saturate(0.0);
+            float edge1 = saturate(1.0);
+            float past1 = saturate(1.0000001 + t * 0.0);    // should still clip to 1
+            float below0 = saturate(-0.0000001 + t * 0.0);  // should clip to 0
+
+            float score =
+                s1 + s2 * 0.1 + s3 * 0.01 + s4 * 0.001 +
+                sv.x * 10.0 + sv.y * 100.0 + sv.z * 1000.0 +
+                edge0 * 0.0001 + edge1 * 0.00001 +
+                past1 * 0.000001 + below0 * 0.0000001;
+
+            resources.output[idx] = score;
+        }
+    }
+}

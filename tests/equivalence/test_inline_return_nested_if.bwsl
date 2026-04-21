@@ -1,0 +1,20 @@
+pipeline EquivInlineReturnNestedIf {
+
+    chooseNestedIf :: (int value) -> int {
+        if (value > 0) {
+            if (value > 1) {
+                return 3;
+            }
+        }
+        return 5;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int value = int(idx) - 3;  // hits both inner-if paths and outer-false path
+            int v = chooseNestedIf(value);
+            resources.output[idx] = float(v);
+        }
+    }
+}

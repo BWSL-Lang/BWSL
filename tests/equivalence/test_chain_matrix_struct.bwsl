@@ -1,0 +1,52 @@
+pipeline EquivChainMatrixStruct {
+
+    // Matrix / struct / swizzle access chains in single expressions.
+    // Common hand-written shader patterns that combine 3-4 access levels
+    // in one line — each step is fine in isolation, but the compiler must
+    // keep types and register indices straight through the whole chain.
+
+    struct Entry {
+        mat3 rot;
+        float4 color;
+        float3 scale;
+    };
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            Entry e;
+            e.rot = mat3(
+                float3(t,        t + 0.1, t + 0.2),
+                float3(t + 1.0,  t + 1.1, t + 1.2),
+                float3(t + 2.0,  t + 2.1, t + 2.2));
+            e.color = float4(t, t * 2.0, t * 3.0, t * 4.0);
+            e.scale = float3(0.5, 1.0, 1.5);
+
+            // Chain 1: matrix element * scalar
+            float a = e.rot[1][2] * e.color.w;
+
+            // Chain 2: matrix column swizzle * struct field swizzle
+            float2 b = e.rot[0].yz * e.scale.zx;
+
+            // Chain 3: struct field indexed + scalar from different struct field
+            float c = e.color[2] + e.scale[1] * e.rot[2][2];
+
+            // Chain 4: swizzle of a matrix row multiplied by a vector literal
+            float3 d = e.rot[2].xyz * float3(0.1, 0.2, 0.3);
+
+            // Chain 5: doubly-indexed matrix multiplied then added through swizzle
+            float e5 = e.rot[0][0] * e.rot[1][1] * e.rot[2][2] + e.color.rgb.r;
+
+            float score =
+                a +
+                b.x * 10.0 + b.y * 100.0 +
+                c * 0.1 +
+                d.x * 1000.0 + d.y * 10000.0 + d.z * 100000.0 +
+                e5 * 0.01;
+
+            resources.output[idx] = score;
+        }
+    }
+}

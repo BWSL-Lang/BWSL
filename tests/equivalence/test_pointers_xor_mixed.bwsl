@@ -1,0 +1,37 @@
+pipeline EquivPointersXorMixed {
+
+    // Same body has both XOR bitwise and pointer ^ (address-of/deref)
+    // operators. Ensures the parser disambiguation and codegen don't
+    // interfere when the two forms live in the same expression block.
+    // Uses `a ^ (-1)` (explicit parens) — bare `a ^ -1` is rejected by
+    // the codegen guard since it parses as `(a^) - 1`.
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+
+            // Pure XOR section
+            int a = int(idx) + 5;
+            int b = int(idx) + 3;
+            int xor1 = a ^ b;
+            int xor2 = a ^ (-1);        // bitwise NOT via XOR with all-ones
+            int xor3 = (a + b) ^ a;
+
+            // Pointer section
+            int val = int(idx) * 11;
+            int^ ptr = ^val;
+            int deref1 = ptr^;
+            ptr^ = ptr^ + 100;
+            int deref2 = ptr^;
+
+            float score =
+                float(xor1) +
+                float(xor2) * 0.001 +
+                float(xor3) * 0.01 +
+                float(deref1) * 0.0001 +
+                float(deref2) * 0.00001;
+
+            resources.output[idx] = score;
+        }
+    }
+}

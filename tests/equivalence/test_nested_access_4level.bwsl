@@ -1,0 +1,63 @@
+pipeline EquivNestedAccess4Level {
+
+    // Four levels of struct-in-struct access, mixed scalar / vector /
+    // matrix fields at each level. Exercises OP_STRUCT_EXTRACT /
+    // OP_STRUCT_INSERT chains and std430 layout for deeply-nested types.
+
+    struct Leaf {
+        float  a;
+        float2 b;
+    };
+
+    struct Inner {
+        Leaf   leaf;
+        float3 v;
+        int    tag;
+    };
+
+    struct Middle {
+        Inner  inner;
+        float  scale;
+    };
+
+    struct Outer {
+        Middle mid;
+        float2 uv;
+    };
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.25;
+
+            Outer o;
+
+            // Writes at every depth.
+            o.mid.inner.leaf.a = t + 1.0;
+            o.mid.inner.leaf.b = float2(t * 2.0, t * 3.0);
+            o.mid.inner.v = float3(t, t + 0.5, t - 0.5);
+            o.mid.inner.tag = int(idx) * 2 + 1;
+            o.mid.scale = t + 10.0;
+            o.uv = float2(t * 0.1, t * 0.2);
+
+            // Compound assign through chain.
+            o.mid.inner.leaf.a = o.mid.inner.leaf.a + o.mid.scale * 0.1;
+            o.mid.inner.v = o.mid.inner.v * 2.0 + o.uv.xyx;
+
+            // Read every depth and combine.
+            float score =
+                o.mid.inner.leaf.a +
+                o.mid.inner.leaf.b.x * 0.1 +
+                o.mid.inner.leaf.b.y * 0.01 +
+                o.mid.inner.v.x * 0.001 +
+                o.mid.inner.v.y * 0.0001 +
+                o.mid.inner.v.z * 0.00001 +
+                float(o.mid.inner.tag) * 0.000001 +
+                o.mid.scale * 0.0000001 +
+                o.uv.x * 0.00000001 +
+                o.uv.y * 0.000000001;
+
+            resources.output[idx] = score;
+        }
+    }
+}

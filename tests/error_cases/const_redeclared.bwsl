@@ -1,0 +1,11 @@
+// Redeclaring a pass-scope const in the same scope must error — it
+// would otherwise silently shadow the first declaration and make
+// later diagnostics point at the wrong token.
+pipeline ConstRedeclared {
+    pass "Compute" {
+        const int N = 5;
+        const int N = 10;
+        compute "Main" [1, 1, 1] {
+        }
+    }
+}

@@ -1,0 +1,25 @@
+// Positional struct constructors must produce OpCompositeConstruct with
+// all fields, including nested structs and structs with more than 4
+// fields (which require iterative OpCompositeInsert chains).
+pipeline EquivStructCtorPositional {
+    struct Pair { float a; float b; };
+    struct Quint { float a; float b; float c; float d; float e; };
+    struct Nested { Pair first; Pair second; float scale; };
+
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            Pair p = Pair(1.0 + t, 2.0 + t);
+            Quint q = Quint(10.0, 20.0, 30.0, 40.0, 50.0);
+            Nested n = Nested(Pair(100.0, 200.0), Pair(300.0, 400.0), 0.5 + t * 0.01);
+
+            float s = p.a + p.b * 0.1
+                    + q.a * 0.01 + q.b * 0.001 + q.c * 0.0001 + q.d * 0.00001 + q.e * 0.000001
+                    + n.first.a * 0.0000001 + n.second.b * 0.00000001
+                    + n.scale;
+            resources.output[idx] = s + t * 0.000000001;
+        }
+    }
+}

@@ -1,0 +1,26 @@
+// Float-to-int truncation semantics: positive, negative, zero, and
+// near-integer. SPIR-V OpConvertFToS truncates toward zero.
+pipeline FloatTruncCast {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int a = int(2.7);       //  2
+            int b = int(-2.7);      // -2
+            int c = int(0.5);       //  0
+            int d = int(-0.5);      //  0
+            int e = int(1.9999);    //  1
+            int f = int(2.0001);    //  2
+
+            uint g = uint(3.7);     //  3
+            // uint(-0.5) is undefined in SPIR-V — avoid
+
+            float ra = float(a);
+            float rb = float(b);
+            float rc = float(c);
+            float rd = float(d);
+            float re = float(e);
+            float rf = float(f);
+
+            float total = ra + rb + rc + rd + re + rf + float(g);
+        }
+    }
+}

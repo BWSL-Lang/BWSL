@@ -1,0 +1,39 @@
+pipeline EquivEnumFlags {
+
+    enum Channels : uint {
+        Red   = 0b0001,
+        Green = 0b0010,
+        Blue  = 0b0100,
+        Alpha = 0b1000
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+
+            // Build a mask that varies per thread
+            Channels mask = Channels::Red;
+            if ((idx & 1u) != 0u) mask = mask | Channels::Green;
+            if ((idx & 2u) != 0u) mask = mask | Channels::Blue;
+            if ((idx & 4u) != 0u) mask = mask | Channels::Alpha;
+
+            Channels toggled = mask ^ Channels::Blue;
+            Channels intersected = toggled & mask;
+
+            bool hasRed = (mask & Channels::Red) != 0;
+            bool hasGreen = (mask & Channels::Green) != 0;
+            bool hasBlue = (mask & Channels::Blue) != 0;
+            bool hasAlpha = (mask & Channels::Alpha) != 0;
+
+            float score =
+                select(0.0, 1.0, hasRed) +
+                select(0.0, 2.0, hasGreen) +
+                select(0.0, 4.0, hasBlue) +
+                select(0.0, 8.0, hasAlpha) +
+                float(uint(toggled)) * 0.01 +
+                float(uint(intersected)) * 0.001;
+
+            resources.output[idx] = score;
+        }
+    }
+}

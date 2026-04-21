@@ -1,0 +1,28 @@
+// Bool vectors: construction, any/all reductions, comparison-to-vec
+// producing a bvec. Previously fuzz didn't cover `bool3`/`bool4`
+// construction from comparisons (`v < float3(1)` → bvec3).
+pipeline BoolVectorOps {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float3 a = float3(0.5, 1.5, 2.5);
+            float3 b = float3(1.0, 1.0, 1.0);
+
+            // Vector comparison producing bvec
+            bool3 lt = a < b;
+            bool3 gt = a > b;
+            bool3 eq = a == b;
+
+            // any / all reductions
+            bool anyLt = any(lt);
+            bool allGt = all(gt);
+
+            // Direct bool construction
+            bool3 flags = bool3(true, false, true);
+            bool anyFlag = any(flags);
+            bool allFlag = all(flags);
+
+            // Combine
+            bool result = anyLt && allFlag;
+        }
+    }
+}

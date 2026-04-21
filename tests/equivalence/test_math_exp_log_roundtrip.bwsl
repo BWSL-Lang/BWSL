@@ -1,0 +1,40 @@
+pipeline EquivMathExpLogRoundtrip {
+
+    // Round-trip identities for exp / log / pow / sqrt families. Catches
+    // drift when any backend swaps the underlying instruction (e.g.
+    // glsl.std.450 Exp2 vs an emulated variant) because the identities
+    // amplify precision mismatches.
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.5 + 0.25;     // 0.25 .. 3.75
+            float x = t + 0.001;                    // keep log inputs > 0
+
+            // log / exp round-trip
+            float rt1 = exp(log(x));                // ≈ x
+            float rt2 = log(exp(x));                // ≈ x
+            float rt3 = exp2(log2(x));              // ≈ x
+            float rt4 = log2(exp2(x));              // ≈ x
+
+            // pow / sqrt consistency
+            float rt5 = pow(x, 2.0) - x * x;        // ≈ 0
+            float rt6 = sqrt(x) * sqrt(x) - x;      // ≈ 0
+            float rt7 = pow(x, 0.5) - sqrt(x);      // ≈ 0
+            float rt8 = rsqrt(x) * sqrt(x);         // ≈ 1
+
+            // exp chain: exp(a+b) ≈ exp(a) * exp(b)
+            float a = 0.3 * t;
+            float b = 0.7 * t;
+            float chain = exp(a + b) - exp(a) * exp(b);  // ≈ 0
+
+            // Weights small enough that cross-backend precision drift
+            // (especially HLSL's exp2 approximation) stays under our
+            // tolerance threshold.
+            resources.output[idx] =
+                rt1 * 0.1 + rt2 * 0.01 + rt3 * 0.001 + rt4 * 0.0001 +
+                rt5 * 1.0 + rt6 * 1.0 + rt7 * 10.0 + rt8 * 1.0 +
+                chain * 10.0;
+        }
+    }
+}

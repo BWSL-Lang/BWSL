@@ -1,0 +1,31 @@
+// Concatenated vector construction: float4 from various arities.
+// Each variant hits a different OP_VEC_CONSTRUCT operand layout.
+pipeline ConcatConstructor {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float2 a = float2(1.0, 2.0);
+            float2 b = float2(3.0, 4.0);
+            float3 c = float3(5.0, 6.0, 7.0);
+
+            // float4 from (vec2, vec2)
+            float4 v1 = float4(a, b);
+
+            // float4 from (vec3, scalar)
+            float4 v2 = float4(c, 8.0);
+
+            // float4 from (scalar, vec3)
+            float4 v3 = float4(0.0, c);
+
+            // float4 from (scalar, vec2, scalar)
+            float4 v4 = float4(0.0, a, 1.0);
+
+            // float4 from (vec2, scalar, scalar)
+            float4 v5 = float4(a, 5.0, 6.0);
+
+            // float4 from 4 scalars
+            float4 v6 = float4(1.0, 2.0, 3.0, 4.0);
+
+            float sum = v1.x + v2.x + v3.x + v4.x + v5.x + v6.x;
+        }
+    }
+}

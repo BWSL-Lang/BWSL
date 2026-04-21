@@ -1,0 +1,15 @@
+// Direct recursion should produce the "recursion is not supported"
+// diagnostic and exit cleanly. The inline-stack detection fires on
+// the first self-call.
+pipeline FnRecursiveCallChain {
+    helperA :: (int x) -> int {
+        if (x <= 0) return 0;
+        return 1 + helperA(x - 1);
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int r = helperA(3);
+        }
+    }
+}

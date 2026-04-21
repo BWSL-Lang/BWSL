@@ -1,0 +1,33 @@
+// abs/sign/min/max on signed int, unsigned int, float, and vectors
+// of each. Each combination picks a different GLSL.std.450 op.
+pipeline AbsSignMinMax {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            // Float
+            float fa = abs(-2.5);
+            float fs = sign(-2.5);
+            float fmn = min(-1.0, 1.0);
+            float fmx = max(-1.0, 1.0);
+
+            // Int
+            int ia = abs(-3);
+            int is_ = sign(-3);
+            int imn = min(-5, 3);
+            int imx = max(-5, 3);
+
+            // Uint (no abs/sign, just min/max)
+            uint umn = min(5u, 3u);
+            uint umx = max(5u, 3u);
+
+            // Vector
+            float3 va = abs(float3(-1.0, 2.0, -3.0));
+            float3 vs = sign(float3(-1.0, 0.0, 2.0));
+            float3 vmn = min(float3(1.0, 2.0, 3.0), float3(2.0, 1.0, 4.0));
+
+            float total = fa + fs + fmn + fmx +
+                          float(ia + is_ + imn + imx) +
+                          float(umn + umx) +
+                          va.x + vs.x + vmn.x;
+        }
+    }
+}

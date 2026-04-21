@@ -1,0 +1,29 @@
+// Quick scope-shadowing test. Inner block redeclares variable with
+// same name but different type. Outer value must persist after
+// the inner block ends.
+pipeline ShortShadowDecl {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int x = 100;
+            {
+                float x = 3.14;
+                float inner = x * 2.0;
+            }
+            int outer = x;
+
+            // Across multiple nested blocks
+            int y = 1;
+            {
+                int y = 2;
+                {
+                    int y = 3;
+                    int z = y;
+                }
+                int z2 = y;
+            }
+            int z3 = y;
+
+            int total = outer + z3;
+        }
+    }
+}

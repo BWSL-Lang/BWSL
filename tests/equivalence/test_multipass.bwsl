@@ -1,0 +1,21 @@
+pipeline EquivMultipass {
+
+    // Two compute passes sharing one storage buffer. Pass1 writes initial
+    // values; Pass2 reads them back and applies a transform. The equivalence
+    // runner must dispatch them in order with a memory barrier between.
+
+    pass "Write" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            resources.output[idx] = float(idx) * 2.0 + 1.0;
+        }
+    }
+
+    pass "Transform" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float prev = resources.output[idx];
+            resources.output[idx] = prev * 10.0 + float(idx);
+        }
+    }
+}

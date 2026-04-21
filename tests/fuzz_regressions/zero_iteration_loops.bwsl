@@ -1,0 +1,23 @@
+// Loops whose bodies never execute in the common path. Previously
+// broke in some compilers that assumed at least one iteration for
+// loop-variable phi setup.
+pipeline ZeroIterationLoops {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int acc = 42;
+
+            // Never enters: condition false from the start
+            for (int i = 10; i < 5; i = i + 1) {
+                acc = acc + i;
+            }
+
+            // Might never enter depending on runtime value
+            int n = int(input.global_id.x);
+            for (int j = 0; j < n; j = j + 1) {
+                acc = acc + j;
+            }
+
+            int final = acc;
+        }
+    }
+}

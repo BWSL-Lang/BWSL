@@ -1,0 +1,43 @@
+pipeline EquivEnumComplex {
+
+    enum MyEnum {
+        A,
+        B,
+        C
+    }
+
+    struct MyStruct {
+        MyEnum e;
+        float f;
+    }
+
+    get_enum_value :: (MyEnum e) -> int {
+        switch (e) {
+            case MyEnum::A: {
+                return 1;
+            }
+            case MyEnum::B: {
+                return 2;
+            }
+            case MyEnum::C: {
+                return 3;
+            }
+        }
+        return 0;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+
+            MyStruct s;
+            if (idx % 3u == 0u) s.e = MyEnum::A;
+            else if (idx % 3u == 1u) s.e = MyEnum::B;
+            else s.e = MyEnum::C;
+            s.f = float(idx) * 0.5;
+
+            int enumVal = get_enum_value(s.e);
+            resources.output[idx] = float(enumVal) + s.f * 0.01;
+        }
+    }
+}

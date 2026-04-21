@@ -1,0 +1,71 @@
+pipeline EquivMathMatrixIdentities {
+
+    // Algebraic identities on matrices. A bug in any matrix op (transpose,
+    // inverse, scalar-multiply, or mat*mat) typically breaks at least one
+    // identity. Running them cross-backend catches drift when a backend
+    // swaps emission (e.g. mat*scalar as per-col FMul vs MatrixTimesScalar).
+    //
+    // Matrix-matrix addition currently lowers to OP_NOP (pre-existing bug
+    // tracked in fuzz_regressions/mat_mat_add_nop.bwsl). Identities below
+    // are phrased to avoid mat+mat and instead combine element-wise via
+    // vectors pulled out of the matrix.
+
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.2 + 0.1;
+
+            mat3 A = mat3(
+                float3(1.0 + t, 0.2, 0.1),
+                float3(-0.3,    1.0, 0.4),
+                float3(0.2,    -0.5, 1.0 + t * 0.5)
+            );
+            mat3 B = mat3(
+                float3(0.7, 0.2 + t, -0.1),
+                float3(0.1, 0.9,      0.3),
+                float3(0.0, 0.2,      1.0 - t * 0.3)
+            );
+
+            // (A*B)^T ≈ B^T * A^T — compare element-wise via column pull.
+            mat3 lhs = transpose(A * B);
+            mat3 rhs = transpose(B) * transpose(A);
+            float3 diffCol0 = lhs[0] - rhs[0];
+            float3 diffCol1 = lhs[1] - rhs[1];
+            float3 diffCol2 = lhs[2] - rhs[2];
+
+            // 4x4 inverse round-trip: M * inverse(M) * v ≈ v
+            mat4 M = mat4(
+                float4(1.0 + t, 0.1,    0.0, 0.5),
+                float4(0.2,    1.0,    0.0, 0.3),
+                float4(0.0,    0.1,    1.0 + t * 0.5, 0.2),
+                float4(0.0,    0.0,    0.0, 1.0)
+            );
+            mat4 Minv = inverse(M);
+            float4 v = float4(t + 0.3, t * 2.0 - 0.1, 0.8 - t, 1.0);
+            float4 rt = (M * Minv) * v;
+
+            // Scalar multiply distributes: (k*A) * v == k * (A * v)
+            float k = 1.25 + t;
+            mat3 Ak = A * k;
+            float3 v3 = float3(t + 0.3, 1.0 - t, 0.7 + t);
+            float3 lhs2 = Ak * v3;
+            float3 rhs2 = (A * v3) * k;
+            float3 diff2 = lhs2 - rhs2;
+
+            // Associativity probe: (A*B)*v ≈ A*(B*v)
+            float3 lhs3 = (A * B) * v3;
+            float3 rhs3 = A * (B * v3);
+            float3 diff3 = lhs3 - rhs3;
+
+            float score =
+                diffCol0.x + diffCol0.y + diffCol0.z +
+                diffCol1.x + diffCol1.y + diffCol1.z +
+                diffCol2.x + diffCol2.y + diffCol2.z +
+                (rt.x - v.x) + (rt.y - v.y) + (rt.z - v.z) + (rt.w - v.w) +
+                diff2.x + diff2.y + diff2.z +
+                diff3.x + diff3.y + diff3.z;
+
+            resources.output[idx] = score;
+        }
+    }
+}

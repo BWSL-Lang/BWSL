@@ -1,0 +1,68 @@
+pipeline EquivNestedAccessMatrixField {
+
+    // Matrix-valued struct fields. Column / row indexing (`m[i]`, `m[i][j]`),
+    // swizzle on an extracted column, and writing back through both forms.
+    // Matrix-in-struct historically hit a different std140 alignment path
+    // than plain-struct or plain-matrix locals, so this pins the combined
+    // form across backends.
+
+    struct XForm {
+        mat3  rot;
+        float3 trans;
+    };
+
+    struct Scene {
+        XForm  x;
+        mat4   view;
+        float  scale;
+    };
+
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.25 + 0.1;
+
+            Scene s;
+
+            // Build a non-trivial 3x3 from scalars.
+            s.x.rot = mat3(
+                float3(1.0, t, 0.0),
+                float3(-t, 1.0, t * 0.5),
+                float3(0.0, -t * 0.5, 1.0)
+            );
+            s.x.trans = float3(t, t * 2.0, t * 3.0);
+
+            s.view = mat4(
+                float4(1.0 + t, 0.0, 0.0, 0.0),
+                float4(0.0, 1.0 + t, 0.0, 0.0),
+                float4(0.0, 0.0, 1.0, t),
+                float4(0.0, 0.0, 0.0, 1.0)
+            );
+            s.scale = t + 2.0;
+
+            // Access patterns:
+            //   whole column, single element, swizzled column.
+            float3 col1 = s.x.rot[1];
+            float  cell = s.x.rot[2][0];
+            float2 col2xy = s.x.rot[0].xy;
+
+            float4 viewCol3 = s.view[3];
+            float  viewCell = s.view[2][3];
+
+            // Per-field write followed by whole-field write.
+            s.x.trans = s.x.trans * s.scale;
+            s.view[3] = float4(t, t * 2.0, t * 3.0, 1.0);
+
+            float4 out4 = s.view * float4(s.x.trans, 1.0);
+
+            float score =
+                col1.x + col1.y * 0.1 + col1.z * 0.01 +
+                cell * 0.001 +
+                col2xy.x * 0.0001 + col2xy.y * 0.00001 +
+                viewCol3.w * 0.000001 + viewCell * 0.0000001 +
+                out4.x + out4.y * 0.1 + out4.z * 0.01 + out4.w * 0.001;
+
+            resources.output[idx] = score;
+        }
+    }
+}

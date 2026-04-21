@@ -1,0 +1,25 @@
+// Different barrier / memory-fence intrinsics in a compute shader.
+// Only barrier() and mem_fence() are tested together here to
+// exercise both OpControlBarrier and OpMemoryBarrier emission.
+pipeline MemoryBarrierCombos {
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            shared int counter[1];
+
+            uint idx = input.local_id.x;
+            if (idx == 0u) {
+                counter[0] = 0;
+            }
+
+            barrier();
+
+            atomic_fetch_add(counter[0], 1);
+
+            mem_fence();
+
+            barrier();
+
+            int final = counter[0];
+        }
+    }
+}

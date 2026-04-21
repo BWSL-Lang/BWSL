@@ -1,0 +1,19 @@
+// Captured 2026-04-20 as a missing-feature stub. As of 2026-04-20
+// (same day fix) the lexer and parser accept all compound-assign
+// operators: `&=`, `|=`, `^=`, `<<=`, `>>=`, `%=`. This file now
+// exercises the successful path; if any of the operators regress the
+// harness flags the regression.
+pipeline BitwiseCompoundAssign {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int x = 0xF0F;
+            x &= 0xFF;
+            x |= 0x100;
+            x ^= 0x55;
+            x %= 7;
+            uint u = 0xABCDu;
+            u <<= 2u;
+            u >>= 1u;
+        }
+    }
+}

@@ -1,0 +1,23 @@
+// Discovered 2026-04-20. Swizzle read on a matrix column that was just
+// written via OpCompositeInsert fails SPIR-V validation (reaches a
+// non-composite during traversal). Root cause: ARRAY_STORE on a matrix
+// variable aliased the matrix's SPIR-V id to the column value, turning
+// the mat3 register into a float3. As of 2026-04-20 (same day fix) the
+// IR lowering recognises `M[const_i] = col_vec` and emits OP_VEC_INSERT
+// (OpCompositeInsert) so the matrix type is preserved across the write,
+// letting subsequent `M[i]` reads yield a full column.
+pipeline MatrixColumnSwizzleAfterWrite {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            mat3 M = mat3(
+                float3(1.0, 0.0, 0.0),
+                float3(0.0, 2.0, 0.0),
+                float3(0.0, 0.0, 3.0)
+            );
+            mat3 N = -M;
+            N[1] = float3(9.0, 9.0, 9.0);
+            float3 col = N[1];
+            float sum = col.x + col.y + col.z;
+        }
+    }
+}

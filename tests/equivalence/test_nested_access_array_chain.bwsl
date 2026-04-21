@@ -1,0 +1,62 @@
+pipeline EquivNestedAccessArrayChain {
+
+    // Array field inside a nested struct: `outer.items[i].inner.field`.
+    // Also covers dynamic indexing of the inner array with a loop-carried
+    // variable — SSA has to fold the indexing through both the struct
+    // and the array dim without collapsing either.
+
+    struct Cell {
+        float3 pos;
+        float  weight;
+    };
+
+    struct Grid {
+        Cell   items[4];
+        float  bias;
+    };
+
+    pass "Compute" {
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) * 0.25;
+
+            Grid g;
+            g.items[0].pos = float3(t, t + 1.0, t + 2.0);
+            g.items[0].weight = 1.0;
+            g.items[1].pos = float3(t * 2.0, t * 3.0, t * 4.0);
+            g.items[1].weight = 2.0;
+            g.items[2].pos = float3(-t, -t - 1.0, -t - 2.0);
+            g.items[2].weight = 3.0;
+            g.items[3].pos = float3(t + 10.0, t + 20.0, t + 30.0);
+            g.items[3].weight = 4.0;
+            g.bias = t + 100.0;
+
+            // Dynamic index chained to struct member.
+            int pick = int(idx) & 3;
+            float3 chosenPos = g.items[pick].pos;
+            float chosenW = g.items[pick].weight;
+
+            // Reduce across the array with member-and-index chains.
+            float3 sumPos = float3(0.0, 0.0, 0.0);
+            float sumW = 0.0;
+            for (int i = 0; i < 4; i = i + 1) {
+                sumPos = sumPos + g.items[i].pos * g.items[i].weight;
+                sumW = sumW + g.items[i].weight;
+            }
+
+            // Write-through chain: update a specific element's field and
+            // re-read through a different index path.
+            g.items[pick].weight = g.items[pick].weight + g.bias;
+            float reread = g.items[(pick + 1) & 3].pos.x + g.items[pick].weight;
+
+            float score =
+                chosenPos.x + chosenPos.y * 0.1 + chosenPos.z * 0.01 +
+                chosenW * 0.001 +
+                sumPos.x * 0.0001 + sumPos.y * 0.00001 + sumPos.z * 0.000001 +
+                sumW * 0.0000001 +
+                reread * 0.00000001;
+
+            resources.output[idx] = score;
+        }
+    }
+}

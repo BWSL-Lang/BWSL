@@ -1,0 +1,32 @@
+// Equivalence: positional struct constructor used inside a fragment shader,
+// with struct member access used to build the output color. Validates that
+// OpCompositeConstruct/OpCompositeExtract lowering is consistent in raster
+// mode across backends.
+pipeline EquivRasterStructCtor {
+    struct Material {
+        float3 albedo;
+        float roughness;
+        float metallic;
+    };
+
+    attributes { }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            Material m = Material(float3(uv.x, uv.y, 0.5), uv.x * 0.5 + 0.2, uv.y * 0.8);
+            float3 c = m.albedo * (1.0 - m.roughness) + float3(m.metallic, m.metallic, m.metallic) * 0.25;
+            output.color = float4(c, 1.0);
+        }
+    }
+}

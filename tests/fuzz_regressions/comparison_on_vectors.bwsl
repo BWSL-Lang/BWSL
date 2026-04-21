@@ -1,0 +1,37 @@
+// Vector comparison (`vec < vec`) yields bvec; `any`/`all` reduce.
+// Each of ==, !=, <, <=, >, >= needs a distinct SPIR-V op for
+// each of bool/int/uint/float elements.
+pipeline ComparisonOnVectors {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float3 a = float3(1.0, 2.0, 3.0);
+            float3 b = float3(2.0, 2.0, 2.0);
+
+            bool3 eq = a == b;
+            bool3 ne = a != b;
+            bool3 lt = a < b;
+            bool3 le = a <= b;
+            bool3 gt = a > b;
+            bool3 ge = a >= b;
+
+            int3 ia = int3(10, 20, 30);
+            int3 ib = int3(20, 20, 20);
+            bool3 ilt = ia < ib;
+            bool3 igt = ia > ib;
+
+            uint3 ua = uint3(1u, 2u, 3u);
+            uint3 ub = uint3(2u, 2u, 2u);
+            bool3 ult = ua < ub;
+            bool3 ugt = ua > ub;
+
+            bool r = any(eq) && all(ge) && any(ilt);
+            int sum = (r ? 1 : 0) +
+                      (any(ne) ? 2 : 0) +
+                      (any(lt) ? 4 : 0) +
+                      (any(le) ? 8 : 0) +
+                      (any(gt) ? 16 : 0) +
+                      (any(ult) ? 32 : 0) +
+                      (any(ugt) ? 64 : 0);
+        }
+    }
+}

@@ -1,0 +1,11 @@
+pipeline EquivMultipass
+
+buffer output float 0 readwrite compute
+
+pass Write
+  type compute
+  depends none
+
+pass Transform
+  type compute
+  depends Write

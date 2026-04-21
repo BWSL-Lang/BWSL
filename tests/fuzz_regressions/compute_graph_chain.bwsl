@@ -1,0 +1,18 @@
+// Multi-pass compute graph. Each pass's outputs feed the next.
+// Parser creates a compute_graph node; IR lowering handles per-pass
+// separately.
+pipeline ComputeGraphChain {
+    pass "Pass1" {
+        compute "Main" [1, 1, 1] {
+            float a = float(input.global_id.x) * 2.0;
+            float b = a + 1.0;
+        }
+    }
+
+    pass "Pass2" {
+        compute "Main" [1, 1, 1] {
+            float c = float(input.global_id.x) * 3.0;
+            float d = c - 0.5;
+        }
+    }
+}

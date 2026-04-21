@@ -1,0 +1,26 @@
+// User function that declares a local array and iterates over it,
+// returning an aggregate. Inlining must correctly bind the local
+// array at each call site without leaking register state between
+// calls.
+pipeline FnLocalArraysLoop {
+    sumSeries :: (int n) -> float {
+        float tmp[8];
+        for (int i = 0; i < 8; i = i + 1) {
+            tmp[i] = float(i) * 0.5 + float(n);
+        }
+        float acc = 0.0;
+        for (int i = 0; i < 8; i = i + 1) {
+            acc = acc + tmp[i];
+        }
+        return acc;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float a = sumSeries(1);
+            float b = sumSeries(2);
+            float c = sumSeries(3);
+            float total = a + b + c;
+        }
+    }
+}

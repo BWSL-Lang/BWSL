@@ -1,0 +1,33 @@
+// Equivalence: bounded for-loop accumulation per pixel. Verifies that loop
+// control-flow (counted loops, running float sums) cross-compiles the same
+// on every backend.
+pipeline EquivRasterLoopSum {
+    attributes { }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float sum = 0.0;
+            float prod = 1.0;
+            for (int i = 0; i < 8; i = i + 1) {
+                float fi = float(i);
+                sum += uv.x * (fi + 1.0) * 0.01;
+                prod *= 1.0 + uv.y * 0.02 * (fi + 1.0);
+            }
+            float r = sum * 0.5;
+            float g = prod - 1.0;
+            float b = sum + g;
+            output.color = float4(r, g, b, 1.0);
+        }
+    }
+}

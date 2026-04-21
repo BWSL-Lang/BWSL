@@ -70,7 +70,9 @@ TokenRef Lexer::NextToken() {
             }
             if (Match('=')) return stream.Push(startPos, static_cast<uint8_t>(TokenType::DIVIDE_ASSIGN));
             return stream.Push(startPos, static_cast<uint8_t>(TokenType::DIVIDE));
-        case '%': return stream.Push(startPos, static_cast<uint8_t>(TokenType::MODULO));
+        case '%':
+            if (Match('=')) return stream.Push(startPos, static_cast<uint8_t>(TokenType::MODULO_ASSIGN));
+            return stream.Push(startPos, static_cast<uint8_t>(TokenType::MODULO));
         case '=':
             if (Match('=')) return stream.Push(startPos, static_cast<uint8_t>(TokenType::EQUALS));
             return stream.Push(startPos, static_cast<uint8_t>(TokenType::ASSIGN));
@@ -78,20 +80,29 @@ TokenRef Lexer::NextToken() {
             if (Match('=')) return stream.Push(startPos, static_cast<uint8_t>(TokenType::NOT_EQUALS));
             return stream.Push(startPos, static_cast<uint8_t>(TokenType::NOT));
         case '<':
-            if (Match('<')) return stream.Push(startPos, static_cast<uint8_t>(TokenType::LEFT_SHIFT));
+            if (Match('<')) {
+                if (Match('=')) return stream.Push(startPos, static_cast<uint8_t>(TokenType::LEFT_SHIFT_ASSIGN));
+                return stream.Push(startPos, static_cast<uint8_t>(TokenType::LEFT_SHIFT));
+            }
             if (Match('=')) return stream.Push(startPos, static_cast<uint8_t>(TokenType::LESS_EQUAL));
             return stream.Push(startPos, static_cast<uint8_t>(TokenType::LESS));
         case '>':
-            if (Match('>')) return stream.Push(startPos, static_cast<uint8_t>(TokenType::RIGHT_SHIFT));
+            if (Match('>')) {
+                if (Match('=')) return stream.Push(startPos, static_cast<uint8_t>(TokenType::RIGHT_SHIFT_ASSIGN));
+                return stream.Push(startPos, static_cast<uint8_t>(TokenType::RIGHT_SHIFT));
+            }
             if (Match('=')) return stream.Push(startPos, static_cast<uint8_t>(TokenType::GREATER_EQUAL));
             return stream.Push(startPos, static_cast<uint8_t>(TokenType::GREATER));
         case '&':
             if (Match('&')) return stream.Push(startPos, static_cast<uint8_t>(TokenType::AND));
+            if (Match('=')) return stream.Push(startPos, static_cast<uint8_t>(TokenType::BITWISE_AND_ASSIGN));
             return stream.Push(startPos, static_cast<uint8_t>(TokenType::BITWISE_AND));
         case '|':
             if (Match('|')) return stream.Push(startPos, static_cast<uint8_t>(TokenType::OR));
+            if (Match('=')) return stream.Push(startPos, static_cast<uint8_t>(TokenType::BITWISE_OR_ASSIGN));
             return stream.Push(startPos, static_cast<uint8_t>(TokenType::BITWISE_OR));
         case '^':
+            if (Match('=')) return stream.Push(startPos, static_cast<uint8_t>(TokenType::BITWISE_XOR_ASSIGN));
             return stream.Push(startPos, static_cast<uint8_t>(TokenType::BITWISE_XOR));
         case '~':
             return stream.Push(startPos, static_cast<uint8_t>(TokenType::BITWISE_NOT));
@@ -244,13 +255,26 @@ TokenRef Lexer::ScanNumber() {
         Advance();
     }
 
-    // Fractional part
+    // Fractional part. Accepts `10.5` and also trailing-dot literals
+    // like `10.` (C / GLSL both accept these). Two ambiguities to keep
+    // in mind:
+    //   - Member access: `v.x` — dot followed by identifier start.
+    //   - Range operator: `0..10` — dot followed by another dot. The
+    //     token here must be an integer `0` so the parser sees
+    //     NUMBER(0) DOT_DOT NUMBER(10); if we eat the first dot we
+    //     break all for-each loops.
     bool hasFraction = false;
-    if (Peek() == '.' && is_digit(static_cast<unsigned>(PeekNext()))) {
-        hasFraction = true;
-        Advance(); // '.'
-        while (is_digit(static_cast<unsigned>(Peek()))) {
-            Advance();
+    if (Peek() == '.') {
+        char after = PeekNext();
+        bool isMemberAccess = (after == '_') || (after >= 'a' && after <= 'z') ||
+                              (after >= 'A' && after <= 'Z');
+        bool isRangeOp = (after == '.');
+        if (!isMemberAccess && !isRangeOp) {
+            hasFraction = true;
+            Advance(); // '.'
+            while (is_digit(static_cast<unsigned>(Peek()))) {
+                Advance();
+            }
         }
     }
 

@@ -1,0 +1,41 @@
+pipeline EquivPointersEdgeCases {
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+
+            // Sequential compound-like writes through a pointer
+            int val = int(idx) + 10;
+            int^ ptr = ^val;
+            ptr^ = ptr^ + 5;
+            int afterAdd = val;
+            ptr^ = ptr^ - 3;
+            int afterSub = val;
+            ptr^ = ptr^ * 2;
+            int afterMul = val;
+
+            // Multiple reads from the same pointer
+            int source = int(idx) * 7;
+            int^ p = ^source;
+            int r1 = p^;
+            int r2 = p^;
+            int r3 = p^;
+            int chainSum = r1 + r2 + r3;
+
+            // Pointer observing mutation
+            int changing = 1;
+            int^ cptr = ^changing;
+            int before = cptr^;
+            changing = int(idx) + 50;
+            int after = cptr^;
+
+            resources.output[idx] =
+                float(afterAdd) +
+                float(afterSub) * 0.1 +
+                float(afterMul) * 0.01 +
+                float(chainSum) * 0.001 +
+                float(before) * 0.0001 +
+                float(after) * 0.00001;
+        }
+    }
+}

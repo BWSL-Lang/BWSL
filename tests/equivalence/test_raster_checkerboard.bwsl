@@ -1,0 +1,29 @@
+// Equivalence: derive a checkerboard pattern from integer window-space pixel
+// coords. Exercises int(FragCoord.x), bitwise AND, and conditional selection
+// in the fragment stage across all backends.
+pipeline EquivRasterCheckerboard {
+    attributes { }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+        }
+
+        fragment {
+            float4 fc = input.position;
+            int cellX = int(fc.x) >> 2;
+            int cellY = int(fc.y) >> 2;
+            int parity = (cellX + cellY) & 1;
+            float f = float(parity);
+            float3 a = float3(0.15, 0.20, 0.30);
+            float3 b = float3(0.80, 0.85, 0.90);
+            float3 color = lerp(a, b, f);
+            output.color = float4(color, 1.0);
+        }
+    }
+}

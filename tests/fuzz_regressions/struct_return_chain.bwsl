@@ -1,0 +1,32 @@
+// Functions that return structs, with the return value directly
+// consumed in a chained member access: `fn(x).field.subField`.
+pipeline StructReturnChain {
+    struct Inner { float3 v; float s; };
+    struct Outer { Inner inn; int tag; };
+
+    makeOuter :: (float t) -> Outer {
+        Outer o;
+        o.inn.v = float3(t, t * 2.0, t * 3.0);
+        o.inn.s = t + 1.0;
+        o.tag = int(t * 10.0);
+        return o;
+    }
+
+    getInner :: (Outer o) -> Inner {
+        return o.inn;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float a = makeOuter(0.5).inn.v.x;
+            float b = makeOuter(1.5).inn.s;
+            int   c = makeOuter(2.5).tag;
+
+            Outer o = makeOuter(3.5);
+            Inner innerCopy = getInner(o);
+            float d = innerCopy.v.y + innerCopy.s;
+
+            float total = a + b + float(c) + d;
+        }
+    }
+}

@@ -1,0 +1,53 @@
+pipeline EquivNestedStructLayout {
+
+    // Layout of structs-in-structs needs to match across all 3 backends
+    // because SSBO reads/writes hit the same memory layout (std430). Tests
+    // that a nested struct with mixed scalar/vector/array fields round-trips
+    // through a local variable and that field access at every depth hits
+    // the right slot.
+
+    struct Inner {
+        float3 pos;
+        float scale;
+    };
+
+    struct Middle {
+        Inner a;
+        Inner b;
+        int tag;
+    };
+
+    struct Outer {
+        Middle mid;
+        float4 extra;
+        float2 uv;
+    };
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            Outer o;
+            o.mid.a.pos = float3(t, t + 1.0, t + 2.0);
+            o.mid.a.scale = t * 0.5;
+            o.mid.b.pos = float3(t * 2.0, t * 3.0, t * 4.0);
+            o.mid.b.scale = t * 0.25;
+            o.mid.tag = int(idx) * 10;
+            o.extra = float4(t, t + 0.1, t + 0.2, t + 0.3);
+            o.uv = float2(t * 0.01, t * 0.02);
+
+            // Read every field back and fold into a single float.
+            float score =
+                o.mid.a.pos.x + o.mid.a.pos.y * 0.1 + o.mid.a.pos.z * 0.01 +
+                o.mid.a.scale * 0.001 +
+                o.mid.b.pos.x * 10.0 + o.mid.b.pos.y * 100.0 + o.mid.b.pos.z * 1000.0 +
+                o.mid.b.scale * 0.0001 +
+                float(o.mid.tag) * 0.00001 +
+                o.extra.x + o.extra.w * 0.5 +
+                o.uv.x * 0.000001 + o.uv.y * 0.0000001;
+
+            resources.output[idx] = score;
+        }
+    }
+}

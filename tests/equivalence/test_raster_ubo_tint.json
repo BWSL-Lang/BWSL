@@ -1,0 +1,16 @@
+{
+    "mode": "raster",
+    "width": 16,
+    "height": 16,
+    "output_size": 4096,
+    "output_type": "float",
+    "tolerance": 0.0001,
+    "resources": [
+        {
+            "kind": "ubo",
+            "binding": 0,
+            "type": "float",
+            "values": [2.0, 0.75, 0.25, 1.0]
+        }
+    ]
+}

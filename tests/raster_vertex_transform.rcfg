@@ -1,0 +1,32 @@
+# Raster vertex-stage MVP transform chain test.
+pipeline RasterVertexTransform
+
+target MainColor RGBA8Unorm viewport
+target MainDepth Depth32Float viewport
+target ShadowDepth Depth32Float 1024 1024
+
+# Camera matrices (vertex)
+uniform modelMatrix mat4 0 vertex
+uniform viewMatrix mat4 1 vertex
+uniform projMatrix mat4 2 vertex
+
+# Shadow-map matrices (vertex)
+uniform lightViewMatrix mat4 3 vertex
+uniform lightProjMatrix mat4 4 vertex
+
+pass Opaque
+  type geometry
+  color MainColor clear 0.1 0.1 0.1 1.0 store
+  depth MainDepth clear 1.0 store
+  depends none
+
+pass Shadow
+  type geometry
+  depth ShadowDepth clear 1.0 store
+  depends none
+
+pass OrthoProject
+  type geometry
+  color MainColor load store
+  depth MainDepth load store
+  depends Opaque

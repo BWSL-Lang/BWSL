@@ -1,0 +1,24 @@
+// Shared memory usage: declare, write at local index, barrier, read
+// from different index. Exercises OP_STORE_SHARED / OP_LOAD_SHARED
+// and the workgroup-storage backing.
+pipeline SharedMemPatterns {
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            shared float tile[8];
+
+            uint idx = input.local_id.x;
+            tile[idx] = float(idx) * 2.5;
+
+            barrier();
+
+            uint partner = (idx + 4u) & 7u;
+            float val = tile[partner];
+
+            tile[idx] = val + 100.0;
+
+            barrier();
+
+            float sum = tile[0] + tile[4];
+        }
+    }
+}

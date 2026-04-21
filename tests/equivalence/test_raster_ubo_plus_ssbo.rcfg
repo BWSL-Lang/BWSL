@@ -1,0 +1,11 @@
+pipeline EquivRasterUboPlusSsbo
+
+target MainColor RGBA32Float 16 16
+
+uniform scale float 0 vertex
+buffer cols float 1 readonly fragment
+
+pass Main
+  type geometry
+  color MainColor clear 0.0 0.0 0.0 0.0 store
+  depends none

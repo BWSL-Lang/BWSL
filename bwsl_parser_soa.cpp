@@ -1685,7 +1685,10 @@ NodeRef Parser::ParseStatement() {
         TokenRef next = PeekNext();
         if (stream->GetType(next) == TokenType::ASSIGN || stream->GetType(next) == TokenType::PLUS_ASSIGN ||
             stream->GetType(next) == TokenType::MINUS_ASSIGN || stream->GetType(next) == TokenType::MULTIPLY_ASSIGN ||
-            stream->GetType(next) == TokenType::DIVIDE_ASSIGN) {
+            stream->GetType(next) == TokenType::DIVIDE_ASSIGN || stream->GetType(next) == TokenType::MODULO_ASSIGN ||
+            stream->GetType(next) == TokenType::BITWISE_AND_ASSIGN || stream->GetType(next) == TokenType::BITWISE_OR_ASSIGN ||
+            stream->GetType(next) == TokenType::BITWISE_XOR_ASSIGN || stream->GetType(next) == TokenType::LEFT_SHIFT_ASSIGN ||
+            stream->GetType(next) == TokenType::RIGHT_SHIFT_ASSIGN) {
             NodeRef expr = ParseExpression();
             if (expr.IsValid()) Consume(TokenType::SEMICOLON, "Expected ';' after assignment");
             return expr;
@@ -1714,6 +1717,23 @@ NodeRef Parser::ParseStatement() {
             // Could be module-qualified type: Module::Type varName;
             // ParseCustomTypeVarDecl handles the full pattern
             return ParseCustomTypeVarDecl();
+        } else if (stream->GetType(next) == TokenType::BITWISE_XOR) {
+            // Could be pointer-to-custom-type declaration: `TypeName^ varName`.
+            // Distinguish from an XOR expression (`a ^ b`) by peeking: a var
+            // decl has `^`+ followed by IDENTIFIER then `=` or `;`. Anything
+            // else (e.g. literal RHS) keeps the default expression path.
+            TokenRef probe = current + 1;
+            while (probe < stream->Count() && stream->GetType(probe) == TokenType::BITWISE_XOR) {
+                probe++;
+            }
+            if (probe < stream->Count() && stream->GetType(probe) == TokenType::IDENTIFIER) {
+                TokenRef afterName = probe + 1;
+                if (afterName < stream->Count() &&
+                    (stream->GetType(afterName) == TokenType::ASSIGN ||
+                     stream->GetType(afterName) == TokenType::SEMICOLON)) {
+                    return ParseCustomTypeVarDecl();
+                }
+            }
         }
     }
 
@@ -1799,7 +1819,15 @@ NodeRef Parser::ParseStatement() {
 
         NodeRef initializer = NodeRef::Null();
         if (Match(TokenType::ASSIGN)) {
-            initializer = ParseExpression();
+            // Brace-list initializer is legal for arrays in this decl
+            // form (`int arr[4] = { 10, 20, 30, 40 }`). Route to the
+            // dedicated array-init parser when we see `{`; otherwise
+            // parse a scalar/expression initializer as before.
+            if (isArray && Check(TokenType::LEFT_BRACE)) {
+                initializer = ParseArrayInitializer();
+            } else {
+                initializer = ParseExpression();
+            }
         }
 
         if (storageClass == StorageClass::Shared && isArray && initializer.IsValid()) {
@@ -1886,6 +1914,15 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
         typeName = std::string(stream->GetValue(previous));
     }
 
+    // Check for pointer type: `CustomType^ name` (matches core-type path in
+    // function parameters). Without this, the statement-level dispatch parses
+    // `Inner^ p = ...` as an XOR expression and silently drops the var decl,
+    // leaving later `p^` dereferences to fall through to the zero-fallback in
+    // LowerIdentifier and produce invalid SPIR-V.
+    while (Match(TokenType::BITWISE_XOR)) {
+        typeName += "^";
+    }
+
     auto ParseArrayDims = [&](std::vector<u32>& dims) -> bool {
         do {
             Consume(TokenType::NUMBER, "Expected array size");
@@ -1921,7 +1958,15 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
     // Optional initializer
     NodeRef initializer = NodeRef::Null();
     if (Match(TokenType::ASSIGN)) {
-        initializer = ParseExpression();
+        // Brace-list initializer is legal for arrays in this same
+        // decl form (`int arr[4] = { 10, 20, 30, 40 }`). Route to the
+        // dedicated array-init parser when we see `{`; otherwise parse
+        // a scalar/expression initializer as before.
+        if (!arrayDims.empty() && Check(TokenType::LEFT_BRACE)) {
+            initializer = ParseArrayInitializer();
+        } else {
+            initializer = ParseExpression();
+        }
     }
 
     Consume(TokenType::SEMICOLON, "Expected ';' after variable declaration");
@@ -2090,10 +2135,16 @@ NodeRef Parser::ParseAssignment() {
         if (assignOp != TokenType::ASSIGN) {
             BinaryOpType binOp;
             switch (assignOp) {
-                case TokenType::PLUS_ASSIGN:     binOp = BinaryOpType::ADD; break;
-                case TokenType::MINUS_ASSIGN:    binOp = BinaryOpType::SUBTRACT; break;
-                case TokenType::MULTIPLY_ASSIGN: binOp = BinaryOpType::MULTIPLY; break;
-                case TokenType::DIVIDE_ASSIGN:   binOp = BinaryOpType::DIVIDE; break;
+                case TokenType::PLUS_ASSIGN:        binOp = BinaryOpType::ADD; break;
+                case TokenType::MINUS_ASSIGN:       binOp = BinaryOpType::SUBTRACT; break;
+                case TokenType::MULTIPLY_ASSIGN:    binOp = BinaryOpType::MULTIPLY; break;
+                case TokenType::DIVIDE_ASSIGN:      binOp = BinaryOpType::DIVIDE; break;
+                case TokenType::MODULO_ASSIGN:      binOp = BinaryOpType::MODULO; break;
+                case TokenType::BITWISE_AND_ASSIGN: binOp = BinaryOpType::BITWISE_AND; break;
+                case TokenType::BITWISE_OR_ASSIGN:  binOp = BinaryOpType::BITWISE_OR; break;
+                case TokenType::BITWISE_XOR_ASSIGN: binOp = BinaryOpType::BITWISE_XOR; break;
+                case TokenType::LEFT_SHIFT_ASSIGN:  binOp = BinaryOpType::LEFT_SHIFT; break;
+                case TokenType::RIGHT_SHIFT_ASSIGN: binOp = BinaryOpType::RIGHT_SHIFT; break;
                 default: binOp = BinaryOpType::ADD; break;  // Fallback
             }
             // Create binary operation: expr op value
@@ -5482,9 +5533,14 @@ NodeRef Parser::ParseEnum() {
             if (astVariant.currentVariant.value != 0xFFFFFFFF) {
                 variant.value = astVariant.currentVariant.value;
             } else {
-                // Auto-assign: for flag enums use powers of 2, otherwise sequential
+                // Auto-assign: for flag enums use powers of 2, otherwise sequential.
+                // Clamp the shift count: more than 31 variants in a flag enum
+                // would shift past the value width (undefined behaviour). The
+                // high bit acts as a saturating sentinel; a semantic error is
+                // surfaced later via enum overflow checking.
                 if (enumData.flags & EnumData::IS_FLAG_ENUM) {
-                    variant.value = (i == 0) ? 1 : (1u << i);
+                    unsigned shift = (i < 31) ? (unsigned)i : 31u;
+                    variant.value = (i == 0) ? 1 : (1u << shift);
                 } else {
                     variant.value = i;
                 }
@@ -6431,10 +6487,25 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
         return *cached;  // Cache hit
     }
 
-    // Fast path 3: Check pre-computed core type hashes
+    // Fast path 3: Check pre-computed core type hashes. GENERIC_T/U/V are
+    // the short names `T`, `U`, `V` — but a user may have defined a
+    // struct or enum with exactly that name (real-world shader code uses
+    // `V` for a vertex struct, etc.). A user-defined symbol takes
+    // precedence over the generic placeholder, which is only meaningful
+    // inside generic-function / constraint contexts.
     for (u32 i = 0; i < TypeHashes::HASH_TABLE_SIZE; i++) {
         if (TypeHashes::HASH_TABLE[i].hash == typeHash) {
             const TypeInfo& info = TypeHashes::HASH_TABLE[i].info;
+            if (info.coreType == CoreType::GENERIC_T ||
+                info.coreType == CoreType::GENERIC_U ||
+                info.coreType == CoreType::GENERIC_V) {
+                Symbol* userSym = SymbolTable::LookupByHash(&symbolTable, typeHash);
+                if (userSym && (userSym->kind == SymbolKind::CUSTOM_TYPE ||
+                                userSym->kind == SymbolKind::ENUM ||
+                                userSym->kind == SymbolKind::ENUM_SYMBOL)) {
+                    break; // fall through to the custom-type path below
+                }
+            }
             typeCache.Insert(typeHash, info);
             return info;
         }
@@ -6701,8 +6772,12 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
                 LookupActiveVariantBinding(src.name.nameHash, &variantValue)) {
                 return MakeLiteralNodeFromValue(variantValue, line, col);
             }
-            // Not a parameter - clone as-is
-            return ASTFactory::MakeIdentifier(ast, src.name, line, col);
+            // Not a parameter - clone as-is. Preserve identifierKind so
+            // downstream passes (e.g. IR lowering's variants.X handler) can
+            // still recognize special identifiers after cloning.
+            NodeRef cloned = ASTFactory::MakeIdentifier(ast, src.name, line, col);
+            ast->GetIdentifier(cloned).identifierKind = src.identifierKind;
+            return cloned;
         }
 
         case ASTNodeType::LITERAL: {

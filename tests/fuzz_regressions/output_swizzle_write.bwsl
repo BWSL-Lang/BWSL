@@ -1,0 +1,23 @@
+// Vertex shader writes to output via multi-component swizzle.
+// `output.position.xy = ...` must correctly update the position
+// without clobbering z/w.
+pipeline OutputSwizzleWrite {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+            output.position.xy = attributes.position.xy;
+            output.position.z = attributes.position.z * 0.5;
+        }
+
+        fragment {
+            output.color = float4(1.0, 0.5, 0.25, 1.0);
+            output.color.rgb = output.color.rgb * 0.5;
+        }
+    }
+}

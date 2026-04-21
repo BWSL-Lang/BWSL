@@ -1,0 +1,28 @@
+// Mixed int/uint/float arithmetic in one expression. The parser
+// inserts implicit casts; IR lowering picks the result type from
+// left operand. Bugs tend to cluster around int-to-float and
+// uint-to-int boundaries.
+pipeline MixedTypeArithChain {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int   i = 7;
+            uint  u = 3u;
+            float f = 2.5;
+
+            // Explicit casts preserve intent across backends.
+            float a = float(i) + f;
+            float b = float(u) * f;
+            int   c = int(f) + i;
+            uint  d = uint(i) + u;
+
+            // Chained expression with mixed constants
+            float e = float(i) * 0.25 + f - float(u) / 4.0;
+
+            // Comparison across types (cast to common type first)
+            bool gt = float(i) > f;
+            bool eq = uint(i) == u;
+
+            float result = a + b + float(c) + float(d) + e + (gt ? 1.0 : 0.0) + (eq ? 0.5 : 0.0);
+        }
+    }
+}

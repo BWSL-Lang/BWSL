@@ -1,0 +1,26 @@
+// Bools used where integers/floats are expected via explicit casts.
+// Tests the cast paths between bool and scalar types.
+pipeline BoolArithInterop {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            bool a = true;
+            bool b = false;
+
+            // Ternary to coerce bool to int/float
+            int ia = a ? 1 : 0;
+            int ib = b ? 1 : 0;
+            float fa = a ? 1.0 : 0.0;
+            float fb = b ? 1.0 : 0.0;
+
+            // Comparison produces bool, convert back
+            bool gt = 5 > 3;
+            float fgt = gt ? 1.0 : 0.0;
+
+            // Logical combined
+            bool xor = a != b;
+            int ix = xor ? 100 : 0;
+
+            int total = ia + ib + int(fa + fb + fgt) + ix;
+        }
+    }
+}

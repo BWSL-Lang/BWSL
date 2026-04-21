@@ -1,0 +1,27 @@
+// Ternaries whose branches have slightly different-ranked types.
+// A single expression should produce the common type; mismatches
+// should error or coerce.
+pipeline TernaryChainedTypes {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int idx = int(input.global_id.x);
+
+            // Both ints
+            int a = (idx > 0) ? 1 : 2;
+
+            // Both floats
+            float b = (idx > 0) ? 1.5 : 2.5;
+
+            // Both vectors of same size/type
+            float3 c = (idx > 0) ? float3(1.0, 0.0, 0.0) : float3(0.0, 1.0, 0.0);
+
+            // Cross-type via explicit cast
+            float d = (idx > 0) ? float(a) : b;
+
+            // Vec ternary chained with arithmetic
+            float3 e = ((idx > 0) ? float3(1.0) : float3(-1.0)) * 2.0;
+
+            float total = float(a) + b + c.x + d + e.x;
+        }
+    }
+}

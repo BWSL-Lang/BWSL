@@ -1,0 +1,26 @@
+// Two functions with the same name but different signatures. The
+// parser's overload resolution picks the right one per call site
+// based on arg types.
+pipeline FnOverloadBySignature {
+    combine :: (float a, float b) -> float {
+        return a + b;
+    }
+
+    combine :: (float3 a, float3 b) -> float3 {
+        return a * b;
+    }
+
+    combine :: (int a, int b) -> int {
+        return a * 2 + b;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float  a = combine(1.0, 2.0);
+            float3 b = combine(float3(1.0, 2.0, 3.0), float3(4.0, 5.0, 6.0));
+            int    c = combine(7, 9);
+
+            float total = a + b.x + b.y + b.z + float(c);
+        }
+    }
+}

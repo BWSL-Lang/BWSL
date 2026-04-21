@@ -1,0 +1,35 @@
+// Compound assignment operators on an array element (`arr[i] += 1`)
+// and on a struct field (`s.x *= 2.0`).
+pipeline CompoundArrayField {
+    struct S { float x; float y; };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int arr[4];
+            arr[0] = 10;
+            arr[1] = 20;
+            arr[2] = 30;
+            arr[3] = 40;
+
+            // Compound assign on array element
+            arr[0] += 5;
+            arr[1] -= 3;
+            arr[2] *= 2;
+            arr[3] /= 4;
+
+            // Compound assign on struct field
+            S s;
+            s.x = 1.0;
+            s.y = 2.0;
+            s.x += 0.5;
+            s.y *= 3.0;
+
+            // Compound with dynamic index
+            int idx = int(input.global_id.x) & 3;
+            arr[idx] += 100;
+
+            int total = arr[0] + arr[1] + arr[2] + arr[3];
+            float ftotal = s.x + s.y;
+        }
+    }
+}

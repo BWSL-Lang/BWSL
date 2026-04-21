@@ -1,0 +1,38 @@
+// Scalar enum (non-sum-type) used as a switch key and in comparisons.
+// These enums lower to INT values, not struct-with-tag.
+pipeline EnumScalarCompare {
+    enum RenderMode : int {
+        Forward = 0,
+        Deferred = 1,
+        Forward_Plus = 2,
+        Clustered = 3
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            RenderMode mode = RenderMode::Deferred;
+
+            float value;
+            if (mode == RenderMode::Forward) {
+                value = 1.0;
+            } else if (mode == RenderMode::Deferred) {
+                value = 2.0;
+            } else if (mode == RenderMode::Forward_Plus) {
+                value = 3.0;
+            } else {
+                value = 4.0;
+            }
+
+            float extra;
+            switch (mode) {
+                case RenderMode::Forward:      extra = 0.1; break;
+                case RenderMode::Deferred:     extra = 0.2; break;
+                case RenderMode::Forward_Plus: extra = 0.3; break;
+                case RenderMode::Clustered:    extra = 0.4; break;
+                default:                       extra = 0.0; break;
+            }
+
+            float sum = value + extra;
+        }
+    }
+}

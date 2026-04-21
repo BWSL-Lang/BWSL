@@ -1,0 +1,117 @@
+// Test: Linear-blend skinning in the vertex stage.
+// Tests: indexed access into a matrix buffer, 4-bone weighted sum, normal
+// transform via skinning matrices, int4/float4 attribute streams, and
+// fragment consumption of tangent-space output from a skinned vertex.
+
+pipeline RasterVertexSkinning {
+    attributes {
+        position:    float3
+        normal:      float3
+        tangent:     float4
+        texcoord:    float2
+        boneIndices: int4
+        boneWeights: float4
+    }
+
+    pass "SkinnedMesh" {
+        use attributes { position, normal, tangent, texcoord, boneIndices, boneWeights }
+
+        vertex {
+            int4 bi = attributes.boneIndices;
+            float4 bw = attributes.boneWeights;
+
+            float4 pos4 = float4(attributes.position, 1.0);
+            float4 nrm4 = float4(attributes.normal, 0.0);
+            float4 tan4 = float4(attributes.tangent.xyz, 0.0);
+
+            // Accumulate position through 4 bones.
+            float4 skinnedPos = resources.boneMatrices[bi.x] * pos4 * bw.x;
+            skinnedPos = skinnedPos + resources.boneMatrices[bi.y] * pos4 * bw.y;
+            skinnedPos = skinnedPos + resources.boneMatrices[bi.z] * pos4 * bw.z;
+            skinnedPos = skinnedPos + resources.boneMatrices[bi.w] * pos4 * bw.w;
+
+            // Skinned normal (no translation contribution because w=0).
+            float4 skinnedNrm = resources.boneMatrices[bi.x] * nrm4 * bw.x;
+            skinnedNrm = skinnedNrm + resources.boneMatrices[bi.y] * nrm4 * bw.y;
+            skinnedNrm = skinnedNrm + resources.boneMatrices[bi.z] * nrm4 * bw.z;
+            skinnedNrm = skinnedNrm + resources.boneMatrices[bi.w] * nrm4 * bw.w;
+
+            // Skinned tangent.
+            float4 skinnedTan = resources.boneMatrices[bi.x] * tan4 * bw.x;
+            skinnedTan = skinnedTan + resources.boneMatrices[bi.y] * tan4 * bw.y;
+            skinnedTan = skinnedTan + resources.boneMatrices[bi.z] * tan4 * bw.z;
+            skinnedTan = skinnedTan + resources.boneMatrices[bi.w] * tan4 * bw.w;
+
+            float4 worldPos = resources.modelMatrix * skinnedPos;
+            float4 clipPos  = resources.viewProjMatrix * worldPos;
+
+            float3 worldN = normalize((resources.modelMatrix * skinnedNrm).xyz);
+            float3 worldT = normalize((resources.modelMatrix * skinnedTan).xyz);
+            float3 worldB = cross(worldN, worldT) * attributes.tangent.w;
+
+            output.position = clipPos;
+            output.worldPos = worldPos.xyz;
+            output.worldN   = worldN;
+            output.worldT   = worldT;
+            output.worldB   = worldB;
+            output.uv       = attributes.texcoord;
+
+            // Write one of the bone weights through as a debug varying to
+            // ensure scalar varyings from a skinned vertex lower correctly.
+            output.primaryBoneWeight = bw.x;
+        }
+
+        fragment {
+            float3 N = normalize(input.worldN);
+            float3 T = normalize(input.worldT);
+            float3 B = normalize(input.worldB);
+            float2 uv = input.uv;
+            float weight = input.primaryBoneWeight;
+
+            // Simple normal map approximation without a texture.
+            float3 tangentNormal = normalize(float3(
+                sin(uv.x * 12.0) * 0.3,
+                cos(uv.y * 12.0) * 0.3,
+                1.0
+            ));
+
+            float3 worldNormal = normalize(
+                T * tangentNormal.x + B * tangentNormal.y + N * tangentNormal.z
+            );
+
+            float3 L = normalize(float3(0.4, 0.8, 0.5));
+            float NdotL = max(dot(worldNormal, L), 0.0);
+
+            // Rim term based on worldNormal vs synthetic view.
+            float3 V = normalize(float3(0.0, 0.0, 1.0));
+            float rim = pow(1.0 - max(dot(V, worldNormal), 0.0), 3.0);
+
+            float3 base = float3(0.8, 0.6, 0.5) * (weight * 0.25 + 0.75);
+            float3 color = base * NdotL + float3(0.15, 0.12, 0.1) * rim;
+
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "SkinnedShadow" {
+        use attributes { position, boneIndices, boneWeights }
+
+        vertex {
+            int4 bi = attributes.boneIndices;
+            float4 bw = attributes.boneWeights;
+            float4 pos4 = float4(attributes.position, 1.0);
+
+            float4 skinnedPos = resources.boneMatrices[bi.x] * pos4 * bw.x;
+            skinnedPos = skinnedPos + resources.boneMatrices[bi.y] * pos4 * bw.y;
+            skinnedPos = skinnedPos + resources.boneMatrices[bi.z] * pos4 * bw.z;
+            skinnedPos = skinnedPos + resources.boneMatrices[bi.w] * pos4 * bw.w;
+
+            output.position = resources.lightViewProjMatrix
+                            * resources.modelMatrix * skinnedPos;
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

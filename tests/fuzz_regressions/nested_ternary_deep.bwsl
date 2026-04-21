@@ -1,0 +1,23 @@
+// 4-level nested ternary with struct-typed result. The per-field
+// decomposition in IR lowering is single-level; nesting stresses the
+// recursive lowering of each branch.
+pipeline NestedTernaryDeep {
+    struct Pt { float3 pos; float w; };
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint idx = input.global_id.x;
+            Pt a; a.pos = float3(1.0); a.w = 1.0;
+            Pt b; b.pos = float3(2.0); b.w = 2.0;
+            Pt c; c.pos = float3(3.0); c.w = 3.0;
+            Pt d; d.pos = float3(4.0); d.w = 4.0;
+            Pt e; e.pos = float3(5.0); e.w = 5.0;
+
+            Pt pick = (idx & 1u) == 0u
+                ? ((idx & 2u) == 0u ? a : b)
+                : ((idx & 2u) == 0u
+                    ? ((idx & 4u) == 0u ? c : d)
+                    : e);
+            float score = pick.pos.x + pick.w;
+        }
+    }
+}

@@ -1,0 +1,38 @@
+// User function that internally calls intrinsics and returns the
+// result. Exercises inlining across a call that itself needs IR
+// for extinst-based intrinsics.
+pipeline FnCallsIntrinsics {
+    safeLength :: (float3 v) -> float {
+        float lenSq = dot(v, v);
+        if (lenSq < 0.0001) {
+            return 0.0;
+        }
+        return sqrt(lenSq);
+    }
+
+    safeNormalize :: (float3 v) -> float3 {
+        float len = safeLength(v);
+        if (len < 0.0001) {
+            return float3(0.0, 0.0, 0.0);
+        }
+        return v / len;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float3 v1 = float3(3.0, 4.0, 0.0);
+            float3 v2 = float3(0.0, 0.0, 0.0);
+            float3 v3 = float3(1.0, 1.0, 1.0);
+
+            float l1 = safeLength(v1);
+            float l2 = safeLength(v2);
+            float l3 = safeLength(v3);
+
+            float3 n1 = safeNormalize(v1);
+            float3 n2 = safeNormalize(v2);
+            float3 n3 = safeNormalize(v3);
+
+            float total = l1 + l2 + l3 + n1.x + n2.x + n3.x;
+        }
+    }
+}

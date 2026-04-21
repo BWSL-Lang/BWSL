@@ -129,6 +129,15 @@ struct IRLowering {
       0xFFFFFFFF; // Module index during inlining (for unqualified calls)
   static constexpr u32 MAX_INLINE_DEPTH = 8;
 
+  // Stack of currently-inlining function AST nodes, for direct /
+  // indirect recursion detection. Packed NodeRefs are 32-bit, so a
+  // small static stack (sized to MAX_INLINE_DEPTH) is enough.
+  u32 inlineStackPacked[MAX_INLINE_DEPTH] = {0};
+  u32 inlineStackDepth = 0;
+  // Set on the first recursion-detection event. bwslc checks this
+  // before attempting SPIR-V validation and cross-compilation.
+  bool recursionDiagnosed = false;
+
   // Loop nesting depth - used to ensure selection merges don't coincide with
   // continue targets
   u32 loopDepth = 0;
@@ -403,6 +412,16 @@ struct IRLowering {
     bool guardInlineReturns =
         (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF);
     bool returnSeen = false;
+
+    // Save variable-register map so that inner-scope redeclarations
+    // (`{ float x = …; }` inside an outer `int x`) don't overwrite the
+    // outer binding. Without this, references to `x` after the inner
+    // block resolve to the inner (now-dead) slot and get the wrong
+    // type. The parser's symbol table does scope-stack pops; the
+    // lowering flat-map didn't.
+    auto savedVariableRegisters = variableRegisters;
+    auto savedVariableStructTypes = variableStructTypes;
+
     for (u32 i = 0; i < block.statements.count; i++) {
       u32 returnCountBefore = inlineReturnCounter;
       if (guardInlineReturns && returnSeen) {
@@ -414,6 +433,9 @@ struct IRLowering {
         returnSeen = true;
       }
     }
+
+    variableRegisters = savedVariableRegisters;
+    variableStructTypes = savedVariableStructTypes;
   }
 
   //==========================================================================
@@ -557,6 +579,13 @@ struct IRLowering {
   void LowerForCStyle(NodeRef ref) {
     const ForCStyleData &forLoop = ast->GetForCStyle(ref);
 
+    // Snapshot variable→register map *before* the init clause runs so
+    // the iterator binding itself (e.g. `int x = …`) doesn't leak out
+    // of the loop if it shadowed an outer variable. The body gets its
+    // own snapshot/restore below so body-local decls don't escape into
+    // the increment clause either.
+    auto savedOuterVariableRegisters = variableRegisters;
+
     // Initialization
     if (!forLoop.init.IsNull()) {
       LowerStatement(forLoop.init);
@@ -588,7 +617,7 @@ struct IRLowering {
     PushLoopContext();
     // Snapshot variable→register mapping so body-scoped declarations
     // (including shadowed iterators in nested for-loops) don't leak into
-    // the increment clause or subsequent outer code.
+    // the increment clause.
     auto savedVariableRegisters = variableRegisters;
     if (!forLoop.body.IsNull()) {
       LowerStatement(forLoop.body);
@@ -626,10 +655,19 @@ struct IRLowering {
           IRProgram::PackStructure(IRProgram::STRUCT_LOOP_HEADER, loopEnd);
       program.continueInfo[branchIdx] = continueTarget;
     }
+
+    // Restore outer scope — drops the iterator binding (and anything the
+    // increment clause introduced) so subsequent references resolve to
+    // shadowed outer variables with their original types.
+    variableRegisters = std::move(savedOuterVariableRegisters);
   }
 
   void LowerForRange(NodeRef ref) {
     const ForRangeData &forLoop = ast->GetForRange(ref);
+
+    // Snapshot outer scope so the iterator (and any body-scope locals)
+    // don't leak out, shadowing / mis-typing later references.
+    auto savedOuterVariableRegisters = variableRegisters;
 
     // Infer iterator type from range bounds WITHOUT lowering yet
     // This preserves the correct control flow structure for SPIR-V
@@ -739,10 +777,14 @@ struct IRLowering {
     program.structureInfo[branchIdx] =
         IRProgram::PackStructure(IRProgram::STRUCT_LOOP_HEADER, loopEnd);
     program.continueInfo[branchIdx] = continueTarget;
+
+    variableRegisters = std::move(savedOuterVariableRegisters);
   }
 
   void LowerForCollection(NodeRef ref) {
     const ForCollectionData &forLoop = ast->GetForCollection(ref);
+
+    auto savedOuterVariableRegisters = variableRegisters;
 
     // Get base register for the collection
     u16 collectionReg = LowerExpression(forLoop.collection);
@@ -817,6 +859,8 @@ struct IRLowering {
     program.structureInfo[branchIdx] =
         IRProgram::PackStructure(IRProgram::STRUCT_LOOP_HEADER, loopEnd);
     program.continueInfo[branchIdx] = continueTarget;
+
+    variableRegisters = std::move(savedOuterVariableRegisters);
   }
 
   void LowerLoop(NodeRef ref) {
@@ -1010,6 +1054,27 @@ struct IRLowering {
               }
               if (val.type == LiteralValue::BOOL) {
                 *outVal = val.boolValue ? 1 : 0;
+                return true;
+              }
+            }
+          }
+        }
+      }
+
+      // Enum variant access: `EnumName.Variant` as a case label.
+      if (valueRef.Type() == ASTNodeType::MEMBER_ACCESS) {
+        const MemberAccessData &access = ast->GetMemberAccess(valueRef);
+        if (access.object.Type() == ASTNodeType::IDENTIFIER) {
+          const IdentifierData &objIdent = ast->GetIdentifier(access.object);
+          Symbol *enumSym = SymbolTable::LookupAny(
+              const_cast<SymbolTableData *>(symbols), objIdent.name);
+          if (enumSym && (enumSym->kind == SymbolKind::CUSTOM_TYPE ||
+                          enumSym->kind == SymbolKind::ENUM_SYMBOL)) {
+            const EnumData &enumData = symbols->enums[enumSym->index];
+            for (u32 v = 0; v < enumData.variants.count; v++) {
+              if (enumData.variants[v].name.nameHash ==
+                  access.member.nameHash) {
+                *outVal = static_cast<s32>(enumData.variants[v].value);
                 return true;
               }
             }
@@ -1212,11 +1277,106 @@ struct IRLowering {
       u16 condReg = LowerExpression(tern.condition);
       u16 trueReg = LowerExpression(tern.trueExpr);
       u16 falseReg = LowerExpression(tern.falseExpr);
+      CoreType resultType = GetRegisterType(trueReg);
+
+      // Matrix-typed ternary: pre-SPIR-V 1.4 `OpSelect` requires scalar or
+      // vector types, so decompose a `cond ? matA : matB` into per-column
+      // OpSelects and rebuild via OP_MAT_CONSTRUCT. Matches the struct
+      // ternary decomposition below.
+      if ((mask(resultType) & TypeMasks::MATRIX_TYPES) != 0) {
+        u32 cols = (resultType == CoreType::MAT4)   ? 4
+                 : (resultType == CoreType::MAT3)   ? 3
+                                                    : 2;
+        CoreType colType = (resultType == CoreType::MAT4) ? CoreType::FLOAT4
+                         : (resultType == CoreType::MAT3) ? CoreType::FLOAT3
+                                                          : CoreType::FLOAT2;
+        u16 colDests[4] = {0, 0, 0, 0};
+        for (u32 c = 0; c < cols; c++) {
+          u16 cIdx = EmitConstantInt(static_cast<int>(c));
+          u16 colT = AllocateRegister();
+          u16 colF = AllocateRegister();
+          SetRegisterType(colT, colType);
+          SetRegisterType(colF, colType);
+          builder.EmitInstruction(OP_ARRAY_LOAD, colT, trueReg, cIdx);
+          builder.EmitInstruction(OP_ARRAY_LOAD, colF, falseReg, cIdx);
+
+          u16 pick = AllocateRegister();
+          SetRegisterType(pick, colType);
+          // OP_SELECT operand order is (false, true, cond)
+          builder.EmitInstruction(OP_SELECT, pick, colF, colT, condReg);
+          colDests[c] = pick;
+        }
+        u16 dest = AllocateRegister();
+        builder.EmitInstruction(OP_MAT_CONSTRUCT, dest, colDests[0],
+                                colDests[1], colDests[2], colDests[3]);
+        program.metadata[builder.currentInstruction - 1] = cols;
+        SetRegisterType(dest, resultType);
+        return dest;
+      }
+
+      // Struct-typed ternary can't use a single OpSelect pre-SPIR-V 1.4.
+      // Decompose into per-field OpSelect + composite reconstruction.
+      if (resultType == CoreType::CUSTOM && trueReg < MAX_REGISTERS &&
+          falseReg < MAX_REGISTERS) {
+        u32 structHash = program.registerStructTypes[trueReg];
+        if (structHash == 0) structHash = program.registerStructTypes[falseReg];
+        if (structHash != 0) {
+          auto it = structTypeMap.find(structHash);
+          if (it != structTypeMap.end()) {
+            const IRProgram::StructTypeInfo &info = program.structTypes[it->second];
+            // Start from one of the operands and insert selected fields in place.
+            u16 current = trueReg;
+            for (u32 i = 0; i < info.fieldCount; i++) {
+              u16 tf = AllocateRegister();
+              builder.EmitInstruction(OP_STRUCT_EXTRACT, tf, trueReg, i);
+              program.metadata[builder.currentInstruction - 1] = structHash;
+              CoreType fieldType = static_cast<CoreType>(
+                  program.structFieldTypes[info.fieldOffset + i]);
+              SetRegisterType(tf, fieldType);
+
+              u16 ff = AllocateRegister();
+              builder.EmitInstruction(OP_STRUCT_EXTRACT, ff, falseReg, i);
+              program.metadata[builder.currentInstruction - 1] = structHash;
+              SetRegisterType(ff, fieldType);
+
+              u16 pick = AllocateRegister();
+              builder.EmitInstruction(OP_SELECT, pick, ff, tf, condReg);
+              SetRegisterType(pick, fieldType);
+
+              u16 next = AllocateRegister();
+              builder.EmitInstruction(OP_STRUCT_INSERT, next, current, i, pick);
+              program.metadata[builder.currentInstruction - 1] = structHash;
+              SetRegisterType(next, CoreType::CUSTOM);
+              program.registerStructTypes[next] = structHash;
+              current = next;
+            }
+            return current;
+          }
+        }
+      }
+
+      // Diagnose pointer-typed ternaries. A naive OpSelect on pointers
+      // produces `Type Id is 0` SPIR-V validation errors (Function-storage
+      // pointer select requires VariablePointers and is backend-specific).
+      // Print an actionable diagnostic; downstream SPIR-V validation will
+      // then fail the compile with a non-zero exit so the error is not
+      // silently swallowed.
+      if (trueReg < MAX_REGISTERS && falseReg < MAX_REGISTERS) {
+        u32 tInfo = program.registerStorageInfo[trueReg];
+        u32 fInfo = program.registerStorageInfo[falseReg];
+        if ((tInfo & IR::IRProgram::STORAGE_IS_PTR) ||
+            (fInfo & IR::IRProgram::STORAGE_IS_PTR)) {
+          fprintf(stderr,
+                  "Error: ternary expression with pointer operands is not "
+                  "supported; select the dereferenced value instead "
+                  "(e.g. `(c ? pa^ : pb^)`) or branch on the pointer with "
+                  "if/else.\n");
+        }
+      }
+
       u16 dest = AllocateRegister();
       // Note: OP_SELECT order is (false, true, cond)
       builder.EmitInstruction(OP_SELECT, dest, falseReg, trueReg, condReg);
-      // Result type matches the true/false value type
-      CoreType resultType = GetRegisterType(trueReg);
       SetRegisterType(dest, resultType);
       return dest;
     }
@@ -1280,8 +1440,108 @@ struct IRLowering {
     return result;
   }
 
+  // Resolves `^struct_var.field` to an OP_LOCAL_FIELD_PTR instruction.
+  // Returns the destination register (non-zero) on success, or 0 if the
+  // access pattern isn't a simple local-struct field (e.g. a swizzle,
+  // a chained access, or an access through a non-local / non-struct
+  // object). The caller falls back to the legacy ADDRESS_OF path on 0.
+  u16 TryLowerLocalFieldAddressOf(NodeRef memberRef) {
+    const MemberAccessData &access = ast->GetMemberAccess(memberRef);
+
+    if (access.object.Type() != ASTNodeType::IDENTIFIER) return 0;
+    const IdentifierData &obj = ast->GetIdentifier(access.object);
+    if (obj.identifierKind != SpecialIdentifier::NONE) return 0;
+
+    // The identifier must be a user variable we've already allocated a
+    // register for. LowerIdentifier handles symbol lookup + caching.
+    u16 baseReg = LowerIdentifier(access.object);
+    if (baseReg >= MAX_REGISTERS) return 0;
+
+    // Base must carry a struct type hash (either from declaration or
+    // inferred). Swizzle / vector-component cases hit when the base
+    // type is a vector with no struct hash — bail and let the existing
+    // ADDRESS_OF path reject them.
+    u32 structTypeHash = program.registerStructTypes[baseReg];
+    if (structTypeHash == 0) {
+      auto varIt = variableStructTypes.find(obj.name.nameHash);
+      if (varIt != variableStructTypes.end()) {
+        structTypeHash = varIt->second;
+        program.registerStructTypes[baseReg] = structTypeHash;
+      }
+    }
+    if (structTypeHash == 0) return 0;
+
+    auto structIt = structTypeMap.find(structTypeHash);
+    if (structIt == structTypeMap.end()) return 0;
+
+    const IRProgram::StructTypeInfo &info = program.structTypes[structIt->second];
+    u32 fieldIndex = 0xFFFFFFFF;
+    CoreType fieldType = CoreType::FLOAT;
+    u32 fieldTypeHash = 0;
+    for (u32 i = 0; i < info.fieldCount; i++) {
+      if (program.structFieldNameHashes[info.fieldOffset + i] ==
+          access.member.nameHash) {
+        fieldIndex = i;
+        fieldType = static_cast<CoreType>(
+            program.structFieldTypes[info.fieldOffset + i]);
+        if (program.structFieldTypeHashes) {
+          fieldTypeHash = program.structFieldTypeHashes[info.fieldOffset + i];
+        }
+        break;
+      }
+    }
+    if (fieldIndex == 0xFFFFFFFF) return 0;
+
+    u16 dest = AllocateRegister();
+    if (dest >= MAX_REGISTERS) return 0;
+
+    // Emit: dest = &base.field
+    // operand1 carries the literal field index (backends read it via
+    // GetOperand(i, 1); SSA skips operand 1 of field-ptr renaming).
+    builder.EmitInstruction(OP_LOCAL_FIELD_PTR, dest, baseReg,
+                            static_cast<u16>(fieldIndex));
+    program.metadata[builder.currentInstruction - 1] = structTypeHash;
+
+    // Pointer value has "no legitimate CoreType" — mark as CUSTOM, same
+    // as scalar pointers. Pointee type + base reg + field flags live
+    // in registerStorageInfo so OP_LOCAL_LOAD / OP_LOCAL_STORE can
+    // recover them.
+    SetRegisterType(dest, CoreType::CUSTOM);
+    u32 storageVal = (static_cast<u32>(baseReg) << 16) |
+                     (static_cast<u32>(fieldType) << 8) |
+                     IR::IRProgram::STORAGE_IS_PTR |
+                     IR::IRProgram::STORAGE_IS_FIELD_PTR;
+    program.registerStorageInfo[dest] = storageVal;
+
+    // Base struct variable's address is effectively taken — SSA must
+    // leave its register alone.
+    program.registerStorageInfo[baseReg] |=
+        IR::IRProgram::STORAGE_IS_ADDRESS_TAKEN;
+
+    // If the field is itself a struct/enum, propagate its type hash so
+    // chained member access on the dereferenced pointer sees the right
+    // struct info.
+    if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
+        fieldTypeHash != 0) {
+      program.registerStructTypes[dest] = fieldTypeHash;
+    }
+
+    return dest;
+  }
+
   u16 LowerUnaryOp(NodeRef ref) {
     const UnaryOpData &unop = ast->GetUnaryOp(ref);
+
+    // Special case: address-of a struct-field member access (`^v.pos`).
+    // Must fire before the generic LowerExpression path; otherwise
+    // LowerMemberAccess emits OP_STRUCT_EXTRACT and we'd be pointing at a
+    // by-value copy instead of the field's memory slot.
+    if (unop.op == UnaryOpType::ADDRESS_OF &&
+        unop.operand.Type() == ASTNodeType::MEMBER_ACCESS) {
+      u16 fieldPtr = TryLowerLocalFieldAddressOf(unop.operand);
+      if (fieldPtr != 0) return fieldPtr;
+    }
+
     u16 operand = LowerExpression(unop.operand);
     u16 dest = AllocateRegister();
 
@@ -1289,15 +1549,29 @@ struct IRLowering {
     switch (unop.op) {
     case UnaryOpType::NEGATE: {
       CoreType type = GetRegisterType(operand);
-      op = (mask(type) & TypeMasks::FLOAT_TYPES) ? OP_FNEG : OP_INEG;
+      TypeMask tmask = mask(type);
+      // Matrix types are float-valued but not in FLOAT_TYPES, so test them
+      // explicitly to avoid falling into the integer path (which emits
+      // OpSNegate on a float matrix and fails SPIR-V validation).
+      bool isFloatLike = (tmask & TypeMasks::FLOAT_TYPES) ||
+                         (tmask & TypeMasks::MATRIX_TYPES);
+      op = isFloatLike ? OP_FNEG : OP_INEG;
       builder.EmitInstruction(op, dest, operand);
       SetRegisterType(dest, type); // Result has same type as operand
       return dest;
     }
     case UnaryOpType::NOT: {
       op = OP_NOT;
+      CoreType type = GetRegisterType(operand);
+      // Preserve bvec width — `!bvec3` must emit `OpLogicalNot %bvec3`, not
+      // `%bool`. Scalar bools stay scalar.
+      CoreType resultType = (type == CoreType::BOOL2 ||
+                             type == CoreType::BOOL3 ||
+                             type == CoreType::BOOL4)
+                                ? type
+                                : CoreType::BOOL;
       builder.EmitInstruction(op, dest, operand);
-      SetRegisterType(dest, CoreType::BOOL); // Logical NOT returns bool
+      SetRegisterType(dest, resultType);
       return dest;
     }
     case UnaryOpType::BITWISE_NOT: {
@@ -1376,6 +1650,11 @@ struct IRLowering {
                        (static_cast<u32>(pointeeType) << 8) |
                        IR::IRProgram::STORAGE_IS_PTR;
       builder.program->registerStorageInfo[dest] = storageVal;
+      // Propagate the struct type hash so p^.field lowering can find the
+      // struct layout. Without this, dereference falls back to vec-extract.
+      if (program.registerStructTypes[operand] != 0) {
+        program.registerStructTypes[dest] = program.registerStructTypes[operand];
+      }
       // Mark the source register as address-taken so SSA doesn't create phi
       // nodes for it
       builder.program->registerStorageInfo[operand] |=
@@ -1383,16 +1662,34 @@ struct IRLowering {
       return dest;
     }
     case UnaryOpType::DEREFERENCE: {
-      // x^: Dereference pointer
-      // Get pointee type from storage info (skip if operand isn't a real reg)
+      // x^: Dereference pointer.
       if ((operand & 0xC000) != 0 || operand >= MAX_REGISTERS) {
         builder.EmitInstruction(OP_LOCAL_LOAD, dest, operand);
         return dest;
       }
       u32 storageInfo = builder.program->registerStorageInfo[operand];
+      if ((storageInfo & IR::IRProgram::STORAGE_IS_PTR) == 0) {
+        // Operand isn't a pointer. This is a common parser-ambiguity
+        // symptom: `a ^ -1` parses as `(a^) - 1` where `a` is a scalar
+        // int, and the silent codegen used to emit OpLoad on a non-
+        // pointer (rejected by SPIR-V validation, confusing error).
+        // Explicit compile error: user should parenthesize the intended
+        // operator — `a ^ (-1)` for XOR, `(ptr^) - n` for deref.
+        fprintf(stderr, "Error: dereference (`^` postfix) applied to a "
+                        "non-pointer value. If you meant binary XOR with a "
+                        "negative / unary-prefixed operand (e.g. `a ^ -1`), "
+                        "wrap the right side in parentheses: `a ^ (-1)`.\n");
+        SetRegisterType(dest, CoreType::INT);
+        return dest;
+      }
       CoreType pointeeType = static_cast<CoreType>((storageInfo >> 8) & 0xFF);
       builder.EmitInstruction(OP_LOCAL_LOAD, dest, operand);
       SetRegisterType(dest, pointeeType);
+      // Propagate the struct type hash to the loaded value so member access
+      // on `p^.field` can find the struct layout.
+      if (program.registerStructTypes[operand] != 0) {
+        program.registerStructTypes[dest] = program.registerStructTypes[operand];
+      }
       return dest;
     }
     }
@@ -1647,6 +1944,13 @@ struct IRLowering {
                                         IR::IRProgram::STORAGE_IS_PTR)) {
           program.registerStorageInfo[varReg] =
               program.registerStorageInfo[initReg];
+          // Also propagate the struct type hash for `TypeName^ p = ^s;` so
+          // `p^.field` later resolves the struct layout.
+          if (program.registerStructTypes[initReg] != 0 &&
+              varReg < MAX_REGISTERS) {
+            program.registerStructTypes[varReg] =
+                program.registerStructTypes[initReg];
+          }
         }
         initializedVariables.insert(varDecl.name.nameHash);
       }
@@ -2568,69 +2872,73 @@ struct IRLowering {
             return;
           }
 
-          // Check for multi-component swizzle assignment (xy, xyz, xyzw, etc.)
-          // Use a single shuffle operation to avoid SSA tracking issues with
-          // intermediates
-          const char *swizzlePatterns[] = {
-              "xy",  "xz",  "xw",   "yz",  "yw",  "zw",  "xyz", "xyw",
-              "xzw", "yzw", "xyzw", "rg",  "rb",  "ra",  "gb",  "ga",
-              "ba",  "rgb", "rga",  "rba", "gba", "rgba"};
-          // Indices into original vector that get replaced by value components
-          // 255 means "keep from original", 0-3 means "take component N from
-          // value" E.g., for "xy" assignment: positions 0,1 get
-          // value[0],value[1]; positions 2,3 stay from original
-          const u8 swizzleIndices[][4] = {
-              {0, 1, 255, 255}, {0, 255, 1, 255}, {0, 255, 255, 1},
-              {255, 0, 1, 255}, {255, 0, 255, 1}, {255, 255, 0, 1},
-              {0, 1, 2, 255},   {0, 1, 255, 2},   {0, 255, 1, 2},
-              {255, 0, 1, 2},   {0, 1, 2, 3},     {0, 1, 255, 255},
-              {0, 255, 1, 255}, {0, 255, 255, 1}, {255, 0, 1, 255},
-              {255, 0, 255, 1}, {255, 255, 0, 1}, {0, 1, 2, 255},
-              {0, 1, 255, 2},   {0, 255, 1, 2},   {255, 0, 1, 2},
-              {0, 1, 2, 3}};
+          // Multi-component swizzle assignment. Parse the member name
+          // character-by-character into output-position -> source-index
+          // mapping, then build a single OpVectorShuffle picking from
+          // value for written positions and from the original otherwise.
+          // Handles in-order (xy, xyz), out-of-order (wz, yx, xzy) and
+          // repeated components across either xyzw or rgba sets.
+          if (sourceBase && !access.member.isHashOnly()) {
+            auto sv = access.member.view(sourceBase);
+            u32 swizzleLen = static_cast<u32>(sv.size());
+            if (swizzleLen >= 2 && swizzleLen <= 4) {
+              u8 targetIdx[4] = {0, 0, 0, 0};
+              bool valid = true;
+              bool seenXyzw = false;
+              bool seenRgba = false;
+              for (u32 i = 0; i < swizzleLen; i++) {
+                char c = sv[i];
+                switch (c) {
+                case 'x': targetIdx[i] = 0; seenXyzw = true; break;
+                case 'y': targetIdx[i] = 1; seenXyzw = true; break;
+                case 'z': targetIdx[i] = 2; seenXyzw = true; break;
+                case 'w': targetIdx[i] = 3; seenXyzw = true; break;
+                case 'r': targetIdx[i] = 0; seenRgba = true; break;
+                case 'g': targetIdx[i] = 1; seenRgba = true; break;
+                case 'b': targetIdx[i] = 2; seenRgba = true; break;
+                case 'a': targetIdx[i] = 3; seenRgba = true; break;
+                default: valid = false; break;
+                }
+                if (!valid) break;
+              }
 
-          for (u32 i = 0;
-               i < sizeof(swizzlePatterns) / sizeof(swizzlePatterns[0]); i++) {
-            if (memberHash == Utils::HashStr(swizzlePatterns[i])) {
-              // Found matching swizzle pattern - use a single shuffle operation
-              CoreType varType = GetRegisterType(objReg);
-              u16 newVecReg = AllocateRegister();
-              SetRegisterType(newVecReg, varType);
+              if (valid && !(seenXyzw && seenRgba)) {
+                CoreType varType = GetRegisterType(objReg);
+                u32 numComponents = GetVectorDimension(varType);
+                if (numComponents < 2) {
+                  builder.EmitInstruction(OP_STORE_REG, objReg, valueReg);
+                  return;
+                }
 
-              // Build shuffle mask: for each output position, either take from
-              // original vector (4+idx) or from value vector (idx)
-              // SPIR-V OpVectorShuffle: result = shuffle(vec0, vec1,
-              // indices...) Index < component_count selects from vec0, >=
-              // selects from vec1
-              u32 numComponents = GetVectorDimension(varType);
-              if (numComponents < 2) {
-                builder.EmitInstruction(OP_STORE_REG, objReg, valueReg);
+                // inverse map: for each original-vec position j,
+                // which value-vec component (if any) overwrites it?
+                u8 fromValue[4] = {255, 255, 255, 255};
+                for (u32 i = 0; i < swizzleLen; i++) {
+                  u8 origSlot = targetIdx[i];
+                  if (origSlot < numComponents) {
+                    fromValue[origSlot] = static_cast<u8>(i);
+                  }
+                }
+
+                u32 shuffleMask = 0;
+                for (u32 j = 0; j < numComponents; j++) {
+                  if (fromValue[j] != 255) {
+                    shuffleMask |=
+                        ((fromValue[j] + numComponents) & 0xF) << (j * 4);
+                  } else {
+                    shuffleMask |= (j & 0xF) << (j * 4);
+                  }
+                }
+
+                u16 newVecReg = AllocateRegister();
+                SetRegisterType(newVecReg, varType);
+                builder.EmitInstruction(OP_VEC_SHUFFLE, newVecReg, objReg,
+                                        valueReg);
+                program.metadata[builder.currentInstruction - 1] = shuffleMask;
+
+                builder.EmitInstruction(OP_STORE_REG, objReg, newVecReg);
                 return;
               }
-
-              // Encode shuffle indices in metadata
-              // For each position: if swizzleIndices[i][j] != 255, take from
-              // value Otherwise, take from original
-              u32 shuffleMask = 0;
-              for (u32 j = 0; j < numComponents; j++) {
-                u8 srcIdx = (j < 4) ? swizzleIndices[i][j] : 255;
-                if (srcIdx != 255) {
-                  // Take from value (second vector) - index is srcIdx +
-                  // numComponents
-                  shuffleMask |= ((srcIdx + numComponents) & 0xF) << (j * 4);
-                } else {
-                  // Keep from original (first vector) - index is j
-                  shuffleMask |= (j & 0xF) << (j * 4);
-                }
-              }
-
-              builder.EmitInstruction(OP_VEC_SHUFFLE, newVecReg, objReg,
-                                      valueReg);
-              program.metadata[builder.currentInstruction - 1] = shuffleMask;
-
-              // Store back to variable
-              builder.EmitInstruction(OP_STORE_REG, objReg, newVecReg);
-              return;
             }
           }
 
@@ -2705,11 +3013,82 @@ struct IRLowering {
       const ArrayAccessData &arrAccess = ast->GetArrayAccess(target);
       u16 baseReg = LowerExpression(arrAccess.array);
       u16 indexReg = LowerExpression(arrAccess.index);
+      // `v[i] = x` where `v` is a scalar vector local (not `v` declared as
+      // `float3[N]`) must go through OpVectorInsertDynamic —
+      // OpCompositeInsert can't take a runtime literal index. Distinguish
+      // the vector-component case from the array-of-vectors case by
+      // comparing the value's type against the base's type:
+      //   - vec-component write: base is a vector, value is the scalar
+      //     component type (e.g., base=float3, value=float)
+      //   - array-of-vectors element write: base tracked as FLOAT3 but
+      //     the value is the whole element (float3)
       if (baseReg < MAX_REGISTERS) {
+        CoreType baseType =
+            static_cast<CoreType>(program.registerTypes[baseReg]);
+        CoreType valueType = GetRegisterType(valueReg);
+        TypeMask btm = mask(baseType);
+        bool baseIsVec = btm & (TypeMasks::FLOAT_VECTORS | TypeMasks::INT_VECTORS |
+                                 TypeMasks::UINT_VECTORS | TypeMasks::BOOL_VECTORS);
+        bool valueIsComponent =
+            (baseType == CoreType::FLOAT2 || baseType == CoreType::FLOAT3 ||
+             baseType == CoreType::FLOAT4) ? (valueType == CoreType::FLOAT) :
+            (baseType == CoreType::INT2   || baseType == CoreType::INT3 ||
+             baseType == CoreType::INT4)  ? (valueType == CoreType::INT) :
+            (baseType == CoreType::UINT2  || baseType == CoreType::UINT3 ||
+             baseType == CoreType::UINT4) ? (valueType == CoreType::UINT) :
+            (baseType == CoreType::BOOL2  || baseType == CoreType::BOOL3 ||
+             baseType == CoreType::BOOL4) ? (valueType == CoreType::BOOL) : false;
+        if (baseIsVec && valueIsComponent) {
+          u16 newVecReg = AllocateRegister();
+          SetRegisterType(newVecReg, baseType);
+          builder.EmitInstruction(OP_VEC_INSERT_DYNAMIC, newVecReg, baseReg,
+                                  valueReg, indexReg);
+          builder.EmitInstruction(OP_STORE_REG, baseReg, newVecReg);
+          return;
+        }
+
+        // Matrix-column write: `M[i] = col_vec` where M is a matrix-typed
+        // local and i is a compile-time integer. Emit OP_VEC_INSERT
+        // (OpCompositeInsert) so the matrix type is preserved — the
+        // generic ARRAY_STORE fallback aliases baseReg to value, turning
+        // the matrix into a column-vec and breaking subsequent reads.
+        //
+        // Only fire when the LHS is `identifier[i]` — a simple local
+        // matrix variable. If the LHS is `struct.field[i]` (array-of-
+        // matrix field), the CoreType is wrong for matrix semantics
+        // (we have no "array of mat4" CoreType, so the register may
+        // carry mat4 spuriously). Fall through to generic ARRAY_STORE
+        // so STRUCT_INSERT can reconstitute the struct correctly.
+        bool baseIsLocalMatrix =
+            arrAccess.array.Type() == ASTNodeType::IDENTIFIER;
+        bool baseIsMat =
+            baseType == CoreType::MAT2 || baseType == CoreType::MAT3 ||
+            baseType == CoreType::MAT4;
+        CoreType expectedCol = (baseType == CoreType::MAT4)   ? CoreType::FLOAT4
+                             : (baseType == CoreType::MAT3)   ? CoreType::FLOAT3
+                             : (baseType == CoreType::MAT2)   ? CoreType::FLOAT2
+                                                              : CoreType::INVALID;
+        bool indexIsConst = (indexReg & 0x4000) != 0;
+        if (baseIsLocalMatrix && baseIsMat && indexIsConst &&
+            valueType == expectedCol) {
+          u16 slot = indexReg & 0x3FFF;
+          u16 literalIdx = 0;
+          if (slot < program.intCount) {
+            literalIdx = static_cast<u16>(program.intConstants[slot]);
+          }
+          u16 newMatReg = AllocateRegister();
+          SetRegisterType(newMatReg, baseType);
+          builder.EmitInstruction(OP_VEC_INSERT, newMatReg, baseReg,
+                                  literalIdx, valueReg);
+          builder.EmitInstruction(OP_STORE_REG, baseReg, newMatReg);
+          return;
+        }
+      }
+      if (baseReg < MAX_REGISTERS) {
+        CoreType baseType =
+            static_cast<CoreType>(program.registerTypes[baseReg]);
         CoreType valueType = GetRegisterType(valueReg);
         if (valueType != CoreType::INVALID && valueType != CoreType::VOID) {
-          CoreType baseType =
-              static_cast<CoreType>(program.registerTypes[baseReg]);
           if (baseType == CoreType::INVALID || baseType == CoreType::VOID ||
               baseType != valueType) {
             SetRegisterType(baseReg, valueType);
@@ -2967,11 +3346,142 @@ struct IRLowering {
           op = OP_MAT_SCALE;
           resultType = leftType;
         }
+      } else if ((binop.op == BinaryOpType::ADD ||
+                  binop.op == BinaryOpType::SUBTRACT ||
+                  binop.op == BinaryOpType::DIVIDE) &&
+                 (rightMask & TypeMasks::MATRIX_TYPES)) {
+        // Element-wise matrix-matrix arithmetic. OpFAdd / OpFSub / OpFDiv
+        // only accept scalar / vector types in SPIR-V, so decompose into
+        // per-column column-extract + column-add + matrix-construct. This
+        // matches what glslang / dxc emit for mat + mat in source code.
+        u32 cols = (leftType == CoreType::MAT4)   ? 4
+                 : (leftType == CoreType::MAT3)   ? 3
+                                                  : 2;
+        CoreType colType = (leftType == CoreType::MAT4)   ? CoreType::FLOAT4
+                         : (leftType == CoreType::MAT3)   ? CoreType::FLOAT3
+                                                          : CoreType::FLOAT2;
+        OpCode colOp = (binop.op == BinaryOpType::ADD)      ? OP_FADD
+                     : (binop.op == BinaryOpType::SUBTRACT) ? OP_FSUB
+                                                            : OP_FDIV;
+
+        u16 colDests[4] = {0, 0, 0, 0};
+        for (u32 c = 0; c < cols; c++) {
+          u16 idx = EmitConstantInt(static_cast<int>(c));
+          u16 colL = AllocateRegister();
+          u16 colR = AllocateRegister();
+          SetRegisterType(colL, colType);
+          SetRegisterType(colR, colType);
+          builder.EmitInstruction(OP_ARRAY_LOAD, colL, left, idx);
+          builder.EmitInstruction(OP_ARRAY_LOAD, colR, right, idx);
+
+          u16 colDest = AllocateRegister();
+          SetRegisterType(colDest, colType);
+          builder.EmitInstruction(colOp, colDest, colL, colR);
+          colDests[c] = colDest;
+        }
+
+        builder.EmitInstruction(OP_MAT_CONSTRUCT, dest, colDests[0],
+                                colDests[1], colDests[2], colDests[3]);
+        program.metadata[builder.currentInstruction - 1] = cols;
+        SetRegisterType(dest, leftType);
+        return dest;
+      } else if ((binop.op == BinaryOpType::ADD ||
+                  binop.op == BinaryOpType::SUBTRACT ||
+                  binop.op == BinaryOpType::DIVIDE) &&
+                 (rightMask & TypeMasks::SCALAR_TYPES)) {
+        // Matrix element-wise op scalar. SPIR-V has no OpMatrixPlusScalar —
+        // splat the scalar into a column-sized vector and apply the op
+        // per column, then reconstruct the matrix.
+        u32 cols = (leftType == CoreType::MAT4)   ? 4
+                 : (leftType == CoreType::MAT3)   ? 3
+                                                  : 2;
+        CoreType colType = (leftType == CoreType::MAT4)   ? CoreType::FLOAT4
+                         : (leftType == CoreType::MAT3)   ? CoreType::FLOAT3
+                                                          : CoreType::FLOAT2;
+        OpCode colOp = (binop.op == BinaryOpType::ADD)      ? OP_FADD
+                     : (binop.op == BinaryOpType::SUBTRACT) ? OP_FSUB
+                                                            : OP_FDIV;
+
+        u16 splat = AllocateRegister();
+        builder.EmitInstruction(OP_VEC_CONSTRUCT, splat, right, right, right,
+                                right);
+        program.metadata[builder.currentInstruction - 1] = cols;
+        SetRegisterType(splat, colType);
+
+        u16 colDests[4] = {0, 0, 0, 0};
+        for (u32 c = 0; c < cols; c++) {
+          u16 idx = EmitConstantInt(static_cast<int>(c));
+          u16 colL = AllocateRegister();
+          SetRegisterType(colL, colType);
+          builder.EmitInstruction(OP_ARRAY_LOAD, colL, left, idx);
+
+          u16 colDest = AllocateRegister();
+          SetRegisterType(colDest, colType);
+          builder.EmitInstruction(colOp, colDest, colL, splat);
+          colDests[c] = colDest;
+        }
+
+        builder.EmitInstruction(OP_MAT_CONSTRUCT, dest, colDests[0],
+                                colDests[1], colDests[2], colDests[3]);
+        program.metadata[builder.currentInstruction - 1] = cols;
+        SetRegisterType(dest, leftType);
+        return dest;
       }
-      // Add/subtract for matrices could be added here if needed
       if (op != OP_NOP) {
         builder.EmitInstruction(op, dest, left, right);
         SetRegisterType(dest, resultType);
+        return dest;
+      }
+    } else if ((leftMask & TypeMasks::SCALAR_TYPES) &&
+               (rightMask & TypeMasks::MATRIX_TYPES)) {
+      // Scalar * Matrix is commutative with the matrix-scalar path;
+      // reorder so OP_MAT_SCALE sees (matrix, scalar). Without this the
+      // expression falls into the scalar-arithmetic branch and emits
+      // OpFMul with a scalar result on matrix operands.
+      if (binop.op == BinaryOpType::MULTIPLY) {
+        builder.EmitInstruction(OP_MAT_SCALE, dest, right, left);
+        SetRegisterType(dest, rightType);
+        return dest;
+      }
+      if (binop.op == BinaryOpType::ADD ||
+          binop.op == BinaryOpType::SUBTRACT ||
+          binop.op == BinaryOpType::DIVIDE) {
+        // Scalar element-wise op matrix. Same splat-then-per-column
+        // strategy as the matrix-on-left case. Operand order matters
+        // for SUBTRACT / DIVIDE: emit FOP(splat, col).
+        u32 cols = (rightType == CoreType::MAT4)   ? 4
+                 : (rightType == CoreType::MAT3)   ? 3
+                                                  : 2;
+        CoreType colType = (rightType == CoreType::MAT4)   ? CoreType::FLOAT4
+                         : (rightType == CoreType::MAT3)   ? CoreType::FLOAT3
+                                                          : CoreType::FLOAT2;
+        OpCode colOp = (binop.op == BinaryOpType::ADD)      ? OP_FADD
+                     : (binop.op == BinaryOpType::SUBTRACT) ? OP_FSUB
+                                                            : OP_FDIV;
+
+        u16 splat = AllocateRegister();
+        builder.EmitInstruction(OP_VEC_CONSTRUCT, splat, left, left, left,
+                                left);
+        program.metadata[builder.currentInstruction - 1] = cols;
+        SetRegisterType(splat, colType);
+
+        u16 colDests[4] = {0, 0, 0, 0};
+        for (u32 c = 0; c < cols; c++) {
+          u16 idx = EmitConstantInt(static_cast<int>(c));
+          u16 colR = AllocateRegister();
+          SetRegisterType(colR, colType);
+          builder.EmitInstruction(OP_ARRAY_LOAD, colR, right, idx);
+
+          u16 colDest = AllocateRegister();
+          SetRegisterType(colDest, colType);
+          builder.EmitInstruction(colOp, colDest, splat, colR);
+          colDests[c] = colDest;
+        }
+
+        builder.EmitInstruction(OP_MAT_CONSTRUCT, dest, colDests[0],
+                                colDests[1], colDests[2], colDests[3]);
+        program.metadata[builder.currentInstruction - 1] = cols;
+        SetRegisterType(dest, rightType);
         return dest;
       }
     } else if ((leftMask & TypeMasks::FLOAT_VECTORS) &&
@@ -3543,6 +4053,38 @@ struct IRLowering {
   u16 LowerMemberAccess(NodeRef ref) {
     const MemberAccessData &access = ast->GetMemberAccess(ref);
 
+    // Resolve `variants.<name>` to the variant's current value as a
+    // constant. Raster stages (vertex/fragment) go through
+    // CloneShaderStageWithParams which substitutes variants at clone time,
+    // but compute / direct stages reach IR lowering with the AST still
+    // containing MemberAccess(VARIANTS, name). Without this, the default
+    // MemberAccess path treats `variants` as a struct-valued register and
+    // emits a bogus OpCompositeExtract on a scalar constant.
+    if (access.object.Type() == ASTNodeType::IDENTIFIER &&
+        !currentPipeline.IsNull()) {
+      const IdentifierData &objIdent = ast->GetIdentifier(access.object);
+      if (objIdent.identifierKind == SpecialIdentifier::VARIANTS) {
+        const PipelineData &pipeline = ast->GetPipeline(currentPipeline);
+        for (u32 i = 0; i < pipeline.variantDecls.count; i++) {
+          const PipelineVariantDeclData &decl = pipeline.variantDecls[i];
+          if (decl.name.nameHash == access.member.nameHash && decl.defaultResolved) {
+            switch (decl.defaultValue.type) {
+              case LiteralValue::FLOAT:
+                return builder.EmitConstant(decl.defaultValue.floatValue);
+              case LiteralValue::INT:
+                return EmitConstantInt(decl.defaultValue.intValue);
+              case LiteralValue::UINT:
+                return EmitConstantUint(decl.defaultValue.uintValue);
+              case LiteralValue::BOOL:
+                return builder.EmitConstantBool(decl.defaultValue.boolValue);
+              default:
+                break;
+            }
+          }
+        }
+      }
+    }
+
     // Handle chained member access (e.g., attributes.normal.y or
     // resources.lights.positions)
     if (access.object.Type() == ASTNodeType::MEMBER_ACCESS ||
@@ -3657,6 +4199,21 @@ struct IRLowering {
           SetRegisterType(srcReg, loadType);
           builder.EmitInstruction(OP_STORAGE_LOAD, srcReg, objectReg);
         }
+        // `.x` / `.r` on an already-scalar value is a no-op (e.g. the
+        // inner `.r` of `v.r.r`). Emitting OP_VEC_EXTRACT on a scalar
+        // makes the SPIR-V backend synthesise OpCompositeExtract on a
+        // non-composite and trips the validator. Skip when the object
+        // came from an ARRAY_ACCESS — array loads of struct-array
+        // fields carry an IR-level scalar CoreType but a SPIR-V
+        // vector type override, so the guard would incorrectly
+        // suppress a needed extract.
+        CoreType srcType = GetRegisterType(srcReg);
+        bool srcFromArrayAccess =
+            access.object.Type() == ASTNodeType::ARRAY_ACCESS;
+        if (!srcFromArrayAccess &&
+            (mask(srcType) & TypeMasks::SCALAR_TYPES) && componentIndex == 0) {
+          return srcReg;
+        }
         u16 dest = AllocateRegister();
         builder.EmitInstruction(OP_VEC_EXTRACT, dest, srcReg, componentIndex);
         // Get the scalar type from the vector type
@@ -3730,6 +4287,46 @@ struct IRLowering {
       // Lower the expression first to get the result
       u16 objectReg = LowerExpression(access.object);
 
+      // Struct-field access on a non-identifier expression (e.g.,
+      // `makeF(1.0).v`, `(a + b).field`). Without this, falling through
+      // to the swizzle-only path returns the whole object for unknown
+      // member names and downstream component extracts hit an
+      // out-of-bounds index on the composite.
+      if (objectReg < MAX_REGISTERS) {
+        u32 structTypeHash = program.registerStructTypes[objectReg];
+        if (structTypeHash != 0) {
+          auto structIt = structTypeMap.find(structTypeHash);
+          if (structIt != structTypeMap.end()) {
+            u32 structIdx = structIt->second;
+            const IRProgram::StructTypeInfo &info =
+                program.structTypes[structIdx];
+            for (u32 i = 0; i < info.fieldCount; i++) {
+              if (program.structFieldNameHashes[info.fieldOffset + i] ==
+                  access.member.nameHash) {
+                u16 dest = AllocateRegister();
+                builder.EmitInstruction(OP_STRUCT_EXTRACT, dest, objectReg, i);
+                program.metadata[builder.currentInstruction - 1] =
+                    structTypeHash;
+                CoreType fieldType = static_cast<CoreType>(
+                    program.structFieldTypes[info.fieldOffset + i]);
+                SetRegisterType(dest, fieldType);
+                // Propagate nested-struct type info for further chaining.
+                if ((fieldType == CoreType::CUSTOM ||
+                     fieldType == CoreType::ENUM) &&
+                    program.structFieldTypeHashes && dest < MAX_REGISTERS) {
+                  u32 fieldTypeHash =
+                      program.structFieldTypeHashes[info.fieldOffset + i];
+                  if (fieldTypeHash != 0) {
+                    program.registerStructTypes[dest] = fieldTypeHash;
+                  }
+                }
+                return dest;
+              }
+            }
+          }
+        }
+      }
+
       // Then apply swizzle/member access
       u32 memberHash = access.member.nameHash;
       u32 componentIndex = 0xFFFFFFFF;
@@ -3749,6 +4346,10 @@ struct IRLowering {
         componentIndex = 3;
 
       if (componentIndex != 0xFFFFFFFF) {
+        CoreType objType = GetRegisterType(objectReg);
+        if ((mask(objType) & TypeMasks::SCALAR_TYPES) && componentIndex == 0) {
+          return objectReg;
+        }
         u16 dest = AllocateRegister();
         builder.EmitInstruction(OP_VEC_EXTRACT, dest, objectReg,
                                 componentIndex);
@@ -4105,6 +4706,10 @@ struct IRLowering {
         componentIndex = 3;
 
       if (componentIndex != 0xFFFFFFFF) {
+        CoreType objType = GetRegisterType(objReg);
+        if ((mask(objType) & TypeMasks::SCALAR_TYPES) && componentIndex == 0) {
+          return objReg;
+        }
         u16 dest = AllocateRegister();
         builder.EmitInstruction(OP_VEC_EXTRACT, dest, objReg, componentIndex);
         // Get the scalar type from the vector type
@@ -4241,6 +4846,12 @@ struct IRLowering {
       // Get the receiver object
       if (!call.moduleObject.IsNull()) {
         u16 receiverReg = LowerExpression(call.moduleObject);
+        // registerStructTypes has MAX_REGISTERS entries. Constant-encoded
+        // registers (bits 0x4000 / 0x8000) and any reg past MAX_REGISTERS
+        // can't have a valid struct-type hash; skip method dispatch.
+        if ((receiverReg & 0xC000) != 0 || receiverReg >= MAX_REGISTERS) {
+          return 0;
+        }
         u32 receiverStructHash = program.registerStructTypes[receiverReg];
 
         if (receiverStructHash != 0) {
@@ -4665,6 +5276,18 @@ struct IRLowering {
         case Intrinsic::ALL:
           resultType = CoreType::BOOL;
           break;
+        case Intrinsic::IS_NAN:
+        case Intrinsic::IS_INF: {
+          // isnan/isinf return a bool (or bvec matching input width).
+          CoreType argType = argCount > 0 ? GetRegisterType(args[0]) : CoreType::FLOAT;
+          switch (argType) {
+            case CoreType::FLOAT2: resultType = CoreType::BOOL2; break;
+            case CoreType::FLOAT3: resultType = CoreType::BOOL3; break;
+            case CoreType::FLOAT4: resultType = CoreType::BOOL4; break;
+            default:               resultType = CoreType::BOOL;  break;
+          }
+          break;
+        }
         default:
           // Most intrinsics return the same type as first arg
           if (argCount > 0) {
@@ -4677,6 +5300,20 @@ struct IRLowering {
     } else {
       // Check if it's a type constructor (float4, float3, int4, etc.)
       CoreType constructedType = LookupCoreType(call.name.nameHash);
+      // GENERIC_T/U/V collide with short user struct names (`T`, `U`,
+      // `V`). A user-defined struct/enum with that name should win, so
+      // `V(a, b)` doesn't silently degrade into a vec-construct call.
+      if (constructedType == CoreType::GENERIC_T ||
+          constructedType == CoreType::GENERIC_U ||
+          constructedType == CoreType::GENERIC_V) {
+        Symbol *userSym = SymbolTable::LookupByHash(
+            const_cast<SymbolTableData *>(symbols), call.name.nameHash);
+        if (userSym && (userSym->kind == SymbolKind::CUSTOM_TYPE ||
+                        userSym->kind == SymbolKind::ENUM ||
+                        userSym->kind == SymbolKind::ENUM_SYMBOL)) {
+          constructedType = CoreType::INVALID;
+        }
+      }
       if (constructedType != CoreType::INVALID &&
           constructedType != CoreType::VOID) {
         // Check if this is a scalar type conversion (float(x), int(x), uint(x))
@@ -4842,6 +5479,80 @@ struct IRLowering {
             }
           }
         } else {
+          // Check for a user-struct positional constructor: `V(a, b, c)`
+          // where V is a declared struct type. Previously fell through to
+          // OP_CALL which emits OpUndef. For structs with up to 4 fields
+          // we can fit the args into OP_STRUCT_CONSTRUCT directly (4
+          // operand slots). For structs with more fields, start from an
+          // undef composite and chain OP_STRUCT_INSERT per field so the
+          // backend still produces a fully-populated OpCompositeInsert
+          // sequence that matches the struct member count.
+          u32 customHash = 0;
+          CoreType resolved =
+              ResolveCoreTypeFromHash(call.name.nameHash, &customHash);
+          if (resolved == CoreType::CUSTOM && customHash != 0) {
+            u32 structTypeHash = LookupOrRegisterStructType(customHash);
+            if (structTypeHash != 0) {
+              auto it = structTypeMap.find(structTypeHash);
+              u32 fieldCount = 0;
+              if (it != structTypeMap.end()) {
+                fieldCount = program.structTypes[it->second].fieldCount;
+              }
+
+              if (argCount <= 4 && fieldCount <= 4) {
+                u16 op0 = argCount > 0 ? args[0] : 0xFFFF;
+                u16 op1 = argCount > 1 ? args[1] : 0xFFFF;
+                u16 op2 = argCount > 2 ? args[2] : 0xFFFF;
+                u16 op3 = argCount > 3 ? args[3] : 0xFFFF;
+                builder.EmitInstruction(OP_STRUCT_CONSTRUCT, dest, op0, op1,
+                                        op2, op3);
+                program.metadata[builder.currentInstruction - 1] =
+                    structTypeHash;
+                SetRegisterType(dest, CoreType::CUSTOM);
+                if (dest < MAX_REGISTERS) {
+                  program.registerStructTypes[dest] = structTypeHash;
+                }
+                return dest;
+              }
+
+              // Struct has more than 4 fields (or user passed more than
+              // 4 positional args). Build via undef-base + chained
+              // STRUCT_INSERTs.
+              u16 base = AllocateRegister();
+              SetRegisterType(base, CoreType::CUSTOM);
+              if (base < MAX_REGISTERS) {
+                program.registerStructTypes[base] = structTypeHash;
+              }
+              AddUndefRegister(base, CoreType::CUSTOM);
+
+              u16 current = base;
+              u32 slots = fieldCount > 0 ? fieldCount : argCount;
+              if (slots > argCount) slots = argCount;
+              for (u32 i = 0; i < slots; i++) {
+                u16 next = AllocateRegister();
+                builder.EmitInstruction(OP_STRUCT_INSERT, next, current,
+                                        static_cast<u16>(i), args[i]);
+                program.metadata[builder.currentInstruction - 1] =
+                    structTypeHash;
+                SetRegisterType(next, CoreType::CUSTOM);
+                if (next < MAX_REGISTERS) {
+                  program.registerStructTypes[next] = structTypeHash;
+                }
+                current = next;
+              }
+
+              // Copy the final composite into the originally-allocated
+              // `dest` so subsequent code that references the call's
+              // destination sees the fully-built struct.
+              builder.EmitInstruction(OP_STORE_REG, dest, current);
+              SetRegisterType(dest, CoreType::CUSTOM);
+              if (dest < MAX_REGISTERS) {
+                program.registerStructTypes[dest] = structTypeHash;
+              }
+              return dest;
+            }
+          }
+
           // Fallback: emit OP_CALL (will produce OpUndef in SPIR-V)
           builder.EmitInstruction(OP_CALL, dest, call.name.nameHash);
           program.metadata[builder.currentInstruction - 1] =
@@ -4880,12 +5591,9 @@ struct IRLowering {
         OverloadTypeMask paramMask = MakeOverloadMaskFromResolvedTypeHash(
             fn.parameters[i].second.nameHash);
         if (!OverloadMaskMatches(paramMask, argMasks[i])) {
-          fprintf(stderr,
-                  "DEBUG: Param[%u] type mismatch: paramMask=%llu, "
-                  "argMask=%llu, paramTypeHash=%u\n",
-                  i, (unsigned long long)paramMask,
-                  (unsigned long long)argMasks[i],
-                  fn.parameters[i].second.nameHash);
+          // Overload rejection is normal during resolution — caller
+          // tries multiple candidates. Downstream "Function not found"
+          // error covers the truly-unresolvable case.
           return false;
         }
       }
@@ -4991,25 +5699,11 @@ struct IRLowering {
     }
 
     if (funcRef.IsNull()) {
-      fprintf(stderr,
-              "DEBUG: Function not found (hash=%u, moduleIndex=%u, "
-              "argCount=%u, currentPipeline=%s)\n",
-              call.name.nameHash, call.moduleIndex, argCount,
-              currentPipeline.IsNull() ? "NULL" : "valid");
-      if (!currentPipeline.IsNull()) {
-        const PipelineData &pipeline = ast->GetPipeline(currentPipeline);
-        fprintf(stderr, "DEBUG: Pipeline has %u functions:\n",
-                pipeline.functions.count);
-        for (u32 i = 0; i < pipeline.functions.count && i < 10; i++) {
-          NodeRef fnRef = pipeline.functions[i];
-          if (fnRef.Type() == ASTNodeType::FUNCTION) {
-            const FunctionDeclData &fn = ast->GetFunction(fnRef);
-            fprintf(stderr, "  [%u] hash=%u, params=%u\n", i, fn.name.nameHash,
-                    fn.parameters.count);
-          }
-        }
-      }
-      return 0xFFFF; // Function not found
+      // "Function not found" is a normal lookup outcome during
+      // constructor calls and intrinsics — the parent dispatch has
+      // its own handling for truly-unresolved symbols. Staying silent
+      // here keeps end-user stderr clean.
+      return 0xFFFF;
     }
 
     const FunctionDeclData &func = ast->GetFunction(funcRef);
@@ -5021,6 +5715,25 @@ struct IRLowering {
 
     if (func.body.IsNull()) {
       return 0xFFFF; // No function body to inline
+    }
+
+    // Direct / indirect recursion check. SPIR-V has no call-stack
+    // semantics — OpFunctionCall cannot target a caller in its own
+    // chain. Previously recursive calls silently produced OpUndef
+    // operands; validation then surfaced a cryptic "Expected int scalar
+    // or vector type" error far from the root cause.
+    for (u32 i = 0; i < inlineStackDepth; i++) {
+      if (inlineStackPacked[i] == funcRef.packed) {
+        if (!recursionDiagnosed) {
+          fprintf(stderr,
+                  "Error: recursion is not supported — a function calls "
+                  "itself (directly or through another function). SPIR-V "
+                  "execution is stack-less; rewrite the algorithm "
+                  "iteratively.\n");
+          recursionDiagnosed = true;
+        }
+        return 0xFFFF;
+      }
     }
 
     // Check inline depth to prevent infinite recursion
@@ -5084,6 +5797,9 @@ struct IRLowering {
     inlineModuleIndex =
         foundModuleIndex; // Set module context for nested unqualified calls
     inlineDepth++;
+    if (inlineStackDepth < MAX_INLINE_DEPTH) {
+      inlineStackPacked[inlineStackDepth++] = funcRef.packed;
+    }
 
     // Lower the function body
     if (func.body.Type() == ASTNodeType::BLOCK) {
@@ -5095,6 +5811,9 @@ struct IRLowering {
     }
 
     // Restore state
+    if (inlineStackDepth > 0) {
+      inlineStackDepth--;
+    }
     inlineDepth--;
     inlineReturnReg = savedReturnReg;
     inlineReturnFlagReg = savedReturnFlagReg;
@@ -5837,6 +6556,21 @@ struct IRLowering {
     }
 
     CoreType coreType = LookupCoreType(typeHash);
+    // GENERIC_T/U/V collide with single-letter user struct names (`V`,
+    // `T`, `U` — common in shader code for vertex, texture, etc.). Prefer
+    // a user-defined struct/enum over the generic placeholder if one
+    // exists. GENERIC_* is only meaningful inside generic-fn signatures,
+    // which have their own type-resolution path.
+    if (coreType == CoreType::GENERIC_T || coreType == CoreType::GENERIC_U ||
+        coreType == CoreType::GENERIC_V) {
+      Symbol *userSym = SymbolTable::LookupByHash(
+          const_cast<SymbolTableData *>(symbols), typeHash);
+      if (userSym && (userSym->kind == SymbolKind::CUSTOM_TYPE ||
+                      userSym->kind == SymbolKind::ENUM ||
+                      userSym->kind == SymbolKind::ENUM_SYMBOL)) {
+        coreType = CoreType::INVALID; // fall through to user-symbol path
+      }
+    }
     if (coreType != CoreType::INVALID && coreType != CoreType::VOID) {
       return coreType;
     }
@@ -6076,6 +6810,12 @@ struct IRLowering {
       return OP_ANY;
     case Intrinsic::ALL:
       return OP_ALL;
+
+    // Float classification
+    case Intrinsic::IS_NAN:
+      return OP_ISNAN;
+    case Intrinsic::IS_INF:
+      return OP_ISINF;
 
     default:
       return OP_NOP;

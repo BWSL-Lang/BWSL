@@ -1,0 +1,116 @@
+// Test: Fragment shader use of input.position (FragCoord / gl_FragCoord)
+// Tests: window-space pixel coords, screen-space procedural effects,
+// depth read via FragCoord.z, perspective divide via FragCoord.w.
+
+pipeline RasterFragCoord {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Scanlines" {
+        use attributes { position, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float4 fragCoord = input.position;
+            float2 uv = input.uv;
+
+            // Scanlines driven purely by screen-space Y.
+            float line = sin(fragCoord.y * 0.5);
+            float mask = 0.75 + 0.25 * line;
+
+            float3 base = float3(uv, 0.5);
+            output.color = float4(base * mask, 1.0);
+        }
+    }
+
+    pass "CheckerFromFragCoord" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            float4 fc = input.position;
+
+            // Derive a checker pattern from window-space pixel coordinates.
+            float2 cell = floor(fc.xy / 16.0);
+            float checker = mod(cell.x + cell.y, 2.0);
+
+            float3 a = float3(0.1, 0.1, 0.15);
+            float3 b = float3(0.85, 0.85, 0.9);
+            float3 color = lerp(a, b, checker);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "DepthFromFragCoord" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            output.position = float4(pos, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float4 fc = input.position;
+            float2 uv = input.uv;
+
+            // FragCoord.z is the interpolated depth in [0,1] (after viewport).
+            float depth = fc.z;
+            float linearizedHint = 1.0 - depth;
+
+            // FragCoord.w is 1/clip.w - use it to visualize perspective falloff.
+            float invW = fc.w;
+            float wVis = saturate(invW);
+
+            float3 color = float3(depth, linearizedHint, wVis);
+
+            // Discard a border band in window space to exercise FragCoord in a
+            // branch that affects control flow.
+            if (fc.x < 4.0 || fc.y < 4.0) {
+                discard;
+            }
+
+            // Also write depth to stress both builtin inputs and outputs.
+            output.depth = depth;
+            output.color = float4(color * uv.x, 1.0);
+        }
+    }
+
+    pass "DitheredGradient" {
+        use attributes { position, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float4 fc = input.position;
+            float2 uv = input.uv;
+
+            // Bayer-style 4x4 dither using integer screen coords.
+            int2 p = int2(int(fc.x), int(fc.y));
+            int x = p.x & 3;
+            int y = p.y & 3;
+            int index = (y << 2) + x;
+
+            float threshold = float(index) / 16.0;
+            float gradient = uv.x;
+
+            float bit = gradient > threshold ? 1.0 : 0.0;
+            float3 color = float3(bit, gradient, 1.0 - gradient);
+
+            output.color = float4(color, 1.0);
+        }
+    }
+}

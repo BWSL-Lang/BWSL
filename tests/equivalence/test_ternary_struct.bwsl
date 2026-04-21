@@ -1,0 +1,44 @@
+pipeline EquivTernaryStruct {
+
+    // Ternary with struct-typed operands. Pre-1.4 SPIR-V's OpSelect
+    // doesn't accept struct composites, so the IR lowering decomposes
+    // into per-field OpSelect + OpCompositeInsert. This test pins down
+    // cross-backend equivalence on both direct and chained struct-ternary.
+
+    struct Frame {
+        float3 pos;
+        float2 uv;
+        float  w;
+    };
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            Frame a;
+            a.pos = float3(t, t + 1.0, t + 2.0);
+            a.uv  = float2(0.1, 0.2);
+            a.w   = 10.0;
+
+            Frame b;
+            b.pos = float3(-t, -(t + 1.0), -(t + 2.0));
+            b.uv  = float2(0.9, 0.8);
+            b.w   = 100.0;
+
+            // Direct bind from ternary
+            Frame c = ((idx & 1u) == 0u) ? a : b;
+
+            // Chain access on ternary result
+            float chainY = ((idx % 3u) == 0u ? a : b).pos.y;
+
+            float score =
+                c.pos.x + c.pos.y * 0.1 + c.pos.z * 0.01 +
+                c.uv.x * 10.0 + c.uv.y * 100.0 +
+                c.w * 0.001 +
+                chainY * 0.0001;
+
+            resources.output[idx] = score;
+        }
+    }
+}

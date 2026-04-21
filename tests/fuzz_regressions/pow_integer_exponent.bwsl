@@ -1,0 +1,17 @@
+// pow() with integer-constant exponent (common optimization target
+// that some backends special-case). Should still produce correct
+// SPIR-V regardless of whether it's folded to FMul or kept as Pow.
+pipeline PowIntegerExponent {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float a = 2.5;
+            float b = pow(a, 2.0);     // often folded to a*a
+            float c = pow(a, 3.0);
+            float d = pow(a, 0.5);     // = sqrt(a)
+            float e = pow(a, -1.0);    // = 1/a
+            float f = pow(a, 0.0);     // = 1
+
+            float sum = b + c + d + e + f;
+        }
+    }
+}

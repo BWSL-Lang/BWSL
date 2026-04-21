@@ -125,7 +125,13 @@ struct SSAConstructor {
     // Worklist for IDF computation
     u32* worklist;
     bool* inWorklist;
-    bool* hasPhiFor;       // [blockCount * variableCount] 
+    bool* hasPhiFor;       // [blockCount * variableCount]
+
+    // Optional blockVisited tracker used during Rename. Non-null only
+    // during the dominator-tree traversal — lets the post-Rename
+    // cleanup pass distinguish reachable from unreachable blocks.
+    bool* renameVisited = nullptr;
+    u32 renameVisitedCapacity = 0;
     
     //==========================================================================
     // Public Interface

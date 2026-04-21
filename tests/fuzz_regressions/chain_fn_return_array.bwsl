@@ -1,0 +1,28 @@
+// Pipeline-scoped function returning a struct with an array field,
+// then chaining array-index + member access on the returned value.
+// Exercises the `fn().field[i].x` pattern — every tier of indirection
+// (call site lowering, struct extract, array load, vector extract)
+// must coordinate register typing.
+pipeline ChainFnReturnArray {
+    struct Packet {
+        float3 pos[3];
+        float  w;
+    };
+
+    buildPacket :: (float t) -> Packet {
+        Packet p;
+        p.pos[0] = float3(t, t + 1.0, t + 2.0);
+        p.pos[1] = float3(-t, t * 2.0, 0.0);
+        p.pos[2] = float3(0.0, 0.0, t * 3.0);
+        p.w = t + 10.0;
+        return p;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float t = float(input.global_id.x);
+            Packet p = buildPacket(t);
+            float a = p.pos[0].x + p.pos[1].y + p.pos[2].z + p.w;
+        }
+    }
+}

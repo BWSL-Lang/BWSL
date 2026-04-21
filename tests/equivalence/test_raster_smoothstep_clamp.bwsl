@@ -1,0 +1,28 @@
+// Equivalence: step / smoothstep / clamp / saturate. These intrinsics are
+// implemented differently across HLSL/GLSL/SPIR-V (GLSL: smoothstep uses
+// Hermite; HLSL: same; SPIR-V GLSL.std.450: SmoothStep). Confirm they match
+// bitwise-close at sensible input ranges.
+pipeline EquivRasterSmoothstepClamp {
+    attributes { }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float s0 = step(0.5, uv.x);
+            float s1 = smoothstep(0.25, 0.75, uv.y);
+            float c0 = clamp(uv.x * 1.5 - 0.25, 0.0, 1.0);
+            float c1 = saturate(uv.y * 2.0 - 0.5);
+            output.color = float4(s0, s1, c0, c1);
+        }
+    }
+}

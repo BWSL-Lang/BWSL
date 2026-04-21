@@ -1,0 +1,28 @@
+// Equivalence: two separate UBO bindings, one in each stage. The vertex
+// stage reads a uniform scale; the fragment stage reads a uniform tint.
+// Validates that multi-UBO descriptor binding at distinct slots matches
+// native SPIR-V across HLSL and GLSL cross-compilation.
+pipeline EquivRasterMultiUbo {
+    attributes {
+    }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            float s = resources.vscale;
+            output.position = float4(p * s, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float4 t = resources.ftint;
+            output.color = float4(uv.x * t.x, uv.y * t.y, t.z, t.w);
+        }
+    }
+}

@@ -1,0 +1,26 @@
+pipeline EquivPointersVectors {
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float f = float(idx);
+
+            float3 v = float3(f, f * 2.0, f * 3.0);
+            float3^ vptr = ^v;
+
+            float3 read1 = vptr^;
+            vptr^ = float3(f + 10.0, f + 20.0, f + 30.0);
+            float3 read2 = v;
+
+            float4 w = float4(f, f + 1.0, f + 2.0, f + 3.0);
+            float4^ wptr = ^w;
+            wptr^ = wptr^ * 0.5;
+            float4 read3 = w;
+
+            resources.output[idx] =
+                read1.x + read1.y * 0.1 + read1.z * 0.01 +
+                read2.x * 0.001 + read2.y * 0.0001 + read2.z * 0.00001 +
+                read3.x * 1000.0 + read3.y * 100.0 + read3.z * 10.0 + read3.w;
+        }
+    }
+}

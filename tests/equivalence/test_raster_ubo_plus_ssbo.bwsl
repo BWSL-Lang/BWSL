@@ -1,0 +1,31 @@
+// Equivalence: combined raster pipeline with a UBO consumed by the vertex
+// stage (transform scale) and an SSBO consumed by the fragment stage
+// (column lookup). Exercises cross-stage descriptor-set replication across
+// native, HLSL, and GLSL backends.
+pipeline EquivRasterUboPlusSsbo {
+    attributes {
+    }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            float s = resources.scale;
+            output.position = float4(p * s, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            int col = int(input.position.x);
+            if (col < 0) { col = 0; }
+            if (col > 15) { col = 15; }
+            float col_val = resources.cols[col];
+            output.color = float4(col_val, uv.x, uv.y, 1.0);
+        }
+    }
+}

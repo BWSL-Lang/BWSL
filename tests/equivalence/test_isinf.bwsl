@@ -1,0 +1,33 @@
+pipeline EquivIsinf {
+
+    // isinf() detects +/-infinity. Pairs with test_nan_isnan; exists to
+    // lock down the second float-classification intrinsic.
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            // Division by zero -> +/-inf
+            float zero = t - t;             // +0.0 at runtime
+            float infPos = 1.0 / zero;
+            float infNeg = -1.0 / zero;
+
+            // Overflowing exp -> +inf
+            float infExp = exp(1000.0 + t);
+
+            // Large multiplication
+            float huge = 1e30 * (1e30 + t);
+
+            float score =
+                select(0.0, 1.0, isinf(infPos))     * 1.0 +
+                select(0.0, 1.0, isinf(infNeg))     * 10.0 +
+                select(0.0, 1.0, isinf(infExp))     * 100.0 +
+                select(0.0, 1.0, isinf(huge))       * 1000.0 +
+                // Sanity: a normal float is not inf
+                select(0.0, 1.0, isinf(t + 1.0))    * 10000.0;
+
+            resources.output[idx] = score;
+        }
+    }
+}

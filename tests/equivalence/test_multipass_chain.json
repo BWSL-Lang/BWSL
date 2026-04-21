@@ -1,0 +1,10 @@
+{
+    "output_size": 32,
+    "output_type": "float",
+    "tolerance": 1e-3,
+    "passes": [
+        {"groups": [8, 1, 1]},
+        {"groups": [8, 1, 1]},
+        {"groups": [8, 1, 1]}
+    ]
+}

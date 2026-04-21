@@ -1,0 +1,68 @@
+pipeline EquivSsaStress {
+
+    // SSA-construction stress test: variables defined in multiple branches,
+    // nested loops with conditional break/skip, address-taken locals used
+    // inside and after loops, and phi sources from three+ paths. Previous
+    // fuzz runs surfaced bugs in exactly this region.
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int iv = int(idx);
+
+            // Multi-branch phi: `v` is written in three different paths
+            // before a single join.
+            int v = -1;
+            if (iv == 0) {
+                v = 10;
+            } else if (iv < 3) {
+                v = 20 + iv;
+            } else if (iv < 5) {
+                v = 30 * iv;
+            } else {
+                v = 40 - iv;
+            }
+
+            // Address-taken variable modified inside nested loops.
+            int acc = 0;
+            int^ accPtr = ^acc;
+            for (int i = 0; i < iv; i = i + 1) {
+                for (int j = 0; j < 3; j = j + 1) {
+                    if (j == 1) { skip; }
+                    if (i == 2 && j == 2) { break; }
+                    accPtr^ = accPtr^ + i * 10 + j;
+                }
+            }
+
+            // Conditional redefinition across loop body and post-loop.
+            int k = iv;
+            for (int m = 0; m < 4; m = m + 1) {
+                if (m == 2) {
+                    k = k * 2;
+                } else {
+                    k = k + 1;
+                }
+            }
+            // Use k after the loop (exercises post-loop phi).
+            if (k > 10) {
+                k = k - 5;
+            }
+
+            // Float reduction with a phi across early-break.
+            float fsum = 0.0;
+            for (int n = 0; n < 6; n = n + 1) {
+                float x = float(n) * 0.5 + float(iv) * 0.1;
+                if (x > 2.5) { break; }
+                fsum = fsum + x;
+            }
+
+            float score =
+                float(v)   +
+                float(acc) * 0.1 +
+                float(k)   * 0.01 +
+                fsum       * 0.001;
+
+            resources.output[idx] = score;
+        }
+    }
+}

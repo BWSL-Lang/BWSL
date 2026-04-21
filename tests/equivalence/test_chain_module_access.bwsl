@@ -1,0 +1,55 @@
+pipeline EquivChainModuleAccess {
+
+    // Cross-scope access chains: module constants and functions mixed into
+    // arithmetic chains with local structs / vectors. A common real-shader
+    // pattern; each individual piece is tested elsewhere, but the
+    // combination (module constant -> local math -> module function -> local
+    // swizzle) stacks multiple IR-lowering paths.
+
+    import Math
+
+    struct Local {
+        float3 dir;
+        float3 color;
+        float intensity;
+    };
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            Local l;
+            l.dir = float3(t, 1.0, t * 0.5);
+            l.color = float3(0.9, 0.5 + t * 0.01, 0.1);
+            l.intensity = 2.0 + t;
+
+            // Module const * local scalar
+            float a = Math::PI * l.intensity;
+
+            // Module function(local vec) -> swizzle -> scalar mul
+            float3 n = Math::safe_normalize(l.dir);
+            float b = n.y * Math::TAU;
+
+            // Module const chain: (const - const) * local
+            float c = (Math::PHI - Math::INV_PI) * l.color.g;
+
+            // Local math -> module function -> local access
+            float mapped = Math::remap(t, 0.0, 7.0, -1.0, 1.0);
+            float d = mapped * l.color.b;
+
+            // Nested module call: square(cube(remap(...)))
+            float e = Math::square(Math::cube(mapped));
+
+            float score =
+                a +
+                b * 10.0 +
+                c * 100.0 +
+                d * 1000.0 +
+                e * 10000.0 +
+                n.x * 0.001 + n.z * 0.0001;
+
+            resources.output[idx] = score;
+        }
+    }
+}

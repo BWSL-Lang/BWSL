@@ -1,0 +1,26 @@
+// Unsigned int arithmetic should wrap around on overflow (defined
+// behavior in SPIR-V). Signed int overflow is implementation-defined
+// but most backends wrap too.
+pipeline UnsignedOverflowWraparound {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint max_u = 0xFFFFFFFFu;
+            uint a = max_u + 1u;         // wraps to 0
+            uint b = max_u * 2u;         // wraps
+            uint c = max_u - 100u;
+            uint d = 0u - 1u;            // wraps to max
+
+            // Shifts
+            uint e = 1u << 31u;          // top bit
+            uint f = max_u >> 28u;       // 0x0F
+
+            // Mixed with signed
+            int si = 100;
+            int sj = si * 1000000;       // well within int range
+            int sk = sj + 1;
+
+            uint sum = a + b + c + d + e + f;
+            int  ssum = sj + sk;
+        }
+    }
+}

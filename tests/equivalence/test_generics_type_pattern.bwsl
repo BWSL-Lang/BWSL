@@ -1,0 +1,39 @@
+pipeline EquivGenericsTypePattern {
+
+    constraint FloatVectors = float2 | float3 | float4;
+
+    vecProcess :: (FloatVectors v) -> FloatVectors {
+        float2: v * 2.0
+        float3: cross(v, float3(0.0, 1.0, 0.0))
+        float4: v.wzyx
+    }
+
+    vecScale :: (FloatVectors v, float s) -> FloatVectors {
+        float4: v * s * 0.5
+        default: v * s
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) + 0.5;
+
+            float2 v2 = float2(t, t + 1.0);
+            float3 v3 = float3(t, t + 1.0, t + 2.0);
+            float4 v4 = float4(t, t + 1.0, t + 2.0, t + 3.0);
+
+            float2 p2 = vecProcess(v2);
+            float3 p3 = vecProcess(v3);
+            float4 p4 = vecProcess(v4);
+
+            float3 s3 = vecScale(v3, 0.25);
+            float4 s4 = vecScale(v4, 0.25);
+
+            resources.output[idx] =
+                p2.x + p2.y * 0.1 +
+                p3.x * 0.01 + p3.y * 0.001 + p3.z * 0.0001 +
+                p4.x * 10.0 + p4.y * 100.0 + p4.z * 1000.0 +
+                s3.x * 0.00001 + s4.x * 0.000001;
+        }
+    }
+}

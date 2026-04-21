@@ -1,0 +1,21 @@
+// Uses the TestVariantEnums module's enum type. Exercises
+// Module::Enum::Variant access and the module's enum-underlying
+// representation.
+pipeline ModuleWithEnum {
+    import TestVariantEnums
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            TestVariantEnums::Mode m = TestVariantEnums::Mode::A;
+
+            float result;
+            if (m == TestVariantEnums::Mode::A) {
+                result = 1.0;
+            } else if (m == TestVariantEnums::Mode::B) {
+                result = 2.0;
+            } else {
+                result = 3.0;
+            }
+        }
+    }
+}

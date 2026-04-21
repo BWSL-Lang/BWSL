@@ -1,0 +1,26 @@
+// Four-deep nested loops with break and continue at different levels.
+// Break/continue target stack has MAX_LOOP_NESTING=16 slots; nesting
+// to depth 4 with interleaved break/skip exercises the stack without
+// overrunning it, and the CFG structured-control-flow annotator has to
+// route each break/continue to the right merge/continue block.
+pipeline NestedLoopsBreakContinue {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int acc = 0;
+            for (int i = 0; i < 4; i = i + 1) {
+                for (int j = 0; j < 4; j = j + 1) {
+                    if ((i + j) > 5) break;
+                    for (int k = 0; k < 4; k = k + 1) {
+                        if (k == j) continue;
+                        for (int m = 0; m < 4; m = m + 1) {
+                            if ((i * j * k * m) > 10) break;
+                            if ((m & 1) == 0) continue;
+                            acc = acc + i + j * 2 + k * 3 + m * 4;
+                        }
+                    }
+                }
+                if (acc > 50) break;
+            }
+        }
+    }
+}

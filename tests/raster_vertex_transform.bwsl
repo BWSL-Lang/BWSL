@@ -1,0 +1,122 @@
+// Test: Classic vertex-stage model/view/projection transform chains.
+// Tests: mat4*vec4, matrix composition, normal matrix via mat3 extraction,
+// TBN construction, homogeneous clip-space output, world-to-view normals.
+
+pipeline RasterVertexTransform {
+    attributes {
+        position: float3
+        normal:   float3
+        tangent:  float4
+        texcoord: float2
+    }
+
+    pass "Opaque" {
+        use attributes { position, normal, tangent, texcoord }
+
+        vertex {
+            // Build MVP by composing successive matrices (stresses
+            // mat4*mat4 construction order and associativity handling).
+            mat4 model = resources.modelMatrix;
+            mat4 view  = resources.viewMatrix;
+            mat4 proj  = resources.projMatrix;
+
+            mat4 modelView = view * model;
+            mat4 mvp = proj * modelView;
+
+            float4 worldPos = model * float4(attributes.position, 1.0);
+            float4 viewPos  = view * worldPos;
+            float4 clipPos  = mvp * float4(attributes.position, 1.0);
+
+            // Extract 3x3 upper-left of modelView for normal transform.
+            mat3 normalMat = mat3(
+                float3(modelView[0][0], modelView[0][1], modelView[0][2]),
+                float3(modelView[1][0], modelView[1][1], modelView[1][2]),
+                float3(modelView[2][0], modelView[2][1], modelView[2][2])
+            );
+
+            float3 n = normalize(normalMat * attributes.normal);
+            float3 t = normalize(normalMat * attributes.tangent.xyz);
+            float3 b = cross(n, t) * attributes.tangent.w;
+
+            output.position  = clipPos;
+            output.worldPos  = worldPos.xyz;
+            output.viewPos   = viewPos.xyz;
+            output.viewNormal = n;
+            output.viewTangent = t;
+            output.viewBitangent = b;
+            output.uv        = attributes.texcoord;
+        }
+
+        fragment {
+            float3 n = normalize(input.viewNormal);
+            float3 t = normalize(input.viewTangent);
+            float3 b = normalize(input.viewBitangent);
+            float2 uv = input.uv;
+            float3 viewPos = input.viewPos;
+
+            // Reconstruct a synthetic normal perturbation in tangent space.
+            float3 tangentN = float3(uv * 2.0 - 1.0, 1.0);
+            tangentN = normalize(tangentN);
+
+            // TBN transform back to view-space.
+            float3 perturbed = normalize(
+                t * tangentN.x + b * tangentN.y + n * tangentN.z
+            );
+
+            // Simple view-space Lambert.
+            float3 L = normalize(float3(0.3, 0.7, 0.5) - viewPos);
+            float NdotL = max(dot(perturbed, L), 0.0);
+
+            float3 color = float3(0.7, 0.6, 0.4) * NdotL;
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "Shadow" {
+        use attributes { position }
+
+        vertex {
+            // Depth-only pass using a single composed matrix.
+            mat4 lightMvp = resources.lightProjMatrix * resources.lightViewMatrix
+                           * resources.modelMatrix;
+            output.position = lightMvp * float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            // Color target is typically unused, but emit something valid.
+            output.color = float4(1.0);
+        }
+    }
+
+    pass "OrthoProject" {
+        use attributes { position, texcoord }
+
+        vertex {
+            // Orthographic projection assembled inline (stresses matN
+            // constant construction in vertex scope).
+            float left   = -1.0;
+            float right  =  1.0;
+            float bottom = -1.0;
+            float top    =  1.0;
+            float near   =  0.1;
+            float far    = 100.0;
+
+            mat4 ortho = mat4(
+                float4(2.0 / (right - left),  0.0,                0.0,                0.0),
+                float4(0.0,                2.0 / (top - bottom),  0.0,                0.0),
+                float4(0.0,                0.0,                 -2.0 / (far - near), 0.0),
+                float4(-(right + left) / (right - left),
+                       -(top + bottom) / (top - bottom),
+                       -(far + near) / (far - near),
+                       1.0)
+            );
+
+            output.position = ortho * float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            output.color = float4(input.uv, 0.5, 1.0);
+        }
+    }
+}

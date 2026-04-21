@@ -1,0 +1,29 @@
+// Equivalence: discard control flow. A circular mask discards pixels outside
+// a centered disc; the cleared color (0,0,0,0) stays put there. Tests that
+// discard on all backends produces the same attachment contents.
+pipeline EquivRasterDiscard {
+    attributes { }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float2 centered = uv - float2(0.5, 0.5);
+            float r2 = centered.x * centered.x + centered.y * centered.y;
+            if (r2 > 0.2) {
+                discard;
+            }
+            float f = 1.0 - r2 * 5.0;
+            output.color = float4(f, f * 0.5, f * 0.25, 1.0);
+        }
+    }
+}

@@ -1,0 +1,35 @@
+// Struct containing enum field. Verifying that enum-field reads /
+// writes through struct member access don't confuse the enum's
+// tag-vs-payload layout.
+pipeline NestedStructMethodField {
+    enum ColorSpace : int {
+        sRGB = 0,
+        Linear = 1,
+        HDR = 2
+    }
+
+    struct Pixel {
+        float4 rgba;
+        ColorSpace cs;
+    };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Pixel p;
+            p.rgba = float4(0.5, 0.25, 0.75, 1.0);
+            p.cs = ColorSpace::Linear;
+
+            float m;
+            if (p.cs == ColorSpace::sRGB) {
+                m = 2.2;
+            } else if (p.cs == ColorSpace::Linear) {
+                m = 1.0;
+            } else {
+                m = 0.45;
+            }
+
+            float4 scaled = p.rgba * m;
+            float sum = scaled.x + scaled.y + scaled.z + scaled.w;
+        }
+    }
+}

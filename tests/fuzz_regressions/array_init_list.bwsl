@@ -1,0 +1,15 @@
+// Array literal initializer: `int arr[4] = { 10, 20, 30, 40 }`. The
+// parser creates a BLOCK with element expressions; IR lowering
+// iterates and emits OP_ARRAY_STORE per element.
+pipeline ArrayInitList {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int arr[4] = { 10, 20, 30, 40 };
+
+            int sum = arr[0] + arr[1] + arr[2] + arr[3];
+
+            float fs[3] = { 1.1, 2.2, 3.3 };
+            float fsum = fs[0] + fs[1] + fs[2];
+        }
+    }
+}

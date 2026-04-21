@@ -1,0 +1,18 @@
+// `variants.X` reference inside a compute shader. Fix #14 last session:
+// parser dropped the identifierKind on clone and IR lowering had no
+// handler for variants.X access in compute. This keeps the regression
+// captured.
+pipeline VariantDefaultCompute {
+    variants {
+        bool USE_FAST = false;
+        int SAMPLES = 4;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float f = variants.USE_FAST ? 1.0 : 0.0;
+            int n = variants.SAMPLES;
+            float total = f + float(n);
+        }
+    }
+}

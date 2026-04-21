@@ -1,0 +1,28 @@
+// Pointer dereference used as operand in arithmetic expressions.
+// Each `ptr^` site must load from the OpVariable; chained expressions
+// ensure the SSA tracking of load-through-pointer is correct.
+pipeline PointerDerefArith {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int a = 10;
+            int b = 20;
+            int^ pa = ^a;
+            int^ pb = ^b;
+
+            int c = pa^ + pb^;
+            int d = pa^ * 2 - pb^;
+            int e = (pa^ + pb^) * (pa^ - pb^);
+
+            // Write through one, read both
+            pa^ = 100;
+            int f = pa^ + pb^;
+
+            // Swap values via pointers
+            int tmp = pa^;
+            pa^ = pb^;
+            pb^ = tmp;
+
+            int total = a + b + c + d + e + f;
+        }
+    }
+}

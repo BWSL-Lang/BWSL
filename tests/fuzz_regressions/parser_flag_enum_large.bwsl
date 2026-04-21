@@ -1,0 +1,31 @@
+// Regression: the SoA parser's flag-enum auto-assignment used `1u << i`
+// without clamping i. Flag enums with 32 or more variants produced a
+// shift-count equal-to-or-greater than the width of `unsigned`, which is
+// undefined behaviour and tripped UBSan during fuzzing. Fix: clamp the
+// shift to 31 at the parser level (semantic layer still reports overflow).
+//
+// To hit the flag-enum auto-assign path the declaration needs an explicit
+// underlying type plus at least one explicit value; the remaining
+// variants are auto-assigned as `1u << i`.
+//
+// Expected behaviour: bwslc exits with code 0 or 1 (no SIGABRT, no UBSan
+// runtime error).
+pipeline ParserFlagEnumLarge {
+
+    enum BigFlags : uint {
+        f00 = 0b1,
+        f01, f02, f03, f04, f05, f06, f07,
+        f08, f09, f10, f11, f12, f13, f14, f15,
+        f16, f17, f18, f19, f20, f21, f22, f23,
+        f24, f25, f26, f27, f28, f29, f30, f31,
+        f32, f33, f34, f35, f36, f37, f38, f39
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint x = uint(BigFlags::f00);
+            uint y = uint(BigFlags::f39);
+            resources.output[0] = float(x + y);
+        }
+    }
+}

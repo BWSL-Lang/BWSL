@@ -1,0 +1,29 @@
+// if-without-else updating multiple variables. Each becomes a phi
+// with (entry-value, if-branch-value). Tests ordering when many
+// variables get phi'd simultaneously.
+pipeline IfNoElseMultiVars {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int a = 1; int b = 2; int c = 3; int d = 4;
+            float x = 1.0; float y = 2.0;
+
+            if (input.global_id.x == 0u) {
+                a = 10; b = 20; c = 30; d = 40;
+                x = 100.0; y = 200.0;
+            }
+
+            // All six variables phi'd
+            int sum = a + b + c + d;
+            float fsum = x + y;
+
+            // Another if-no-else with some of the same
+            if (input.global_id.x > 0u) {
+                a = a * 2;
+                x = x * 0.5;
+            }
+
+            int sum2 = a + b;
+            float fsum2 = x + y;
+        }
+    }
+}

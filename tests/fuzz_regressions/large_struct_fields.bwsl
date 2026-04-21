@@ -1,0 +1,45 @@
+// Struct with many (16+) fields of mixed types. Tests struct-field
+// indexing / offset arithmetic at realistic width.
+pipeline LargeStructFields {
+    struct Wide {
+        float a; float b; float c; float d;
+        float e; float f; float g; float h;
+        int i; int j; int k; int l;
+        float2 v2;
+        float3 v3;
+        float4 v4;
+        mat3 m;
+    };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Wide w;
+            w.a = 1.0;
+            w.b = 2.0;
+            w.c = 3.0;
+            w.d = 4.0;
+            w.e = 5.0;
+            w.f = 6.0;
+            w.g = 7.0;
+            w.h = 8.0;
+            w.i = 100;
+            w.j = 200;
+            w.k = 300;
+            w.l = 400;
+            w.v2 = float2(0.1, 0.2);
+            w.v3 = float3(0.3, 0.4, 0.5);
+            w.v4 = float4(0.6, 0.7, 0.8, 0.9);
+            w.m = mat3(
+                float3(1.0, 0.0, 0.0),
+                float3(0.0, 1.0, 0.0),
+                float3(0.0, 0.0, 1.0)
+            );
+
+            float sum =
+                w.a + w.b + w.c + w.d + w.e + w.f + w.g + w.h +
+                float(w.i + w.j + w.k + w.l) +
+                w.v2.x + w.v3.y + w.v4.z +
+                w.m[0].x + w.m[1].y + w.m[2].z;
+        }
+    }
+}

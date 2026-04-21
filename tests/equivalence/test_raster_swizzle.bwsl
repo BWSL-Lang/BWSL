@@ -1,0 +1,30 @@
+// Equivalence: heavy vector swizzles and recombinations. Exercises
+// OpVectorShuffle handling in cross-compilation paths.
+pipeline EquivRasterSwizzle {
+    attributes { }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float4 base = float4(uv.x, uv.y, 1.0 - uv.x, 1.0 - uv.y);
+            float3 a = base.xyz;
+            float3 b = base.yzw;
+            float3 c = base.wzx;
+            float4 out4 = float4(a.xy, b.z, c.x);
+            float3 mix1 = out4.zyx + a;
+            float2 mix2 = base.xz * base.yw;
+            float3 color = float3(mix1.x * 0.5, mix2.x, out4.w * mix2.y);
+            output.color = float4(color, 1.0);
+        }
+    }
+}

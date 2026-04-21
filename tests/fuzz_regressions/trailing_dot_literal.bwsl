@@ -1,0 +1,20 @@
+// Captured 2026-04-20. The lexer previously required a digit after the
+// decimal point, rejecting GLSL-style `10.` / `0.` literals. The fix
+// accepts trailing-dot while keeping `.` as member access (`v.x`) and
+// `..` as a range operator (`0..10`).
+pipeline TrailingDotLiteral {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float a = 10.;
+            float b = 0.;
+            float3 v = float3(1., 2., 3.);
+            float c = a + b + v.x;
+
+            // Range operator must still parse.
+            int total = 0;
+            for (i in 0..5) {
+                total = total + i;
+            }
+        }
+    }
+}

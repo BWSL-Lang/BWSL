@@ -1,0 +1,24 @@
+// Switch with adjacent cases (no break between cases). SPIR-V
+// doesn't really model fallthrough — each case gets its own label.
+// BWSL's switch lowering either rejects fallthrough or emulates it;
+// either way this file shouldn't crash.
+pipeline SwitchFallthroughCompact {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int k = int(input.global_id.x) & 7;
+            int result = 0;
+
+            switch (k) {
+                case 0: result = 10; break;
+                case 1: result = 11; break;
+                case 2:
+                case 3:
+                case 4: result = 20; break;   // 2, 3, 4 all map to 20
+                case 5: result = 30; break;
+                default: result = -1; break;
+            }
+
+            int final = result * 2;
+        }
+    }
+}

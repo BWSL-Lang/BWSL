@@ -1,0 +1,28 @@
+// Vertex shader writing multiple custom varyings plus the standard
+// output.position. Each varying should get its own OpVariable with
+// Output storage class.
+pipeline VertexMultipleOutputs {
+    attributes {
+        position: float3
+        normal: float3
+        uv: float2
+    }
+
+    pass "Main" {
+        use attributes { position, normal, uv }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.vnormal = attributes.normal;
+            output.vuv = attributes.uv;
+            output.depth = attributes.position.z;
+        }
+
+        fragment {
+            float3 n = normalize(input.vnormal);
+            float2 uv = input.vuv;
+            float d = input.depth;
+            output.color = float4(n * 0.5 + 0.5, d * 0.1 + uv.x);
+        }
+    }
+}

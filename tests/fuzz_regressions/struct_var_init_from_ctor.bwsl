@@ -1,0 +1,33 @@
+// Struct variable declaration with inline constructor-style init
+// (if supported) or explicit field assignments.
+pipeline StructVarInitFromCtor {
+    struct Pt { float x; float y; float z; };
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Pt p;
+            p.x = 1.0;
+            p.y = 2.0;
+            p.z = 3.0;
+
+            // Struct assignment from another struct's fields copied
+            Pt q;
+            q.x = p.x * 2.0;
+            q.y = p.y * 2.0;
+            q.z = p.z * 2.0;
+
+            // Compound expression with struct field access
+            float sum = p.x + p.y + p.z + q.x + q.y + q.z;
+
+            // Struct in a conditional
+            Pt chosen;
+            if (sum > 10.0) {
+                chosen = p;
+            } else {
+                chosen = q;
+            }
+
+            float result = chosen.x + chosen.y + chosen.z;
+        }
+    }
+}

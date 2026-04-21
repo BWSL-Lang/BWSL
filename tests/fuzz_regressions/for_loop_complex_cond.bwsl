@@ -1,0 +1,24 @@
+// For loop with a compound condition and compound post-increment.
+// Parses each part as an expression; the condition can be a boolean
+// expression, not just a comparison.
+pipeline ForLoopComplexCond {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int sum = 0;
+            int cap = 50;
+
+            // Compound condition: `i < cap && sum < 100`
+            for (int i = 0; i < cap && sum < 100; i = i + 1) {
+                sum = sum + i;
+            }
+
+            // Compound post-step: `i = i + 2`
+            int even = 0;
+            for (int i = 0; i < 20; i = i + 2) {
+                even = even + i;
+            }
+
+            int total = sum + even + cap;
+        }
+    }
+}

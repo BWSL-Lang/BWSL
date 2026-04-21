@@ -1,0 +1,173 @@
+// Test: Fragment-stage screen-space post-processing effects.
+// Tests: vignette, gamma/sRGB correction, chromatic aberration via
+// offset reconstruction, tonemapping operators, and film-grain-like
+// procedural noise. Uses procedural vertex synthesis (no attributes).
+
+pipeline RasterFragmentPostEffects {
+    attributes {
+        // Fullscreen triangle - no attributes.
+    }
+
+    pass "Vignette" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+
+            // Synthetic scene color.
+            float3 scene = float3(0.7, 0.6, 0.4) * (0.5 + 0.5 * sin(uv.x * 12.0));
+
+            // Vignette centered on (0.5, 0.5).
+            float2 d = uv - 0.5;
+            float r = length(d);
+            float vignette = smoothstep(0.75, 0.25, r);
+
+            output.color = float4(scene * vignette, 1.0);
+        }
+    }
+
+    pass "Gamma" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float3 linearColor = float3(uv.x, uv.y, 1.0 - uv.x);
+
+            // Gamma 2.2 encode.
+            float3 encoded = float3(
+                pow(linearColor.x, 1.0 / 2.2),
+                pow(linearColor.y, 1.0 / 2.2),
+                pow(linearColor.z, 1.0 / 2.2)
+            );
+
+            // Gamma 2.2 decode round-trip on the right half.
+            float3 decoded = float3(
+                pow(encoded.x, 2.2),
+                pow(encoded.y, 2.2),
+                pow(encoded.z, 2.2)
+            );
+
+            float3 display = uv.x < 0.5 ? encoded : decoded;
+            output.color = float4(display, 1.0);
+        }
+    }
+
+    pass "ChromaticAberration" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+
+            // Offsets increase with distance from center.
+            float2 centered = uv - 0.5;
+            float r = length(centered);
+            float strength = 0.015 * r;
+            float2 dir = r > 1e-5 ? centered / r : float2(0.0);
+
+            float2 uvR = uv + dir * strength;
+            float2 uvG = uv;
+            float2 uvB = uv - dir * strength;
+
+            // Synthetic per-channel scene (no texture dependency).
+            float R = sin(uvR.x * 20.0) * 0.5 + 0.5;
+            float G = sin(uvG.x * 20.0 + 1.0) * 0.5 + 0.5;
+            float B = sin(uvB.x * 20.0 + 2.0) * 0.5 + 0.5;
+
+            output.color = float4(R, G, B, 1.0);
+        }
+    }
+
+    pass "Tonemap" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+
+            // High-dynamic-range synthetic input (>1.0 in places).
+            float3 hdr = float3(uv.x * 4.0, uv.y * 4.0, 2.0 * (1.0 - uv.x));
+
+            // Reinhard.
+            float3 reinhard = hdr / (1.0 + hdr);
+
+            // ACES (approximate, Narkowicz).
+            float3 a = hdr * (hdr * 2.51 + 0.03);
+            float3 b = hdr * (hdr * 2.43 + 0.59) + 0.14;
+            float3 aces = a / b;
+            aces = clamp(aces, 0.0, 1.0);
+
+            // Split view: left = Reinhard, right = ACES.
+            float3 display = uv.x < 0.5 ? reinhard : aces;
+            output.color = float4(display, 1.0);
+        }
+    }
+
+    pass "FilmGrain" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float4 fc = input.position;
+
+            // Base scene.
+            float3 scene = float3(0.3, 0.45, 0.6);
+
+            // Hash-based noise driven by FragCoord so grain is stable per pixel.
+            float2 p = fc.xy * 0.1;
+            float n = fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.547);
+            float grain = (n - 0.5) * 0.08;
+
+            float3 color = scene + float3(grain);
+
+            // Soft clamp + gentle contrast.
+            color = clamp(color, 0.0, 1.0);
+            color = (color - 0.5) * 1.1 + 0.5;
+
+            output.color = float4(color, 1.0);
+        }
+    }
+}

@@ -1,0 +1,33 @@
+pipeline EquivPbrModule {
+
+    import PBR
+
+    // PBR lighting math — purely numeric, so despite modules_pbr_lighting
+    // being raster-based in the unit test, the math runs equivalently in a
+    // compute kernel. Exercises module-qualified types (PBR::PBRMaterial)
+    // and module-qualified function calls (PBR::calculateDirectLighting).
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) / 7.0;
+
+            // Vary material parameters per thread.
+            PBR::PBRMaterial mat;
+            mat.albedo = float3(t, 1.0 - t, 0.5);
+            mat.roughness = 0.1 + t * 0.8;
+            mat.metallic = t;
+            mat.ao = 1.0;
+
+            float3 N = normalize(float3(0.3, 1.0, 0.1 + t * 0.4));
+            float3 V = normalize(float3(0.1, 0.2, 1.0));
+            float3 L = normalize(float3(-0.4 + t * 0.2, 0.7, 0.6));
+            float3 radiance = float3(2.0, 1.6, 1.2);
+
+            float3 lit = PBR::calculateDirectLighting(mat, N, V, L, radiance);
+
+            // Fold the RGB result to a single float for buffer comparison.
+            resources.output[idx] = lit.x + lit.y * 0.1 + lit.z * 0.01;
+        }
+    }
+}

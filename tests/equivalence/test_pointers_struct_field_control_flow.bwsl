@@ -1,0 +1,48 @@
+pipeline EquivPointersStructFieldControlFlow {
+
+    // Struct-field pointer combined with if/else branches. Companion to
+    // test_pointers_struct_field — that one exercises straight-line flow,
+    // this one forces the SPIR-V OpAccessChain to participate in PHI nodes
+    // when the pointer-bearing register's definition point is block-local.
+
+    struct Rec {
+        float3 a;
+        float3 b;
+        float  s;
+    };
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+
+            Rec r;
+            r.a = float3(float(idx), 0.0, 0.0);
+            r.b = float3(0.0, float(idx) + 1.0, 0.0);
+            r.s = float(idx) * 0.5;
+
+            // Conditional field write through pointer.
+            if ((idx & 1u) == 0u) {
+                float3^ ap = ^r.a;
+                ap^ = ap^ * 2.0 + float3(1.0, 2.0, 3.0);
+            } else {
+                float3^ bp = ^r.b;
+                bp^ = bp^ * 3.0 + float3(4.0, 5.0, 6.0);
+            }
+
+            // Always write the scalar field through a pointer after the if.
+            float^ sp = ^r.s;
+            sp^ = sp^ + 10.0;
+
+            // Accumulate via field pointer in a short bounded loop.
+            float3^ ap2 = ^r.a;
+            for (int i = 0; i < 3; i = i + 1) {
+                ap2^ = ap2^ + float3(0.1, 0.2, 0.3);
+            }
+
+            resources.output[idx] =
+                r.a.x + r.a.y * 0.1 + r.a.z * 0.01 +
+                r.b.x * 0.001 + r.b.y * 0.0001 + r.b.z * 0.00001 +
+                r.s * 0.000001;
+        }
+    }
+}

@@ -1,0 +1,24 @@
+pipeline EquivInlineReturnOuterSkipBreak {
+
+    chooseOuter :: (int limit) -> int {
+        for (int i = 0; i < limit; i = i + 1) {
+            if (i == 0) {
+                skip;
+            }
+            if (i == limit - 1) {
+                break;
+            }
+            return 4;
+        }
+        return 6;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int limit = int(idx);  // 0: skipped, 1: skip+break, 2: skip then return, etc.
+            int v = chooseOuter(limit);
+            resources.output[idx] = float(v);
+        }
+    }
+}

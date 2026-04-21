@@ -1,0 +1,32 @@
+pipeline EquivPointersStructField {
+
+    struct Particle {
+        float3 pos;
+        float w;
+    };
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+
+            // Basic ^v.field: write a vector field through a pointer, then
+            // read the vector and scalar fields back out of the struct.
+            Particle p;
+            p.pos = float3(float(idx), float(idx) + 1.0, float(idx) + 2.0);
+            p.w = float(idx) * 10.0;
+
+            float3^ posPtr = ^p.pos;
+            posPtr^ = float3(100.0, 200.0, 300.0) + float(idx);
+
+            // Also take address of the scalar field.
+            float^ wPtr = ^p.w;
+            wPtr^ = wPtr^ * 2.0 + 1.0;
+
+            resources.output[idx] =
+                posPtr^.x * 0.001 +
+                posPtr^.y * 0.01 +
+                posPtr^.z * 0.1 +
+                wPtr^;
+        }
+    }
+}

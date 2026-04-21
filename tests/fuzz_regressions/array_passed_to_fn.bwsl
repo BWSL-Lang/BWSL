@@ -1,0 +1,41 @@
+// BWSL doesn't have array passing semantics in its current form —
+// functions receive scalars/vectors/structs by value. Calling a
+// function with an "array-ish" struct is the closest pattern. This
+// test exercises that via a struct wrapper.
+pipeline ArrayPassedToFn {
+    struct Array4 {
+        float a0;
+        float a1;
+        float a2;
+        float a3;
+    };
+
+    sumArray :: (Array4 arr) -> float {
+        return arr.a0 + arr.a1 + arr.a2 + arr.a3;
+    }
+
+    scaleArray :: (Array4 arr, float k) -> Array4 {
+        Array4 r;
+        r.a0 = arr.a0 * k;
+        r.a1 = arr.a1 * k;
+        r.a2 = arr.a2 * k;
+        r.a3 = arr.a3 * k;
+        return r;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Array4 v;
+            v.a0 = 1.0;
+            v.a1 = 2.0;
+            v.a2 = 3.0;
+            v.a3 = 4.0;
+
+            float s1 = sumArray(v);
+            Array4 v2 = scaleArray(v, 2.0);
+            float s2 = sumArray(v2);
+
+            float total = s1 + s2;
+        }
+    }
+}

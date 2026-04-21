@@ -1,0 +1,13 @@
+// Reading `input.workgroup_id` from a non-compute stage must be a
+// diagnosed error, not silent bad SPIR-V emission.
+pipeline WorkgroupIdWrongStage {
+    pass "Main" {
+        vertex {
+            uint3 wg = input.workgroup_id;
+            output.position = float4(float(wg.x), 0.0, 0.0, 1.0);
+        }
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

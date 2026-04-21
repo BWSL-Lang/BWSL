@@ -1,0 +1,31 @@
+// Logical && / || with side-effecting right-hand side. In SPIR-V
+// these become OpLogicalAnd / OpLogicalOr (no short-circuit, both
+// sides evaluated). BWSL's current lowering matches that semantics.
+// This test pins down that both sides evaluate without breaking
+// structured control flow.
+pipeline BoolShortCircuit {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int counter = 0;
+            bool a = true;
+            bool b = false;
+
+            // Compound expressions
+            bool c1 = a && b;          // false
+            bool c2 = a || b;          // true
+            bool c3 = !a || b;         // false
+            bool c4 = a && !b;         // true
+
+            // Nested ternaries with boolean conditions
+            int r = (a && c2) ? 1 : ((b || c1) ? 2 : 3);
+
+            // Comparisons in logical context
+            bool eq = (counter == 0) && (counter < 10);
+            bool gt = (counter > -1) || (counter == 100);
+
+            int total = r + (c1 ? 1 : 0) + (c2 ? 2 : 0) +
+                        (c3 ? 4 : 0) + (c4 ? 8 : 0) +
+                        (eq ? 100 : 0) + (gt ? 1000 : 0);
+        }
+    }
+}

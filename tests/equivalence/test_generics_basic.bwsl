@@ -1,0 +1,37 @@
+pipeline EquivGenericsBasic {
+
+    constraint FloatVectors = float2 | float3 | float4;
+    constraint AllFloats = float | float2 | float3 | float4;
+
+    lengthSquared :: (FloatVectors v) -> float {
+        return dot(v, v);
+    }
+
+    scale :: (FloatVectors v, float s) -> FloatVectors {
+        return v * s;
+    }
+
+    doubleValue :: (AllFloats x) -> AllFloats {
+        return x + x;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float f = float(idx) + 1.0;
+
+            float2 v2 = float2(f, f * 2.0);
+            float3 v3 = float3(f, f * 2.0, f * 3.0);
+            float4 v4 = float4(f, f * 2.0, f * 3.0, f * 4.0);
+
+            float len2 = lengthSquared(v2);
+            float len3 = lengthSquared(v3);
+            float len4 = lengthSquared(v4);
+
+            float3 scaled = scale(v3, 0.5);
+            float doubled = doubleValue(f);
+
+            resources.output[idx] = len2 + len3 + len4 + scaled.x + scaled.y + scaled.z + doubled;
+        }
+    }
+}

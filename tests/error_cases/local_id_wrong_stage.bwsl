@@ -1,0 +1,13 @@
+// `input.local_id` is only valid in compute shaders. Reading it from
+// vertex must be diagnosed.
+pipeline LocalIdWrongStage {
+    pass "Main" {
+        vertex {
+            uint3 l = input.local_id;
+            output.position = float4(float(l.x), 0.0, 0.0, 1.0);
+        }
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

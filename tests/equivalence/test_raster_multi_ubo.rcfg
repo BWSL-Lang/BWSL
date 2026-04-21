@@ -1,0 +1,11 @@
+pipeline EquivRasterMultiUbo
+
+target MainColor RGBA32Float 16 16
+
+uniform vscale float 0 vertex
+uniform ftint float4 1 fragment
+
+pass Main
+  type geometry
+  color MainColor clear 0.0 0.0 0.0 0.0 store
+  depends none

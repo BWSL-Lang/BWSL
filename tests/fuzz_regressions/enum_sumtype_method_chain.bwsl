@@ -1,0 +1,27 @@
+// Sum-type enum with method calls chained onto the result of a
+// constructor. Method-call lowering used to OOB-index
+// registerStructTypes on constant-encoded receivers (fix #16). This
+// pins the fixed path.
+pipeline EnumSumtypeMethodChain {
+    enum Shape {
+        Sphere(float radius),
+        Box(float3 halfExtents),
+        Empty
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Shape s = Shape::Sphere(1.5);
+            Shape t = Shape::Box(float3(2.0, 3.0, 4.0));
+            Shape u = Shape::Empty;
+
+            // Pattern match via tag
+            float r;
+            if (s.tag == 0u) {
+                r = 1.0;
+            } else {
+                r = -1.0;
+            }
+        }
+    }
+}

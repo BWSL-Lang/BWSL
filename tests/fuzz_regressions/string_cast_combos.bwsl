@@ -1,0 +1,28 @@
+// Cast chains across numeric types. Each `T(...)` in BWSL lowers to
+// a conversion op: F2I, I2F, F2U, U2F, I2U, U2I. Chaining exercises
+// type propagation through multiple conversions.
+pipeline CastCombos {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float f = 3.75;
+            int   i = int(f);
+            uint  u = uint(f);
+            float g = float(i);
+            float h = float(u);
+
+            // Round-trip with intermediate arithmetic
+            int   i2 = int(float(i) * 2.5);
+            uint  u2 = uint(float(u) * 1.5);
+
+            // Through several types
+            float k = float(int(uint(float(i) + 0.5)));
+
+            // Vector conversions
+            float3 v3 = float3(1.5, 2.5, 3.5);
+            int3   iv = int3(v3);
+            float3 back = float3(iv);
+
+            float sum = g + h + float(i2) + float(u2) + k + back.x + back.y + back.z;
+        }
+    }
+}

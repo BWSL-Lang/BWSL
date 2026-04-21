@@ -1,0 +1,19 @@
+// Compute dispatch with 2D workgroup size. Builtin `global_id.xy`
+// must resolve correctly across all backends.
+pipeline InputGlobal2DDispatch {
+    pass "Compute" {
+        compute "Main" [8, 8, 1] {
+            uint2 coord = input.global_id.xy;
+            uint packed = coord.x * 100u + coord.y;
+
+            // Also check local_id.xy
+            uint2 lc = input.local_id.xy;
+            uint lpacked = lc.x + lc.y * 8u;
+
+            // And num_workgroups
+            uint nw = input.num_workgroups.x;
+
+            uint total = packed + lpacked + nw;
+        }
+    }
+}

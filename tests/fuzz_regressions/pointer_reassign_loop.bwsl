@@ -1,0 +1,22 @@
+// Pointer variable is phi'd inside a loop (reassigned across iterations
+// AND between branches). SSA has to keep the pointer-register separate
+// from the pointee registers. Previously this triggered the
+// OP_LOCAL_STORE-as-register-def bug.
+pipeline PointerReassignLoop {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            int x = 10;
+            int y = 20;
+            int^ p = ^x;
+            for (int i = 0; i < 4; i = i + 1) {
+                if ((i & 1) == 0) {
+                    p = ^x;
+                } else {
+                    p = ^y;
+                }
+                p^ = p^ + i;
+            }
+            int sum = x + y;
+        }
+    }
+}

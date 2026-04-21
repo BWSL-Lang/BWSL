@@ -1,0 +1,34 @@
+pipeline EquivPointersStruct {
+    struct Inner { float a; float b; };
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+
+            Inner i;
+            i.a = 1.0 + float(idx);
+            i.b = 2.0 + float(idx) * 0.5;
+
+            Inner^ p = ^i;
+
+            float sumRead = p^.a + p^.b;
+
+            p^.a = p^.a * 2.0;
+            p^.b = p^.b + 10.0;
+
+            float sumAfterWrite = i.a + i.b;
+
+            Inner j;
+            j.a = -3.0;
+            j.b = 4.5;
+            p^ = j;
+
+            float sumAfterAssign = i.a - i.b;
+
+            resources.output[idx] =
+                sumRead +
+                sumAfterWrite * 0.01 +
+                sumAfterAssign * 0.0001;
+        }
+    }
+}

@@ -1,0 +1,59 @@
+pipeline EquivChainFnReturn {
+
+    // Function that returns a struct, then chained access on the result.
+    // Tests that struct-return values carry correct register/type info
+    // across inlining and that downstream member/swizzle accesses work.
+
+    struct Frame {
+        float3 origin;
+        float3 basisX;
+        float3 basisY;
+        float3 basisZ;
+    };
+
+    buildFrame :: (float t) -> Frame {
+        Frame f;
+        f.origin = float3(t, t + 1.0, t + 2.0);
+        f.basisX = float3(1.0, 0.0, 0.0);
+        f.basisY = float3(0.0, 1.0, 0.0);
+        f.basisZ = float3(0.0, 0.0, 1.0);
+        return f;
+    }
+
+    combine :: (float3 a, float3 b) -> float3 {
+        return a * b.y + b * a.x;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx);
+
+            // Chain 1: fn() -> struct field -> swizzle directly.
+            float a = buildFrame(t).origin.y;
+
+            // Chain 2: fn() -> field swizzle + another direct-chain read.
+            float3 bz = buildFrame(t).basisZ;
+            float b = bz.xyz.z + buildFrame(t + 1.0).origin.x;
+
+            // Chain 3: fn-of-fn-of-fn with direct field chains inside
+            // another function's argument list.
+            float3 c = combine(
+                combine(buildFrame(t).origin, buildFrame(t + 1.0).basisX),
+                buildFrame(t + 2.0).basisY);
+
+            // Chain 4: struct member fed back into another function via
+            // local.
+            Frame fr = buildFrame(t * 0.5);
+            float d = combine(fr.origin.xyz, fr.basisX.zyx).y;
+
+            float score =
+                a +
+                b * 10.0 +
+                c.x * 100.0 + c.y * 1000.0 + c.z * 10000.0 +
+                d * 100000.0;
+
+            resources.output[idx] = score;
+        }
+    }
+}

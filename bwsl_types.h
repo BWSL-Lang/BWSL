@@ -394,12 +394,18 @@ namespace TokenMasks {
         mask(TokenType::MAT4);
         
     // Operator masks
-    static constexpr TokenMask ASSIGNMENT_OPERATORS = 
-        mask(TokenType::ASSIGN)          | 
-        mask(TokenType::PLUS_ASSIGN)     | 
-        mask(TokenType::MINUS_ASSIGN)    |
-        mask(TokenType::MULTIPLY_ASSIGN) | 
-        mask(TokenType::DIVIDE_ASSIGN);
+    static constexpr TokenMask ASSIGNMENT_OPERATORS =
+        mask(TokenType::ASSIGN)             |
+        mask(TokenType::PLUS_ASSIGN)        |
+        mask(TokenType::MINUS_ASSIGN)       |
+        mask(TokenType::MULTIPLY_ASSIGN)    |
+        mask(TokenType::DIVIDE_ASSIGN)      |
+        mask(TokenType::MODULO_ASSIGN)      |
+        mask(TokenType::BITWISE_AND_ASSIGN) |
+        mask(TokenType::BITWISE_OR_ASSIGN)  |
+        mask(TokenType::BITWISE_XOR_ASSIGN) |
+        mask(TokenType::LEFT_SHIFT_ASSIGN)  |
+        mask(TokenType::RIGHT_SHIFT_ASSIGN);
         
     static constexpr TokenMask UNARY_OPERATORS = 
         mask(TokenType::NOT)       | 
@@ -606,6 +612,14 @@ namespace TypeHashes {
     constexpr u32 MAT2        = Utils::HashStr("mat2");
     constexpr u32 MAT3        = Utils::HashStr("mat3");
     constexpr u32 MAT4        = Utils::HashStr("mat4");
+    // HLSL-style aliases for matrix types: `floatNxN` resolves to MAT{N}.
+    // Without these, `float3x3(...)` as a constructor call lowers as a user
+    // function call (OP_CALL/OpUndef), even though `float3x3 x = ...;`
+    // declarations resolve via ParseTypeName. Cross-backend tests could mask
+    // this because all backends convert the OpUndef result identically.
+    constexpr u32 FLOAT2X2    = Utils::HashStr("float2x2");
+    constexpr u32 FLOAT3X3    = Utils::HashStr("float3x3");
+    constexpr u32 FLOAT4X4    = Utils::HashStr("float4x4");
     constexpr u32 VOID        = Utils::HashStr("void");
     constexpr u32 ENUM        = Utils::HashStr("enum");
     constexpr u32 CONSTRAINT  = Utils::HashStr("constraint");
@@ -647,6 +661,9 @@ namespace TypeHashes {
         {MAT2,   TYPE_INFO(CoreType::MAT2,   4,  true)},
         {MAT3,   TYPE_INFO(CoreType::MAT3,   9,  true)},
         {MAT4,   TYPE_INFO(CoreType::MAT4,   16, true)},
+        {FLOAT2X2, TYPE_INFO(CoreType::MAT2, 4,  true)},
+        {FLOAT3X3, TYPE_INFO(CoreType::MAT3, 9,  true)},
+        {FLOAT4X4, TYPE_INFO(CoreType::MAT4, 16, true)},
         {T, TYPE_INFO(CoreType::GENERIC_T, 1,  true)},
         {U, TYPE_INFO(CoreType::GENERIC_U, 1,  true)},
         {V, TYPE_INFO(CoreType::GENERIC_V, 1,  true)},

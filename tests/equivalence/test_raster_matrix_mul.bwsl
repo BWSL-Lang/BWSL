@@ -1,0 +1,33 @@
+// Equivalence: build a 3x3 rotation from sin/cos, multiply a vec3, read the
+// result. Confirms matrix constructors and mat*vec produce identical pixels
+// across backends.
+pipeline EquivRasterMatrixMul {
+    attributes { }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float a = uv.x * 2.0;
+            float ca = cos(a);
+            float sa = sin(a);
+            mat3 rot = mat3(
+                ca,  -sa, 0.0,
+                sa,   ca, 0.0,
+                0.0,  0.0, 1.0
+            );
+            float3 v = float3(uv.x - 0.5, uv.y - 0.5, 1.0);
+            float3 r = rot * v;
+            output.color = float4(r.x + 0.5, r.y + 0.5, r.z * 0.5, 1.0);
+        }
+    }
+}

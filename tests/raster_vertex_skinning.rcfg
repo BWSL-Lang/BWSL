@@ -1,0 +1,23 @@
+# Raster vertex-stage skinning test.
+pipeline RasterVertexSkinning
+
+target MainColor RGBA8Unorm viewport
+target MainDepth Depth32Float viewport
+target ShadowDepth Depth32Float 1024 1024
+
+uniform modelMatrix mat4 0 vertex
+uniform viewProjMatrix mat4 1 vertex
+uniform lightViewProjMatrix mat4 2 vertex
+
+buffer boneMatrices mat4 3 readonly vertex
+
+pass SkinnedMesh
+  type geometry
+  color MainColor clear 0.05 0.05 0.08 1.0 store
+  depth MainDepth clear 1.0 store
+  depends none
+
+pass SkinnedShadow
+  type geometry
+  depth ShadowDepth clear 1.0 store
+  depends none

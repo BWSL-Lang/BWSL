@@ -1,0 +1,27 @@
+// Generic fn whose return type is the same constraint as a
+// parameter. Multiple same-name calls distinguished by types.
+// `x + x` avoids a separate pre-existing bug where literal
+// coercion across the generic's parameter type doesn't fire
+// (`return x + 1` emits FAdd-with-int-operand when instantiated
+// on float). That pattern is documented in
+// fuzz_regressions/generic_mixed_literal.bwsl.
+pipeline TypeofGenericMix {
+    constraint AllFloats = float | float2 | float3 | float4;
+
+    doubleIt :: (AllFloats x) -> AllFloats {
+        return x + x;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float a = doubleIt(1.5);
+            float2 b = doubleIt(float2(1.0, 2.0));
+            float3 c = doubleIt(float3(1.0, 2.0, 3.0));
+
+            // Nested
+            float d = doubleIt(doubleIt(1.0));
+
+            float total = a + b.x + c.x + d;
+        }
+    }
+}

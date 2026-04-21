@@ -1,0 +1,22 @@
+pipeline EquivInlineReturnLoopUntil {
+
+    chooseUntil :: (int limit) -> int {
+        int i = 0;
+        loop {
+            if (i == limit) {
+                return 7;
+            }
+            i = i + 1;
+        } until (i > limit + 2);
+        return 9;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int limit = int(idx) - 3;  // mix of negatives (takes until-exit) and positives
+            int v = chooseUntil(limit);
+            resources.output[idx] = float(v);
+        }
+    }
+}

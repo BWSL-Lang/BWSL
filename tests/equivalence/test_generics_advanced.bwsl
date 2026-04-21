@@ -1,0 +1,42 @@
+pipeline EquivGenericsAdvanced {
+
+    constraint FloatVectors = float2 | float3 | float4;
+    constraint Vec3Or4 = float3 | float4;
+
+    genericBlend :: (FloatVectors a, FloatVectors b, float t) -> FloatVectors {
+        return a + (b - a) * t;
+    }
+
+    genericClampVec :: (FloatVectors v, FloatVectors minVal, FloatVectors maxVal) -> FloatVectors {
+        return max(min(v, maxVal), minVal);
+    }
+
+    safeNormalize :: (Vec3Or4 v) -> Vec3Or4 {
+        float len = length(v);
+        if (len < 0.0001) {
+            return v;
+        }
+        return v / len;
+    }
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) / 7.0;
+
+            float3 a = float3(t, 1.0 - t, 0.5);
+            float3 b = float3(1.0, 0.0, t);
+            float3 blended = genericBlend(a, b, t);
+            float3 clamped = genericClampVec(blended, float3(-0.5), float3(0.5));
+            float3 normalized = safeNormalize(clamped + float3(0.01, 0.02, 0.03));
+
+            float2 blended2 = genericBlend(float2(0.0, 1.0), float2(1.0, 0.0), t);
+
+            resources.output[idx] =
+                blended.x + blended.y * 0.1 + blended.z * 0.01 +
+                clamped.x * 0.001 +
+                normalized.x * 0.0001 + normalized.y * 0.00001 +
+                blended2.x * 10.0 + blended2.y * 100.0;
+        }
+    }
+}

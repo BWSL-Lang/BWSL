@@ -1,0 +1,17 @@
+// Long swizzle chains stress the vector extract / shuffle lowering.
+// Previously, some combinations fell into the member-access path
+// expecting a struct and returned the whole vector, leaving
+// downstream ops with mismatched types.
+pipeline DeepSwizzleChain {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float4 v = float4(1.0, 2.0, 3.0, 4.0);
+            float4 a = v.xyzw.wzyx.yxwz;
+            float3 b = v.wzy.zyx.xyz;
+            float2 c = v.rg.yx;
+            float  d = v.r;
+            float4 e = a + float4(b, d);
+            float sum = e.x + e.y + e.z + e.w + c.x;
+        }
+    }
+}

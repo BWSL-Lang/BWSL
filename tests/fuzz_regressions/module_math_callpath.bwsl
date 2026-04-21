@@ -1,0 +1,27 @@
+// Module-qualified function call from a compute shader. `import`
+// lives inside the pipeline block. Exercises the module-call inlining
+// path.
+pipeline ModuleMathCallpath {
+    import Math
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float t = float(input.global_id.x) + 0.25;
+
+            // Call several Math:: functions
+            float a = Math::remap(t, 0.0, 10.0, -1.0, 1.0);
+            float b = Math::square(t);
+            float c = Math::cube(t);
+            float d = Math::inverse_lerp(0.0, 10.0, t);
+
+            float3 v = float3(1.0, 2.0, 3.0);
+            float3 n = Math::safe_normalize(v);
+
+            // Reuse constants
+            float tau = Math::TAU;
+            float pi  = Math::PI;
+
+            float sum = a + b + c + d + n.x + n.y + n.z + tau + pi;
+        }
+    }
+}

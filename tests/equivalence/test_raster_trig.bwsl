@@ -1,0 +1,31 @@
+// Equivalence: exercise sin/cos/pow/exp/log in the fragment stage. Uses
+// small-magnitude values well inside each intrinsic's well-behaved range to
+// keep fp rounding differences within tolerance.
+pipeline EquivRasterTrig {
+    attributes { }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float s = sin(uv.x * 3.0);
+            float c = cos(uv.y * 2.0);
+            float e = exp(uv.x * 0.5);
+            float l = log(uv.y + 1.0);
+            float p = pow(uv.x + 0.1, 1.5);
+            float r = (s + c) * 0.25 + 0.5;
+            float g = (e - 1.0) * 0.5;
+            float b = l * 0.75;
+            output.color = float4(r, g, b, p);
+        }
+    }
+}

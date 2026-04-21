@@ -1,0 +1,34 @@
+pipeline EquivFloatToInt {
+
+    // Float → int conversion rounding. SPIR-V's OpConvertFToS truncates
+    // toward zero, but the source language's `int(x)` cast and `floor()`
+    // differ for negative values (-1.5 truncates to -1, floors to -2).
+    // Backends may also disagree on very large floats (beyond int range)
+    // and on NaN inputs.
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            // Values that straddle integer boundaries both signs.
+            float v = float(idx) - 3.5;      // -3.5, -2.5, ..., 4.5
+
+            int truncated = int(v);          // toward zero
+            int floored   = int(floor(v));
+            int ceilinged = int(ceil(v));
+            int rounded   = int(round(v));
+
+            // Clamp-style: very large magnitude should saturate similarly
+            float big = v * 1e9;
+            int bigI = int(clamp(big, -2e9, 2e9));
+
+            float score =
+                float(truncated) +
+                float(floored)   * 0.1 +
+                float(ceilinged) * 0.01 +
+                float(rounded)   * 0.001 +
+                float(bigI)      * 0.0000001;
+
+            resources.output[idx] = score;
+        }
+    }
+}

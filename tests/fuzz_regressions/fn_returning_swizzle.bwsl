@@ -1,0 +1,27 @@
+// Function's return value is a swizzle of a vector. Exercises
+// OP_VEC_SHUFFLE at function return time and type propagation
+// through inlining.
+pipeline FnReturningSwizzle {
+    getYZ :: (float4 v) -> float2 {
+        return v.yz;
+    }
+
+    getWXY :: (float4 v) -> float3 {
+        return v.wxy;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float4 v = float4(1.0, 2.0, 3.0, 4.0);
+
+            float2 a = getYZ(v);
+            float3 b = getWXY(v);
+
+            // Swizzle the result
+            float ax = a.x;
+            float bx = b.x;
+
+            float sum = a.x + a.y + b.x + b.y + b.z;
+        }
+    }
+}

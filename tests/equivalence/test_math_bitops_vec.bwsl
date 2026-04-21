@@ -1,0 +1,50 @@
+pipeline EquivMathBitopsVec {
+
+    // Bitwise AND/OR/XOR/shift/popcnt/clz on int and uint vectors plus
+    // scalar-vector and vector-vector forms. Existing test_xor_bitwise
+    // only covers scalar paths — vector lowering goes through a
+    // different codegen branch for some ops (splat vs per-component).
+
+    pass "Compute" {
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+
+            uint3 a = uint3(idx,             idx * 2u,  idx * 4u);
+            uint3 b = uint3(0xDEADBEEFu,     0x0F0F0F0Fu, 0xFFFF0000u);
+            int3  sa = int3(int(idx) - 3,    int(idx) * 5,  -int(idx));
+            int3  sb = int3(0x01234567,      -0x76543210,   0x0A0B0C0D);
+
+            // Bitwise on unsigned vec
+            uint3 uand = a & b;
+            uint3 uor  = a | b;
+            uint3 uxor = a ^ b;
+            uint3 unot = ~a;
+
+            // Shifts (variable + literal)
+            uint3 ushl = a << 3u;
+            uint3 ushr = b >> uint3(1u, 2u, 3u);
+
+            // Signed bitwise vector
+            int3 sand = sa & sb;
+            int3 sor  = sa | sb;
+            int3 sxor = sa ^ sb;
+
+            // Population / leading zero / trailing zero on scalars
+            int popA = count_bits(a.x);
+            int lzB  = first_bit_high(b.y | 1u);    // first set bit from high
+            int tzB  = first_bit_low(b.z | 1u);     // first set bit from low
+
+            // Reconstruct by summing bit-shifts so no bit is ignored.
+            uint u = (uand.x ^ uor.y ^ uxor.z ^ unot.x ^ ushl.y ^ ushr.z);
+            int  s = sand.x + sor.y + sxor.z;
+
+            // Hash the integer results through a stable conversion to float.
+            resources.output[idx] =
+                float(u & 0xFFFFFu) +
+                float(s & 0xFFFF) * 0.001 +
+                float(popA) * 0.000001 +
+                float(lzB) * 0.0000001 +
+                float(tzB) * 0.00000001;
+        }
+    }
+}

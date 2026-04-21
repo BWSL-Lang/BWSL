@@ -1,0 +1,125 @@
+// Test: Procedural geometry synthesized from input.vertex_id and
+// input.instance_id. Tests fullscreen-triangle generation, billboard
+// quad expansion, and instance-driven transforms without vertex buffers.
+
+pipeline RasterVertexProceduralQuad {
+    attributes {
+        // Fully procedural: no attribute streams bound.
+    }
+
+    pass "FullscreenTri" {
+        vertex {
+            // Classic fullscreen triangle covering NDC via 3 vertices.
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 pos = positions[input.vertex_id];
+            float2 uv  = (pos + 1.0) * 0.5;
+
+            output.position = float4(pos, 0.0, 1.0);
+            output.uv = uv;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float4 fc = input.position;
+
+            // Radial gradient from screen center.
+            float2 centered = uv * 2.0 - 1.0;
+            float dist = length(centered);
+            float3 color = lerp(float3(0.9, 0.85, 0.7), float3(0.1, 0.1, 0.2), dist);
+
+            // Subtle vignette using FragCoord magnitude.
+            float vignette = saturate(1.0 - dist * 0.85);
+            color = color * vignette;
+
+            output.color = float4(color, 1.0);
+        }
+    }
+
+    pass "BillboardQuads" {
+        vertex {
+            // Emit 4 vertices per instance, 6 indices assumed, for a
+            // quad strip centered on a per-instance world position.
+            float2[4] corners;
+            corners[0] = float2(-0.5, -0.5);
+            corners[1] = float2( 0.5, -0.5);
+            corners[2] = float2(-0.5,  0.5);
+            corners[3] = float2( 0.5,  0.5);
+
+            uint vid = input.vertex_id;
+            uint iid = input.instance_id;
+            float2 corner = corners[vid & 3u];
+
+            // Per-instance procedural position grid (8x8).
+            float ix = float(iid & 7u);
+            float iy = float((iid >> 3) & 7u);
+            float3 center = float3(ix * 0.2 - 0.7, iy * 0.2 - 0.7, 0.0);
+
+            // Per-instance procedural color.
+            float3 tint = float3(
+                fract(float(iid) * 0.137),
+                fract(float(iid) * 0.271),
+                fract(float(iid) * 0.517)
+            );
+
+            float scale = 0.08;
+            float3 worldPos = center + float3(corner * scale, 0.0);
+
+            output.position = float4(worldPos, 1.0);
+            output.uv = corner + 0.5;
+            output.tint = tint;
+            output.instance = float(iid);
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float3 tint = input.tint;
+            float inst = input.instance;
+
+            // Rounded-rect alpha mask.
+            float2 d = abs(uv - 0.5) * 2.0;
+            float edge = max(d.x, d.y);
+            float alpha = 1.0 - smoothstep(0.9, 1.0, edge);
+
+            if (alpha < 0.01) {
+                discard;
+            }
+
+            float pulse = 0.5 + 0.5 * sin(inst * 0.3);
+            float3 color = tint * (0.4 + 0.6 * pulse);
+
+            output.color = float4(color, alpha);
+        }
+    }
+
+    pass "InstancedLine" {
+        vertex {
+            // Synthesize a horizontal line per instance at varying Y.
+            uint vid = input.vertex_id & 1u;
+            uint iid = input.instance_id;
+
+            float x = (vid == 0u) ? -1.0 : 1.0;
+            float y = float(iid) * 0.05 - 1.0;
+
+            output.position = float4(x, y, 0.0, 1.0);
+            output.instanceIdx = float(iid);
+        }
+
+        fragment {
+            float idx = input.instanceIdx;
+            float hue = fract(idx * 0.081);
+
+            // Cheap HSV->RGB-ish via sin offsets.
+            float3 color = float3(
+                0.5 + 0.5 * sin(hue * 6.283),
+                0.5 + 0.5 * sin(hue * 6.283 + 2.094),
+                0.5 + 0.5 * sin(hue * 6.283 + 4.189)
+            );
+
+            output.color = float4(color, 1.0);
+        }
+    }
+}

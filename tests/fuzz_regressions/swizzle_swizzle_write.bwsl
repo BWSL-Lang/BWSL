@@ -1,0 +1,21 @@
+// Swizzle of a swizzle: `v.xyz.yx`. Currently each level is lowered
+// independently — first extract .xyz, then shuffle .yx on the result.
+// Tests that the intermediate type flows correctly.
+pipeline SwizzleSwizzleWrite {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float4 v = float4(1.0, 2.0, 3.0, 4.0);
+
+            // Read swizzle-of-swizzle
+            float3 a = v.wzyx.xyz;
+            float2 b = v.xyz.yx;
+            float  c = v.xyz.x;
+
+            // Chain swizzles in arithmetic
+            float3 d = v.xyz + v.yzw;
+            float3 e = d.zxy;
+
+            float sum = a.x + b.x + c + e.x;
+        }
+    }
+}

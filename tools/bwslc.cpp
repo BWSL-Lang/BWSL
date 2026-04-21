@@ -704,6 +704,11 @@ const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_ATOMIC_CMP_XCHG: return "ATOMIC_CMP_XCHG";
         case IR::OP_ANY:             return "ANY";
         case IR::OP_ALL:             return "ALL";
+        // Local pointers
+        case IR::OP_LOCAL_VAR_PTR:   return "LOCAL_VAR_PTR";
+        case IR::OP_LOCAL_LOAD:      return "LOCAL_LOAD";
+        case IR::OP_LOCAL_STORE:     return "LOCAL_STORE";
+        case IR::OP_LOCAL_FIELD_PTR: return "LOCAL_FIELD_PTR";
         // Synchronization
         case IR::OP_BARRIER:       return "BARRIER";
         case IR::OP_MEM_FENCE:     return "MEM_FENCE";
@@ -1182,6 +1187,14 @@ CompileResult CompileShaderStage(
     if (lowering.program.instructionCount == 0 ||
         lowering.program.opcodes[lowering.program.instructionCount - 1] != OP_RET) {
         lowering.builder.EmitInstruction(OP_RET, 0, 0);
+    }
+
+    // If IR lowering reported recursion, short-circuit: downstream SSA /
+    // SPIR-V emission would produce spurious validator errors drowning
+    // the diagnostic that already went to stderr.
+    if (lowering.recursionDiagnosed) {
+        result.error = "Recursion is not supported by SPIR-V. See diagnostic above.";
+        return result;
     }
 
     auto irEnd = Clock::now();
