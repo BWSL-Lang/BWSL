@@ -149,6 +149,10 @@ ERROR_CASE_TESTS = {
     "array_size_overflow.bwsl": "Invalid array size. Max 256k elements",
 }
 
+TOP_LEVEL_EXPECTED_ERROR_TESTS = {
+    "resources_rcfg_undeclared_error": "Resource not declared in pipeline resources block",
+}
+
 TEXT_GOLDEN_SUFFIXES = {".metal", ".hlsl", ".glsl", ".gles"}
 
 EQUIV_BACKENDS = ("spirv", "hlsl", "glsl")
@@ -1576,6 +1580,26 @@ def main() -> int:
             ],
             cwd=root,
         )
+
+        expected_error = TOP_LEVEL_EXPECTED_ERROR_TESTS.get(test_name)
+        if expected_error is not None:
+            error_text = result.stdout.strip()
+            if result.returncode == 0:
+                print(f"[{RED}FAIL{NC}] {test_name}")
+                print("       Error: invalid top-level error test unexpectedly succeeded")
+                failed += 1
+                continue
+            if expected_error not in error_text:
+                print(f"[{RED}FAIL{NC}] {test_name}")
+                print(f"       Error: expected '{expected_error}' in error output, got: {error_text}")
+                failed += 1
+                continue
+            if config_args:
+                print(f"[{GREEN}PASS{NC}] {test_name} (config: {Path(config_args[1]).name})")
+            else:
+                print(f"[{GREEN}PASS{NC}] {test_name}")
+            passed += 1
+            continue
 
         if result.returncode != 0:
             error_text = result.stdout.strip()

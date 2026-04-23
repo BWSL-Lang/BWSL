@@ -464,17 +464,20 @@ inline ParseResult Parse(const std::string& content) {
                 u8 stages = ParseStage(tokens[4]);
                 if (stages == 0) stages = 1;
 
-                bool isSampler = (typeName.find("sampler") != std::string::npos);
+                bool isPlainSamplerType = (typeName == "sampler");
+                bool isTextureSamplerType =
+                    !isPlainSamplerType &&
+                    (typeName.find("sampler") != std::string::npos);
 
                 UniformInfo info;
                 info.name = name;
                 info.typeName = typeName;
                 info.bindingIndex = binding;
                 info.stages = stages;
-                info.isSampler = isSampler;
+                info.isSampler = isTextureSamplerType || isPlainSamplerType;
                 result.uniformLookup[name] = info;
 
-                if (isSampler) {
+                if (isTextureSamplerType) {
                     TextureBinding texDesc;
                     texDesc.name = name;
                     texDesc.bindingIndex = binding;
@@ -482,6 +485,12 @@ inline ParseResult Parse(const std::string& content) {
                     texDesc.isArray = (typeName.find("Array") != std::string::npos);
                     texDesc.isCubemap = (typeName.find("Cube") != std::string::npos);
                     result.config.textures.push_back(texDesc);
+                } else if (isPlainSamplerType) {
+                    SamplerBinding desc;
+                    desc.name = name;
+                    desc.bindingIndex = binding;
+                    desc.stages = stages;
+                    result.config.samplers.push_back(desc);
                 } else {
                     UniformBufferBinding desc;
                     desc.name = name;
