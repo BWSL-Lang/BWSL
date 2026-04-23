@@ -18,10 +18,10 @@
 //   const bwsl = await import('./bwsl.js');
 //   const module = await bwsl.default();
 //   const compile = module.cwrap('compile', 'string', ['string', 'string', 'string']);
-//   const result = compile(bwslSource, renderConfig, flags);  // flags: "-internals", "-modules /path"
+//   const result = compile(bwslSource, "", flags);  // flags: "-internals", "-modules /path"
 //   const json = JSON.parse(result);
 //   const getSymbols = module.cwrap('getSymbols', 'string', ['string', 'string', 'string']);
-//   const symbols = getSymbols(bwslSource, renderConfig, flags);  // flags: "-modules /path"
+//   const symbols = getSymbols(bwslSource, "", flags);  // flags: "-modules /path"
 
 #include <cstdio>
 #include <cstdlib>
@@ -59,6 +59,7 @@ static constexpr bool USE_DIRECT_GLES = false;
 #include "../bwsl_cfg.h"
 #include "../bwsl_ssa.h"
 #include "../bwsl_parser_soa.h"
+#include "../bwsl_resource_reflection.h"
 #include "../bwsl_lexer.h"
 #include "../bwsl_eval_soa.h"
 #include "../bwsl_variant_system.h"
@@ -365,34 +366,304 @@ static std::string DumpSpirvToString(const std::vector<u32>& spirv) {
     return out.str();
 }
 
-static RenderConfig CreateDefaultRenderConfig(const std::string& pipelineName) {
-    RenderConfig config;
-    config.name = pipelineName;
+static const char* ResourceTypeToString(::ResourceBinding::Type type) {
+    switch (type) {
+        case ::ResourceBinding::UniformBuffer: return "uniform";
+        case ::ResourceBinding::StorageBuffer: return "storage_buffer";
+        case ::ResourceBinding::Texture: return "texture";
+        case ::ResourceBinding::Sampler: return "sampler";
+        case ::ResourceBinding::StorageImage: return "storage_image";
+        default: return "buffer";
+    }
+}
 
-    config.renderTargets = {
-        RenderTargetHelpers::ColorTarget("SceneColor", 1.0f, PixelFormat::RGBA16Float),
-        RenderTargetHelpers::DepthTarget("SceneDepth", 1.0f),
+static std::string StageFlagsToJsonArray(u8 stageFlags) {
+    std::string json = "[";
+    bool first = true;
+    auto appendStage = [&](const char* stageName, ShaderStage stage) {
+        if ((stageFlags & SymbolTable::ShaderStageToBit(stage)) == 0) return;
+        if (!first) json += ",";
+        json += "\"";
+        json += stageName;
+        json += "\"";
+        first = false;
     };
 
-    // Add default uniforms for Three.js compatibility
-    // stages is now a bitmask: 1=vertex, 2=fragment, 3=both
-    UniformBufferBinding mvMatrix; mvMatrix.name = "modelViewMatrix"; mvMatrix.typeName = "mat4"; mvMatrix.bindingIndex = 0; mvMatrix.stages = 1;
-    UniformBufferBinding projMatrix; projMatrix.name = "projectionMatrix"; projMatrix.typeName = "mat4"; projMatrix.bindingIndex = 1; projMatrix.stages = 1;
-    UniformBufferBinding normMatrix; normMatrix.name = "normalMatrix"; normMatrix.typeName = "mat3"; normMatrix.bindingIndex = 2; normMatrix.stages = 1;
-    UniformBufferBinding timeUniform; timeUniform.name = "time"; timeUniform.typeName = "float"; timeUniform.bindingIndex = 3; timeUniform.stages = 3;
-    config.uniformBuffers.push_back(mvMatrix);
-    config.uniformBuffers.push_back(projMatrix);
-    config.uniformBuffers.push_back(normMatrix);
-    config.uniformBuffers.push_back(timeUniform);
+    appendStage("vertex", ShaderStage::Vertex);
+    appendStage("fragment", ShaderStage::Fragment);
+    appendStage("compute", ShaderStage::Compute);
 
-    RenderConfig::PassData mainPass;
-    mainPass.name = "Main";
-    mainPass.type = PassType::Standard;
-    mainPass.descriptor.name = "Main";
-    mainPass.descriptor.pipelineName = pipelineName;
-    config.passes.push_back(mainPass);
+    json += "]";
+    return json;
+}
+
+static const char* ResourceAccessToString(BWSL::ResourceAccessMode access) {
+    switch (access) {
+        case BWSL::ResourceAccessMode::ReadOnly: return "readonly";
+        case BWSL::ResourceAccessMode::WriteOnly: return "writeonly";
+        case BWSL::ResourceAccessMode::ReadWrite: return "readwrite";
+        default: return "readonly";
+    }
+}
+
+static std::string ResolveArenaString(const ArenaString& value,
+                                      const char* sourceBase,
+                                      const std::string& fallback = {}) {
+    if (!value.isHashOnly() && sourceBase) {
+        return std::string(value.view(sourceBase));
+    }
+
+    std::string reversed = ReverseLookup::GetString(value.nameHash);
+    if (!reversed.empty()) {
+        return reversed;
+    }
+
+    return fallback;
+}
+
+static RenderConfig CreateSyntheticRenderConfig(const AST& ast,
+                                                const PipelineData& pipeline,
+                                                const SymbolTableData& symbols,
+                                                const char* sourceBase) {
+    RenderConfig config;
+    config.name = ResolveArenaString(pipeline.name, sourceBase, "Demo");
+
+    auto appendResource = [&](const std::string& resourceName,
+                              const std::string& typeName,
+                              const ResourceData& resource) {
+        switch (resource.type) {
+            case ResourceBinding::UniformBuffer: {
+                UniformBufferBinding binding;
+                binding.name = resourceName;
+                binding.typeName = typeName;
+                binding.bindingIndex = resource.bindingIndex;
+                binding.stages = resource.stageFlags;
+                config.uniformBuffers.push_back(std::move(binding));
+                break;
+            }
+            case ResourceBinding::Texture: {
+                TextureBinding binding;
+                binding.name = resourceName;
+                binding.bindingIndex = resource.bindingIndex;
+                binding.isArray = resource.isArrayTexture;
+                binding.isCubemap = resource.isCubemapTexture;
+                binding.stages = resource.stageFlags;
+                config.textures.push_back(std::move(binding));
+                break;
+            }
+            case ResourceBinding::Sampler: {
+                SamplerBinding binding;
+                binding.name = resourceName;
+                binding.bindingIndex = resource.bindingIndex;
+                binding.stages = resource.stageFlags;
+                config.samplers.push_back(std::move(binding));
+                break;
+            }
+            case ResourceBinding::StorageBuffer: {
+                StorageBufferBinding binding;
+                binding.name = resourceName;
+                binding.typeName = typeName;
+                binding.bindingIndex = resource.bindingIndex;
+                binding.readOnly = true;
+                binding.stages = resource.stageFlags;
+                config.storageBuffers.push_back(std::move(binding));
+                break;
+            }
+            case ResourceBinding::StorageImage: {
+                StorageImageBinding binding;
+                binding.name = resourceName;
+                binding.bindingIndex = resource.bindingIndex;
+                binding.accessMode = ::ResourceAccessMode::ReadWrite;
+                binding.stages = resource.stageFlags;
+                config.storageImages.push_back(std::move(binding));
+                break;
+            }
+            default:
+                break;
+        }
+    };
+
+    if (pipeline.resources.count > 0) {
+        for (u32 i = 0; i < pipeline.resources.count; i++) {
+            const ResourceDeclData& decl = ast.GetResourceDecl(pipeline.resources[i]);
+            Symbol* sym = SymbolTable::LookupResource(const_cast<SymbolTableData*>(&symbols), decl.name);
+            if (!sym || sym->index >= symbols.resources.count) {
+                continue;
+            }
+
+            const ResourceData& resource = symbols.resources[sym->index];
+            std::string resourceName = ResolveArenaString(
+                decl.name,
+                sourceBase,
+                GetResourceNameByIndex(symbols, sym->index, sourceBase)
+            );
+            if (resourceName.empty()) {
+                continue;
+            }
+
+            appendResource(resourceName,
+                           ResolveArenaString(decl.typeName, sourceBase),
+                           resource);
+        }
+    } else {
+        for (u32 resourceIndex = 0; resourceIndex < symbols.resources.count; resourceIndex++) {
+            const ResourceData& resource = symbols.resources[resourceIndex];
+            std::string resourceName = GetResourceNameByIndex(symbols, resourceIndex, sourceBase);
+            if (resourceName.empty()) {
+                continue;
+            }
+
+            appendResource(resourceName,
+                           ResolveArenaString(resource.typeName, sourceBase),
+                           resource);
+        }
+    }
+
+    for (u32 i = 0; i < pipeline.passes.count; i++) {
+        const PassData& pass = ast.GetPass(pipeline.passes[i]);
+        RenderConfig::PassData passConfig;
+        passConfig.name = ResolveArenaString(pass.name, sourceBase, "pass" + std::to_string(i));
+        passConfig.type = pass.computeShader.IsNull() ? PassType::Standard : PassType::Compute;
+        passConfig.descriptor.name = passConfig.name;
+        passConfig.descriptor.pipelineName = config.name;
+        config.passes.push_back(std::move(passConfig));
+    }
 
     return config;
+}
+
+using NameBindingEntry = std::pair<std::string, u32>;
+
+static void SortNameBindingEntries(std::vector<NameBindingEntry>& entries) {
+    std::sort(entries.begin(), entries.end(),
+              [](const NameBindingEntry& lhs, const NameBindingEntry& rhs) {
+                  if (lhs.second != rhs.second) return lhs.second < rhs.second;
+                  return lhs.first < rhs.first;
+              });
+}
+
+static std::vector<NameBindingEntry> CollectWebGLUniformEntries(
+    const std::vector<ReflectedResourceBinding>& resources,
+    ShaderStage stage) {
+    std::vector<NameBindingEntry> entries;
+    const u8 stageMask = SymbolTable::ShaderStageToBit(stage);
+    for (const ReflectedResourceBinding& resource : resources) {
+        if (resource.type != ResourceBinding::UniformBuffer ||
+            (resource.stages & stageMask) == 0 ||
+            resource.set != 0) {
+            continue;
+        }
+        entries.emplace_back(resource.name, resource.binding);
+    }
+    SortNameBindingEntries(entries);
+    return entries;
+}
+
+static std::vector<NameBindingEntry> CollectWebGLSamplerEntries(
+    const std::vector<ReflectedResourceBinding>& resources,
+    ShaderStage stage) {
+    std::vector<NameBindingEntry> entries;
+    const u8 stageMask = SymbolTable::ShaderStageToBit(stage);
+    for (const ReflectedResourceBinding& resource : resources) {
+        if (resource.type != ResourceBinding::Texture ||
+            (resource.stages & stageMask) == 0 ||
+            resource.set != 0) {
+            continue;
+        }
+        entries.emplace_back(resource.name, resource.binding);
+    }
+    SortNameBindingEntries(entries);
+    return entries;
+}
+
+static void AppendNameBindingMap(std::ostringstream& json,
+                                 const char* label,
+                                 const std::vector<NameBindingEntry>& entries) {
+    json << "\"" << label << "\":{";
+    for (size_t i = 0; i < entries.size(); i++) {
+        if (i > 0) json << ",";
+        json << "\"" << EscapeJsonString(entries[i].first) << "\":" << entries[i].second;
+    }
+    json << "}";
+}
+
+static void AppendResourceReflectionJson(std::ostringstream& json,
+                                         const std::vector<ReflectedResourceBinding>& resources) {
+    json << "\"resources\":[";
+    for (size_t i = 0; i < resources.size(); i++) {
+        const ReflectedResourceBinding& resource = resources[i];
+        if (i > 0) json << ",";
+        json << "{";
+        json << "\"name\":\"" << EscapeJsonString(resource.name) << "\",";
+        json << "\"type\":\"" << ResourceTypeToString(resource.type) << "\",";
+        json << "\"set\":" << resource.set << ",";
+        json << "\"binding\":" << resource.binding << ",";
+        json << "\"stages\":" << StageFlagsToJsonArray(resource.stages) << ",";
+        json << "\"access\":\"" << ResourceAccessToString(resource.access) << "\"";
+        if (resource.combinedSampledImage) {
+            json << ",\"abi\":\"combined_sampled_image\"";
+            if (!resource.combinedWith.empty()) {
+                json << ",\"combinedWith\":\"" << EscapeJsonString(resource.combinedWith) << "\"";
+            }
+        }
+        json << "}";
+    }
+    json << "]";
+}
+
+static void AppendWebGLStageJson(std::ostringstream& json,
+                                 ShaderStage stage,
+                                 const AST* ast,
+                                 const PipelineData* pipeline,
+                                 const PassData* pass,
+                                 const char* sourceBase,
+                                 const std::vector<ReflectedResourceBinding>& resources) {
+    if (stage == ShaderStage::Vertex) {
+        json << "\"vertex\":{";
+        json << "\"attributes\":{";
+        if (ast && pipeline && pass) {
+            bool firstAttribute = true;
+            for (u32 i = 0; i < pipeline->attributes.count; i++) {
+                const AttributeDeclData& attributeDecl = ast->GetAttributeDecl(pipeline->attributes[i]);
+                bool isUsedByPass = false;
+                for (u32 usedIdx = 0; usedIdx < pass->usedAttributes.count; usedIdx++) {
+                    if (pass->usedAttributes[usedIdx].nameHash == attributeDecl.name.nameHash) {
+                        isUsedByPass = true;
+                        break;
+                    }
+                }
+
+                if (!isUsedByPass) continue;
+
+                if (!firstAttribute) json << ",";
+                json << "\""
+                     << EscapeJsonString(ResolveArenaString(attributeDecl.name, sourceBase))
+                     << "\":" << static_cast<u32>(attributeDecl.attributeIndex);
+                firstAttribute = false;
+            }
+        }
+        json << "},";
+        AppendNameBindingMap(json, "uniforms", CollectWebGLUniformEntries(resources, stage));
+        json << ",";
+        AppendNameBindingMap(json, "samplers", CollectWebGLSamplerEntries(resources, stage));
+        json << "}";
+        return;
+    }
+
+    if (stage == ShaderStage::Fragment) {
+        json << "\"fragment\":{";
+        AppendNameBindingMap(json, "uniforms", CollectWebGLUniformEntries(resources, stage));
+        json << ",";
+        AppendNameBindingMap(json, "samplers", CollectWebGLSamplerEntries(resources, stage));
+        json << "}";
+        return;
+    }
+
+    json << "\"compute\":{";
+    AppendNameBindingMap(json, "uniforms", CollectWebGLUniformEntries(resources, stage));
+    json << ",";
+    AppendNameBindingMap(json, "samplers", CollectWebGLSamplerEntries(resources, stage));
+    json << "}";
 }
 
 // ============= Shader Compilation =============
@@ -403,15 +674,8 @@ struct ShaderOutput {
     std::string fragmentGlsl;
     std::string computeGlsl;
     std::string error;
-
-    // JSON metadata for vertex shader
-    std::vector<std::pair<std::string, int>> attributes;
-    std::vector<std::pair<std::string, int>> vertexUniforms;
-    std::vector<std::pair<std::string, int>> vertexSamplers;
-
-    // JSON metadata for fragment shader
-    std::vector<std::pair<std::string, int>> fragmentUniforms;
-    std::vector<std::pair<std::string, int>> fragmentSamplers;
+    IRAnalysis analysis{};
+    std::vector<ExplicitSamplerUse> explicitSamplerUses;
 
     // Internals for -internals flag
     std::string irDump;
@@ -535,6 +799,8 @@ static ShaderOutput CompileShaderStage(
 
     builder.EmitFunction();
     std::vector<u32> spirv = builder.Finalize();
+    AnalyzeIR(&output.analysis, &lowering.program);
+    output.explicitSamplerUses = CollectExplicitSamplerUses(lowering.program, stage);
 
     if (spirv.size() <= 5) {
         output.error = "SPIR-V generation failed";
@@ -638,21 +904,8 @@ static std::string CompileToJson(const char* bwslSource,
                                  const std::vector<std::string>& modulePaths = {},
                                  const std::vector<VariantOverride>& variantOverrides = {},
                                  bool dumpVariantSpace = false) {
+    (void)rcfgSource;
     std::string source(bwslSource);
-
-    // Parse render config
-    RenderConfig renderConfig;
-    RenderConfigParser::GeometryConfig geometryConfig;  // Geometry configuration (instancing, etc.)
-    if (rcfgSource && strlen(rcfgSource) > 0) {
-        auto parseResult = RenderConfigParser::Parse(std::string(rcfgSource));
-        if (!parseResult.success) {
-            return "{\"success\":false,\"errors\":[\"" + EscapeJsonString(parseResult.error) + "\"]}";
-        }
-        renderConfig = std::move(parseResult.config);
-        geometryConfig = parseResult.geometry;
-    } else {
-        renderConfig = CreateDefaultRenderConfig("Demo");
-    }
 
     // Set up module search paths from flags
     BWSL::ClearModuleSearchPaths();
@@ -668,7 +921,6 @@ static std::string CompileToJson(const char* bwslSource,
     lexer.Tokenize();
     Parser parser;
     parser.Init(&lexer, &stream, &context);
-    SymbolTable::InitFromRenderConfig(&parser.symbolTable, renderConfig);
 
     // Parse as pipeline
     parser.ParsePipeline();
@@ -746,9 +998,13 @@ static std::string CompileToJson(const char* bwslSource,
 
     const PipelineData& pipeline = context.ast.GetPipeline(specializedPipelineRef);
     const char* sourceBase = lexer.GetSourceBase();
+    RenderConfig renderConfig = CreateSyntheticRenderConfig(context.ast,
+                                                            pipeline,
+                                                            parser.symbolTable,
+                                                            sourceBase);
     const ComputeGraphData* graphData = nullptr;
     ComputeGraphCompileResult graphResult = CompileComputeGraph(context.ast,
-                                                               context.ast.GetPipeline(originalPipelineRef),
+                                                               pipeline,
                                                                renderConfig,
                                                                sourceBase);
     if (!graphResult.success) {
@@ -813,6 +1069,39 @@ static std::string CompileToJson(const char* bwslSource,
             }
         }
 
+        std::vector<ExplicitSamplerUse> reflectionSamplerUses;
+        if (!vertResult.explicitSamplerUses.empty()) {
+            reflectionSamplerUses.insert(reflectionSamplerUses.end(),
+                                         vertResult.explicitSamplerUses.begin(),
+                                         vertResult.explicitSamplerUses.end());
+        }
+        if (!fragResult.explicitSamplerUses.empty()) {
+            reflectionSamplerUses.insert(reflectionSamplerUses.end(),
+                                         fragResult.explicitSamplerUses.begin(),
+                                         fragResult.explicitSamplerUses.end());
+        }
+        if (!compResult.explicitSamplerUses.empty()) {
+            reflectionSamplerUses.insert(reflectionSamplerUses.end(),
+                                         compResult.explicitSamplerUses.begin(),
+                                         compResult.explicitSamplerUses.end());
+        }
+
+        ResourceReflectionConfig reflectionConfig;
+        reflectionConfig.vertexPullingMode = ResourceReflectionConfig::VertexPullingMode::Disabled;
+        reflectionConfig.descriptorSet = 0;
+
+        const std::vector<ReflectedResourceBinding> reflectedResources =
+            BuildResolvedResourceReflection(&context.ast,
+                                           &pipeline,
+                                           &pass,
+                                           parser.symbolTable,
+                                           sourceBase,
+                                           isComputePass ? nullptr : &vertResult.analysis,
+                                           isComputePass ? nullptr : &fragResult.analysis,
+                                           isComputePass ? &compResult.analysis : nullptr,
+                                           reflectionConfig,
+                                           reflectionSamplerUses.empty() ? nullptr : &reflectionSamplerUses);
+
         // Add to JSON
         if (!firstPass) json << ",";
         firstPass = false;
@@ -822,54 +1111,19 @@ static std::string CompileToJson(const char* bwslSource,
             const ShaderStageData& computeStage = context.ast.GetShaderStage(pass.computeShader);
             json << "\"compute\":\"" << EscapeJsonString(compResult.computeGlsl) << "\",";
             json << "\"workgroupSize\":[" << computeStage.workgroupSizeX << ","
-                 << computeStage.workgroupSizeY << "," << computeStage.workgroupSizeZ << "]";
+                 << computeStage.workgroupSizeY << "," << computeStage.workgroupSizeZ << "],";
+            AppendResourceReflectionJson(json, reflectedResources);
+            json << ",\"webgl\":{";
+            AppendWebGLStageJson(json, ShaderStage::Compute, &context.ast, &pipeline, nullptr, sourceBase, reflectedResources);
+            json << "}";
         } else {
             json << "\"vertex\":\"" << EscapeJsonString(vertResult.vertexGlsl) << "\",";
             json << "\"fragment\":\"" << EscapeJsonString(fragResult.fragmentGlsl) << "\",";
-
-            // Add attributes metadata
-            json << "\"attributes\":{";
-            for (u32 i = 0; i < pass.usedAttributes.count; i++) {
-                std::string attrName = pass.usedAttributes[i].ToString(sourceBase);
-                if (i > 0) json << ",";
-                json << "\"" << attrName << "\":" << i;
-            }
-            json << "},";
-
-            // Add vertex uniforms metadata
-            json << "\"vertexUniforms\":{";
-            bool firstUniform = true;
-            for (const auto& ub : renderConfig.uniformBuffers) {
-                if (static_cast<int>(ub.stages) & 1) {  // Vertex stage
-                    if (!firstUniform) json << ",";
-                    json << "\"" << ub.name << "\":" << ub.bindingIndex;
-                    firstUniform = false;
-                }
-            }
-            json << "},";
-
-            // Add fragment uniforms metadata
-            json << "\"fragmentUniforms\":{";
-            firstUniform = true;
-            for (const auto& ub : renderConfig.uniformBuffers) {
-                if (static_cast<int>(ub.stages) & 2) {  // Fragment stage
-                    if (!firstUniform) json << ",";
-                    json << "\"" << ub.name << "\":" << ub.bindingIndex;
-                    firstUniform = false;
-                }
-            }
-            json << "},";
-
-            // Add samplers metadata
-            json << "\"samplers\":{";
-            bool firstSampler = true;
-            for (const auto& tex : renderConfig.textures) {
-                if (static_cast<int>(tex.stages) & 2) {  // Fragment stage
-                    if (!firstSampler) json << ",";
-                    json << "\"" << tex.name << "\":" << tex.bindingIndex;
-                    firstSampler = false;
-                }
-            }
+            AppendResourceReflectionJson(json, reflectedResources);
+            json << ",\"webgl\":{";
+            AppendWebGLStageJson(json, ShaderStage::Vertex, &context.ast, &pipeline, &pass, sourceBase, reflectedResources);
+            json << ",";
+            AppendWebGLStageJson(json, ShaderStage::Fragment, &context.ast, &pipeline, nullptr, sourceBase, reflectedResources);
             json << "},";
 
             // Add varyings metadata (vertex output -> fragment input mappings)
@@ -888,111 +1142,7 @@ static std::string CompileToJson(const char* bwslSource,
         json << "}";
     }
 
-    json << ",\"variants\":" << SerializeVariantReflectionJson(variantReflection);
-
-    json << "},";
-
-    // Add render config for multi-pass setup
-    json << "\"config\":{";
-    json << "\"targets\":{";
-    bool firstTarget = true;
-    for (const auto& target : renderConfig.renderTargets) {
-        if (!firstTarget) json << ",";
-        json << "\"" << target.name << "\":{\"format\":\"" << PixelFormatToString(target.format) << "\",\"size\":\"viewport\"}";
-        firstTarget = false;
-    }
-    json << "},";
-
-    json << "\"passes\":[";
-    for (size_t i = 0; i < renderConfig.passes.size(); i++) {
-        if (i > 0) json << ",";
-        const auto& p = renderConfig.passes[i];
-        json << "{\"name\":\"" << p.name << "\"";
-
-        // Pass type
-        std::string typeStr = "geometry";
-        switch (p.type) {
-            case PassType::Shadow: typeStr = "shadow"; break;
-            case PassType::Standard: typeStr = "geometry"; break;
-            case PassType::PostProcess: typeStr = "fullscreen"; break;
-            case PassType::Fullscreen: typeStr = "fullscreen"; break;
-            case PassType::Compute: typeStr = "compute"; break;
-            case PassType::UI: typeStr = "ui"; break;
-            default: typeStr = "geometry"; break;
-        }
-        json << ",\"type\":\"" << typeStr << "\"";
-
-        if (p.type == PassType::Compute) {
-            json << ",\"dispatch\":[" << p.dispatch.groupCountX << ","
-                 << p.dispatch.groupCountY << "," << p.dispatch.groupCountZ << "]";
-        }
-
-        // Color attachment
-        if (!p.descriptor.colorAttachments.empty()) {
-            const auto& color = p.descriptor.colorAttachments[0];
-            std::string colorTarget = color.targetName.empty() ? "@screen" : color.targetName;
-            json << ",\"color\":\"" << colorTarget << "\"";
-
-            if (color.loadAction == LoadAction::Clear) {
-                json << ",\"colorClear\":["
-                     << color.clearColor[0] << "," << color.clearColor[1] << ","
-                     << color.clearColor[2] << "," << color.clearColor[3] << "]";
-            }
-        } else {
-            json << ",\"color\":\"@screen\"";
-        }
-
-        // Depth attachment
-        if (!p.descriptor.depthStencilAttachment.targetName.empty()) {
-            json << ",\"depth\":\"" << p.descriptor.depthStencilAttachment.targetName << "\"";
-            if (p.descriptor.depthStencilAttachment.depthLoadAction == LoadAction::Clear) {
-                json << ",\"depthClear\":" << p.descriptor.depthStencilAttachment.clearDepth;
-            }
-        }
-
-        // Resource bindings (inputs)
-        if (!p.descriptor.resourceBindings.empty()) {
-            json << ",\"inputs\":[";
-            bool firstBinding = true;
-            for (const auto& binding : p.descriptor.resourceBindings) {
-                if (!firstBinding) json << ",";
-                // Find uniform name by binding index
-                std::string uniformName = "slot" + std::to_string(binding.bindingIndex);
-                for (const auto& tex : renderConfig.textures) {
-                    if (tex.bindingIndex == binding.bindingIndex) {
-                        uniformName = tex.name;
-                        break;
-                    }
-                }
-                json << "[\"" << uniformName << "\",\"" << binding.resourceName << "\"]";
-                firstBinding = false;
-            }
-            json << "]";
-        }
-
-        // Dependencies
-        if (!p.descriptor.dependencies.empty()) {
-            json << ",\"depends\":[";
-            for (size_t d = 0; d < p.descriptor.dependencies.size(); d++) {
-                if (d > 0) json << ",";
-                json << "\"" << p.descriptor.dependencies[d] << "\"";
-            }
-            json << "]";
-        }
-
-        json << "}";
-    }
-    json << "]";
-
-    // Add geometry configuration if instancing is enabled
-    if (geometryConfig.type == RenderConfigParser::GeometryConfig::Type::Instanced) {
-        json << ",\"geometry\":{";
-        json << "\"type\":\"instanced\",";
-        json << "\"instanceCount\":" << geometryConfig.instanceCount;
-        json << "}";
-    }
-
-    json << "}";
+    json << "},\"variants\":" << SerializeVariantReflectionJson(variantReflection);
 
     if (graphData) {
         json << ",\"computeGraph\":{";
@@ -1112,7 +1262,8 @@ static std::string g_resultBuffer;
 
 extern "C" {
 
-// Main compile function - takes BWSL source, optional render config, and optional flags
+// Main compile function - takes BWSL source, a reserved/ignored compatibility string,
+// and optional flags.
 // flags: "-internals" to include IR dump and SPIR-V disassembly in output
 //        "-modules <path>" to add module search path (can be used multiple times)
 //        "-variant name=value" to specialize one named variant (can be used multiple times)
@@ -1196,19 +1347,9 @@ static const char* SymbolKindToString(SymbolKind kind) {
 }
 
 static std::string GetSymbolsJson(const char* bwslSource, const char* rcfgSource, const std::vector<std::string>& modulePaths = {}) {
+    (void)rcfgSource;
     std::string source(bwslSource);
     std::ostringstream json;
-
-    // Parse render config for resources
-    RenderConfig renderConfig;
-    if (rcfgSource && strlen(rcfgSource) > 0) {
-        auto parseResult = RenderConfigParser::Parse(std::string(rcfgSource));
-        if (parseResult.success) {
-            renderConfig = std::move(parseResult.config);
-        }
-    } else {
-        renderConfig = CreateDefaultRenderConfig("Demo");
-    }
 
     // Set up module search paths from flags
     BWSL::ClearModuleSearchPaths();
@@ -1224,7 +1365,6 @@ static std::string GetSymbolsJson(const char* bwslSource, const char* rcfgSource
     lexer.Tokenize();
     Parser parser;
     parser.Init(&lexer, &stream, &context);
-    SymbolTable::InitFromRenderConfig(&parser.symbolTable, renderConfig);
 
     // Try to parse - continue even if there are errors
     parser.ParsePipeline();
@@ -1318,7 +1458,7 @@ static std::string GetSymbolsJson(const char* bwslSource, const char* rcfgSource
     return json.str();
 }
 
-// Get symbols for autocomplete
+// Get symbols for autocomplete.
 // Returns JSON with symbols, types, and keywords
 // flags: "-modules <path>" to add module search path (can be used multiple times)
 const char* getSymbols(const char* bwslSource, const char* rcfgSource, const char* flags) {
