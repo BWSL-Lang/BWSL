@@ -48,13 +48,16 @@ jobs:
       - name: Build SPIRV-Tools CLI
         shell: pwsh
         run: |
+          $workspace = $env:GITHUB_WORKSPACE -replace '\\', '/'
+          $spirvHeadersDir = "$workspace/vendor/SPIRV-Headers"
+          $spirvToolsDir = "$workspace/build/spirv-tools"
           cmake -S vendor/SPIRV-Tools -B build/spirv-tools `
             -DSPIRV_WERROR=OFF `
             -DSPIRV_SKIP_TESTS=ON `
-            -DSPIRV-Headers_SOURCE_DIR="$env:GITHUB_WORKSPACE/vendor/SPIRV-Headers"
+            -DSPIRV-Headers_SOURCE_DIR="$spirvHeadersDir"
           cmake --build build/spirv-tools --config Release --target spirv-dis spirv-val --parallel
-          "$env:GITHUB_WORKSPACE/build/spirv-tools/tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          "$env:GITHUB_WORKSPACE/build/spirv-tools/tools/Release" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "$spirvToolsDir/tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "$spirvToolsDir/tools/Release" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Set up Python
         uses: actions/setup-python@v5
