@@ -18,6 +18,7 @@ if not exist "build" mkdir "build"
 set "COMMON_FLAGS=/nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB /Ivendor\SPIRV-Cross /I."
 set "RELEASE_FLAGS=/O2 /W4"
 set "DEBUG_FLAGS=/Zi /Od /W4"
+set "LINK_FLAGS=/link /STACK:8388608"
 set "SOURCES=tools\spirv_cross_wrapper.cpp tools\bwslc.cpp"
 
 if /I "%TARGET%"=="bwslc" goto :build_release
@@ -32,13 +33,13 @@ echo Unknown target: %TARGET%
 goto :help
 
 :build_release
-cl %RELEASE_FLAGS% %COMMON_FLAGS% /Fobuild\ /Febuild\bwslc.exe %SOURCES%
+cl %RELEASE_FLAGS% %COMMON_FLAGS% /Fobuild\ /Febuild\bwslc.exe %SOURCES% %LINK_FLAGS%
 if errorlevel 1 exit /b 1
 echo Built: build\bwslc.exe
 exit /b 0
 
 :build_debug
-cl %DEBUG_FLAGS% %COMMON_FLAGS% /Fobuild\ /Fdbuild\bwslc-debug.pdb /Febuild\bwslc-debug.exe %SOURCES%
+cl %DEBUG_FLAGS% %COMMON_FLAGS% /Fobuild\ /Fdbuild\bwslc-debug.pdb /Febuild\bwslc-debug.exe %SOURCES% %LINK_FLAGS%
 if errorlevel 1 exit /b 1
 echo Built: build\bwslc-debug.exe
 exit /b 0

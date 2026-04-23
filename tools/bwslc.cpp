@@ -1415,8 +1415,8 @@ CompileResult CompileShaderStage(
     // CFG Construction
     auto cfgStart = Clock::now();
     Memory::BWEMemoryArena cfgArena;
-    char cfgMem[512 * 1024];
-    cfgArena.Initialize(cfgMem, sizeof(cfgMem));
+    std::vector<char> cfgMem(512 * 1024);
+    cfgArena.Initialize(cfgMem.data(), cfgMem.size());
 
     CFGBuilder cfgBuilder;
     CFG* cfgPtr = nullptr;
@@ -1469,8 +1469,8 @@ CompileResult CompileShaderStage(
 
         // Create GLES arena
         Memory::BWEMemoryArena glesArena;
-        char glesMem[128 * 1024];
-        glesArena.Initialize(glesMem, sizeof(glesMem));
+        std::vector<char> glesMem(128 * 1024);
+        glesArena.Initialize(glesMem.data(), glesMem.size());
 
         // Initialize and emit GLES
         GLES::GLESBuilder glesBuilder;
@@ -1496,8 +1496,8 @@ CompileResult CompileShaderStage(
     auto spirvStart = Clock::now();
 
     Memory::BWEMemoryArena spirvArena;
-    char spirvMem[512 * 1024];
-    spirvArena.Initialize(spirvMem, sizeof(spirvMem));
+    std::vector<char> spirvMem(512 * 1024);
+    spirvArena.Initialize(spirvMem.data(), spirvMem.size());
 
     SPIRVBuilder builder;
     builder.Initialize(&spirvArena, &lowering.program, stage,
