@@ -1,0 +1,11 @@
+{
+    "mode": "raster",
+    "width": 16,
+    "height": 16,
+    "output_size": 4096,
+    "output_type": "float",
+    "tolerance": 0.0001,
+    "depth": true,
+    "check_depth": true,
+    "depth_tolerance": 0.0001
+}

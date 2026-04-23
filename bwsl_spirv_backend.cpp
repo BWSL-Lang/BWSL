@@ -424,13 +424,9 @@ void SPIRVBuilder::EmitPreamble() {
     EmitCapability(static_cast<spv::Capability>(62)); // GroupNonUniformVote
   }
 
-  // Atomic operations
-  if (analysis.Has(IRAnalysis::CAP_ATOMICS)) {
-    // AtomicStorage for buffer atomics
-    if (analysis.Has(IRAnalysis::CAP_STORAGE_BUFFER)) {
-      EmitCapability(spv::CapabilityAtomicStorage);
-    }
-  }
+  // Atomic operations: Vulkan does NOT require any capability for SSBO/workgroup
+  // atomics beyond Shader. AtomicStorage is for OpenCL/Kernel contexts only and
+  // is explicitly disallowed by spirv-val under vulkan1.x target environments.
 
   // Image read/write capabilities
   if (analysis.Has(IRAnalysis::CAP_IMAGE_STORE)) {
@@ -5741,10 +5737,10 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       // Explicit gradients - operand 2 is ddx, operand 3 is ddy
       u32 ddx_id = GetSpirvId(ir->GetOperand(ir_idx, 2));
       u32 ddy_id = GetSpirvId(ir->GetOperand(ir_idx, 3));
-      if (currentFunctionSize + 9 > currentFunctionCapacity)
+      if (currentFunctionSize + 8 > currentFunctionCapacity)
         GrowCurrentFunction();
       currentFunction[currentFunctionSize++] =
-          (9 << 16) | spv::OpImageSampleExplicitLod;
+          (8 << 16) | spv::OpImageSampleExplicitLod;
       currentFunction[currentFunctionSize++] = result_type;
       currentFunction[currentFunctionSize++] = dest;
       currentFunction[currentFunctionSize++] = sampled_img_id;
@@ -7109,27 +7105,42 @@ static bool IsMatrixType(CoreType type) {
          type == CoreType::MAT4;
 }
 
+static u32 GetVertexPullingBindingCount(const SPIRVBuilder::VertexPullingConfig& config) {
+  switch (config.mode) {
+  case SPIRVBuilder::VertexInputMode::SeparateBuffers:
+    return static_cast<u32>(std::popcount(config.attributeMask));
+  case SPIRVBuilder::VertexInputMode::UnifiedWithOffsets:
+    return 2;
+  case SPIRVBuilder::VertexInputMode::Interleaved:
+  default:
+    return 0;
+  }
+}
+
+static u32 ResolveVertexPullingCollisionBinding(
+    const SPIRVBuilder::VertexPullingConfig& config, u32 resourceSet,
+    u32 binding) {
+  if (resourceSet != config.descriptorSet) {
+    return binding;
+  }
+
+  const u32 occupiedCount = GetVertexPullingBindingCount(config);
+  if (occupiedCount == 0) {
+    return binding;
+  }
+
+  if (binding >= config.baseBufferBinding) {
+    return binding + occupiedCount;
+  }
+
+  return binding;
+}
+
 void SPIRVBuilder::DeclareResources() {
   // Declare resources based on IR analysis results
   // Each uniform binding in BWSL is a single typed value
   // (resources.modelMatrix, etc.) We create a struct wrapper for each to
   // satisfy SPIR-V UBO requirements
-
-  // Calculate binding offset for vertex pulling buffers
-  // When vertex pulling is enabled, attribute buffers occupy bindings starting
-  // at baseBufferBinding Uniforms need to be offset to avoid collisions
-  u32 vertexPullingBindingOffset = 0;
-  if (vertexPullingConfig.mode == VertexInputMode::SeparateBuffers) {
-    // Count used attributes - each gets a separate buffer binding
-    for (u32 i = 0; i < 8; i++) {
-      if (analysis.usedAttributeMask & (1 << i)) {
-        vertexPullingBindingOffset++;
-      }
-    }
-  } else if (vertexPullingConfig.mode == VertexInputMode::UnifiedWithOffsets) {
-    // Unified mode uses 2 bindings: vertex buffer + offset table
-    vertexPullingBindingOffset = 2;
-  }
 
   // ============= Uniform Buffers =============
   for (u32 binding = 0; binding < 32; binding++) {
@@ -7199,16 +7210,10 @@ void SPIRVBuilder::DeclareResources() {
       EmitToSection(&globals, spv::OpVariable, ops, 3);
     }
 
-    // Decorate with DescriptorSet and Binding
-    // Only offset binding if it would collide with vertex attribute buffers
-    // Attribute buffers occupy bindings [baseBufferBinding, baseBufferBinding +
-    // count)
-    u32 actualBinding = binding;
-    if (binding < vertexPullingBindingOffset) {
-      // This uniform would collide with vertex attributes, offset it
-      actualBinding = binding + vertexPullingBindingOffset;
-    }
     u32 set_val[] = {0};
+    u32 actualBinding =
+        ResolveVertexPullingCollisionBinding(vertexPullingConfig, set_val[0],
+                                            binding);
     u32 bind_val[] = {actualBinding};
     EmitDecoration(var_id, spv::DecorationDescriptorSet, set_val, 1);
     EmitDecoration(var_id, spv::DecorationBinding, bind_val, 1);
@@ -7329,9 +7334,10 @@ void SPIRVBuilder::DeclareResources() {
       EmitToSection(&globals, spv::OpVariable, ops, 3);
     }
 
-    // Use absolute binding index from rcfg (not offset)
-    u32 textureBinding = binding;
     u32 set_val[] = {0};
+    u32 textureBinding =
+        ResolveVertexPullingCollisionBinding(vertexPullingConfig, set_val[0],
+                                            binding);
     u32 bind_val[] = {textureBinding};
     EmitDecoration(tex_var_id, spv::DecorationDescriptorSet, set_val, 1);
     EmitDecoration(tex_var_id, spv::DecorationBinding, bind_val, 1);
@@ -7475,7 +7481,10 @@ void SPIRVBuilder::DeclareResources() {
             EmitToSection(&typesConstants, spv::OpTypeRuntimeArray, ops, 2);
           }
 
-          // ArrayStride decoration - calculate element size (std430 layout)
+          // ArrayStride decoration - calculate element size (std430 layout).
+          // Vulkan's std140/std430/relaxed block layout require vec3 array
+          // elements to be 16-byte aligned; emitting stride 12 produces SPIR-V
+          // that fails spirv-val and is rejected by conformant drivers.
           u32 elemSize = 4; // default for float/int/uint
           switch (elementCoreType) {
           case CoreType::FLOAT2:
@@ -7486,7 +7495,7 @@ void SPIRVBuilder::DeclareResources() {
           case CoreType::FLOAT3:
           case CoreType::INT3:
           case CoreType::UINT3:
-            elemSize = 12;
+            elemSize = 16;
             break;
           case CoreType::FLOAT4:
           case CoreType::INT4:
@@ -7556,9 +7565,11 @@ void SPIRVBuilder::DeclareResources() {
         EmitToSection(&globals, spv::OpVariable, ops, 3);
       }
 
-      // Decorate - storage buffers in set 1
       u32 set_val[] = {1};
-      u32 bind_val[] = {binding};
+      u32 actualBinding =
+          ResolveVertexPullingCollisionBinding(vertexPullingConfig, set_val[0],
+                                              binding);
+      u32 bind_val[] = {actualBinding};
       EmitDecoration(ssbo_var_id, spv::DecorationDescriptorSet, set_val, 1);
       EmitDecoration(ssbo_var_id, spv::DecorationBinding, bind_val, 1);
 
@@ -7585,7 +7596,7 @@ void SPIRVBuilder::DeclareResources() {
 
       storageBufferIds[binding] = ssbo_var_id;
       bindingSets[resourceCount] = 1;
-      bindingIndices[resourceCount] = binding;
+      bindingIndices[resourceCount] = actualBinding;
       resourceCount++;
     }
   }
@@ -7615,10 +7626,11 @@ void SPIRVBuilder::DeclareResources() {
         EmitToSection(&globals, spv::OpVariable, ops, 3);
       }
 
-      // Decorate with binding - storage images use set 0 with their binding
-      // index
       u32 set_val[] = {0};
-      u32 bind_val[] = {binding};
+      u32 actualBinding =
+          ResolveVertexPullingCollisionBinding(vertexPullingConfig, set_val[0],
+                                              binding);
+      u32 bind_val[] = {actualBinding};
       EmitDecoration(img_var_id, spv::DecorationDescriptorSet, set_val, 1);
       EmitDecoration(img_var_id, spv::DecorationBinding, bind_val, 1);
 
@@ -7627,7 +7639,7 @@ void SPIRVBuilder::DeclareResources() {
 
       storageImageIds[binding] = img_var_id;
       bindingSets[resourceCount] = 0;
-      bindingIndices[resourceCount] = binding;
+      bindingIndices[resourceCount] = actualBinding;
       resourceCount++;
     }
   }

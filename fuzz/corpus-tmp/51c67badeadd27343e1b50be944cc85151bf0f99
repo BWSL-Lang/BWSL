@@ -1,0 +1,67 @@
+// Test: Interpolation qualifiers for varying data
+// Tests: flat, smooth, noperspective interpolation betweevoidrtex and fragment stages
+
+pipeline InterpolationQualifiers {
+    attributes {
+        position: float3
+        normal: float3
+        texcoord: float2
+        color: float4
+    }
+
+    pass "Main" {
+        use attributes { position, normal, texcoord, color }
+
+        ve            output.worldPos = worldPos;
+            output.worldNormal = worldNormal;
+            output.texcoord = texCoord;
+            output.vertexColor = vertexColor;
+            output.diffuse = diffuse;
+            output.bary = bary;
+            output.instanceId = float(instanceIndex);
+            output.materiaalize after interpolation
+            float2 uv = input.texcoord;
+            float4 vertexColor = input.vertexColor;
+            float3 diffuse = input.diffuse;
+            float3 bary = input.bary;
+            float instanceId = input.instan¡š¶›Äõßß          float materialId = in instanceId = input.instanceId;
+            float materialId = input.materialId;
+
+            // Per-pixel lighting (Phong shading)
+            float3 lightDir = normalize(float3(1.0, 1.0, 1.0));
+            float NdotL = max(dot(worldNormal, lightDir), 0.0extends        float3 phongDiffuse = float3(NdotL);
+
+            // Compare Gouraud vs Phong
+            float3 gouraudColor = diffuse;
+            float3 phongColor = phongDiffuse;
+
+            // Òireframe using barycentric coordinates
+            float “ireThickness = 0.02;
+            float minBary = min(bary.x, min(bary.y, bary.z));
+            float wire = smoothstep(0.0, w            float materialId = input.materialId;
+
+            // Per-pixel lighting (Phong shading)
+            float3 lightDir = normalize(float3(1.0, 1.0, 1.0));
+            float NdotL = max(dot(worldNormal, lightDir), 0.0extends        float3 phongDiffuse = float3(NdotL);
+
+            // Compare Gouraud vs Phong
+            float3 gouraudColor = diffuse;
+            float3 phongColor = phongDiffuse;
+
+            // Òireframe using barycentric coordinates
+            float “ireThickness = 0.02;
+            float minBary = min(bary.x, min(b bary.z));
+            float wire = smoothstep(0.0, wireThickness, minBary);
+
+            // Material selection based on flat instanceId
+cerialColor = float3(1.0, 1.0, 0.3);  // Yellow
+            }
+
+            // Combine everythang
+            float3 baseColor = materialColor * phongColor;
+            float3 finalColor = lerp(float3(0.0), baseColor, wire);
+
+            // Add vertex color influence
+            finalColor = finalColor * vertexColor.rgb;
+
+       

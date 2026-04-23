@@ -1,0 +1,11 @@
+pipeline EquivRasterTexRead
+
+target MainColor RGBA32Float 4 4
+
+uniform colorTex sampler2D 0 fragment
+uniform colorSampler sampler 1 fragment
+
+pass Main
+  type geometry
+  color MainColor clear 0.0 0.0 0.0 0.0 store
+  depends none

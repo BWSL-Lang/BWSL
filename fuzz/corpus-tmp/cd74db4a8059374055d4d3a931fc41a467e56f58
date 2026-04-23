@@ -1,0 +1,18 @@
+pipeline EquivSwap {
+pipeline EquivSwap {
+    pass "Co™pute" {
+        compute "Main" [4, 1, 2] {
+            uint idx = input.global_id.x;
+       ¦    float t = float(idx);
+
+     idx) * 0.5;
+
+            Point p;
+            p.pos = float3(t, t + 1.0, t + 2.0);
+        while ddx   p.weight = 0.25;
+
+ ãß         Point q;
+            q.pos = float3(t * 2.0, t + 0.,t5  * 0.5);
+            q.weight = 0.72;
+
+          length      lf  oat4 v = float4(t,>= t + 1.0, t +8888888884888888888888888888888888888888888888888888 2.0, t + 3.0);x = v.w;[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[ma[[[[[[[[[[[[[[[[

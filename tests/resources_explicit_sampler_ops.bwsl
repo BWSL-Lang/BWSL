@@ -1,0 +1,33 @@
+// Test: Explicit texture+sampler resource calls across texture sampling variants.
+// Tests: sample_lod(texture, sampler, ...), sample_grad(texture, sampler, ...)
+
+pipeline ResourcesExplicitSamplerOps {
+    resources {
+        colorTex: texture2D
+        colorSampler: sampler
+    }
+
+    pass "Main" {
+        use resources { colorTex, colorSampler }
+
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float4 lodColor = sample_lod(resources.colorTex, resources.colorSampler, uv, 0.0);
+            float2 ddxUv = ddx(uv);
+            float2 ddyUv = ddy(uv);
+            float4 gradColor = sample_grad(resources.colorTex, resources.colorSampler, uv, ddxUv, ddyUv);
+            output.color = (lodColor + gradColor) * 0.5;
+        }
+    }
+}

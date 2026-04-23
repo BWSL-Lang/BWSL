@@ -301,6 +301,26 @@ def has_glsl_tooling() -> bool:
     return shutil.which("glslangValidator") is not None
 
 
+def has_spirv_val_tooling() -> bool:
+    return shutil.which("spirv-val") is not None
+
+
+def validate_spirv(spv_path: Path,
+                   target_env: str = "vulkan1.2") -> tuple[bool, str]:
+    """Run spirv-val on a SPIR-V binary. Returns (ok, stderr-on-failure).
+
+    Catches malformed modules that would otherwise reach the driver: bad
+    binding decorations, missing types, invalid control flow, etc. Cheap
+    enough (~1ms/shader) to run on every backend output in the suite.
+    """
+    result = run_command([
+        "spirv-val", "--target-env", target_env, str(spv_path),
+    ])
+    if result.returncode != 0:
+        return False, result.stdout.strip()
+    return True, ""
+
+
 HLSL_PROFILE = {"vert": "vs_6_0", "frag": "ps_6_0", "comp": "cs_6_0"}
 GLSLANG_STAGE = {"vert": "vert", "frag": "frag", "comp": "comp"}
 
@@ -711,15 +731,66 @@ _HLSL_PROFILE = {"comp": "cs_6_0", "vert": "vs_6_0", "frag": "ps_6_0"}
 _GLSL_STAGE = {"comp": "comp", "vert": "vert", "frag": "frag"}
 
 
+_HLSL_TEXTURE_DECL_RE = re.compile(
+    r'^(\s*)(Texture\w+(?:<[^>]+>)?\s+\S+\s*:\s*register\(t(\d+)\)\s*;)\s*$')
+_HLSL_SAMPLER_DECL_RE = re.compile(
+    r'^(\s*)(SamplerState\s+\S+\s*:\s*register\(s\d+\)\s*;)\s*$')
+
+
+def _combine_hlsl_image_samplers(src: str) -> str:
+    """Pair adjacent Texture2D / SamplerState declarations into one combined
+    image sampler descriptor via [[vk::combinedImageSampler]] + vk::binding.
+
+    SPIRV-Cross emits HLSL with a Texture2D and SamplerState per BWSL
+    sampler2D resource, each on its own register (t/s). Without annotations
+    dxc would place both at the same binding slot on set 0 (illegal) or at
+    different binding spaces depending on shift flags. By merging them into
+    a single COMBINED_IMAGE_SAMPLER at the original texture binding, the
+    re-emitted SPIR-V matches the native BWSL and GLSL layouts so the same
+    Vulkan descriptor set works across all three backends.
+    """
+    lines = src.split('\n')
+    out: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        tm = _HLSL_TEXTURE_DECL_RE.match(lines[i])
+        if tm:
+            j = i + 1
+            while j < n and lines[j].strip() == '':
+                j += 1
+            sm = _HLSL_SAMPLER_DECL_RE.match(lines[j]) if j < n else None
+            if sm:
+                binding = tm.group(3)
+                attr = f'[[vk::combinedImageSampler]][[vk::binding({binding}, 0)]]'
+                out.append(f'{tm.group(1)}{attr} {tm.group(2)}')
+                for k in range(i + 1, j):
+                    out.append(lines[k])
+                out.append(f'{sm.group(1)}{attr} {sm.group(2)}')
+                i = j + 1
+                continue
+        out.append(lines[i])
+        i += 1
+    return '\n'.join(out)
+
+
 def convert_hlsl_to_spirv(hlsl_file: Path, out_spv: Path,
                           stage: str = "comp") -> tuple[bool, str]:
     profile = _HLSL_PROFILE.get(stage)
     if profile is None:
         return False, f"unsupported stage for dxc: {stage}"
+
+    src = hlsl_file.read_text(encoding="utf-8")
+    patched = _combine_hlsl_image_samplers(src)
+    input_path = hlsl_file
+    if patched != src:
+        input_path = hlsl_file.with_suffix(hlsl_file.suffix + ".vk")
+        input_path.write_text(patched, encoding="utf-8")
+
     result = run_command([
         "dxc", "-spirv", "-T", profile, "-E", "main",
         "-fvk-use-dx-layout",
-        str(hlsl_file), "-Fo", str(out_spv),
+        str(input_path), "-Fo", str(out_spv),
     ])
     if result.returncode != 0:
         return False, result.stdout.strip()
@@ -778,13 +849,28 @@ def pack_values(itype: str, values: list, out_path: Path) -> None:
 
 def dispatch_raster(runner: Path, vert_spv: Path, frag_spv: Path,
                     output_bin: Path, spec: dict,
-                    resource_bins: list[tuple[str, int, Path]] | None = None
+                    resource_bins: list[tuple[str, int, Path]] | None = None,
+                    texture_bins: list[tuple[Path, int, int, int]] | None = None,
+                    depth_output_bin: Path | None = None,
+                    vbo_spec: tuple[Path, int, int, list[tuple[int, str, int]]]
+                                | None = None
                     ) -> tuple[bool, str]:
     """Run the raster equivalence dispatcher.
 
     resource_bins: list of (kind, binding, path) tuples, where kind is one of
     "ssbo" or "ubo". Each contributes an upload of `path` into the matching
     descriptor binding, visible to both vertex and fragment stages.
+
+    texture_bins: list of (path, width, height, binding) tuples. Each texture
+    is uploaded as an RGBA8_UNORM 2D image bound as a COMBINED_IMAGE_SAMPLER
+    at the given binding, with a nearest-clamp sampler.
+
+    depth_output_bin: optional path for float32 depth-buffer readback when
+    the spec enables depth testing.
+
+    vbo_spec: optional (path, vertex_count, stride, attribs) tuple; attribs
+    is a list of (location, format_name, offset). When provided, enables
+    interleaved vertex-buffer input instead of the fullscreen-triangle path.
     """
     args = [
         str(runner),
@@ -797,9 +883,24 @@ def dispatch_raster(runner: Path, vert_spv: Path, frag_spv: Path,
         "--output-size", str(spec["output_size"]),
         "--set", str(spec.get("descriptor_set", 1)),
     ]
+    mrt = int(spec.get("mrt", 1))
+    if mrt != 1:
+        args += ["--raster-mrt", str(mrt)]
+    if spec.get("depth"):
+        args += ["--raster-depth"]
+        if depth_output_bin is not None:
+            args += ["--raster-depth-output", str(depth_output_bin)]
+    if vbo_spec is not None:
+        vbo_path, vcount, stride, attribs = vbo_spec
+        args += ["--raster-vbo", str(vbo_path), str(vcount), str(stride)]
+        for loc, fmt, off in attribs:
+            args += ["--raster-vbo-attr", str(loc), fmt, str(off)]
     for kind, binding, path in (resource_bins or []):
         flag = "--raster-ssbo" if kind == "ssbo" else "--raster-ubo"
         args += [flag, str(path), str(binding)]
+    for path, width, height, binding in (texture_bins or []):
+        args += ["--raster-tex2d", str(path), str(width), str(height),
+                 str(binding)]
     result = run_command(args)
     if result.returncode != 0:
         return False, result.stdout.strip()
@@ -870,7 +971,8 @@ def compare_bytes(reference: bytes, actual: bytes, spec: dict) -> tuple[bool, st
 
 
 def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
-                          runner: Path, verbose: bool) -> bool:
+                          runner: Path, verbose: bool,
+                          spirv_val: bool = False) -> bool:
     """Dispatch a single raster-mode equivalence test across backends.
 
     Expects a single-pass pipeline with a vertex + fragment stage. Looks for
@@ -883,6 +985,15 @@ def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
         print(f"[{RED}FAIL{NC}] {test_name} (raster: need exactly 1 vert/frag pair, got "
               f"{len(native_vert)}/{len(native_frag)})")
         return False
+
+    if spirv_val:
+        for label, spv in (("native vert", native_vert[0]),
+                           ("native frag", native_frag[0])):
+            ok_v, msg_v = validate_spirv(spv)
+            if not ok_v:
+                print(f"[{RED}FAIL{NC}] {test_name} ({label} spirv-val)")
+                print(f"       {msg_v}")
+                return False
 
     # Backend -> (vert_spv_path, frag_spv_path) pair.
     backends: dict[str, tuple[Path, Path]] = {
@@ -912,6 +1023,14 @@ def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
             if verbose:
                 print(f"       {YELLOW}{cross_name.upper()} frag -> SPIR-V skipped{NC}: {msg_f}")
             continue
+        if spirv_val:
+            ok_vv, msg_vv = validate_spirv(vert_spv)
+            ok_fv, msg_fv = validate_spirv(frag_spv)
+            if not (ok_vv and ok_fv):
+                print(f"[{RED}FAIL{NC}] {test_name} ({cross_name} spirv-val)")
+                if not ok_vv: print(f"       vert: {msg_vv}")
+                if not ok_fv: print(f"       frag: {msg_fv}")
+                return False
         backends[cross_name] = (vert_spv, frag_spv)
 
     # Materialize raster resource bindings (SSBO / UBO) if requested. The same
@@ -930,16 +1049,139 @@ def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
             return False
         resource_bins.append((kind, binding, res_path))
 
+    # Materialize raster textures. Accepts RGBA8 pixel data either as raw
+    # bytes, as a list of [r,g,b,a] quads in 0..255, or as "values" of length
+    # width*height*4 in 0..255. A single image is shared across all backends
+    # since every descriptor layout matches after the HLSL rewrite pass.
+    texture_bins: list[tuple[Path, int, int, int]] = []
+    for i, tex in enumerate(spec.get("textures", [])):
+        binding = int(tex["binding"])
+        w = int(tex["width"])
+        h = int(tex["height"])
+        tex_path = test_out / f"{test_name}_tex{i}.bin"
+        expected = w * h * 4
+        data: bytes
+        if "values" in tex:
+            vs = tex["values"]
+            data = bytes(int(v) & 0xFF for v in vs)
+        elif "pixels" in tex:
+            flat: list[int] = []
+            for px in tex["pixels"]:
+                if len(px) != 4:
+                    print(f"[{RED}FAIL{NC}] {test_name} (texture {i} pixel "
+                          f"must be [r,g,b,a])")
+                    return False
+                flat.extend(int(c) & 0xFF for c in px)
+            data = bytes(flat)
+        elif "bytes_path" in tex:
+            data = Path(tex["bytes_path"]).read_bytes()
+        elif "fill" in tex:
+            fill = tex["fill"]
+            if len(fill) != 4:
+                print(f"[{RED}FAIL{NC}] {test_name} (texture {i} fill must "
+                      f"be [r,g,b,a])")
+                return False
+            data = bytes([int(c) & 0xFF for c in fill]) * (w * h)
+        else:
+            print(f"[{RED}FAIL{NC}] {test_name} (texture {i} has no "
+                  f"values/pixels/bytes_path/fill)")
+            return False
+        if len(data) != expected:
+            print(f"[{RED}FAIL{NC}] {test_name} (texture {i} size "
+                  f"{len(data)} != {expected} for {w}x{h} RGBA8)")
+            return False
+        tex_path.write_bytes(data)
+        texture_bins.append((tex_path, w, h, binding))
+
+    # Materialize an optional interleaved vertex buffer. The spec shape is:
+    #   "vertices": {
+    #      "stride": <bytes per vertex>,
+    #      "attributes": [{"location": 0, "format": "R32G32B32_SFLOAT",
+    #                      "offset": 0}, ...],
+    #      "data": [<flat list of typed components per vertex>]   OR
+    #      "bytes_path": "<path to prebuilt VBO file>"
+    #   }
+    # We pack "data" as an interleaved raw byte blob according to each
+    # attribute's format; the Vulkan runner treats it as opaque bytes.
+    vbo_spec = None
+    verts = spec.get("vertices")
+    if verts is not None:
+        import struct
+        stride = int(verts["stride"])
+        attrs = verts.get("attributes", [])
+        attrib_tuples: list[tuple[int, str, int]] = [
+            (int(a["location"]), a["format"], int(a["offset"]))
+            for a in attrs
+        ]
+        vbo_path = test_out / f"{test_name}_vbo.bin"
+        if "bytes_path" in verts:
+            vbo_path = Path(verts["bytes_path"])
+            vcount = int(verts["count"])
+        elif "data" in verts:
+            # `data` is a list-of-lists: one entry per vertex, each vertex a
+            # flat list of per-attribute components in attribute order. E.g.
+            # for [pos3, color3] stride=24, a vertex is [x,y,z,r,g,b].
+            rows = verts["data"]
+            if not rows:
+                print(f"[{RED}FAIL{NC}] {test_name} (vertices.data is empty)")
+                return False
+            # Determine the struct pack char for each attribute.
+            fmt_to_pack = {
+                "R32_SFLOAT": ("f", 1),
+                "R32G32_SFLOAT": ("f", 2),
+                "R32G32B32_SFLOAT": ("f", 3),
+                "R32G32B32A32_SFLOAT": ("f", 4),
+                "R32_SINT": ("i", 1),
+                "R32_UINT": ("I", 1),
+                "R32G32_UINT": ("I", 2),
+                "R32G32B32_UINT": ("I", 3),
+                "R32G32B32A32_UINT": ("I", 4),
+            }
+            packers: list[tuple[str, int, int]] = []
+            for a in attrs:
+                p = fmt_to_pack.get(a["format"])
+                if p is None:
+                    print(f"[{RED}FAIL{NC}] {test_name} "
+                          f"(unsupported vertex format {a['format']})")
+                    return False
+                packers.append((p[0], p[1], int(a["offset"])))
+            buf = bytearray(stride * len(rows))
+            for vi, row in enumerate(rows):
+                cursor = 0
+                base = vi * stride
+                for pack_char, ncomp, off in packers:
+                    comps = row[cursor:cursor + ncomp]
+                    cursor += ncomp
+                    packed = struct.pack(f"{ncomp}{pack_char}", *comps)
+                    buf[base + off:base + off + len(packed)] = packed
+            vbo_path.write_bytes(bytes(buf))
+            vcount = len(rows)
+        else:
+            print(f"[{RED}FAIL{NC}] {test_name} (vertices: need data/bytes_path)")
+            return False
+        vbo_spec = (vbo_path, vcount, stride, attrib_tuples)
+
+    depth_enabled = bool(spec.get("depth"))
+    depth_check = depth_enabled and bool(spec.get("check_depth", depth_enabled))
+
     outputs: dict[str, bytes] = {}
+    depth_outputs: dict[str, bytes] = {}
     dispatch_errors: list[str] = []
     for backend, (vs, fs) in backends.items():
         out_bin = test_out / f"{test_name}_{backend}.bin"
+        depth_bin = (test_out / f"{test_name}_{backend}_depth.bin"
+                     if depth_check else None)
         ok, msg = dispatch_raster(runner, vs, fs, out_bin, spec,
-                                  resource_bins=resource_bins)
+                                  resource_bins=resource_bins,
+                                  texture_bins=texture_bins,
+                                  depth_output_bin=depth_bin,
+                                  vbo_spec=vbo_spec)
         if not ok:
             dispatch_errors.append(f"{backend}: {msg}")
             continue
         outputs[backend] = out_bin.read_bytes()
+        if depth_check and depth_bin is not None and depth_bin.exists():
+            depth_outputs[backend] = depth_bin.read_bytes()
 
     if "spirv" not in outputs:
         print(f"[{RED}FAIL{NC}] {test_name} (native raster dispatch failed)")
@@ -957,6 +1199,23 @@ def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
         if not ok:
             test_failed = True
             details.append(f"{backend}: {msg}")
+    # Depth readback is always float32; compare with the same tolerance as
+    # the color output (or 0 by default). We synthesize a depth-only spec so
+    # compare_bytes picks the float path.
+    if depth_check and "spirv" in depth_outputs:
+        depth_ref = depth_outputs["spirv"]
+        depth_spec = {
+            "tolerance": float(spec.get("depth_tolerance",
+                                        spec.get("tolerance", 0.0))),
+            "output_type": "float",
+        }
+        for backend, data in depth_outputs.items():
+            if backend == "spirv":
+                continue
+            ok, msg = compare_bytes(depth_ref, data, depth_spec)
+            if not ok:
+                test_failed = True
+                details.append(f"{backend} depth: {msg}")
     for e in dispatch_errors:
         test_failed = True
         details.append(e)
@@ -968,12 +1227,21 @@ def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
         return False
 
     backend_names = ", ".join(sorted(outputs.keys()))
-    print(f"[{GREEN}PASS{NC}] {test_name} ({backend_names}, raster)")
+    extra = []
+    if int(spec.get("mrt", 1)) > 1:
+        extra.append(f"mrt={spec['mrt']}")
+    if depth_enabled:
+        extra.append("depth")
+    if vbo_spec is not None:
+        extra.append("vbo")
+    tag = ", ".join(["raster", *extra])
+    print(f"[{GREEN}PASS{NC}] {test_name} ({backend_names}, {tag})")
     return True
 
 
 def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
-                          modules_dir: Path, verbose: bool) -> tuple[int, int]:
+                          modules_dir: Path, verbose: bool,
+                          spirv_val: bool = False) -> tuple[int, int]:
     equiv_dir = root / "tests" / "equivalence"
     if not equiv_dir.exists():
         return 0, 0
@@ -1024,7 +1292,8 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
             continue
 
         if spec.get("mode") == "raster":
-            ok = run_raster_equiv_test(test_name, test_out, spec, runner, verbose)
+            ok = run_raster_equiv_test(test_name, test_out, spec, runner,
+                                       verbose, spirv_val=spirv_val)
             if ok:
                 passed += 1
             else:
@@ -1039,6 +1308,19 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
             print(f"[{RED}FAIL{NC}] {test_name} (no native .spv produced)")
             failed += 1
             continue
+
+        if spirv_val:
+            spv_val_failed = False
+            for spv in native_spvs:
+                ok_v, msg_v = validate_spirv(spv)
+                if not ok_v:
+                    print(f"[{RED}FAIL{NC}] {test_name} (native spirv-val)")
+                    print(f"       {spv.name}: {msg_v}")
+                    spv_val_failed = True
+                    break
+            if spv_val_failed:
+                failed += 1
+                continue
 
         # Backend -> list of per-pass .spv paths.
         backends_spv: dict[str, list[Path]] = {"spirv": list(native_spvs)}
@@ -1057,6 +1339,14 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
                     all_ok = False
                     break
                 converted.append(spv)
+            if all_ok and spirv_val:
+                for spv in converted:
+                    ok_v, msg_v = validate_spirv(spv)
+                    if not ok_v:
+                        print(f"[{RED}FAIL{NC}] {test_name} (hlsl-rt spirv-val)")
+                        print(f"       {spv.name}: {msg_v}")
+                        all_ok = False
+                        break
             if all_ok:
                 backends_spv["hlsl"] = converted
 
@@ -1073,6 +1363,14 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
                     all_ok = False
                     break
                 converted.append(spv)
+            if all_ok and spirv_val:
+                for spv in converted:
+                    ok_v, msg_v = validate_spirv(spv)
+                    if not ok_v:
+                        print(f"[{RED}FAIL{NC}] {test_name} (glsl-rt spirv-val)")
+                        print(f"       {spv.name}: {msg_v}")
+                        all_ok = False
+                        break
             if all_ok:
                 backends_spv["glsl"] = converted
 
@@ -1139,6 +1437,13 @@ def main() -> int:
     parser.add_argument("--gles", action="store_true", help="Enable GLES validation via glslangValidator")
     parser.add_argument("--all-validators", "-A", action="store_true", help="Enable Metal/HLSL/GLSL/GLES validators")
     parser.add_argument("--equivalence", "-E", action="store_true", help="Run cross-backend equivalence compute tests via Vulkan")
+    parser.add_argument("--spirv-val", action="store_true",
+                        help="Run spirv-val on every produced SPIR-V module (auto-on if spirv-val is installed)")
+    parser.add_argument("--no-spirv-val", action="store_true",
+                        help="Disable spirv-val even if the tool is installed")
+    parser.add_argument("--compiler",
+                        help="Path to an alternate bwslc binary (e.g. bwslc-sanitize). "
+                             "If omitted, the default build/bwslc is used.")
     parser.add_argument(
         "--update-golden",
         "-u",
@@ -1154,6 +1459,12 @@ def main() -> int:
     gles_validation = args.gles or args.all_validators
     update_golden = args.update_golden
     verbose = args.verbose
+    if args.no_spirv_val:
+        spirv_val = False
+    elif args.spirv_val:
+        spirv_val = True
+    else:
+        spirv_val = has_spirv_val_tooling()
 
     script_dir = Path(__file__).resolve().parent
     root = script_dir.parent
@@ -1178,16 +1489,23 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     golden_dir.mkdir(parents=True, exist_ok=True)
 
-    bwslc = compiler_path(root)
-    if not bwslc.exists():
-        print(f"{YELLOW}Building compiler...{NC}")
-        if not build_compiler(root):
-            print(f"{RED}Failed to build compiler{NC}")
+    if args.compiler:
+        bwslc = Path(args.compiler).resolve()
+        if not bwslc.exists():
+            print(f"{RED}--compiler path does not exist: {bwslc}{NC}")
             return 1
+        print(f"Compiler: {BLUE}{bwslc}{NC} (overridden)")
+    else:
         bwslc = compiler_path(root)
         if not bwslc.exists():
-            print(f"{RED}Failed to build compiler{NC}")
-            return 1
+            print(f"{YELLOW}Building compiler...{NC}")
+            if not build_compiler(root):
+                print(f"{RED}Failed to build compiler{NC}")
+                return 1
+            bwslc = compiler_path(root)
+            if not bwslc.exists():
+                print(f"{RED}Failed to build compiler{NC}")
+                return 1
 
     passed = failed = skipped = 0
     metal_passed = metal_failed = 0
@@ -1207,6 +1525,8 @@ def main() -> int:
         print(f"GLSL validation:  {GREEN}enabled{NC}")
     if gles_validation:
         print(f"GLES validation:  {GREEN}enabled{NC}")
+    if spirv_val:
+        print(f"SPIR-V validation: {GREEN}enabled{NC} (spirv-val)")
     if update_golden:
         print(f"Mode: {BLUE}updating golden files{NC}")
     print()
@@ -1266,6 +1586,19 @@ def main() -> int:
             print(f"       Error: {error_text}")
             failed += 1
             continue
+
+        if spirv_val:
+            spv_val_failed = False
+            for spv_file in sorted(output_dir.glob(f"{test_name}_pass*.spv")):
+                ok_sv, msg_sv = validate_spirv(spv_file)
+                if not ok_sv:
+                    print(f"[{RED}FAIL{NC}] {test_name}")
+                    print(f"       spirv-val {spv_file.name}: {msg_sv}")
+                    failed += 1
+                    spv_val_failed = True
+                    break
+            if spv_val_failed:
+                continue
 
         if config_args:
             print(f"[{GREEN}PASS{NC}] {test_name} (config: {Path(config_args[1]).name})")
@@ -1665,7 +1998,8 @@ def main() -> int:
             print(f"{YELLOW}Warning: equivalence tests require both dxc and glslangValidator on PATH{NC}")
         else:
             equiv_passed, equiv_failed = run_equivalence_suite(
-                root, bwslc, runner, modules_dir, verbose
+                root, bwslc, runner, modules_dir, verbose,
+                spirv_val=spirv_val,
             )
 
     print()

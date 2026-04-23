@@ -1,0 +1,30 @@
+// Equivalence: fragment shader writes gl_FragDepth / SV_Depth / output.depth
+// explicitly from a pixel-varying expression. We read back both the color
+// attachment and the D32_SFLOAT depth buffer and require a bit-exact (modulo
+// floating-point tolerance) match across native SPIR-V, HLSL->SPIR-V, and
+// GLSL->SPIR-V. Validates that (1) output.depth correctly maps to FragDepth
+// in all three emission paths, (2) the depth value is written with the same
+// precision on each backend, and (3) per-pixel depth writes interact
+// correctly with depth-test state in the pipeline.
+pipeline EquivRasterDepthWrite {
+    attributes { }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.5, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float d = 0.25 + 0.5 * uv.x;
+            output.color = float4(uv.x, uv.y, d, 1.0);
+            output.depth = d;
+        }
+    }
+}

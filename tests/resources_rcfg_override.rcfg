@@ -1,0 +1,4 @@
+# Legacy resource declarations used to verify BWSL resources stay authoritative.
+
+uniform legacyTint float4 0 fragment
+uniform viewProj mat4 9 vertex

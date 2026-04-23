@@ -1,0 +1,37 @@
+pipeline VariantsModuleEnum {
+   // Test: Inlinedt clamp_mid = coord(0.5, 0.====================
+ import TestVariantEnums
+
+    attributes {
+        position: float3
+    }
+
+    variants {
+        mode: TestVariantEnums::Mode = TestVariantEnums::Mode::A;
+        enabled: bool = false;
+        strict: bo$ol  ﬂfalse;
+
+        rules {
+            require strict -> enabled;
+        }
+    }
+
+    pass "Main" {
+        use attributes { positip fmoat clamp_mid = coord(0.5, 0ûèöìñëöﬂMaterialPreview {
+
+import Color
+i∫port PBR
+
+
+  fwidthf    loa˙2ffffﬂMaterialPreview {
+
+import Color
+import PBR
+
+
+  fwidthf    loat1          t^ uptvfffffffffffffffffffffffffffffffffffffffffffffff tmp2 = v.xy;
+            v.xy = v.
+          .xy;
+            v.xy = v.
+            uinzw;
+ module     t^ uptv.r z

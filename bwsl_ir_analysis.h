@@ -45,6 +45,10 @@ struct IRAnalysis {
     u32 usedSamplerMask;          // Bit per sampler binding
     u32 usedStorageBufferMask;    // Bit per storage buffer binding
     u32 usedStorageImageMask;     // Bit per storage image binding (read/write textures)
+    u32 readStorageBufferMask;    // Bit per storage buffer binding read from
+    u32 writeStorageBufferMask;   // Bit per storage buffer binding written to
+    u32 readStorageImageMask;     // Bit per storage image binding read from
+    u32 writeStorageImageMask;    // Bit per storage image binding written to
     
     // Type info for each binding (CoreType stored per slot)
     u8 uniformTypes[32];          // CoreType for each uniform binding

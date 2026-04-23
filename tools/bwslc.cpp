@@ -22,6 +22,7 @@
 #include <sstream>
 #include <filesystem>
 #include <chrono>
+#include <algorithm>
 #include <future>
 #include <thread>
 
@@ -44,6 +45,7 @@ namespace spirv_cross_wrapper {
 #include "../bwsl_cfg.h"
 #include "../bwsl_ssa.h"
 #include "../bwsl_parser_soa.h"
+#include "../bwsl_resource_reflection.h"
 #include "../bwsl_lexer.h"
 #include "../bwsl_eval_soa.h"
 #include "../bwsl_variant_system.h"
@@ -109,6 +111,7 @@ struct CompilerConfig {
     bool showTiming  = false;              // Print timing information
     bool skipValidation = false;           // Skip SPIR-V validation (faster but less safe)
     bool outputInternals = false;          // Output IR dump + SPIR-V disassembly to JSON file
+    bool outputBindings = false;           // Output resolved resource bindings JSON
     bool dumpVariantSpace = false;         // Dump variant schema/reflection JSON
     std::vector<VariantOverride> variantOverrides;
 };
@@ -214,6 +217,7 @@ void PrintUsage(const char* programName) {
     printf("  -gles          Generate GLSL ES output for WebGL 2.0 / OpenGL ES 3.0 (version 300 es)\n");
     printf("  -gles-direct   Generate GLSL ES directly from IR (bypass SPIRV-Cross, faster)\n");
     printf("  -webgl         Alias for -gles\n");
+    printf("  -bindings      Output resolved resource bindings JSON\n");
     printf("  -all           Generate all outputs\n");
     printf("----------------------------------------\n");
     printf("Debug options:\n");
@@ -917,6 +921,197 @@ std::string EscapeJsonString(const std::string& str) {
     return result;
 }
 
+static u8 BuildPassAttributeMask(const AST& ast, NodeRef pipelineRef, NodeRef passRef) {
+    if (pipelineRef.IsNull() || passRef.IsNull()) {
+        return 0;
+    }
+
+    const PipelineData& pipeline = ast.GetPipeline(pipelineRef);
+    const PassData& pass = ast.GetPass(passRef);
+
+    u8 mask = 0;
+
+    auto addAttributeMask = [&](const ArenaString& attributeName) {
+        for (u32 i = 0; i < pipeline.attributes.count; i++) {
+            const AttributeDeclData& attr = ast.GetAttributeDecl(pipeline.attributes[i]);
+            if (attr.name.nameHash == attributeName.nameHash) {
+                mask |= (1u << attr.attributeIndex);
+                return;
+            }
+        }
+    };
+
+    if (pass.usedAttributes.count > 0) {
+        for (u32 i = 0; i < pass.usedAttributes.count; i++) {
+            addAttributeMask(pass.usedAttributes[i]);
+        }
+        return mask;
+    }
+
+    for (u32 i = 0; i < pipeline.attributes.count; i++) {
+        const AttributeDeclData& attr = ast.GetAttributeDecl(pipeline.attributes[i]);
+        mask |= (1u << attr.attributeIndex);
+    }
+
+    return mask;
+}
+
+static std::string BuildWebGLSidecarJson(const PassData& pass,
+                                         const SymbolTableData& symbols,
+                                         const IRAnalysis& analysis,
+                                         const char* sourceBase,
+                                         const RenderConfigParser::GeometryConfig& geometryConfig,
+                                         bool includeAttributes,
+                                         const AST* ast = nullptr,
+                                         const PipelineData* pipeline = nullptr) {
+    std::vector<std::pair<std::string, u32>> uniforms;
+    std::vector<std::pair<std::string, u32>> samplers;
+
+    ResourceReflectionConfig reflectionConfig;
+    reflectionConfig.vertexPullingMode = ResourceReflectionConfig::VertexPullingMode::Disabled;
+    reflectionConfig.descriptorSet = 0;
+
+    const std::vector<ReflectedResourceBinding> reflected =
+        BuildResolvedResourceReflection(ast, pipeline, &pass, symbols, sourceBase,
+                                        &analysis, nullptr, nullptr, reflectionConfig);
+
+    for (const ReflectedResourceBinding& resource : reflected) {
+        if (resource.type == ResourceBinding::UniformBuffer) {
+            uniforms.emplace_back(resource.name, resource.binding);
+        } else if (resource.type == ResourceBinding::Texture) {
+            samplers.emplace_back(resource.name, resource.binding);
+        }
+    }
+
+    auto sortEntries = [](auto& entries) {
+        std::sort(entries.begin(), entries.end(),
+                  [](const auto& lhs, const auto& rhs) {
+                      if (lhs.second != rhs.second) return lhs.second < rhs.second;
+                      return lhs.first < rhs.first;
+                  });
+    };
+    sortEntries(uniforms);
+    sortEntries(samplers);
+
+    auto appendMap = [](std::string& json,
+                        const char* label,
+                        const std::vector<std::pair<std::string, u32>>& entries,
+                        bool trailingComma) {
+        json += "  \"";
+        json += label;
+        json += "\": {\n";
+        for (size_t i = 0; i < entries.size(); i++) {
+            json += "    \"";
+            json += EscapeJsonString(entries[i].first);
+            json += "\": ";
+            json += std::to_string(entries[i].second);
+            if (i + 1 < entries.size()) json += ",";
+            json += "\n";
+        }
+        json += "  }";
+        if (trailingComma) json += ",";
+        json += "\n";
+    };
+
+    std::string json = "{\n";
+    if (includeAttributes) {
+        json += "  \"attributes\": {\n";
+        for (u32 i = 0; i < pass.usedAttributes.count; i++) {
+            std::string attrName = pass.usedAttributes[i].ToString(sourceBase);
+            json += "    \"" + EscapeJsonString(attrName) + "\": " + std::to_string(i);
+            if (i + 1 < pass.usedAttributes.count) json += ",";
+            json += "\n";
+        }
+        json += "  },\n";
+    }
+
+    appendMap(json, "uniforms", uniforms, true);
+    appendMap(json, "samplers", samplers,
+              geometryConfig.type == RenderConfigParser::GeometryConfig::Type::Instanced);
+
+    if (geometryConfig.type == RenderConfigParser::GeometryConfig::Type::Instanced) {
+        json += "  \"geometry\": {\n";
+        json += "    \"type\": \"instanced\",\n";
+        json += "    \"instanceCount\": " + std::to_string(geometryConfig.instanceCount) + "\n";
+        json += "  }\n";
+    }
+
+    json += "}\n";
+    return json;
+}
+
+static const char* ResourceTypeToString(::ResourceBinding::Type type) {
+    switch (type) {
+        case ::ResourceBinding::UniformBuffer: return "uniform";
+        case ::ResourceBinding::StorageBuffer: return "storage_buffer";
+        case ::ResourceBinding::Texture: return "texture";
+        case ::ResourceBinding::Sampler: return "sampler";
+        case ::ResourceBinding::StorageImage: return "storage_image";
+        default: return "buffer";
+    }
+}
+
+static std::string StageFlagsToJsonArray(u8 stageFlags) {
+    std::string json = "[";
+    bool first = true;
+    auto appendStage = [&](const char* stageName, ShaderStage stage) {
+        if ((stageFlags & SymbolTable::ShaderStageToBit(stage)) == 0) return;
+        if (!first) json += ", ";
+        json += "\"";
+        json += stageName;
+        json += "\"";
+        first = false;
+    };
+
+    appendStage("vertex", ShaderStage::Vertex);
+    appendStage("fragment", ShaderStage::Fragment);
+    appendStage("compute", ShaderStage::Compute);
+
+    json += "]";
+    return json;
+}
+
+static const char* ResourceAccessToString(BWSL::ResourceAccessMode access) {
+    switch (access) {
+        case BWSL::ResourceAccessMode::ReadOnly: return "readonly";
+        case BWSL::ResourceAccessMode::WriteOnly: return "writeonly";
+        case BWSL::ResourceAccessMode::ReadWrite: return "readwrite";
+        default: return "readonly";
+    }
+}
+
+static std::string BuildResourceBindingsJson(const std::string& passName,
+                                             const std::vector<ReflectedResourceBinding>& bindings) {
+    std::string json = "{\n";
+    json += "  \"pass\": \"" + EscapeJsonString(passName) + "\",\n";
+    json += "  \"resources\": [\n";
+
+    for (size_t i = 0; i < bindings.size(); i++) {
+        const ReflectedResourceBinding& binding = bindings[i];
+        json += "    {\n";
+        json += "      \"name\": \"" + EscapeJsonString(binding.name) + "\",\n";
+        json += "      \"type\": \"" + std::string(ResourceTypeToString(binding.type)) + "\",\n";
+        json += "      \"set\": " + std::to_string(binding.set) + ",\n";
+        json += "      \"binding\": " + std::to_string(binding.binding) + ",\n";
+        json += "      \"stages\": " + StageFlagsToJsonArray(binding.stages) + ",\n";
+        json += "      \"access\": \"" + std::string(ResourceAccessToString(binding.access)) + "\"";
+        if (binding.combinedSampledImage) {
+            json += ",\n      \"abi\": \"combined_sampled_image\"";
+            if (!binding.combinedWith.empty()) {
+                json += ",\n      \"combinedWith\": \"" + EscapeJsonString(binding.combinedWith) + "\"";
+            }
+        }
+        json += "\n";
+        json += "    }";
+        if (i + 1 < bindings.size()) json += ",";
+        json += "\n";
+    }
+
+    json += "  ]\n";
+    json += "}\n";
+    return json;
+}
+
 // Dump IR to a string (for -internals output)
 std::string DumpIRToString(const IRProgram& prog) {
     std::string out;
@@ -1084,6 +1279,8 @@ struct CompileResult {
     std::string error;
     std::string irDump;       // IR dump for -internals output
     bool hasWaveOps = false;
+    IRAnalysis analysis{};
+    std::vector<ExplicitSamplerUse> explicitSamplerUses;
     ShaderTiming timing;
 };
 
@@ -1115,7 +1312,7 @@ CompileResult CompileShaderStage(
     bool verbose,
     bool dumpIr = false,
     bool debugNames = false,
-    bool useStd430Padding = false,
+    bool useStd430Padding = true,
     bool useInterleavedVertices = false,
     NodeRef pipelineRef = NodeRef::Null(),
     NodeRef passRef = NodeRef::Null(),  // For pass-scoped function lookup
@@ -1255,6 +1452,8 @@ CompileResult CompileShaderStage(
         result.irDump = DumpIRToString(lowering.program);
     }
 
+    result.explicitSamplerUses = CollectExplicitSamplerUses(lowering.program, stage);
+
     // Direct GLES output (bypasses SPIRV-Cross)
     if (useDirectGles) {
         auto glesStart = Clock::now();
@@ -1311,6 +1510,7 @@ CompileResult CompileShaderStage(
     vpConfig.mode = useInterleavedVertices
         ? SPIRVBuilder::VertexInputMode::Interleaved
         : SPIRVBuilder::VertexInputMode::SeparateBuffers;
+    vpConfig.attributeMask = useInterleavedVertices ? 0 : BuildPassAttributeMask(context.ast, pipelineRef, passRef);
     vpConfig.baseBufferBinding = 0;
     vpConfig.descriptorSet = 0;
     builder.SetVertexPullingConfig(vpConfig);
@@ -1319,7 +1519,10 @@ CompileResult CompileShaderStage(
 
     builder.EmitFunction();
     result.spirv = builder.Finalize();
-    result.hasWaveOps = builder.analysis.Has(IRAnalysis::CAP_WAVE_OPS);
+    IRAnalysis finalAnalysis{};
+    AnalyzeIR(&finalAnalysis, &lowering.program);
+    result.analysis = finalAnalysis;
+    result.hasWaveOps = finalAnalysis.Has(IRAnalysis::CAP_WAVE_OPS);
 
     auto spirvEnd = Clock::now();
     result.timing.spirvGenMs = std::chrono::duration<double, std::milli>(spirvEnd - spirvStart).count();
@@ -1381,6 +1584,7 @@ int main(int argc, char* argv[]) {
             config.outputHlsl = true;
             config.outputGlsl = true;
             config.outputGlslEs = true;
+            config.outputBindings = true;
         } else if (arg == "-modules" && i + 1 < argc) {
             config.modulePaths.push_back(argv[++i]);
         } else if (arg == "-config" && i + 1 < argc) {
@@ -1410,6 +1614,8 @@ int main(int argc, char* argv[]) {
             config.skipValidation = true;
         } else if (arg == "-internals") {
             config.outputInternals = true;
+        } else if (arg == "-bindings") {
+            config.outputBindings = true;
         } else {
             fprintf(stderr, "Unknown option: %s\n", arg.c_str());
             PrintUsage(argv[0]);
@@ -1642,6 +1848,15 @@ int main(int argc, char* argv[]) {
         // Create varying context for this pass - shared between vertex and fragment
         // Vertex shader populates it, fragment shader uses it to resolve input.xxx
         PassVaryingContext passVaryings;
+        IRAnalysis vertexReflectionAnalysis{};
+        IRAnalysis fragmentReflectionAnalysis{};
+        IRAnalysis computeReflectionAnalysis{};
+        std::vector<ExplicitSamplerUse> vertexReflectionSamplerUses;
+        std::vector<ExplicitSamplerUse> fragmentReflectionSamplerUses;
+        std::vector<ExplicitSamplerUse> computeReflectionSamplerUses;
+        bool haveVertexReflectionAnalysis = false;
+        bool haveFragmentReflectionAnalysis = false;
+        bool haveComputeReflectionAnalysis = false;
 
         // Compile vertex shader
         if ((config.stageFilter.empty() || config.stageFilter == "vertex") &&
@@ -1650,7 +1865,7 @@ int main(int argc, char* argv[]) {
             printf("  Vertex shader:\n");
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Vertex, config.verbose, config.dumpIr, config.debugNames,
-                                                       config.outputGlsl || config.outputGlslEs, config.outputGlslEs, specializedPipelineRef,
+                                                       true, config.outputGlslEs, specializedPipelineRef,
                                                        pipeline.passes[passIdx], &passVaryings, config.outputInternals,
                                                        config.useDirectGles, &config.renderConfig);
 
@@ -1658,6 +1873,9 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "    Error: %s\n", result.error.c_str());
                 errorCount++;
             } else {
+                vertexReflectionAnalysis = result.analysis;
+                vertexReflectionSamplerUses = result.explicitSamplerUses;
+                haveVertexReflectionAnalysis = true;
                 // Record timing for this shader
                 timing.shaderTimings.push_back({passName + "_vert", result.timing});
                 ShaderTiming& shaderTime = timing.shaderTimings.back().second;
@@ -1755,42 +1973,10 @@ int main(int argc, char* argv[]) {
                                     printf("    -> %s\n", glslEsPath.c_str());
                                 }
 
-                                // Generate JSON sidecar with attribute and uniform mappings for WebGL
-                                std::string json = "{\n  \"attributes\": {\n";
-                                for (u32 i = 0; i < pass.usedAttributes.count; i++) {
-                                    std::string attrName = pass.usedAttributes[i].ToString(sourceBase);
-                                    json += "    \"" + attrName + "\": " + std::to_string(i);
-                                    if (i < pass.usedAttributes.count - 1) json += ",";
-                                    json += "\n";
-                                }
-                                json += "  },\n  \"uniforms\": {\n";
-                                bool firstUniform = true;
-                                for (const auto& ub : config.renderConfig.uniformBuffers) {
-                                    if (static_cast<int>(ub.stages) & 1) {
-                                        if (!firstUniform) json += ",\n";
-                                        json += "    \"" + ub.name + "\": " + std::to_string(ub.bindingIndex);
-                                        firstUniform = false;
-                                    }
-                                }
-                                if (!firstUniform) json += "\n";
-                                json += "  },\n  \"samplers\": {\n";
-                                bool firstSampler = true;
-                                for (const auto& tex : config.renderConfig.textures) {
-                                    if (static_cast<int>(tex.stages) & 1) {
-                                        if (!firstSampler) json += ",\n";
-                                        json += "    \"" + tex.name + "\": " + std::to_string(tex.bindingIndex);
-                                        firstSampler = false;
-                                    }
-                                }
-                                if (!firstSampler) json += "\n";
-                                json += "  }";
-                                if (config.geometryConfig.type == RenderConfigParser::GeometryConfig::Type::Instanced) {
-                                    json += ",\n  \"geometry\": {\n";
-                                    json += "    \"type\": \"instanced\",\n";
-                                    json += "    \"instanceCount\": " + std::to_string(config.geometryConfig.instanceCount) + "\n";
-                                    json += "  }";
-                                }
-                                json += "\n}\n";
+                                std::string json = BuildWebGLSidecarJson(
+                                    pass, parser.symbolTable, result.analysis,
+                                    sourceBase, config.geometryConfig, true,
+                                    &context.ast, &pipeline);
                                 std::string jsonPath = outBase + ".json";
                                 if (WriteTextFile(jsonPath, json)) {
                                     printf("    -> %s\n", jsonPath.c_str());
@@ -1840,39 +2026,10 @@ int main(int argc, char* argv[]) {
                         if (!glslEsSource.empty() && glslEsSource.find("error") == std::string::npos) {
                             std::string glslEsPath = outBase + ".gles";
                             if (WriteTextFile(glslEsPath, glslEsSource)) printf("    -> %s\n", glslEsPath.c_str());
-                            // JSON sidecar for WebGL
-                            std::string json = "{\n  \"attributes\": {\n";
-                            for (u32 i = 0; i < pass.usedAttributes.count; i++) {
-                                std::string attrName = pass.usedAttributes[i].ToString(sourceBase);
-                                json += "    \"" + attrName + "\": " + std::to_string(i);
-                                if (i < pass.usedAttributes.count - 1) json += ",";
-                                json += "\n";
-                            }
-                            json += "  },\n  \"uniforms\": {\n";
-                            bool firstUniform = true;
-                            for (const auto& ub : config.renderConfig.uniformBuffers) {
-                                if (static_cast<int>(ub.stages) & 1) {
-                                    if (!firstUniform) json += ",\n";
-                                    json += "    \"" + ub.name + "\": " + std::to_string(ub.bindingIndex);
-                                    firstUniform = false;
-                                }
-                            }
-                            if (!firstUniform) json += "\n";
-                            json += "  },\n  \"samplers\": {\n";
-                            bool firstSampler = true;
-                            for (const auto& tex : config.renderConfig.textures) {
-                                if (static_cast<int>(tex.stages) & 1) {
-                                    if (!firstSampler) json += ",\n";
-                                    json += "    \"" + tex.name + "\": " + std::to_string(tex.bindingIndex);
-                                    firstSampler = false;
-                                }
-                            }
-                            if (!firstSampler) json += "\n";
-                            json += "  }";
-                            if (config.geometryConfig.type == RenderConfigParser::GeometryConfig::Type::Instanced) {
-                                json += ",\n  \"geometry\": {\n    \"type\": \"instanced\",\n    \"instanceCount\": " + std::to_string(config.geometryConfig.instanceCount) + "\n  }";
-                            }
-                            json += "\n}\n";
+                            std::string json = BuildWebGLSidecarJson(
+                                pass, parser.symbolTable, result.analysis,
+                                sourceBase, config.geometryConfig, true,
+                                &context.ast, &pipeline);
                             std::string jsonPath = outBase + ".json";
                             if (WriteTextFile(jsonPath, json)) printf("    -> %s\n", jsonPath.c_str());
                         } else fprintf(stderr, "    Warning: GLSL ES cross-compilation failed\n");
@@ -1916,7 +2073,7 @@ int main(int argc, char* argv[]) {
             fflush(stdout);
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Fragment, config.verbose, config.dumpIr, config.debugNames,
-                                                       config.outputGlsl || config.outputGlslEs, false, specializedPipelineRef,
+                                                       true, false, specializedPipelineRef,
                                                        pipeline.passes[passIdx], &passVaryings, config.outputInternals,
                                                        config.useDirectGles, &config.renderConfig);  // Use same varying context populated by vertex shader
 
@@ -1924,6 +2081,9 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "    Error: %s\n", result.error.c_str());
                 errorCount++;
             } else {
+                fragmentReflectionAnalysis = result.analysis;
+                fragmentReflectionSamplerUses = result.explicitSamplerUses;
+                haveFragmentReflectionAnalysis = true;
                 // Record timing for this shader
                 timing.shaderTimings.push_back({passName + "_frag", result.timing});
                 ShaderTiming& shaderTime = timing.shaderTimings.back().second;
@@ -1996,32 +2156,10 @@ int main(int argc, char* argv[]) {
                             if (!glesSource.empty() && glesSource.find("error") == std::string::npos) {
                                 std::string glslEsPath = outBase + ".gles";
                                 if (WriteTextFile(glslEsPath, glesSource)) printf("    -> %s\n", glslEsPath.c_str());
-                                // Generate JSON sidecar for fragment shader
-                                std::string json = "{\n  \"uniforms\": {\n";
-                                bool firstUniform = true;
-                                for (const auto& ub : config.renderConfig.uniformBuffers) {
-                                    if (static_cast<int>(ub.stages) & 2) {
-                                        if (!firstUniform) json += ",\n";
-                                        json += "    \"" + ub.name + "\": " + std::to_string(ub.bindingIndex);
-                                        firstUniform = false;
-                                    }
-                                }
-                                if (!firstUniform) json += "\n";
-                                json += "  },\n  \"samplers\": {\n";
-                                bool firstSampler = true;
-                                for (const auto& tex : config.renderConfig.textures) {
-                                    if (static_cast<int>(tex.stages) & 2) {
-                                        if (!firstSampler) json += ",\n";
-                                        json += "    \"" + tex.name + "\": " + std::to_string(tex.bindingIndex);
-                                        firstSampler = false;
-                                    }
-                                }
-                                if (!firstSampler) json += "\n";
-                                json += "  }";
-                                if (config.geometryConfig.type == RenderConfigParser::GeometryConfig::Type::Instanced) {
-                                    json += ",\n  \"geometry\": {\n    \"type\": \"instanced\",\n    \"instanceCount\": " + std::to_string(config.geometryConfig.instanceCount) + "\n  }";
-                                }
-                                json += "\n}\n";
+                                std::string json = BuildWebGLSidecarJson(
+                                    pass, parser.symbolTable, result.analysis,
+                                    sourceBase, config.geometryConfig, false,
+                                    &context.ast, &pipeline);
                                 std::string jsonPath = outBase + ".json";
                                 if (WriteTextFile(jsonPath, json)) printf("    -> %s\n", jsonPath.c_str());
                             } else fprintf(stderr, "    Warning: GLSL ES cross-compilation failed\n");
@@ -2067,31 +2205,10 @@ int main(int argc, char* argv[]) {
                         if (!glslEsSource.empty() && glslEsSource.find("error") == std::string::npos) {
                             std::string glslEsPath = outBase + ".gles";
                             if (WriteTextFile(glslEsPath, glslEsSource)) printf("    -> %s\n", glslEsPath.c_str());
-                            std::string json = "{\n  \"uniforms\": {\n";
-                            bool firstUniform = true;
-                            for (const auto& ub : config.renderConfig.uniformBuffers) {
-                                if (static_cast<int>(ub.stages) & 2) {
-                                    if (!firstUniform) json += ",\n";
-                                    json += "    \"" + ub.name + "\": " + std::to_string(ub.bindingIndex);
-                                    firstUniform = false;
-                                }
-                            }
-                            if (!firstUniform) json += "\n";
-                            json += "  },\n  \"samplers\": {\n";
-                            bool firstSampler = true;
-                            for (const auto& tex : config.renderConfig.textures) {
-                                if (static_cast<int>(tex.stages) & 2) {
-                                    if (!firstSampler) json += ",\n";
-                                    json += "    \"" + tex.name + "\": " + std::to_string(tex.bindingIndex);
-                                    firstSampler = false;
-                                }
-                            }
-                            if (!firstSampler) json += "\n";
-                            json += "  }";
-                            if (config.geometryConfig.type == RenderConfigParser::GeometryConfig::Type::Instanced) {
-                                json += ",\n  \"geometry\": {\n    \"type\": \"instanced\",\n    \"instanceCount\": " + std::to_string(config.geometryConfig.instanceCount) + "\n  }";
-                            }
-                            json += "\n}\n";
+                            std::string json = BuildWebGLSidecarJson(
+                                pass, parser.symbolTable, result.analysis,
+                                sourceBase, config.geometryConfig, false,
+                                &context.ast, &pipeline);
                             std::string jsonPath = outBase + ".json";
                             if (WriteTextFile(jsonPath, json)) printf("    -> %s\n", jsonPath.c_str());
                         } else fprintf(stderr, "    Warning: GLSL ES cross-compilation failed\n");
@@ -2135,7 +2252,7 @@ int main(int argc, char* argv[]) {
             fflush(stdout);
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Compute, config.verbose, config.dumpIr, config.debugNames,
-                                                       config.outputGlsl || config.outputGlslEs, false, specializedPipelineRef,
+                                                       true, false, specializedPipelineRef,
                                                        pipeline.passes[passIdx], nullptr, config.outputInternals,
                                                        config.useDirectGles, &config.renderConfig);
 
@@ -2143,6 +2260,9 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "    Error: %s\n", result.error.c_str());
                 errorCount++;
             } else {
+                computeReflectionAnalysis = result.analysis;
+                computeReflectionSamplerUses = result.explicitSamplerUses;
+                haveComputeReflectionAnalysis = true;
                 // Record timing for this shader
                 timing.shaderTimings.push_back({passName + "_comp", result.timing});
                 ShaderTiming& shaderTime = timing.shaderTimings.back().second;
@@ -2287,6 +2407,50 @@ int main(int argc, char* argv[]) {
                     fprintf(stderr, "    Error: Could not write SPIR-V file\n");
                     errorCount++;
                 }
+            }
+        }
+
+        if (config.outputInternals || config.outputBindings) {
+            ResourceReflectionConfig reflectionConfig;
+            reflectionConfig.vertexPullingMode = config.outputGlslEs
+                ? ResourceReflectionConfig::VertexPullingMode::Disabled
+                : ResourceReflectionConfig::VertexPullingMode::SeparateBuffers;
+            reflectionConfig.attributeMask = 0;
+            if (!config.outputGlslEs) {
+                reflectionConfig.attributeMask = haveVertexReflectionAnalysis
+                    ? static_cast<u8>(vertexReflectionAnalysis.usedAttributeMask)
+                    : BuildPassAttributeMask(context.ast, specializedPipelineRef, pipeline.passes[passIdx]);
+            }
+            reflectionConfig.baseBufferBinding = 0;
+            reflectionConfig.descriptorSet = 0;
+
+            std::vector<ExplicitSamplerUse> reflectionSamplerUses;
+            reflectionSamplerUses.insert(reflectionSamplerUses.end(),
+                                         vertexReflectionSamplerUses.begin(),
+                                         vertexReflectionSamplerUses.end());
+            reflectionSamplerUses.insert(reflectionSamplerUses.end(),
+                                         fragmentReflectionSamplerUses.begin(),
+                                         fragmentReflectionSamplerUses.end());
+            reflectionSamplerUses.insert(reflectionSamplerUses.end(),
+                                         computeReflectionSamplerUses.begin(),
+                                         computeReflectionSamplerUses.end());
+
+            const std::vector<ReflectedResourceBinding> bindings =
+                BuildResolvedResourceReflection(&context.ast,
+                                               &pipeline,
+                                               &pass,
+                                               parser.symbolTable,
+                                               sourceBase,
+                                               haveVertexReflectionAnalysis ? &vertexReflectionAnalysis : nullptr,
+                                               haveFragmentReflectionAnalysis ? &fragmentReflectionAnalysis : nullptr,
+                                               haveComputeReflectionAnalysis ? &computeReflectionAnalysis : nullptr,
+                                               reflectionConfig,
+                                               reflectionSamplerUses.empty() ? nullptr : &reflectionSamplerUses);
+
+            std::string bindingsPath = BuildOutputBasePath(config.outputDir, baseName + "_" + passName) + ".bindings.json";
+            std::string bindingsJson = BuildResourceBindingsJson(passName, bindings);
+            if (WriteTextFile(bindingsPath, bindingsJson)) {
+                printf("  -> %s\n", bindingsPath.c_str());
             }
         }
     }

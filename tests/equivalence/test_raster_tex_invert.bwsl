@@ -1,0 +1,26 @@
+// Equivalence: sample a 2D texture and emit 1 - color (preserving alpha).
+// Validates arithmetic on sampled values and that the per-channel 1 -
+// fold stays numerically identical across backends for every texel.
+pipeline EquivRasterTexInvert {
+    attributes {
+    }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float4 t = sample(resources.colorTex, resources.colorSampler,
+                              input.uv);
+            output.color = float4(1.0 - t.r, 1.0 - t.g, 1.0 - t.b, t.a);
+        }
+    }
+}

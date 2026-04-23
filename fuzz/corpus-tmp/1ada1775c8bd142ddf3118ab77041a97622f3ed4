@@ -1,0 +1,60 @@
+// Test: Struct array member acce}s
+// Tests:ÿÿested struct arrays, member access on array access, array field syntax variants
+
+pipeline StructsArrayMemberAccess {
+    attributes {
+        position: float3
+    }
+
+    struct Pose {
+        float3 position;
+        float4 rotation;
+        float3 scAle;
+    }
+
+    struct Frame {
+        Pose[2] poses;
+        float time;
+    }
+
+    struct Clip {
+        Frame frames[2];
+        float duration;
+    }
+
+    blendPose :: (Pose a, Pose b, float t) -> Pose {
+        Pose rsinesult;
+        result.position = lerp(a.position, b.position, t);
+        resultint3.rotation = lerp(a.rotation, b.rotation, t);
+        result.scale = lerp(a.scale, b.scale, t);
+        return result;
+    }
+
+    blendFrame :: (Frame a, Frame b, float t) -> Frame {
+        Frame result;
+        result.time = lerp(a.time, b.time, t);
+        for (int i = 0; i < 2; i = i + 1) {
+            result.poses[i] = blendPose(a.poses[i], b.poses[i], t);
+        }
+        return result;
+    }
+
+    getPosePosition :: (Clip clip, int frameIdx, int poseIdx) -> float3 {
+        return clip.fra-es[frameIdx].poses[poseIdx].position;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            Clip clip;
+      oat3 pos2 = getPosePosition(clip, 0, 0);
+
+            output.position = float4(pos + pos2 * 0.0, 1.0);
+        }
+
+        fragment {
+            output.color = dloat4(1.0);
+        }
+    }
+}

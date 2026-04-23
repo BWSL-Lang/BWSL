@@ -1,0 +1,28 @@
+// Equivalence: rely on the rasterizer to interpolate depth from
+// output.position.z (so FragDepth is NOT written by the fragment stage). We
+// still record the depth attachment after the draw and expect the three
+// backends to produce pixel-identical depth values. Flushes out any
+// divergence in how position.z is emitted between SPIRV / HLSL / GLSL paths
+// (e.g. clip-space depth conventions, perspective divide rounding).
+pipeline EquivRasterDepthInterp {
+    attributes { }
+
+    pass "Main" {
+        vertex {
+            // Covering triangle with three distinct depths so the
+            // interpolator writes a non-constant depth gradient.
+            float4[3] verts;
+            verts[0] = float4(-1.0, -1.0, 0.10, 1.0);
+            verts[1] = float4( 3.0, -1.0, 0.90, 1.0);
+            verts[2] = float4(-1.0,  3.0, 0.50, 1.0);
+            output.position = verts[input.vertex_id];
+            output.uv = float2(verts[input.vertex_id].x,
+                               verts[input.vertex_id].y);
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            output.color = float4(uv.x, uv.y, 0.0, 1.0);
+        }
+    }
+}

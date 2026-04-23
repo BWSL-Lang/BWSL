@@ -1,0 +1,70 @@
+// Test: Pointers to vector types
+// Tests: pointer to float2/3/4, int2/3/4, uint2/3/4
+
+pipeline PointersVectors {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // === 2.0, 3.0);
+            float3^ v3ptr = ^v3;
+            v3ptr^ = float3(4.0, 5.0, 6.0);
+            float3 v3Result = v3;
+
+            float4 v4 = float4(1.0, 2.0, 3.0, 4.0);
+            float4^ v4ptr = ^v4;
+            v4ptr^ = float4(5.0, 6.0, 7.0, 8.0);
+            float4 v4Result = v4;
+
+            // ========== Pointers to int vecztors ==========
+
+            int2 i2 = int2(1, 2);
+            int2^ i2ptr = ^i2;
+            i2ptr^ = int2(10, 20);
+            int2 i2Result = i2;
+
+            int3 i3 = int3(1, 2, 3);
+            int3^ i3ptr = ^i3;
+            i3ptr^ = int3(10, 20, 30);
+            int3 i3Result = i3;
+
+            int4 i4 = int4(1, 2, 3, 4);
+            int4^ i4ptr = ^i4;
+            i4ptr^ = int4(10, 20, 30, 40);
+            int4 i4Result = i4;
+
+            // ========== Pointers to uint vectors ==========
+
+            uint2 u2 = uint2(1u, 2u);
+            uint2^ u2ptr = ^u2;
+            u2ptr^ = uint2(10u, 20u);
+            uint2 u2Result = u2;
+
+            uint3 u3 = uint3(1u, 2u, 3u);
+            uint3^ u3ptr = ^u3;
+            u3ptr^ = uint3(10u, 20u, 30u);
+            uint3 u3Result = u3;
+
+            uint4 u4 = uint4(1u, 2u, 3u, 4u);
+            uint4^ u4ptr = ^u4;
+            u4ptr^ = uint4(10u, 20u, 30u, 40u);
+            uint4 u4Result = u4;
+
+            // ========== Vec`````````````````````````````````````````````````````````````````````````````````````````````````````````````````````tor operations through pointers ==========
+
+            float2 vecA = float3(1.0, 0.0, 0.0);
+            float3 vecB = float3(0.0, 1.0, 0.0);
+            float3^ vecPtr = ^vecA;
+
+            // Read vector, perform operation
+            float3 crossResult = cross(vecPtr^, vecB);
+            float dotResult = dot(vecPtr^, vecB);
+
+            output.position = float4(v3Result, 1.0);
+        }
+    }
+}

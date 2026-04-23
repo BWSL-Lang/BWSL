@@ -1,8 +1,41 @@
 #include "bwsl_ir_analysis.h"
+#include "bwsl_resource_reflection.h"
 #include "bwsl_utils.h"
 #include <cstring>
 
 namespace BWSL {
+
+static inline void MarkStorageBufferRead(IRAnalysis* analysis, u16 binding) {
+  if (binding < 32) {
+    analysis->usedStorageBufferMask |= (1u << binding);
+    analysis->readStorageBufferMask |= (1u << binding);
+  }
+  analysis->Set(IRAnalysis::CAP_STORAGE_BUFFER);
+}
+
+static inline void MarkStorageBufferWrite(IRAnalysis* analysis, u16 binding) {
+  if (binding < 32) {
+    analysis->usedStorageBufferMask |= (1u << binding);
+    analysis->writeStorageBufferMask |= (1u << binding);
+  }
+  analysis->Set(IRAnalysis::CAP_STORAGE_BUFFER);
+}
+
+static inline void MarkStorageImageRead(IRAnalysis* analysis, u16 binding) {
+  if (binding < 32) {
+    analysis->usedStorageImageMask |= (1u << binding);
+    analysis->readStorageImageMask |= (1u << binding);
+  }
+  analysis->Set(IRAnalysis::CAP_IMAGE_LOAD);
+}
+
+static inline void MarkStorageImageWrite(IRAnalysis* analysis, u16 binding) {
+  if (binding < 32) {
+    analysis->usedStorageImageMask |= (1u << binding);
+    analysis->writeStorageImageMask |= (1u << binding);
+  }
+  analysis->Set(IRAnalysis::CAP_IMAGE_STORE);
+}
 
 // Compute hashes at startup for output name resolution
 static const u32 HASH_POSITION = Utils::HashStr("position");
@@ -38,6 +71,15 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
 
   if (!ir || ir->instructionCount == 0)
     return;
+
+  u16* storagePointerBindings = nullptr;
+  if (ir->registerCount > 0) {
+    storagePointerBindings =
+        static_cast<u16*>(alloca(ir->registerCount * sizeof(u16)));
+    for (u32 reg = 0; reg < ir->registerCount; reg++) {
+      storagePointerBindings[reg] = 0xFFFF;
+    }
+  }
 
   for (u32 i = 0; i < ir->instructionCount; i++) {
     u16 op = ir->opcodes[i];
@@ -155,10 +197,11 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
     case IR::OP_STORE_BUFFER: {
       // operand[0] is the binding index
       u16 binding = ir->GetOperand(i, 0);
-      if (binding < 32) {
-        analysis->usedStorageBufferMask |= (1 << binding);
+      if (op == IR::OP_LOAD_BUFFER) {
+        MarkStorageBufferRead(analysis, binding);
+      } else {
+        MarkStorageBufferWrite(analysis, binding);
       }
-      analysis->Set(IRAnalysis::CAP_STORAGE_BUFFER);
       break;
     }
 
@@ -166,14 +209,56 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
       // operand[0] is the binding index
       u16 binding = ir->GetOperand(i, 0);
       if (binding < 32) {
-        analysis->usedStorageBufferMask |= (1 << binding);
+        analysis->usedStorageBufferMask |= (1u << binding);
+        u16 destReg = ir->destinations[i];
+        if (storagePointerBindings && destReg < ir->registerCount) {
+          storagePointerBindings[destReg] = binding;
+        }
       }
       analysis->Set(IRAnalysis::CAP_STORAGE_BUFFER);
       break;
     }
 
-    // OP_STORAGE_FIELD, OP_STORAGE_INDEX, OP_STORAGE_LOAD don't have binding
-    // info directly - the binding is tracked through OP_STORAGE_PTR
+    case IR::OP_STORAGE_FIELD:
+    case IR::OP_STORAGE_INDEX: {
+      u16 basePtrReg = ir->GetOperand(i, 0);
+      u16 destReg = ir->destinations[i];
+      if (storagePointerBindings &&
+          basePtrReg < ir->registerCount &&
+          destReg < ir->registerCount) {
+        storagePointerBindings[destReg] = storagePointerBindings[basePtrReg];
+      }
+      break;
+    }
+
+    case IR::OP_STORAGE_LOAD: {
+      u16 ptrReg = ir->GetOperand(i, 0);
+      if (storagePointerBindings && ptrReg < ir->registerCount) {
+        u16 binding = storagePointerBindings[ptrReg];
+        if (binding != 0xFFFF) {
+          MarkStorageBufferRead(analysis, binding);
+        }
+      }
+      break;
+    }
+
+    case IR::OP_ARRAY_LOAD:
+    case IR::OP_ARRAY_STORE: {
+      u16 baseReg = (op == IR::OP_ARRAY_LOAD)
+          ? ir->GetOperand(i, 0)
+          : ir->destinations[i];
+      if (storagePointerBindings && baseReg < ir->registerCount) {
+        u16 binding = storagePointerBindings[baseReg];
+        if (binding != 0xFFFF) {
+          if (op == IR::OP_ARRAY_LOAD) {
+            MarkStorageBufferRead(analysis, binding);
+          } else {
+            MarkStorageBufferWrite(analysis, binding);
+          }
+        }
+      }
+      break;
+    }
 
     // ========== Texture Operations ==========
     case IR::OP_TEX_SAMPLE:
@@ -192,13 +277,18 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
           analysis->usedTextureMask |= (1 << binding);
         }
       }
-      // Sampler register is encoded as 0x3000 | bindingIndex
-      u16 samplerReg = ir->GetOperand(i, 1);
-      if ((samplerReg & 0xF000) == 0x3000) {
-        u16 binding = samplerReg & 0x0FFF;
-        if (binding < 32) {
-          analysis->usedSamplerMask |= (1 << binding);
+      u16 binding = 0xFFFF;
+      if (TextureOpHasExplicitSampler(ir->metadata[i])) {
+        binding = GetTextureOpExplicitSamplerBinding(ir->metadata[i]);
+      } else {
+        // Legacy IR used operand 1 for explicit samplers.
+        u16 samplerReg = ir->GetOperand(i, 1);
+        if ((samplerReg & 0xF000) == 0x3000) {
+          binding = samplerReg & 0x0FFF;
         }
+      }
+      if (binding < 32) {
+        analysis->usedSamplerMask |= (1 << binding);
       }
       break;
     }
@@ -220,12 +310,8 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
       // textures)
       u16 imgReg = ir->GetOperand(i, 0);
       if ((imgReg & 0xF000) == 0x2000) {
-        u16 binding = imgReg & 0x0FFF;
-        if (binding < 32) {
-          analysis->usedStorageImageMask |= (1 << binding);
-        }
+        MarkStorageImageRead(analysis, static_cast<u16>(imgReg & 0x0FFF));
       }
-      analysis->Set(IRAnalysis::CAP_IMAGE_LOAD);
       break;
     }
 
@@ -234,12 +320,8 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
       // textures)
       u16 imgReg = ir->GetOperand(i, 0);
       if ((imgReg & 0xF000) == 0x2000) {
-        u16 binding = imgReg & 0x0FFF;
-        if (binding < 32) {
-          analysis->usedStorageImageMask |= (1 << binding);
-        }
+        MarkStorageImageWrite(analysis, static_cast<u16>(imgReg & 0x0FFF));
       }
-      analysis->Set(IRAnalysis::CAP_IMAGE_STORE);
       break;
     }
 
@@ -284,6 +366,14 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
     case IR::OP_ATOMIC_XOR:
     case IR::OP_ATOMIC_XCHG:
     case IR::OP_ATOMIC_CMP_XCHG: {
+      u16 ptrReg = ir->GetOperand(i, 0);
+      if (storagePointerBindings && ptrReg < ir->registerCount) {
+        u16 binding = storagePointerBindings[ptrReg];
+        if (binding != 0xFFFF) {
+          MarkStorageBufferRead(analysis, binding);
+          MarkStorageBufferWrite(analysis, binding);
+        }
+      }
       analysis->Set(IRAnalysis::CAP_ATOMICS);
       break;
     }

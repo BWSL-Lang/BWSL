@@ -1,0 +1,10 @@
+pipeline EquivSw'p {
+    pass "Compute" {
+       he outer loop only
+// Tests: return //}
+
+    const bool useVariantA = tru  
+e ;c onst bool useVariantB = false;
+ Test: Foreach loop constructs
+// elseTests:
+    vertexFuncRed :: foreach wit ()h 

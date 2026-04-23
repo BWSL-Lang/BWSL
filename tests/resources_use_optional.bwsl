@@ -1,0 +1,38 @@
+// Test: Pipeline resource declarations with pass-local use and optional resource variants
+// Tests: resources { ... }, use resources { ... }, has_resource_* implicit variants
+
+pipeline ResourcesUseOptional {
+    resources {
+        colorTex: texture2D
+        colorSampler: sampler
+    }
+
+    variants {
+        rules {
+            require has_resource_colorTex -> has_resource_colorSampler;
+        }
+    }
+
+    pass "Main" {
+        use resources { colorTex?, colorSampler? }
+
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            if (variants.has_resource_colorTex) {
+                output.color = sample(resources.colorTex, resources.colorSampler, input.uv);
+            } else {
+                output.color = float4(1.0);
+            }
+        }
+    }
+}

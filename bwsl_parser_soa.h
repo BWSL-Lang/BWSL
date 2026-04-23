@@ -237,11 +237,13 @@ private:
     //------------------ Parsing functions ------------------------//
     void ParseImports(NodeRef pipeline);
     void ParseAttributes(NodeRef pipeline);
+    void ParseResources(NodeRef pipeline);
     void ParseVariants(NodeRef pipeline);
     void ParseVariantRules(NodeRef pipeline);
     void ParsePassBody(NodeRef pass);
     void ParseComputeBody(NodeRef compute);
     void ParseUseAttributes(NodeRef pass);
+    void ParseUseResources(NodeRef pass);
     void ParseFunctionsBlockBody(NodeRef block);
     void ParseFunctionParameters(NodeRef function);
     NodeRef ParseComputeStage();
@@ -314,6 +316,9 @@ private:
     bool MatchMask(TokenMask mask);
     bool CheckMask(TokenMask mask);
     bool ValidateAttributeInUse(const ArenaString& attrName);
+    bool ValidateResourceInUse(const ArenaString& resourceName);
+    bool PipelineDeclaresResources() const;
+    const ResourceDeclData* LookupPipelineResourceDecl(const ArenaString& resourceName) const;
     bool ValidateAssignmentTarget(NodeRef target);
 
     //----------------- Shader stage expression resolution ------------------------//
@@ -322,15 +327,18 @@ private:
     NodeRef LookupShaderFunction(u32 nameHash, const PassData& pass, CoreType expectedReturnType);
     bool ResolvePipelineVariants(NodeRef pipeline, std::string* outError = nullptr);
     bool IsOptionalAttributeFeature(NodeRef pipeline, u8 attributeIndex) const;
+    bool IsOptionalResourceFeature(NodeRef pipeline, u8 resourceIndex) const;
     bool LookupVariantType(NodeRef pipeline, u32 nameHash, TypeInfo* outType,
                            u32* outEnumTypeHash = nullptr,
                            bool* outImplicit = nullptr,
-                           u8* outAttributeIndex = nullptr) const;
+                           u8* outAttributeIndex = nullptr,
+                           u8* outResourceIndex = nullptr) const;
     bool LookupActiveVariantBinding(u32 nameHash, LiteralValue* outValue = nullptr,
                                     TypeInfo* outType = nullptr,
                                     u32* outEnumTypeHash = nullptr,
                                     bool* outImplicit = nullptr,
-                                    u8* outAttributeIndex = nullptr) const;
+                                    u8* outAttributeIndex = nullptr,
+                                    u8* outResourceIndex = nullptr) const;
     void SetActiveVariantSelection(const VariantSelectionData& selection, bool allowBareLookup);
     void ClearActiveVariantSelection();
     std::string FormatVariantExpression(NodeRef expr) const;
@@ -374,6 +382,8 @@ private:
         LiteralValue value;
         bool isImplicit;
         u8 attributeIndex;
+        u8 resourceIndex;
+        ImplicitVariantKind implicitKind;
     };
     std::vector<ActiveVariantBinding> activeVariantBindings;
     bool allowBareVariantLookup = false;

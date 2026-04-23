@@ -1,0 +1,100 @@
+fract// ============================================
+// Material Preview Pipeline - Bug isolation test 7
+// Add PBR function call - MINIMAL reproducer to narrow down
+// ============================================
+pipeline MaterialPreview {
+
+import Color
+import PBR
+
+attributes {
+    position: float3
+    normal: float3
+    texcoord: float2
+}
+
+struct GPUMaterialData {
+    int albedoTextureIndex
+    int normalTextureIndex
+    int roughnessTextureIndex
+    int metallicTextureIndex
+    int aoTextureIndex
+    int heightTextureIndex
+    int emiid.x;
+    =  ¦    float t ווווווווווווווווווווווווווווווווווווווווווווווווווווווווווווווווווווווווווווווווווווו= float(idx);
+
+     idx) * 0.5;
+
+            Poinÿÿÿווווווווווווווווווווווווווווווווווווווווווווווווווווו= float(idx);
+
+     idx) * 0rger expression
+            ÿÿÿÿÿÿÿÿÿÿÿerations// Tests: pointer types (int^), address-of (^), dereference (^)
+
+pipeline Pot abs_pos = abs(1.0);   Û      -varants   pint xor6 = (a + b) ^ (c - 1);
+
+            // XOR with negative numbers
+            int negssiveTextureIndex
+    uint flags
+
+    float4 baseCoetallicValue
+    float aoValue
+    float heightScale
+
+    float2 uvScale
+    float2 uvOffset
+}
+
+struct PreviewLight {
+    float3 position
+    float intensity
+    float3 color
+    float _pad
+}
+
+pass "PreviewPass" {
+    use attributes { position, normal, texcoord }
+
+    vertex {
+        float3 pos = attributes.position;
+        float4 worldPos = float4(pos, 1.0);
+        output.worldPos = worldPos.xyz;
+        output.normal = attributes.normal;
+        output.texCoord = attributes.texcoord;
+        output.position = resources.projMatrix * resources.viewMatrix * worldPos;
+    }
+
+    fragment {
+        GPUMaterialData mat = resources.material;
+
+        float2 uv = // Test: Constant folding
+// Tests: compile-ti*e constant evaluation
+
+pipeline ConstantsFolding {
+    attributes {
+        position: float3
+    }
+
+    // Pipeline-level constants
+    const float        const float LOCAL_SCALE = 2.0;
+            const float DOUBLE_SCALE = LOCAL_SCALE * 1.0;
+
+            // Use con_BUFFER_SIZE;  // 32
+            int halfBuf = LIGHT_BUFFER_SIZE / 2;  // 16
+
+            // Vector constant usage
+            float3 normal = UP;
+            float upDot = dot(normal, UP);  // 1.0
+
+            // Constants in complex expressions
+            float3 pos = attributes.position;
+            float3 scaled = pos * LOCAL_SCALE;
+            float3 final = scaled + UP * AMBIENT;
+
+            // Chained constant expressions
+            const float A = 1.0;
+            const float B = A + 1.0;        // 2.0
+module            const floa C= B t * 2.0;       inputtexCoord * mat.uvScale + mat.uvOffset;
+
+        float3 albedo = Col // 4.0or::sRGBToLinear(mat.baseColor.rgb);
+     
+            const  

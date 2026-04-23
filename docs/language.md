@@ -3,6 +3,14 @@
 This document describes the currently supported BWSL language surface as it
 exists in the compiler and regression suite in this repository.
 
+## Specification Draft
+
+The canonical specification draft now lives in [`docs/spec/`](spec/README.md).
+
+Use this page as the compact language reference. Use the files in
+`docs/spec/` when you need stricter wording about what is normative,
+provisional, or still implementation-defined.
+
 ## File Kinds
 
 BWSL source files are either:
@@ -32,6 +40,7 @@ A pipeline file can contain:
 
 - `import`
 - `attributes { ... }`
+- `resources { ... }`
 - `const`
 - `constraint`
 - `enum`
@@ -52,6 +61,12 @@ pipeline Demo {
         texcoord: float2
     }
 
+    resources {
+        viewProj: mat4
+        colorTex: texture2D
+        colorSampler: sampler
+    }
+
     constraint FloatVectors = float2 | float3 | float4;
 
     struct Params {
@@ -64,14 +79,15 @@ pipeline Demo {
 
     pass "Main" {
         use attributes { position, texcoord }
+        use resources { viewProj, colorTex?, colorSampler? }
 
         vertex {
-            output.position = float4(attributes.position, 1.0);
+            output.position = resources.viewProj * float4(attributes.position, 1.0);
             output.uv = tintUv(attributes.texcoord);
         }
 
         fragment {
-            output.color = float4(input.uv, 0.0, 1.0);
+            output.color = sample(resources.colorTex, resources.colorSampler, input.uv);
         }
     }
 }
@@ -111,6 +127,33 @@ attributes {
 }
 ```
 
+## Resources
+
+Pipeline shader resources are declared in a `resources` block:
+
+```bwsl
+resources {
+    viewProj: mat4
+    colorTex: texture2D
+    colorSampler: sampler
+    particles: buffer<Particle>
+}
+```
+
+Notes:
+
+- Resources are declared once per pipeline.
+- Resources are used per pass via `use resources { ... }`.
+- Resources are read in shaders through `resources.<name>`.
+- When a pipeline declares `resources {}`, those declarations are the only valid
+  names for `use resources { ... }` and `resources.<name>` access, even if a
+  legacy `.rcfg` also declares resources.
+- `?` in `use resources { foo? }` introduces an implicit variant named
+  `has_resource_foo`.
+- The compiler can emit resolved resource bindings with `-bindings`; that
+  reflection output is the authoritative ABI.
+
+
 ## Passes
 
 A pass contains one graphics pipeline pair (`vertex` and optional `fragment`)
@@ -119,14 +162,15 @@ or one `compute` stage.
 ```bwsl
 pass "Main" {
     use attributes { position, texcoord }
+    use resources { viewProj, colorTex, colorSampler }
 
     vertex {
-        output.position = float4(attributes.position, 1.0);
+        output.position = resources.viewProj * float4(attributes.position, 1.0);
         output.uv = attributes.texcoord;
     }
 
     fragment {
-        output.color = float4(input.uv, 0.0, 1.0);
+        output.color = sample(resources.colorTex, resources.colorSampler, input.uv);
     }
 }
 ```

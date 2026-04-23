@@ -1,0 +1,20 @@
+{
+  "mode": "raster",
+  "width": 2,
+  "height": 2,
+  "output_size": 64,
+  "output_type": "float",
+  "tolerance": 0.0,
+  "descriptor_set": 1,
+  "textures": [
+    {
+      "binding": 0,
+      "width": 2,
+      "height": 2,
+      "pixels": [
+        [255, 0,   0,   255], [0,   255, 0,   255],
+        [0,   0,   255, 255], [255, 255, 0,   128]
+      ]
+    }
+  ]
+}

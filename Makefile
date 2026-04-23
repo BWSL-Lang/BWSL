@@ -45,6 +45,7 @@ WASM_DIR = $(BUILD_DIR)/wasm
 
 BWSLC_OUT = $(BUILD_DIR)/bwslc$(EXE_EXT)
 BWSLC_DEBUG_OUT = $(BUILD_DIR)/bwslc-debug$(EXE_EXT)
+BWSLC_SANITIZE_OUT = $(BUILD_DIR)/bwslc-sanitize$(EXE_EXT)
 BWSLC_WIN_ZIG_OUT = $(BUILD_DIR)/bwslc-win.exe
 BWSLC_WIN_ZIG_DEBUG_OUT = $(BUILD_DIR)/bwslc-win-debug.exe
 
@@ -143,9 +144,9 @@ WASM_SPIRV_INCLUDES = -I. -Itools
 # Targets
 # ============================================================================
 
-.PHONY: all help bwslc bwslc-debug bwslc-msvc bwslc-msvc-debug \
-	bwslc-win-zig bwslc-win-zig-debug clean wasm wasm-debug test install \
-	equiv_runner
+.PHONY: all help bwslc bwslc-debug bwslc-sanitize bwslc-msvc bwslc-msvc-debug \
+	bwslc-win-zig bwslc-win-zig-debug clean wasm wasm-debug test test-sanitize \
+	install equiv_runner
 
 all: bwslc
 
@@ -167,6 +168,40 @@ bwslc: $(BUILD_DIR)
 bwslc-debug: $(BUILD_DIR)
 	$(NATIVE_BWSLC_DEBUG_CMD)
 	@echo "Built: $(BWSLC_DEBUG_OUT)"
+
+# Sanitizer build: ASan + UBSan, no optimization, frame pointers retained.
+# Used by the regression harness (`make test-sanitize`) to catch memory and
+# undefined-behavior bugs that the release build silently tolerates.
+SANITIZE_CXX ?= $(shell if [ -x /opt/homebrew/opt/llvm/bin/clang++ ]; then \
+	echo /opt/homebrew/opt/llvm/bin/clang++; \
+	elif [ -x /usr/local/opt/llvm/bin/clang++ ]; then \
+	echo /usr/local/opt/llvm/bin/clang++; \
+	else echo $(CXX); fi)
+SANITIZE_FLAGS = -std=c++20 -Wall -Wextra -g -O1 -fno-omit-frame-pointer \
+	-fsanitize=address,undefined -fno-sanitize-recover=all
+SANITIZE_LINK_FLAGS =
+ifeq ($(SANITIZE_CXX),/opt/homebrew/opt/llvm/bin/clang++)
+SANITIZE_LINK_FLAGS = -stdlib=libc++ -L/opt/homebrew/opt/llvm/lib/c++ \
+	-Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++
+endif
+ifeq ($(SANITIZE_CXX),/usr/local/opt/llvm/bin/clang++)
+SANITIZE_LINK_FLAGS = -stdlib=libc++ -L/usr/local/opt/llvm/lib/c++ \
+	-Wl,-rpath,/usr/local/opt/llvm/lib/c++
+endif
+
+bwslc-sanitize: $(BUILD_DIR)
+	$(SANITIZE_CXX) $(SANITIZE_FLAGS) $(SANITIZE_LINK_FLAGS) $(SPIRV_CROSS_FLAGS) \
+		$(SPIRV_CROSS_INCLUDES) -I. \
+		-o $(BWSLC_SANITIZE_OUT) $(SPIRV_CROSS_WRAPPER) $(BWSLC_SRC)
+	@echo "Built: $(BWSLC_SANITIZE_OUT)"
+
+# Run the Python regression harness against the sanitized binary. We pass
+# --compiler so run_tests.py uses the sanitized build instead of build/bwslc,
+# and halt_on_error + abort_on_error make any ASan/UBSan hit a test failure.
+test-sanitize: bwslc-sanitize
+	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=1 \
+	UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_stacktrace=1 \
+	python3 tests/run_tests.py --compiler $(BWSLC_SANITIZE_OUT) --no-spirv-val
 
 equiv_runner: $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(VULKAN_INCLUDE) -o $(EQUIV_RUNNER_OUT) \

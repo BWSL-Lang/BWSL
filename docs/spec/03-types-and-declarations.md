@@ -1,0 +1,120 @@
+# Types and Declarations
+
+Status: `stable` with a few `provisional` compatibility aliases
+
+Primary implementation sources:
+
+- `bwsl_token_defs.h`
+- `bwsl_types.h`
+- `bwsl_parser_soa.cpp`
+
+## Canonical Source Types
+
+The current source language includes these built-in scalar, vector, and matrix
+type spellings:
+
+- `bool`
+- `int`, `int2`, `int3`, `int4`
+- `uint`, `uint2`, `uint3`, `uint4`
+- `float`, `float2`, `float3`, `float4`
+- `mat2`, `mat3`, `mat4`
+- `void`
+
+The source language also includes resource-facing built-in type names such as:
+
+- `texture2D`
+- `texture3D`
+- `textureCube`
+- `texture2DArray`
+- `sampler`
+
+User-defined nominal types include:
+
+- `struct` types
+- `enum` types
+- module-qualified custom types such as `Module::Type`
+
+## Compatibility Aliases
+
+The implementation accepts:
+
+- `float2x2`
+- `float3x3`
+- `float4x4`
+
+These currently resolve as aliases for `mat2`, `mat3`, and `mat4`. The spec
+draft treats them as accepted compatibility syntax, but the canonical spellings
+remain `mat2`, `mat3`, and `mat4`.
+
+## Variable Declarations
+
+The language supports ordinary variable declarations and `const` declarations.
+
+Current `const` rules include:
+
+- `const` declarations require an initializer
+- top-level and pass-level `const` values are parsed and may be compile-time
+  evaluated when possible
+- module-level `const` declarations currently require literal initializers
+
+## Arrays
+
+Fixed-size arrays are part of the current language surface.
+
+Examples:
+
+```bwsl
+float weights[4];
+mat4 bones[64];
+```
+
+Current array-size rules:
+
+- sizes must be compile-time values
+- integer literals are accepted
+- some compile-time constants are accepted where supported by the parser
+- the implementation currently rejects sizes above 256k elements
+
+## Structs
+
+Struct declarations are accepted at pipeline scope and module scope.
+
+Current field forms include:
+
+```bwsl
+struct Light {
+    float3 position;
+    float intensity;
+    mat4 bones[64];
+}
+```
+
+The parser also accepts a legacy array-field form `Type[N] name`; the canonical
+form for the spec should be `Type name[N]`.
+
+## Pointers
+
+Pointer types are part of the current source language and use `^`:
+
+- pointer type: `Type^`
+- address-of: `^value`
+- dereference: `ptr^`
+
+Examples:
+
+```bwsl
+int x = 42;
+int^ p = ^x;
+int y = p^;
+```
+
+## Declaration Notes
+
+The parser accepts a few declaration conveniences that the public docs do not
+fully standardize yet. In particular:
+
+- parameter declarations support more than one concrete syntax form
+- some compile-time constants are substituted very early in parsing
+
+Those details are documented further in later sections and should be treated as
+implementation-defined until the spec wording hardens.

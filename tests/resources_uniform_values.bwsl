@@ -1,0 +1,31 @@
+// Test: BWSL-declared uniform-style resources with direct value and struct member access
+// Tests: resources { ... }, use resources { ... }, mat4 resources, struct resources
+
+pipeline ResourcesUniformValues {
+    attributes {
+        position: float3
+    }
+
+    struct Params {
+        float4 tint;
+    }
+
+    resources {
+        viewProj: mat4
+        params: Params
+    }
+
+    pass "Main" {
+        use attributes { position }
+        use resources { viewProj, params }
+
+        vertex {
+            output.position = resources.viewProj * float4(attributes.position, 1.0);
+            output.tint = resources.params.tint;
+        }
+
+        fragment {
+            output.color = input.tint;
+        }
+    }
+}

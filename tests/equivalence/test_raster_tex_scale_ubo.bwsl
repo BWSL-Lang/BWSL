@@ -1,0 +1,29 @@
+// Equivalence: sample a texture in the fragment stage and scale by a
+// scalar read from a fragment-visible UBO. Exercises the combined
+// texture+UBO descriptor bundle: a COMBINED_IMAGE_SAMPLER at binding 0
+// and a UNIFORM_BUFFER at binding 2, on the same set. All three
+// backends should produce identical RGBA32F framebuffer bytes.
+pipeline EquivRasterTexScaleUbo {
+    attributes {
+    }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float4 t = sample(resources.colorTex, resources.colorSampler,
+                              input.uv);
+            float s = resources.scale;
+            output.color = float4(t.r * s, t.g * s, t.b * s, t.a);
+        }
+    }
+}

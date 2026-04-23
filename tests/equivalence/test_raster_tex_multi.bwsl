@@ -1,0 +1,27 @@
+// Equivalence: sample two textures at the same UV and blend with a
+// constant weight. Verifies that multiple COMBINED_IMAGE_SAMPLER
+// descriptors at distinct bindings resolve correctly in every backend,
+// with sample ordering and per-channel blending preserved bit-for-bit.
+pipeline EquivRasterTexMulti {
+    attributes {
+    }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float4 a = sample(resources.texA, resources.sampA, input.uv);
+            float4 b = sample(resources.texB, resources.sampB, input.uv);
+            output.color = a * 0.75 + b * 0.25;
+        }
+    }
+}

@@ -1,0 +1,22 @@
+// Test: BWSL storage-buffer resources report readonly/writeonly/readwrite access correctly
+
+pipeline ResourcesStorageAccess {
+    resources {
+        srcBuffer: buffer<float>
+        dstBuffer: buffer<float>
+        scratchBuffer: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { srcBuffer, dstBuffer, scratchBuffer }
+
+        compute "Main" [64, 1, 1] {
+            uint idx = input.global_id.x;
+            float src = resources.srcBuffer[idx];
+            resources.dstBuffer[idx] = src * 2.0;
+
+            float prior = resources.scratchBuffer[idx];
+            resources.scratchBuffer[idx] = prior + src;
+        }
+    }
+}

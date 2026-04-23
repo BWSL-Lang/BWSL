@@ -6,6 +6,7 @@
 #include "bwsl_ir_analysis.h" // For OutputSlot constants
 #include "bwsl_ir_gen.h"
 #include "bwsl_mem_pool.h"
+#include "bwsl_resource_reflection.h"
 #include "bwsl_symbol_table.h"
 #include <cstring>
 #include <unordered_map>
@@ -5131,7 +5132,8 @@ struct IRLowering {
 
     if (call.flags & FunctionCallFlags::IS_INTRINSIC) {
       using Intrinsic = StdLib::Intrinsic;
-      Intrinsic intrinsic = static_cast<Intrinsic>(call.intrinsicIndex);
+      Intrinsic intrinsic =
+          static_cast<Intrinsic>(StdLib::INTRINSICS[call.intrinsicIndex].enumIndex);
 
       OpCode op = OP_NOP;
 
@@ -5214,13 +5216,10 @@ struct IRLowering {
         break;
       }
       // Texture operations need special handling:
-      // 2-arg form: sample(texture, coord)
-      //   args[0] = combined texture/sampler (with 0x2000 marker)
-      //   args[1] = coordinates
-      // 3-arg form: sample(texture, sampler, coord)
-      //   args[0] = texture (with 0x2000 marker)
-      //   args[1] = sampler (ignored for now, assumed combined with texture)
-      //   args[2] = coordinates
+      // sample(texture, coord)
+      // sample(texture, sampler, coord)
+      // sample_lod/bias/cmp(texture, [sampler,] coord, extra)
+      // sample_grad(texture, [sampler,] coord, ddx, ddy)
       // Result type is always FLOAT4
       case Intrinsic::SAMPLE:
       case Intrinsic::SAMPLE_LOD:
@@ -5229,12 +5228,36 @@ struct IRLowering {
       case Intrinsic::SAMPLE_CMP: {
         OpCode texOp = IntrinsicToOpcode(intrinsic);
         u16 texReg = args[0]; // Texture with 0x2000 marker
-        // Coordinate is the last argument - handle both 2-arg and 3-arg forms
-        u16 coordReg = (argCount >= 3) ? args[2] : args[1];
+        const bool hasExplicitSampler =
+            argCount >= 3 && (args[1] & 0xF000) == 0x3000;
+        u16 coordReg = hasExplicitSampler ? args[2] : args[1];
 
-        // Emit with texture in operand 0 (preserving 0x2000 marker for
-        // analysis) and coordinates in operand 1
-        builder.EmitInstruction(texOp, dest, texReg, coordReg);
+        switch (intrinsic) {
+          case Intrinsic::SAMPLE:
+            builder.EmitInstruction(texOp, dest, texReg, coordReg);
+            break;
+          case Intrinsic::SAMPLE_LOD:
+          case Intrinsic::SAMPLE_BIAS:
+          case Intrinsic::SAMPLE_CMP: {
+            u16 extraReg = hasExplicitSampler ? args[3] : args[2];
+            builder.EmitInstruction(texOp, dest, texReg, coordReg, extraReg);
+            break;
+          }
+          case Intrinsic::SAMPLE_GRAD: {
+            u16 ddxReg = hasExplicitSampler ? args[3] : args[2];
+            u16 ddyReg = hasExplicitSampler ? args[4] : args[3];
+            builder.EmitInstruction(texOp, dest, texReg, coordReg, ddxReg, ddyReg);
+            break;
+          }
+          default:
+            break;
+        }
+
+        if (hasExplicitSampler) {
+          BWSL::SetTextureOpExplicitSamplerMetadata(program,
+                                                    builder.currentInstruction - 1,
+                                                    static_cast<u16>(args[1] & 0x0FFFu));
+        }
 
         // Texture samples always return float4
         SetRegisterType(dest, CoreType::FLOAT4);

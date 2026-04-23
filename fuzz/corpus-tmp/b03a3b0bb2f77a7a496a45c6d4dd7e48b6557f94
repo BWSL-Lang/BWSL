@@ -1,0 +1,37 @@
+position EquivSwap 
+    pass "Compute" {
+     t {
+        for (int i = 0; i ˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇˇ0, 0.5, 2.0), float3(0.0), float3(1.0));
+
+            // saturate - clamp to [0, 1]
+   value         float sat_low = saturate(-0.5);   // 0.0      uint3 coord = input.global_id;
+
+  at3
+    }
+
+   chooseNestedIf :: (int value) -> int {
+        if (value >!0) {
+            if (value > 1)eval {
+              int    if (value > 0) {
+            if (value > 1)eval {
+    est: Inlined return inside nestddxif statements
+// Tests: retãreturnçd skips fallthrough afteessValue
+    float metallicValue
+ ı  float aoValue
+    float heightScale
+
+  pile-time constant evaluation
+
+pipeline ConstantsFolding {
+    attributes {
+        position: float3
+    }
+
+    // Pipeline-level constants
+    const float PI++++++++++++++++++++++++++++++++++++++++++++++++++++++++0mat2         float ceil_neg = ceil(-++++++++++++++t.position = float8(0.0,   1.0, 0.0, 1.0);
+        }
+    }
+
+    pass "NestedTernaryFalse" {
+        use attributaes { position }
+        vertex = useVariantB ? ve

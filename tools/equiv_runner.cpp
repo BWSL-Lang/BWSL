@@ -10,21 +10,53 @@
 //                [--output-binding N] [--set N]
 //
 // RASTER MODE (--raster):
-//   Loads a vertex + fragment SPIR-V pair, creates a RGBA32F color attachment
-//   of the given size, draws a fullscreen triangle (3 vertices, no vertex
-//   buffer - expects the vertex shader to synthesize positions from
-//   gl_VertexIndex / vertex_id), then copies the rendered image to host and
-//   writes it to --output. Output size must equal width*height*16 bytes.
+//   Loads a vertex + fragment SPIR-V pair, creates one or more RGBA32F color
+//   attachments of the given size, draws either a fullscreen triangle (the
+//   default, 3 synthetic vertices sourced from gl_VertexIndex) or a custom
+//   vertex stream, then copies each attachment to host and concatenates the
+//   results into --output. Output layout is
+//     [attachment0 pixels][attachment1 pixels]...[attachmentN-1 pixels]
+//   with each attachment contributing width*height*16 bytes (RGBA32F).
 //
 //   equiv_runner --raster --vert-spirv v.spv --frag-spirv f.spv \
 //                --width W --height H --output out.bin --output-size BYTES \
-//                [--raster-ssbo FILE BINDING]... \
-//                [--raster-ubo FILE BINDING]... \
+//                [--raster-mrt N]                      \
+//                [--raster-depth]                      \
+//                [--raster-depth-output PATH]          \
+//                [--raster-ssbo FILE BINDING]...       \
+//                [--raster-ubo FILE BINDING]...        \
+//                [--raster-tex2d FILE W H BINDING]...  \
+//                [--raster-vbo FILE COUNT STRIDE]      \
+//                [--raster-vbo-attr LOCATION FORMAT OFFSET]... \
 //                [--set N]
+//
+//   --raster-mrt N enables N color attachments (default 1). Fragment shader
+//   must declare matching location=0..N-1 outputs. --output-size must cover
+//   all N attachments.
+//
+//   --raster-depth enables a D32_SFLOAT depth attachment with depth test +
+//   write using CompareOp::LESS_OR_EQUAL, cleared to 1.0. Fragment shaders
+//   can write gl_FragDepth explicitly or let the vertex position supply it.
+//   --raster-depth-output PATH writes a width*height*4 byte float32 readback
+//   of the final depth buffer to PATH for cross-backend comparison.
+//
+//   --raster-vbo enables real vertex-buffer input. FILE contains tightly
+//   packed vertex data with COUNT vertices at STRIDE bytes each. Each
+//   --raster-vbo-attr maps an interleaved attribute at LOCATION (shader
+//   input_location), FORMAT (one of R32G32_SFLOAT, R32G32B32_SFLOAT,
+//   R32G32B32A32_SFLOAT, R32_SFLOAT, R32G32B32A32_UINT), and byte OFFSET
+//   within the vertex. Without --raster-vbo the shader falls back to the
+//   3-vertex synthetic fullscreen triangle path.
 //
 //   Each --raster-ssbo / --raster-ubo pair uploads FILE into a storage or
 //   uniform buffer at the given descriptor binding, visible to both the
 //   vertex and fragment stages.
+//
+//   Each --raster-tex2d entry uploads FILE (tightly-packed RGBA8_UNORM,
+//   4 bytes per texel, W*H*4 bytes total) into a sampled 2D image at the
+//   given binding as a COMBINED_IMAGE_SAMPLER. The sampler is hardcoded
+//   to nearest filtering with clamp-to-edge addressing and no mipmaps so
+//   fetches are bit-exact across backends.
 //
 // Exit codes: 0 on success, 1 on failure.
 
@@ -161,6 +193,33 @@ struct Args {
     bool is_ubo = false;  // false => storage buffer
   };
   std::vector<RasterResource> raster_resources;
+
+  struct RasterTexture {
+    std::string path;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t binding = 0;
+  };
+  std::vector<RasterTexture> raster_textures;
+
+  // MRT: N color attachments (all RGBA32F).
+  uint32_t color_attachment_count = 1;
+
+  // Depth attachment (D32_SFLOAT) + optional float32 readback.
+  bool depth_enabled = false;
+  std::string depth_output_path;
+
+  // Interleaved vertex input. When path is empty, the draw falls back to the
+  // fullscreen-triangle path that feeds gl_VertexIndex = 0..2.
+  struct VertexAttribute {
+    uint32_t location = 0;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    uint32_t offset = 0;
+  };
+  std::string vbo_path;
+  uint32_t vbo_vertex_count = 0;
+  uint32_t vbo_stride = 0;
+  std::vector<VertexAttribute> vbo_attributes;
 };
 
 Args parse_args(int argc, char **argv) {
@@ -234,6 +293,69 @@ Args parse_args(int argc, char **argv) {
       need(++i);
       r.binding = static_cast<uint32_t>(std::strtoul(argv[i], nullptr, 10));
       a.raster_resources.push_back(r);
+    } else if (f == "--raster-tex2d") {
+      Args::RasterTexture t{};
+      need(++i);
+      t.path = argv[i];
+      need(++i);
+      t.width = static_cast<uint32_t>(std::strtoul(argv[i], nullptr, 10));
+      need(++i);
+      t.height = static_cast<uint32_t>(std::strtoul(argv[i], nullptr, 10));
+      need(++i);
+      t.binding = static_cast<uint32_t>(std::strtoul(argv[i], nullptr, 10));
+      a.raster_textures.push_back(t);
+    } else if (f == "--raster-mrt") {
+      need(++i);
+      a.color_attachment_count =
+          static_cast<uint32_t>(std::strtoul(argv[i], nullptr, 10));
+      if (a.color_attachment_count == 0 || a.color_attachment_count > 8) {
+        die("--raster-mrt must be in [1, 8]");
+      }
+    } else if (f == "--raster-depth") {
+      a.depth_enabled = true;
+    } else if (f == "--raster-depth-output") {
+      need(++i);
+      a.depth_output_path = argv[i];
+      a.depth_enabled = true;
+    } else if (f == "--raster-vbo") {
+      need(++i);
+      a.vbo_path = argv[i];
+      need(++i);
+      a.vbo_vertex_count =
+          static_cast<uint32_t>(std::strtoul(argv[i], nullptr, 10));
+      need(++i);
+      a.vbo_stride = static_cast<uint32_t>(std::strtoul(argv[i], nullptr, 10));
+    } else if (f == "--raster-vbo-attr") {
+      Args::VertexAttribute va{};
+      need(++i);
+      va.location = static_cast<uint32_t>(std::strtoul(argv[i], nullptr, 10));
+      need(++i);
+      std::string fmt = argv[i];
+      if (fmt == "R32_SFLOAT") {
+        va.format = VK_FORMAT_R32_SFLOAT;
+      } else if (fmt == "R32G32_SFLOAT") {
+        va.format = VK_FORMAT_R32G32_SFLOAT;
+      } else if (fmt == "R32G32B32_SFLOAT") {
+        va.format = VK_FORMAT_R32G32B32_SFLOAT;
+      } else if (fmt == "R32G32B32A32_SFLOAT") {
+        va.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+      } else if (fmt == "R32_UINT") {
+        va.format = VK_FORMAT_R32_UINT;
+      } else if (fmt == "R32G32_UINT") {
+        va.format = VK_FORMAT_R32G32_UINT;
+      } else if (fmt == "R32G32B32_UINT") {
+        va.format = VK_FORMAT_R32G32B32_UINT;
+      } else if (fmt == "R32G32B32A32_UINT") {
+        va.format = VK_FORMAT_R32G32B32A32_UINT;
+      } else if (fmt == "R32_SINT") {
+        va.format = VK_FORMAT_R32_SINT;
+      } else {
+        std::string m = "unknown --raster-vbo-attr format: " + fmt;
+        die(m.c_str());
+      }
+      need(++i);
+      va.offset = static_cast<uint32_t>(std::strtoul(argv[i], nullptr, 10));
+      a.vbo_attributes.push_back(va);
     } else {
       std::string m = "unknown arg: " + f;
       die(m.c_str());
@@ -362,83 +484,176 @@ int run_raster(const Args &args) {
 
   VulkanContext ctx = make_context(/*need_graphics=*/true);
 
-  VkFormat color_fmt = VK_FORMAT_R32G32B32A32_SFLOAT;
+  const VkFormat color_fmt = VK_FORMAT_R32G32B32A32_SFLOAT;
+  const VkFormat depth_fmt = VK_FORMAT_D32_SFLOAT;
+  const uint32_t mrt = args.color_attachment_count;
+  const VkDeviceSize per_attachment_size =
+      static_cast<VkDeviceSize>(args.width) * args.height * 16u;
 
-  // ===== Color image + view =====
-  VkImageCreateInfo img_ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-  img_ci.imageType = VK_IMAGE_TYPE_2D;
-  img_ci.format = color_fmt;
-  img_ci.extent = {args.width, args.height, 1};
-  img_ci.mipLevels = 1;
-  img_ci.arrayLayers = 1;
-  img_ci.samples = VK_SAMPLE_COUNT_1_BIT;
-  img_ci.tiling = VK_IMAGE_TILING_OPTIMAL;
-  img_ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-  img_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-  img_ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  if (args.output_size < per_attachment_size * mrt) {
+    die("--output-size too small for width*height*16*mrt");
+  }
 
-  VkImage color_img;
-  VK_CHECK(vkCreateImage(ctx.dev, &img_ci, nullptr, &color_img));
+  // ===== Color images + views (one per MRT slot) =====
+  struct ColorTarget {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+  };
+  std::vector<ColorTarget> color_targets(mrt);
+  for (uint32_t i = 0; i < mrt; ++i) {
+    VkImageCreateInfo img_ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    img_ci.imageType = VK_IMAGE_TYPE_2D;
+    img_ci.format = color_fmt;
+    img_ci.extent = {args.width, args.height, 1};
+    img_ci.mipLevels = 1;
+    img_ci.arrayLayers = 1;
+    img_ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    img_ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+    img_ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    img_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    img_ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VK_CHECK(vkCreateImage(ctx.dev, &img_ci, nullptr, &color_targets[i].image));
 
-  VkMemoryRequirements img_req{};
-  vkGetImageMemoryRequirements(ctx.dev, color_img, &img_req);
-  VkMemoryAllocateInfo img_ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-  img_ai.allocationSize = img_req.size;
-  img_ai.memoryTypeIndex = find_mem_type(ctx.phys, img_req.memoryTypeBits,
-                                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-  VkDeviceMemory color_mem;
-  VK_CHECK(vkAllocateMemory(ctx.dev, &img_ai, nullptr, &color_mem));
-  VK_CHECK(vkBindImageMemory(ctx.dev, color_img, color_mem, 0));
+    VkMemoryRequirements img_req{};
+    vkGetImageMemoryRequirements(ctx.dev, color_targets[i].image, &img_req);
+    VkMemoryAllocateInfo img_ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    img_ai.allocationSize = img_req.size;
+    img_ai.memoryTypeIndex = find_mem_type(
+        ctx.phys, img_req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VK_CHECK(vkAllocateMemory(ctx.dev, &img_ai, nullptr,
+                              &color_targets[i].memory));
+    VK_CHECK(vkBindImageMemory(ctx.dev, color_targets[i].image,
+                               color_targets[i].memory, 0));
 
-  VkImageViewCreateInfo iv_ci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-  iv_ci.image = color_img;
-  iv_ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-  iv_ci.format = color_fmt;
-  iv_ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-  iv_ci.subresourceRange.levelCount = 1;
-  iv_ci.subresourceRange.layerCount = 1;
-  VkImageView color_view;
-  VK_CHECK(vkCreateImageView(ctx.dev, &iv_ci, nullptr, &color_view));
+    VkImageViewCreateInfo iv_ci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    iv_ci.image = color_targets[i].image;
+    iv_ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    iv_ci.format = color_fmt;
+    iv_ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    iv_ci.subresourceRange.levelCount = 1;
+    iv_ci.subresourceRange.layerCount = 1;
+    VK_CHECK(
+        vkCreateImageView(ctx.dev, &iv_ci, nullptr, &color_targets[i].view));
+  }
 
-  // ===== Readback buffer =====
+  // ===== Optional depth image + view =====
+  VkImage depth_img = VK_NULL_HANDLE;
+  VkDeviceMemory depth_mem = VK_NULL_HANDLE;
+  VkImageView depth_view = VK_NULL_HANDLE;
+  const bool depth_readback = !args.depth_output_path.empty();
+  if (args.depth_enabled) {
+    VkImageCreateInfo img_ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    img_ci.imageType = VK_IMAGE_TYPE_2D;
+    img_ci.format = depth_fmt;
+    img_ci.extent = {args.width, args.height, 1};
+    img_ci.mipLevels = 1;
+    img_ci.arrayLayers = 1;
+    img_ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    img_ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+    img_ci.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                   (depth_readback ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
+    img_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    img_ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VK_CHECK(vkCreateImage(ctx.dev, &img_ci, nullptr, &depth_img));
+
+    VkMemoryRequirements img_req{};
+    vkGetImageMemoryRequirements(ctx.dev, depth_img, &img_req);
+    VkMemoryAllocateInfo img_ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    img_ai.allocationSize = img_req.size;
+    img_ai.memoryTypeIndex = find_mem_type(
+        ctx.phys, img_req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VK_CHECK(vkAllocateMemory(ctx.dev, &img_ai, nullptr, &depth_mem));
+    VK_CHECK(vkBindImageMemory(ctx.dev, depth_img, depth_mem, 0));
+
+    VkImageViewCreateInfo iv_ci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    iv_ci.image = depth_img;
+    iv_ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    iv_ci.format = depth_fmt;
+    iv_ci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    iv_ci.subresourceRange.levelCount = 1;
+    iv_ci.subresourceRange.layerCount = 1;
+    VK_CHECK(vkCreateImageView(ctx.dev, &iv_ci, nullptr, &depth_view));
+  }
+
+  // ===== Color readback buffer =====
   Buffer readback = make_host_buffer(
       ctx.dev, ctx.phys, args.output_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
   std::memset(readback.mapped, 0, args.output_size);
 
-  // ===== Render pass =====
-  VkAttachmentDescription att{};
-  att.format = color_fmt;
-  att.samples = VK_SAMPLE_COUNT_1_BIT;
-  att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-  att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-  att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-  att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-  att.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  att.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  // ===== Optional depth readback buffer =====
+  Buffer depth_readback_buf{};
+  VkDeviceSize depth_size = 0;
+  if (depth_readback) {
+    depth_size = static_cast<VkDeviceSize>(args.width) * args.height * 4u;
+    depth_readback_buf = make_host_buffer(ctx.dev, ctx.phys, depth_size,
+                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    std::memset(depth_readback_buf.mapped, 0, depth_size);
+  }
 
-  VkAttachmentReference color_ref{};
-  color_ref.attachment = 0;
-  color_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  // ===== Render pass =====
+  std::vector<VkAttachmentDescription> atts(mrt);
+  std::vector<VkAttachmentReference> color_refs(mrt);
+  for (uint32_t i = 0; i < mrt; ++i) {
+    atts[i] = {};
+    atts[i].format = color_fmt;
+    atts[i].samples = VK_SAMPLE_COUNT_1_BIT;
+    atts[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    atts[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    atts[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    atts[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    atts[i].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    atts[i].finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    color_refs[i].attachment = i;
+    color_refs[i].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  }
+
+  VkAttachmentReference depth_ref{};
+  if (args.depth_enabled) {
+    VkAttachmentDescription da{};
+    da.format = depth_fmt;
+    da.samples = VK_SAMPLE_COUNT_1_BIT;
+    da.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    // STORE when we want to read back the depth buffer, otherwise DONT_CARE
+    // (the driver may drop the write, which is what we want).
+    da.storeOp = depth_readback ? VK_ATTACHMENT_STORE_OP_STORE
+                                : VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    da.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    da.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    da.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    da.finalLayout = depth_readback
+                         ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+                         : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    atts.push_back(da);
+    depth_ref.attachment = mrt;
+    depth_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+  }
 
   VkSubpassDescription sub{};
   sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-  sub.colorAttachmentCount = 1;
-  sub.pColorAttachments = &color_ref;
+  sub.colorAttachmentCount = mrt;
+  sub.pColorAttachments = color_refs.data();
+  sub.pDepthStencilAttachment = args.depth_enabled ? &depth_ref : nullptr;
 
   VkRenderPassCreateInfo rpci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-  rpci.attachmentCount = 1;
-  rpci.pAttachments = &att;
+  rpci.attachmentCount = (uint32_t)atts.size();
+  rpci.pAttachments = atts.data();
   rpci.subpassCount = 1;
   rpci.pSubpasses = &sub;
   VkRenderPass render_pass;
   VK_CHECK(vkCreateRenderPass(ctx.dev, &rpci, nullptr, &render_pass));
 
   // ===== Framebuffer =====
+  std::vector<VkImageView> fb_views;
+  fb_views.reserve(mrt + (args.depth_enabled ? 1 : 0));
+  for (uint32_t i = 0; i < mrt; ++i) fb_views.push_back(color_targets[i].view);
+  if (args.depth_enabled) fb_views.push_back(depth_view);
+
   VkFramebufferCreateInfo fbci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
   fbci.renderPass = render_pass;
-  fbci.attachmentCount = 1;
-  fbci.pAttachments = &color_view;
+  fbci.attachmentCount = (uint32_t)fb_views.size();
+  fbci.pAttachments = fb_views.data();
   fbci.width = args.width;
   fbci.height = args.height;
   fbci.layers = 1;
@@ -482,9 +697,91 @@ int run_raster(const Args &args) {
                                    : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER});
   }
 
+  // ===== Sampled 2D images (COMBINED_IMAGE_SAMPLER) =====
+  struct SampledTexture {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkSampler sampler = VK_NULL_HANDLE;
+    Buffer staging{};  // kept alive for the duration of the submit
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t binding = 0;
+  };
+  std::vector<SampledTexture> textures;
+  textures.reserve(args.raster_textures.size());
+  for (const auto &rt : args.raster_textures) {
+    if (rt.width == 0 || rt.height == 0) die("raster-tex2d: zero extent");
+    VkDeviceSize tex_bytes =
+        static_cast<VkDeviceSize>(rt.width) * rt.height * 4;
+    auto pixels = read_file(rt.path);
+    if (pixels.size() != tex_bytes) {
+      std::fprintf(stderr,
+                   "equiv_runner: raster-tex2d: file '%s' size=%zu, "
+                   "expected %llu for %ux%u RGBA8\n",
+                   rt.path.c_str(), pixels.size(),
+                   (unsigned long long)tex_bytes, rt.width, rt.height);
+      std::exit(1);
+    }
+
+    SampledTexture t{};
+    t.width = rt.width;
+    t.height = rt.height;
+    t.binding = rt.binding;
+
+    VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = VK_FORMAT_R8G8B8A8_UNORM;
+    ici.extent = {rt.width, rt.height, 1};
+    ici.mipLevels = 1;
+    ici.arrayLayers = 1;
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VK_CHECK(vkCreateImage(ctx.dev, &ici, nullptr, &t.image));
+
+    VkMemoryRequirements mreq{};
+    vkGetImageMemoryRequirements(ctx.dev, t.image, &mreq);
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize = mreq.size;
+    mai.memoryTypeIndex = find_mem_type(ctx.phys, mreq.memoryTypeBits,
+                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VK_CHECK(vkAllocateMemory(ctx.dev, &mai, nullptr, &t.memory));
+    VK_CHECK(vkBindImageMemory(ctx.dev, t.image, t.memory, 0));
+
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vci.image = t.image;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = VK_FORMAT_R8G8B8A8_UNORM;
+    vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    vci.subresourceRange.levelCount = 1;
+    vci.subresourceRange.layerCount = 1;
+    VK_CHECK(vkCreateImageView(ctx.dev, &vci, nullptr, &t.view));
+
+    VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    sci.magFilter = VK_FILTER_NEAREST;
+    sci.minFilter = VK_FILTER_NEAREST;
+    sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.unnormalizedCoordinates = VK_FALSE;
+    sci.minLod = 0.0f;
+    sci.maxLod = 0.0f;
+    VK_CHECK(vkCreateSampler(ctx.dev, &sci, nullptr, &t.sampler));
+
+    t.staging = make_host_buffer(ctx.dev, ctx.phys, tex_bytes,
+                                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+    std::memcpy(t.staging.mapped, pixels.data(), pixels.size());
+
+    textures.push_back(t);
+  }
+
   // ===== Descriptor set layout =====
   std::vector<VkDescriptorSetLayoutBinding> dsl_bindings;
-  dsl_bindings.reserve(resources.size());
+  dsl_bindings.reserve(resources.size() + textures.size());
   for (const auto &rb : resources) {
     VkDescriptorSetLayoutBinding b{};
     b.binding = rb.binding;
@@ -493,10 +790,18 @@ int run_raster(const Args &args) {
     b.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     dsl_bindings.push_back(b);
   }
+  for (const auto &tx : textures) {
+    VkDescriptorSetLayoutBinding b{};
+    b.binding = tx.binding;
+    b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b.descriptorCount = 1;
+    b.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    dsl_bindings.push_back(b);
+  }
 
   VkDescriptorSetLayout dsl = VK_NULL_HANDLE;
   uint32_t num_sets = 0;
-  if (!resources.empty()) {
+  if (!dsl_bindings.empty()) {
     VkDescriptorSetLayoutCreateInfo dslci{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     dslci.bindingCount = (uint32_t)dsl_bindings.size();
@@ -520,7 +825,7 @@ int run_raster(const Args &args) {
   // ===== Descriptor pool + sets =====
   VkDescriptorPool dpool = VK_NULL_HANDLE;
   std::vector<VkDescriptorSet> dsets;
-  if (!resources.empty()) {
+  if (!dsl_bindings.empty()) {
     // Sum descriptor counts by type for the pool sizing.
     uint32_t ssbo_count = 0;
     uint32_t ubo_count = 0;
@@ -528,6 +833,7 @@ int run_raster(const Args &args) {
       if (rb.type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) ssbo_count++;
       else ubo_count++;
     }
+    uint32_t tex_count = static_cast<uint32_t>(textures.size());
     std::vector<VkDescriptorPoolSize> pool_sizes;
     if (ssbo_count > 0) {
       pool_sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -536,6 +842,10 @@ int run_raster(const Args &args) {
     if (ubo_count > 0) {
       pool_sizes.push_back({VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                             ubo_count * num_sets});
+    }
+    if (tex_count > 0) {
+      pool_sizes.push_back({VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                            tex_count * num_sets});
     }
     VkDescriptorPoolCreateInfo dpci{
         VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -553,11 +863,13 @@ int run_raster(const Args &args) {
     dsets.resize(num_sets);
     VK_CHECK(vkAllocateDescriptorSets(ctx.dev, &dsai, dsets.data()));
 
-    // Stable storage for VkDescriptorBufferInfo: one per (set, resource).
+    // Stable storage for descriptor infos: one per (set, resource/texture).
     std::vector<VkDescriptorBufferInfo> buf_infos(
         resources.size() * num_sets);
+    std::vector<VkDescriptorImageInfo> img_infos(
+        textures.size() * num_sets);
     std::vector<VkWriteDescriptorSet> writes;
-    writes.reserve(resources.size() * num_sets);
+    writes.reserve((resources.size() + textures.size()) * num_sets);
     for (uint32_t s = 0; s < num_sets; ++s) {
       for (size_t r = 0; r < resources.size(); ++r) {
         size_t idx = s * resources.size() + r;
@@ -568,6 +880,18 @@ int run_raster(const Args &args) {
         w.descriptorCount = 1;
         w.descriptorType = resources[r].type;
         w.pBufferInfo = &buf_infos[idx];
+        writes.push_back(w);
+      }
+      for (size_t t = 0; t < textures.size(); ++t) {
+        size_t idx = s * textures.size() + t;
+        img_infos[idx] = {textures[t].sampler, textures[t].view,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w.dstSet = dsets[s];
+        w.dstBinding = textures[t].binding;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo = &img_infos[idx];
         writes.push_back(w);
       }
     }
@@ -586,8 +910,32 @@ int run_raster(const Args &args) {
   stages[1].module = fs_mod;
   stages[1].pName = "main";
 
+  // Vertex input: either interleaved VBO (when --raster-vbo was given) or
+  // empty, in which case the vertex shader synthesizes 3 vertices from
+  // gl_VertexIndex to cover the fullscreen triangle path.
   VkPipelineVertexInputStateCreateInfo vi_ci{
       VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+  VkVertexInputBindingDescription vbo_binding{};
+  std::vector<VkVertexInputAttributeDescription> vbo_attr_descs;
+  const bool use_vbo = !args.vbo_path.empty();
+  if (use_vbo) {
+    vbo_binding.binding = 0;
+    vbo_binding.stride = args.vbo_stride;
+    vbo_binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    vbo_attr_descs.reserve(args.vbo_attributes.size());
+    for (const auto &va : args.vbo_attributes) {
+      VkVertexInputAttributeDescription d{};
+      d.binding = 0;
+      d.location = va.location;
+      d.format = va.format;
+      d.offset = va.offset;
+      vbo_attr_descs.push_back(d);
+    }
+    vi_ci.vertexBindingDescriptionCount = 1;
+    vi_ci.pVertexBindingDescriptions = &vbo_binding;
+    vi_ci.vertexAttributeDescriptionCount = (uint32_t)vbo_attr_descs.size();
+    vi_ci.pVertexAttributeDescriptions = vbo_attr_descs.data();
+  }
 
   VkPipelineInputAssemblyStateCreateInfo ia_ci{
       VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
@@ -613,16 +961,32 @@ int run_raster(const Args &args) {
       VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
   ms_ci.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-  VkPipelineColorBlendAttachmentState blend_att{};
-  blend_att.blendEnable = VK_FALSE;
-  blend_att.colorWriteMask =
-      VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+  // One blend attachment per MRT slot; all disabled so the shader output is
+  // copied verbatim.
+  std::vector<VkPipelineColorBlendAttachmentState> blend_atts(mrt);
+  for (uint32_t i = 0; i < mrt; ++i) {
+    blend_atts[i] = {};
+    blend_atts[i].blendEnable = VK_FALSE;
+    blend_atts[i].colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+  }
 
   VkPipelineColorBlendStateCreateInfo cb_ci{
       VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-  cb_ci.attachmentCount = 1;
-  cb_ci.pAttachments = &blend_att;
+  cb_ci.attachmentCount = mrt;
+  cb_ci.pAttachments = blend_atts.data();
+
+  // Depth-stencil state: LESS_OR_EQUAL gives us deterministic "keep the
+  // first write at a given pixel" semantics that all three backends agree
+  // on when fragments overlap.
+  VkPipelineDepthStencilStateCreateInfo ds_ci{
+      VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+  ds_ci.depthTestEnable = args.depth_enabled ? VK_TRUE : VK_FALSE;
+  ds_ci.depthWriteEnable = args.depth_enabled ? VK_TRUE : VK_FALSE;
+  ds_ci.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+  ds_ci.depthBoundsTestEnable = VK_FALSE;
+  ds_ci.stencilTestEnable = VK_FALSE;
 
   VkGraphicsPipelineCreateInfo gpci{
       VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
@@ -634,6 +998,7 @@ int run_raster(const Args &args) {
   gpci.pRasterizationState = &rs_ci;
   gpci.pMultisampleState = &ms_ci;
   gpci.pColorBlendState = &cb_ci;
+  gpci.pDepthStencilState = args.depth_enabled ? &ds_ci : nullptr;
   gpci.layout = pipe_layout;
   gpci.renderPass = render_pass;
   gpci.subpass = 0;
@@ -660,14 +1025,86 @@ int run_raster(const Args &args) {
   bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
 
-  VkClearValue clear{};
-  clear.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+  // Upload sampled-texture pixel data via staging buffers and transition
+  // each image into SHADER_READ_ONLY_OPTIMAL before the draw. Uses a
+  // pipeline barrier rather than a separate submit so all work happens in
+  // one command buffer.
+  for (const auto &tx : textures) {
+    VkImageMemoryBarrier to_dst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    to_dst.srcAccessMask = 0;
+    to_dst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    to_dst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    to_dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    to_dst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_dst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_dst.image = tx.image;
+    to_dst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    to_dst.subresourceRange.levelCount = 1;
+    to_dst.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &to_dst);
+
+    VkBufferImageCopy copy{};
+    copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copy.imageSubresource.layerCount = 1;
+    copy.imageExtent = {tx.width, tx.height, 1};
+    vkCmdCopyBufferToImage(cmd, tx.staging.buffer, tx.image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+
+    VkImageMemoryBarrier to_read{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    to_read.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    to_read.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    to_read.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    to_read.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    to_read.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_read.image = tx.image;
+    to_read.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    to_read.subresourceRange.levelCount = 1;
+    to_read.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &to_read);
+  }
+
+  // Optional VBO upload. We do this after the render pass + pipeline setup
+  // but before command recording by staging into a host-visible buffer that
+  // we bind directly (keeps cleanup simple; a small performance hit is fine
+  // in a test runner).
+  Buffer vbo_buf{};
+  uint32_t draw_vertex_count = 3;
+  if (use_vbo) {
+    auto vbo_bytes = read_file(args.vbo_path);
+    const VkDeviceSize required =
+        static_cast<VkDeviceSize>(args.vbo_vertex_count) * args.vbo_stride;
+    if (vbo_bytes.size() < required) {
+      die("--raster-vbo file smaller than count*stride");
+    }
+    vbo_buf = make_host_buffer(ctx.dev, ctx.phys, required,
+                               VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    std::memcpy(vbo_buf.mapped, vbo_bytes.data(),
+                static_cast<size_t>(required));
+    draw_vertex_count = args.vbo_vertex_count;
+  }
+
+  // One clear value per attachment, in render-pass-attachment order: colors
+  // first (all zero), then depth (1.0).
+  std::vector<VkClearValue> clears(mrt + (args.depth_enabled ? 1 : 0));
+  for (uint32_t i = 0; i < mrt; ++i) {
+    clears[i].color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+  }
+  if (args.depth_enabled) {
+    clears[mrt].depthStencil = {1.0f, 0};
+  }
+
   VkRenderPassBeginInfo rpbi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
   rpbi.renderPass = render_pass;
   rpbi.framebuffer = framebuffer;
   rpbi.renderArea = {{0, 0}, {args.width, args.height}};
-  rpbi.clearValueCount = 1;
-  rpbi.pClearValues = &clear;
+  rpbi.clearValueCount = (uint32_t)clears.size();
+  rpbi.pClearValues = clears.data();
 
   vkCmdBeginRenderPass(cmd, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
@@ -676,29 +1113,55 @@ int run_raster(const Args &args) {
                             0, (uint32_t)dsets.size(), dsets.data(), 0,
                             nullptr);
   }
-  vkCmdDraw(cmd, 3, 1, 0, 0);
+  if (use_vbo) {
+    VkBuffer vb = vbo_buf.buffer;
+    VkDeviceSize off = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &off);
+  }
+  vkCmdDraw(cmd, draw_vertex_count, 1, 0, 0);
   vkCmdEndRenderPass(cmd);
 
-  // Image layout is now TRANSFER_SRC_OPTIMAL (via finalLayout). Copy to
-  // readback buffer.
-  VkBufferImageCopy region{};
-  region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-  region.imageSubresource.layerCount = 1;
-  region.imageExtent = {args.width, args.height, 1};
-  vkCmdCopyImageToBuffer(cmd, color_img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                         readback.buffer, 1, &region);
+  // Copy each color attachment into readback buffer at offset i*per_attachment.
+  // All attachments are already in TRANSFER_SRC_OPTIMAL via finalLayout.
+  for (uint32_t i = 0; i < mrt; ++i) {
+    VkBufferImageCopy region{};
+    region.bufferOffset = i * per_attachment_size;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = {args.width, args.height, 1};
+    vkCmdCopyImageToBuffer(cmd, color_targets[i].image,
+                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           readback.buffer, 1, &region);
+  }
 
-  // Make the buffer write visible to host.
-  VkBufferMemoryBarrier bmb{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-  bmb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-  bmb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-  bmb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  bmb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  bmb.buffer = readback.buffer;
-  bmb.size = VK_WHOLE_SIZE;
+  if (depth_readback) {
+    VkBufferImageCopy region{};
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = {args.width, args.height, 1};
+    vkCmdCopyImageToBuffer(cmd, depth_img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           depth_readback_buf.buffer, 1, &region);
+  }
+
+  // Make the buffer writes visible to host.
+  std::vector<VkBufferMemoryBarrier> bmbs;
+  {
+    VkBufferMemoryBarrier b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.buffer = readback.buffer;
+    b.size = VK_WHOLE_SIZE;
+    bmbs.push_back(b);
+    if (depth_readback) {
+      b.buffer = depth_readback_buf.buffer;
+      bmbs.push_back(b);
+    }
+  }
   vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &bmb, 0,
-                       nullptr);
+                       VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr,
+                       (uint32_t)bmbs.size(), bmbs.data(), 0, nullptr);
 
   VK_CHECK(vkEndCommandBuffer(cmd));
 
@@ -709,6 +1172,10 @@ int run_raster(const Args &args) {
   VK_CHECK(vkQueueWaitIdle(ctx.queue));
 
   write_file(args.output_path, readback.mapped, args.output_size);
+  if (depth_readback) {
+    write_file(args.depth_output_path, depth_readback_buf.mapped,
+               static_cast<size_t>(depth_size));
+  }
 
   // Cleanup.
   vkDestroyCommandPool(ctx.dev, cmdpool, nullptr);
@@ -718,9 +1185,21 @@ int run_raster(const Args &args) {
   vkDestroyShaderModule(ctx.dev, fs_mod, nullptr);
   vkDestroyFramebuffer(ctx.dev, framebuffer, nullptr);
   vkDestroyRenderPass(ctx.dev, render_pass, nullptr);
-  vkDestroyImageView(ctx.dev, color_view, nullptr);
-  vkDestroyImage(ctx.dev, color_img, nullptr);
-  vkFreeMemory(ctx.dev, color_mem, nullptr);
+  for (auto &ct : color_targets) {
+    vkDestroyImageView(ctx.dev, ct.view, nullptr);
+    vkDestroyImage(ctx.dev, ct.image, nullptr);
+    vkFreeMemory(ctx.dev, ct.memory, nullptr);
+  }
+  if (depth_view != VK_NULL_HANDLE) {
+    vkDestroyImageView(ctx.dev, depth_view, nullptr);
+    vkDestroyImage(ctx.dev, depth_img, nullptr);
+    vkFreeMemory(ctx.dev, depth_mem, nullptr);
+  }
+  if (use_vbo) {
+    vkUnmapMemory(ctx.dev, vbo_buf.memory);
+    vkDestroyBuffer(ctx.dev, vbo_buf.buffer, nullptr);
+    vkFreeMemory(ctx.dev, vbo_buf.memory, nullptr);
+  }
   if (dpool != VK_NULL_HANDLE) vkDestroyDescriptorPool(ctx.dev, dpool, nullptr);
   if (dsl != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(ctx.dev, dsl, nullptr);
   for (auto &rb : resources) {
@@ -728,9 +1207,23 @@ int run_raster(const Args &args) {
     vkDestroyBuffer(ctx.dev, rb.buf.buffer, nullptr);
     vkFreeMemory(ctx.dev, rb.buf.memory, nullptr);
   }
+  for (auto &tx : textures) {
+    vkDestroySampler(ctx.dev, tx.sampler, nullptr);
+    vkDestroyImageView(ctx.dev, tx.view, nullptr);
+    vkDestroyImage(ctx.dev, tx.image, nullptr);
+    vkFreeMemory(ctx.dev, tx.memory, nullptr);
+    vkUnmapMemory(ctx.dev, tx.staging.memory);
+    vkDestroyBuffer(ctx.dev, tx.staging.buffer, nullptr);
+    vkFreeMemory(ctx.dev, tx.staging.memory, nullptr);
+  }
   vkUnmapMemory(ctx.dev, readback.memory);
   vkDestroyBuffer(ctx.dev, readback.buffer, nullptr);
   vkFreeMemory(ctx.dev, readback.memory, nullptr);
+  if (depth_readback) {
+    vkUnmapMemory(ctx.dev, depth_readback_buf.memory);
+    vkDestroyBuffer(ctx.dev, depth_readback_buf.buffer, nullptr);
+    vkFreeMemory(ctx.dev, depth_readback_buf.memory, nullptr);
+  }
   vkDestroyDevice(ctx.dev, nullptr);
   vkDestroyInstance(ctx.instance, nullptr);
   return 0;

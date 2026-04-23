@@ -6,10 +6,10 @@
 #include "bwsl_cfg.h"
 #include "bwsl_ssa.h"
 #include "bwsl_parser_soa.h"
+#include "bwsl_resource_reflection.h"
 #include "bwsl_lexer.h"
-#include "../arena_allocator.h"
-#include "../render_config.h"
-#include "../model_types.h"
+#include "bwsl_arena.h"
+#include "bwsl_render_config.h"
 #include <vector>
 #include <string>
 #include <unordered_map>
@@ -147,7 +147,11 @@ struct CompiledVariant {
         std::string name;
         u32 set;
         u32 binding;
-        enum class Type { UniformBuffer, StorageBuffer, Texture, Sampler } type;
+        u8 stages = 0;
+        ResourceAccessMode access = ResourceAccessMode::ReadOnly;
+        bool combinedSampledImage = false;
+        std::string combinedWith;
+        enum class Type { UniformBuffer, StorageBuffer, Texture, Sampler, StorageImage } type;
     };
     std::vector<ResourceBinding> resources;
     
@@ -352,7 +356,6 @@ public:
     }
 
 private:
-    Memory::BWEMemoryArena* compilerArena = nullptr;
     const RenderConfig* renderConfig = nullptr;
     std::string shaderPath_;
     
@@ -521,13 +524,21 @@ private:
         variant.passName = passName;
         variant.attributeMask = attributeMask;
         
+        IRAnalysis vertexAnalysis{};
+        IRAnalysis fragmentAnalysis{};
+        std::vector<ExplicitSamplerUse> reflectionSamplerUses;
+        bool hasVertexAnalysis = false;
+        bool hasFragmentAnalysis = false;
+
         // Compile vertex shader if present
         if (!targetPass.vertexShader.IsNull()) {
             if (!CompileShaderStage(shaderSet, targetPass.vertexShader, 
-                                    ShaderStage::Vertex, config, variant.vertexSpirv)) {
+                                    ShaderStage::Vertex, config, variant.vertexSpirv,
+                                    &vertexAnalysis, &reflectionSamplerUses)) {
                 shaderSet.variants.erase(variantKey);
                 return false;
             }
+            hasVertexAnalysis = true;
         }
         
         // Compile fragment shader if present
@@ -535,21 +546,30 @@ private:
             CompilationConfig fragConfig = config;
             fragConfig.stage = ShaderStage::Fragment;
             if (!CompileShaderStage(shaderSet, targetPass.fragmentShader,
-                                    ShaderStage::Fragment, fragConfig, variant.fragmentSpirv)) {
+                                    ShaderStage::Fragment, fragConfig, variant.fragmentSpirv,
+                                    &fragmentAnalysis, &reflectionSamplerUses)) {
                 shaderSet.variants.erase(variantKey);
                 return false;
             }
+            hasFragmentAnalysis = true;
         }
-        
+
         // Populate attribute bindings for reflection
         PopulateAttributeBindings(variant, config);
+        PopulateResourceBindings(shaderSet, pipeline, targetPass, config, variant,
+                                 hasVertexAnalysis ? &vertexAnalysis : nullptr,
+                                 hasFragmentAnalysis ? &fragmentAnalysis : nullptr,
+                                 nullptr,
+                                 reflectionSamplerUses.empty() ? nullptr : &reflectionSamplerUses);
         
         return true;
     }
     
     bool CompileShaderStage(PipelineShaderSet& shaderSet, NodeRef stageRef,
                            ShaderStage stage, const CompilationConfig& config,
-                           std::vector<u32>& outSpirv) {
+                           std::vector<u32>& outSpirv,
+                           IRAnalysis* outAnalysis = nullptr,
+                           std::vector<ExplicitSamplerUse>* outExplicitSamplerUses = nullptr) {
         AST& ast = shaderSet.cachedContext->ast;
         const ShaderStageData& shaderStage = ast.GetShaderStage(stageRef);
         
@@ -622,6 +642,13 @@ private:
         
         // --- SSA Conversion ---
         SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena);
+
+        if (outExplicitSamplerUses) {
+            std::vector<ExplicitSamplerUse> stageUses =
+                CollectExplicitSamplerUses(lowering.program, stage);
+            outExplicitSamplerUses->insert(outExplicitSamplerUses->end(),
+                                           stageUses.begin(), stageUses.end());
+        }
         
         // --- Generate SPIR-V ---
         Memory::BWEMemoryArena spirvArena;
@@ -639,6 +666,9 @@ private:
         builder.EmitFunction();
 
         outSpirv = builder.Finalize();
+        if (outAnalysis) {
+            *outAnalysis = builder.analysis;
+        }
 
         if (outSpirv.size() <= 5) {
             return false;  // Invalid SPIR-V (too small)
@@ -659,10 +689,14 @@ private:
     }
     
     void ConfigureVertexPulling(SPIRVBuilder& builder, const CompilationConfig& config) {
-        // This will be expanded in the spirv-vertex-pulling todo
-        // For now, the builder uses its default attribute handling
-        (void)builder;
-        (void)config;
+        SPIRVBuilder::VertexPullingConfig vpConfig;
+        vpConfig.mode = (config.vertexPulling.mode == VertexInputMode::UnifiedWithOffsets)
+            ? SPIRVBuilder::VertexInputMode::UnifiedWithOffsets
+            : SPIRVBuilder::VertexInputMode::SeparateBuffers;
+        vpConfig.attributeMask = config.vertexPulling.attributeMask;
+        vpConfig.baseBufferBinding = config.vertexPulling.baseBufferBinding;
+        vpConfig.descriptorSet = config.vertexPulling.descriptorSet;
+        builder.SetVertexPullingConfig(vpConfig);
     }
     
     void PopulateAttributeBindings(CompiledVariant& variant, const CompilationConfig& config) {
@@ -680,6 +714,71 @@ private:
                     binding++;  // Each attribute gets its own binding
                 }
             }
+        }
+    }
+
+    static CompiledVariant::ResourceBinding::Type MapReflectedResourceType(::ResourceBinding::Type type) {
+        switch (type) {
+            case ::ResourceBinding::UniformBuffer:
+                return CompiledVariant::ResourceBinding::Type::UniformBuffer;
+            case ::ResourceBinding::StorageBuffer:
+                return CompiledVariant::ResourceBinding::Type::StorageBuffer;
+            case ::ResourceBinding::Texture:
+                return CompiledVariant::ResourceBinding::Type::Texture;
+            case ::ResourceBinding::Sampler:
+                return CompiledVariant::ResourceBinding::Type::Sampler;
+            case ::ResourceBinding::StorageImage:
+                return CompiledVariant::ResourceBinding::Type::StorageImage;
+            default:
+                return CompiledVariant::ResourceBinding::Type::UniformBuffer;
+        }
+    }
+
+    void PopulateResourceBindings(PipelineShaderSet& shaderSet,
+                                  const PipelineData& pipeline,
+                                  const PassData& pass,
+                                  const CompilationConfig& config,
+                                  CompiledVariant& variant,
+                                  const IRAnalysis* vertexAnalysis,
+                                  const IRAnalysis* fragmentAnalysis,
+                                  const IRAnalysis* computeAnalysis,
+                                  const std::vector<ExplicitSamplerUse>* explicitSamplerUses) {
+        ResourceReflectionConfig reflectionConfig;
+        reflectionConfig.vertexPullingMode = (config.vertexPulling.mode == VertexInputMode::UnifiedWithOffsets)
+            ? ResourceReflectionConfig::VertexPullingMode::UnifiedWithOffsets
+            : ResourceReflectionConfig::VertexPullingMode::SeparateBuffers;
+        reflectionConfig.attributeMask = config.vertexPulling.attributeMask;
+        if (reflectionConfig.attributeMask == 0 && vertexAnalysis) {
+            reflectionConfig.attributeMask = static_cast<u8>(vertexAnalysis->usedAttributeMask);
+        }
+        reflectionConfig.baseBufferBinding = config.vertexPulling.baseBufferBinding;
+        reflectionConfig.descriptorSet = config.vertexPulling.descriptorSet;
+
+        const std::vector<ReflectedResourceBinding> reflected =
+            BuildResolvedResourceReflection(&shaderSet.cachedContext->ast,
+                                           &pipeline,
+                                           &pass,
+                                           shaderSet.cachedParser->symbolTable,
+                                           shaderSet.cachedParser->sourceBase(),
+                                           vertexAnalysis,
+                                           fragmentAnalysis,
+                                           computeAnalysis,
+                                           reflectionConfig,
+                                           explicitSamplerUses);
+
+        variant.resources.clear();
+        variant.resources.reserve(reflected.size());
+        for (const ReflectedResourceBinding& resource : reflected) {
+            CompiledVariant::ResourceBinding binding;
+            binding.name = resource.name;
+            binding.set = resource.set;
+            binding.binding = resource.binding;
+            binding.stages = resource.stages;
+            binding.access = resource.access;
+            binding.combinedSampledImage = resource.combinedSampledImage;
+            binding.combinedWith = resource.combinedWith;
+            binding.type = MapReflectedResourceType(resource.type);
+            variant.resources.push_back(std::move(binding));
         }
     }
 };

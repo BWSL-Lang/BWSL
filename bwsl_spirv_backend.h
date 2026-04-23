@@ -181,7 +181,13 @@ struct SPIRVBuilder {
     bool emitDebugNames = false;  // Emit OpName/OpMemberName for debugging
 
     // ============= Layout Options =============
-    bool useStd430Padding = false;  // Use 16-byte stride for vec3 (required for GLSL compatibility)
+    bool useStd430Padding = true;   // Use 16-byte stride for vec3[] in SSBOs.
+                                    // REQUIRED for Vulkan: std140/std430/relaxed
+                                    // block layout all mandate 16-byte-aligned
+                                    // ArrayStride for vec3 elements. Stride 12
+                                    // yields SPIR-V that fails spirv-val and is
+                                    // rejected by conformant drivers. The flag
+                                    // remains togglable only for experimentation.
     
     // ============= Vertex Pulling Configuration =============
     enum class VertexInputMode : u8 {

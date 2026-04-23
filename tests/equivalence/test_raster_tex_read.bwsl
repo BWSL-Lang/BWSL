@@ -1,0 +1,28 @@
+// Equivalence: raster pipeline samples a 2D texture in the fragment
+// stage. Validates that BWSL's combined-image-sampler emission
+// (SPIR-V native) stays bit-exact with the HLSL->SPIR-V and
+// GLSL->SPIR-V paths when a texel is fetched and echoed to the
+// framebuffer.
+pipeline EquivRasterTexRead {
+    attributes {
+    }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float4 t = sample(resources.colorTex, resources.colorSampler, uv);
+            output.color = t;
+        }
+    }
+}

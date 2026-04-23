@@ -145,13 +145,12 @@ struct AttributeDeclData {
     u8 _pad[2];
 };
 
-// 24 bytes + ArenaArray
+// 24 bytes
 struct ResourceDeclData {
-    ResourceType resourceType;
-    u8 _pad[3];
     ArenaString name;
-    u32 slot;
-    ArenaArray<std::pair<ArenaString, ArenaString>> fields;
+    ArenaString typeName;
+    u8 resourceIndex;
+    u8 _pad[3];
 };
 
 // 24 bytes
@@ -251,12 +250,14 @@ struct VariantRuleData {
 struct PassData {
     ArenaString name;
     ArenaArray<ArenaString> usedAttributes;
+    ArenaArray<ArenaString> usedResources;
     ArenaArray<NodeRef> consts;     // Pass-scoped constants
     ArenaArray<NodeRef> functions;  // Pass-scoped functions
     NodeRef vertexShader;
     NodeRef fragmentShader;
     NodeRef computeShader;
     u32 optionalAttributesMask;     // Bitmask of optional attributes (from ? syntax)
+    u32 optionalResourcesMask;      // Bitmask of optional resources (from ? syntax)
 };
 
 enum class ResourceAccessMode : u8 {
@@ -1013,17 +1014,40 @@ namespace ASTFactory {
         return NodeRef(ASTNodeType::ATTRIBUTE_DECL, index);
     }
 
+    inline NodeRef MakeResourceDecl(AST* ast, const std::string& name, const std::string& type,
+                                    u32 line = 0, u32 col = 0) {
+        u32 index = ast->resourceDecls.count;
+        ResourceDeclData data;
+        data.name = ArenaString::MakeHashOnly(name);
+        data.typeName = ArenaString::MakeHashOnly(type);
+        data.resourceIndex = 0xFF;
+        ast->resourceDecls.Push(ast->arena, data);
+
+        if (ast->nodeCount >= ast->nodeCapacity) {
+            u32 newCapacity = ast->nodeCapacity * 2;
+            u32* newPositions = (u32*)ast->arena->Allocate(sizeof(u32) * newCapacity, 64);
+            memcpy(newPositions, ast->positions, ast->nodeCount * sizeof(u32));
+            ast->positions = newPositions;
+            ast->nodeCapacity = newCapacity;
+        }
+        ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
+
+        return NodeRef(ASTNodeType::RESOURCE_DECL, index);
+    }
+
     inline NodeRef MakePass(AST* ast, const std::string& name, u32 line = 0, u32 col = 0) {
         u32 index = ast->passes.count;
         PassData data;
         data.name = ArenaString::MakeHashOnly(name);
         data.usedAttributes.Init(ast->arena, 8);
+        data.usedResources.Init(ast->arena, 8);
         data.consts.Init(ast->arena, 4);
         data.functions.Init(ast->arena, 8);  // Pass-scoped functions
         data.vertexShader = NodeRef::Null();
         data.fragmentShader = NodeRef::Null();
         data.computeShader = NodeRef::Null();
         data.optionalAttributesMask = 0;
+        data.optionalResourcesMask = 0;
         ast->passes.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {

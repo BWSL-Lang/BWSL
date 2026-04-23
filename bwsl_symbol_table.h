@@ -711,7 +711,13 @@ namespace SymbolTable {
             // Parser stores stage flags as bitmask directly (1=vertex, 2=fragment, 3=both)
             resData.stageFlags = static_cast<u8>(ub.stages);
             // Store the explicit type from render config
-            resData.coreType = static_cast<u8>(ParseTypeName(ub.typeName));
+            resData.typeName = ArenaString::MakeHashOnly(ub.typeName);
+            ReverseLookup::Register(resData.typeName.nameHash, ub.typeName.c_str());
+            CoreType uniformType = ParseTypeName(ub.typeName);
+            resData.coreType = static_cast<u8>(uniformType);
+            if (uniformType == CoreType::CUSTOM) {
+                resData.structTypeHash = Utils::HashStr(ub.typeName.c_str());
+            }
             table->resources.Push(table->arena, resData);
             table->symbols.Push(table->arena, sym);
         }

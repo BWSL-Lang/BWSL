@@ -5,6 +5,15 @@
 
 namespace BWSL {
 
+static const char* ImplicitKindToString(ImplicitVariantKind kind) {
+    switch (kind) {
+        case ImplicitVariantKind::Attribute: return "attribute";
+        case ImplicitVariantKind::Resource: return "resource";
+        case ImplicitVariantKind::None:
+        default: return "none";
+    }
+}
+
 static std::string EscapeJson(const std::string& input) {
     std::string out;
     out.reserve(input.size() + 16);
@@ -26,6 +35,8 @@ std::string SerializeVariantReflectionJson(const VariantReflectionData& reflecti
     json << "{";
     json << "\"attributeMask\":" << reflection.attributeMask << ",";
     json << "\"hasAttributeMask\":" << (reflection.hasAttributeMask ? "true" : "false") << ",";
+    json << "\"resourceMask\":" << reflection.resourceMask << ",";
+    json << "\"hasResourceMask\":" << (reflection.hasResourceMask ? "true" : "false") << ",";
 
     json << "\"declared\":[";
     for (size_t i = 0; i < reflection.declared.size(); i++) {
@@ -46,8 +57,13 @@ std::string SerializeVariantReflectionJson(const VariantReflectionData& reflecti
         json << "{"
              << "\"name\":\"" << EscapeJson(decl.name.ToString(reflection.sourceBase)) << "\","
              << "\"type\":\"" << EscapeJson(SymbolTable::FormatTypeInfo(decl.typeInfo, decl.enumTypeHash, reflection.symbolTable, reflection.sourceBase)) << "\","
-             << "\"attributeIndex\":" << static_cast<u32>(decl.attributeIndex)
-             << "}";
+             << "\"implicitKind\":\"" << ImplicitKindToString(decl.implicitKind) << "\"";
+        if (decl.implicitKind == ImplicitVariantKind::Attribute) {
+            json << ",\"attributeIndex\":" << static_cast<u32>(decl.attributeIndex);
+        } else if (decl.implicitKind == ImplicitVariantKind::Resource) {
+            json << ",\"resourceIndex\":" << static_cast<u32>(decl.resourceIndex);
+        }
+        json << "}";
     }
     json << "],";
 
@@ -73,7 +89,12 @@ std::string SerializeVariantReflectionJson(const VariantReflectionData& reflecti
              << "\"value\":\"" << EscapeJson(SymbolTable::FormatLiteralValue(value.value, reflection.symbolTable, reflection.sourceBase, value.enumTypeHash)) << "\","
              << "\"implicit\":" << (value.isImplicit ? "true" : "false");
         if (value.isImplicit) {
-            json << ",\"attributeIndex\":" << static_cast<u32>(value.attributeIndex);
+            json << ",\"implicitKind\":\"" << ImplicitKindToString(value.implicitKind) << "\"";
+            if (value.implicitKind == ImplicitVariantKind::Attribute) {
+                json << ",\"attributeIndex\":" << static_cast<u32>(value.attributeIndex);
+            } else if (value.implicitKind == ImplicitVariantKind::Resource) {
+                json << ",\"resourceIndex\":" << static_cast<u32>(value.resourceIndex);
+            }
         }
         json << "}";
     }

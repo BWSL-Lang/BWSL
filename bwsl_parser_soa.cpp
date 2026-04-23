@@ -117,6 +117,232 @@ namespace parser_timing {
 
 namespace BWSL {
 
+namespace {
+
+static std::string StripFixedArraySuffixes(const std::string& typeName) {
+    std::string base = typeName;
+    while (!base.empty() && base.back() == ']') {
+        size_t left = base.rfind('[');
+        if (left == std::string::npos) break;
+        bool digitsOnly = true;
+        for (size_t i = left + 1; i + 1 < base.size(); i++) {
+            if (!std::isdigit(static_cast<unsigned char>(base[i]))) {
+                digitsOnly = false;
+                break;
+            }
+        }
+        if (!digitsOnly) break;
+        base.erase(left);
+    }
+    return base;
+}
+
+static bool StartsWith(std::string_view value, std::string_view prefix) {
+    return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
+}
+
+static std::string ParseInnerResourceType(std::string_view typeName, std::string_view prefix) {
+    if (!StartsWith(typeName, prefix) || typeName.size() <= prefix.size() + 1 || typeName.back() != '>') {
+        return {};
+    }
+    return std::string(typeName.substr(prefix.size(), typeName.size() - prefix.size() - 1));
+}
+
+static TypeInfo MakeTypeInfoForCoreType(CoreType coreType) {
+    switch (coreType) {
+        case CoreType::BOOL:   return TYPE_INFO(CoreType::BOOL,   1, false);
+        case CoreType::INT:    return TYPE_INFO(CoreType::INT,    1, false);
+        case CoreType::UINT:   return TYPE_INFO(CoreType::UINT,   1, false);
+        case CoreType::FLOAT:  return TYPE_INFO(CoreType::FLOAT,  1, false);
+        case CoreType::BOOL2:  return TYPE_INFO(CoreType::BOOL2,  2, true);
+        case CoreType::BOOL3:  return TYPE_INFO(CoreType::BOOL3,  3, true);
+        case CoreType::BOOL4:  return TYPE_INFO(CoreType::BOOL4,  4, true);
+        case CoreType::INT2:   return TYPE_INFO(CoreType::INT2,   2, true);
+        case CoreType::INT3:   return TYPE_INFO(CoreType::INT3,   3, true);
+        case CoreType::INT4:   return TYPE_INFO(CoreType::INT4,   4, true);
+        case CoreType::UINT2:  return TYPE_INFO(CoreType::UINT2,  2, true);
+        case CoreType::UINT3:  return TYPE_INFO(CoreType::UINT3,  3, true);
+        case CoreType::UINT4:  return TYPE_INFO(CoreType::UINT4,  4, true);
+        case CoreType::FLOAT2: return TYPE_INFO(CoreType::FLOAT2, 2, true);
+        case CoreType::FLOAT3: return TYPE_INFO(CoreType::FLOAT3, 3, true);
+        case CoreType::FLOAT4: return TYPE_INFO(CoreType::FLOAT4, 4, true);
+        case CoreType::MAT2:   return TYPE_INFO(CoreType::MAT2,   4, true);
+        case CoreType::MAT3:   return TYPE_INFO(CoreType::MAT3,   9, true);
+        case CoreType::MAT4:   return TYPE_INFO(CoreType::MAT4,   16, true);
+        case CoreType::TEXTURE2D:      return TYPE_INFO(CoreType::TEXTURE2D,      0, false);
+        case CoreType::TEXTURE3D:      return TYPE_INFO(CoreType::TEXTURE3D,      0, false);
+        case CoreType::TEXTURECUBE:    return TYPE_INFO(CoreType::TEXTURECUBE,    0, false);
+        case CoreType::TEXTURE2DARRAY: return TYPE_INFO(CoreType::TEXTURE2DARRAY, 0, false);
+        case CoreType::SAMPLER:        return TYPE_INFO(CoreType::SAMPLER,        0, false);
+        case CoreType::CBUFFER:        return TYPE_INFO(CoreType::CBUFFER,        0, false);
+        case CoreType::BUFFER:         return TYPE_INFO(CoreType::BUFFER,         0, false);
+        default:
+            return TYPE_INFO(CoreType::INVALID, 0, false);
+    }
+}
+
+static TypeInfo MakeCustomTypeInfo(SymbolTableData* table, u32 typeHash) {
+    if (typeHash == 0) {
+        return TYPE_INFO(CoreType::INVALID, 0, false);
+    }
+
+    Symbol* sym = SymbolTable::LookupByHash(table, typeHash);
+    if (sym && sym->kind == SymbolKind::CUSTOM_TYPE) {
+        const StructData& structData = table->structs[sym->index];
+        return TypeInfo{
+            CoreType::CUSTOM,
+            static_cast<u8>(structData.fields.count),
+            structData.isIndexable,
+            0,
+            structData.name.nameHash,
+            0,
+            0
+        };
+    }
+
+    return TypeInfo{CoreType::CUSTOM, 1, 0, 0, typeHash, 0, 0};
+}
+
+static TypeInfo MakeTypeInfoForResource(SymbolTableData* table, const ResourceData& data) {
+    CoreType coreType = static_cast<CoreType>(data.coreType);
+
+    switch (data.type) {
+        case ResourceBinding::Texture:
+            if (coreType == CoreType::INVALID) {
+                coreType = data.isArrayTexture ? CoreType::TEXTURE2DARRAY
+                         : data.isCubemapTexture ? CoreType::TEXTURECUBE
+                         : CoreType::TEXTURE2D;
+            }
+            return MakeTypeInfoForCoreType(coreType);
+
+        case ResourceBinding::Sampler:
+            return MakeTypeInfoForCoreType(CoreType::SAMPLER);
+
+        case ResourceBinding::UniformBuffer: {
+            if (data.structTypeHash != 0 || coreType == CoreType::CUSTOM) {
+                u32 typeHash = data.structTypeHash != 0 ? data.structTypeHash : data.typeName.nameHash;
+                return MakeCustomTypeInfo(table, typeHash);
+            }
+            return MakeTypeInfoForCoreType(coreType);
+        }
+
+        case ResourceBinding::StorageBuffer: {
+            TypeInfo elementType = TYPE_INFO(CoreType::INVALID, 0, false);
+            if (data.structTypeHash != 0 || coreType == CoreType::CUSTOM) {
+                u32 typeHash = data.structTypeHash != 0 ? data.structTypeHash : data.typeName.nameHash;
+                elementType = MakeCustomTypeInfo(table, typeHash);
+            } else {
+                elementType = MakeTypeInfoForCoreType(coreType);
+            }
+
+            if (elementType.coreType == CoreType::INVALID) {
+                return elementType;
+            }
+
+            elementType.arrayDimensions = elementType.arrayDimensions > 0 ? elementType.arrayDimensions : 1;
+            if (elementType.arrayStride == 0) {
+                elementType.arrayStride = static_cast<u32>(elementType.componentCount ? elementType.componentCount : 1) * 4u;
+            }
+            return elementType;
+        }
+
+        case ResourceBinding::StorageImage:
+            return MakeTypeInfoForCoreType(CoreType::TEXTURE2D);
+
+        default:
+            return TYPE_INFO(CoreType::INVALID, 0, false);
+    }
+}
+
+static void RegisterParsedResource(SymbolTableData* table,
+                                   const std::string& resourceName,
+                                   const std::string& typeName,
+                                   u32 bindingIndex) {
+    ArenaString resourceArena = ArenaString::MakeHashOnly(resourceName);
+    Symbol* sym = SymbolTable::AddResource(table, resourceArena);
+    if (!sym) {
+        sym = SymbolTable::LookupResource(table, resourceArena);
+        if (!sym || sym->kind != SymbolKind::RESOURCE) return;
+    }
+
+    ReverseLookup::Register(resourceArena.nameHash, resourceName.c_str());
+
+    ResourceData& data = table->resources[sym->index];
+    data = ResourceData{};
+    data.bindingIndex = bindingIndex;
+    data.stageFlags = SymbolTable::ShaderStageToBit(ShaderStage::Vertex) |
+                      SymbolTable::ShaderStageToBit(ShaderStage::Fragment) |
+                      SymbolTable::ShaderStageToBit(ShaderStage::Compute);
+    data.typeName = ArenaString::MakeHashOnly(typeName);
+    ReverseLookup::Register(data.typeName.nameHash, typeName.c_str());
+
+    if (typeName == "sampler") {
+        data.type = ResourceBinding::Sampler;
+        data.coreType = static_cast<u8>(CoreType::SAMPLER);
+        return;
+    }
+    if (typeName == "texture2D") {
+        data.type = ResourceBinding::Texture;
+        data.coreType = static_cast<u8>(CoreType::TEXTURE2D);
+        return;
+    }
+    if (typeName == "texture3D") {
+        data.type = ResourceBinding::Texture;
+        data.coreType = static_cast<u8>(CoreType::TEXTURE3D);
+        return;
+    }
+    if (typeName == "textureCube") {
+        data.type = ResourceBinding::Texture;
+        data.coreType = static_cast<u8>(CoreType::TEXTURECUBE);
+        data.isCubemapTexture = true;
+        return;
+    }
+    if (typeName == "texture2DArray") {
+        data.type = ResourceBinding::Texture;
+        data.coreType = static_cast<u8>(CoreType::TEXTURE2DARRAY);
+        data.isArrayTexture = true;
+        return;
+    }
+
+    std::string innerType = ParseInnerResourceType(typeName, "buffer<");
+    if (!innerType.empty()) {
+        data.type = ResourceBinding::StorageBuffer;
+        data.typeName = ArenaString::MakeHashOnly(innerType);
+        ReverseLookup::Register(data.typeName.nameHash, innerType.c_str());
+        std::string baseType = StripFixedArraySuffixes(innerType);
+        CoreType coreType = SymbolTable::ParseTypeName(baseType);
+        data.coreType = static_cast<u8>(coreType);
+        if (coreType == CoreType::CUSTOM) {
+            data.structTypeHash = Utils::HashStr(baseType.c_str());
+        }
+        return;
+    }
+
+    innerType = ParseInnerResourceType(typeName, "cbuffer<");
+    if (!innerType.empty()) {
+        data.type = ResourceBinding::UniformBuffer;
+        data.typeName = ArenaString::MakeHashOnly(innerType);
+        ReverseLookup::Register(data.typeName.nameHash, innerType.c_str());
+        std::string baseType = StripFixedArraySuffixes(innerType);
+        CoreType coreType = SymbolTable::ParseTypeName(baseType);
+        data.coreType = static_cast<u8>(coreType);
+        if (coreType == CoreType::CUSTOM) {
+            data.structTypeHash = Utils::HashStr(baseType.c_str());
+        }
+        return;
+    }
+
+    data.type = ResourceBinding::UniformBuffer;
+    std::string baseType = StripFixedArraySuffixes(typeName);
+    CoreType coreType = SymbolTable::ParseTypeName(baseType);
+    data.coreType = static_cast<u8>(coreType);
+    if (coreType == CoreType::CUSTOM) {
+        data.structTypeHash = Utils::HashStr(baseType.c_str());
+    }
+}
+
+} // namespace
+
 // Global module search paths - can be extended by external tools (e.g., bwslc)
 static std::vector<std::string> g_additionalModuleSearchPaths;
 
@@ -552,6 +778,12 @@ NodeRef Parser::ParsePipeline() {
             ParseImports(pipeline);
         } else if (Match(TokenType::ATTRIBUTES)) {
             ParseAttributes(pipeline);
+        } else if (Match(TokenType::RESOURCES)) {
+            if (ast->GetPipeline(pipeline).resources.count > 0) {
+                Error("Only one resources block is allowed per pipeline");
+                continue;
+            }
+            ParseResources(pipeline);
         } else if (Match(TokenType::VARIANTS)) {
             if (ast->GetPipeline(pipeline).variantDecls.count > 0 ||
                 ast->GetPipeline(pipeline).variantRules.count > 0) {
@@ -670,7 +902,7 @@ NodeRef Parser::ParsePipeline() {
                 ast->GetPipeline(pipeline).functions.Push(arena, function);
             }
         } else {
-            ErrorAtCurrent("Expected 'import', 'attributes', 'variants', 'compute_graph', 'constraint', 'enum', 'eval', 'module', 'struct', or 'pass'");
+            ErrorAtCurrent("Expected 'import', 'attributes', 'resources', 'variants', 'compute_graph', 'constraint', 'enum', 'eval', 'module', 'struct', or 'pass'");
             Advance();
         }
         
@@ -804,6 +1036,39 @@ void Parser::ParseAttributes(NodeRef pipeline) {
             Error("First attribute must be 'position'");
         }
     }
+}
+
+void Parser::ParseResources(NodeRef pipeline) {
+    Consume(TokenType::LEFT_BRACE, "Expected '{' after 'resources'");
+    u8 resourceIndex = 0;
+
+    while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
+        NodeRef resource = ParseResourceDecl();
+        if (resource.IsValid()) {
+            ast->GetResourceDecl(resource).resourceIndex = resourceIndex;
+            ast->GetPipeline(pipeline).resources.Push(arena, resource);
+
+            const ResourceDeclData& decl = ast->GetResourceDecl(resource);
+            RegisterParsedResource(&symbolTable,
+                                   decl.name.ToString(sourceBase()),
+                                   decl.typeName.ToString(sourceBase()),
+                                   resourceIndex);
+            resourceIndex++;
+        } else {
+            if (panicMode) {
+                Synchronize();
+                panicMode = false;
+            } else if (stream->GetType(current) != TokenType::RIGHT_BRACE &&
+                       stream->GetType(current) != TokenType::EOF_TOKEN) {
+                Advance();
+            } else {
+                break;
+            }
+        }
+    }
+
+    Consume(TokenType::RIGHT_BRACE, "Expected '}' after resources");
 }
 
 void Parser::ParseVariants(NodeRef pipeline) {
@@ -981,6 +1246,48 @@ NodeRef Parser::ParseAttributeDecl() {
     return attr;
 }
 
+NodeRef Parser::ParseResourceDecl() {
+    if (!Consume(TokenType::IDENTIFIER, "Expected resource name")) {
+        if (stream->GetType(current) != TokenType::RIGHT_BRACE && stream->GetType(current) != TokenType::EOF_TOKEN) {
+            Advance();
+        }
+        return NodeRef::Null();
+    }
+
+    std::string name(stream->GetValue(previous));
+    SourceLocation loc = getLocation(stream->GetOffset(previous));
+
+    if (!Consume(TokenType::COLON, "Expected ':' after resource name")) {
+        if (stream->GetType(current) != TokenType::RIGHT_BRACE && stream->GetType(current) != TokenType::EOF_TOKEN) {
+            Advance();
+        }
+        return NodeRef::Null();
+    }
+
+    std::string typeName;
+    while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        if (Check(TokenType::SEMICOLON)) {
+            Advance();
+            break;
+        }
+        if (!typeName.empty() && Check(TokenType::IDENTIFIER) && stream->GetType(PeekNext()) == TokenType::COLON) {
+            break;
+        }
+        std::string_view segment = stream->GetValue(current);
+        typeName.append(segment.data(), segment.size());
+        Advance();
+    }
+
+    if (typeName.empty()) {
+        Error("Expected resource type after ':'");
+        return NodeRef::Null();
+    }
+
+    ReverseLookup::Register(Utils::HashStr(name.c_str()), name.c_str());
+    ReverseLookup::Register(Utils::HashStr(typeName.c_str()), typeName.c_str());
+    return ASTFactory::MakeResourceDecl(ast, name, typeName, loc.line, loc.column);
+}
+
 //==============================================================================
 // Pass parsing
 //==============================================================================
@@ -1012,10 +1319,16 @@ void Parser::ParsePassBody(NodeRef pass) {
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
         ProgressGuard _pg_(this);
         if (Match(TokenType::USE)) {
-            if (!ast->GetPass(pass).computeShader.IsNull()) {
-                Error("Compute passes cannot use attributes");
+            if (Check(TokenType::ATTRIBUTES)) {
+                if (!ast->GetPass(pass).computeShader.IsNull()) {
+                    Error("Compute passes cannot use attributes");
+                }
+                ParseUseAttributes(pass);
+            } else if (Check(TokenType::RESOURCES)) {
+                ParseUseResources(pass);
+            } else {
+                Error("Expected 'attributes' or 'resources' after 'use'");
             }
-            ParseUseAttributes(pass);
         } else if (Match(TokenType::CONST)) {
             SourceLocation loc = getLocation(stream->GetOffset(previous));
             if (!MatchMask(TokenMasks::CORE_TYPES)) {
@@ -1193,6 +1506,43 @@ void Parser::ParseUseAttributes(NodeRef pass) {
 
         if (!Match(TokenType::COMMA)) break;
     }
+    Consume(TokenType::RIGHT_BRACE, "Expected '}'");
+}
+
+void Parser::ParseUseResources(NodeRef pass) {
+    Consume(TokenType::RESOURCES, "Expected 'resources'");
+    Consume(TokenType::LEFT_BRACE, "Expected '{'");
+
+    while (!Check(TokenType::RIGHT_BRACE)) {
+        ProgressGuard _pg_(this);
+        Consume(TokenType::IDENTIFIER, "Expected resource name");
+        ArenaString resourceName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
+        bool isOptional = Match(TokenType::QUESTION);
+
+        const ResourceDeclData* pipelineDecl = LookupPipelineResourceDecl(resourceName);
+        const bool pipelineOwnsResources = PipelineDeclaresResources();
+        if (pipelineOwnsResources) {
+            if (!pipelineDecl) {
+                Error("Unknown resource in 'use resources'");
+            } else {
+                ast->GetPass(pass).usedResources.Push(arena, resourceName);
+
+                if (isOptional && pipelineDecl->resourceIndex < 32) {
+                    ast->GetPass(pass).optionalResourcesMask |= (1u << pipelineDecl->resourceIndex);
+                }
+            }
+        } else {
+            Symbol* sym = SymbolTable::LookupResource(&symbolTable, resourceName);
+            if (!sym || sym->kind != SymbolKind::RESOURCE) {
+                Error("Unknown resource in 'use resources'");
+            } else {
+                ast->GetPass(pass).usedResources.Push(arena, resourceName);
+            }
+        }
+
+        if (!Match(TokenType::COMMA)) break;
+    }
+
     Consume(TokenType::RIGHT_BRACE, "Expected '}'");
 }
 
@@ -2789,7 +3139,16 @@ NodeRef Parser::ParseMemberAccess(NodeRef object) {
         switch (ident.identifierKind) {
             case SpecialIdentifier::RESOURCES:
                 if (inShaderStage) {
-                    if (!SymbolTable::ValidateResourceAccess(&symbolTable, memberName, currentShaderStage, sourceBase())) {
+                    if (PipelineDeclaresResources() && !LookupPipelineResourceDecl(memberName)) {
+                        ErrorAtPrevious("Resource not declared in pipeline resources block");
+                        break;
+                    }
+                    bool requireUseResources = currentPass.IsValid() &&
+                        ((currentPipeline.IsValid() && ast->GetPipeline(currentPipeline).resources.count > 0) ||
+                         ast->GetPass(currentPass).usedResources.count > 0);
+                    if (requireUseResources && !ValidateResourceInUse(memberName)) {
+                        ErrorAtPrevious("Resource not declared in 'use resources' for this pass");
+                    } else if (!SymbolTable::ValidateResourceAccess(&symbolTable, memberName, currentShaderStage, sourceBase())) {
                         ErrorAtPrevious("Resource not available in this shader stage");
                     }
                 }
@@ -2900,6 +3259,36 @@ bool Parser::ValidateAttributeInUse(const ArenaString& attrName) {
         }
     }
     return false;
+}
+
+bool Parser::ValidateResourceInUse(const ArenaString& resourceName) {
+    if (!currentPass.IsValid()) return false;
+
+    const PassData& pass = ast->GetPass(currentPass);
+    for (u32 i = 0; i < pass.usedResources.count; i++) {
+        if (pass.usedResources[i].nameHash == resourceName.nameHash) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Parser::PipelineDeclaresResources() const {
+    return currentPipeline.IsValid() &&
+           ast->GetPipeline(currentPipeline).resources.count > 0;
+}
+
+const ResourceDeclData* Parser::LookupPipelineResourceDecl(const ArenaString& resourceName) const {
+    if (!PipelineDeclaresResources()) return nullptr;
+
+    const PipelineData& pipeline = ast->GetPipeline(currentPipeline);
+    for (u32 i = 0; i < pipeline.resources.count; i++) {
+        const ResourceDeclData& resourceDecl = ast->GetResourceDecl(pipeline.resources[i]);
+        if (resourceDecl.name.nameHash == resourceName.nameHash) {
+            return &resourceDecl;
+        }
+    }
+    return nullptr;
 }
 
 bool Parser::ValidateAssignmentTarget(NodeRef target) {
@@ -3467,14 +3856,35 @@ bool Parser::IsOptionalAttributeFeature(NodeRef pipeline, u8 attributeIndex) con
     return false;
 }
 
+bool Parser::IsOptionalResourceFeature(NodeRef pipeline, u8 resourceIndex) const {
+    if (pipeline.IsNull() || resourceIndex >= 32) return false;
+    const u32 bit = (1u << resourceIndex);
+
+    if (currentPass.IsValid() && currentPipeline == pipeline) {
+        if (ast->GetPass(currentPass).optionalResourcesMask & bit) {
+            return true;
+        }
+    }
+
+    const PipelineData& pipelineData = ast->GetPipeline(pipeline);
+    for (u32 i = 0; i < pipelineData.passes.count; i++) {
+        if (ast->GetPass(pipelineData.passes[i]).optionalResourcesMask & bit) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool Parser::LookupVariantType(NodeRef pipeline, u32 nameHash, TypeInfo* outType,
                                u32* outEnumTypeHash,
                                bool* outImplicit,
-                               u8* outAttributeIndex) const {
+                               u8* outAttributeIndex,
+                               u8* outResourceIndex) const {
     if (outType) *outType = TYPE_INFO(CoreType::INVALID, 0, false);
     if (outEnumTypeHash) *outEnumTypeHash = 0;
     if (outImplicit) *outImplicit = false;
     if (outAttributeIndex) *outAttributeIndex = 0xFF;
+    if (outResourceIndex) *outResourceIndex = 0xFF;
 
     if (pipeline.IsNull()) return false;
     const PipelineData& pipelineData = ast->GetPipeline(pipeline);
@@ -3501,6 +3911,17 @@ bool Parser::LookupVariantType(NodeRef pipeline, u32 nameHash, TypeInfo* outType
         return true;
     }
 
+    for (u32 i = 0; i < pipelineRef.resources.count; i++) {
+        const ResourceDeclData& resourceDecl = ast->GetResourceDecl(pipelineRef.resources[i]);
+        if (!IsOptionalResourceFeature(pipeline, resourceDecl.resourceIndex)) continue;
+        std::string implicitName = std::string("has_resource_") + resourceDecl.name.ToString(sourceBase());
+        if (Utils::HashStr(implicitName.c_str()) != nameHash) continue;
+        if (outType) *outType = TYPE_INFO(CoreType::BOOL, 1, false);
+        if (outImplicit) *outImplicit = true;
+        if (outResourceIndex) *outResourceIndex = resourceDecl.resourceIndex;
+        return true;
+    }
+
     return false;
 }
 
@@ -3508,7 +3929,8 @@ bool Parser::LookupActiveVariantBinding(u32 nameHash, LiteralValue* outValue,
                                         TypeInfo* outType,
                                         u32* outEnumTypeHash,
                                         bool* outImplicit,
-                                        u8* outAttributeIndex) const {
+                                        u8* outAttributeIndex,
+                                        u8* outResourceIndex) const {
     for (size_t i = activeVariantBindings.size(); i > 0; --i) {
         const ActiveVariantBinding& binding = activeVariantBindings[i - 1];
         if (binding.nameHash != nameHash) continue;
@@ -3517,6 +3939,7 @@ bool Parser::LookupActiveVariantBinding(u32 nameHash, LiteralValue* outValue,
         if (outEnumTypeHash) *outEnumTypeHash = binding.enumTypeHash;
         if (outImplicit) *outImplicit = binding.isImplicit;
         if (outAttributeIndex) *outAttributeIndex = binding.attributeIndex;
+        if (outResourceIndex) *outResourceIndex = binding.resourceIndex;
         return true;
     }
     return false;
@@ -3532,7 +3955,9 @@ void Parser::SetActiveVariantSelection(const VariantSelectionData& selection, bo
         binding.enumTypeHash = value.enumTypeHash;
         binding.value = value.value;
         binding.isImplicit = value.isImplicit;
+        binding.implicitKind = value.implicitKind;
         binding.attributeIndex = value.attributeIndex;
+        binding.resourceIndex = value.resourceIndex;
         activeVariantBindings.push_back(binding);
     }
     this->allowBareVariantLookup = allowBareLookup;
@@ -3596,7 +4021,9 @@ bool Parser::ResolvePipelineVariants(NodeRef pipeline, std::string* outError) {
         binding.enumTypeHash = decl.enumTypeHash;
         binding.value = value;
         binding.isImplicit = false;
+        binding.implicitKind = ImplicitVariantKind::None;
         binding.attributeIndex = 0xFF;
+        binding.resourceIndex = 0xFF;
         activeVariantBindings.push_back(binding);
     }
 
@@ -3614,7 +4041,29 @@ bool Parser::ResolvePipelineVariants(NodeRef pipeline, std::string* outError) {
         binding.value.type = LiteralValue::BOOL;
         binding.value.boolValue = false;
         binding.isImplicit = true;
+        binding.implicitKind = ImplicitVariantKind::Attribute;
         binding.attributeIndex = attr.attributeIndex;
+        binding.resourceIndex = 0xFF;
+        activeVariantBindings.push_back(binding);
+    }
+
+    for (u32 i = 0; i < pipelineData.resources.count; i++) {
+        const ResourceDeclData& resourceDecl = ast->GetResourceDecl(pipelineData.resources[i]);
+        if (!IsOptionalResourceFeature(pipeline, resourceDecl.resourceIndex)) continue;
+
+        ActiveVariantBinding binding{};
+        std::string implicitName = std::string("has_resource_") + resourceDecl.name.ToString(sourceBase());
+        u32 implicitHash = Utils::HashStr(implicitName.c_str());
+        ReverseLookup::Register(implicitHash, implicitName.c_str());
+        binding.nameHash = implicitHash;
+        binding.typeInfo = TYPE_INFO(CoreType::BOOL, 1, false);
+        binding.enumTypeHash = 0;
+        binding.value.type = LiteralValue::BOOL;
+        binding.value.boolValue = false;
+        binding.isImplicit = true;
+        binding.implicitKind = ImplicitVariantKind::Resource;
+        binding.attributeIndex = 0xFF;
+        binding.resourceIndex = resourceDecl.resourceIndex;
         activeVariantBindings.push_back(binding);
     }
 
@@ -3708,11 +4157,12 @@ bool Parser::BuildVariantSelection(NodeRef pipeline, const VariantSelectionData*
                                    const std::vector<VariantOverride>& overrides,
                                    VariantSelectionData* outSelection,
                                    std::string* outError) {
-    (void)baseSelection;
     if (!outSelection) return false;
     outSelection->values.clear();
     outSelection->attributeMask = attributeMask;
     outSelection->hasAttributeMask = hasAttributeMask;
+    outSelection->resourceMask = baseSelection ? baseSelection->resourceMask : 0;
+    outSelection->hasResourceMask = baseSelection ? baseSelection->hasResourceMask : false;
 
     if (!ResolvePipelineVariants(pipeline, outError)) {
         return false;
@@ -3732,6 +4182,7 @@ bool Parser::BuildVariantSelection(NodeRef pipeline, const VariantSelectionData*
         value.typeInfo = decl.typeInfo;
         value.enumTypeHash = decl.enumTypeHash;
         value.value = decl.defaultValue;
+        value.implicitKind = ImplicitVariantKind::None;
         outSelection->values.push_back(value);
     }
 
@@ -3814,7 +4265,30 @@ bool Parser::BuildVariantSelection(NodeRef pipeline, const VariantSelectionData*
             ? ((attributeMask & (1u << attr.attributeIndex)) != 0)
             : true;
         value.isImplicit = true;
+        value.implicitKind = ImplicitVariantKind::Attribute;
         value.attributeIndex = attr.attributeIndex;
+        value.resourceIndex = 0xFF;
+        outSelection->values.push_back(value);
+    }
+
+    for (u32 i = 0; i < pipelineData.resources.count; i++) {
+        const ResourceDeclData& resourceDecl = ast->GetResourceDecl(pipelineData.resources[i]);
+        if (!IsOptionalResourceFeature(pipeline, resourceDecl.resourceIndex)) continue;
+
+        VariantSelectionValue value{};
+        std::string implicitName = std::string("has_resource_") + resourceDecl.name.ToString(sourceBase());
+        value.name = ArenaString::MakeHashOnly(implicitName);
+        ReverseLookup::Register(value.name.nameHash, implicitName.c_str());
+        value.typeInfo = TYPE_INFO(CoreType::BOOL, 1, false);
+        value.enumTypeHash = 0;
+        value.value.type = LiteralValue::BOOL;
+        value.value.boolValue = outSelection->hasResourceMask
+            ? ((outSelection->resourceMask & (1u << resourceDecl.resourceIndex)) != 0)
+            : true;
+        value.isImplicit = true;
+        value.implicitKind = ImplicitVariantKind::Resource;
+        value.attributeIndex = 0xFF;
+        value.resourceIndex = resourceDecl.resourceIndex;
         outSelection->values.push_back(value);
     }
 
@@ -3865,6 +4339,8 @@ bool Parser::BuildVariantReflection(NodeRef pipeline, const VariantSelectionData
     outReflection->sourceBase = sourceBase();
     outReflection->attributeMask = selection ? selection->attributeMask : 0;
     outReflection->hasAttributeMask = selection ? selection->hasAttributeMask : false;
+    outReflection->resourceMask = selection ? selection->resourceMask : 0;
+    outReflection->hasResourceMask = selection ? selection->hasResourceMask : false;
 
     if (!ResolvePipelineVariants(pipeline, outError)) {
         return false;
@@ -3891,7 +4367,23 @@ bool Parser::BuildVariantReflection(NodeRef pipeline, const VariantSelectionData
         reflection.typeInfo = TYPE_INFO(CoreType::BOOL, 1, false);
         reflection.enumTypeHash = 0;
         reflection.isImplicit = true;
+        reflection.implicitKind = ImplicitVariantKind::Attribute;
         reflection.attributeIndex = attr.attributeIndex;
+        outReflection->implicit.push_back(reflection);
+    }
+
+    for (u32 i = 0; i < pipelineData.resources.count; i++) {
+        const ResourceDeclData& resourceDecl = ast->GetResourceDecl(pipelineData.resources[i]);
+        if (!IsOptionalResourceFeature(pipeline, resourceDecl.resourceIndex)) continue;
+        VariantDeclarationReflection reflection{};
+        std::string implicitName = std::string("has_resource_") + resourceDecl.name.ToString(sourceBase());
+        reflection.name = ArenaString::MakeHashOnly(implicitName);
+        ReverseLookup::Register(reflection.name.nameHash, implicitName.c_str());
+        reflection.typeInfo = TYPE_INFO(CoreType::BOOL, 1, false);
+        reflection.enumTypeHash = 0;
+        reflection.isImplicit = true;
+        reflection.implicitKind = ImplicitVariantKind::Resource;
+        reflection.resourceIndex = resourceDecl.resourceIndex;
         outReflection->implicit.push_back(reflection);
     }
 
@@ -5230,15 +5722,7 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
                     case SpecialIdentifier::RESOURCES: {
                         Symbol* sym = SymbolTable::LookupAny(&symbolTable, memberData.member);
                         if (sym && sym->kind == SymbolKind::RESOURCE) {
-                            ResourceData& data = symbolTable.resources[sym->index];
-                            switch (data.type) {
-                                case ResourceBinding::Type::Texture:
-                                    return TypeInfo{CoreType::TEXTURE2D, 0, 0, 0, 0, 0, 0};
-                                case ResourceBinding::Type::Sampler:
-                                    return TypeInfo{CoreType::SAMPLER, 0, 0, 0, 0, 0, 0};
-                                default:
-                                    return TypeInfo{CoreType::INVALID, 0, 0, 0, 0, 0, 0};
-                            }
+                            return MakeTypeInfoForResource(&symbolTable, symbolTable.resources[sym->index]);
                         }
                         break;
                     }
@@ -5286,6 +5770,9 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
                     case SymbolKind::VARIABLE:
                         return symbolTable.variables[sym->index].typeInfo;
 
+                    case SymbolKind::RESOURCE:
+                        return MakeTypeInfoForResource(&symbolTable, symbolTable.resources[sym->index]);
+
                     case SymbolKind::EVAL_CONSTANT: {
                         LiteralValue& value = symbolTable.evalConstants[sym->index];
                         switch (value.type) {
@@ -5330,6 +5817,13 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
                 case CoreType::MAT4:
                     return TypeInfo{CoreType::FLOAT4, 4, 0, 0, 0, 0, 0};
                 default:
+                    if (arrayType.arrayDimensions > 0) {
+                        TypeInfo elementType = arrayType;
+                        elementType.arrayDimensions--;
+                        elementType.arrayLength = 0;
+                        elementType.arrayStride = 0;
+                        return elementType;
+                    }
                     return TypeInfo{CoreType::INVALID, 0, 0, 0, 0, 0, 0};
             }
         }
@@ -6451,6 +6945,10 @@ TypeInfo Parser::GetTypeInfoFromSymbol(Symbol* sym) {
             return attrData.typeInfo;
         }
 
+        case SymbolKind::RESOURCE: {
+            return MakeTypeInfoForResource(&symbolTable, symbolTable.resources[sym->index]);
+        }
+
         case SymbolKind::EVAL_CONSTANT: {
             const LiteralValue& value = symbolTable.evalConstants[sym->index];
             switch (value.type) {
@@ -7024,7 +7522,11 @@ NodeRef Parser::ClonePassWithActiveVariants(NodeRef passRef) {
     for (u32 i = 0; i < srcPass.usedAttributes.count; i++) {
         dstPass.usedAttributes.Push(arena, srcPass.usedAttributes[i]);
     }
+    for (u32 i = 0; i < srcPass.usedResources.count; i++) {
+        dstPass.usedResources.Push(arena, srcPass.usedResources[i]);
+    }
     dstPass.optionalAttributesMask = srcPass.optionalAttributesMask;
+    dstPass.optionalResourcesMask = srcPass.optionalResourcesMask;
 
     for (u32 i = 0; i < srcPass.consts.count; i++) {
         dstPass.consts.Push(arena, CloneNodeWithParams(srcPass.consts[i], nullptr, 0));

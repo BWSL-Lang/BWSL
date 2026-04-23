@@ -1,0 +1,24 @@
+// Equivalence: all three vertices emit the same constant depth (0.75) so
+// the rasterizer writes exactly that value into every pixel of the depth
+// buffer. Tests the simplest path: depth attachment is attached, depth
+// test + write are enabled, and no per-pixel depth varies. Any mismatch in
+// the fixed-function pipeline depth plumbing across backends will trip the
+// float32 compare immediately.
+pipeline EquivRasterDepthConstant {
+    attributes { }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.75, 1.0);
+        }
+
+        fragment {
+            output.color = float4(0.1, 0.2, 0.3, 1.0);
+        }
+    }
+}
