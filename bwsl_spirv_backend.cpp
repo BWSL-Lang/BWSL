@@ -167,7 +167,7 @@ constexpr std::array<spv::Op, 256> BuildIrToSpvOpTable() {
     table[IR::OP_WAVE_ALL] = static_cast<spv::Op>(334);
     table[IR::OP_WAVE_ANY] = static_cast<spv::Op>(335);
     table[IR::OP_WAVE_BALLOT] = static_cast<spv::Op>(333);
-    table[IR::OP_WAVE_READ_FIRST] = static_cast<spv::Op>(339);
+    table[IR::OP_WAVE_READ_FIRST] = static_cast<spv::Op>(338);
     table[IR::OP_WAVE_READ_LANE] = static_cast<spv::Op>(337);
     table[IR::OP_WAVE_SUM] = static_cast<spv::Op>(349);
     table[IR::OP_WAVE_MUL] = static_cast<spv::Op>(353);
@@ -416,12 +416,13 @@ void SPIRVBuilder::EmitPreamble() {
   // Wave/subgroup operations (SPIR-V 1.3+)
   if (analysis.Has(IRAnalysis::CAP_WAVE_OPS)) {
     // GroupNonUniform = 61, GroupNonUniformArithmetic = 63,
-    // GroupNonUniformBallot = 64
+    // GroupNonUniformBallot = 64, GroupNonUniformShuffle = 65
     EmitCapability(static_cast<spv::Capability>(61)); // GroupNonUniform
     EmitCapability(
         static_cast<spv::Capability>(63)); // GroupNonUniformArithmetic
     EmitCapability(static_cast<spv::Capability>(64)); // GroupNonUniformBallot
     EmitCapability(static_cast<spv::Capability>(62)); // GroupNonUniformVote
+    EmitCapability(static_cast<spv::Capability>(65)); // GroupNonUniformShuffle
   }
 
   // Atomic operations: Vulkan does NOT require any capability for SSBO/workgroup
@@ -5553,15 +5554,101 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       break;
     }
 
+    auto get_uint_constant_lane_id = [&](u16 lane_reg) -> u32 {
+      if ((lane_reg & 0xC000) == 0xC000) {
+        u32 idx = lane_reg & 0x3FFF;
+        if (idx >= ir->boolCount) {
+          return 0;
+        }
+        return GetIntConstantId(ir->boolConstants[idx] != 0 ? 1u : 0u, true);
+      }
+      if (lane_reg & 0x4000) {
+        u32 idx = lane_reg & 0x3FFF;
+        if (idx >= ir->intCount) {
+          return 0;
+        }
+        return GetIntConstantId(ir->intConstants[idx], true);
+      }
+      if (lane_reg & 0x2000) {
+        return GetSpirvId(lane_reg);
+      }
+      if (lane_reg & 0x8000) {
+        return 0;
+      }
+
+      if (lane_reg >= idCapacity) {
+        return 0;
+      }
+
+      u32 lane_id = spirvIds[lane_reg];
+      if (lane_id == 0) {
+        return 0;
+      }
+      if (lane_id == boolTrueId) {
+        return GetIntConstantId(1, true);
+      }
+      if (lane_id == boolFalseId) {
+        return GetIntConstantId(0, true);
+      }
+      for (u32 i = 0; i < ir->intCount; i++) {
+        if (uintConstantIds[i] == lane_id) {
+          return lane_id;
+        }
+        if (intConstantIds[i] == lane_id) {
+          return GetIntConstantId(ir->intConstants[i], true);
+        }
+      }
+      return 0;
+    };
+
+    auto get_uint_lane_id = [&](u16 lane_reg) -> u32 {
+      if (u32 constant_lane_id = get_uint_constant_lane_id(lane_reg)) {
+        return constant_lane_id;
+      }
+
+      u32 lane_id = GetSpirvId(lane_reg);
+      CoreType laneType = GetOperandType(lane_reg);
+      if (laneType == CoreType::UINT) {
+        return lane_id;
+      }
+
+      u32 uint_type = GetTypeId(CoreType::UINT);
+      u32 converted_lane = AllocateId();
+      switch (laneType) {
+      case CoreType::INT:
+        Emit(spv::OpBitcast, uint_type, converted_lane, lane_id);
+        break;
+      case CoreType::FLOAT:
+        Emit(spv::OpConvertFToU, uint_type, converted_lane, lane_id);
+        break;
+      case CoreType::BOOL: {
+        u32 one = GetIntConstantId(1, true);
+        u32 zero = GetIntConstantId(0, true);
+        Emit(spv::OpSelect, uint_type, converted_lane, lane_id, one, zero);
+        break;
+      }
+      default:
+        Emit(spv::OpBitcast, uint_type, converted_lane, lane_id);
+        break;
+      }
+      return converted_lane;
+    };
+
     if (op == IR::OP_WAVE_READ_FIRST) {
-      Emit(static_cast<spv::Op>(339), result_type, dest, scope, value_id);
+      Emit(static_cast<spv::Op>(338), result_type, dest, scope, value_id);
       break;
     }
 
     if (op == IR::OP_WAVE_READ_LANE) {
-      u32 lane_id = GetSpirvId(ir->GetOperand(ir_idx, 1));
-      Emit(static_cast<spv::Op>(337), result_type, dest, scope, value_id,
-           lane_id);
+      u16 lane_reg = ir->GetOperand(ir_idx, 1);
+      if (u32 constant_lane_id = get_uint_constant_lane_id(lane_reg)) {
+        Emit(static_cast<spv::Op>(337), result_type, dest, scope, value_id,
+             constant_lane_id);
+      } else {
+        u32 lane_id = get_uint_lane_id(lane_reg);
+        Emit(static_cast<spv::Op>(345), result_type, dest, scope, value_id,
+             lane_id);
+      }
       break;
     }
 

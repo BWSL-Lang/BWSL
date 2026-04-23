@@ -423,7 +423,7 @@ constexpr IntrinsicData INTRINSICS[] = {
     INTRINSIC_FIXED(WAVE_ACTIVE_ALL, "wave_all", mask(CoreType::BOOL), mask(CoreType::BOOL), 0, 0, 0, IntrinsicFlags::WAVE_OP, SPV_MAP(static_cast<spv::Op>(334), SPV_EXT_NONE)), // OpGroupNonUniformAll
     INTRINSIC_FIXED(WAVE_ACTIVE_ANY, "wave_any", mask(CoreType::BOOL), mask(CoreType::BOOL), 0, 0, 0, IntrinsicFlags::WAVE_OP, SPV_MAP(static_cast<spv::Op>(335), SPV_EXT_NONE)), // OpGroupNonUniformAny
     INTRINSIC_FIXED(WAVE_BROADCAST, "wave_broadcast", TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, mask(CoreType::INT), 0, 0, IntrinsicFlags::WAVE_OP, SPV_MAP(static_cast<spv::Op>(337), SPV_EXT_NONE)), // OpGroupNonUniformBroadcast
-    INTRINSIC_FIXED(WAVE_READ_FIRST, "wave_read_first", TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, 0, 0, 0, IntrinsicFlags::WAVE_OP, SPV_MAP(static_cast<spv::Op>(339), SPV_EXT_NONE)), // OpGroupNonUniformBroadcastFirst
+    INTRINSIC_FIXED(WAVE_READ_FIRST, "wave_read_first", TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, 0, 0, 0, IntrinsicFlags::WAVE_OP, SPV_MAP(static_cast<spv::Op>(338), SPV_EXT_NONE)), // OpGroupNonUniformBroadcastFirst
     
     // Atomics
     INTRINSIC_FIXED(ATOMIC_ADD, "atomic_add", mask(CoreType::INT), mask(CoreType::CUSTOM), mask(CoreType::INT), 0, 0, IntrinsicFlags::ATOMIC_OP, SPV_MAP(spv::OpAtomicIAdd, SPV_EXT_NONE)),
