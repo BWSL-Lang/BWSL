@@ -1380,6 +1380,11 @@ CompileResult CompileShaderStage(
         lowering.LowerStatement(block.statements[i]);
     }
 
+    if (lowering.hadError) {
+        result.error = "IR lowering failed. See diagnostic above.";
+        return result;
+    }
+
     // Ensure return
     if (lowering.program.instructionCount == 0 ||
         lowering.program.opcodes[lowering.program.instructionCount - 1] != OP_RET) {

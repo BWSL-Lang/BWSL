@@ -138,6 +138,9 @@ struct IRLowering {
   // Set on the first recursion-detection event. bwslc checks this
   // before attempting SPIR-V validation and cross-compilation.
   bool recursionDiagnosed = false;
+  // Tracks lowering-stage diagnostics that should fail the compile even
+  // when external SPIR-V validation tooling is unavailable.
+  bool hadError = false;
 
   // Loop nesting depth - used to ensure selection merges don't coincide with
   // continue targets
@@ -171,6 +174,11 @@ struct IRLowering {
   // Source base for string extraction (used for varying names in GLES output)
   const char *sourceBase = nullptr;
 
+  void ReportError(const char *message) {
+    fprintf(stderr, "%s", message);
+    hadError = true;
+  }
+
   void Initialize(IRMemoryPool *memPool, const SymbolTableData *symTable,
                   AST *astData, const char *srcBase = nullptr) {
     pool = memPool;
@@ -182,6 +190,8 @@ struct IRLowering {
     builder.program = &program;
     builder.currentInstruction = 0;
     builder.nextRegister = 0;
+    recursionDiagnosed = false;
+    hadError = false;
 
     // Allocate IR arrays. instructionCount must be zeroed explicitly — it's
     // a plain u32 field with no inline initializer, and the enclosing
@@ -1120,8 +1130,7 @@ struct IRLowering {
           NodeRef valueRef = caseData.values[v];
           s32 caseVal = 0;
           if (!GetCaseLiteralValue(valueRef, &caseVal)) {
-            fprintf(
-                stderr,
+            ReportError(
                 "Error: switch case values must be compile-time literals\n");
             return;
           }
@@ -1207,8 +1216,7 @@ struct IRLowering {
           NodeRef valueRef = caseData.values[v];
           s32 caseVal = 0;
           if (!GetCaseLiteralValue(valueRef, &caseVal)) {
-            fprintf(
-                stderr,
+            ReportError(
                 "Error: switch case values must be compile-time literals\n");
             return;
           }
@@ -1367,11 +1375,11 @@ struct IRLowering {
         u32 fInfo = program.registerStorageInfo[falseReg];
         if ((tInfo & IR::IRProgram::STORAGE_IS_PTR) ||
             (fInfo & IR::IRProgram::STORAGE_IS_PTR)) {
-          fprintf(stderr,
-                  "Error: ternary expression with pointer operands is not "
-                  "supported; select the dereferenced value instead "
-                  "(e.g. `(c ? pa^ : pb^)`) or branch on the pointer with "
-                  "if/else.\n");
+          ReportError(
+              "Error: ternary expression with pointer operands is not "
+              "supported; select the dereferenced value instead "
+              "(e.g. `(c ? pa^ : pb^)`) or branch on the pointer with "
+              "if/else.\n");
         }
       }
 
@@ -1676,10 +1684,10 @@ struct IRLowering {
         // pointer (rejected by SPIR-V validation, confusing error).
         // Explicit compile error: user should parenthesize the intended
         // operator — `a ^ (-1)` for XOR, `(ptr^) - n` for deref.
-        fprintf(stderr, "Error: dereference (`^` postfix) applied to a "
-                        "non-pointer value. If you meant binary XOR with a "
-                        "negative / unary-prefixed operand (e.g. `a ^ -1`), "
-                        "wrap the right side in parentheses: `a ^ (-1)`.\n");
+        ReportError("Error: dereference (`^` postfix) applied to a "
+                    "non-pointer value. If you meant binary XOR with a "
+                    "negative / unary-prefixed operand (e.g. `a ^ -1`), "
+                    "wrap the right side in parentheses: `a ^ (-1)`.\n");
         SetRegisterType(dest, CoreType::INT);
         return dest;
       }
@@ -1780,12 +1788,11 @@ struct IRLowering {
 
     if (isShared) {
       if (currentStage != ShaderStage::Compute) {
-        fprintf(
-            stderr,
+        ReportError(
             "Error: shared variables are only allowed in compute shaders\n");
       }
       if (!isArray) {
-        fprintf(stderr, "Error: shared variables must be declared as arrays\n");
+        ReportError("Error: shared variables must be declared as arrays\n");
       }
 
       SetRegisterType(varReg, coreType);
@@ -4521,8 +4528,7 @@ struct IRLowering {
       switch (memberHash) {
       case BuiltinHash::VERTEX_ID:
         if (currentStage != ShaderStage::Vertex) {
-          fprintf(
-              stderr,
+          ReportError(
               "Error: input.vertex_id is only available in vertex shaders\n");
           return 0;
         }
@@ -4533,8 +4539,7 @@ struct IRLowering {
 
       case BuiltinHash::INSTANCE_ID:
         if (currentStage != ShaderStage::Vertex) {
-          fprintf(
-              stderr,
+          ReportError(
               "Error: input.instance_id is only available in vertex shaders\n");
           return 0;
         }
@@ -4545,8 +4550,7 @@ struct IRLowering {
 
       case BuiltinHash::GLOBAL_ID:
         if (currentStage != ShaderStage::Compute) {
-          fprintf(
-              stderr,
+          ReportError(
               "Error: input.global_id is only available in compute shaders\n");
           return 0;
         }
@@ -4557,8 +4561,7 @@ struct IRLowering {
 
       case BuiltinHash::LOCAL_ID:
         if (currentStage != ShaderStage::Compute) {
-          fprintf(
-              stderr,
+          ReportError(
               "Error: input.local_id is only available in compute shaders\n");
           return 0;
         }
@@ -4569,8 +4572,8 @@ struct IRLowering {
 
       case BuiltinHash::WORKGROUP_ID:
         if (currentStage != ShaderStage::Compute) {
-          fprintf(stderr, "Error: input.workgroup_id is only available in "
-                          "compute shaders\n");
+          ReportError("Error: input.workgroup_id is only available in "
+                      "compute shaders\n");
           return 0;
         }
         builder.EmitInstruction(OP_LOAD_INPUT, dest,
@@ -4580,8 +4583,8 @@ struct IRLowering {
 
       case BuiltinHash::NUM_WORKGROUPS:
         if (currentStage != ShaderStage::Compute) {
-          fprintf(stderr, "Error: input.num_workgroups is only available in "
-                          "compute shaders\n");
+          ReportError("Error: input.num_workgroups is only available in "
+                      "compute shaders\n");
           return 0;
         }
         builder.EmitInstruction(OP_LOAD_INPUT, dest,
@@ -4591,8 +4594,8 @@ struct IRLowering {
 
       case BuiltinHash::LOCAL_INDEX:
         if (currentStage != ShaderStage::Compute) {
-          fprintf(stderr, "Error: input.local_index is only available in "
-                          "compute shaders\n");
+          ReportError("Error: input.local_index is only available in "
+                      "compute shaders\n");
           return 0;
         }
         builder.EmitInstruction(OP_LOAD_INPUT, dest,
@@ -5189,8 +5192,8 @@ struct IRLowering {
       case Intrinsic::MEMORY_BARRIER:
       case Intrinsic::STORAGE_BARRIER: {
         if (currentStage != ShaderStage::Compute) {
-          fprintf(stderr, "Error: barrier intrinsics are only available in "
-                          "compute shaders\n");
+          ReportError("Error: barrier intrinsics are only available in "
+                      "compute shaders\n");
           return 0;
         }
         op = IntrinsicToOpcode(intrinsic);
