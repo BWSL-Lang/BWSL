@@ -6018,9 +6018,15 @@ NodeRef Parser::ParseEnum() {
             EnumData::Variant variant;
             variant.name = astVariant.currentVariant.name;
             variant.associatedTypes.Init(arena, astVariant.currentVariant.associatedTypes.count);
+            variant.associatedTypeHashes.Init(arena, astVariant.currentVariant.associatedTypes.count);
 
             for (u32 j = 0; j < astVariant.currentVariant.associatedTypes.count; j++) {
                 variant.associatedTypes.Push(arena, astVariant.currentVariant.associatedTypes[j]);
+                u32 typeHash = 0;
+                if (j < astVariant.currentVariant.associatedTypeHashes.count) {
+                    typeHash = astVariant.currentVariant.associatedTypeHashes[j];
+                }
+                variant.associatedTypeHashes.Push(arena, typeHash);
             }
 
             // Assign values
@@ -6087,11 +6093,29 @@ NodeRef Parser::ParseEnumVariant() {
                 if (MatchMask(TokenMasks::CORE_TYPES)) {
                     CoreType type = TokenTypeToReturnType(PreviousTokenType());
                     ast->GetEnumDecl(variant).currentVariant.associatedTypes.Push(arena, type);
+                    ast->GetEnumDecl(variant).currentVariant.associatedTypeHashes.Push(arena, 0);
                     // Consume optional parameter name (e.g., "float radius" -> consume "radius")
                     Match(TokenType::IDENTIFIER);
                 } else if (Match(TokenType::IDENTIFIER)) {
-                    // Custom type like Texture2D - store as CUSTOM
-                    ast->GetEnumDecl(variant).currentVariant.associatedTypes.Push(arena, CoreType::CUSTOM);
+                    // Custom type like `SDFShape` or `MyStruct`. Preserve the
+                    // resolved hash so lowering can distinguish nested enum
+                    // payloads from other CUSTOM payloads.
+                    std::string typeName(stream->GetValue(previous));
+                    u32 typeHash = Utils::HashStr(typeName.c_str());
+                    TypeInfo typeInfo = ResolveType(typeName);
+                    CoreType type = typeInfo.coreType;
+                    u32 customHash = 0;
+                    if (type == CoreType::CUSTOM) {
+                        customHash = typeInfo.customTypeHash != 0
+                                         ? typeInfo.customTypeHash
+                                         : typeHash;
+                    } else if (type == CoreType::INVALID ||
+                               type == CoreType::VOID) {
+                        type = CoreType::CUSTOM;
+                        customHash = typeHash;
+                    }
+                    ast->GetEnumDecl(variant).currentVariant.associatedTypes.Push(arena, type);
+                    ast->GetEnumDecl(variant).currentVariant.associatedTypeHashes.Push(arena, customHash);
                     // Consume optional parameter name
                     Match(TokenType::IDENTIFIER);
                 } else {

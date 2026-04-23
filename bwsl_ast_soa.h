@@ -307,6 +307,7 @@ struct EnumDeclData {
     struct VariantInfo {
         ArenaString name;
         ArenaArray<CoreType> associatedTypes;
+        ArenaArray<u32> associatedTypeHashes;
         u32 value;
     };
     VariantInfo currentVariant; // Temporary storage during parsing
@@ -314,6 +315,7 @@ struct EnumDeclData {
     ArenaArray<NodeRef> variants;
     ArenaArray<NodeRef> methods;
     ArenaArray<CoreType> associatedTypes;
+    ArenaArray<u32> associatedTypeHashes;
 };
 
 // Pattern match - complex, ~48 bytes + ArenaArrays
@@ -1268,9 +1270,12 @@ namespace ASTFactory {
         EnumDeclData data;
         data.name = name;
         data.underlyingType = underlyingType;
+        data.currentVariant.associatedTypes.Init(ast->arena, 4);
+        data.currentVariant.associatedTypeHashes.Init(ast->arena, 4);
         data.variants.Init(ast->arena, 8);
         data.methods.Init(ast->arena, 4);
         data.associatedTypes.Init(ast->arena, 0);
+        data.associatedTypeHashes.Init(ast->arena, 0);
         ast->enumDecls.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {
@@ -1292,10 +1297,12 @@ namespace ASTFactory {
         data.underlyingType = CoreType::INVALID;
         data.currentVariant.name = name;
         data.currentVariant.value = value;
-        data.currentVariant.associatedTypes.Init(ast->arena, 0);
+        data.currentVariant.associatedTypes.Init(ast->arena, 4);
+        data.currentVariant.associatedTypeHashes.Init(ast->arena, 4);
         data.variants.Init(ast->arena, 0);
         data.methods.Init(ast->arena, 0);
         data.associatedTypes.Init(ast->arena, 4);
+        data.associatedTypeHashes.Init(ast->arena, 4);
         ast->enumDecls.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {

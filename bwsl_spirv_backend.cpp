@@ -4233,7 +4233,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     // Get enum struct type from register struct type info
     u16 dest_reg = ir->destinations[ir_idx];
     u32 enumStructHash = 0;
-    if (dest_reg < 512 && ir->registerStructTypes) {
+    if (dest_reg < ir->registerCount && ir->registerStructTypes) {
       enumStructHash = ir->registerStructTypes[dest_reg];
     }
 
@@ -4243,30 +4243,68 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     }
 
     // Build constituents: [tag, field0, field1, ...]
-    // Find struct field count to pad with zeros
-    u32 totalFieldCount = 1; // At least the tag
-    for (u32 i = 0; i < structTypeCount; i++) {
-      if (structTypeHashes[i] == enumStructHash) {
-        // Get field count from IR struct info
-        for (u32 s = 0; s < ir->structTypeCount; s++) {
-          if (ir->structTypes[s].nameHash == enumStructHash) {
-            totalFieldCount = ir->structTypes[s].fieldCount;
-            break;
-          }
-        }
+    const IR::IRProgram::StructTypeInfo *enumStructInfo = nullptr;
+    for (u32 s = 0; s < ir->structTypeCount; s++) {
+      if (ir->structTypes[s].nameHash == enumStructHash) {
+        enumStructInfo = &ir->structTypes[s];
         break;
       }
     }
+    u32 totalFieldCount = enumStructInfo ? enumStructInfo->fieldCount : 1;
+    u32 fieldOffset = enumStructInfo ? enumStructInfo->fieldOffset : 0;
+
+    auto fieldTypeAt = [&](u32 actualFieldIndex) -> CoreType {
+      if (!enumStructInfo || actualFieldIndex >= enumStructInfo->fieldCount) {
+        return CoreType::FLOAT;
+      }
+      return static_cast<CoreType>(
+          ir->structFieldTypes[fieldOffset + actualFieldIndex]);
+    };
+
+    auto fieldTypeHashAt = [&](u32 actualFieldIndex) -> u32 {
+      if (!enumStructInfo || !ir->structFieldTypeHashes ||
+          actualFieldIndex >= enumStructInfo->fieldCount) {
+        return 0;
+      }
+      return ir->structFieldTypeHashes[fieldOffset + actualFieldIndex];
+    };
+
+    auto defaultValueForField = [&](u32 actualFieldIndex) -> u32 {
+      CoreType fieldType = fieldTypeAt(actualFieldIndex);
+      switch (fieldType) {
+      case CoreType::INT:
+        return GetIntConstantId(0, false);
+      case CoreType::UINT:
+        return GetIntConstantId(0, true);
+      case CoreType::BOOL:
+        return GetBoolConstantId(false);
+      case CoreType::CUSTOM:
+      case CoreType::ENUM: {
+        u32 fieldHash = fieldTypeHashAt(actualFieldIndex);
+        u32 fieldTypeId = fieldHash != 0 ? GetStructTypeId(fieldHash) : 0;
+        if (fieldTypeId == 0) {
+          fieldTypeId = GetTypeId(CoreType::FLOAT);
+        }
+        u32 undefId = AllocateId();
+        Emit(spv::OpUndef, fieldTypeId, undefId);
+        return undefId;
+      }
+      default:
+        return GetFloatConstantId(0.0f);
+      }
+    };
 
     // Prepare constituents
-    u32 constituents[16] = {0};
+    u32 constituents[128] = {0};
     u32 constituentCount = 0;
 
     // First constituent: tag (variant index)
     constituents[constituentCount++] = GetIntConstantId(variantIndex, false);
 
-    // Remaining constituents: field values from operands, padded with zeros
-    // Vector types need to be decomposed into individual scalars
+    // Remaining constituents: field values from operands, padded with zeros.
+    // Vector operands and flattened struct operands are decomposed into the
+    // enum payload storage fields. Nested enum payloads are kept as aggregate
+    // struct fields when the destination field type is CUSTOM.
     for (u32 i = 0; i < 4 && constituentCount < totalFieldCount; i++) {
       u16 op_reg = ir->GetOperand(ir_idx, i);
       if (op_reg != 0x3FFF && op_reg != 0xFFFF) {
@@ -4274,6 +4312,90 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         CoreType opType = CoreType::FLOAT;
         if (ir->registerTypes && op_reg < ir->registerCount) {
           opType = static_cast<CoreType>(ir->registerTypes[op_reg]);
+        }
+
+        CoreType expectedFieldType = fieldTypeAt(constituentCount);
+        u32 opStructHash = 0;
+        if ((opType == CoreType::CUSTOM || opType == CoreType::ENUM) &&
+            op_reg < ir->registerCount && ir->registerStructTypes) {
+          opStructHash = ir->registerStructTypes[op_reg];
+        }
+
+        if ((opType == CoreType::CUSTOM || opType == CoreType::ENUM) &&
+            expectedFieldType != CoreType::CUSTOM && opStructHash != 0) {
+          const IR::IRProgram::StructTypeInfo *operandStructInfo = nullptr;
+          for (u32 s = 0; s < ir->structTypeCount; s++) {
+            if (ir->structTypes[s].nameHash == opStructHash) {
+              operandStructInfo = &ir->structTypes[s];
+              break;
+            }
+          }
+
+          if (operandStructInfo) {
+            u32 compositeId = GetSpirvId(op_reg);
+            for (u32 f = 0; f < operandStructInfo->fieldCount &&
+                            constituentCount < totalFieldCount;
+                 f++) {
+              CoreType subFieldType = static_cast<CoreType>(
+                  ir->structFieldTypes[operandStructInfo->fieldOffset + f]);
+              u32 subFieldTypeId = 0;
+              if (subFieldType == CoreType::CUSTOM ||
+                  subFieldType == CoreType::ENUM) {
+                u32 subHash = ir->structFieldTypeHashes
+                                  ? ir->structFieldTypeHashes
+                                        [operandStructInfo->fieldOffset + f]
+                                  : 0;
+                subFieldTypeId = subHash != 0 ? GetStructTypeId(subHash) : 0;
+              } else {
+                subFieldTypeId = GetTypeId(subFieldType);
+              }
+              if (subFieldTypeId == 0) {
+                subFieldTypeId = GetTypeId(CoreType::FLOAT);
+              }
+
+              u32 fieldId = AllocateId();
+              Emit(spv::OpCompositeExtract, subFieldTypeId, fieldId,
+                   compositeId, f);
+
+              u32 componentCount = 1;
+              switch (subFieldType) {
+              case CoreType::FLOAT2:
+              case CoreType::INT2:
+              case CoreType::UINT2:
+                componentCount = 2;
+                break;
+              case CoreType::FLOAT3:
+              case CoreType::INT3:
+              case CoreType::UINT3:
+                componentCount = 3;
+                break;
+              case CoreType::FLOAT4:
+              case CoreType::INT4:
+              case CoreType::UINT4:
+                componentCount = 4;
+                break;
+              default:
+                componentCount = 1;
+                break;
+              }
+
+              if (componentCount == 1) {
+                constituents[constituentCount++] = fieldId;
+              } else {
+                CoreType scalarType = GetScalarComponentType(subFieldType);
+                u32 scalarTypeId = GetTypeId(scalarType);
+                for (u32 c = 0; c < componentCount &&
+                                constituentCount < totalFieldCount;
+                     c++) {
+                  u32 extractId = AllocateId();
+                  Emit(spv::OpCompositeExtract, scalarTypeId, extractId,
+                       fieldId, c);
+                  constituents[constituentCount++] = extractId;
+                }
+              }
+            }
+            continue;
+          }
         }
 
         u32 componentCount = 1;
@@ -4304,8 +4426,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         } else {
           // Vector - extract each component
           u32 vec_id = GetSpirvId(op_reg);
-          u32 scalar_type = GetTypeId(
-              CoreType::FLOAT); // Enum fields are always floats in our struct
+          u32 scalar_type = GetTypeId(GetScalarComponentType(opType));
           for (u32 c = 0;
                c < componentCount && constituentCount < totalFieldCount; c++) {
             u32 extract_id = AllocateId();
@@ -4315,17 +4436,19 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
           }
         }
       } else if (i < argCount) {
-        // Unexpected sentinel - use zero
-        constituents[constituentCount++] = GetFloatConstantId(0.0f);
+        // Unexpected sentinel - use a type-correct default
+        constituents[constituentCount++] =
+            defaultValueForField(constituentCount);
       } else {
-        // Padding with zeros
-        constituents[constituentCount++] = GetFloatConstantId(0.0f);
+        // Padding
+        constituents[constituentCount++] =
+            defaultValueForField(constituentCount);
       }
     }
 
-    // Pad remaining fields with zeros
+    // Pad remaining fields
     while (constituentCount < totalFieldCount) {
-      constituents[constituentCount++] = GetFloatConstantId(0.0f);
+      constituents[constituentCount++] = defaultValueForField(constituentCount);
     }
 
     // OpCompositeConstruct: result_type result_id constituents...
@@ -4371,6 +4494,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u16 enum_reg = ir->GetOperand(ir_idx, 0);
     u16 field_idx_reg = ir->GetOperand(ir_idx, 1);
     u32 enum_id = GetSpirvId(enum_reg);
+    u16 dest_reg = ir->destinations[ir_idx];
 
     // For now, assume field index is a constant
     u32 field_idx = 0;
@@ -4380,7 +4504,51 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       field_idx = ir->intConstants[idx];
     }
 
-    u32 result_type = GetTypeId(CoreType::FLOAT); // Assume float for now
+    u32 result_type = 0;
+    if (dest_reg < ir->registerCount && ir->registerTypes) {
+      CoreType destType = static_cast<CoreType>(ir->registerTypes[dest_reg]);
+      if ((destType == CoreType::CUSTOM || destType == CoreType::ENUM) &&
+          ir->registerStructTypes) {
+        u32 destStructHash = ir->registerStructTypes[dest_reg];
+        if (destStructHash != 0) {
+          result_type = GetStructTypeId(destStructHash);
+        }
+      } else {
+        result_type = GetTypeId(destType);
+      }
+    }
+
+    if (result_type == 0 && enum_reg < ir->registerCount &&
+        ir->registerStructTypes) {
+      u32 enumStructHash = ir->registerStructTypes[enum_reg];
+      for (u32 s = 0; s < ir->structTypeCount; s++) {
+        if (ir->structTypes[s].nameHash != enumStructHash) {
+          continue;
+        }
+        const IR::IRProgram::StructTypeInfo &info = ir->structTypes[s];
+        u32 actualFieldIndex = 1 + field_idx;
+        if (actualFieldIndex >= info.fieldCount) {
+          break;
+        }
+        CoreType fieldType = static_cast<CoreType>(
+            ir->structFieldTypes[info.fieldOffset + actualFieldIndex]);
+        if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
+            ir->structFieldTypeHashes) {
+          u32 fieldStructHash =
+              ir->structFieldTypeHashes[info.fieldOffset + actualFieldIndex];
+          if (fieldStructHash != 0) {
+            result_type = GetStructTypeId(fieldStructHash);
+          }
+        } else {
+          result_type = GetTypeId(fieldType);
+        }
+        break;
+      }
+    }
+
+    if (result_type == 0) {
+      result_type = GetTypeId(CoreType::FLOAT);
+    }
 
     // OpCompositeExtract: result_type result_id composite index...
     // Field index is offset by 1 because field 0 is the tag

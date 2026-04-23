@@ -223,6 +223,7 @@ struct EnumData {
     struct Variant {
         ArenaString name;
         ArenaArray<CoreType> associatedTypes;  // Empty if no data
+        ArenaArray<u32> associatedTypeHashes;  // Parallel custom type hashes
         u32 value;  // Computed or explicit
     };
     ArenaArray<Variant> variants;

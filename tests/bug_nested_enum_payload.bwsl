@@ -1,0 +1,62 @@
+pipeline BugNestedEnumPayload {
+  enum Inner {
+    A(float value),
+    B(float3 value)
+  }
+
+  enum Curve {
+    Linear,
+    Pulse(float strength)
+  }
+
+  enum Outer {
+    Pair(Inner fromValue, Inner toValue, Curve curve),
+
+    eval value :: (float phase) -> float {
+      Pair(fromValue, toValue, curve): {
+        return phase;
+      }
+    }
+  }
+
+  makeOuter :: (int index) -> Outer {
+    if (index == 1) {
+      return Outer::Pair(
+        Inner::B(float3(0.42)),
+        Inner::A(0.18),
+        Curve::Pulse(0.5)
+      );
+    }
+
+    return Outer::Pair(
+      Inner::A(0.6),
+      Inner::B(float3(0.45)),
+      Curve::Linear
+    );
+  }
+
+  attributes {
+    position: float3
+    texcoord: float2
+  }
+
+  resources {
+    time: float
+  }
+
+  pass "MainPass" {
+    use attributes { position, texcoord }
+    use resources { time }
+
+    vertex {
+      output.position = float4(attributes.position, 1.0);
+      output.uv = attributes.texcoord;
+    }
+
+    fragment {
+      Outer outer = makeOuter(int(resources.time) % 2);
+      float v = outer.value(fract(resources.time));
+      output.color = float4(v, v, v, 1.0);
+    }
+  }
+}

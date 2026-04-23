@@ -2385,8 +2385,104 @@ struct IRLowering {
     return typeNameHash;
   }
 
-  // Register an enum sum type as a struct in the IR
-  // Layout: { int tag; <fields for largest variant> }
+  bool IsSumEnumTypeHash(u32 typeHash) {
+    const EnumData *enumData =
+        SymbolTable::ResolveEnumDataByHash(symbols, typeHash);
+    return enumData && (enumData->flags & EnumData::IS_SUM_TYPE);
+  }
+
+  StructData *LookupStructDataByHash(u32 typeHash) {
+    if (!symbols || typeHash == 0) {
+      return nullptr;
+    }
+
+    Symbol *sym = SymbolTable::LookupByHash(
+        const_cast<SymbolTableData *>(symbols), typeHash);
+    if (sym && sym->kind == SymbolKind::CUSTOM_TYPE) {
+      return const_cast<StructData *>(&symbols->structs[sym->index]);
+    }
+
+    return g_customTypes.LookupType(typeHash);
+  }
+
+  u32 ScalarComponentCount(CoreType type) {
+    switch (type) {
+    case CoreType::FLOAT2:
+    case CoreType::INT2:
+    case CoreType::UINT2:
+    case CoreType::BOOL2:
+      return 2;
+    case CoreType::FLOAT3:
+    case CoreType::INT3:
+    case CoreType::UINT3:
+    case CoreType::BOOL3:
+      return 3;
+    case CoreType::FLOAT4:
+    case CoreType::INT4:
+    case CoreType::UINT4:
+    case CoreType::BOOL4:
+      return 4;
+    default:
+      return 1;
+    }
+  }
+
+  void AppendEnumPayloadLayout(CoreType type, u32 typeHash,
+                               CoreType *fieldTypes, u32 *fieldTypeHashes,
+                               u32 &fieldCount, u32 maxFields) {
+    if (fieldCount >= maxFields) {
+      return;
+    }
+
+    if (type == CoreType::CUSTOM && typeHash != 0) {
+      if (IsSumEnumTypeHash(typeHash)) {
+        fieldTypes[fieldCount] = CoreType::CUSTOM;
+        fieldTypeHashes[fieldCount] = typeHash;
+        fieldCount++;
+        return;
+      }
+
+      if (StructData *structData = LookupStructDataByHash(typeHash)) {
+        for (u32 i = 0; i < structData->fields.count && fieldCount < maxFields;
+             i++) {
+          const StructData::Field &field = structData->fields[i];
+          u32 fieldHash = (field.type.coreType == CoreType::CUSTOM)
+                              ? field.type.customTypeHash
+                              : 0;
+          AppendEnumPayloadLayout(field.type.coreType, fieldHash, fieldTypes,
+                                  fieldTypeHashes, fieldCount, maxFields);
+        }
+        return;
+      }
+
+      fieldTypes[fieldCount] = CoreType::CUSTOM;
+      fieldTypeHashes[fieldCount] = typeHash;
+      fieldCount++;
+      return;
+    }
+
+    CoreType scalarType = GetScalarComponentType(type);
+    u32 componentCount = ScalarComponentCount(type);
+    for (u32 c = 0; c < componentCount && fieldCount < maxFields; c++) {
+      fieldTypes[fieldCount] = scalarType;
+      fieldTypeHashes[fieldCount] = 0;
+      fieldCount++;
+    }
+  }
+
+  u32 GetEnumPayloadFieldCount(CoreType type, u32 typeHash) {
+    CoreType fieldTypes[64];
+    u32 fieldTypeHashes[64];
+    u32 fieldCount = 0;
+    AppendEnumPayloadLayout(type, typeHash, fieldTypes, fieldTypeHashes,
+                            fieldCount, 64);
+    return fieldCount;
+  }
+
+  // Register an enum sum type as a struct in the IR.
+  // Layout: { int tag; <flattened payload fields for the widest variant> }.
+  // Nested sum-type enums are represented as aggregate struct fields so method
+  // dispatch on pattern-bound payloads keeps the nested enum's type identity.
   u32 RegisterEnumAsStructType(u32 enumNameHash, u32 enumIndex) {
     if (!symbols || enumIndex >= symbols->enums.count) {
       return 0;
@@ -2396,49 +2492,55 @@ struct IRLowering {
     }
 
     const EnumData &enumData = symbols->enums[enumIndex];
+    static constexpr u32 MAX_ENUM_PAYLOAD_FIELDS = 64;
+    CoreType payloadFieldTypes[MAX_ENUM_PAYLOAD_FIELDS];
+    u32 payloadFieldTypeHashes[MAX_ENUM_PAYLOAD_FIELDS];
+    bool payloadFieldSet[MAX_ENUM_PAYLOAD_FIELDS];
+    for (u32 i = 0; i < MAX_ENUM_PAYLOAD_FIELDS; i++) {
+      payloadFieldTypes[i] = CoreType::FLOAT;
+      payloadFieldTypeHashes[i] = 0;
+      payloadFieldSet[i] = false;
+    }
 
-    // Calculate max total size across all variants
-    // Each variant can have different associated types
-    u32 maxScalarCount = 0; // Max number of scalar floats needed
+    u32 maxPayloadFieldCount = 0;
     for (u32 v = 0; v < enumData.variants.count; v++) {
       const EnumData::Variant &variant = enumData.variants[v];
-      u32 scalarCount = 0;
+      CoreType variantFieldTypes[MAX_ENUM_PAYLOAD_FIELDS];
+      u32 variantFieldTypeHashes[MAX_ENUM_PAYLOAD_FIELDS];
+      u32 variantFieldCount = 0;
+
       for (u32 t = 0; t < variant.associatedTypes.count; t++) {
         CoreType assocType = variant.associatedTypes[t];
-        // Count scalars for this type
-        switch (assocType) {
-        case CoreType::FLOAT:
-        case CoreType::INT:
-        case CoreType::UINT:
-          scalarCount += 1;
-          break;
-        case CoreType::FLOAT2:
-        case CoreType::INT2:
-        case CoreType::UINT2:
-          scalarCount += 2;
-          break;
-        case CoreType::FLOAT3:
-        case CoreType::INT3:
-        case CoreType::UINT3:
-          scalarCount += 3;
-          break;
-        case CoreType::FLOAT4:
-        case CoreType::INT4:
-        case CoreType::UINT4:
-          scalarCount += 4;
-          break;
-        default:
-          scalarCount += 1; // Fallback
-          break;
+        u32 assocHash = 0;
+        if (t < variant.associatedTypeHashes.count) {
+          assocHash = variant.associatedTypeHashes[t];
+        }
+        AppendEnumPayloadLayout(assocType, assocHash, variantFieldTypes,
+                                variantFieldTypeHashes, variantFieldCount,
+                                MAX_ENUM_PAYLOAD_FIELDS);
+      }
+
+      for (u32 i = 0; i < variantFieldCount; i++) {
+        if (!payloadFieldSet[i]) {
+          payloadFieldTypes[i] = variantFieldTypes[i];
+          payloadFieldTypeHashes[i] = variantFieldTypeHashes[i];
+          payloadFieldSet[i] = true;
+        } else if (payloadFieldTypes[i] != variantFieldTypes[i] ||
+                   payloadFieldTypeHashes[i] != variantFieldTypeHashes[i]) {
+          // Existing enum storage used float payload slots for heterogeneous
+          // variants. Keep that fallback for conflicts while preserving
+          // precise types when all variants agree at a payload position.
+          payloadFieldTypes[i] = CoreType::FLOAT;
+          payloadFieldTypeHashes[i] = 0;
         }
       }
-      if (scalarCount > maxScalarCount) {
-        maxScalarCount = scalarCount;
+
+      if (variantFieldCount > maxPayloadFieldCount) {
+        maxPayloadFieldCount = variantFieldCount;
       }
     }
 
-    // Create struct with: tag (int) + maxScalarCount floats
-    u32 totalFields = 1 + maxScalarCount; // tag + payload fields
+    u32 totalFields = 1 + maxPayloadFieldCount; // tag + payload fields
 
     u32 structIdx = program.structTypeCount++;
     structTypeMap[enumNameHash] = structIdx;
@@ -2468,20 +2570,36 @@ struct IRLowering {
     program.structFieldByteOffsets[fieldOffset] = currentOffset;
     currentOffset += 4; // int is 4 bytes
 
-    // Fields 1..N: payload floats
-    for (u32 i = 0; i < maxScalarCount; i++) {
+    // Fields 1..N: payload storage
+    for (u32 i = 0; i < maxPayloadFieldCount; i++) {
       u32 fIdx = fieldOffset + 1 + i;
-      program.structFieldTypes[fIdx] = static_cast<u16>(CoreType::FLOAT);
+      CoreType fieldType = payloadFieldTypes[i];
+      u32 fieldTypeHash = payloadFieldTypeHashes[i];
+
+      program.structFieldTypes[fIdx] = static_cast<u16>(fieldType);
       // Generate field name like "f0", "f1", etc.
       char fieldName[16];
       snprintf(fieldName, sizeof(fieldName), "f%u", i);
       program.structFieldNameHashes[fIdx] = Utils::HashStr(fieldName);
-      program.structFieldTypeHashes[fIdx] = 0;
+      program.structFieldTypeHashes[fIdx] =
+          (fieldType == CoreType::CUSTOM) ? fieldTypeHash : 0;
       program.structFieldArraySizes[fIdx] = 0;
-      // std140 alignment for float is 4
-      currentOffset = (currentOffset + 3) & ~3;
+
+      u32 fieldSize = GetTypeSize(fieldType);
+      u32 alignment = GetTypeAlignment(fieldType);
+      if (fieldType == CoreType::CUSTOM && fieldTypeHash != 0) {
+        u32 nestedHash = LookupOrRegisterStructType(fieldTypeHash);
+        auto nestedIt =
+            structTypeMap.find(nestedHash != 0 ? nestedHash : fieldTypeHash);
+        if (nestedIt != structTypeMap.end()) {
+          fieldSize = program.structTypes[nestedIt->second].totalSize;
+          alignment = 16;
+        }
+      }
+
+      currentOffset = (currentOffset + alignment - 1) & ~(alignment - 1);
       program.structFieldByteOffsets[fIdx] = currentOffset;
-      currentOffset += 4;
+      currentOffset += fieldSize;
     }
 
     info.totalSize = currentOffset;
@@ -4061,6 +4179,39 @@ struct IRLowering {
   u16 LowerMemberAccess(NodeRef ref) {
     const MemberAccessData &access = ast->GetMemberAccess(ref);
 
+    // Sum-type enum variant with no payload, e.g. `Curve::Linear`.
+    // Payload variants with arguments lower through LowerFunctionCall.
+    if (access.isModuleQualified &&
+        access.object.Type() == ASTNodeType::IDENTIFIER) {
+      const IdentifierData &enumIdent = ast->GetIdentifier(access.object);
+      u32 enumHash = enumIdent.name.nameHash;
+      Symbol *enumSym = SymbolTable::LookupByHash(
+          const_cast<SymbolTableData *>(symbols), enumHash);
+      if (enumSym && (enumSym->kind == SymbolKind::ENUM ||
+                      enumSym->kind == SymbolKind::ENUM_SYMBOL)) {
+        const EnumData &enumData = symbols->enums[enumSym->index];
+        if (enumData.flags & EnumData::IS_SUM_TYPE) {
+          for (u32 v = 0; v < enumData.variants.count; v++) {
+            const EnumData::Variant &variant = enumData.variants[v];
+            if (variant.name.nameHash == access.member.nameHash &&
+                variant.associatedTypes.count == 0) {
+              u16 dest = AllocateRegister();
+              u32 enumStructHash = LookupOrRegisterStructType(enumHash);
+              builder.EmitInstruction(OP_ENUM_CONSTRUCT, dest, 0x3FFF,
+                                      0x3FFF, 0x3FFF, 0x3FFF);
+              program.metadata[builder.currentInstruction - 1] =
+                  (v << 16) | (0u << 8) | (enumHash & 0xFF);
+              SetRegisterType(dest, CoreType::CUSTOM);
+              if (dest < MAX_REGISTERS) {
+                program.registerStructTypes[dest] = enumStructHash;
+              }
+              return dest;
+            }
+          }
+        }
+      }
+    }
+
     // Resolve `variants.<name>` to the variant's current value as a
     // constant. Raster stages (vertex/fragment) go through
     // CloneShaderStageWithParams which substitutes variants at clone time,
@@ -4934,28 +5085,6 @@ struct IRLowering {
                 }
                 auto baseVarRegs = variableRegisters;
 
-                auto scalarCountFor = [](CoreType type) -> u32 {
-                  switch (type) {
-                  case CoreType::FLOAT2:
-                  case CoreType::INT2:
-                  case CoreType::UINT2:
-                  case CoreType::BOOL2:
-                    return 2;
-                  case CoreType::FLOAT3:
-                  case CoreType::INT3:
-                  case CoreType::UINT3:
-                  case CoreType::BOOL3:
-                    return 3;
-                  case CoreType::FLOAT4:
-                  case CoreType::INT4:
-                  case CoreType::UINT4:
-                  case CoreType::BOOL4:
-                    return 4;
-                  default:
-                    return 1;
-                  }
-                };
-
                 // For each arm, check if tag == variantIndex, evaluate body,
                 // select
                 u16 resultReg = AllocateRegister();
@@ -5015,7 +5144,12 @@ struct IRLowering {
 
                     for (u32 t = 0; t < variant.associatedTypes.count; t++) {
                       CoreType assocType = variant.associatedTypes[t];
-                      u32 componentCount = scalarCountFor(assocType);
+                      u32 assocHash = 0;
+                      if (t < variant.associatedTypeHashes.count) {
+                        assocHash = variant.associatedTypeHashes[t];
+                      }
+                      u32 componentCount =
+                          GetEnumPayloadFieldCount(assocType, assocHash);
                       if (bindingIdx >= arm.bindings.count) {
                         payloadIndex += componentCount;
                         continue;
@@ -5027,14 +5161,39 @@ struct IRLowering {
                         continue;
                       }
 
-                      if (componentCount == 1) {
+                      bool isNestedSumEnum =
+                          assocType == CoreType::CUSTOM && assocHash != 0 &&
+                          IsSumEnumTypeHash(assocHash);
+
+                      if (isNestedSumEnum) {
+                        u16 fieldReg = AllocateRegister();
+                        u16 fieldIdx = EmitConstantInt(payloadIndex);
+                        builder.EmitInstruction(OP_ENUM_FIELD, fieldReg,
+                                                selfReg, fieldIdx);
+                        SetRegisterType(fieldReg, CoreType::CUSTOM);
+                        u32 structHash = LookupOrRegisterStructType(assocHash);
+                        program.registerStructTypes[fieldReg] =
+                            structHash != 0 ? structHash : assocHash;
+                        variableRegisters[binding.first.nameHash] = fieldReg;
+                      } else if (componentCount == 1) {
                         u16 fieldReg = AllocateRegister();
                         u16 fieldIdx = EmitConstantInt(payloadIndex);
                         builder.EmitInstruction(OP_ENUM_FIELD, fieldReg,
                                                 selfReg, fieldIdx);
                         SetRegisterType(fieldReg, assocType);
+                        if (assocType == CoreType::CUSTOM && assocHash != 0) {
+                          u32 structHash = LookupOrRegisterStructType(assocHash);
+                          program.registerStructTypes[fieldReg] =
+                              structHash != 0 ? structHash : assocHash;
+                        }
                         variableRegisters[binding.first.nameHash] = fieldReg;
                       } else {
+                        if (assocType == CoreType::CUSTOM) {
+                          ReportError("Error: binding flattened struct enum "
+                                      "payloads is not supported yet\n");
+                          payloadIndex += componentCount;
+                          continue;
+                        }
                         u16 components[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
                         CoreType scalarType = GetScalarComponentType(assocType);
                         for (u32 c = 0; c < componentCount && c < 4; c++) {

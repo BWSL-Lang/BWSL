@@ -25,7 +25,7 @@ struct ArenaArray {
 
     void Push(BWSL_Arena* arena, const T& item) {
         if (count >= capacity) {
-            u32 newCapacity = capacity * 2;
+            u32 newCapacity = capacity > 0 ? capacity * 2 : 1;
             T* newData = (T*)arena->Allocate(sizeof(T) * newCapacity, alignof(T));
             for (u32 i = 0; i < count; ++i) {
                 newData[i] = data[i];
