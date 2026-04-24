@@ -5439,6 +5439,19 @@ struct IRLowering {
         SetRegisterType(dest, CoreType::FLOAT4);
         return dest;
       }
+      case Intrinsic::TEXTURE_SIZE: {
+        u16 texReg = args[0];
+        u16 lodReg = (argCount >= 2) ? args[1] : EmitConstantInt(0);
+        builder.EmitInstruction(OP_TEX_SIZE, dest, texReg, lodReg);
+        SetRegisterType(dest, CoreType::INT2);
+        return dest;
+      }
+      case Intrinsic::BITFIELD_INSERT: {
+        builder.EmitInstruction(OP_BITFIELD_INSERT, dest, args[0], args[1],
+                                args[2], args[3]);
+        SetRegisterType(dest, GetRegisterType(args[0]));
+        return dest;
+      }
       default:
         op = IntrinsicToOpcode(intrinsic);
         break;
@@ -5461,8 +5474,37 @@ struct IRLowering {
         case Intrinsic::ALL:
           resultType = CoreType::BOOL;
           break;
+        case Intrinsic::AS_FLOAT: {
+          CoreType argType = argCount > 0 ? GetRegisterType(args[0]) : CoreType::UINT;
+          resultType = GetVectorType(CoreType::FLOAT, GetVectorDimension(argType));
+          break;
+        }
+        case Intrinsic::AS_INT: {
+          CoreType argType = argCount > 0 ? GetRegisterType(args[0]) : CoreType::FLOAT;
+          resultType = GetVectorType(CoreType::INT, GetVectorDimension(argType));
+          break;
+        }
+        case Intrinsic::AS_UINT: {
+          CoreType argType = argCount > 0 ? GetRegisterType(args[0]) : CoreType::FLOAT;
+          resultType = GetVectorType(CoreType::UINT, GetVectorDimension(argType));
+          break;
+        }
+        case Intrinsic::PACK_UNORM4X8:
+        case Intrinsic::PACK_SNORM4X8:
+        case Intrinsic::PACK_HALF2X16:
+          resultType = CoreType::UINT;
+          break;
+        case Intrinsic::UNPACK_UNORM4X8:
+        case Intrinsic::UNPACK_SNORM4X8:
+          resultType = CoreType::FLOAT4;
+          break;
+        case Intrinsic::UNPACK_HALF2X16:
+          resultType = CoreType::FLOAT2;
+          break;
         case Intrinsic::IS_NAN:
-        case Intrinsic::IS_INF: {
+        case Intrinsic::IS_INF:
+        case Intrinsic::IS_FINITE:
+        case Intrinsic::IS_NORMAL: {
           // isnan/isinf return a bool (or bvec matching input width).
           CoreType argType = argCount > 0 ? GetRegisterType(args[0]) : CoreType::FLOAT;
           switch (argType) {
@@ -6837,6 +6879,10 @@ struct IRLowering {
       return OP_CEIL;
     case Intrinsic::ROUND:
       return OP_ROUND;
+    case Intrinsic::TRUNC:
+      return OP_TRUNC;
+    case Intrinsic::FMA:
+      return OP_FMA;
     case Intrinsic::POW:
       return OP_POW;
     case Intrinsic::SQRT:
@@ -6867,6 +6913,12 @@ struct IRLowering {
       return OP_ATAN;
     case Intrinsic::ATAN2:
       return OP_ATAN2;
+    case Intrinsic::SINH:
+      return OP_SINH;
+    case Intrinsic::COSH:
+      return OP_COSH;
+    case Intrinsic::TANH:
+      return OP_TANH;
     case Intrinsic::DEGREES:
       return OP_DEGREES;
     case Intrinsic::RADIANS:
@@ -6985,6 +7037,26 @@ struct IRLowering {
       return OP_CTZ;
     case Intrinsic::FIRST_BIT_HIGH:
       return OP_CLZ;
+    case Intrinsic::BITFIELD_EXTRACT:
+      return OP_BITFIELD_EXTRACT;
+    case Intrinsic::BITFIELD_INSERT:
+      return OP_BITFIELD_INSERT;
+    case Intrinsic::PACK_UNORM4X8:
+      return OP_PACK_UNORM4X8;
+    case Intrinsic::UNPACK_UNORM4X8:
+      return OP_UNPACK_UNORM4X8;
+    case Intrinsic::PACK_SNORM4X8:
+      return OP_PACK_SNORM4X8;
+    case Intrinsic::UNPACK_SNORM4X8:
+      return OP_UNPACK_SNORM4X8;
+    case Intrinsic::PACK_HALF2X16:
+      return OP_PACK_HALF2X16;
+    case Intrinsic::UNPACK_HALF2X16:
+      return OP_UNPACK_HALF2X16;
+    case Intrinsic::AS_FLOAT:
+    case Intrinsic::AS_INT:
+    case Intrinsic::AS_UINT:
+      return OP_BITCAST;
 
     // Control flow
     case Intrinsic::SELECT:
@@ -7001,6 +7073,10 @@ struct IRLowering {
       return OP_ISNAN;
     case Intrinsic::IS_INF:
       return OP_ISINF;
+    case Intrinsic::IS_FINITE:
+      return OP_ISFINITE;
+    case Intrinsic::IS_NORMAL:
+      return OP_ISNORMAL;
 
     default:
       return OP_NOP;

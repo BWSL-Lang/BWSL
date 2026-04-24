@@ -1052,6 +1052,9 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_COSH:
             EmitFuncAssign(instIdx, dest, "cosh", 1);
             return;
+        case IR::OP_TANH:
+            EmitFuncAssign(instIdx, dest, "tanh", 1);
+            return;
 
         // ===== Geometric =====
         case IR::OP_DOT:
@@ -1169,6 +1172,30 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_REVERSE_BITS:
             EmitFuncAssign(instIdx, dest, "bitfieldReverse", 1);
             return;
+        case IR::OP_BITFIELD_EXTRACT:
+            EmitFuncAssign(instIdx, dest, "bitfieldExtract", 3);
+            return;
+        case IR::OP_BITFIELD_INSERT:
+            EmitFuncAssign(instIdx, dest, "bitfieldInsert", 4);
+            return;
+        case IR::OP_PACK_UNORM4X8:
+            EmitFuncAssign(instIdx, dest, "packUnorm4x8", 1);
+            return;
+        case IR::OP_UNPACK_UNORM4X8:
+            EmitFuncAssign(instIdx, dest, "unpackUnorm4x8", 1);
+            return;
+        case IR::OP_PACK_SNORM4X8:
+            EmitFuncAssign(instIdx, dest, "packSnorm4x8", 1);
+            return;
+        case IR::OP_UNPACK_SNORM4X8:
+            EmitFuncAssign(instIdx, dest, "unpackSnorm4x8", 1);
+            return;
+        case IR::OP_PACK_HALF2X16:
+            EmitFuncAssign(instIdx, dest, "packHalf2x16", 1);
+            return;
+        case IR::OP_UNPACK_HALF2X16:
+            EmitFuncAssign(instIdx, dest, "unpackHalf2x16", 1);
+            return;
 
         // ===== Type Conversion =====
         case IR::OP_F2I:
@@ -1209,24 +1236,36 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
         case IR::OP_BITCAST: {
             // Reinterpret bits - use GLSL bitcast functions
-            u16 srcType = ir->registerTypes[Op(instIdx, 0)];
+            u16 srcReg = Op(instIdx, 0);
+            u16 srcType = (ir->registerTypes && srcReg < ir->registerCount) ? ir->registerTypes[srcReg] : 0;
             u16 dstType = ir->types[instIdx];
-            if (srcType == static_cast<u16>(CoreType::FLOAT) && dstType == static_cast<u16>(CoreType::INT)) {
+            auto scalarFamily = [](u16 type) -> CoreType {
+                CoreType t = static_cast<CoreType>(type);
+                switch (t) {
+                    case CoreType::FLOAT: case CoreType::FLOAT2: case CoreType::FLOAT3: case CoreType::FLOAT4: return CoreType::FLOAT;
+                    case CoreType::INT: case CoreType::INT2: case CoreType::INT3: case CoreType::INT4: return CoreType::INT;
+                    case CoreType::UINT: case CoreType::UINT2: case CoreType::UINT3: case CoreType::UINT4: return CoreType::UINT;
+                    default: return t;
+                }
+            };
+            CoreType srcFamily = scalarFamily(srcType);
+            CoreType dstFamily = scalarFamily(dstType);
+            if (srcFamily == CoreType::FLOAT && dstFamily == CoreType::INT) {
                 EmitRegWithDecl(dest);
                 out.Lit(" = floatBitsToInt(");
                 EmitExpr(Op(instIdx, 0));
                 out.Lit(");");
-            } else if (srcType == static_cast<u16>(CoreType::FLOAT) && dstType == static_cast<u16>(CoreType::UINT)) {
+            } else if (srcFamily == CoreType::FLOAT && dstFamily == CoreType::UINT) {
                 EmitRegWithDecl(dest);
                 out.Lit(" = floatBitsToUint(");
                 EmitExpr(Op(instIdx, 0));
                 out.Lit(");");
-            } else if (srcType == static_cast<u16>(CoreType::INT) && dstType == static_cast<u16>(CoreType::FLOAT)) {
+            } else if (srcFamily == CoreType::INT && dstFamily == CoreType::FLOAT) {
                 EmitRegWithDecl(dest);
                 out.Lit(" = intBitsToFloat(");
                 EmitExpr(Op(instIdx, 0));
                 out.Lit(");");
-            } else if (srcType == static_cast<u16>(CoreType::UINT) && dstType == static_cast<u16>(CoreType::FLOAT)) {
+            } else if (srcFamily == CoreType::UINT && dstFamily == CoreType::FLOAT) {
                 EmitRegWithDecl(dest);
                 out.Lit(" = uintBitsToFloat(");
                 EmitExpr(Op(instIdx, 0));
@@ -1242,6 +1281,18 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         }
         case IR::OP_SIGN:
             EmitFuncAssign(instIdx, dest, "sign", 1);
+            return;
+        case IR::OP_ISNAN:
+            EmitFuncAssign(instIdx, dest, "isnan", 1);
+            return;
+        case IR::OP_ISINF:
+            EmitFuncAssign(instIdx, dest, "isinf", 1);
+            return;
+        case IR::OP_ISFINITE:
+            EmitFuncAssign(instIdx, dest, "isfinite", 1);
+            return;
+        case IR::OP_ISNORMAL:
+            EmitFuncAssign(instIdx, dest, "isnormal", 1);
             return;
 
         // ===== Vector Operations =====
@@ -1890,8 +1941,23 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
         case IR::OP_COSH:
             out.Lit("cosh("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
             return;
+        case IR::OP_TANH:
+            out.Lit("tanh("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
         case IR::OP_SIGN:
             out.Lit("sign("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_ISNAN:
+            out.Lit("isnan("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_ISINF:
+            out.Lit("isinf("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_ISFINITE:
+            out.Lit("isfinite("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_ISNORMAL:
+            out.Lit("isnormal("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
             return;
 
         // ===== Geometric =====
@@ -1991,6 +2057,30 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
         case IR::OP_REVERSE_BITS:
             out.Lit("bitfieldReverse("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
             return;
+        case IR::OP_BITFIELD_EXTRACT:
+            out.Lit("bitfieldExtract("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
+            return;
+        case IR::OP_BITFIELD_INSERT:
+            out.Lit("bitfieldInsert("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Lit(", "); EmitExpr(Op(instIdx, 3)); out.Chr(')');
+            return;
+        case IR::OP_PACK_UNORM4X8:
+            out.Lit("packUnorm4x8("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_UNPACK_UNORM4X8:
+            out.Lit("unpackUnorm4x8("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_PACK_SNORM4X8:
+            out.Lit("packSnorm4x8("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_UNPACK_SNORM4X8:
+            out.Lit("unpackSnorm4x8("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_PACK_HALF2X16:
+            out.Lit("packHalf2x16("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_UNPACK_HALF2X16:
+            out.Lit("unpackHalf2x16("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
 
         // ===== Type Conversion =====
         case IR::OP_F2I:
@@ -2012,15 +2102,27 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
             out.Lit("int("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
             return;
         case IR::OP_BITCAST: {
-            u16 srcType = ir->registerTypes ? ir->registerTypes[Op(instIdx, 0)] : 0;
+            u16 srcReg = Op(instIdx, 0);
+            u16 srcType = (ir->registerTypes && srcReg < ir->registerCount) ? ir->registerTypes[srcReg] : 0;
             u16 dstType = ir->types[instIdx];
-            if (srcType == static_cast<u16>(CoreType::FLOAT) && dstType == static_cast<u16>(CoreType::INT)) {
+            auto scalarFamily = [](u16 type) -> CoreType {
+                CoreType t = static_cast<CoreType>(type);
+                switch (t) {
+                    case CoreType::FLOAT: case CoreType::FLOAT2: case CoreType::FLOAT3: case CoreType::FLOAT4: return CoreType::FLOAT;
+                    case CoreType::INT: case CoreType::INT2: case CoreType::INT3: case CoreType::INT4: return CoreType::INT;
+                    case CoreType::UINT: case CoreType::UINT2: case CoreType::UINT3: case CoreType::UINT4: return CoreType::UINT;
+                    default: return t;
+                }
+            };
+            CoreType srcFamily = scalarFamily(srcType);
+            CoreType dstFamily = scalarFamily(dstType);
+            if (srcFamily == CoreType::FLOAT && dstFamily == CoreType::INT) {
                 out.Lit("floatBitsToInt("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            } else if (srcType == static_cast<u16>(CoreType::FLOAT) && dstType == static_cast<u16>(CoreType::UINT)) {
+            } else if (srcFamily == CoreType::FLOAT && dstFamily == CoreType::UINT) {
                 out.Lit("floatBitsToUint("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            } else if (srcType == static_cast<u16>(CoreType::INT) && dstType == static_cast<u16>(CoreType::FLOAT)) {
+            } else if (srcFamily == CoreType::INT && dstFamily == CoreType::FLOAT) {
                 out.Lit("intBitsToFloat("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            } else if (srcType == static_cast<u16>(CoreType::UINT) && dstType == static_cast<u16>(CoreType::FLOAT)) {
+            } else if (srcFamily == CoreType::UINT && dstFamily == CoreType::FLOAT) {
                 out.Lit("uintBitsToFloat("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
             } else {
                 EmitExpr(Op(instIdx, 0));

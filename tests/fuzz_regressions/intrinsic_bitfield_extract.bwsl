@@ -1,0 +1,11 @@
+// Regression: bitfield_extract is registered as a stdlib intrinsic and lowers to OP_BITFIELD_EXTRACT.
+pipeline IntrinsicBitfieldExtract {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint raw = (input.global_id.x << 4) | 0xFu;
+            uint u = bitfield_extract(raw, 4, 4);
+            int s = bitfield_extract(int(raw), 0, 4);
+            int total = int(u) + s;
+        }
+    }
+}

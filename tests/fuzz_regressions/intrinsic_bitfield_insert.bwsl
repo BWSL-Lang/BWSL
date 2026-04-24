@@ -1,0 +1,11 @@
+// Regression: bitfield_insert is registered as a stdlib intrinsic and lowers to OP_BITFIELD_INSERT.
+pipeline IntrinsicBitfieldInsert {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint raw = input.global_id.x | 0xF0u;
+            uint u = bitfield_insert(raw, 3u, 8, 2);
+            int s = bitfield_insert(int(raw), 1, 2, 3);
+            int total = int(u) + s;
+        }
+    }
+}

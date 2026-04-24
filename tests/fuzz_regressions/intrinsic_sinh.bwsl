@@ -1,0 +1,11 @@
+// Regression: sinh is registered as a stdlib intrinsic and lowers to OP_SINH.
+pipeline IntrinsicSinh {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = float(input.global_id.x) * 0.01;
+            float scalar = sinh(x);
+            float3 vector = sinh(float3(x, x + 0.25, x + 0.5));
+            float total = scalar + vector.x + vector.y + vector.z;
+        }
+    }
+}

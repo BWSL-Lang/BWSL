@@ -1,0 +1,12 @@
+// Regression: tanh uses a non-contiguous IR opcode and must still be handled by
+// lowering, SSA operand renaming, SPIR-V, and text backends.
+pipeline IntrinsicTanh {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = float(input.global_id.x) * 0.01;
+            float scalar = tanh(x);
+            float3 vector = tanh(float3(x - 0.5, x, x + 0.5));
+            float total = scalar + vector.x + vector.y + vector.z;
+        }
+    }
+}

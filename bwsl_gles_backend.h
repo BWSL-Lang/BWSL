@@ -127,7 +127,8 @@ static constexpr OpInfo BIT_OPS[] = {
     {"bitfieldReverse", 1, 1}, // OP_REVERSE_BITS
 };
 
-// Math functions: OP_SQRT (0x80) through OP_COSH (0x8F)
+// Math functions: OP_SQRT (0x80) through OP_COSH (0x8F).
+// OP_TANH is non-contiguous and handled explicitly in bwsl_gles_backend.cpp.
 static constexpr const char* MATH_FUNCS[] = {
     "sqrt", "inversesqrt", "pow", "exp", "exp2", "log", "log2",
     "sin", "cos", "tan", "asin", "acos", "atan", "atan",  // atan2 uses same name

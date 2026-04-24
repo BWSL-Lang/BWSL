@@ -303,6 +303,11 @@ enum OpCode : u16 {
     OP_CLZ           = 0x48,  // Count leading zeros
     OP_CTZ           = 0x49,  // Count trailing zeros
     OP_REVERSE_BITS  = 0x4A,
+    OP_BITFIELD_EXTRACT = 0x4B,
+    OP_BITFIELD_INSERT  = 0x4C,
+    OP_PACK_UNORM4X8    = 0x4D,
+    OP_UNPACK_UNORM4X8  = 0x4E,
+    OP_PACK_SNORM4X8    = 0x4F,
     
     // ========== Comparison ==========
     OP_FEQ           = 0x50,  // Float equal
@@ -372,6 +377,11 @@ enum OpCode : u16 {
     OP_ATAN2         = 0x8D,
     OP_SINH          = 0x8E,
     OP_COSH          = 0x8F,
+    OP_TANH          = 0xAB,
+    OP_UNPACK_SNORM4X8 = 0xAC,
+    OP_PACK_HALF2X16   = 0xAD,
+    OP_UNPACK_HALF2X16 = 0xAE,
+    OP_ISNORMAL        = 0xAF,
 
     // ========== Geometric ==========
     OP_DOT           = 0x90,
@@ -461,6 +471,7 @@ enum OpCode : u16 {
     // ========== Float classification ==========
     OP_ISNAN           = 0xEC,  // isnan(x) -> bool / bvec
     OP_ISINF           = 0xED,  // isinf(x) -> bool / bvec
+    OP_ISFINITE        = 0xEE,  // isfinite(x) -> bool / bvec
 
     // ========== Dynamic vector indexing ==========
     // dest = insert(src_vec, value_reg, index_reg) where index is a runtime

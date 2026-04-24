@@ -1,0 +1,11 @@
+// Regression: asint is registered as a stdlib intrinsic and lowers to OP_BITCAST.
+pipeline IntrinsicAsint {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = float(input.global_id.x) + 1.0;
+            int scalar = asint(x);
+            int3 vector = asint(float3(x, x + 1.0, x + 2.0));
+            int total = scalar + vector.x + vector.y + vector.z;
+        }
+    }
+}

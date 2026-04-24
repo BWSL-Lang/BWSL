@@ -1,0 +1,28 @@
+// Regression: texture_size is registered as a stdlib intrinsic and lowers to OP_TEX_SIZE.
+pipeline IntrinsicTextureSize {
+    resources {
+        colorTex: texture2D
+    }
+
+    pass "Main" {
+        use resources { colorTex }
+
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+        }
+
+        fragment {
+            int2 size0 = texture_size(resources.colorTex);
+            int2 size1 = texture_size(resources.colorTex, 0);
+            float sx = float(max(size0.x, 1));
+            float sy = float(max(size1.y, 1));
+            output.color = float4(1.0 / sx, 1.0 / sy, 0.0, 1.0);
+        }
+    }
+}

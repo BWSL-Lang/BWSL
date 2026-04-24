@@ -1,0 +1,11 @@
+// Regression: fma is registered as a stdlib intrinsic and lowers to OP_FMA.
+pipeline IntrinsicFma {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = float(input.global_id.x) + 1.0;
+            float scalar = fma(x, 2.0, 0.5);
+            float3 vector = fma(float3(x, x + 1.0, x + 2.0), float3(2.0), float3(0.5));
+            float total = scalar + vector.x + vector.y + vector.z;
+        }
+    }
+}

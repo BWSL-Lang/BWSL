@@ -1,0 +1,10 @@
+// Regression: pack_half2x16 is registered as a stdlib intrinsic and lowers to OP_PACK_HALF2X16.
+pipeline IntrinsicPackHalf2x16 {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = float(input.global_id.x & 31u) / 31.0;
+            uint packed = pack_half2x16(float2(x, 1.0 - x));
+            uint total = packed ^ input.global_id.x;
+        }
+    }
+}

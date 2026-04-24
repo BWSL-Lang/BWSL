@@ -595,6 +595,11 @@ const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_CLZ:           return "CLZ";
         case IR::OP_CTZ:           return "CTZ";
         case IR::OP_REVERSE_BITS:  return "REVERSE_BITS";
+        case IR::OP_BITFIELD_EXTRACT: return "BITFIELD_EXTRACT";
+        case IR::OP_BITFIELD_INSERT:  return "BITFIELD_INSERT";
+        case IR::OP_PACK_UNORM4X8:    return "PACK_UNORM4X8";
+        case IR::OP_UNPACK_UNORM4X8:  return "UNPACK_UNORM4X8";
+        case IR::OP_PACK_SNORM4X8:    return "PACK_SNORM4X8";
         // Comparison
         case IR::OP_FEQ:           return "FEQ";
         case IR::OP_FNE:           return "FNE";
@@ -652,6 +657,14 @@ const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_ATAN2:         return "ATAN2";
         case IR::OP_SINH:          return "SINH";
         case IR::OP_COSH:          return "COSH";
+        case IR::OP_TANH:          return "TANH";
+        case IR::OP_UNPACK_SNORM4X8: return "UNPACK_SNORM4X8";
+        case IR::OP_PACK_HALF2X16: return "PACK_HALF2X16";
+        case IR::OP_UNPACK_HALF2X16: return "UNPACK_HALF2X16";
+        case IR::OP_ISNORMAL:      return "ISNORMAL";
+        case IR::OP_ISNAN:         return "ISNAN";
+        case IR::OP_ISINF:         return "ISINF";
+        case IR::OP_ISFINITE:      return "ISFINITE";
         // Geometric
         case IR::OP_DOT:           return "DOT";
         case IR::OP_CROSS:         return "CROSS";

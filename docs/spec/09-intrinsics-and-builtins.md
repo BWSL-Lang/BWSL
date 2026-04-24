@@ -34,23 +34,27 @@ Current intrinsic names include, among others:
 
 - math: `lerp`, `smoothstep`, `saturate`, `fract`, `step`, `clamp`, `sign`,
   `abs`, `min`, `max`, `floor`, `ceil`, `round`, `mod`, `pow`, `sqrt`,
-  `rsqrt`, `exp`, `exp2`, `log`, `log2`
+  `rsqrt`, `exp`, `exp2`, `log`, `log2`, `trunc`, `fma`
 - trig: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sincos`,
-  `degrees`, `radians`
+  `sinh`, `cosh`, `tanh`, `degrees`, `radians`
 - vector and matrix: `dot`, `cross`, `normalize`, `length`, `distance`,
   `reflect`, `refract`, `faceforward`, `transpose`, `determinant`, `inverse`
 - derivatives: `ddx`, `ddy`, `ddx_fine`, `ddy_fine`, `ddx_coarse`,
   `ddy_coarse`, `fwidth`
 - texture and image: `sample`, `sample_lod`, `sample_bias`, `sample_grad`,
-  `sample_cmp`, `gather`, `load`, `store`
+  `sample_cmp`, `gather`, `load`, `store`, `texture_size`
 - synchronization: `barrier`, `memoryBarrier`, `storageBarrier`
 - wave: `wave_sum`, `wave_product`, `wave_min`, `wave_max`, `wave_all`,
   `wave_any`, `wave_broadcast`, `wave_read_first`
 - atomics: `atomic_add`, `atomic_min`, `atomic_max`, `atomic_and`,
   `atomic_or`, `atomic_xor`, `atomic_exchange`, `atomic_cmp_exchange`
-- bit ops: `count_bits`, `reverse_bits`, `first_bit_low`, `first_bit_high`
+- bit ops: `count_bits`, `reverse_bits`, `first_bit_low`, `first_bit_high`,
+  `bitfield_extract`, `bitfield_insert`, `asfloat`, `asint`, `asuint`,
+  `pack_unorm4x8`, `unpack_unorm4x8`, `pack_snorm4x8`, `unpack_snorm4x8`,
+  `pack_half2x16`, `unpack_half2x16`
 - control/select: `select`
-- reductions and classification: `any`, `all`, `isnan`, `isinf`
+- reductions and classification: `any`, `all`, `isnan`, `isinf`, `isfinite`,
+  `isnormal`
 
 ## Arity and Validation
 

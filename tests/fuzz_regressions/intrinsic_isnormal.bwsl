@@ -1,0 +1,11 @@
+// Regression: isnormal is registered as a stdlib intrinsic and lowers to OP_ISNORMAL.
+pipeline IntrinsicIsnormal {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = float(input.global_id.x) + 1.0;
+            bool scalar = isnormal(x);
+            bool vector = all(isnormal(float3(x, x + 1.0, x + 2.0)));
+            float total = select(0.0, 1.0, scalar) + select(0.0, 1.0, vector);
+        }
+    }
+}

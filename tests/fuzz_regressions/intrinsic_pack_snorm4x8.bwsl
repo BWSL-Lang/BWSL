@@ -1,0 +1,10 @@
+// Regression: pack_snorm4x8 is registered as a stdlib intrinsic and lowers to OP_PACK_SNORM4X8.
+pipeline IntrinsicPackSnorm4x8 {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = float(input.global_id.x & 127u) / 127.0;
+            uint packed = pack_snorm4x8(float4(-x, 0.0, x, 1.0));
+            uint total = packed ^ input.global_id.x;
+        }
+    }
+}

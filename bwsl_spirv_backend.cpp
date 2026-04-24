@@ -79,6 +79,11 @@ constexpr std::array<spv::Op, 256> BuildIrToSpvOpTable() {
     // ========== Bitwise ==========
     table[IR::OP_CLZ] = spv::OpExtInst;
     table[IR::OP_CTZ] = spv::OpExtInst;
+    table[IR::OP_BITFIELD_EXTRACT] = spv::OpBitFieldSExtract;
+    table[IR::OP_BITFIELD_INSERT] = spv::OpBitFieldInsert;
+    table[IR::OP_PACK_UNORM4X8] = spv::OpExtInst;
+    table[IR::OP_UNPACK_UNORM4X8] = spv::OpExtInst;
+    table[IR::OP_PACK_SNORM4X8] = spv::OpExtInst;
 
     // ========== Type Conversion ==========
     table[IR::OP_SIGN] = spv::OpExtInst;
@@ -100,6 +105,11 @@ constexpr std::array<spv::Op, 256> BuildIrToSpvOpTable() {
     table[IR::OP_ATAN2] = spv::OpExtInst;
     table[IR::OP_SINH] = spv::OpExtInst;
     table[IR::OP_COSH] = spv::OpExtInst;
+    table[IR::OP_TANH] = spv::OpExtInst;
+    table[IR::OP_UNPACK_SNORM4X8] = spv::OpExtInst;
+    table[IR::OP_PACK_HALF2X16] = spv::OpExtInst;
+    table[IR::OP_UNPACK_HALF2X16] = spv::OpExtInst;
+    table[IR::OP_ISNORMAL] = spv::OpNop; // Emitted portably for Shader capability
 
     // ========== Geometric ==========
     table[IR::OP_DOT] = spv::OpDot;
@@ -160,6 +170,7 @@ constexpr std::array<spv::Op, 256> BuildIrToSpvOpTable() {
     // ========== Float classification ==========
     table[IR::OP_ISNAN] = spv::OpIsNan;
     table[IR::OP_ISINF] = spv::OpIsInf;
+    table[IR::OP_ISFINITE] = spv::OpNop; // Emitted as !isnan(x) && !isinf(x)
 
     // ========== Wave/SIMD/Subgroup Operations ==========
     table[IR::OP_WAVE_MIN] = static_cast<spv::Op>(358);
@@ -196,7 +207,9 @@ constexpr std::array<u32, 256> BuildIrToGlslStd450Table() {
     table[IR::OP_FLOOR] = GLSLstd450Floor;
     table[IR::OP_CEIL] = GLSLstd450Ceil;
     table[IR::OP_ROUND] = GLSLstd450RoundEven;
+    table[IR::OP_TRUNC] = GLSLstd450Trunc;
     table[IR::OP_FRACT] = GLSLstd450Fract;
+    table[IR::OP_FMA] = GLSLstd450Fma;
 
     // ========== Arithmetic (Integer) ==========
     table[IR::OP_IABS] = GLSLstd450SAbs;
@@ -210,6 +223,9 @@ constexpr std::array<u32, 256> BuildIrToGlslStd450Table() {
     // ========== Bitwise ==========
     table[IR::OP_CLZ] = GLSLstd450FindUMsb;
     table[IR::OP_CTZ] = GLSLstd450FindILsb;
+    table[IR::OP_PACK_UNORM4X8] = GLSLstd450PackUnorm4x8;
+    table[IR::OP_UNPACK_UNORM4X8] = GLSLstd450UnpackUnorm4x8;
+    table[IR::OP_PACK_SNORM4X8] = GLSLstd450PackSnorm4x8;
 
     // ========== Type Conversion ==========
     table[IR::OP_SIGN] = GLSLstd450FSign;
@@ -231,6 +247,10 @@ constexpr std::array<u32, 256> BuildIrToGlslStd450Table() {
     table[IR::OP_ATAN2] = GLSLstd450Atan2;
     table[IR::OP_SINH] = GLSLstd450Sinh;
     table[IR::OP_COSH] = GLSLstd450Cosh;
+    table[IR::OP_TANH] = GLSLstd450Tanh;
+    table[IR::OP_UNPACK_SNORM4X8] = GLSLstd450UnpackSnorm4x8;
+    table[IR::OP_PACK_HALF2X16] = GLSLstd450PackHalf2x16;
+    table[IR::OP_UNPACK_HALF2X16] = GLSLstd450UnpackHalf2x16;
 
     // ========== Geometric ==========
     table[IR::OP_CROSS] = GLSLstd450Cross;
@@ -435,6 +455,9 @@ void SPIRVBuilder::EmitPreamble() {
   }
   if (analysis.Has(IRAnalysis::CAP_IMAGE_LOAD)) {
     EmitCapability(spv::CapabilityStorageImageReadWithoutFormat);
+  }
+  if (analysis.Has(IRAnalysis::CAP_IMAGE_QUERY)) {
+    EmitCapability(spv::CapabilityImageQuery);
   }
 
   // 64-bit types
@@ -2050,6 +2073,68 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     break;
   }
 
+  case IR::OP_ISFINITE: {
+    u16 dest_reg = ir->destinations[ir_idx];
+    u16 op_reg = ir->GetOperand(ir_idx, 0);
+    u32 operand = GetSpirvId(op_reg);
+    u32 result_type = GetResultType(dest_reg, op_reg);
+
+    u32 is_nan = AllocateId();
+    u32 is_inf = AllocateId();
+    u32 nan_or_inf = AllocateId();
+    Emit(spv::OpIsNan, result_type, is_nan, operand);
+    Emit(spv::OpIsInf, result_type, is_inf, operand);
+    Emit(spv::OpLogicalOr, result_type, nan_or_inf, is_nan, is_inf);
+    Emit(spv::OpLogicalNot, result_type, dest, nan_or_inf);
+    break;
+  }
+
+  case IR::OP_ISNORMAL: {
+    u16 dest_reg = ir->destinations[ir_idx];
+    u16 op_reg = ir->GetOperand(ir_idx, 0);
+    u32 operand = GetSpirvId(op_reg);
+    u32 result_type = GetResultType(dest_reg, op_reg);
+    CoreType op_type = GetOperandType(op_reg);
+    u32 operand_type = GetTypeId(op_type);
+
+    u32 min_normal_scalar = GetFloatConstantId(1.17549435e-38f);
+    u32 min_normal = min_normal_scalar;
+    u32 component_count = 1;
+    switch (op_type) {
+    case CoreType::FLOAT2:
+      component_count = 2;
+      break;
+    case CoreType::FLOAT3:
+      component_count = 3;
+      break;
+    case CoreType::FLOAT4:
+      component_count = 4;
+      break;
+    default:
+      break;
+    }
+    if (component_count > 1) {
+      u32 constituents[4] = {min_normal_scalar, min_normal_scalar,
+                             min_normal_scalar, min_normal_scalar};
+      min_normal =
+          GetCompositeConstantId(operand_type, constituents, component_count);
+    }
+
+    u32 abs_value = AllocateId();
+    Emit(spv::OpExtInst, operand_type, abs_value, glslStd450Id, GLSLstd450FAbs,
+         operand);
+
+    u32 normal_magnitude = AllocateId();
+    u32 is_inf = AllocateId();
+    u32 not_inf = AllocateId();
+    Emit(spv::OpFOrdGreaterThanEqual, result_type, normal_magnitude, abs_value,
+         min_normal);
+    Emit(spv::OpIsInf, result_type, is_inf, operand);
+    Emit(spv::OpLogicalNot, result_type, not_inf, is_inf);
+    Emit(spv::OpLogicalAnd, result_type, dest, normal_magnitude, not_inf);
+    break;
+  }
+
   // ========== Shift Operations ==========
   case IR::OP_SHL: {
     u16 dest_reg = ir->destinations[ir_idx];
@@ -2658,6 +2743,15 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     break;
   }
 
+  case IR::OP_BITCAST: {
+    u16 dest_reg = ir->destinations[ir_idx];
+    u16 operand_reg = ir->GetOperand(ir_idx, 0);
+    u32 operand = GetSpirvId(operand_reg);
+    u32 result_type = GetResultType(dest_reg, operand_reg);
+    Emit(spv::OpBitcast, result_type, dest, operand);
+    break;
+  }
+
   // ========== Extended Instructions (GLSL.std.450) ==========
   // Single-operand functions (result type matches input type)
   case IR::OP_SQRT:
@@ -2672,6 +2766,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_ASIN:
   case IR::OP_ACOS:
   case IR::OP_ATAN:
+  case IR::OP_SINH:
+  case IR::OP_COSH:
+  case IR::OP_TANH:
   case IR::OP_FLOOR:
   case IR::OP_CEIL:
   case IR::OP_ROUND:
@@ -2684,7 +2781,13 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_CLZ:
   case IR::OP_CTZ:
   case IR::OP_DEGREES:
-  case IR::OP_RADIANS: {
+  case IR::OP_RADIANS:
+  case IR::OP_PACK_UNORM4X8:
+  case IR::OP_UNPACK_UNORM4X8:
+  case IR::OP_PACK_SNORM4X8:
+  case IR::OP_UNPACK_SNORM4X8:
+  case IR::OP_PACK_HALF2X16:
+  case IR::OP_UNPACK_HALF2X16: {
     u16 dest_reg = ir->destinations[ir_idx];
     u16 operand_reg = ir->GetOperand(ir_idx, 0);
     u32 result_type = GetResultType(dest_reg, operand_reg);
@@ -2711,6 +2814,39 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     currentFunction[currentFunctionSize++] = glslStd450Id;
     currentFunction[currentFunctionSize++] = glsl_op;
     currentFunction[currentFunctionSize++] = operand;
+    break;
+  }
+
+  case IR::OP_BITFIELD_EXTRACT: {
+    u16 dest_reg = ir->destinations[ir_idx];
+    u16 base_reg = ir->GetOperand(ir_idx, 0);
+    u16 offset_reg = ir->GetOperand(ir_idx, 1);
+    u16 count_reg = ir->GetOperand(ir_idx, 2);
+    u32 result_type = GetResultType(dest_reg, base_reg);
+    u32 base_id = GetSpirvId(base_reg);
+    u32 offset_id = GetSpirvId(offset_reg);
+    u32 count_id = GetSpirvId(count_reg);
+    CoreType base_type = GetOperandType(base_reg);
+    spv::Op extract_op =
+        (base_type == CoreType::UINT) ? spv::OpBitFieldUExtract
+                                      : spv::OpBitFieldSExtract;
+    Emit(extract_op, result_type, dest, base_id, offset_id, count_id);
+    break;
+  }
+
+  case IR::OP_BITFIELD_INSERT: {
+    u16 dest_reg = ir->destinations[ir_idx];
+    u16 base_reg = ir->GetOperand(ir_idx, 0);
+    u16 insert_reg = ir->GetOperand(ir_idx, 1);
+    u16 offset_reg = ir->GetOperand(ir_idx, 2);
+    u16 count_reg = ir->GetOperand(ir_idx, 3);
+    u32 result_type = GetResultType(dest_reg, base_reg);
+    u32 base_id = GetSpirvId(base_reg);
+    u32 insert_id = GetSpirvId(insert_reg);
+    u32 offset_id = GetSpirvId(offset_reg);
+    u32 count_id = GetSpirvId(count_reg);
+    Emit(spv::OpBitFieldInsert, result_type, dest, base_id, insert_id,
+         offset_id, count_id);
     break;
   }
 
@@ -6008,6 +6144,43 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     default:
       break;
     }
+    break;
+  }
+
+  case IR::OP_TEX_SIZE: {
+    u16 tex_reg = ir->GetOperand(ir_idx, 0);
+    u16 lod_reg = ir->GetOperand(ir_idx, 1);
+    u16 tex_slot = tex_reg & 0x0FFF;
+
+    u32 tex_var_id = textureIds[tex_slot];
+    if (tex_var_id == 0) {
+      u32 result_type = GetTypeId(CoreType::INT2);
+      Emit(spv::OpUndef, result_type, dest);
+      break;
+    }
+
+    u32 sampled_img_type;
+    u32 image_type;
+    if (textureIsArray[tex_slot]) {
+      sampled_img_type = GetArraySampledImageTypeId();
+      image_type = GetArrayImageTypeId();
+    } else if (textureIsCubemap[tex_slot]) {
+      sampled_img_type = GetCubeSampledImageTypeId();
+      image_type = GetCubeImageTypeId();
+    } else {
+      sampled_img_type = GetSampledImageTypeId();
+      image_type = GetImageTypeId();
+    }
+
+    u32 sampled_img_id = AllocateId();
+    Emit(spv::OpLoad, sampled_img_type, sampled_img_id, tex_var_id);
+
+    u32 image_id = AllocateId();
+    Emit(spv::OpImage, image_type, image_id, sampled_img_id);
+
+    u32 result_type = GetResultType(ir->destinations[ir_idx], tex_reg);
+    u32 lod_id = GetSpirvId(lod_reg);
+    Emit(spv::OpImageQuerySizeLod, result_type, dest, image_id, lod_id);
     break;
   }
 

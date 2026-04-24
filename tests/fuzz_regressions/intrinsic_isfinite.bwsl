@@ -1,0 +1,11 @@
+// Regression: isfinite is registered as a stdlib intrinsic and lowers to OP_ISFINITE.
+pipeline IntrinsicIsfinite {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = float(input.global_id.x) + 1.0;
+            bool scalar = isfinite(x);
+            bool vector = all(isfinite(float3(x, x + 1.0, x + 2.0)));
+            float total = select(0.0, 1.0, scalar) + select(0.0, 1.0, vector);
+        }
+    }
+}

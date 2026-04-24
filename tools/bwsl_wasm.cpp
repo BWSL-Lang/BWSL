@@ -173,6 +173,11 @@ static const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_COS: return "COS";
         case IR::OP_TAN: return "TAN";
         case IR::OP_POW: return "POW";
+        case IR::OP_TANH: return "TANH";
+        case IR::OP_UNPACK_SNORM4X8: return "UNPACK_SNORM4X8";
+        case IR::OP_PACK_HALF2X16: return "PACK_HALF2X16";
+        case IR::OP_UNPACK_HALF2X16: return "UNPACK_HALF2X16";
+        case IR::OP_ISNORMAL: return "ISNORMAL";
         case IR::OP_EXP: return "EXP";
         case IR::OP_LOG: return "LOG";
         case IR::OP_FLOOR: return "FLOOR";
@@ -186,6 +191,14 @@ static const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_FMAX: return "FMAX";
         case IR::OP_FCLAMP: return "FCLAMP";
         case IR::OP_FABS: return "FABS";
+        case IR::OP_BITFIELD_EXTRACT: return "BITFIELD_EXTRACT";
+        case IR::OP_BITFIELD_INSERT: return "BITFIELD_INSERT";
+        case IR::OP_PACK_UNORM4X8: return "PACK_UNORM4X8";
+        case IR::OP_UNPACK_UNORM4X8: return "UNPACK_UNORM4X8";
+        case IR::OP_PACK_SNORM4X8: return "PACK_SNORM4X8";
+        case IR::OP_ISNAN: return "ISNAN";
+        case IR::OP_ISINF: return "ISINF";
+        case IR::OP_ISFINITE: return "ISFINITE";
         case IR::OP_VEC_CONSTRUCT: return "VEC_CONSTRUCT";
         case IR::OP_VEC_EXTRACT: return "VEC_EXTRACT";
         case IR::OP_MAT_MUL: return "MAT_MUL";

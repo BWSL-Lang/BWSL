@@ -95,6 +95,16 @@ pipeline IntrinsicsAdditional {
             float trunc_pos = trunc(3.7);    // 3.0
             float trunc_neg = trunc(-3.7);   // -3.0
 
+            // ===== fma - fused multiply-add =====
+            float fma_scalar = fma(2.0, 3.0, 4.0); // 10.0
+            float3 fma_vec = fma(float3(1.0, 2.0, 3.0), float3(2.0), float3(0.5));
+
+            // ===== hyperbolic trig =====
+            float sinh_0 = sinh(0.0);  // 0.0
+            float cosh_0 = cosh(0.0);  // 1.0
+            float tanh_0 = tanh(0.0);  // 0.0
+            float3 tanh_vec = tanh(float3(-1.0, 0.0, 1.0));
+
             // ===== mod - floating-point modulo =====
             float mod_1 = mod(5.0, 3.0);     // 2.0
             float mod_2 = mod(7.5, 2.5);     // 0.0
@@ -140,6 +150,10 @@ pipeline IntrinsicsAdditional {
             finalPos.x = finalPos.x + sat_mid * 0.01;
             finalPos.y = finalPos.y + ss_mid * 0.01;
             finalPos.z = finalPos.z + lerp_half * 0.001;
+            finalPos.x = finalPos.x + fma_scalar * 0.0001 + fma_vec.x * 0.0001;
+            finalPos.y = finalPos.y + (trunc_pos + trunc_neg) * 0.0001;
+            finalPos.y = finalPos.y + (sinh_0 + cosh_0 + tanh_0) * 0.0001;
+            finalPos.z = finalPos.z + tanh_vec.z * 0.0001;
 
             output.position = finalPos;
             output.uv = uv;

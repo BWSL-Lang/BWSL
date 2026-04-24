@@ -1,0 +1,11 @@
+// Regression: trunc is registered as a stdlib intrinsic and lowers to OP_TRUNC.
+pipeline IntrinsicTrunc {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = float(input.global_id.x) + 3.75;
+            float a = trunc(x);
+            float b = trunc(-x);
+            float total = a + b;
+        }
+    }
+}

@@ -269,6 +269,9 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
     case IR::OP_TEX_GATHER:
     case IR::OP_TEX_FETCH:
     case IR::OP_TEX_SIZE: {
+      if (op == IR::OP_TEX_SIZE) {
+        analysis->capabilityFlags |= IRAnalysis::CAP_IMAGE_QUERY;
+      }
       // Texture register is encoded as 0x2000 | bindingIndex
       u16 texReg = ir->GetOperand(i, 0);
       if ((texReg & 0xF000) == 0x2000) {

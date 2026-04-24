@@ -34,7 +34,9 @@ enum class Intrinsic : u16 {
     FLOOR,
     CEIL,
     ROUND,
+    TRUNC,
     MOD,
+    FMA,
     POW,
     SQRT,
     RSQRT,
@@ -52,6 +54,9 @@ enum class Intrinsic : u16 {
     ATAN,
     ATAN2,
     SINCOS,
+    SINH,
+    COSH,
+    TANH,
     DEGREES,
     RADIANS,
     
@@ -88,6 +93,7 @@ enum class Intrinsic : u16 {
     GATHER,
     LOAD,
     STORE,
+    TEXTURE_SIZE,
 
     // Synchronization
     BARRIER,
@@ -119,6 +125,17 @@ enum class Intrinsic : u16 {
     REVERSE_BITS,
     FIRST_BIT_LOW,
     FIRST_BIT_HIGH,
+    BITFIELD_EXTRACT,
+    BITFIELD_INSERT,
+    PACK_UNORM4X8,
+    UNPACK_UNORM4X8,
+    PACK_SNORM4X8,
+    UNPACK_SNORM4X8,
+    PACK_HALF2X16,
+    UNPACK_HALF2X16,
+    AS_FLOAT,
+    AS_INT,
+    AS_UINT,
 
     // Control flow
     SELECT,  // Ternary select: select(false_val, true_val, condition)
@@ -130,6 +147,8 @@ enum class Intrinsic : u16 {
     // Float classification
     IS_NAN,
     IS_INF,
+    IS_FINITE,
+    IS_NORMAL,
 
     COUNT,
     INVALID = 0xFFFF
@@ -171,7 +190,9 @@ constexpr BackendNames BACKEND_NAMES[] = {
     {"floor", "floor", "floor"},                         // FLOOR
     {"ceil", "ceil", "ceil"},                            // CEIL
     {"round", "round", "round"},                         // ROUND
+    {"trunc", "trunc", "trunc"},                         // TRUNC
     {"fmod", "fmod", "mod"},                             // MOD
+    {"fma", "fma", "fma"},                               // FMA
     {"pow", "pow", "pow"},                               // POW
     {"sqrt", "sqrt", "sqrt"},                            // SQRT
     {"rsqrt", "rsqrt", "inversesqrt"},                   // RSQRT
@@ -189,6 +210,9 @@ constexpr BackendNames BACKEND_NAMES[] = {
     {"atan", "atan", "atan"},                            // ATAN
     {"atan2", "atan2", "atan"},                          // ATAN2
     {nullptr, "sincos", nullptr},                        // SINCOS (custom)
+    {"sinh", "sinh", "sinh"},                            // SINH
+    {"cosh", "cosh", "cosh"},                            // COSH
+    {"tanh", "tanh", "tanh"},                            // TANH
     {"degrees", "degrees", "degrees"},                   // DEGREES
     {"radians", "radians", "radians"},                   // RADIANS
     
@@ -225,6 +249,7 @@ constexpr BackendNames BACKEND_NAMES[] = {
     {"gather", ".Gather", "textureGather"},             // GATHER
     {"read", ".Load", "texelFetch"},                    // LOAD
     {"write", nullptr, "imageStore"},                   // STORE (custom HLSL)
+    {"get_width", ".GetDimensions", "textureSize"},     // TEXTURE_SIZE
 
     // Synchronization
     {"barrier", "barrier", "barrier"},                  // BARRIER
@@ -256,6 +281,17 @@ constexpr BackendNames BACKEND_NAMES[] = {
     {"reverse_bits", "reversebits", "bitfieldReverse"}, // REVERSE_BITS
     {"ctz", "firstbitlow", "findLSB"},                  // FIRST_BIT_LOW
     {"clz", "firstbithigh", "findMSB"},                 // FIRST_BIT_HIGH
+    {"extract_bits", nullptr, "bitfieldExtract"},       // BITFIELD_EXTRACT
+    {"insert_bits", nullptr, "bitfieldInsert"},         // BITFIELD_INSERT
+    {"pack_unorm4x8", nullptr, "packUnorm4x8"},         // PACK_UNORM4X8
+    {"unpack_unorm4x8", nullptr, "unpackUnorm4x8"},     // UNPACK_UNORM4X8
+    {"pack_snorm4x8", nullptr, "packSnorm4x8"},         // PACK_SNORM4X8
+    {"unpack_snorm4x8", nullptr, "unpackSnorm4x8"},     // UNPACK_SNORM4X8
+    {"pack_half2x16", nullptr, "packHalf2x16"},         // PACK_HALF2X16
+    {"unpack_half2x16", nullptr, "unpackHalf2x16"},     // UNPACK_HALF2X16
+    {"as_type<float>", "asfloat", "uintBitsToFloat"},   // AS_FLOAT
+    {"as_type<int>", "asint", "floatBitsToInt"},        // AS_INT
+    {"as_type<uint>", "asuint", "floatBitsToUint"},     // AS_UINT
 
     // Control flow
     {"select", "select", "mix"},                        // SELECT (GLSL uses mix for component-wise select)
@@ -267,6 +303,8 @@ constexpr BackendNames BACKEND_NAMES[] = {
     // Float classification
     {"isnan", "isnan", "isnan"},                        // IS_NAN
     {"isinf", "isinf", "isinf"},                        // IS_INF
+    {"isfinite", "isfinite", "isfinite"},                // IS_FINITE
+    {"isnormal", "isnormal", "isnormal"},                // IS_NORMAL
 };
 
 struct IntrinsicData {
@@ -352,7 +390,9 @@ constexpr IntrinsicData INTRINSICS[] = {
     INTRINSIC_FIXED(FLOOR, "floor", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Floor)),
     INTRINSIC_FIXED(CEIL, "ceil", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Ceil)),
     INTRINSIC_FIXED(ROUND, "round", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450RoundEven)),
+    INTRINSIC_FIXED(TRUNC, "trunc", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Trunc)),
     INTRINSIC_FIXED(MOD, "mod", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, SPV_MAP(spv::OpFMod, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(FMA, "fma", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Fma)),
     INTRINSIC_FIXED(POW, "pow", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Pow)),
     INTRINSIC_FIXED(SQRT, "sqrt", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Sqrt)),
     INTRINSIC_FIXED(RSQRT, "rsqrt", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450InverseSqrt)),
@@ -370,6 +410,9 @@ constexpr IntrinsicData INTRINSICS[] = {
     INTRINSIC_FIXED(ATAN, "atan", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Atan)),
     INTRINSIC_FIXED(ATAN2, "atan2", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Atan2)),
     INTRINSIC_FIXED(SINCOS, "sincos", mask(CoreType::VOID), mask(CoreType::FLOAT), mask(CoreType::FLOAT), mask(CoreType::FLOAT), 0, IntrinsicFlags::CUSTOM_METAL | IntrinsicFlags::CUSTOM_GLSL, SPV_MAP(SPV_OP_NONE, SPV_EXT_NONE)), // Custom: calls Sin + Cos
+    INTRINSIC_FIXED(SINH, "sinh", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Sinh)),
+    INTRINSIC_FIXED(COSH, "cosh", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Cosh)),
+    INTRINSIC_FIXED(TANH, "tanh", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Tanh)),
     INTRINSIC_FIXED(DEGREES, "degrees", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Degrees)),
     INTRINSIC_FIXED(RADIANS, "radians", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Radians)),
     
@@ -406,6 +449,7 @@ constexpr IntrinsicData INTRINSICS[] = {
     TEXTURE_INTRINSIC(GATHER, "gather", 3, 4, 0),            // SpvOpImageGather
     TEXTURE_INTRINSIC(LOAD, "load", 3, 4, 0),                // SpvOpImageFetch
     INTRINSIC_FIXED(STORE, "store", mask(CoreType::VOID), mask(CoreType::CUSTOM), mask(CoreType::INT2), mask(CoreType::FLOAT4), 0, IntrinsicFlags::TEXTURE_OP | IntrinsicFlags::CUSTOM_HLSL, SPV_MAP(spv::OpImageWrite, SPV_EXT_NONE)),
+    INTRINSIC_VAR(TEXTURE_SIZE, "texture_size", 1, 2, mask(CoreType::INT2), TypeMasks::TEXTURE_TYPES, mask(CoreType::INT), 0, 0, 0, 0, IntrinsicFlags::TEXTURE_OP, SPV_MAP(spv::OpImageQuerySizeLod, SPV_EXT_NONE)),
 
     // Synchronization
     INTRINSIC_FIXED(BARRIER, "barrier", mask(CoreType::VOID), 0, 0, 0, 0, 0, SPV_MAP(spv::OpControlBarrier, SPV_EXT_NONE)),
@@ -440,6 +484,17 @@ constexpr IntrinsicData INTRINSICS[] = {
     INTRINSIC_FIXED(REVERSE_BITS, "reverse_bits", mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT) | mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(spv::OpBitReverse, SPV_EXT_NONE)),
     INTRINSIC_FIXED(FIRST_BIT_LOW, "first_bit_low", mask(CoreType::INT), mask(CoreType::INT) | mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450FindILsb)),
     INTRINSIC_FIXED(FIRST_BIT_HIGH, "first_bit_high", mask(CoreType::INT), mask(CoreType::INT) | mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450FindSMsb)), // FindSMsb for signed, FindUMsb for unsigned
+    INTRINSIC_FIXED(BITFIELD_EXTRACT, "bitfield_extract", mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT), mask(CoreType::INT), 0, 0, SPV_MAP(spv::OpBitFieldSExtract, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(BITFIELD_INSERT, "bitfield_insert", mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT), mask(CoreType::INT), 0, SPV_MAP(spv::OpBitFieldInsert, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(PACK_UNORM4X8, "pack_unorm4x8", mask(CoreType::UINT), mask(CoreType::FLOAT4), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450PackUnorm4x8)),
+    INTRINSIC_FIXED(UNPACK_UNORM4X8, "unpack_unorm4x8", mask(CoreType::FLOAT4), mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450UnpackUnorm4x8)),
+    INTRINSIC_FIXED(PACK_SNORM4X8, "pack_snorm4x8", mask(CoreType::UINT), mask(CoreType::FLOAT4), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450PackSnorm4x8)),
+    INTRINSIC_FIXED(UNPACK_SNORM4X8, "unpack_snorm4x8", mask(CoreType::FLOAT4), mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450UnpackSnorm4x8)),
+    INTRINSIC_FIXED(PACK_HALF2X16, "pack_half2x16", mask(CoreType::UINT), mask(CoreType::FLOAT2), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450PackHalf2x16)),
+    INTRINSIC_FIXED(UNPACK_HALF2X16, "unpack_half2x16", mask(CoreType::FLOAT2), mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450UnpackHalf2x16)),
+    INTRINSIC_FIXED(AS_FLOAT, "asfloat", TypeMasks::FLOAT_TYPES, TypeMasks::INT_TYPES | TypeMasks::UINT_TYPES, 0, 0, 0, 0, SPV_MAP(spv::OpBitcast, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(AS_INT, "asint", TypeMasks::INT_TYPES, TypeMasks::FLOAT_TYPES | TypeMasks::UINT_TYPES, 0, 0, 0, 0, SPV_MAP(spv::OpBitcast, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(AS_UINT, "asuint", TypeMasks::UINT_TYPES, TypeMasks::FLOAT_TYPES | TypeMasks::INT_TYPES, 0, 0, 0, 0, SPV_MAP(spv::OpBitcast, SPV_EXT_NONE)),
 
     // Control flow
     // select(false_val, true_val, condition) - returns true_val where condition is true, false_val otherwise
@@ -455,6 +510,8 @@ constexpr IntrinsicData INTRINSICS[] = {
     // input shape at type-check time.
     INTRINSIC_FIXED(IS_NAN, "isnan", mask(CoreType::BOOL) | TypeMasks::BOOL_VECTORS, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(spv::OpIsNan, SPV_EXT_NONE)),
     INTRINSIC_FIXED(IS_INF, "isinf", mask(CoreType::BOOL) | TypeMasks::BOOL_VECTORS, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(spv::OpIsInf, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(IS_FINITE, "isfinite", mask(CoreType::BOOL) | TypeMasks::BOOL_VECTORS, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(IS_NORMAL, "isnormal", mask(CoreType::BOOL) | TypeMasks::BOOL_VECTORS, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, SPV_EXT_NONE)),
 };
 #undef INTRINSIC_ENTRY
 

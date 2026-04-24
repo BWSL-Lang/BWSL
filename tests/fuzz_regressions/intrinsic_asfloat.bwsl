@@ -1,0 +1,11 @@
+// Regression: asfloat is registered as a stdlib intrinsic and lowers to OP_BITCAST.
+pipeline IntrinsicAsfloat {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint raw = 0x3F800000u + input.global_id.x;
+            float scalar = asfloat(raw);
+            float3 vector = asfloat(uint3(raw, raw + 1u, raw + 2u));
+            float total = scalar + vector.x + vector.y + vector.z;
+        }
+    }
+}
