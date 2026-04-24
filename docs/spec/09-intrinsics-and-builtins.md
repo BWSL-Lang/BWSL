@@ -33,7 +33,7 @@ That table currently defines families for:
 Current intrinsic names include, among others:
 
 - math: `lerp`, `smoothstep`, `saturate`, `fract`, `step`, `clamp`, `sign`,
-  `abs`, `min`, `max`, `floor`, `ceil`, `round`, `mod`, `pow`, `sqrt`,
+  `abs`, `min`, `max`, `floor`, `ceil`, `round`, `mod`, `fmod`, `pow`, `sqrt`,
   `rsqrt`, `rcp`, `exp`, `exp2`, `log`, `log2`, `trunc`, `fma`
 - trig: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sincos`,
   `sinh`, `cosh`, `tanh`, `degrees`, `radians`
@@ -57,6 +57,9 @@ Current intrinsic names include, among others:
 - control/select: `select`
 - reductions and classification: `any`, `all`, `isnan`, `isinf`, `isfinite`,
   `isnormal`
+
+BWSL intrinsic names are intentionally opinionated; backend-specific spellings
+are handled during target emission rather than accepted as source-level aliases.
 
 ## Arity and Validation
 

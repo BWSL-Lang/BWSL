@@ -49,6 +49,7 @@ constexpr std::array<spv::Op, 256> BuildIrToSpvOpTable() {
     table[IR::OP_FMUL] = spv::OpFMul;
     table[IR::OP_FDIV] = spv::OpFDiv;
     table[IR::OP_FMOD] = spv::OpFMod;
+    table[IR::OP_FREM] = spv::OpFRem;
     table[IR::OP_FNEG] = spv::OpFNegate;
     table[IR::OP_FABS] = spv::OpExtInst;
     table[IR::OP_FMIN] = spv::OpExtInst;
@@ -1580,7 +1581,8 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_FADD:
   case IR::OP_FSUB:
   case IR::OP_FDIV:
-  case IR::OP_FMOD: {
+  case IR::OP_FMOD:
+  case IR::OP_FREM: {
     u16 dest_reg = ir->destinations[ir_idx];
     u16 op1_reg = ir->GetOperand(ir_idx, 0);
     u16 op2_reg = ir->GetOperand(ir_idx, 1);

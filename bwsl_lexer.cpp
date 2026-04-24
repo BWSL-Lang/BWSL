@@ -371,7 +371,6 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             if (memcmp(str, "for", 3) == 0) return TokenType::FOR;
             if (memcmp(str, "int", 3) == 0) return TokenType::INT;
             if (memcmp(str, "use", 3) == 0) return TokenType::USE;
-            if (memcmp(str, "mix", 3) == 0) return TokenType::MIX;
             if (memcmp(str, "out", 3) == 0) return TokenType::OUT;
             break;
             

@@ -342,6 +342,7 @@ enum OpCode : u16 {
     OP_UNPACK_UNORM2X16 = 0x6B,
     OP_PACK_SNORM2X16   = 0x6C,
     OP_UNPACK_SNORM2X16 = 0x6D,
+    OP_FREM             = 0x6E,  // Truncating float remainder (fmod)
     
     // ========== Vector Operations ==========
     OP_VEC_EXTRACT   = 0x70,  // Extract component

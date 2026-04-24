@@ -6899,6 +6899,8 @@ struct IRLowering {
       return OP_ROUND;
     case Intrinsic::TRUNC:
       return OP_TRUNC;
+    case Intrinsic::FMOD:
+      return OP_FREM;
     case Intrinsic::FMA:
       return OP_FMA;
     case Intrinsic::POW:

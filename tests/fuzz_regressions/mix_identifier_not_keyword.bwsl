@@ -1,0 +1,13 @@
+pipeline MixIdentifierNotKeyword {
+    pass "Main" {
+        vertex {
+            float mix = 0.5;
+            float x = lerp(0.0, 1.0, mix);
+            output.position = float4(x, x, x, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

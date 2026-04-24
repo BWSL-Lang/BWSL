@@ -104,7 +104,6 @@ public:
         table[FOR] = 3;
         table[INT] = 3;
         table[USE] = 3;
-        table[MIX] = 3;
         table[OUT] = 3;
 
         // Four character keywords
@@ -264,7 +263,6 @@ inline const char* TokenTypeName(TokenType type) {
         case FOR: return "FOR";
         case INT: return "INT";
         case USE: return "USE";
-        case MIX: return "MIX";
         case OUT: return "OUT";
         case PASS: return "PASS";
         case TRUE: return "TRUE";

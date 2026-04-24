@@ -135,6 +135,7 @@ VARIANT_ERROR_TESTS = {
 }
 
 ERROR_CASE_TESTS = {
+    "backend_spelling_alias_rejected.bwsl": "SPIR-V validation failed",
     "invalid_intrinsic_arity.bwsl": "'sin' accepts at most 1 arguments, got 2",
     "missing_semicolon.bwsl": "Expected ';' after expression",
     "unknown_module_import.bwsl": "Unknown module 'DoesNotExist'",
@@ -148,6 +149,20 @@ ERROR_CASE_TESTS = {
     "duplicate_compute_block.bwsl": "Only one compute block is allowed per pass",
     "array_size_overflow.bwsl": "Invalid array size. Max 256k elements",
 }
+
+FORBIDDEN_SOURCE_ALIAS_NAMES = (
+    "mix",
+    "frac",
+    "inversesqrt",
+    "dFdx",
+    "dFdy",
+    "dFdxFine",
+    "dFdyFine",
+    "dFdxCoarse",
+    "dFdyCoarse",
+    "fwidthFine",
+    "fwidthCoarse",
+)
 
 TOP_LEVEL_EXPECTED_ERROR_TESTS = {
     "resources_rcfg_undeclared_error": "Resource not declared in pipeline resources block",
@@ -1979,6 +1994,27 @@ def main() -> int:
 
             print(f"[{GREEN}PASS{NC}] error_cases/{test_file.stem}")
             passed += 1
+
+    stdlib_source = (root / "bwsl_stdlib.h").read_text(encoding="utf-8")
+    token_sources = "\n".join(
+        (root / path).read_text(encoding="utf-8")
+        for path in ("bwsl_token_defs.h", "bwsl_token_stream.h", "bwsl_lexer.cpp")
+    )
+    forbidden_hits: list[str] = []
+    for name in FORBIDDEN_SOURCE_ALIAS_NAMES:
+        intrinsic_pattern = rf'INTRINSIC_FIXED\([^,\n]+,\s*"{re.escape(name)}"'
+        if re.search(intrinsic_pattern, stdlib_source):
+            forbidden_hits.append(f"intrinsic alias '{name}'")
+    if re.search(r"\bMIX\b", token_sources):
+        forbidden_hits.append("mix token/keyword")
+
+    if forbidden_hits:
+        print(f"[{RED}FAIL{NC}] source_alias_surface")
+        print("       Error: forbidden source spelling(s): " + ", ".join(forbidden_hits))
+        failed += 1
+    else:
+        print(f"[{GREEN}PASS{NC}] source_alias_surface")
+        passed += 1
 
     # Fuzzer-found regressions. Each file was a crash or hang until the
     # referenced fix landed. Pass = bwslc exits in bounded time with code 0 or

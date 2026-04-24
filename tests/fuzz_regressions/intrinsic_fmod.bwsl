@@ -1,0 +1,11 @@
+// Regression: fmod is a distinct truncating-remainder intrinsic, not an alias for mod.
+pipeline IntrinsicFmod {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = float(input.global_id.x) - 5.5;
+            float scalar = fmod(x, 2.0);
+            float3 vector = fmod(float3(x, x + 1.0, x + 2.0), float3(2.0, 3.0, 4.0));
+            float total = scalar + vector.x + vector.y + vector.z;
+        }
+    }
+}

@@ -558,6 +558,7 @@ const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_FMUL:          return "FMUL";
         case IR::OP_FDIV:          return "FDIV";
         case IR::OP_FMOD:          return "FMOD";
+        case IR::OP_FREM:          return "FREM";
         case IR::OP_FNEG:          return "FNEG";
         case IR::OP_FABS:          return "FABS";
         case IR::OP_FMIN:          return "FMIN";
@@ -878,7 +879,7 @@ void DumpIR(const IRProgram& prog) {
                     FormatOperand(prog, op3).c_str());
                 break;
             // Binary operations: show both operands
-            case IR::OP_FADD: case IR::OP_FSUB: case IR::OP_FMUL: case IR::OP_FDIV:
+            case IR::OP_FADD: case IR::OP_FSUB: case IR::OP_FMUL: case IR::OP_FDIV: case IR::OP_FREM:
             case IR::OP_IADD: case IR::OP_ISUB: case IR::OP_IMUL: case IR::OP_IDIV:
             case IR::OP_AND: case IR::OP_OR: case IR::OP_XOR:
             case IR::OP_FLT: case IR::OP_FLE: case IR::OP_FGT: case IR::OP_FGE: case IR::OP_FEQ: case IR::OP_FNE:
@@ -1230,7 +1231,7 @@ std::string DumpIRToString(const IRProgram& prog) {
                     FormatOperand(prog, op3).c_str());
                 out += buf;
                 break;
-            case IR::OP_FADD: case IR::OP_FSUB: case IR::OP_FMUL: case IR::OP_FDIV:
+            case IR::OP_FADD: case IR::OP_FSUB: case IR::OP_FMUL: case IR::OP_FDIV: case IR::OP_FREM:
             case IR::OP_IADD: case IR::OP_ISUB: case IR::OP_IMUL: case IR::OP_IDIV:
             case IR::OP_AND: case IR::OP_OR: case IR::OP_XOR:
             case IR::OP_FLT: case IR::OP_FLE: case IR::OP_FGT: case IR::OP_FGE: case IR::OP_FEQ: case IR::OP_FNE:

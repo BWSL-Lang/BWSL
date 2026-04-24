@@ -158,6 +158,7 @@ static const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_FSUB: return "FSUB";
         case IR::OP_FMUL: return "FMUL";
         case IR::OP_FDIV: return "FDIV";
+        case IR::OP_FREM: return "FREM";
         case IR::OP_FNEG: return "FNEG";
         case IR::OP_IADD: return "IADD";
         case IR::OP_ISUB: return "ISUB";

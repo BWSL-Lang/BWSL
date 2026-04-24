@@ -29,6 +29,18 @@ void GLESBuilder::CountUses() {
                 regInfo[valueReg].useCount++;
             }
         }
+
+        // Direct GLES lowers FRem as x - y * trunc(x / y), so each operand is
+        // emitted twice. Count the extra uses to avoid inlining expressions
+        // that would need hidden temporaries.
+        if (ir->opcodes[i] == IR::OP_FREM) {
+            for (u32 j = 0; j < 2; j++) {
+                u16 op = ir->GetOperand(i, j);
+                if ((op & 0xC000) == 0 && op < regCount) {
+                    regInfo[op].useCount++;
+                }
+            }
+        }
     }
 
     // Also count PHI operand uses - these are stored separately
@@ -967,6 +979,18 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_FMOD:
             EmitFuncAssign(instIdx, dest, "mod", 2);
             return;
+        case IR::OP_FREM:
+            EmitRegWithDecl(dest);
+            out.Lit(" = (");
+            EmitExpr(Op(instIdx, 0));
+            out.Lit(" - ");
+            EmitExpr(Op(instIdx, 1));
+            out.Lit(" * trunc(");
+            EmitExpr(Op(instIdx, 0));
+            out.Lit(" / ");
+            EmitExpr(Op(instIdx, 1));
+            out.Lit("));");
+            return;
 
         case IR::OP_FNEG: case IR::OP_INEG:
             EmitUnaryAssign(instIdx, dest, "-");
@@ -1882,6 +1906,17 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
             return;
         case IR::OP_FMOD:
             out.Lit("mod("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_FREM:
+            out.Chr('(');
+            EmitExpr(Op(instIdx, 0));
+            out.Lit(" - ");
+            EmitExpr(Op(instIdx, 1));
+            out.Lit(" * trunc(");
+            EmitExpr(Op(instIdx, 0));
+            out.Lit(" / ");
+            EmitExpr(Op(instIdx, 1));
+            out.Lit("))");
             return;
         case IR::OP_FNEG: case IR::OP_INEG:
             out.Lit("(-"); EmitExpr(Op(instIdx, 0)); out.Chr(')');

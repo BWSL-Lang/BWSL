@@ -36,6 +36,7 @@ enum class Intrinsic : u16 {
     ROUND,
     TRUNC,
     MOD,
+    FMOD,
     FMA,
     POW,
     SQRT,
@@ -200,6 +201,7 @@ constexpr BackendNames BACKEND_NAMES[] = {
     {"round", "round", "round"},                         // ROUND
     {"trunc", "trunc", "trunc"},                         // TRUNC
     {"fmod", "fmod", "mod"},                             // MOD
+    {"fmod", "fmod", nullptr},                            // FMOD
     {"fma", "fma", "fma"},                               // FMA
     {"pow", "pow", "pow"},                               // POW
     {"sqrt", "sqrt", "sqrt"},                            // SQRT
@@ -408,6 +410,7 @@ constexpr IntrinsicData INTRINSICS[] = {
     INTRINSIC_FIXED(ROUND, "round", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450RoundEven)),
     INTRINSIC_FIXED(TRUNC, "trunc", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Trunc)),
     INTRINSIC_FIXED(MOD, "mod", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, SPV_MAP(spv::OpFMod, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(FMOD, "fmod", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, SPV_MAP(spv::OpFRem, SPV_EXT_NONE)),
     INTRINSIC_FIXED(FMA, "fma", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Fma)),
     INTRINSIC_FIXED(POW, "pow", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Pow)),
     INTRINSIC_FIXED(SQRT, "sqrt", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Sqrt)),

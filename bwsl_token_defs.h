@@ -110,7 +110,6 @@ enum TokenType : uint8_t {
     FOR,
     FOREACH,
     USE,
-    MIX,
     OUT,
     PASS,
     TRUE,
