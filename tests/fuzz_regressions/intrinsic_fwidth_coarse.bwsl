@@ -1,0 +1,21 @@
+// Regression: fwidth_coarse is registered as a fragment-only stdlib intrinsic.
+pipeline IntrinsicFwidthCoarse {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.coord = attributes.position.xy;
+        }
+
+        fragment {
+            float2 uv = input.coord;
+            float2 width = fwidth_coarse(uv);
+            output.color = float4(width.x, width.y, fwidth_coarse(uv.y), 1.0);
+        }
+    }
+}

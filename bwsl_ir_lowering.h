@@ -5452,6 +5452,12 @@ struct IRLowering {
         SetRegisterType(dest, CoreType::INT);
         return dest;
       }
+      case Intrinsic::RCP: {
+        u16 one = builder.EmitConstant(1.0f);
+        builder.EmitInstruction(OP_FDIV, dest, one, args[0]);
+        SetRegisterType(dest, GetRegisterType(args[0]));
+        return dest;
+      }
       case Intrinsic::BITFIELD_INSERT: {
         builder.EmitInstruction(OP_BITFIELD_INSERT, dest, args[0], args[1],
                                 args[2], args[3]);
@@ -6977,6 +6983,10 @@ struct IRLowering {
       return OP_DDY_COARSE;
     case Intrinsic::FWIDTH:
       return OP_FWIDTH;
+    case Intrinsic::FWIDTH_FINE:
+      return OP_FWIDTH_FINE;
+    case Intrinsic::FWIDTH_COARSE:
+      return OP_FWIDTH_COARSE;
 
     // Texture operations - these need special handling
     case Intrinsic::SAMPLE:

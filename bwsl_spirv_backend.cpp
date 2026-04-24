@@ -166,6 +166,8 @@ constexpr std::array<spv::Op, 256> BuildIrToSpvOpTable() {
     table[IR::OP_DDX_COARSE] = spv::OpDPdxCoarse;
     table[IR::OP_DDY_COARSE] = spv::OpDPdyCoarse;
     table[IR::OP_FWIDTH] = spv::OpFwidth;
+    table[IR::OP_FWIDTH_FINE] = spv::OpFwidthFine;
+    table[IR::OP_FWIDTH_COARSE] = spv::OpFwidthCoarse;
 
     // ========== Boolean reductions ==========
     table[IR::OP_ANY] = spv::OpAny;
@@ -2046,7 +2048,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_DDY_FINE:
   case IR::OP_DDX_COARSE:
   case IR::OP_DDY_COARSE:
-  case IR::OP_FWIDTH: {
+  case IR::OP_FWIDTH:
+  case IR::OP_FWIDTH_FINE:
+  case IR::OP_FWIDTH_COARSE: {
     u16 dest_reg = ir->destinations[ir_idx];
     u16 op_reg = ir->GetOperand(ir_idx, 0);
     u32 operand = GetSpirvId(op_reg);

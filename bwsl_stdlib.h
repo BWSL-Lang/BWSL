@@ -40,6 +40,7 @@ enum class Intrinsic : u16 {
     POW,
     SQRT,
     RSQRT,
+    RCP,
     EXP,
     EXP2,
     LOG,
@@ -83,6 +84,8 @@ enum class Intrinsic : u16 {
     DDX_COARSE,
     DDY_COARSE,
     FWIDTH,
+    FWIDTH_FINE,
+    FWIDTH_COARSE,
     
     // Texture
     SAMPLE,
@@ -201,6 +204,7 @@ constexpr BackendNames BACKEND_NAMES[] = {
     {"pow", "pow", "pow"},                               // POW
     {"sqrt", "sqrt", "sqrt"},                            // SQRT
     {"rsqrt", "rsqrt", "inversesqrt"},                   // RSQRT
+    {"rcp", "rcp", nullptr},                             // RCP
     {"exp", "exp", "exp"},                               // EXP
     {"exp2", "exp2", "exp2"},                            // EXP2
     {"log", "log", "log"},                               // LOG
@@ -244,6 +248,8 @@ constexpr BackendNames BACKEND_NAMES[] = {
     {"dfdx_coarse", "ddx_coarse", "dFdxCoarse"},        // DDX_COARSE
     {"dfdy_coarse", "ddy_coarse", "dFdyCoarse"},        // DDY_COARSE
     {"fwidth", "fwidth", "fwidth"},                      // FWIDTH
+    {"fwidth", "fwidth", "fwidthFine"},                  // FWIDTH_FINE
+    {"fwidth", "fwidth", "fwidthCoarse"},                // FWIDTH_COARSE
     
     // Texture
     {"sample", ".Sample", "texture"},                    // SAMPLE
@@ -406,6 +412,7 @@ constexpr IntrinsicData INTRINSICS[] = {
     INTRINSIC_FIXED(POW, "pow", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Pow)),
     INTRINSIC_FIXED(SQRT, "sqrt", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Sqrt)),
     INTRINSIC_FIXED(RSQRT, "rsqrt", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450InverseSqrt)),
+    INTRINSIC_FIXED(RCP, "rcp", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, SPV_EXT_NONE)),
     INTRINSIC_FIXED(EXP, "exp", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Exp)),
     INTRINSIC_FIXED(EXP2, "exp2", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Exp2)),
     INTRINSIC_FIXED(LOG, "log", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Log)),
@@ -449,6 +456,8 @@ constexpr IntrinsicData INTRINSICS[] = {
     INTRINSIC_FIXED(DDX_COARSE, "ddx_coarse", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, IntrinsicFlags::FRAGMENT_ONLY, SPV_MAP(spv::OpDPdxCoarse, SPV_EXT_NONE)),
     INTRINSIC_FIXED(DDY_COARSE, "ddy_coarse", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, IntrinsicFlags::FRAGMENT_ONLY, SPV_MAP(spv::OpDPdyCoarse, SPV_EXT_NONE)),
     INTRINSIC_FIXED(FWIDTH, "fwidth", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, IntrinsicFlags::FRAGMENT_ONLY, SPV_MAP(spv::OpFwidth, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(FWIDTH_FINE, "fwidth_fine", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, IntrinsicFlags::FRAGMENT_ONLY, SPV_MAP(spv::OpFwidthFine, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(FWIDTH_COARSE, "fwidth_coarse", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, IntrinsicFlags::FRAGMENT_ONLY, SPV_MAP(spv::OpFwidthCoarse, SPV_EXT_NONE)),
     
     // Texture operations (SPIR-V ops handled specially based on sampling mode)
     TEXTURE_INTRINSIC(SAMPLE, "sample", 2, 6, 0),            // SpvOpImageSampleImplicitLod

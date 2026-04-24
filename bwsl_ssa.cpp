@@ -661,6 +661,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             op == IR::OP_PACK_SNORM2X16 || op == IR::OP_UNPACK_SNORM2X16 ||
             op == IR::OP_UNPACK_SNORM4X8 || op == IR::OP_PACK_HALF2X16 ||
             op == IR::OP_UNPACK_HALF2X16 || op == IR::OP_ISNORMAL ||
+            (op >= IR::OP_DDX && op <= IR::OP_FWIDTH_COARSE) || // Derivatives
             (op >= IR::OP_LERP && op <= IR::OP_RADIANS) ||  // Interpolation
             (op >= IR::OP_F2I && op <= IR::OP_SIGN) ||      // Type conversions
             (op >= IR::OP_ISNAN && op <= IR::OP_ISFINITE) || // Float classification

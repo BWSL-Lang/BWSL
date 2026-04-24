@@ -431,6 +431,8 @@ enum OpCode : u16 {
     OP_DDX_COARSE      = 0xC4,
     OP_DDY_COARSE      = 0xC5,
     OP_FWIDTH          = 0xC6,
+    OP_FWIDTH_FINE     = 0xC7,
+    OP_FWIDTH_COARSE   = 0xC8,
     
     // ========== Interpolation ==========
     OP_LERP            = 0xD0,

@@ -169,6 +169,8 @@ static const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_NORMALIZE: return "NORMALIZE";
         case IR::OP_SQRT: return "SQRT";
         case IR::OP_RSQRT: return "RSQRT";
+        case IR::OP_FWIDTH_FINE: return "FWIDTH_FINE";
+        case IR::OP_FWIDTH_COARSE: return "FWIDTH_COARSE";
         case IR::OP_SIN: return "SIN";
         case IR::OP_COS: return "COS";
         case IR::OP_TAN: return "TAN";

@@ -34,13 +34,13 @@ Current intrinsic names include, among others:
 
 - math: `lerp`, `smoothstep`, `saturate`, `fract`, `step`, `clamp`, `sign`,
   `abs`, `min`, `max`, `floor`, `ceil`, `round`, `mod`, `pow`, `sqrt`,
-  `rsqrt`, `exp`, `exp2`, `log`, `log2`, `trunc`, `fma`
+  `rsqrt`, `rcp`, `exp`, `exp2`, `log`, `log2`, `trunc`, `fma`
 - trig: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sincos`,
   `sinh`, `cosh`, `tanh`, `degrees`, `radians`
 - vector and matrix: `dot`, `cross`, `normalize`, `length`, `distance`,
   `reflect`, `refract`, `faceforward`, `transpose`, `determinant`, `inverse`
 - derivatives: `ddx`, `ddy`, `ddx_fine`, `ddy_fine`, `ddx_coarse`,
-  `ddy_coarse`, `fwidth`
+  `ddy_coarse`, `fwidth`, `fwidth_fine`, `fwidth_coarse`
 - texture and image: `sample`, `sample_lod`, `sample_bias`, `sample_grad`,
   `sample_cmp`, `gather`, `load`, `store`, `texture_size`, `texture_levels`
 - synchronization: `barrier`, `memoryBarrier`, `storageBarrier`

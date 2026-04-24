@@ -1458,6 +1458,12 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_FWIDTH:
             EmitFuncAssign(instIdx, dest, "fwidth", 1);
             return;
+        case IR::OP_FWIDTH_FINE:
+            EmitFuncAssign(instIdx, dest, "fwidth", 1);
+            return;
+        case IR::OP_FWIDTH_COARSE:
+            EmitFuncAssign(instIdx, dest, "fwidth", 1);
+            return;
 
         // ===== Select (ternary) =====
         case IR::OP_SELECT:
@@ -2356,7 +2362,7 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
         case IR::OP_DDY: case IR::OP_DDY_FINE: case IR::OP_DDY_COARSE:
             out.Lit("dFdy("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
             return;
-        case IR::OP_FWIDTH:
+        case IR::OP_FWIDTH: case IR::OP_FWIDTH_FINE: case IR::OP_FWIDTH_COARSE:
             out.Lit("fwidth("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
             return;
 

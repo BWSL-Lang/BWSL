@@ -707,6 +707,8 @@ const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_DDX_COARSE:    return "DDX_COARSE";
         case IR::OP_DDY_COARSE:    return "DDY_COARSE";
         case IR::OP_FWIDTH:        return "FWIDTH";
+        case IR::OP_FWIDTH_FINE:   return "FWIDTH_FINE";
+        case IR::OP_FWIDTH_COARSE: return "FWIDTH_COARSE";
         // Interpolation
         case IR::OP_LERP:          return "LERP";
         case IR::OP_SMOOTHSTEP:    return "SMOOTHSTEP";

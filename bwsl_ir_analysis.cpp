@@ -338,13 +338,15 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
     }
 
     case IR::OP_DDX_FINE:
-    case IR::OP_DDY_FINE: {
+    case IR::OP_DDY_FINE:
+    case IR::OP_FWIDTH_FINE: {
       analysis->Set(IRAnalysis::CAP_FINE_DERIVATIVES);
       break;
     }
 
     case IR::OP_DDX_COARSE:
-    case IR::OP_DDY_COARSE: {
+    case IR::OP_DDY_COARSE:
+    case IR::OP_FWIDTH_COARSE: {
       analysis->Set(IRAnalysis::CAP_COARSE_DERIVATIVES);
       break;
     }
