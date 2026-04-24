@@ -94,6 +94,7 @@ enum class Intrinsic : u16 {
     LOAD,
     STORE,
     TEXTURE_SIZE,
+    TEXTURE_LEVELS,
 
     // Synchronization
     BARRIER,
@@ -127,8 +128,12 @@ enum class Intrinsic : u16 {
     FIRST_BIT_HIGH,
     BITFIELD_EXTRACT,
     BITFIELD_INSERT,
+    PACK_UNORM2X16,
+    UNPACK_UNORM2X16,
     PACK_UNORM4X8,
     UNPACK_UNORM4X8,
+    PACK_SNORM2X16,
+    UNPACK_SNORM2X16,
     PACK_SNORM4X8,
     UNPACK_SNORM4X8,
     PACK_HALF2X16,
@@ -250,6 +255,7 @@ constexpr BackendNames BACKEND_NAMES[] = {
     {"read", ".Load", "texelFetch"},                    // LOAD
     {"write", nullptr, "imageStore"},                   // STORE (custom HLSL)
     {"get_width", ".GetDimensions", "textureSize"},     // TEXTURE_SIZE
+    {"get_num_mip_levels", ".GetDimensions", "textureQueryLevels"}, // TEXTURE_LEVELS
 
     // Synchronization
     {"barrier", "barrier", "barrier"},                  // BARRIER
@@ -283,8 +289,12 @@ constexpr BackendNames BACKEND_NAMES[] = {
     {"clz", "firstbithigh", "findMSB"},                 // FIRST_BIT_HIGH
     {"extract_bits", nullptr, "bitfieldExtract"},       // BITFIELD_EXTRACT
     {"insert_bits", nullptr, "bitfieldInsert"},         // BITFIELD_INSERT
+    {"pack_unorm2x16", nullptr, "packUnorm2x16"},       // PACK_UNORM2X16
+    {"unpack_unorm2x16", nullptr, "unpackUnorm2x16"},   // UNPACK_UNORM2X16
     {"pack_unorm4x8", nullptr, "packUnorm4x8"},         // PACK_UNORM4X8
     {"unpack_unorm4x8", nullptr, "unpackUnorm4x8"},     // UNPACK_UNORM4X8
+    {"pack_snorm2x16", nullptr, "packSnorm2x16"},       // PACK_SNORM2X16
+    {"unpack_snorm2x16", nullptr, "unpackSnorm2x16"},   // UNPACK_SNORM2X16
     {"pack_snorm4x8", nullptr, "packSnorm4x8"},         // PACK_SNORM4X8
     {"unpack_snorm4x8", nullptr, "unpackSnorm4x8"},     // UNPACK_SNORM4X8
     {"pack_half2x16", nullptr, "packHalf2x16"},         // PACK_HALF2X16
@@ -450,6 +460,7 @@ constexpr IntrinsicData INTRINSICS[] = {
     TEXTURE_INTRINSIC(LOAD, "load", 3, 4, 0),                // SpvOpImageFetch
     INTRINSIC_FIXED(STORE, "store", mask(CoreType::VOID), mask(CoreType::CUSTOM), mask(CoreType::INT2), mask(CoreType::FLOAT4), 0, IntrinsicFlags::TEXTURE_OP | IntrinsicFlags::CUSTOM_HLSL, SPV_MAP(spv::OpImageWrite, SPV_EXT_NONE)),
     INTRINSIC_VAR(TEXTURE_SIZE, "texture_size", 1, 2, mask(CoreType::INT2), TypeMasks::TEXTURE_TYPES, mask(CoreType::INT), 0, 0, 0, 0, IntrinsicFlags::TEXTURE_OP, SPV_MAP(spv::OpImageQuerySizeLod, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(TEXTURE_LEVELS, "texture_levels", mask(CoreType::INT), TypeMasks::TEXTURE_TYPES, 0, 0, 0, IntrinsicFlags::TEXTURE_OP, SPV_MAP(spv::OpImageQueryLevels, SPV_EXT_NONE)),
 
     // Synchronization
     INTRINSIC_FIXED(BARRIER, "barrier", mask(CoreType::VOID), 0, 0, 0, 0, 0, SPV_MAP(spv::OpControlBarrier, SPV_EXT_NONE)),
@@ -486,8 +497,12 @@ constexpr IntrinsicData INTRINSICS[] = {
     INTRINSIC_FIXED(FIRST_BIT_HIGH, "first_bit_high", mask(CoreType::INT), mask(CoreType::INT) | mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450FindSMsb)), // FindSMsb for signed, FindUMsb for unsigned
     INTRINSIC_FIXED(BITFIELD_EXTRACT, "bitfield_extract", mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT), mask(CoreType::INT), 0, 0, SPV_MAP(spv::OpBitFieldSExtract, SPV_EXT_NONE)),
     INTRINSIC_FIXED(BITFIELD_INSERT, "bitfield_insert", mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT), mask(CoreType::INT), 0, SPV_MAP(spv::OpBitFieldInsert, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(PACK_UNORM2X16, "pack_unorm2x16", mask(CoreType::UINT), mask(CoreType::FLOAT2), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450PackUnorm2x16)),
+    INTRINSIC_FIXED(UNPACK_UNORM2X16, "unpack_unorm2x16", mask(CoreType::FLOAT2), mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450UnpackUnorm2x16)),
     INTRINSIC_FIXED(PACK_UNORM4X8, "pack_unorm4x8", mask(CoreType::UINT), mask(CoreType::FLOAT4), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450PackUnorm4x8)),
     INTRINSIC_FIXED(UNPACK_UNORM4X8, "unpack_unorm4x8", mask(CoreType::FLOAT4), mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450UnpackUnorm4x8)),
+    INTRINSIC_FIXED(PACK_SNORM2X16, "pack_snorm2x16", mask(CoreType::UINT), mask(CoreType::FLOAT2), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450PackSnorm2x16)),
+    INTRINSIC_FIXED(UNPACK_SNORM2X16, "unpack_snorm2x16", mask(CoreType::FLOAT2), mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450UnpackSnorm2x16)),
     INTRINSIC_FIXED(PACK_SNORM4X8, "pack_snorm4x8", mask(CoreType::UINT), mask(CoreType::FLOAT4), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450PackSnorm4x8)),
     INTRINSIC_FIXED(UNPACK_SNORM4X8, "unpack_snorm4x8", mask(CoreType::FLOAT4), mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450UnpackSnorm4x8)),
     INTRINSIC_FIXED(PACK_HALF2X16, "pack_half2x16", mask(CoreType::UINT), mask(CoreType::FLOAT2), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450PackHalf2x16)),

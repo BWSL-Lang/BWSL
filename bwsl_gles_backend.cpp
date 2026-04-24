@@ -1178,11 +1178,23 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_BITFIELD_INSERT:
             EmitFuncAssign(instIdx, dest, "bitfieldInsert", 4);
             return;
+        case IR::OP_PACK_UNORM2X16:
+            EmitFuncAssign(instIdx, dest, "packUnorm2x16", 1);
+            return;
+        case IR::OP_UNPACK_UNORM2X16:
+            EmitFuncAssign(instIdx, dest, "unpackUnorm2x16", 1);
+            return;
         case IR::OP_PACK_UNORM4X8:
             EmitFuncAssign(instIdx, dest, "packUnorm4x8", 1);
             return;
         case IR::OP_UNPACK_UNORM4X8:
             EmitFuncAssign(instIdx, dest, "unpackUnorm4x8", 1);
+            return;
+        case IR::OP_PACK_SNORM2X16:
+            EmitFuncAssign(instIdx, dest, "packSnorm2x16", 1);
+            return;
+        case IR::OP_UNPACK_SNORM2X16:
+            EmitFuncAssign(instIdx, dest, "unpackSnorm2x16", 1);
             return;
         case IR::OP_PACK_SNORM4X8:
             EmitFuncAssign(instIdx, dest, "packSnorm4x8", 1);
@@ -1396,6 +1408,13 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));  // lod
+            out.Lit(");");
+            return;
+
+        case IR::OP_TEX_LEVELS:
+            EmitRegWithDecl(dest);
+            out.Lit(" = textureQueryLevels(");
+            EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(");");
             return;
 
@@ -2063,11 +2082,23 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
         case IR::OP_BITFIELD_INSERT:
             out.Lit("bitfieldInsert("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Lit(", "); EmitExpr(Op(instIdx, 3)); out.Chr(')');
             return;
+        case IR::OP_PACK_UNORM2X16:
+            out.Lit("packUnorm2x16("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_UNPACK_UNORM2X16:
+            out.Lit("unpackUnorm2x16("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
         case IR::OP_PACK_UNORM4X8:
             out.Lit("packUnorm4x8("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
             return;
         case IR::OP_UNPACK_UNORM4X8:
             out.Lit("unpackUnorm4x8("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_PACK_SNORM2X16:
+            out.Lit("packSnorm2x16("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_UNPACK_SNORM2X16:
+            out.Lit("unpackSnorm2x16("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
             return;
         case IR::OP_PACK_SNORM4X8:
             out.Lit("packSnorm4x8("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
@@ -2301,6 +2332,9 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
             return;
         case IR::OP_TEX_SIZE:
             out.Lit("textureSize("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
+            return;
+        case IR::OP_TEX_LEVELS:
+            out.Lit("textureQueryLevels("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
             return;
         case IR::OP_TEX_GATHER:
             out.Lit("textureGather("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');

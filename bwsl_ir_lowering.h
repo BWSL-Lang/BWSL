@@ -5446,6 +5446,12 @@ struct IRLowering {
         SetRegisterType(dest, CoreType::INT2);
         return dest;
       }
+      case Intrinsic::TEXTURE_LEVELS: {
+        u16 texReg = args[0];
+        builder.EmitInstruction(OP_TEX_LEVELS, dest, texReg);
+        SetRegisterType(dest, CoreType::INT);
+        return dest;
+      }
       case Intrinsic::BITFIELD_INSERT: {
         builder.EmitInstruction(OP_BITFIELD_INSERT, dest, args[0], args[1],
                                 args[2], args[3]);
@@ -5490,9 +5496,15 @@ struct IRLowering {
           break;
         }
         case Intrinsic::PACK_UNORM4X8:
+        case Intrinsic::PACK_UNORM2X16:
         case Intrinsic::PACK_SNORM4X8:
+        case Intrinsic::PACK_SNORM2X16:
         case Intrinsic::PACK_HALF2X16:
           resultType = CoreType::UINT;
+          break;
+        case Intrinsic::UNPACK_UNORM2X16:
+        case Intrinsic::UNPACK_SNORM2X16:
+          resultType = CoreType::FLOAT2;
           break;
         case Intrinsic::UNPACK_UNORM4X8:
         case Intrinsic::UNPACK_SNORM4X8:
@@ -7041,10 +7053,18 @@ struct IRLowering {
       return OP_BITFIELD_EXTRACT;
     case Intrinsic::BITFIELD_INSERT:
       return OP_BITFIELD_INSERT;
+    case Intrinsic::PACK_UNORM2X16:
+      return OP_PACK_UNORM2X16;
+    case Intrinsic::UNPACK_UNORM2X16:
+      return OP_UNPACK_UNORM2X16;
     case Intrinsic::PACK_UNORM4X8:
       return OP_PACK_UNORM4X8;
     case Intrinsic::UNPACK_UNORM4X8:
       return OP_UNPACK_UNORM4X8;
+    case Intrinsic::PACK_SNORM2X16:
+      return OP_PACK_SNORM2X16;
+    case Intrinsic::UNPACK_SNORM2X16:
+      return OP_UNPACK_SNORM2X16;
     case Intrinsic::PACK_SNORM4X8:
       return OP_PACK_SNORM4X8;
     case Intrinsic::UNPACK_SNORM4X8:
@@ -7053,6 +7073,8 @@ struct IRLowering {
       return OP_PACK_HALF2X16;
     case Intrinsic::UNPACK_HALF2X16:
       return OP_UNPACK_HALF2X16;
+    case Intrinsic::TEXTURE_LEVELS:
+      return OP_TEX_LEVELS;
     case Intrinsic::AS_FLOAT:
     case Intrinsic::AS_INT:
     case Intrinsic::AS_UINT:

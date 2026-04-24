@@ -597,8 +597,12 @@ const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_REVERSE_BITS:  return "REVERSE_BITS";
         case IR::OP_BITFIELD_EXTRACT: return "BITFIELD_EXTRACT";
         case IR::OP_BITFIELD_INSERT:  return "BITFIELD_INSERT";
+        case IR::OP_PACK_UNORM2X16:   return "PACK_UNORM2X16";
+        case IR::OP_UNPACK_UNORM2X16: return "UNPACK_UNORM2X16";
         case IR::OP_PACK_UNORM4X8:    return "PACK_UNORM4X8";
         case IR::OP_UNPACK_UNORM4X8:  return "UNPACK_UNORM4X8";
+        case IR::OP_PACK_SNORM2X16:   return "PACK_SNORM2X16";
+        case IR::OP_UNPACK_SNORM2X16: return "UNPACK_SNORM2X16";
         case IR::OP_PACK_SNORM4X8:    return "PACK_SNORM4X8";
         // Comparison
         case IR::OP_FEQ:           return "FEQ";
@@ -691,6 +695,7 @@ const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_TEX_GATHER:      return "TEX_GATHER";
         case IR::OP_TEX_FETCH:       return "TEX_FETCH";
         case IR::OP_TEX_SIZE:        return "TEX_SIZE";
+        case IR::OP_TEX_LEVELS:      return "TEX_LEVELS";
         case IR::OP_IMG_LOAD:        return "IMG_LOAD";
         case IR::OP_IMG_STORE:       return "IMG_STORE";
         case IR::OP_LOAD_TEX_HANDLE: return "LOAD_TEX_HANDLE";

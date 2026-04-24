@@ -106,6 +106,10 @@ constexpr std::array<spv::Op, 256> BuildIrToSpvOpTable() {
     table[IR::OP_SINH] = spv::OpExtInst;
     table[IR::OP_COSH] = spv::OpExtInst;
     table[IR::OP_TANH] = spv::OpExtInst;
+    table[IR::OP_PACK_UNORM2X16] = spv::OpExtInst;
+    table[IR::OP_UNPACK_UNORM2X16] = spv::OpExtInst;
+    table[IR::OP_PACK_SNORM2X16] = spv::OpExtInst;
+    table[IR::OP_UNPACK_SNORM2X16] = spv::OpExtInst;
     table[IR::OP_UNPACK_SNORM4X8] = spv::OpExtInst;
     table[IR::OP_PACK_HALF2X16] = spv::OpExtInst;
     table[IR::OP_UNPACK_HALF2X16] = spv::OpExtInst;
@@ -223,8 +227,12 @@ constexpr std::array<u32, 256> BuildIrToGlslStd450Table() {
     // ========== Bitwise ==========
     table[IR::OP_CLZ] = GLSLstd450FindUMsb;
     table[IR::OP_CTZ] = GLSLstd450FindILsb;
+    table[IR::OP_PACK_UNORM2X16] = GLSLstd450PackUnorm2x16;
+    table[IR::OP_UNPACK_UNORM2X16] = GLSLstd450UnpackUnorm2x16;
     table[IR::OP_PACK_UNORM4X8] = GLSLstd450PackUnorm4x8;
     table[IR::OP_UNPACK_UNORM4X8] = GLSLstd450UnpackUnorm4x8;
+    table[IR::OP_PACK_SNORM2X16] = GLSLstd450PackSnorm2x16;
+    table[IR::OP_UNPACK_SNORM2X16] = GLSLstd450UnpackSnorm2x16;
     table[IR::OP_PACK_SNORM4X8] = GLSLstd450PackSnorm4x8;
 
     // ========== Type Conversion ==========
@@ -2782,8 +2790,12 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_CTZ:
   case IR::OP_DEGREES:
   case IR::OP_RADIANS:
+  case IR::OP_PACK_UNORM2X16:
+  case IR::OP_UNPACK_UNORM2X16:
   case IR::OP_PACK_UNORM4X8:
   case IR::OP_UNPACK_UNORM4X8:
+  case IR::OP_PACK_SNORM2X16:
+  case IR::OP_UNPACK_SNORM2X16:
   case IR::OP_PACK_SNORM4X8:
   case IR::OP_UNPACK_SNORM4X8:
   case IR::OP_PACK_HALF2X16:
@@ -6181,6 +6193,41 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u32 result_type = GetResultType(ir->destinations[ir_idx], tex_reg);
     u32 lod_id = GetSpirvId(lod_reg);
     Emit(spv::OpImageQuerySizeLod, result_type, dest, image_id, lod_id);
+    break;
+  }
+
+  case IR::OP_TEX_LEVELS: {
+    u16 tex_reg = ir->GetOperand(ir_idx, 0);
+    u16 tex_slot = tex_reg & 0x0FFF;
+
+    u32 tex_var_id = textureIds[tex_slot];
+    if (tex_var_id == 0) {
+      u32 result_type = GetTypeId(CoreType::INT);
+      Emit(spv::OpUndef, result_type, dest);
+      break;
+    }
+
+    u32 sampled_img_type;
+    u32 image_type;
+    if (textureIsArray[tex_slot]) {
+      sampled_img_type = GetArraySampledImageTypeId();
+      image_type = GetArrayImageTypeId();
+    } else if (textureIsCubemap[tex_slot]) {
+      sampled_img_type = GetCubeSampledImageTypeId();
+      image_type = GetCubeImageTypeId();
+    } else {
+      sampled_img_type = GetSampledImageTypeId();
+      image_type = GetImageTypeId();
+    }
+
+    u32 sampled_img_id = AllocateId();
+    Emit(spv::OpLoad, sampled_img_type, sampled_img_id, tex_var_id);
+
+    u32 image_id = AllocateId();
+    Emit(spv::OpImage, image_type, image_id, sampled_img_id);
+
+    u32 result_type = GetTypeId(CoreType::INT);
+    Emit(spv::OpImageQueryLevels, result_type, dest, image_id);
     break;
   }
 

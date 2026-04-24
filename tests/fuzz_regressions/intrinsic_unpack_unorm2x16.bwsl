@@ -1,0 +1,10 @@
+// Regression: unpack_unorm2x16 is registered as a stdlib intrinsic and lowers to OP_UNPACK_UNORM2X16.
+pipeline IntrinsicUnpackUnorm2x16 {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint packed = 0x80004000u ^ input.global_id.x;
+            float2 unpacked = unpack_unorm2x16(packed);
+            float total = unpacked.x + unpacked.y;
+        }
+    }
+}

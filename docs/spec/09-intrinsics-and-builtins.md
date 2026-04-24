@@ -42,7 +42,7 @@ Current intrinsic names include, among others:
 - derivatives: `ddx`, `ddy`, `ddx_fine`, `ddy_fine`, `ddx_coarse`,
   `ddy_coarse`, `fwidth`
 - texture and image: `sample`, `sample_lod`, `sample_bias`, `sample_grad`,
-  `sample_cmp`, `gather`, `load`, `store`, `texture_size`
+  `sample_cmp`, `gather`, `load`, `store`, `texture_size`, `texture_levels`
 - synchronization: `barrier`, `memoryBarrier`, `storageBarrier`
 - wave: `wave_sum`, `wave_product`, `wave_min`, `wave_max`, `wave_all`,
   `wave_any`, `wave_broadcast`, `wave_read_first`
@@ -50,8 +50,10 @@ Current intrinsic names include, among others:
   `atomic_or`, `atomic_xor`, `atomic_exchange`, `atomic_cmp_exchange`
 - bit ops: `count_bits`, `reverse_bits`, `first_bit_low`, `first_bit_high`,
   `bitfield_extract`, `bitfield_insert`, `asfloat`, `asint`, `asuint`,
-  `pack_unorm4x8`, `unpack_unorm4x8`, `pack_snorm4x8`, `unpack_snorm4x8`,
-  `pack_half2x16`, `unpack_half2x16`
+  `pack_unorm2x16`, `unpack_unorm2x16`, `pack_unorm4x8`,
+  `unpack_unorm4x8`, `pack_snorm2x16`, `unpack_snorm2x16`,
+  `pack_snorm4x8`, `unpack_snorm4x8`, `pack_half2x16`,
+  `unpack_half2x16`
 - control/select: `select`
 - reductions and classification: `any`, `all`, `isnan`, `isinf`, `isfinite`,
   `isnormal`

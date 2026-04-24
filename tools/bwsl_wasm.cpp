@@ -193,12 +193,17 @@ static const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_FABS: return "FABS";
         case IR::OP_BITFIELD_EXTRACT: return "BITFIELD_EXTRACT";
         case IR::OP_BITFIELD_INSERT: return "BITFIELD_INSERT";
+        case IR::OP_PACK_UNORM2X16: return "PACK_UNORM2X16";
+        case IR::OP_UNPACK_UNORM2X16: return "UNPACK_UNORM2X16";
         case IR::OP_PACK_UNORM4X8: return "PACK_UNORM4X8";
         case IR::OP_UNPACK_UNORM4X8: return "UNPACK_UNORM4X8";
+        case IR::OP_PACK_SNORM2X16: return "PACK_SNORM2X16";
+        case IR::OP_UNPACK_SNORM2X16: return "UNPACK_SNORM2X16";
         case IR::OP_PACK_SNORM4X8: return "PACK_SNORM4X8";
         case IR::OP_ISNAN: return "ISNAN";
         case IR::OP_ISINF: return "ISINF";
         case IR::OP_ISFINITE: return "ISFINITE";
+        case IR::OP_TEX_LEVELS: return "TEX_LEVELS";
         case IR::OP_VEC_CONSTRUCT: return "VEC_CONSTRUCT";
         case IR::OP_VEC_EXTRACT: return "VEC_EXTRACT";
         case IR::OP_MAT_MUL: return "MAT_MUL";

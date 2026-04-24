@@ -338,6 +338,10 @@ enum OpCode : u16 {
     OP_F162F         = 0x67,  // Half to float
     OP_BITCAST       = 0x68,  // Reinterpret bits
     OP_SIGN          = 0x69, 
+    OP_PACK_UNORM2X16   = 0x6A,
+    OP_UNPACK_UNORM2X16 = 0x6B,
+    OP_PACK_SNORM2X16   = 0x6C,
+    OP_UNPACK_SNORM2X16 = 0x6D,
     
     // ========== Vector Operations ==========
     OP_VEC_EXTRACT   = 0x70,  // Extract component
@@ -414,6 +418,7 @@ enum OpCode : u16 {
     OP_TEX_GATHER      = 0xB5,
     OP_TEX_FETCH       = 0xB6,  // texelFetch
     OP_TEX_SIZE        = 0xB7,
+    OP_TEX_LEVELS      = 0xBB,
     OP_IMG_LOAD        = 0xB8,  // Image load
     OP_IMG_STORE       = 0xB9,  // Image store
     OP_LOAD_TEX_HANDLE = 0xBA,  // bindless textures

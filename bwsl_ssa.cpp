@@ -657,12 +657,14 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             (op >= IR::OP_FEQ && op <= IR::OP_UGE) ||       // Comparison
             (op >= IR::OP_SQRT && op <= IR::OP_FACEFORWARD) || // Math functions
             op == IR::OP_TANH ||                            // Non-contiguous math function
+            op == IR::OP_PACK_UNORM2X16 || op == IR::OP_UNPACK_UNORM2X16 ||
+            op == IR::OP_PACK_SNORM2X16 || op == IR::OP_UNPACK_SNORM2X16 ||
             op == IR::OP_UNPACK_SNORM4X8 || op == IR::OP_PACK_HALF2X16 ||
             op == IR::OP_UNPACK_HALF2X16 || op == IR::OP_ISNORMAL ||
             (op >= IR::OP_LERP && op <= IR::OP_RADIANS) ||  // Interpolation
             (op >= IR::OP_F2I && op <= IR::OP_SIGN) ||      // Type conversions
             (op >= IR::OP_ISNAN && op <= IR::OP_ISFINITE) || // Float classification
-            op == IR::OP_TEX_SIZE ||                         // Texture query
+            op == IR::OP_TEX_SIZE || op == IR::OP_TEX_LEVELS || // Texture query
             op == IR::OP_VEC_CONSTRUCT ||                   // Vector construction
             op == IR::OP_VEC_EXTRACT ||                     // Vector extract
             op == IR::OP_VEC_INSERT ||                      // Vector component insert (literal index)
