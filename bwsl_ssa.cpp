@@ -659,9 +659,10 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             op == IR::OP_TANH ||                            // Non-contiguous math function
             op == IR::OP_PACK_UNORM2X16 || op == IR::OP_UNPACK_UNORM2X16 ||
             op == IR::OP_PACK_SNORM2X16 || op == IR::OP_UNPACK_SNORM2X16 ||
-            op == IR::OP_FREM ||
+            op == IR::OP_FREM || op == IR::OP_LDEXP ||
             op == IR::OP_UNPACK_SNORM4X8 || op == IR::OP_PACK_HALF2X16 ||
             op == IR::OP_UNPACK_HALF2X16 || op == IR::OP_ISNORMAL ||
+            op == IR::OP_MODF_STRUCT || op == IR::OP_FREXP_STRUCT ||
             (op >= IR::OP_DDX && op <= IR::OP_FWIDTH_COARSE) || // Derivatives
             (op >= IR::OP_LERP && op <= IR::OP_RADIANS) ||  // Interpolation
             (op >= IR::OP_F2I && op <= IR::OP_SIGN) ||      // Type conversions

@@ -1,0 +1,11 @@
+// Regression: modf returns a small BWSL result struct with fraction and whole fields.
+pipeline IntrinsicModf {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = -2.5;
+            float fraction = modf(x).fraction;
+            float whole = modf(x).whole;
+            float y = fraction + whole;
+        }
+    }
+}

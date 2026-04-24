@@ -159,6 +159,7 @@ static const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_FMUL: return "FMUL";
         case IR::OP_FDIV: return "FDIV";
         case IR::OP_FREM: return "FREM";
+        case IR::OP_LDEXP: return "LDEXP";
         case IR::OP_FNEG: return "FNEG";
         case IR::OP_IADD: return "IADD";
         case IR::OP_ISUB: return "ISUB";
@@ -180,6 +181,8 @@ static const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_UNPACK_SNORM4X8: return "UNPACK_SNORM4X8";
         case IR::OP_PACK_HALF2X16: return "PACK_HALF2X16";
         case IR::OP_UNPACK_HALF2X16: return "UNPACK_HALF2X16";
+        case IR::OP_MODF_STRUCT: return "MODF_STRUCT";
+        case IR::OP_FREXP_STRUCT: return "FREXP_STRUCT";
         case IR::OP_ISNORMAL: return "ISNORMAL";
         case IR::OP_EXP: return "EXP";
         case IR::OP_LOG: return "LOG";

@@ -97,6 +97,7 @@ constexpr std::array<spv::Op, 256> BuildIrToSpvOpTable() {
     table[IR::OP_EXP2] = spv::OpExtInst;
     table[IR::OP_LOG] = spv::OpExtInst;
     table[IR::OP_LOG2] = spv::OpExtInst;
+    table[IR::OP_LDEXP] = spv::OpExtInst;
     table[IR::OP_SIN] = spv::OpExtInst;
     table[IR::OP_COS] = spv::OpExtInst;
     table[IR::OP_TAN] = spv::OpExtInst;
@@ -115,6 +116,8 @@ constexpr std::array<spv::Op, 256> BuildIrToSpvOpTable() {
     table[IR::OP_PACK_HALF2X16] = spv::OpExtInst;
     table[IR::OP_UNPACK_HALF2X16] = spv::OpExtInst;
     table[IR::OP_ISNORMAL] = spv::OpNop; // Emitted portably for Shader capability
+    table[IR::OP_MODF_STRUCT] = spv::OpExtInst;
+    table[IR::OP_FREXP_STRUCT] = spv::OpExtInst;
 
     // ========== Geometric ==========
     table[IR::OP_DOT] = spv::OpDot;
@@ -249,6 +252,7 @@ constexpr std::array<u32, 256> BuildIrToGlslStd450Table() {
     table[IR::OP_EXP2] = GLSLstd450Exp2;
     table[IR::OP_LOG] = GLSLstd450Log;
     table[IR::OP_LOG2] = GLSLstd450Log2;
+    table[IR::OP_LDEXP] = GLSLstd450Ldexp;
     table[IR::OP_SIN] = GLSLstd450Sin;
     table[IR::OP_COS] = GLSLstd450Cos;
     table[IR::OP_TAN] = GLSLstd450Tan;
@@ -262,6 +266,8 @@ constexpr std::array<u32, 256> BuildIrToGlslStd450Table() {
     table[IR::OP_UNPACK_SNORM4X8] = GLSLstd450UnpackSnorm4x8;
     table[IR::OP_PACK_HALF2X16] = GLSLstd450PackHalf2x16;
     table[IR::OP_UNPACK_HALF2X16] = GLSLstd450UnpackHalf2x16;
+    table[IR::OP_MODF_STRUCT] = GLSLstd450ModfStruct;
+    table[IR::OP_FREXP_STRUCT] = GLSLstd450FrexpStruct;
 
     // ========== Geometric ==========
     table[IR::OP_CROSS] = GLSLstd450Cross;
@@ -2805,7 +2811,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_PACK_SNORM4X8:
   case IR::OP_UNPACK_SNORM4X8:
   case IR::OP_PACK_HALF2X16:
-  case IR::OP_UNPACK_HALF2X16: {
+  case IR::OP_UNPACK_HALF2X16:
+  case IR::OP_MODF_STRUCT:
+  case IR::OP_FREXP_STRUCT: {
     u16 dest_reg = ir->destinations[ir_idx];
     u16 operand_reg = ir->GetOperand(ir_idx, 0);
     u32 result_type = GetResultType(dest_reg, operand_reg);
@@ -2971,6 +2979,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_IMAX: // Integer max (SMax in GLSL.std.450)
   case IR::OP_UMIN: // Unsigned min (UMin in GLSL.std.450)
   case IR::OP_UMAX: // Unsigned max (UMax in GLSL.std.450)
+  case IR::OP_LDEXP:
   case IR::OP_STEP:
   case IR::OP_REFLECT:
   case IR::OP_CROSS: {

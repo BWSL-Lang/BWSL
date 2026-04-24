@@ -1,0 +1,10 @@
+// Regression: ldexp lowers to GLSL.std.450 Ldexp for SPIR-V and a GLES fallback.
+pipeline IntrinsicLdexp {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = 1.5;
+            int e = 2;
+            float y = ldexp(x, e);
+        }
+    }
+}

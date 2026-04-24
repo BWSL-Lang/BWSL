@@ -1,0 +1,9 @@
+// Regression: f16tof32 lowers through unpack_half2x16 and returns the low lane.
+pipeline IntrinsicF16ToF32 {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            uint halfBits = f32tof16(0.5);
+            float x = f16tof32(halfBits);
+        }
+    }
+}

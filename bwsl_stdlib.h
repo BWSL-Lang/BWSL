@@ -46,6 +46,10 @@ enum class Intrinsic : u16 {
     EXP2,
     LOG,
     LOG2,
+    LOG10,
+    FREXP,
+    LDEXP,
+    MODF_SPLIT,
     
     // Trigonometry
     SIN,
@@ -142,6 +146,8 @@ enum class Intrinsic : u16 {
     UNPACK_SNORM4X8,
     PACK_HALF2X16,
     UNPACK_HALF2X16,
+    F32TOF16,
+    F16TOF32,
     AS_FLOAT,
     AS_INT,
     AS_UINT,
@@ -211,6 +217,10 @@ constexpr BackendNames BACKEND_NAMES[] = {
     {"exp2", "exp2", "exp2"},                            // EXP2
     {"log", "log", "log"},                               // LOG
     {"log2", "log2", "log2"},                            // LOG2
+    {nullptr, nullptr, nullptr},                         // LOG10 (lowered)
+    {"frexp", "frexp", "frexp"},                         // FREXP
+    {"ldexp", "ldexp", "ldexp"},                         // LDEXP
+    {"modf", "modf", "modf"},                            // MODF_SPLIT
     
     // Trigonometry
     {"sin", "sin", "sin"},                               // SIN
@@ -307,6 +317,8 @@ constexpr BackendNames BACKEND_NAMES[] = {
     {"unpack_snorm4x8", nullptr, "unpackSnorm4x8"},     // UNPACK_SNORM4X8
     {"pack_half2x16", nullptr, "packHalf2x16"},         // PACK_HALF2X16
     {"unpack_half2x16", nullptr, "unpackHalf2x16"},     // UNPACK_HALF2X16
+    {nullptr, nullptr, nullptr},                         // F32TOF16 (lowered)
+    {nullptr, nullptr, nullptr},                         // F16TOF32 (lowered)
     {"as_type<float>", "asfloat", "uintBitsToFloat"},   // AS_FLOAT
     {"as_type<int>", "asint", "floatBitsToInt"},        // AS_INT
     {"as_type<uint>", "asuint", "floatBitsToUint"},     // AS_UINT
@@ -420,6 +432,10 @@ constexpr IntrinsicData INTRINSICS[] = {
     INTRINSIC_FIXED(EXP2, "exp2", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Exp2)),
     INTRINSIC_FIXED(LOG, "log", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Log)),
     INTRINSIC_FIXED(LOG2, "log2", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Log2)),
+    INTRINSIC_FIXED(LOG10, "log10", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(FREXP, "frexp", mask(CoreType::CUSTOM), mask(CoreType::FLOAT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450FrexpStruct)),
+    INTRINSIC_FIXED(LDEXP, "ldexp", mask(CoreType::FLOAT), mask(CoreType::FLOAT), mask(CoreType::INT), 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Ldexp)),
+    INTRINSIC_FIXED(MODF_SPLIT, "modf", mask(CoreType::CUSTOM), mask(CoreType::FLOAT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450ModfStruct)),
     
     // Trigonometry - work on all float types
     INTRINSIC_FIXED(SIN, "sin", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Sin)),
@@ -519,6 +535,8 @@ constexpr IntrinsicData INTRINSICS[] = {
     INTRINSIC_FIXED(UNPACK_SNORM4X8, "unpack_snorm4x8", mask(CoreType::FLOAT4), mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450UnpackSnorm4x8)),
     INTRINSIC_FIXED(PACK_HALF2X16, "pack_half2x16", mask(CoreType::UINT), mask(CoreType::FLOAT2), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450PackHalf2x16)),
     INTRINSIC_FIXED(UNPACK_HALF2X16, "unpack_half2x16", mask(CoreType::FLOAT2), mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450UnpackHalf2x16)),
+    INTRINSIC_FIXED(F32TOF16, "f32tof16", mask(CoreType::UINT), mask(CoreType::FLOAT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, SPV_EXT_NONE)),
+    INTRINSIC_FIXED(F16TOF32, "f16tof32", mask(CoreType::FLOAT), mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, SPV_EXT_NONE)),
     INTRINSIC_FIXED(AS_FLOAT, "asfloat", TypeMasks::FLOAT_TYPES, TypeMasks::INT_TYPES | TypeMasks::UINT_TYPES, 0, 0, 0, 0, SPV_MAP(spv::OpBitcast, SPV_EXT_NONE)),
     INTRINSIC_FIXED(AS_INT, "asint", TypeMasks::INT_TYPES, TypeMasks::FLOAT_TYPES | TypeMasks::UINT_TYPES, 0, 0, 0, 0, SPV_MAP(spv::OpBitcast, SPV_EXT_NONE)),
     INTRINSIC_FIXED(AS_UINT, "asuint", TypeMasks::UINT_TYPES, TypeMasks::FLOAT_TYPES | TypeMasks::INT_TYPES, 0, 0, 0, 0, SPV_MAP(spv::OpBitcast, SPV_EXT_NONE)),

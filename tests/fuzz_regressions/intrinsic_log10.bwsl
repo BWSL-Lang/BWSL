@@ -1,0 +1,9 @@
+// Regression: log10 is a BWSL intrinsic lowered portably through log2.
+pipeline IntrinsicLog10 {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = 11.0;
+            float y = log10(x);
+        }
+    }
+}

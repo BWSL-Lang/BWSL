@@ -1,0 +1,9 @@
+// Regression: f32tof16 lowers through pack_half2x16 and returns the low half bits.
+pipeline IntrinsicF32ToF16 {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = 0.5;
+            uint halfBits = f32tof16(x);
+        }
+    }
+}

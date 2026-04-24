@@ -2385,6 +2385,62 @@ struct IRLowering {
     return typeNameHash;
   }
 
+  u32 RegisterBuiltinStructType(const char *typeName,
+                                const char *const *fieldNames,
+                                const CoreType *fieldTypes,
+                                u32 fieldCount) {
+    if (!typeName || !fieldNames || !fieldTypes || fieldCount == 0 ||
+        program.structTypeCount >= program.structTypeCapacity) {
+      return 0;
+    }
+
+    u32 typeNameHash = Utils::HashStr(typeName);
+    auto existing = structTypeMap.find(typeNameHash);
+    if (existing != structTypeMap.end()) {
+      return typeNameHash;
+    }
+
+    u32 structIdx = program.structTypeCount++;
+    structTypeMap[typeNameHash] = structIdx;
+    ReverseLookup::Register(typeNameHash, typeName);
+
+    IRProgram::StructTypeInfo &info = program.structTypes[structIdx];
+    info.nameHash = typeNameHash;
+    info.fieldCount = fieldCount;
+
+    u32 fieldOffset = 0;
+    for (u32 i = 0; i < structIdx; i++) {
+      fieldOffset += program.structTypes[i].fieldCount;
+    }
+    info.fieldOffset = fieldOffset;
+
+    if (fieldOffset + fieldCount > program.structFieldCapacity) {
+      program.structTypeCount--;
+      structTypeMap.erase(typeNameHash);
+      return 0;
+    }
+
+    u32 currentOffset = 0;
+    for (u32 i = 0; i < fieldCount; i++) {
+      u32 fieldNameHash = Utils::HashStr(fieldNames[i]);
+      ReverseLookup::Register(fieldNameHash, fieldNames[i]);
+
+      program.structFieldTypes[fieldOffset + i] =
+          static_cast<u16>(fieldTypes[i]);
+      program.structFieldNameHashes[fieldOffset + i] = fieldNameHash;
+      program.structFieldTypeHashes[fieldOffset + i] = 0;
+      program.structFieldArraySizes[fieldOffset + i] = 0;
+
+      u32 alignment = GetTypeAlignment(fieldTypes[i]);
+      currentOffset = (currentOffset + alignment - 1) & ~(alignment - 1);
+      program.structFieldByteOffsets[fieldOffset + i] = currentOffset;
+      currentOffset += GetTypeSize(fieldTypes[i]);
+    }
+
+    info.totalSize = currentOffset;
+    return typeNameHash;
+  }
+
   bool IsSumEnumTypeHash(u32 typeHash) {
     const EnumData *enumData =
         SymbolTable::ResolveEnumDataByHash(symbols, typeHash);
@@ -5458,6 +5514,56 @@ struct IRLowering {
         SetRegisterType(dest, GetRegisterType(args[0]));
         return dest;
       }
+      case Intrinsic::LOG10: {
+        u16 log2Reg = AllocateRegister();
+        builder.EmitInstruction(OP_LOG2, log2Reg, args[0]);
+        SetRegisterType(log2Reg, GetRegisterType(args[0]));
+        u16 scale = builder.EmitConstant(0.3010299956639812f);
+        builder.EmitInstruction(OP_FMUL, dest, log2Reg, scale);
+        SetRegisterType(dest, GetRegisterType(args[0]));
+        return dest;
+      }
+      case Intrinsic::F32TOF16: {
+        u16 zero = builder.EmitConstant(0.0f);
+        u16 pair = AllocateRegister();
+        builder.EmitInstruction(OP_VEC_CONSTRUCT, pair, args[0], zero);
+        SetRegisterType(pair, CoreType::FLOAT2);
+        builder.EmitInstruction(OP_PACK_HALF2X16, dest, pair);
+        SetRegisterType(dest, CoreType::UINT);
+        return dest;
+      }
+      case Intrinsic::F16TOF32: {
+        u16 pair = AllocateRegister();
+        builder.EmitInstruction(OP_UNPACK_HALF2X16, pair, args[0]);
+        SetRegisterType(pair, CoreType::FLOAT2);
+        builder.EmitInstruction(OP_VEC_EXTRACT, dest, pair, 0);
+        SetRegisterType(dest, CoreType::FLOAT);
+        return dest;
+      }
+      case Intrinsic::MODF_SPLIT: {
+        static const char *fieldNames[] = {"fraction", "whole"};
+        static const CoreType fieldTypes[] = {CoreType::FLOAT, CoreType::FLOAT};
+        u32 structHash =
+            RegisterBuiltinStructType("BwslModfResult", fieldNames,
+                                      fieldTypes, 2);
+        builder.EmitInstruction(OP_MODF_STRUCT, dest, args[0]);
+        program.metadata[builder.currentInstruction - 1] = structHash;
+        SetRegisterType(dest, CoreType::CUSTOM);
+        program.registerStructTypes[dest] = structHash;
+        return dest;
+      }
+      case Intrinsic::FREXP: {
+        static const char *fieldNames[] = {"mantissa", "exponent"};
+        static const CoreType fieldTypes[] = {CoreType::FLOAT, CoreType::INT};
+        u32 structHash =
+            RegisterBuiltinStructType("BwslFrexpResult", fieldNames,
+                                      fieldTypes, 2);
+        builder.EmitInstruction(OP_FREXP_STRUCT, dest, args[0]);
+        program.metadata[builder.currentInstruction - 1] = structHash;
+        SetRegisterType(dest, CoreType::CUSTOM);
+        program.registerStructTypes[dest] = structHash;
+        return dest;
+      }
       case Intrinsic::BITFIELD_INSERT: {
         builder.EmitInstruction(OP_BITFIELD_INSERT, dest, args[0], args[1],
                                 args[2], args[3]);
@@ -6917,6 +7023,8 @@ struct IRLowering {
       return OP_LOG;
     case Intrinsic::LOG2:
       return OP_LOG2;
+    case Intrinsic::LDEXP:
+      return OP_LDEXP;
 
     // Trigonometry
     case Intrinsic::SIN:

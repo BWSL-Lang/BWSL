@@ -1,0 +1,11 @@
+// Regression: frexp returns a small BWSL result struct with mantissa and exponent fields.
+pipeline IntrinsicFrexp {
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            float x = 8.0;
+            float mantissa = frexp(x).mantissa;
+            int exponent = frexp(x).exponent;
+            float y = ldexp(mantissa, exponent);
+        }
+    }
+}

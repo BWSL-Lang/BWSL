@@ -343,6 +343,7 @@ enum OpCode : u16 {
     OP_PACK_SNORM2X16   = 0x6C,
     OP_UNPACK_SNORM2X16 = 0x6D,
     OP_FREM             = 0x6E,  // Truncating float remainder (fmod)
+    OP_LDEXP            = 0x6F,  // x * 2^exp with integer exponent
     
     // ========== Vector Operations ==========
     OP_VEC_EXTRACT   = 0x70,  // Extract component
@@ -420,6 +421,8 @@ enum OpCode : u16 {
     OP_TEX_FETCH       = 0xB6,  // texelFetch
     OP_TEX_SIZE        = 0xB7,
     OP_TEX_LEVELS      = 0xBB,
+    OP_MODF_STRUCT     = 0xBE,  // modf(x) -> { fraction, whole }
+    OP_FREXP_STRUCT    = 0xBF,  // frexp(x) -> { mantissa, exponent }
     OP_IMG_LOAD        = 0xB8,  // Image load
     OP_IMG_STORE       = 0xB9,  // Image store
     OP_LOAD_TEX_HANDLE = 0xBA,  // bindless textures

@@ -5754,6 +5754,23 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
                     }
                 }
             }
+            TypeInfo objType = GetExpressionType(memberData.object);
+            if (objType.coreType == CoreType::CUSTOM) {
+                u32 memberHash = memberData.member.nameHash;
+                if (objType.customTypeHash == Utils::HashStr("BwslModfResult")) {
+                    if (memberHash == Utils::HashStr("fraction") ||
+                        memberHash == Utils::HashStr("whole")) {
+                        return TypeInfo{CoreType::FLOAT, 1, 0, 0, 0, 0, 0};
+                    }
+                } else if (objType.customTypeHash == Utils::HashStr("BwslFrexpResult")) {
+                    if (memberHash == Utils::HashStr("mantissa")) {
+                        return TypeInfo{CoreType::FLOAT, 1, 0, 0, 0, 0, 0};
+                    }
+                    if (memberHash == Utils::HashStr("exponent")) {
+                        return TypeInfo{CoreType::INT, 1, 0, 0, 0, 0, 0};
+                    }
+                }
+            }
             break;
         }
 
@@ -5879,6 +5896,22 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
         case ASTNodeType::FUNCTION_CALL: {
             const FunctionCallData& funcCall = ast->GetFunctionCall(expr);
             if (funcCall.flags & FunctionCallFlags::IS_INTRINSIC) {
+                StdLib::Intrinsic intrinsic =
+                    static_cast<StdLib::Intrinsic>(StdLib::INTRINSICS[funcCall.intrinsicIndex].enumIndex);
+                switch (intrinsic) {
+                    case StdLib::Intrinsic::FREXP:
+                        return TypeInfo{CoreType::CUSTOM, 1, 0, 0, Utils::HashStr("BwslFrexpResult"), 0, 0};
+                    case StdLib::Intrinsic::MODF_SPLIT:
+                        return TypeInfo{CoreType::CUSTOM, 1, 0, 0, Utils::HashStr("BwslModfResult"), 0, 0};
+                    case StdLib::Intrinsic::F32TOF16:
+                        return TypeInfo{CoreType::UINT, 1, 0, 0, 0, 0, 0};
+                    case StdLib::Intrinsic::F16TOF32:
+                    case StdLib::Intrinsic::LDEXP:
+                    case StdLib::Intrinsic::LOG10:
+                        return TypeInfo{CoreType::FLOAT, 1, 0, 0, 0, 0, 0};
+                    default:
+                        break;
+                }
                 return TypeInfo{CoreType::FLOAT, 1, 0, 0, 0, 0, 0};
             } else {
                 std::vector<OverloadTypeMask> argMasks;

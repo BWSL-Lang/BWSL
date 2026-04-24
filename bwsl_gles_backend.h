@@ -318,6 +318,10 @@ private:
     void EmitPhiDeclarations();
     void EmitUndefDeclarations();
     void EmitDefaultValue(u16 type);
+    void EmitStructDeclarations();
+    void EmitStructTypeName(u32 typeHash);
+    void EmitStructFieldName(u32 fieldHash);
+    void EmitRegisterType(u16 reg);
 
     // ===== Expression Emission =====
     void EmitExpr(u16 reg);
@@ -336,6 +340,10 @@ private:
 
     // ===== Helpers =====
     void EmitType(u16 typeId) {
+        if (typeId >= (sizeof(Str::TYPE_NAMES) / sizeof(Str::TYPE_NAMES[0]))) {
+            out.Lit("void");
+            return;
+        }
         out.Str(Str::TYPE_NAMES[typeId]);
     }
 
@@ -355,7 +363,7 @@ private:
             regInfo[reg].flags |= REG_DECLARED;
             u16 regType = ir->registerTypes ? ir->registerTypes[reg] : 0;
             if (regType != 0 && regType != static_cast<u16>(CoreType::INVALID)) {
-                EmitType(regType);
+                EmitRegisterType(reg);
                 out.Chr(' ');
             }
             EmitReg(reg);

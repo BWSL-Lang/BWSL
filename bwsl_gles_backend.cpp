@@ -92,7 +92,11 @@ void GLESBuilder::CountUses() {
             regInfo[dest].flags |= REG_TRIVIAL | REG_INLINEABLE;
         }
         // Pure expressions with single use can inline
-        else if (regInfo[dest].useCount == 1 && !IR::HasSideEffects(static_cast<IR::OpCode>(opcode))) {
+        else if (regInfo[dest].useCount == 1 &&
+                 (!ir->registerTypes || dest >= ir->registerCount ||
+                  (ir->registerTypes[dest] != static_cast<u16>(CoreType::CUSTOM) &&
+                   ir->registerTypes[dest] != static_cast<u16>(CoreType::ENUM))) &&
+                 !IR::HasSideEffects(static_cast<IR::OpCode>(opcode))) {
             regInfo[dest].flags |= REG_INLINEABLE;
         }
     }
@@ -107,6 +111,99 @@ void GLESBuilder::EmitHeader() {
     out.Lit("precision highp float;\n");
     out.Lit("precision highp int;\n");
     out.NL(0);
+    EmitStructDeclarations();
+
+    bool needsFrexp = false;
+    for (u32 i = 0; i < ir->instructionCount; i++) {
+        if (ir->opcodes[i] == IR::OP_FREXP_STRUCT) {
+            needsFrexp = true;
+            break;
+        }
+    }
+    if (needsFrexp) {
+        out.Lit("BwslFrexpResult bwsl_frexp(float x) {\n");
+        out.Lit("    int e = (x == 0.0) ? 0 : (int(floor(log2(abs(x)))) + 1);\n");
+        out.Lit("    float m = (x == 0.0) ? 0.0 : (x * exp2(float(-e)));\n");
+        out.Lit("    return BwslFrexpResult(m, e);\n");
+        out.Lit("}\n\n");
+    }
+}
+
+static bool GLESIsValidIdent(const std::string& s) {
+    if (s.empty()) return false;
+    char first = s[0];
+    if (!((first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z') || first == '_')) {
+        return false;
+    }
+    for (char c : s) {
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void GLESBuilder::EmitStructTypeName(u32 typeHash) {
+    std::string name = ReverseLookup::GetString(typeHash);
+    if (GLESIsValidIdent(name)) {
+        out.Str(name.c_str());
+    } else {
+        out.Lit("Struct_");
+        out.Uint(typeHash);
+    }
+}
+
+void GLESBuilder::EmitStructFieldName(u32 fieldHash) {
+    std::string name = ReverseLookup::GetString(fieldHash);
+    if (GLESIsValidIdent(name)) {
+        out.Str(name.c_str());
+    } else {
+        out.Lit("field_");
+        out.Uint(fieldHash);
+    }
+}
+
+void GLESBuilder::EmitRegisterType(u16 reg) {
+    CoreType regType = (ir->registerTypes && reg < ir->registerCount)
+                           ? static_cast<CoreType>(ir->registerTypes[reg])
+                           : CoreType::INVALID;
+    if ((regType == CoreType::CUSTOM || regType == CoreType::ENUM) &&
+        ir->registerStructTypes && reg < ir->registerCount &&
+        ir->registerStructTypes[reg] != 0) {
+        EmitStructTypeName(ir->registerStructTypes[reg]);
+        return;
+    }
+    EmitType(static_cast<u16>(regType));
+}
+
+void GLESBuilder::EmitStructDeclarations() {
+    if (!ir->structTypes || ir->structTypeCount == 0) {
+        return;
+    }
+
+    for (u32 s = 0; s < ir->structTypeCount; s++) {
+        const IR::IRProgram::StructTypeInfo& info = ir->structTypes[s];
+        out.Lit("struct ");
+        EmitStructTypeName(info.nameHash);
+        out.Lit(" {\n");
+        for (u32 f = 0; f < info.fieldCount; f++) {
+            u32 fieldIdx = info.fieldOffset + f;
+            out.Lit("    ");
+            CoreType fieldType = static_cast<CoreType>(ir->structFieldTypes[fieldIdx]);
+            u32 fieldTypeHash = ir->structFieldTypeHashes[fieldIdx];
+            if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
+                fieldTypeHash != 0) {
+                EmitStructTypeName(fieldTypeHash);
+            } else {
+                EmitType(static_cast<u16>(fieldType));
+            }
+            out.Chr(' ');
+            EmitStructFieldName(ir->structFieldNameHashes[fieldIdx]);
+            out.Lit(";\n");
+        }
+        out.Lit("};\n\n");
+    }
 }
 
 // ============================================================================
@@ -1049,6 +1146,32 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_LOG2:
             EmitFuncAssign(instIdx, dest, "log2", 1);
             return;
+        case IR::OP_LDEXP:
+            EmitRegWithDecl(dest);
+            out.Lit(" = (");
+            EmitExpr(Op(instIdx, 0));
+            out.Lit(" * exp2(float(");
+            EmitExpr(Op(instIdx, 1));
+            out.Lit(")));");
+            return;
+        case IR::OP_MODF_STRUCT:
+            EmitRegWithDecl(dest);
+            out.Lit(" = ");
+            EmitStructTypeName(ir->metadata[instIdx]);
+            out.Chr('(');
+            EmitExpr(Op(instIdx, 0));
+            out.Lit(" - trunc(");
+            EmitExpr(Op(instIdx, 0));
+            out.Lit("), trunc(");
+            EmitExpr(Op(instIdx, 0));
+            out.Lit("));");
+            return;
+        case IR::OP_FREXP_STRUCT:
+            EmitRegWithDecl(dest);
+            out.Lit(" = bwsl_frexp(");
+            EmitExpr(Op(instIdx, 0));
+            out.Lit(");");
+            return;
         case IR::OP_SIN:
             EmitFuncAssign(instIdx, dest, "sin", 1);
             return;
@@ -1576,7 +1699,22 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_STRUCT_CONSTRUCT: {
             // Build struct from field values - emit as struct constructor
             EmitRegWithDecl(dest);
-            out.Lit(" = /* struct construct */;");
+            out.Lit(" = ");
+            u32 structHash = ir->metadata[instIdx];
+            if (structHash == 0 && ir->registerStructTypes && dest < ir->registerCount) {
+                structHash = ir->registerStructTypes[dest];
+            }
+            EmitStructTypeName(structHash);
+            out.Chr('(');
+            bool first = true;
+            for (u32 i = 0; i < 4; i++) {
+                u16 valueReg = Op(instIdx, i);
+                if (valueReg == 0xFFFF || valueReg == 0x3FFF) continue;
+                if (!first) out.Lit(", ");
+                EmitExpr(valueReg);
+                first = false;
+            }
+            out.Lit(");");
             return;
         }
 
@@ -1584,11 +1722,28 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             // Extract field from struct
             u16 structReg = Op(instIdx, 0);
             u16 fieldIdx = Op(instIdx, 1);
+            u32 structHash = (ir->registerStructTypes && structReg < ir->registerCount)
+                                 ? ir->registerStructTypes[structReg]
+                                 : 0;
             EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(structReg);
-            out.Lit(".field");
-            out.Uint(fieldIdx);
+            out.Chr('.');
+            bool emittedField = false;
+            if (structHash != 0 && ir->structTypes && ir->structFieldNameHashes) {
+                for (u32 s = 0; s < ir->structTypeCount; s++) {
+                    const IR::IRProgram::StructTypeInfo& info = ir->structTypes[s];
+                    if (info.nameHash == structHash && fieldIdx < info.fieldCount) {
+                        EmitStructFieldName(ir->structFieldNameHashes[info.fieldOffset + fieldIdx]);
+                        emittedField = true;
+                        break;
+                    }
+                }
+            }
+            if (!emittedField) {
+                out.Lit("field_");
+                out.Uint(fieldIdx);
+            }
             out.Lit(";");
             return;
         }
@@ -1598,14 +1753,31 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             u16 structReg = Op(instIdx, 0);
             u16 fieldIdx = Op(instIdx, 1);
             u16 valueReg = Op(instIdx, 2);
+            u32 structHash = (ir->registerStructTypes && structReg < ir->registerCount)
+                                 ? ir->registerStructTypes[structReg]
+                                 : 0;
             EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(structReg);
             out.Lit(";\n");
             out.NL(indent);
             EmitRegWithDecl(dest);
-            out.Lit(".field");
-            out.Uint(fieldIdx);
+            out.Chr('.');
+            bool emittedField = false;
+            if (structHash != 0 && ir->structTypes && ir->structFieldNameHashes) {
+                for (u32 s = 0; s < ir->structTypeCount; s++) {
+                    const IR::IRProgram::StructTypeInfo& info = ir->structTypes[s];
+                    if (info.nameHash == structHash && fieldIdx < info.fieldCount) {
+                        EmitStructFieldName(ir->structFieldNameHashes[info.fieldOffset + fieldIdx]);
+                        emittedField = true;
+                        break;
+                    }
+                }
+            }
+            if (!emittedField) {
+                out.Lit("field_");
+                out.Uint(fieldIdx);
+            }
             out.Lit(" = ");
             EmitExpr(valueReg);
             out.Lit(";");
@@ -1973,6 +2145,22 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
             return;
         case IR::OP_LOG2:
             out.Lit("log2("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            return;
+        case IR::OP_LDEXP:
+            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" * exp2(float("); EmitExpr(Op(instIdx, 1)); out.Lit(")))");
+            return;
+        case IR::OP_MODF_STRUCT:
+            EmitStructTypeName(ir->metadata[instIdx]);
+            out.Chr('(');
+            EmitExpr(Op(instIdx, 0));
+            out.Lit(" - trunc(");
+            EmitExpr(Op(instIdx, 0));
+            out.Lit("), trunc(");
+            EmitExpr(Op(instIdx, 0));
+            out.Lit("))");
+            return;
+        case IR::OP_FREXP_STRUCT:
+            out.Lit("bwsl_frexp("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
             return;
         case IR::OP_SIN:
             out.Lit("sin("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
@@ -2355,6 +2543,32 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
             return;
         }
 
+        case IR::OP_STRUCT_EXTRACT: {
+            u16 structReg = Op(instIdx, 0);
+            u16 fieldIdx = Op(instIdx, 1);
+            u32 structHash = (ir->registerStructTypes && structReg < ir->registerCount)
+                                 ? ir->registerStructTypes[structReg]
+                                 : 0;
+            EmitExpr(structReg);
+            out.Chr('.');
+            bool emittedField = false;
+            if (structHash != 0 && ir->structTypes && ir->structFieldNameHashes) {
+                for (u32 s = 0; s < ir->structTypeCount; s++) {
+                    const IR::IRProgram::StructTypeInfo& info = ir->structTypes[s];
+                    if (info.nameHash == structHash && fieldIdx < info.fieldCount) {
+                        EmitStructFieldName(ir->structFieldNameHashes[info.fieldOffset + fieldIdx]);
+                        emittedField = true;
+                        break;
+                    }
+                }
+            }
+            if (!emittedField) {
+                out.Lit("field_");
+                out.Uint(fieldIdx);
+            }
+            return;
+        }
+
         // ===== Texture Operations =====
         case IR::OP_TEX_SAMPLE:
             out.Lit("texture("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
@@ -2428,13 +2642,6 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
             out.Chr(')');
             return;
         }
-
-        // ===== Struct Operations =====
-        case IR::OP_STRUCT_EXTRACT:
-            EmitExpr(Op(instIdx, 0));
-            out.Lit(".field");
-            out.Uint(Op(instIdx, 1));
-            return;
 
         // ===== Enum Operations =====
         case IR::OP_ENUM_CONSTRUCT:
