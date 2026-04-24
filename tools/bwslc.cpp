@@ -696,8 +696,13 @@ const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_TEX_SAMPLE_BIAS: return "TEX_SAMPLE_BIAS";
         case IR::OP_TEX_SAMPLE_GRAD: return "TEX_SAMPLE_GRAD";
         case IR::OP_TEX_SAMPLE_CMP:  return "TEX_SAMPLE_CMP";
+        case IR::OP_TEX_SAMPLE_OFFSET:      return "TEX_SAMPLE_OFFSET";
+        case IR::OP_TEX_SAMPLE_LOD_OFFSET:  return "TEX_SAMPLE_LOD_OFFSET";
+        case IR::OP_TEX_SAMPLE_BIAS_OFFSET: return "TEX_SAMPLE_BIAS_OFFSET";
         case IR::OP_TEX_GATHER:      return "TEX_GATHER";
+        case IR::OP_TEX_GATHER_OFFSET: return "TEX_GATHER_OFFSET";
         case IR::OP_TEX_FETCH:       return "TEX_FETCH";
+        case IR::OP_TEX_FETCH_OFFSET: return "TEX_FETCH_OFFSET";
         case IR::OP_TEX_SIZE:        return "TEX_SIZE";
         case IR::OP_TEX_LEVELS:      return "TEX_LEVELS";
         case IR::OP_IMG_LOAD:        return "IMG_LOAD";
@@ -1501,6 +1506,11 @@ CompileResult CompileShaderStage(
         glesBuilder.Initialize(&glesArena, parser.sourceBase(),
                                &lowering.program, cfgPtr, stage,
                                &pass, renderConfig, &glesAnalysis, varyingContext);
+        if (stage == ShaderStage::Compute && shaderStageData) {
+            glesBuilder.SetComputeWorkgroupSize(shaderStageData->workgroupSizeX,
+                                                shaderStageData->workgroupSizeY,
+                                                shaderStageData->workgroupSizeZ);
+        }
         std::string_view glesOutput = glesBuilder.Emit();
         result.directGlesSource = std::string(glesOutput);
 

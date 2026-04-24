@@ -5437,13 +5437,17 @@ struct IRLowering {
       // sample(texture, coord)
       // sample(texture, sampler, coord)
       // sample_lod/bias/cmp(texture, [sampler,] coord, extra)
+      // sample_*_offset(texture, [sampler,] coord, extra..., offset)
       // sample_grad(texture, [sampler,] coord, ddx, ddy)
       // Result type is always FLOAT4
       case Intrinsic::SAMPLE:
       case Intrinsic::SAMPLE_LOD:
       case Intrinsic::SAMPLE_BIAS:
       case Intrinsic::SAMPLE_GRAD:
-      case Intrinsic::SAMPLE_CMP: {
+      case Intrinsic::SAMPLE_CMP:
+      case Intrinsic::SAMPLE_OFFSET:
+      case Intrinsic::SAMPLE_LOD_OFFSET:
+      case Intrinsic::SAMPLE_BIAS_OFFSET: {
         OpCode texOp = IntrinsicToOpcode(intrinsic);
         u16 texReg = args[0]; // Texture with 0x2000 marker
         const bool hasExplicitSampler =
@@ -5454,11 +5458,23 @@ struct IRLowering {
           case Intrinsic::SAMPLE:
             builder.EmitInstruction(texOp, dest, texReg, coordReg);
             break;
+          case Intrinsic::SAMPLE_OFFSET: {
+            u16 offsetReg = hasExplicitSampler ? args[3] : args[2];
+            builder.EmitInstruction(texOp, dest, texReg, coordReg, offsetReg);
+            break;
+          }
           case Intrinsic::SAMPLE_LOD:
           case Intrinsic::SAMPLE_BIAS:
           case Intrinsic::SAMPLE_CMP: {
             u16 extraReg = hasExplicitSampler ? args[3] : args[2];
             builder.EmitInstruction(texOp, dest, texReg, coordReg, extraReg);
+            break;
+          }
+          case Intrinsic::SAMPLE_LOD_OFFSET:
+          case Intrinsic::SAMPLE_BIAS_OFFSET: {
+            u16 extraReg = hasExplicitSampler ? args[3] : args[2];
+            u16 offsetReg = hasExplicitSampler ? args[4] : args[3];
+            builder.EmitInstruction(texOp, dest, texReg, coordReg, extraReg, offsetReg);
             break;
           }
           case Intrinsic::SAMPLE_GRAD: {
@@ -5482,16 +5498,45 @@ struct IRLowering {
         return dest;
       }
       case Intrinsic::GATHER:
-      case Intrinsic::LOAD: {
+      case Intrinsic::GATHER_OFFSET: {
         OpCode texOp = IntrinsicToOpcode(intrinsic);
         u16 texReg = args[0]; // Texture with 0x2000 marker
-        // Coordinate is the last argument - handle both 2-arg and 3-arg forms
-        u16 coordReg = (argCount >= 3) ? args[2] : args[1];
+        const bool hasExplicitSampler =
+            argCount >= 4 && (args[1] & 0xF000) == 0x3000;
+        u16 coordReg = hasExplicitSampler ? args[2] : args[1];
+        u16 componentReg = hasExplicitSampler ? args[3] : args[2];
+        u16 offsetReg = 0x3FFF;
+        if (intrinsic == Intrinsic::GATHER_OFFSET) {
+          offsetReg = hasExplicitSampler ? args[4] : args[3];
+        }
 
-        // Emit with texture in operand 0 (preserving 0x2000 marker for
-        // analysis) and coordinates in operand 1
-        builder.EmitInstruction(texOp, dest, texReg, coordReg);
+        builder.EmitInstruction(texOp, dest, texReg, coordReg, componentReg, offsetReg);
+        if (hasExplicitSampler) {
+          BWSL::SetTextureOpExplicitSamplerMetadata(program,
+                                                    builder.currentInstruction - 1,
+                                                    static_cast<u16>(args[1] & 0x0FFFu));
+        }
 
+        SetRegisterType(dest, CoreType::FLOAT4);
+        return dest;
+      }
+      case Intrinsic::LOAD:
+      case Intrinsic::LOAD_OFFSET: {
+        OpCode texOp = IntrinsicToOpcode(intrinsic);
+        u16 texReg = args[0];
+        const bool hasExplicitSampler =
+            argCount >= 4 && (args[1] & 0xF000) == 0x3000;
+        u16 coordReg = hasExplicitSampler ? args[2] : args[1];
+        u16 lodReg = hasExplicitSampler ? args[3] : args[2];
+        u16 offsetReg = (intrinsic == Intrinsic::LOAD_OFFSET)
+                            ? (hasExplicitSampler ? args[4] : args[3])
+                            : 0x3FFF;
+        builder.EmitInstruction(texOp, dest, texReg, coordReg, lodReg, offsetReg);
+        if (hasExplicitSampler) {
+          BWSL::SetTextureOpExplicitSamplerMetadata(program,
+                                                    builder.currentInstruction - 1,
+                                                    static_cast<u16>(args[1] & 0x0FFFu));
+        }
         SetRegisterType(dest, CoreType::FLOAT4);
         return dest;
       }
@@ -7109,10 +7154,20 @@ struct IRLowering {
       return OP_TEX_SAMPLE_GRAD;
     case Intrinsic::SAMPLE_CMP:
       return OP_TEX_SAMPLE_CMP;
+    case Intrinsic::SAMPLE_OFFSET:
+      return OP_TEX_SAMPLE_OFFSET;
+    case Intrinsic::SAMPLE_LOD_OFFSET:
+      return OP_TEX_SAMPLE_LOD_OFFSET;
+    case Intrinsic::SAMPLE_BIAS_OFFSET:
+      return OP_TEX_SAMPLE_BIAS_OFFSET;
     case Intrinsic::GATHER:
       return OP_TEX_GATHER;
+    case Intrinsic::GATHER_OFFSET:
+      return OP_TEX_GATHER_OFFSET;
     case Intrinsic::LOAD:
       return OP_TEX_FETCH;
+    case Intrinsic::LOAD_OFFSET:
+      return OP_TEX_FETCH_OFFSET;
     case Intrinsic::STORE:
       return OP_IMG_STORE;
 

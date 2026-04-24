@@ -1,0 +1,20 @@
+// Regression: gather_offset lowers to texture gather with component and offset operands.
+pipeline IntrinsicGatherOffset {
+    resources {
+        colorTex: texture2D
+    }
+
+    pass "Main" {
+        use resources { colorTex }
+
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+            output.texcoord = float2(0.5, 0.5);
+        }
+
+        fragment {
+            float4 c = gather_offset(resources.colorTex, input.texcoord, 0, int2(1, 1));
+            output.color = c;
+        }
+    }
+}

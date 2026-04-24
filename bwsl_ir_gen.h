@@ -437,6 +437,11 @@ enum OpCode : u16 {
     OP_FWIDTH          = 0xC6,
     OP_FWIDTH_FINE     = 0xC7,
     OP_FWIDTH_COARSE   = 0xC8,
+    OP_TEX_SAMPLE_OFFSET      = 0xC9,
+    OP_TEX_SAMPLE_LOD_OFFSET  = 0xCA,
+    OP_TEX_SAMPLE_BIAS_OFFSET = 0xCB,
+    OP_TEX_GATHER_OFFSET      = 0xCC,
+    OP_TEX_FETCH_OFFSET       = 0xCD,
     
     // ========== Interpolation ==========
     OP_LERP            = 0xD0,
@@ -539,11 +544,11 @@ inline bool IsTerminator(OpCode op) {
 }
 
 inline bool IsTextureOp(OpCode op) {
-    return op >= 0xB0 && op <= 0xB9;
+    return (op >= 0xB0 && op <= 0xBF) || (op >= OP_TEX_SAMPLE_OFFSET && op <= OP_TEX_FETCH_OFFSET);
 }
 
 inline bool IsFragmentOnlyOp(OpCode op) {
-    return (op >= 0xC0 && op <= 0xC6) || op == OP_TEX_SAMPLE_BIAS;
+    return (op >= 0xC0 && op <= 0xC8) || op == OP_TEX_SAMPLE_BIAS || op == OP_TEX_SAMPLE_BIAS_OFFSET;
 }
 
 inline bool IsComputeOnlyOp(OpCode op) {

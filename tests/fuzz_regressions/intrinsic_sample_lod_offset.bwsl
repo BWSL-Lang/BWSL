@@ -1,0 +1,20 @@
+// Regression: sample_lod_offset lowers to explicit-LOD sampling with an offset operand.
+pipeline IntrinsicSampleLodOffset {
+    resources {
+        colorTex: texture2D
+    }
+
+    pass "Main" {
+        use resources { colorTex }
+
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+            output.texcoord = float2(0.5, 0.5);
+        }
+
+        fragment {
+            float4 c = sample_lod_offset(resources.colorTex, input.texcoord, 0.0, int2(1, 0));
+            output.color = c;
+        }
+    }
+}

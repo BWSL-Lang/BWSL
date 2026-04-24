@@ -266,12 +266,24 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
     case IR::OP_TEX_SAMPLE_BIAS:
     case IR::OP_TEX_SAMPLE_GRAD:
     case IR::OP_TEX_SAMPLE_CMP:
+    case IR::OP_TEX_SAMPLE_OFFSET:
+    case IR::OP_TEX_SAMPLE_LOD_OFFSET:
+    case IR::OP_TEX_SAMPLE_BIAS_OFFSET:
     case IR::OP_TEX_GATHER:
+    case IR::OP_TEX_GATHER_OFFSET:
     case IR::OP_TEX_FETCH:
+    case IR::OP_TEX_FETCH_OFFSET:
     case IR::OP_TEX_SIZE:
     case IR::OP_TEX_LEVELS: {
       if (op == IR::OP_TEX_SIZE || op == IR::OP_TEX_LEVELS) {
         analysis->capabilityFlags |= IRAnalysis::CAP_IMAGE_QUERY;
+      }
+      if (op == IR::OP_TEX_SAMPLE_OFFSET ||
+          op == IR::OP_TEX_SAMPLE_LOD_OFFSET ||
+          op == IR::OP_TEX_SAMPLE_BIAS_OFFSET ||
+          op == IR::OP_TEX_GATHER_OFFSET ||
+          op == IR::OP_TEX_FETCH_OFFSET) {
+        analysis->capabilityFlags |= IRAnalysis::CAP_IMAGE_GATHER_EXT;
       }
       // Texture register is encoded as 0x2000 | bindingIndex
       u16 texReg = ir->GetOperand(i, 0);

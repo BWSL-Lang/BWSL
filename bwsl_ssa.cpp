@@ -667,7 +667,14 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             (op >= IR::OP_LERP && op <= IR::OP_RADIANS) ||  // Interpolation
             (op >= IR::OP_F2I && op <= IR::OP_SIGN) ||      // Type conversions
             (op >= IR::OP_ISNAN && op <= IR::OP_ISFINITE) || // Float classification
-            op == IR::OP_TEX_SIZE || op == IR::OP_TEX_LEVELS || // Texture query
+            op == IR::OP_TEX_SAMPLE || op == IR::OP_TEX_SAMPLE_LOD ||
+            op == IR::OP_TEX_SAMPLE_BIAS || op == IR::OP_TEX_SAMPLE_GRAD ||
+            op == IR::OP_TEX_SAMPLE_CMP || op == IR::OP_TEX_GATHER ||
+            op == IR::OP_TEX_FETCH ||
+            op == IR::OP_TEX_SIZE || op == IR::OP_TEX_LEVELS ||
+            op == IR::OP_TEX_SAMPLE_OFFSET || op == IR::OP_TEX_SAMPLE_LOD_OFFSET ||
+            op == IR::OP_TEX_SAMPLE_BIAS_OFFSET ||
+            op == IR::OP_TEX_GATHER_OFFSET || op == IR::OP_TEX_FETCH_OFFSET || // Texture query/offset
             op == IR::OP_VEC_CONSTRUCT ||                   // Vector construction
             op == IR::OP_VEC_EXTRACT ||                     // Vector extract
             op == IR::OP_VEC_INSERT ||                      // Vector component insert (literal index)

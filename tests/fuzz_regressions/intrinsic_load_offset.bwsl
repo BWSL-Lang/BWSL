@@ -1,0 +1,19 @@
+// Regression: load_offset lowers to image fetch with LOD and offset operands.
+pipeline IntrinsicLoadOffset {
+    resources {
+        colorTex: texture2D
+    }
+
+    pass "Main" {
+        use resources { colorTex }
+
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+        }
+
+        fragment {
+            float4 c = load_offset(resources.colorTex, int2(0, 0), 0, int2(1, 0));
+            output.color = c;
+        }
+    }
+}

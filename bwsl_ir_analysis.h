@@ -77,6 +77,7 @@ struct IRAnalysis {
         CAP_CLIP_DISTANCE     = 1 << 14,  // ClipDistance used
         CAP_CULL_DISTANCE     = 1 << 15,  // CullDistance used
         CAP_IMAGE_QUERY       = 1 << 16,  // Image/texture query ops used
+        CAP_IMAGE_GATHER_EXT  = 1 << 17,  // Offset image operands
     };
     u32 capabilityFlags;
     

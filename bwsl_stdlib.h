@@ -98,8 +98,13 @@ enum class Intrinsic : u16 {
     SAMPLE_BIAS,
     SAMPLE_GRAD,
     SAMPLE_CMP,
+    SAMPLE_OFFSET,
+    SAMPLE_LOD_OFFSET,
+    SAMPLE_BIAS_OFFSET,
     GATHER,
+    GATHER_OFFSET,
     LOAD,
+    LOAD_OFFSET,
     STORE,
     TEXTURE_SIZE,
     TEXTURE_LEVELS,
@@ -269,8 +274,13 @@ constexpr BackendNames BACKEND_NAMES[] = {
     {"sample", ".SampleBias", "texture"},               // SAMPLE_BIAS
     {"sample", ".SampleGrad", "textureGrad"},           // SAMPLE_GRAD
     {"sample_compare", ".SampleCmp", "texture"},        // SAMPLE_CMP
+    {"sample", ".Sample", "textureOffset"},             // SAMPLE_OFFSET
+    {"sample", ".SampleLevel", "textureLodOffset"},     // SAMPLE_LOD_OFFSET
+    {"sample", ".SampleBias", "textureOffset"},         // SAMPLE_BIAS_OFFSET
     {"gather", ".Gather", "textureGather"},             // GATHER
+    {"gather", ".Gather", "textureGatherOffset"},       // GATHER_OFFSET
     {"read", ".Load", "texelFetch"},                    // LOAD
+    {"read", ".Load", "texelFetchOffset"},              // LOAD_OFFSET
     {"write", nullptr, "imageStore"},                   // STORE (custom HLSL)
     {"get_width", ".GetDimensions", "textureSize"},     // TEXTURE_SIZE
     {"get_num_mip_levels", ".GetDimensions", "textureQueryLevels"}, // TEXTURE_LEVELS
@@ -484,8 +494,13 @@ constexpr IntrinsicData INTRINSICS[] = {
     TEXTURE_INTRINSIC(SAMPLE_GRAD, "sample_grad", 4, 7, 0),  // SpvOpImageSampleExplicitLod with Grad
     TEXTURE_INTRINSIC(SAMPLE_BIAS, "sample_bias", 3, 5, IntrinsicFlags::FRAGMENT_ONLY), // SpvOpImageSampleImplicitLod with Bias
     TEXTURE_INTRINSIC(SAMPLE_CMP, "sample_cmp", 3, 5, 0),    // SpvOpImageSampleDrefImplicitLod
+    TEXTURE_INTRINSIC(SAMPLE_OFFSET, "sample_offset", 3, 4, 0), // Offset operand
+    TEXTURE_INTRINSIC(SAMPLE_LOD_OFFSET, "sample_lod_offset", 4, 5, 0), // Lod + offset
+    TEXTURE_INTRINSIC(SAMPLE_BIAS_OFFSET, "sample_bias_offset", 4, 5, IntrinsicFlags::FRAGMENT_ONLY), // Bias + offset
     TEXTURE_INTRINSIC(GATHER, "gather", 3, 4, 0),            // SpvOpImageGather
+    TEXTURE_INTRINSIC(GATHER_OFFSET, "gather_offset", 4, 5, 0), // OpImageGather + offset
     TEXTURE_INTRINSIC(LOAD, "load", 3, 4, 0),                // SpvOpImageFetch
+    TEXTURE_INTRINSIC(LOAD_OFFSET, "load_offset", 4, 5, 0),  // OpImageFetch + offset
     INTRINSIC_FIXED(STORE, "store", mask(CoreType::VOID), mask(CoreType::CUSTOM), mask(CoreType::INT2), mask(CoreType::FLOAT4), 0, IntrinsicFlags::TEXTURE_OP | IntrinsicFlags::CUSTOM_HLSL, SPV_MAP(spv::OpImageWrite, SPV_EXT_NONE)),
     INTRINSIC_VAR(TEXTURE_SIZE, "texture_size", 1, 2, mask(CoreType::INT2), TypeMasks::TEXTURE_TYPES, mask(CoreType::INT), 0, 0, 0, 0, IntrinsicFlags::TEXTURE_OP, SPV_MAP(spv::OpImageQuerySizeLod, SPV_EXT_NONE)),
     INTRINSIC_FIXED(TEXTURE_LEVELS, "texture_levels", mask(CoreType::INT), TypeMasks::TEXTURE_TYPES, 0, 0, 0, IntrinsicFlags::TEXTURE_OP, SPV_MAP(spv::OpImageQueryLevels, SPV_EXT_NONE)),

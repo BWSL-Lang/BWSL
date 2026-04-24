@@ -263,6 +263,9 @@ struct GLESBuilder {
     const RenderConfig* renderConfig;
     const IRAnalysis* analysis;              // For attribute/output types
     IR::PassVaryingContext* varyings;        // Vertex→Fragment varyings
+    u32 workgroupSizeX;
+    u32 workgroupSizeY;
+    u32 workgroupSizeZ;
 
 
     void DebugDumpRegisterInfo();
@@ -287,6 +290,9 @@ struct GLESBuilder {
         renderConfig = config;
         analysis = analysisData;
         varyings = varyingCtx;
+        workgroupSizeX = 1;
+        workgroupSizeY = 1;
+        workgroupSizeZ = 1;
 
         regCount = ir->registerCount;
         regInfo = static_cast<RegInfo*>(arena->Allocate(regCount * sizeof(RegInfo)));
@@ -300,6 +306,12 @@ struct GLESBuilder {
     }
 
     std::string_view Emit();
+
+    void SetComputeWorkgroupSize(u32 x, u32 y, u32 z) {
+        workgroupSizeX = x;
+        workgroupSizeY = y;
+        workgroupSizeZ = z;
+    }
 
 private:
     // ===== Analysis Pass =====

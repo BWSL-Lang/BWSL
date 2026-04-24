@@ -6,6 +6,7 @@
 #include <vector>
 #include <cstdint>
 #include <unordered_map>
+#include <unordered_set>
 
 // Include SPIRV-Cross headers (before any BWSL headers)
 #include "../vendor/SPIRV-Cross/spirv_msl.hpp"
@@ -102,6 +103,76 @@ static void preserveBindingIndices(spirv_cross::CompilerMSL& compiler, spv::Exec
     }
 }
 
+static bool LiteralStringEquals(const std::vector<uint32_t>& words,
+                                size_t start,
+                                size_t end,
+                                const char* expected) {
+    size_t charIndex = 0;
+    for (size_t i = start; i < end; i++) {
+        uint32_t word = words[i];
+        for (uint32_t byte = 0; byte < 4; byte++) {
+            char c = static_cast<char>((word >> (byte * 8)) & 0xffu);
+            char want = expected[charIndex];
+            if (c != want) {
+                return false;
+            }
+            if (c == '\0') {
+                return true;
+            }
+            charIndex++;
+        }
+    }
+    return expected[charIndex] == '\0';
+}
+
+static std::string CheckGLSLESSPIRVCompatRaw(const std::vector<uint32_t>& spirv,
+                                             int glslVersion,
+                                             bool es) {
+    if (!es || spirv.size() < 5) return {};
+
+    std::unordered_set<uint32_t> glslStd450Ids;
+    for (size_t offset = 5; offset < spirv.size();) {
+        uint32_t first = spirv[offset];
+        uint16_t op = static_cast<uint16_t>(first & 0xffffu);
+        uint16_t wordCount = static_cast<uint16_t>(first >> 16);
+        if (wordCount == 0 || offset + wordCount > spirv.size()) {
+            return "error: malformed SPIR-V instruction stream";
+        }
+
+        if (op == spv::OpExtInstImport && wordCount >= 3 &&
+            LiteralStringEquals(spirv, offset + 2, offset + wordCount,
+                                "GLSL.std.450")) {
+            glslStd450Ids.insert(spirv[offset + 1]);
+        } else if (op == spv::OpExtInst && wordCount >= 5) {
+            uint32_t setId = spirv[offset + 3];
+            uint32_t extOp = spirv[offset + 4];
+            if (glslStd450Ids.count(setId) != 0) {
+                if (extOp == GLSLstd450Ldexp) {
+                    return "error: GLSL ES does not support GLSL.std.450 Ldexp; use the direct GLES ldexp fallback";
+                }
+                if (extOp == GLSLstd450ModfStruct) {
+                    return "error: GLSL ES cannot cross-compile GLSL.std.450 ModfStruct; use the direct GLES modf fallback";
+                }
+            }
+        } else if (op == spv::OpDPdxFine || op == spv::OpDPdyFine ||
+                   op == spv::OpDPdxCoarse || op == spv::OpDPdyCoarse ||
+                   op == spv::OpFwidthFine || op == spv::OpFwidthCoarse) {
+            return "error: GLSL ES does not support fine/coarse derivative opcodes; use the direct GLES derivative fallback";
+        } else if (glslVersion < 310 && op == spv::OpImageQueryLevels) {
+            return "error: GLSL ES 300 does not support textureQueryLevels";
+        } else if (glslVersion < 310 && op == spv::OpImageGather &&
+                   wordCount >= 7) {
+            uint32_t imageOperands = spirv[offset + 6];
+            if ((imageOperands & spv::ImageOperandsOffsetMask) != 0) {
+                return "error: GLSL ES 300 does not support textureGatherOffset";
+            }
+        }
+
+        offset += wordCount;
+    }
+    return {};
+}
+
 std::string CompileToMSL(const std::vector<uint32_t>& spirv) {
 #ifdef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
     // No exceptions - just compile (will abort on error)
@@ -190,6 +261,7 @@ static std::string CheckGLSLESEmittedCompat(const std::string& source,
         "findMSB(", "findLSB(", "bitCount(", "bitfieldReverse(",
         "bitfieldExtract(", "bitfieldInsert(",
         "uaddCarry(", "usubBorrow(", "umulExtended(", "imulExtended(",
+        "ldexp(",
     };
     for (const char* kw : es310_only) {
         if (source.find(kw) != std::string::npos) {
@@ -202,6 +274,9 @@ static std::string CheckGLSLESEmittedCompat(const std::string& source,
 
 std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, bool es) {
 #ifdef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
+    if (auto err = CheckGLSLESSPIRVCompatRaw(spirv, glslVersion, es); !err.empty()) {
+        return err;
+    }
     spirv_cross::CompilerGLSL compiler(spirv);
     if (auto err = CheckGLSLESCompat(compiler, glslVersion, es); !err.empty()) {
         return err;
@@ -219,6 +294,9 @@ std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, b
     return result;
 #else
     try {
+        if (auto err = CheckGLSLESSPIRVCompatRaw(spirv, glslVersion, es); !err.empty()) {
+            return err;
+        }
         spirv_cross::CompilerGLSL compiler(spirv);
         if (auto err = CheckGLSLESCompat(compiler, glslVersion, es); !err.empty()) {
             return err;
@@ -253,6 +331,9 @@ std::string CompileToGLSLWithVaryings(
     bool isVertex)
 {
 #ifdef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
+    if (auto err = CheckGLSLESSPIRVCompatRaw(spirv, glslVersion, es); !err.empty()) {
+        return err;
+    }
     spirv_cross::CompilerGLSL compiler(spirv);
     spirv_cross::CompilerGLSL::Options glslOpts;
     glslOpts.version = glslVersion;
@@ -273,9 +354,16 @@ std::string CompileToGLSLWithVaryings(
         }
     }
 
-    return compiler.compile();
+    std::string result = compiler.compile();
+    if (auto err = CheckGLSLESEmittedCompat(result, glslVersion, es); !err.empty()) {
+        return err;
+    }
+    return result;
 #else
     try {
+        if (auto err = CheckGLSLESSPIRVCompatRaw(spirv, glslVersion, es); !err.empty()) {
+            return err;
+        }
         spirv_cross::CompilerGLSL compiler(spirv);
         spirv_cross::CompilerGLSL::Options glslOpts;
         glslOpts.version = glslVersion;
@@ -296,7 +384,11 @@ std::string CompileToGLSLWithVaryings(
             }
         }
 
-        return compiler.compile();
+        std::string result = compiler.compile();
+        if (auto err = CheckGLSLESEmittedCompat(result, glslVersion, es); !err.empty()) {
+            return err;
+        }
+        return result;
     } catch (const spirv_cross::CompilerError& e) {
         return std::string("error: ") + e.what();
     } catch (const std::exception& e) {

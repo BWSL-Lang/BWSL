@@ -1,0 +1,20 @@
+// Regression: sample_offset lowers to image sampling with an offset operand.
+pipeline IntrinsicSampleOffset {
+    resources {
+        colorTex: texture2D
+    }
+
+    pass "Main" {
+        use resources { colorTex }
+
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+            output.texcoord = float2(0.5, 0.5);
+        }
+
+        fragment {
+            float4 c = sample_offset(resources.colorTex, input.texcoord, int2(1, 0));
+            output.color = c;
+        }
+    }
+}

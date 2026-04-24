@@ -210,6 +210,11 @@ static const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_ISINF: return "ISINF";
         case IR::OP_ISFINITE: return "ISFINITE";
         case IR::OP_TEX_LEVELS: return "TEX_LEVELS";
+        case IR::OP_TEX_SAMPLE_OFFSET: return "TEX_SAMPLE_OFFSET";
+        case IR::OP_TEX_SAMPLE_LOD_OFFSET: return "TEX_SAMPLE_LOD_OFFSET";
+        case IR::OP_TEX_SAMPLE_BIAS_OFFSET: return "TEX_SAMPLE_BIAS_OFFSET";
+        case IR::OP_TEX_GATHER_OFFSET: return "TEX_GATHER_OFFSET";
+        case IR::OP_TEX_FETCH_OFFSET: return "TEX_FETCH_OFFSET";
         case IR::OP_VEC_CONSTRUCT: return "VEC_CONSTRUCT";
         case IR::OP_VEC_EXTRACT: return "VEC_EXTRACT";
         case IR::OP_MAT_MUL: return "MAT_MUL";
@@ -370,6 +375,67 @@ static std::string DumpIRToString(const IRProgram& prog) {
     }
 
     return out;
+}
+
+static bool CanUseDirectGLESFallback(const IRProgram& program, ShaderStage stage) {
+    for (u32 i = 0; i < program.instructionCount; i++) {
+        IR::OpCode op = static_cast<IR::OpCode>(program.opcodes[i]);
+        switch (op) {
+            case IR::OP_TEX_LEVELS:
+            case IR::OP_TEX_GATHER_OFFSET:
+                return false;
+            case IR::OP_LOAD_BUFFER:
+            case IR::OP_STORE_BUFFER:
+            case IR::OP_LOAD_SHARED:
+            case IR::OP_STORE_SHARED:
+            case IR::OP_BARRIER:
+            case IR::OP_MEM_FENCE:
+                return false;
+            case IR::OP_ATOMIC_ADD:
+            case IR::OP_ATOMIC_SUB:
+            case IR::OP_ATOMIC_MIN:
+            case IR::OP_ATOMIC_MAX:
+            case IR::OP_ATOMIC_AND:
+            case IR::OP_ATOMIC_OR:
+            case IR::OP_ATOMIC_XOR:
+            case IR::OP_ATOMIC_XCHG:
+            case IR::OP_ATOMIC_CMP_XCHG:
+                return false;
+            default:
+                break;
+        }
+    }
+    (void)stage;
+    return true;
+}
+
+static std::string EmitDirectGLES(IRProgram& program,
+                                  CFG* cfgPtr,
+                                  ShaderStage stage,
+                                  const PassData& pass,
+                                  const RenderConfig& renderConfig,
+                                  IRAnalysis& analysis,
+                                  IR::PassVaryingContext* varyingContext,
+                                  const ShaderStageData* shaderStageData,
+                                  const char* sourceBase) {
+    if (!CanUseDirectGLESFallback(program, stage)) {
+        return {};
+    }
+
+    Memory::BWEMemoryArena glesArena;
+    char glesMem[128 * 1024];
+    glesArena.Initialize(glesMem, sizeof(glesMem));
+
+    GLES::GLESBuilder glesBuilder;
+    glesBuilder.Initialize(&glesArena, sourceBase, &program, cfgPtr, stage,
+                           &pass, &renderConfig, &analysis, varyingContext);
+    if (stage == ShaderStage::Compute && shaderStageData) {
+        glesBuilder.SetComputeWorkgroupSize(shaderStageData->workgroupSizeX,
+                                            shaderStageData->workgroupSizeY,
+                                            shaderStageData->workgroupSizeZ);
+    }
+    std::string_view glesOutput = glesBuilder.Emit();
+    return std::string(glesOutput);
 }
 
 // Simple SPIR-V text dump (since we can't run spirv-dis in WASM)
@@ -840,39 +906,15 @@ static ShaderOutput CompileShaderStage(
     // Cross-compile to GLSL ES 300
     std::string glslSource;
 
-    // Use direct GLES backend for vertex/fragment shaders (faster, no SPIRV-Cross)
+    // Use direct GLES backend when requested, or as a fallback for ES constructs
+    // SPIRV-Cross cannot emit in the no-exceptions WASM build.
     if constexpr (USE_DIRECT_GLES) {
-        if (stage == ShaderStage::Vertex || stage == ShaderStage::Fragment) {
-            // Run IR analysis (needed for attribute/output types)
-            IRAnalysis glesAnalysis = {};
-            AnalyzeIR(&glesAnalysis, &lowering.program);
-
-            // Create GLES arena
-            Memory::BWEMemoryArena glesArena;
-            char glesMem[128 * 1024];
-            glesArena.Initialize(glesMem, sizeof(glesMem));
-
-            // Initialize and emit GLES
-            GLES::GLESBuilder glesBuilder;
-            glesBuilder.Initialize(&glesArena, sourceBase,
-                                   &lowering.program, cfgPtr, stage,
-                                   &pass, &renderConfig, &glesAnalysis, varyingContext);
-            std::string_view glesOutput = glesBuilder.Emit();
-            glslSource = std::string(glesOutput);
-
-            if (glslSource.empty()) {
-                output.error = "Direct GLES generation failed";
-                return output;
-            }
-        } else if (stage == ShaderStage::Compute) {
-            // Compute shaders still use SPIRV-Cross (needs GLSL 310 es features)
-#ifdef USE_SPIRV_CROSS_LIB
-            std::vector<uint32_t> spirvData(spirv.begin(), spirv.end());
-            glslSource = spirv_cross_wrapper::CompileToGLSL(spirvData, 310, true);
-#else
-            output.error = "Compute shaders require SPIRV-Cross";
+        glslSource = EmitDirectGLES(lowering.program, cfgPtr, stage, pass,
+                                    renderConfig, output.analysis, varyingContext,
+                                    shaderStageData, sourceBase);
+        if (glslSource.empty()) {
+            output.error = "Direct GLES generation failed";
             return output;
-#endif
         }
     } else {
         // Original SPIRV-Cross path
@@ -896,6 +938,15 @@ static ShaderOutput CompileShaderStage(
                 spirvData, 300, true, varyingNames, isVertex);
         } else if (stage == ShaderStage::Compute) {
             glslSource = spirv_cross_wrapper::CompileToGLSL(spirvData, 310, true);
+        }
+
+        if (glslSource.empty() || glslSource.find("error:") == 0) {
+            std::string fallback = EmitDirectGLES(lowering.program, cfgPtr, stage, pass,
+                                                  renderConfig, output.analysis, varyingContext,
+                                                  shaderStageData, sourceBase);
+            if (!fallback.empty()) {
+                glslSource = fallback;
+            }
         }
 #else
         output.error = "SPIRV-Cross not available (USE_SPIRV_CROSS_LIB not defined)";

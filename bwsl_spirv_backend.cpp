@@ -476,6 +476,9 @@ void SPIRVBuilder::EmitPreamble() {
   if (analysis.Has(IRAnalysis::CAP_IMAGE_QUERY)) {
     EmitCapability(spv::CapabilityImageQuery);
   }
+  if (analysis.Has(IRAnalysis::CAP_IMAGE_GATHER_EXT)) {
+    EmitCapability(spv::CapabilityImageGatherExtended);
+  }
 
   // 64-bit types
   if (analysis.Has(IRAnalysis::CAP_INT64)) {
@@ -6077,7 +6080,10 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_TEX_SAMPLE:
   case IR::OP_TEX_SAMPLE_LOD:
   case IR::OP_TEX_SAMPLE_BIAS:
-  case IR::OP_TEX_SAMPLE_GRAD: {
+  case IR::OP_TEX_SAMPLE_GRAD:
+  case IR::OP_TEX_SAMPLE_OFFSET:
+  case IR::OP_TEX_SAMPLE_LOD_OFFSET:
+  case IR::OP_TEX_SAMPLE_BIAS_OFFSET: {
     // Texture sampling: dest = sample(texture, coord)
     // IR format: s0 = texture (with 0x2000 marker), s1 = coord
     // The resources are declared as combined image samplers
@@ -6114,62 +6120,193 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u32 sampled_img_id = AllocateId();
     Emit(spv::OpLoad, sampled_img_type, sampled_img_id, tex_var_id);
 
+    auto emitImageInst = [&](spv::Op imageOp, u32 resultType, u32 imageOperands,
+                             const u32 *extraOperands, u32 extraCount) {
+      u32 wordCount = 5 + (imageOperands != 0 ? 1 + extraCount : 0);
+      if (currentFunctionSize + wordCount > currentFunctionCapacity)
+        GrowCurrentFunction();
+      currentFunction[currentFunctionSize++] = (wordCount << 16) | imageOp;
+      currentFunction[currentFunctionSize++] = resultType;
+      currentFunction[currentFunctionSize++] = dest;
+      currentFunction[currentFunctionSize++] = sampled_img_id;
+      currentFunction[currentFunctionSize++] = coord_id;
+      if (imageOperands != 0) {
+        currentFunction[currentFunctionSize++] = imageOperands;
+        for (u32 i = 0; i < extraCount; i++) {
+          currentFunction[currentFunctionSize++] = extraOperands[i];
+        }
+      }
+    };
+
     // Sample the texture
     switch (op) {
     case IR::OP_TEX_SAMPLE:
-      Emit(spv::OpImageSampleImplicitLod, result_type, dest, sampled_img_id,
-           coord_id);
+      emitImageInst(spv::OpImageSampleImplicitLod, result_type, 0, nullptr, 0);
       break;
+    case IR::OP_TEX_SAMPLE_OFFSET: {
+      u32 offset_id = GetSpirvId(ir->GetOperand(ir_idx, 2));
+      u32 extras[1] = {offset_id};
+      emitImageInst(spv::OpImageSampleImplicitLod, result_type,
+                    spv::ImageOperandsOffsetMask, extras, 1);
+      break;
+    }
     case IR::OP_TEX_SAMPLE_LOD: {
-      // Explicit LOD - operand 2 is LOD level
       u32 lod_id = GetSpirvId(ir->GetOperand(ir_idx, 2));
-      // OpImageSampleExplicitLod with Lod operand
-      if (currentFunctionSize + 7 > currentFunctionCapacity)
-        GrowCurrentFunction();
-      currentFunction[currentFunctionSize++] =
-          (7 << 16) | spv::OpImageSampleExplicitLod;
-      currentFunction[currentFunctionSize++] = result_type;
-      currentFunction[currentFunctionSize++] = dest;
-      currentFunction[currentFunctionSize++] = sampled_img_id;
-      currentFunction[currentFunctionSize++] = coord_id;
-      currentFunction[currentFunctionSize++] = 0x2; // Lod image operand
-      currentFunction[currentFunctionSize++] = lod_id;
+      u32 extras[1] = {lod_id};
+      emitImageInst(spv::OpImageSampleExplicitLod, result_type,
+                    spv::ImageOperandsLodMask, extras, 1);
+      break;
+    }
+    case IR::OP_TEX_SAMPLE_LOD_OFFSET: {
+      u32 lod_id = GetSpirvId(ir->GetOperand(ir_idx, 2));
+      u32 offset_id = GetSpirvId(ir->GetOperand(ir_idx, 3));
+      u32 extras[2] = {lod_id, offset_id};
+      emitImageInst(spv::OpImageSampleExplicitLod, result_type,
+                    spv::ImageOperandsLodMask | spv::ImageOperandsOffsetMask,
+                    extras, 2);
       break;
     }
     case IR::OP_TEX_SAMPLE_BIAS: {
-      // Bias - operand 2 is bias value
       u32 bias_id = GetSpirvId(ir->GetOperand(ir_idx, 2));
-      if (currentFunctionSize + 7 > currentFunctionCapacity)
-        GrowCurrentFunction();
-      currentFunction[currentFunctionSize++] =
-          (7 << 16) | spv::OpImageSampleImplicitLod;
-      currentFunction[currentFunctionSize++] = result_type;
-      currentFunction[currentFunctionSize++] = dest;
-      currentFunction[currentFunctionSize++] = sampled_img_id;
-      currentFunction[currentFunctionSize++] = coord_id;
-      currentFunction[currentFunctionSize++] = 0x1; // Bias image operand
-      currentFunction[currentFunctionSize++] = bias_id;
+      u32 extras[1] = {bias_id};
+      emitImageInst(spv::OpImageSampleImplicitLod, result_type,
+                    spv::ImageOperandsBiasMask, extras, 1);
+      break;
+    }
+    case IR::OP_TEX_SAMPLE_BIAS_OFFSET: {
+      u32 bias_id = GetSpirvId(ir->GetOperand(ir_idx, 2));
+      u32 offset_id = GetSpirvId(ir->GetOperand(ir_idx, 3));
+      u32 extras[2] = {bias_id, offset_id};
+      emitImageInst(spv::OpImageSampleImplicitLod, result_type,
+                    spv::ImageOperandsBiasMask | spv::ImageOperandsOffsetMask,
+                    extras, 2);
       break;
     }
     case IR::OP_TEX_SAMPLE_GRAD: {
       // Explicit gradients - operand 2 is ddx, operand 3 is ddy
       u32 ddx_id = GetSpirvId(ir->GetOperand(ir_idx, 2));
       u32 ddy_id = GetSpirvId(ir->GetOperand(ir_idx, 3));
-      if (currentFunctionSize + 8 > currentFunctionCapacity)
-        GrowCurrentFunction();
-      currentFunction[currentFunctionSize++] =
-          (8 << 16) | spv::OpImageSampleExplicitLod;
-      currentFunction[currentFunctionSize++] = result_type;
-      currentFunction[currentFunctionSize++] = dest;
-      currentFunction[currentFunctionSize++] = sampled_img_id;
-      currentFunction[currentFunctionSize++] = coord_id;
-      currentFunction[currentFunctionSize++] = 0x4; // Grad image operand
-      currentFunction[currentFunctionSize++] = ddx_id;
-      currentFunction[currentFunctionSize++] = ddy_id;
+      u32 extras[2] = {ddx_id, ddy_id};
+      emitImageInst(spv::OpImageSampleExplicitLod, result_type,
+                    spv::ImageOperandsGradMask, extras, 2);
       break;
     }
     default:
       break;
+    }
+    break;
+  }
+
+  case IR::OP_TEX_FETCH:
+  case IR::OP_TEX_FETCH_OFFSET: {
+    u16 tex_reg = ir->GetOperand(ir_idx, 0);
+    u16 coord_reg = ir->GetOperand(ir_idx, 1);
+    u16 lod_reg = ir->GetOperand(ir_idx, 2);
+    u16 tex_slot = tex_reg & 0x0FFF;
+
+    u32 tex_var_id = textureIds[tex_slot];
+    if (tex_var_id == 0) {
+      u32 result_type = GetTypeId(CoreType::FLOAT4);
+      Emit(spv::OpUndef, result_type, dest);
+      break;
+    }
+
+    u32 sampled_img_type;
+    u32 image_type;
+    if (textureIsArray[tex_slot]) {
+      sampled_img_type = GetArraySampledImageTypeId();
+      image_type = GetArrayImageTypeId();
+    } else if (textureIsCubemap[tex_slot]) {
+      sampled_img_type = GetCubeSampledImageTypeId();
+      image_type = GetCubeImageTypeId();
+    } else {
+      sampled_img_type = GetSampledImageTypeId();
+      image_type = GetImageTypeId();
+    }
+
+    u32 sampled_img_id = AllocateId();
+    Emit(spv::OpLoad, sampled_img_type, sampled_img_id, tex_var_id);
+
+    u32 image_id = AllocateId();
+    Emit(spv::OpImage, image_type, image_id, sampled_img_id);
+
+    u32 result_type = GetTypeId(CoreType::FLOAT4);
+    u32 coord_id = GetSpirvId(coord_reg);
+    u32 lod_id = GetSpirvId(lod_reg);
+    u32 imageOperands = spv::ImageOperandsLodMask;
+    u32 extras[2] = {lod_id, 0};
+    u32 extraCount = 1;
+    if (op == IR::OP_TEX_FETCH_OFFSET) {
+      extras[1] = GetSpirvId(ir->GetOperand(ir_idx, 3));
+      imageOperands |= spv::ImageOperandsOffsetMask;
+      extraCount = 2;
+    }
+
+    u32 wordCount = 5 + 1 + extraCount;
+    if (currentFunctionSize + wordCount > currentFunctionCapacity)
+      GrowCurrentFunction();
+    currentFunction[currentFunctionSize++] = (wordCount << 16) | spv::OpImageFetch;
+    currentFunction[currentFunctionSize++] = result_type;
+    currentFunction[currentFunctionSize++] = dest;
+    currentFunction[currentFunctionSize++] = image_id;
+    currentFunction[currentFunctionSize++] = coord_id;
+    currentFunction[currentFunctionSize++] = imageOperands;
+    for (u32 i = 0; i < extraCount; i++) {
+      currentFunction[currentFunctionSize++] = extras[i];
+    }
+    break;
+  }
+
+  case IR::OP_TEX_GATHER:
+  case IR::OP_TEX_GATHER_OFFSET: {
+    u16 tex_reg = ir->GetOperand(ir_idx, 0);
+    u16 coord_reg = ir->GetOperand(ir_idx, 1);
+    u16 component_reg = ir->GetOperand(ir_idx, 2);
+    u16 tex_slot = tex_reg & 0x0FFF;
+    u32 coord_id = GetSpirvId(coord_reg);
+
+    u32 tex_var_id = textureIds[tex_slot];
+    if (tex_var_id == 0) {
+      u32 result_type = GetTypeId(CoreType::FLOAT4);
+      Emit(spv::OpUndef, result_type, dest);
+      break;
+    }
+
+    u32 sampled_img_type;
+    if (textureIsArray[tex_slot]) {
+      sampled_img_type = GetArraySampledImageTypeId();
+    } else if (textureIsCubemap[tex_slot]) {
+      sampled_img_type = GetCubeSampledImageTypeId();
+    } else {
+      sampled_img_type = GetSampledImageTypeId();
+    }
+
+    u32 sampled_img_id = AllocateId();
+    Emit(spv::OpLoad, sampled_img_type, sampled_img_id, tex_var_id);
+
+    u32 result_type = GetTypeId(CoreType::FLOAT4);
+    u32 component_id = GetSpirvId(component_reg);
+    u32 imageOperands = 0;
+    u32 offset_id = 0;
+    u32 extraCount = 0;
+    if (op == IR::OP_TEX_GATHER_OFFSET) {
+      imageOperands = spv::ImageOperandsOffsetMask;
+      offset_id = GetSpirvId(ir->GetOperand(ir_idx, 3));
+      extraCount = 1;
+    }
+
+    u32 wordCount = 6 + (imageOperands != 0 ? 1 + extraCount : 0);
+    if (currentFunctionSize + wordCount > currentFunctionCapacity)
+      GrowCurrentFunction();
+    currentFunction[currentFunctionSize++] = (wordCount << 16) | spv::OpImageGather;
+    currentFunction[currentFunctionSize++] = result_type;
+    currentFunction[currentFunctionSize++] = dest;
+    currentFunction[currentFunctionSize++] = sampled_img_id;
+    currentFunction[currentFunctionSize++] = coord_id;
+    currentFunction[currentFunctionSize++] = component_id;
+    if (imageOperands != 0) {
+      currentFunction[currentFunctionSize++] = imageOperands;
+      currentFunction[currentFunctionSize++] = offset_id;
     }
     break;
   }
