@@ -506,6 +506,9 @@ namespace SymbolTable {
             case CoreType::INT:    return TypeHashes::INT;
             case CoreType::UINT:   return TypeHashes::UINT;
             case CoreType::FLOAT:  return TypeHashes::FLOAT;
+            case CoreType::INT64:  return TypeHashes::INT64;
+            case CoreType::UINT64: return TypeHashes::UINT64;
+            case CoreType::DOUBLE: return TypeHashes::DOUBLE;
             case CoreType::INT2:   return TypeHashes::INT2;
             case CoreType::INT3:   return TypeHashes::INT3;
             case CoreType::INT4:   return TypeHashes::INT4;
@@ -515,9 +518,21 @@ namespace SymbolTable {
             case CoreType::FLOAT2: return TypeHashes::FLOAT2;
             case CoreType::FLOAT3: return TypeHashes::FLOAT3;
             case CoreType::FLOAT4: return TypeHashes::FLOAT4;
+            case CoreType::INT64X2:  return TypeHashes::INT64X2;
+            case CoreType::INT64X3:  return TypeHashes::INT64X3;
+            case CoreType::INT64X4:  return TypeHashes::INT64X4;
+            case CoreType::UINT64X2: return TypeHashes::UINT64X2;
+            case CoreType::UINT64X3: return TypeHashes::UINT64X3;
+            case CoreType::UINT64X4: return TypeHashes::UINT64X4;
+            case CoreType::DOUBLE2:  return TypeHashes::DOUBLE2;
+            case CoreType::DOUBLE3:  return TypeHashes::DOUBLE3;
+            case CoreType::DOUBLE4:  return TypeHashes::DOUBLE4;
             case CoreType::MAT2:   return TypeHashes::MAT2;
             case CoreType::MAT3:   return TypeHashes::MAT3;
             case CoreType::MAT4:   return TypeHashes::MAT4;
+            case CoreType::DMAT2:  return TypeHashes::DMAT2;
+            case CoreType::DMAT3:  return TypeHashes::DMAT3;
+            case CoreType::DMAT4:  return TypeHashes::DMAT4;
             default:               return 0;
         }
     }
@@ -656,6 +671,9 @@ namespace SymbolTable {
         if (baseType == "int") return CoreType::INT;
         if (baseType == "uint") return CoreType::UINT;
         if (baseType == "float") return CoreType::FLOAT;
+        if (baseType == "int64") return CoreType::INT64;
+        if (baseType == "uint64") return CoreType::UINT64;
+        if (baseType == "double") return CoreType::DOUBLE;
         if (baseType == "float2") return CoreType::FLOAT2;
         if (baseType == "float3") return CoreType::FLOAT3;
         if (baseType == "float4") return CoreType::FLOAT4;
@@ -665,9 +683,21 @@ namespace SymbolTable {
         if (baseType == "uint2") return CoreType::UINT2;
         if (baseType == "uint3") return CoreType::UINT3;
         if (baseType == "uint4") return CoreType::UINT4;
+        if (baseType == "double2") return CoreType::DOUBLE2;
+        if (baseType == "double3") return CoreType::DOUBLE3;
+        if (baseType == "double4") return CoreType::DOUBLE4;
+        if (baseType == "int64x2") return CoreType::INT64X2;
+        if (baseType == "int64x3") return CoreType::INT64X3;
+        if (baseType == "int64x4") return CoreType::INT64X4;
+        if (baseType == "uint64x2") return CoreType::UINT64X2;
+        if (baseType == "uint64x3") return CoreType::UINT64X3;
+        if (baseType == "uint64x4") return CoreType::UINT64X4;
         if (baseType == "mat2" || baseType == "float2x2") return CoreType::MAT2;
         if (baseType == "mat3" || baseType == "float3x3") return CoreType::MAT3;
         if (baseType == "mat4" || baseType == "float4x4") return CoreType::MAT4;
+        if (baseType == "dmat2") return CoreType::DMAT2;
+        if (baseType == "dmat3") return CoreType::DMAT3;
+        if (baseType == "dmat4") return CoreType::DMAT4;
         if (baseType == "bool") return CoreType::BOOL;
         return CoreType::CUSTOM;  // Unknown type - treat as custom struct
     }

@@ -399,6 +399,10 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             
         case 5:
             if (memcmp(str, "float", 5) == 0) return TokenType::FLOAT;
+            if (memcmp(str, "int64", 5) == 0) return TokenType::INT64;
+            if (memcmp(str, "dmat2", 5) == 0) return TokenType::DMAT2;
+            if (memcmp(str, "dmat3", 5) == 0) return TokenType::DMAT3;
+            if (memcmp(str, "dmat4", 5) == 0) return TokenType::DMAT4;
             if (memcmp(str, "false", 5) == 0) return TokenType::FALSE;
             if (memcmp(str, "const", 5) == 0) return TokenType::CONST;
             if (memcmp(str, "uint2", 5) == 0) return TokenType::UINT2;
@@ -414,6 +418,8 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
         case 6:
             if (memcmp(str, "vertex", 6) == 0) return TokenType::VERTEX;
             if (memcmp(str, "shader", 6) == 0) return TokenType::SHADER;
+            if (memcmp(str, "double", 6) == 0) return TokenType::DOUBLE;
+            if (memcmp(str, "uint64", 6) == 0) return TokenType::UINT64;
             if (memcmp(str, "import", 6) == 0) return TokenType::IMPORT;
             if (memcmp(str, "return", 6) == 0) return TokenType::RETURN;
             if (memcmp(str, "shared", 6) == 0) return TokenType::SHARED;
@@ -432,6 +438,12 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             if (memcmp(str, "cbuffer", 7) == 0) return TokenType::CBUFFER;
             if (memcmp(str, "sampler", 7) == 0) return TokenType::SAMPLER;
             if (memcmp(str, "compute", 7) == 0) return TokenType::COMPUTE;
+            if (memcmp(str, "double2", 7) == 0) return TokenType::DOUBLE2;
+            if (memcmp(str, "double3", 7) == 0) return TokenType::DOUBLE3;
+            if (memcmp(str, "double4", 7) == 0) return TokenType::DOUBLE4;
+            if (memcmp(str, "int64x2", 7) == 0) return TokenType::INT64X2;
+            if (memcmp(str, "int64x3", 7) == 0) return TokenType::INT64X3;
+            if (memcmp(str, "int64x4", 7) == 0) return TokenType::INT64X4;
             if (memcmp(str, "outputs", 7) == 0) return TokenType::OUTPUTS;
             if (memcmp(str, "extends", 7) == 0) return TokenType::EXTENDS;
             if (memcmp(str, "foreach", 7) == 0) return TokenType::FOREACH;
@@ -441,6 +453,9 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             break;
             
         case 8:
+            if (memcmp(str, "uint64x2", 8) == 0) return TokenType::UINT64X2;
+            if (memcmp(str, "uint64x3", 8) == 0) return TokenType::UINT64X3;
+            if (memcmp(str, "uint64x4", 8) == 0) return TokenType::UINT64X4;
             if (memcmp(str, "pipeline", 8) == 0) return TokenType::PIPELINE;
             if (memcmp(str, "fragment", 8) == 0) return TokenType::FRAGMENT;
             if (memcmp(str, "readonly", 8) == 0) return TokenType::READONLY;

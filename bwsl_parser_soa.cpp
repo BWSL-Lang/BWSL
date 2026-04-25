@@ -154,6 +154,9 @@ static TypeInfo MakeTypeInfoForCoreType(CoreType coreType) {
         case CoreType::INT:    return TYPE_INFO(CoreType::INT,    1, false);
         case CoreType::UINT:   return TYPE_INFO(CoreType::UINT,   1, false);
         case CoreType::FLOAT:  return TYPE_INFO(CoreType::FLOAT,  1, false);
+        case CoreType::INT64:  return TYPE_INFO(CoreType::INT64,  1, false);
+        case CoreType::UINT64: return TYPE_INFO(CoreType::UINT64, 1, false);
+        case CoreType::DOUBLE: return TYPE_INFO(CoreType::DOUBLE, 1, false);
         case CoreType::BOOL2:  return TYPE_INFO(CoreType::BOOL2,  2, true);
         case CoreType::BOOL3:  return TYPE_INFO(CoreType::BOOL3,  3, true);
         case CoreType::BOOL4:  return TYPE_INFO(CoreType::BOOL4,  4, true);
@@ -166,9 +169,21 @@ static TypeInfo MakeTypeInfoForCoreType(CoreType coreType) {
         case CoreType::FLOAT2: return TYPE_INFO(CoreType::FLOAT2, 2, true);
         case CoreType::FLOAT3: return TYPE_INFO(CoreType::FLOAT3, 3, true);
         case CoreType::FLOAT4: return TYPE_INFO(CoreType::FLOAT4, 4, true);
+        case CoreType::INT64X2:  return TYPE_INFO(CoreType::INT64X2,  2, true);
+        case CoreType::INT64X3:  return TYPE_INFO(CoreType::INT64X3,  3, true);
+        case CoreType::INT64X4:  return TYPE_INFO(CoreType::INT64X4,  4, true);
+        case CoreType::UINT64X2: return TYPE_INFO(CoreType::UINT64X2, 2, true);
+        case CoreType::UINT64X3: return TYPE_INFO(CoreType::UINT64X3, 3, true);
+        case CoreType::UINT64X4: return TYPE_INFO(CoreType::UINT64X4, 4, true);
+        case CoreType::DOUBLE2:  return TYPE_INFO(CoreType::DOUBLE2,  2, true);
+        case CoreType::DOUBLE3:  return TYPE_INFO(CoreType::DOUBLE3,  3, true);
+        case CoreType::DOUBLE4:  return TYPE_INFO(CoreType::DOUBLE4,  4, true);
         case CoreType::MAT2:   return TYPE_INFO(CoreType::MAT2,   4, true);
         case CoreType::MAT3:   return TYPE_INFO(CoreType::MAT3,   9, true);
         case CoreType::MAT4:   return TYPE_INFO(CoreType::MAT4,   16, true);
+        case CoreType::DMAT2:  return TYPE_INFO(CoreType::DMAT2,  4, true);
+        case CoreType::DMAT3:  return TYPE_INFO(CoreType::DMAT3,  9, true);
+        case CoreType::DMAT4:  return TYPE_INFO(CoreType::DMAT4,  16, true);
         case CoreType::TEXTURE2D:      return TYPE_INFO(CoreType::TEXTURE2D,      0, false);
         case CoreType::TEXTURE3D:      return TYPE_INFO(CoreType::TEXTURE3D,      0, false);
         case CoreType::TEXTURECUBE:    return TYPE_INFO(CoreType::TEXTURECUBE,    0, false);
@@ -689,11 +704,7 @@ bool Parser::IsFunctionDeclStart() {
 }
 
 bool Parser::CheckMask(TokenMask mask) {
-    size_t type = static_cast<size_t>(stream->GetType(current));
-    if (type >= 64) {
-        return false;
-    }
-    return (mask & (1ULL << type)) != 0;
+    return TokenMasks::matches(mask, stream->GetType(current));
 }
 
 bool Parser::MatchMask(TokenMask mask) {
@@ -716,10 +727,25 @@ CoreType Parser::TokenTypeToReturnType(TokenType type) {
         case TokenType::FLOAT2: return CoreType::FLOAT2;
         case TokenType::FLOAT3: return CoreType::FLOAT3;
         case TokenType::FLOAT4: return CoreType::FLOAT4;
+        case TokenType::INT64:    return CoreType::INT64;
+        case TokenType::UINT64:   return CoreType::UINT64;
+        case TokenType::DOUBLE:   return CoreType::DOUBLE;
+        case TokenType::INT64X2:  return CoreType::INT64X2;
+        case TokenType::INT64X3:  return CoreType::INT64X3;
+        case TokenType::INT64X4:  return CoreType::INT64X4;
+        case TokenType::UINT64X2: return CoreType::UINT64X2;
+        case TokenType::UINT64X3: return CoreType::UINT64X3;
+        case TokenType::UINT64X4: return CoreType::UINT64X4;
+        case TokenType::DOUBLE2:  return CoreType::DOUBLE2;
+        case TokenType::DOUBLE3:  return CoreType::DOUBLE3;
+        case TokenType::DOUBLE4:  return CoreType::DOUBLE4;
         case TokenType::BOOL:   return CoreType::BOOL;
         case TokenType::MAT2:   return CoreType::MAT2;
         case TokenType::MAT3:   return CoreType::MAT3;
         case TokenType::MAT4:   return CoreType::MAT4;
+        case TokenType::DMAT2:   return CoreType::DMAT2;
+        case TokenType::DMAT3:   return CoreType::DMAT3;
+        case TokenType::DMAT4:   return CoreType::DMAT4;
         case TokenType::VERTEX_FUNCTION:   return CoreType::VERTEX_FUNCTION;
         case TokenType::FRAGMENT_FUNCTION: return CoreType::FRAGMENT_FUNCTION;
         case TokenType::COMPUTE_FUNCTION:  return CoreType::COMPUTE_FUNCTION;
@@ -5509,13 +5535,25 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
     // Compute array type info for symbol table
     auto GetComponentCountLocal = [](CoreType t) -> u8 {
         switch (t) {
-            case CoreType::INT: case CoreType::UINT: case CoreType::FLOAT: case CoreType::BOOL: return 1;
-            case CoreType::INT2: case CoreType::UINT2: case CoreType::FLOAT2: return 2;
-            case CoreType::INT3: case CoreType::UINT3: case CoreType::FLOAT3: return 3;
-            case CoreType::INT4: case CoreType::UINT4: case CoreType::FLOAT4: return 4;
+            case CoreType::INT: case CoreType::UINT: case CoreType::FLOAT:
+            case CoreType::INT64: case CoreType::UINT64: case CoreType::DOUBLE:
+            case CoreType::BOOL:
+                return 1;
+            case CoreType::INT2: case CoreType::UINT2: case CoreType::FLOAT2:
+            case CoreType::INT64X2: case CoreType::UINT64X2: case CoreType::DOUBLE2:
+                return 2;
+            case CoreType::INT3: case CoreType::UINT3: case CoreType::FLOAT3:
+            case CoreType::INT64X3: case CoreType::UINT64X3: case CoreType::DOUBLE3:
+                return 3;
+            case CoreType::INT4: case CoreType::UINT4: case CoreType::FLOAT4:
+            case CoreType::INT64X4: case CoreType::UINT64X4: case CoreType::DOUBLE4:
+                return 4;
             case CoreType::MAT2: return 4;
             case CoreType::MAT3: return 9;
             case CoreType::MAT4: return 16;
+            case CoreType::DMAT2: return 4;
+            case CoreType::DMAT3: return 9;
+            case CoreType::DMAT4: return 16;
             default: return 1;
         }
     };
@@ -5819,20 +5857,38 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
                 case CoreType::FLOAT3:
                 case CoreType::FLOAT4:
                     return TypeInfo{CoreType::FLOAT, 1, 0, 0, 0, 0, 0};
+                case CoreType::DOUBLE2:
+                case CoreType::DOUBLE3:
+                case CoreType::DOUBLE4:
+                    return TypeInfo{CoreType::DOUBLE, 1, 0, 0, 0, 0, 0};
                 case CoreType::INT2:
                 case CoreType::INT3:
                 case CoreType::INT4:
                     return TypeInfo{CoreType::INT, 1, 0, 0, 0, 0, 0};
+                case CoreType::INT64X2:
+                case CoreType::INT64X3:
+                case CoreType::INT64X4:
+                    return TypeInfo{CoreType::INT64, 1, 0, 0, 0, 0, 0};
                 case CoreType::UINT2:
                 case CoreType::UINT3:
                 case CoreType::UINT4:
                     return TypeInfo{CoreType::UINT, 1, 0, 0, 0, 0, 0};
+                case CoreType::UINT64X2:
+                case CoreType::UINT64X3:
+                case CoreType::UINT64X4:
+                    return TypeInfo{CoreType::UINT64, 1, 0, 0, 0, 0, 0};
                 case CoreType::MAT2:
                     return TypeInfo{CoreType::FLOAT2, 2, 0, 0, 0, 0, 0};
                 case CoreType::MAT3:
                     return TypeInfo{CoreType::FLOAT3, 3, 0, 0, 0, 0, 0};
                 case CoreType::MAT4:
                     return TypeInfo{CoreType::FLOAT4, 4, 0, 0, 0, 0, 0};
+                case CoreType::DMAT2:
+                    return TypeInfo{CoreType::DOUBLE2, 2, 0, 0, 0, 0, 0};
+                case CoreType::DMAT3:
+                    return TypeInfo{CoreType::DOUBLE3, 3, 0, 0, 0, 0, 0};
+                case CoreType::DMAT4:
+                    return TypeInfo{CoreType::DOUBLE4, 4, 0, 0, 0, 0, 0};
                 default:
                     if (arrayType.arrayDimensions > 0) {
                         TypeInfo elementType = arrayType;

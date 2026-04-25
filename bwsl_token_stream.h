@@ -131,6 +131,10 @@ public:
 
         // Five character keywords
         table[FLOAT] = 5;
+        table[INT64] = 5;
+        table[DMAT2] = 5;
+        table[DMAT3] = 5;
+        table[DMAT4] = 5;
         table[WHERE] = 5;
         table[FALSE] = 5;
         table[CONST] = 5;
@@ -145,6 +149,8 @@ public:
         // Six character keywords
         table[VERTEX] = 6;
         table[SHADER] = 6;
+        table[DOUBLE] = 6;
+        table[UINT64] = 6;
         table[IMPORT] = 6;
         table[RETURN] = 6;
         table[SHARED] = 6;
@@ -162,6 +168,12 @@ public:
         table[CBUFFER] = 7;
         table[SAMPLER] = 7;
         table[COMPUTE] = 7;
+        table[DOUBLE2] = 7;
+        table[DOUBLE3] = 7;
+        table[DOUBLE4] = 7;
+        table[INT64X2] = 7;
+        table[INT64X3] = 7;
+        table[INT64X4] = 7;
         table[EXTENDS] = 7;
         table[FOREACH] = 7;
         table[DISCARD] = 7;
@@ -170,6 +182,9 @@ public:
         table[REQUIRE] = 7;
 
         // Eight character keywords
+        table[UINT64X2] = 8;
+        table[UINT64X3] = 8;
+        table[UINT64X4] = 8;
         table[PIPELINE] = 8;
         table[FRAGMENT] = 8;
         table[READONLY] = 8;
@@ -285,6 +300,21 @@ inline const char* TokenTypeName(TokenType type) {
         case FLOAT2: return "FLOAT2";
         case FLOAT3: return "FLOAT3";
         case FLOAT4: return "FLOAT4";
+        case DOUBLE: return "DOUBLE";
+        case DOUBLE2: return "DOUBLE2";
+        case DOUBLE3: return "DOUBLE3";
+        case DOUBLE4: return "DOUBLE4";
+        case INT64: return "INT64";
+        case UINT64: return "UINT64";
+        case INT64X2: return "INT64X2";
+        case INT64X3: return "INT64X3";
+        case INT64X4: return "INT64X4";
+        case UINT64X2: return "UINT64X2";
+        case UINT64X3: return "UINT64X3";
+        case UINT64X4: return "UINT64X4";
+        case DMAT2: return "DMAT2";
+        case DMAT3: return "DMAT3";
+        case DMAT4: return "DMAT4";
         case CONST: return "CONST";
         case SHARED: return "SHARED";
         case VERTEX: return "VERTEX";

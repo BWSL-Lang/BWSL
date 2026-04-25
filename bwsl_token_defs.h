@@ -171,6 +171,25 @@ enum TokenType : uint8_t {
     ERROR_TOKEN,
     EOF_TOKEN,
     DEFAULT,
+
+    // Reserved 64-bit scalar/vector/matrix type names. These are appended
+    // after the first 64 token slots so existing operator bitmasks keep their
+    // layout.
+    DOUBLE,
+    DOUBLE2,
+    DOUBLE3,
+    DOUBLE4,
+    INT64,
+    UINT64,
+    INT64X2,
+    INT64X3,
+    INT64X4,
+    UINT64X2,
+    UINT64X3,
+    UINT64X4,
+    DMAT2,
+    DMAT3,
+    DMAT4,
     TOKEN_COUNT
 };
 

@@ -124,6 +124,23 @@ enum class CoreType : u8 {
     FRAGMENT_FUNCTION,
     COMPUTE_FUNCTION,
     PASS_BLOCK,
+
+    // Reserved 64-bit types
+    INT64,
+    UINT64,
+    DOUBLE,
+    INT64X2,
+    INT64X3,
+    INT64X4,
+    UINT64X2,
+    UINT64X3,
+    UINT64X4,
+    DOUBLE2,
+    DOUBLE3,
+    DOUBLE4,
+    DMAT2,
+    DMAT3,
+    DMAT4,
     COUNT // THIS HAS TO BE LAST, OR ELSE SHIT BREAKS!!!!!!!!
 };
 
@@ -327,6 +344,23 @@ inline bool IsArray(const TypeInfo& info) {
         TYPE_INFO(CoreType::INVALID, 0, false),  // ERROR_TOKEN
         TYPE_INFO(CoreType::INVALID, 0, false),  // EOF_TOKEN
         TYPE_INFO(CoreType::INVALID, 0, false),  // DEFAULT
+
+        // --- Reserved 64-bit types ---
+        TYPE_INFO(CoreType::DOUBLE,   1,  false),  // DOUBLE
+        TYPE_INFO(CoreType::DOUBLE2,  2,  true ),  // DOUBLE2
+        TYPE_INFO(CoreType::DOUBLE3,  3,  true ),  // DOUBLE3
+        TYPE_INFO(CoreType::DOUBLE4,  4,  true ),  // DOUBLE4
+        TYPE_INFO(CoreType::INT64,    1,  false),  // INT64
+        TYPE_INFO(CoreType::UINT64,   1,  false),  // UINT64
+        TYPE_INFO(CoreType::INT64X2,  2,  true ),  // INT64X2
+        TYPE_INFO(CoreType::INT64X3,  3,  true ),  // INT64X3
+        TYPE_INFO(CoreType::INT64X4,  4,  true ),  // INT64X4
+        TYPE_INFO(CoreType::UINT64X2, 2,  true ),  // UINT64X2
+        TYPE_INFO(CoreType::UINT64X3, 3,  true ),  // UINT64X3
+        TYPE_INFO(CoreType::UINT64X4, 4,  true ),  // UINT64X4
+        TYPE_INFO(CoreType::DMAT2,    4,  true ),  // DMAT2
+        TYPE_INFO(CoreType::DMAT3,    9,  true ),  // DMAT3
+        TYPE_INFO(CoreType::DMAT4,    16, true ),  // DMAT4
     };
 
     static_assert(
@@ -476,11 +510,82 @@ namespace TokenMasks {
 
     // Helper functions
     static constexpr bool hasToken(TokenMask mask, TokenType type) {
-        return (mask & (1ULL << static_cast<uint8_t>(type))) != 0;
+        u8 idx = static_cast<u8>(type);
+        return idx < 64 && (mask & (1ULL << idx)) != 0;
+    }
+
+    static constexpr bool isReservedScalar64Type(TokenType type) {
+        return type == TokenType::DOUBLE ||
+               type == TokenType::INT64 ||
+               type == TokenType::UINT64;
+    }
+
+    static constexpr bool isReservedVector64Type(TokenType type) {
+        return type == TokenType::DOUBLE2 ||
+               type == TokenType::DOUBLE3 ||
+               type == TokenType::DOUBLE4 ||
+               type == TokenType::INT64X2 ||
+               type == TokenType::INT64X3 ||
+               type == TokenType::INT64X4 ||
+               type == TokenType::UINT64X2 ||
+               type == TokenType::UINT64X3 ||
+               type == TokenType::UINT64X4;
+    }
+
+    static constexpr bool isReservedMatrix64Type(TokenType type) {
+        return type == TokenType::DMAT2 ||
+               type == TokenType::DMAT3 ||
+               type == TokenType::DMAT4;
+    }
+
+    static constexpr bool isReservedInt64Type(TokenType type) {
+        return type == TokenType::INT64 ||
+               type == TokenType::INT64X2 ||
+               type == TokenType::INT64X3 ||
+               type == TokenType::INT64X4;
+    }
+
+    static constexpr bool isReservedUint64Type(TokenType type) {
+        return type == TokenType::UINT64 ||
+               type == TokenType::UINT64X2 ||
+               type == TokenType::UINT64X3 ||
+               type == TokenType::UINT64X4;
+    }
+
+    static constexpr bool isReservedFloat64Type(TokenType type) {
+        return type == TokenType::DOUBLE ||
+               type == TokenType::DOUBLE2 ||
+               type == TokenType::DOUBLE3 ||
+               type == TokenType::DOUBLE4 ||
+               type == TokenType::DMAT2 ||
+               type == TokenType::DMAT3 ||
+               type == TokenType::DMAT4;
+    }
+
+    static constexpr bool isReserved64Type(TokenType type) {
+        return isReservedScalar64Type(type) ||
+               isReservedVector64Type(type) ||
+               isReservedMatrix64Type(type);
+    }
+
+    static constexpr bool matches(TokenMask tokenMask, TokenType type) {
+        if (hasToken(tokenMask, type)) return true;
+        if ((tokenMask & CORE_TYPES) == CORE_TYPES && isReserved64Type(type)) return true;
+        if ((tokenMask & SCALAR_TYPES) == SCALAR_TYPES && isReservedScalar64Type(type)) return true;
+        if ((tokenMask & VECTOR_TYPES) == VECTOR_TYPES && isReservedVector64Type(type)) return true;
+        if ((tokenMask & MATRIX_TYPES) == MATRIX_TYPES && isReservedMatrix64Type(type)) return true;
+        if ((tokenMask & INT_TYPES) == INT_TYPES && isReservedInt64Type(type)) return true;
+        if ((tokenMask & UINT_TYPES) == UINT_TYPES && isReservedUint64Type(type)) return true;
+        if ((tokenMask & BUFFER_TYPES) == BUFFER_TYPES && isReservedFloat64Type(type)) return true;
+        if ((tokenMask & INDEXABLE_TYPES) == INDEXABLE_TYPES &&
+            (isReservedVector64Type(type) || isReservedMatrix64Type(type))) {
+            return true;
+        }
+        return false;
     }
     
     static constexpr bool isType(TokenType type) {
-        return hasToken(CORE_TYPES, type);
+        return matches(CORE_TYPES, type);
     }
     
     static constexpr bool isOperator(TokenType type) {
@@ -488,15 +593,15 @@ namespace TokenMasks {
     }
     
     static constexpr bool isVectorType(TokenType type) {
-        return hasToken(VECTOR_TYPES, type);
+        return matches(VECTOR_TYPES, type);
     }
     
     static constexpr bool isMatrixType(TokenType type) {
-        return hasToken(MATRIX_TYPES, type);
+        return matches(MATRIX_TYPES, type);
     }
     
     static constexpr bool isScalarType(TokenType type) {
-        return hasToken(SCALAR_TYPES, type);
+        return matches(SCALAR_TYPES, type);
     }
 
     static constexpr bool isGenericType(TokenType type) {
@@ -507,66 +612,96 @@ namespace TokenMasks {
 
         static constexpr TypeMask CORE_TYPES = 
         mask(CoreType::FLOAT) | mask(CoreType::FLOAT2) | mask(CoreType::FLOAT3) | mask(CoreType::FLOAT4) |
+        mask(CoreType::DOUBLE) | mask(CoreType::DOUBLE2) | mask(CoreType::DOUBLE3) | mask(CoreType::DOUBLE4) |
         mask(CoreType::INT)   | mask(CoreType::INT2)   | mask(CoreType::INT3)   | mask(CoreType::INT4)   |
+        mask(CoreType::INT64) | mask(CoreType::INT64X2) | mask(CoreType::INT64X3) | mask(CoreType::INT64X4) |
         mask(CoreType::UINT)  | mask(CoreType::UINT2)  | mask(CoreType::UINT3)  | mask(CoreType::UINT4)  |
-        mask(CoreType::MAT2)  | mask(CoreType::MAT3)   | mask(CoreType::MAT4)   | mask(CoreType::BOOL) 
+        mask(CoreType::UINT64) | mask(CoreType::UINT64X2) | mask(CoreType::UINT64X3) | mask(CoreType::UINT64X4) |
+        mask(CoreType::MAT2)  | mask(CoreType::MAT3)   | mask(CoreType::MAT4)   |
+        mask(CoreType::DMAT2) | mask(CoreType::DMAT3)  | mask(CoreType::DMAT4)  | mask(CoreType::BOOL)
         | mask(CoreType::ENUM);
 
         static constexpr TypeMask ALL = 
         mask(CoreType::FLOAT) | mask(CoreType::FLOAT2) | mask(CoreType::FLOAT3) | mask(CoreType::FLOAT4) |
+        mask(CoreType::DOUBLE) | mask(CoreType::DOUBLE2) | mask(CoreType::DOUBLE3) | mask(CoreType::DOUBLE4) |
         mask(CoreType::INT)   | mask(CoreType::INT2)   | mask(CoreType::INT3)   | mask(CoreType::INT4)   |
+        mask(CoreType::INT64) | mask(CoreType::INT64X2) | mask(CoreType::INT64X3) | mask(CoreType::INT64X4) |
         mask(CoreType::UINT)  | mask(CoreType::UINT2)  | mask(CoreType::UINT3)  | mask(CoreType::UINT4)  |
-        mask(CoreType::MAT2)  | mask(CoreType::MAT3)   | mask(CoreType::MAT4)   | mask(CoreType::BOOL)
+        mask(CoreType::UINT64) | mask(CoreType::UINT64X2) | mask(CoreType::UINT64X3) | mask(CoreType::UINT64X4) |
+        mask(CoreType::MAT2)  | mask(CoreType::MAT3)   | mask(CoreType::MAT4)   |
+        mask(CoreType::DMAT2) | mask(CoreType::DMAT3)  | mask(CoreType::DMAT4)  | mask(CoreType::BOOL)
         | mask(CoreType::ENUM) | mask(CoreType::GENERIC_T) | mask(CoreType::GENERIC_U) | mask(CoreType::GENERIC_V) | mask(CoreType::CONSTRAINT);
 
         static constexpr TypeMask BUFFER_TYPES = 
         mask(CoreType::FLOAT) | mask(CoreType::FLOAT2) | mask(CoreType::FLOAT3) | mask(CoreType::FLOAT4) |
-        mask(CoreType::MAT2)  | mask(CoreType::MAT3)   | mask(CoreType::MAT4)   | mask(CoreType::BOOL);
+        mask(CoreType::DOUBLE) | mask(CoreType::DOUBLE2) | mask(CoreType::DOUBLE3) | mask(CoreType::DOUBLE4) |
+        mask(CoreType::MAT2)  | mask(CoreType::MAT3)   | mask(CoreType::MAT4)   |
+        mask(CoreType::DMAT2) | mask(CoreType::DMAT3)  | mask(CoreType::DMAT4)  | mask(CoreType::BOOL);
 
         static constexpr TypeMask INDEXABLE_TYPES = 
         mask(CoreType::FLOAT2) | mask(CoreType::FLOAT3) | mask(CoreType::FLOAT4) |
+        mask(CoreType::DOUBLE2) | mask(CoreType::DOUBLE3) | mask(CoreType::DOUBLE4) |
         mask(CoreType::INT2)   | mask(CoreType::INT3)   | mask(CoreType::INT4)   |
+        mask(CoreType::INT64X2) | mask(CoreType::INT64X3) | mask(CoreType::INT64X4) |
         mask(CoreType::UINT2)  | mask(CoreType::UINT3)  | mask(CoreType::UINT4)  |
-        mask(CoreType::MAT2)   | mask(CoreType::MAT3)   | mask(CoreType::MAT4);
+        mask(CoreType::UINT64X2) | mask(CoreType::UINT64X3) | mask(CoreType::UINT64X4) |
+        mask(CoreType::MAT2)   | mask(CoreType::MAT3)   | mask(CoreType::MAT4) |
+        mask(CoreType::DMAT2)  | mask(CoreType::DMAT3)  | mask(CoreType::DMAT4);
 
         
         static constexpr TypeMask NUMERIC_TYPES = 
         mask(CoreType::FLOAT2) | mask(CoreType::FLOAT3) | mask(CoreType::FLOAT4) |
+        mask(CoreType::DOUBLE2) | mask(CoreType::DOUBLE3) | mask(CoreType::DOUBLE4) |
         mask(CoreType::INT2)   | mask(CoreType::INT3)   | mask(CoreType::INT4)   |
+        mask(CoreType::INT64X2) | mask(CoreType::INT64X3) | mask(CoreType::INT64X4) |
         mask(CoreType::UINT2)  | mask(CoreType::UINT3)  | mask(CoreType::UINT4)  |
-        mask(CoreType::MAT2)   | mask(CoreType::MAT3)   | mask(CoreType::MAT4);
+        mask(CoreType::UINT64X2) | mask(CoreType::UINT64X3) | mask(CoreType::UINT64X4) |
+        mask(CoreType::MAT2)   | mask(CoreType::MAT3)   | mask(CoreType::MAT4) |
+        mask(CoreType::DMAT2)  | mask(CoreType::DMAT3)  | mask(CoreType::DMAT4);
 
         static constexpr TypeMask SCALAR_TYPES = 
-        mask(CoreType::FLOAT)  | mask(CoreType::INT) | mask(CoreType::UINT) | mask(CoreType::BOOL);
+        mask(CoreType::FLOAT)  | mask(CoreType::DOUBLE) | mask(CoreType::INT) |
+        mask(CoreType::INT64) | mask(CoreType::UINT) | mask(CoreType::UINT64) | mask(CoreType::BOOL);
     
         static constexpr TypeMask VECTOR_TYPES = 
         mask(CoreType::FLOAT2) | mask(CoreType::FLOAT3) | mask(CoreType::FLOAT4) |
+        mask(CoreType::DOUBLE2) | mask(CoreType::DOUBLE3) | mask(CoreType::DOUBLE4) |
         mask(CoreType::INT2)   | mask(CoreType::INT3)   | mask(CoreType::INT4) |
-        mask(CoreType::UINT2)  | mask(CoreType::UINT3)  | mask(CoreType::UINT4);
+        mask(CoreType::INT64X2) | mask(CoreType::INT64X3) | mask(CoreType::INT64X4) |
+        mask(CoreType::UINT2)  | mask(CoreType::UINT3)  | mask(CoreType::UINT4) |
+        mask(CoreType::UINT64X2) | mask(CoreType::UINT64X3) | mask(CoreType::UINT64X4);
     
         static constexpr TypeMask MATRIX_TYPES = 
-        mask(CoreType::MAT2) | mask(CoreType::MAT3) | mask(CoreType::MAT4);
+        mask(CoreType::MAT2) | mask(CoreType::MAT3) | mask(CoreType::MAT4) |
+        mask(CoreType::DMAT2) | mask(CoreType::DMAT3) | mask(CoreType::DMAT4);
     
         static constexpr TypeMask FLOAT_TYPES = 
-        mask(CoreType::FLOAT) | mask(CoreType::FLOAT2) | mask(CoreType::FLOAT3) | mask(CoreType::FLOAT4);
+        mask(CoreType::FLOAT) | mask(CoreType::FLOAT2) | mask(CoreType::FLOAT3) | mask(CoreType::FLOAT4) |
+        mask(CoreType::DOUBLE) | mask(CoreType::DOUBLE2) | mask(CoreType::DOUBLE3) | mask(CoreType::DOUBLE4) |
+        mask(CoreType::DMAT2) | mask(CoreType::DMAT3) | mask(CoreType::DMAT4);
 
         static constexpr TypeMask INT_TYPES = 
-        mask(CoreType::INT) | mask(CoreType::INT2) | mask(CoreType::INT3) | mask(CoreType::INT4);
+        mask(CoreType::INT) | mask(CoreType::INT2) | mask(CoreType::INT3) | mask(CoreType::INT4) |
+        mask(CoreType::INT64) | mask(CoreType::INT64X2) | mask(CoreType::INT64X3) | mask(CoreType::INT64X4);
 
         static constexpr TypeMask UINT_TYPES = 
-        mask(CoreType::UINT) | mask(CoreType::UINT2) | mask(CoreType::UINT3) | mask(CoreType::UINT4);
+        mask(CoreType::UINT) | mask(CoreType::UINT2) | mask(CoreType::UINT3) | mask(CoreType::UINT4) |
+        mask(CoreType::UINT64) | mask(CoreType::UINT64X2) | mask(CoreType::UINT64X3) | mask(CoreType::UINT64X4);
 
         static constexpr TypeMask FLOAT_VECTORS = 
         mask(CoreType::FLOAT2) | 
-        mask(CoreType::FLOAT3) | mask(CoreType::FLOAT4);
+        mask(CoreType::FLOAT3) | mask(CoreType::FLOAT4) |
+        mask(CoreType::DOUBLE2) | mask(CoreType::DOUBLE3) | mask(CoreType::DOUBLE4);
     
         static constexpr TypeMask INT_VECTORS = 
         mask(CoreType::INT2) | 
-        mask(CoreType::INT3) | mask(CoreType::INT4);
+        mask(CoreType::INT3) | mask(CoreType::INT4) |
+        mask(CoreType::INT64X2) | mask(CoreType::INT64X3) | mask(CoreType::INT64X4);
     
         static constexpr TypeMask UINT_VECTORS =
         mask(CoreType::UINT2) |
-        mask(CoreType::UINT3) | mask(CoreType::UINT4);
+        mask(CoreType::UINT3) | mask(CoreType::UINT4) |
+        mask(CoreType::UINT64X2) | mask(CoreType::UINT64X3) | mask(CoreType::UINT64X4);
 
         static constexpr TypeMask BOOL_VECTORS =
         mask(CoreType::BOOL2) | mask(CoreType::BOOL3) | mask(CoreType::BOOL4);
@@ -600,6 +735,9 @@ namespace TypeHashes {
     constexpr u32 INT         = Utils::HashStr("int");
     constexpr u32 UINT        = Utils::HashStr("uint");
     constexpr u32 FLOAT       = Utils::HashStr("float");
+    constexpr u32 INT64       = Utils::HashStr("int64");
+    constexpr u32 UINT64      = Utils::HashStr("uint64");
+    constexpr u32 DOUBLE      = Utils::HashStr("double");
     constexpr u32 INT2        = Utils::HashStr("int2");
     constexpr u32 INT3        = Utils::HashStr("int3");
     constexpr u32 INT4        = Utils::HashStr("int4");
@@ -609,9 +747,21 @@ namespace TypeHashes {
     constexpr u32 FLOAT2      = Utils::HashStr("float2");
     constexpr u32 FLOAT3      = Utils::HashStr("float3");
     constexpr u32 FLOAT4      = Utils::HashStr("float4");
+    constexpr u32 INT64X2     = Utils::HashStr("int64x2");
+    constexpr u32 INT64X3     = Utils::HashStr("int64x3");
+    constexpr u32 INT64X4     = Utils::HashStr("int64x4");
+    constexpr u32 UINT64X2    = Utils::HashStr("uint64x2");
+    constexpr u32 UINT64X3    = Utils::HashStr("uint64x3");
+    constexpr u32 UINT64X4    = Utils::HashStr("uint64x4");
+    constexpr u32 DOUBLE2     = Utils::HashStr("double2");
+    constexpr u32 DOUBLE3     = Utils::HashStr("double3");
+    constexpr u32 DOUBLE4     = Utils::HashStr("double4");
     constexpr u32 MAT2        = Utils::HashStr("mat2");
     constexpr u32 MAT3        = Utils::HashStr("mat3");
     constexpr u32 MAT4        = Utils::HashStr("mat4");
+    constexpr u32 DMAT2       = Utils::HashStr("dmat2");
+    constexpr u32 DMAT3       = Utils::HashStr("dmat3");
+    constexpr u32 DMAT4       = Utils::HashStr("dmat4");
     // HLSL-style aliases for matrix types: `floatNxN` resolves to MAT{N}.
     // Without these, `float3x3(...)` as a constructor call lowers as a user
     // function call (OP_CALL/OpUndef), even though `float3x3 x = ...;`
@@ -649,6 +799,9 @@ namespace TypeHashes {
         {INT,    TYPE_INFO(CoreType::INT,    1,  false)},
         {UINT,   TYPE_INFO(CoreType::UINT,   1,  false)},
         {FLOAT,  TYPE_INFO(CoreType::FLOAT,  1,  false)},
+        {INT64,  TYPE_INFO(CoreType::INT64,  1,  false)},
+        {UINT64, TYPE_INFO(CoreType::UINT64, 1,  false)},
+        {DOUBLE, TYPE_INFO(CoreType::DOUBLE, 1,  false)},
         {INT2,   TYPE_INFO(CoreType::INT2,   2,  true)},
         {INT3,   TYPE_INFO(CoreType::INT3,   3,  true)},
         {INT4,   TYPE_INFO(CoreType::INT4,   4,  true)},
@@ -658,9 +811,21 @@ namespace TypeHashes {
         {FLOAT2, TYPE_INFO(CoreType::FLOAT2, 2,  true)},
         {FLOAT3, TYPE_INFO(CoreType::FLOAT3, 3,  true)},
         {FLOAT4, TYPE_INFO(CoreType::FLOAT4, 4,  true)},
+        {INT64X2,  TYPE_INFO(CoreType::INT64X2,  2, true)},
+        {INT64X3,  TYPE_INFO(CoreType::INT64X3,  3, true)},
+        {INT64X4,  TYPE_INFO(CoreType::INT64X4,  4, true)},
+        {UINT64X2, TYPE_INFO(CoreType::UINT64X2, 2, true)},
+        {UINT64X3, TYPE_INFO(CoreType::UINT64X3, 3, true)},
+        {UINT64X4, TYPE_INFO(CoreType::UINT64X4, 4, true)},
+        {DOUBLE2, TYPE_INFO(CoreType::DOUBLE2, 2, true)},
+        {DOUBLE3, TYPE_INFO(CoreType::DOUBLE3, 3, true)},
+        {DOUBLE4, TYPE_INFO(CoreType::DOUBLE4, 4, true)},
         {MAT2,   TYPE_INFO(CoreType::MAT2,   4,  true)},
         {MAT3,   TYPE_INFO(CoreType::MAT3,   9,  true)},
         {MAT4,   TYPE_INFO(CoreType::MAT4,   16, true)},
+        {DMAT2,  TYPE_INFO(CoreType::DMAT2,  4,  true)},
+        {DMAT3,  TYPE_INFO(CoreType::DMAT3,  9,  true)},
+        {DMAT4,  TYPE_INFO(CoreType::DMAT4,  16, true)},
         {FLOAT2X2, TYPE_INFO(CoreType::MAT2, 4,  true)},
         {FLOAT3X3, TYPE_INFO(CoreType::MAT3, 9,  true)},
         {FLOAT4X4, TYPE_INFO(CoreType::MAT4, 16, true)},
