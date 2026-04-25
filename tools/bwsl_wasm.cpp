@@ -381,9 +381,6 @@ static bool CanUseDirectGLESFallback(const IRProgram& program, ShaderStage stage
     for (u32 i = 0; i < program.instructionCount; i++) {
         IR::OpCode op = static_cast<IR::OpCode>(program.opcodes[i]);
         switch (op) {
-            case IR::OP_TEX_LEVELS:
-            case IR::OP_TEX_GATHER_OFFSET:
-                return false;
             case IR::OP_LOAD_BUFFER:
             case IR::OP_STORE_BUFFER:
             case IR::OP_LOAD_SHARED:

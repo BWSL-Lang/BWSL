@@ -516,7 +516,64 @@ CrossCompileResult ParallelCrossCompile(
 
     return result;
 }
+
+static bool IsFailedCrossCompileSource(const std::string& source) {
+    return source.empty() || source.find("error") != std::string::npos;
+}
+
+static bool IsKnownGLESFallbackError(const std::string& source) {
+    return source.find("direct GLES") != std::string::npos ||
+           source.find("GLSL.std.450 ModfStruct") != std::string::npos ||
+           source.find("GLSL.std.450 Ldexp") != std::string::npos ||
+           source.find("textureQueryLevels") != std::string::npos ||
+           source.find("textureGatherOffset") != std::string::npos ||
+           source.find("fine/coarse derivative") != std::string::npos;
+}
+
+static std::string SelectGLESSource(const CrossCompileResult& crossResult,
+                                    const std::string& directGlesSource,
+                                    double directGlesMs,
+                                    bool useDirectGles,
+                                    double* selectedMs) {
+    if (useDirectGles) {
+        if (selectedMs) *selectedMs = directGlesMs;
+        return directGlesSource;
+    }
+
+    if (IsFailedCrossCompileSource(crossResult.glslEs) &&
+        IsKnownGLESFallbackError(crossResult.glslEs) &&
+        !directGlesSource.empty() &&
+        directGlesSource.find("error") == std::string::npos) {
+        if (selectedMs) *selectedMs = directGlesMs;
+        return directGlesSource;
+    }
+
+    if (selectedMs) *selectedMs = crossResult.glslEsMs;
+    return crossResult.glslEs;
+}
 #endif
+
+static bool ProgramNeedsDirectGLESFallback(const IRProgram& program) {
+    for (u32 i = 0; i < program.instructionCount; i++) {
+        switch (static_cast<IR::OpCode>(program.opcodes[i])) {
+            case IR::OP_LDEXP:
+            case IR::OP_MODF_STRUCT:
+            case IR::OP_TEX_LEVELS:
+            case IR::OP_TEX_GATHER:
+            case IR::OP_TEX_GATHER_OFFSET:
+            case IR::OP_DDX_FINE:
+            case IR::OP_DDY_FINE:
+            case IR::OP_DDX_COARSE:
+            case IR::OP_DDY_COARSE:
+            case IR::OP_FWIDTH_FINE:
+            case IR::OP_FWIDTH_COARSE:
+                return true;
+            default:
+                break;
+        }
+    }
+    return false;
+}
 
 // ============= IR Dump =============
 
@@ -1348,6 +1405,7 @@ CompileResult CompileShaderStage(
     PassVaryingContext* varyingContext = nullptr,  // Shared context for vertex->fragment varyings
     bool captureIr = false,  // Capture IR dump for -internals output
     bool useDirectGles = false,  // Generate GLES directly from IR (bypass SPIRV-Cross)
+    bool allowDirectGlesFallback = false,  // Precompute direct GLES for known SPIRV-Cross ES gaps
     const RenderConfig* renderConfig = nullptr  // For GLES backend
 ) {
     using Clock = std::chrono::high_resolution_clock;
@@ -1488,8 +1546,11 @@ CompileResult CompileShaderStage(
 
     result.explicitSamplerUses = CollectExplicitSamplerUses(lowering.program, stage);
 
+    const bool emitDirectGles =
+        useDirectGles || (allowDirectGlesFallback && ProgramNeedsDirectGLESFallback(lowering.program));
+
     // Direct GLES output (bypasses SPIRV-Cross)
-    if (useDirectGles) {
+    if (emitDirectGles) {
         auto glesStart = Clock::now();
 
         // Run IR analysis (needed for attribute/output types)
@@ -1906,7 +1967,7 @@ int main(int argc, char* argv[]) {
                                                        ShaderStage::Vertex, config.verbose, config.dumpIr, config.debugNames,
                                                        true, config.outputGlslEs, specializedPipelineRef,
                                                        pipeline.passes[passIdx], &passVaryings, config.outputInternals,
-                                                       config.useDirectGles, &config.renderConfig);
+                                                       config.useDirectGles, config.outputGlslEs, &config.renderConfig);
 
             if (!result.success) {
                 fprintf(stderr, "    Error: %s\n", result.error.c_str());
@@ -1997,13 +2058,11 @@ int main(int argc, char* argv[]) {
 
                         // Handle GLSL ES output
                         if (config.outputGlslEs) {
-                            // Use direct GLES output if available (bypasses SPIRV-Cross)
-                            std::string glesSource = config.useDirectGles
-                                ? result.directGlesSource
-                                : crossResult.glslEs;
-                            double glesMs = config.useDirectGles
-                                ? result.timing.glslEsCrossMs
-                                : crossResult.glslEsMs;
+                            double glesMs = 0.0;
+                            std::string glesSource = SelectGLESSource(
+                                crossResult, result.directGlesSource,
+                                result.timing.glslEsCrossMs,
+                                config.useDirectGles, &glesMs);
 
                             shaderTime.glslEsCrossMs = glesMs;
                             if (!glesSource.empty() && glesSource.find("error") == std::string::npos) {
@@ -2114,7 +2173,7 @@ int main(int argc, char* argv[]) {
                                                        ShaderStage::Fragment, config.verbose, config.dumpIr, config.debugNames,
                                                        true, false, specializedPipelineRef,
                                                        pipeline.passes[passIdx], &passVaryings, config.outputInternals,
-                                                       config.useDirectGles, &config.renderConfig);  // Use same varying context populated by vertex shader
+                                                       config.useDirectGles, config.outputGlslEs, &config.renderConfig);  // Use same varying context populated by vertex shader
 
             if (!result.success) {
                 fprintf(stderr, "    Error: %s\n", result.error.c_str());
@@ -2183,13 +2242,11 @@ int main(int argc, char* argv[]) {
                             } else fprintf(stderr, "    Warning: GLSL cross-compilation failed\n");
                         }
                         if (config.outputGlslEs) {
-                            // Use direct GLES output if available (bypasses SPIRV-Cross)
-                            std::string glesSource = config.useDirectGles
-                                ? result.directGlesSource
-                                : crossResult.glslEs;
-                            double glesMs = config.useDirectGles
-                                ? result.timing.glslEsCrossMs
-                                : crossResult.glslEsMs;
+                            double glesMs = 0.0;
+                            std::string glesSource = SelectGLESSource(
+                                crossResult, result.directGlesSource,
+                                result.timing.glslEsCrossMs,
+                                config.useDirectGles, &glesMs);
 
                             shaderTime.glslEsCrossMs = glesMs;
                             if (!glesSource.empty() && glesSource.find("error") == std::string::npos) {
@@ -2293,7 +2350,7 @@ int main(int argc, char* argv[]) {
                                                        ShaderStage::Compute, config.verbose, config.dumpIr, config.debugNames,
                                                        true, false, specializedPipelineRef,
                                                        pipeline.passes[passIdx], nullptr, config.outputInternals,
-                                                       config.useDirectGles, &config.renderConfig);
+                                                       config.useDirectGles, config.outputGlslEs, &config.renderConfig);
 
             if (!result.success) {
                 fprintf(stderr, "    Error: %s\n", result.error.c_str());
@@ -2362,13 +2419,11 @@ int main(int argc, char* argv[]) {
                             } else fprintf(stderr, "    Warning: GLSL cross-compilation failed\n");
                         }
                         if (config.outputGlslEs) {
-                            // Use direct GLES output if available (bypasses SPIRV-Cross)
-                            std::string glesSource = config.useDirectGles
-                                ? result.directGlesSource
-                                : crossResult.glslEs;
-                            double glesMs = config.useDirectGles
-                                ? result.timing.glslEsCrossMs
-                                : crossResult.glslEsMs;
+                            double glesMs = 0.0;
+                            std::string glesSource = SelectGLESSource(
+                                crossResult, result.directGlesSource,
+                                result.timing.glslEsCrossMs,
+                                config.useDirectGles, &glesMs);
                             shaderTime.glslEsCrossMs = glesMs;
                             if (!glesSource.empty() && glesSource.find("error") == std::string::npos) {
                                 std::string glslEsPath = outBase + ".gles";

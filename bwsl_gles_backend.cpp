@@ -127,10 +127,13 @@ void GLESBuilder::EmitHeader() {
     EmitStructDeclarations();
 
     bool needsFrexp = false;
+    bool needsGatherPolyfill = false;
     for (u32 i = 0; i < ir->instructionCount; i++) {
         if (ir->opcodes[i] == IR::OP_FREXP_STRUCT) {
             needsFrexp = true;
-            break;
+        } else if (ir->opcodes[i] == IR::OP_TEX_GATHER ||
+                   ir->opcodes[i] == IR::OP_TEX_GATHER_OFFSET) {
+            needsGatherPolyfill = true;
         }
     }
     if (needsFrexp) {
@@ -138,6 +141,28 @@ void GLESBuilder::EmitHeader() {
         out.Lit("    int e = (x == 0.0) ? 0 : (int(floor(log2(abs(x)))) + 1);\n");
         out.Lit("    float m = (x == 0.0) ? 0.0 : (x * exp2(float(-e)));\n");
         out.Lit("    return BwslFrexpResult(m, e);\n");
+        out.Lit("}\n\n");
+    }
+    if (needsGatherPolyfill) {
+        out.Lit("float bwsl_gather_component(vec4 value, int component) {\n");
+        out.Lit("    if (component == 1) return value.y;\n");
+        out.Lit("    if (component == 2) return value.z;\n");
+        out.Lit("    if (component == 3) return value.w;\n");
+        out.Lit("    return value.x;\n");
+        out.Lit("}\n\n");
+        out.Lit("vec4 bwsl_texture_gather_offset(sampler2D tex, vec2 uv, int component, ivec2 offset) {\n");
+        out.Lit("    vec2 size = vec2(textureSize(tex, 0));\n");
+        out.Lit("    vec2 invSize = 1.0 / size;\n");
+        out.Lit("    ivec2 base = ivec2(floor(uv * size - vec2(0.5))) + offset;\n");
+        out.Lit("    vec2 p00 = (vec2(base) + vec2(0.5)) * invSize;\n");
+        out.Lit("    vec4 s00 = texture(tex, p00);\n");
+        out.Lit("    vec4 s10 = texture(tex, p00 + vec2(invSize.x, 0.0));\n");
+        out.Lit("    vec4 s01 = texture(tex, p00 + vec2(0.0, invSize.y));\n");
+        out.Lit("    vec4 s11 = texture(tex, p00 + invSize);\n");
+        out.Lit("    return vec4(bwsl_gather_component(s00, component), bwsl_gather_component(s10, component), bwsl_gather_component(s11, component), bwsl_gather_component(s01, component));\n");
+        out.Lit("}\n\n");
+        out.Lit("vec4 bwsl_texture_gather(sampler2D tex, vec2 uv, int component) {\n");
+        out.Lit("    return bwsl_texture_gather_offset(tex, uv, component, ivec2(0));\n");
         out.Lit("}\n\n");
     }
 }
@@ -188,6 +213,15 @@ void GLESBuilder::EmitRegisterType(u16 reg) {
         return;
     }
     EmitType(static_cast<u16>(regType));
+}
+
+void GLESBuilder::EmitTextureLevelsUniformName(u16 texReg) {
+    out.Lit("bwsl_texture_levels_");
+    if ((texReg & 0xF000) == 0x2000) {
+        out.Uint(texReg & 0x0FFF);
+    } else {
+        out.Lit("dynamic");
+    }
 }
 
 void GLESBuilder::EmitStructDeclarations() {
@@ -357,12 +391,18 @@ void GLESBuilder::EmitOutputs() {
 
 void GLESBuilder::EmitUniforms() {
     bool usedTextures[16] = {};
+    bool usedTextureLevels[16] = {};
     for (u32 i = 0; i < ir->instructionCount; i++) {
         if (!IR::IsTextureOp(static_cast<IR::OpCode>(ir->opcodes[i]))) continue;
         u16 texReg = ir->GetOperand(i, 0);
         if ((texReg & 0xF000) != 0x2000) continue;
         u16 texSlot = texReg & 0x0FFF;
-        if (texSlot < 16) usedTextures[texSlot] = true;
+        if (texSlot < 16) {
+            usedTextures[texSlot] = true;
+            if (ir->opcodes[i] == IR::OP_TEX_LEVELS) {
+                usedTextureLevels[texSlot] = true;
+            }
+        }
     }
 
     bool emittedTextures[16] = {};
@@ -425,6 +465,11 @@ void GLESBuilder::EmitUniforms() {
             out.Lit(" u_");
             out.Str(tex.name.c_str());
             out.Lit(";\n");
+            if (texSlot < 16 && usedTextureLevels[texSlot]) {
+                out.Lit("uniform int ");
+                EmitTextureLevelsUniformName(static_cast<u16>(0x2000 | texSlot));
+                out.Lit(";\n");
+            }
             if (texSlot < 16) emittedTextures[texSlot] = true;
             texSlot++;
         }
@@ -450,6 +495,11 @@ void GLESBuilder::EmitUniforms() {
         out.Lit("uniform sampler2D sampler");
         out.Uint(i);
         out.Lit(";\n");
+        if (usedTextureLevels[i]) {
+            out.Lit("uniform int ");
+            EmitTextureLevelsUniformName(static_cast<u16>(0x2000 | i));
+            out.Lit(";\n");
+        }
         emittedFallbackTexture = true;
     }
     if (emittedFallbackTexture) {
@@ -1651,14 +1701,14 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         case IR::OP_TEX_LEVELS:
             EmitRegWithDecl(dest);
-            out.Lit(" = textureQueryLevels(");
-            EmitExpr(Op(instIdx, 0));  // sampler
-            out.Lit(");");
+            out.Lit(" = max(");
+            EmitTextureLevelsUniformName(Op(instIdx, 0));
+            out.Lit(", 1);");
             return;
 
         case IR::OP_TEX_GATHER:
             EmitRegWithDecl(dest);
-            out.Lit(" = textureGather(");
+            out.Lit(" = bwsl_texture_gather(");
             EmitExpr(Op(instIdx, 0));  // sampler
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));  // coord
@@ -1669,14 +1719,14 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         case IR::OP_TEX_GATHER_OFFSET:
             EmitRegWithDecl(dest);
-            out.Lit(" = textureGatherOffset(");
+            out.Lit(" = bwsl_texture_gather_offset(");
             EmitExpr(Op(instIdx, 0));
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));
             out.Lit(", ");
-            EmitExpr(Op(instIdx, 3));
-            out.Lit(", ");
             EmitExpr(Op(instIdx, 2));
+            out.Lit(", ");
+            EmitExpr(Op(instIdx, 3));
             out.Lit(");");
             return;
 
@@ -2717,13 +2767,13 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
             out.Lit("textureSize("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
             return;
         case IR::OP_TEX_LEVELS:
-            out.Lit("textureQueryLevels("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+            out.Lit("max("); EmitTextureLevelsUniformName(Op(instIdx, 0)); out.Lit(", 1)");
             return;
         case IR::OP_TEX_GATHER:
-            out.Lit("textureGather("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
+            out.Lit("bwsl_texture_gather("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
             return;
         case IR::OP_TEX_GATHER_OFFSET:
-            out.Lit("textureGatherOffset("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 3)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
+            out.Lit("bwsl_texture_gather_offset("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Lit(", "); EmitExpr(Op(instIdx, 3)); out.Chr(')');
             return;
         case IR::OP_LOAD_TEX_HANDLE:
             out.Lit("u_");
