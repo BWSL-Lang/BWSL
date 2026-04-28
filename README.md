@@ -212,19 +212,19 @@ Current examples for these features live in `tests/`, especially:
 - In `attributes { ... }`, the first declared attribute must be `position`.
 - Module files are regular `.bwsl` files that begin with `module` instead of `pipeline`.
 - Angle-bracket generic parameter syntax and `where` clauses are not part of the current supported surface. Constraint-based generics are the active form.
-- `eval { ... }` currently expands at parse time into an ordinary block. It supports compile-time locals and compile-time statement expansion, but runtime declarations inside an `eval` block should not currently reuse a visible compile-time name.
+- `eval { ... }` is expanded by a post-parse comptime pass before IR lowering. It supports compile-time locals, compile-time control flow, statement emission, and hygienic runtime shadowing of visible comptime names.
 
 ## Planned Changes
 
-BWSL's compile-time features are moving toward a more explicit `comptime` model rather than staying as parser-driven conveniences.
+BWSL's compile-time features now use a dedicated comptime pass for `eval`
+execution and expansion. Longer-term work is still moving toward richer
+Zig-like comptime data and specialization.
 
 Near-term planned work:
 
-- Move `eval { ... }` execution and expansion logic out of the parser and into the compile-time evaluator layer (`bwsl_eval_soa.cpp`, cache code, or a dedicated comptime module).
-- Keep the parser responsible for syntax and AST construction, while a dedicated compile-time expander/interpreter owns statement execution, block scoping, and AST emission.
-- Make compile-time contexts stricter so constructs like `eval if` and `eval { ... }` fail clearly when they depend on runtime data.
-- Support hygienic shadowing and block-local compile-time bindings inside `eval { ... }` without accidental identifier substitution.
-- Extend compile-time evaluation beyond scalar literals toward richer compile-time data and, eventually, compile-time parameters / const-generic style specialization.
+- Broaden compile-time values beyond scalar/vector literals and existing enum/module/variant constants.
+- Add compile-time parameters and const-generic style specialization.
+- Continue tightening diagnostics and conformance coverage for nested eval scopes, loop expansion, and budget limits.
 
 ## Render Config Overview
 

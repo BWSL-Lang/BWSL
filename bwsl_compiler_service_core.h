@@ -6,6 +6,7 @@
 #include "bwsl_cfg.h"
 #include "bwsl_ssa.h"
 #include "bwsl_parser_soa.h"
+#include "bwsl_comptime_interpreter.h"
 #include "bwsl_resource_reflection.h"
 #include "bwsl_lexer.h"
 #include "bwsl_arena.h"
@@ -479,6 +480,21 @@ private:
         if (shaderSet.cachedParser->hadError) {
             return false;
         }
+
+        std::string variantResolveError;
+        if (!shaderSet.cachedParser->ResolveVariants(shaderSet.cachedContext->root,
+                                                     &variantResolveError)) {
+            return false;
+        }
+
+        std::string comptimeError;
+        if (!Comptime::RunComptimeInterpreter(shaderSet.cachedContext.get(),
+                                              shaderSet.cachedParser.get(),
+                                              shaderSet.cachedContext->root,
+                                              &comptimeError)) {
+            return false;
+        }
+        shaderSet.cachedParser->ResolveShaderStages(shaderSet.cachedContext->root);
         
         shaderSet.astCached = true;
         return true;

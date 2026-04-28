@@ -333,6 +333,7 @@ private:
     void EmitStructDeclarations();
     void EmitStructTypeName(u32 typeHash);
     void EmitStructFieldName(u32 fieldHash);
+    void EmitStructFieldNameByIndex(u32 structHash, u16 fieldIdx);
     void EmitRegisterType(u16 reg);
     void EmitTextureLevelsUniformName(u16 texReg);
 

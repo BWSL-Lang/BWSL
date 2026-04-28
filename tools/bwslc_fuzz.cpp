@@ -36,6 +36,7 @@
 #include "../bwsl_lexer.cpp"
 #include "../bwsl_parser_soa.cpp"
 #include "../bwsl_eval_soa.cpp"
+#include "../bwsl_comptime_interpreter.cpp"
 #include "../bwsl_module_cache.cpp"
 #include "../bwsl_custom_type_registry.cpp"
 #include "../bwsl_variant_system.cpp"
@@ -184,6 +185,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     // paths, not reproduce the full CLI driver. All three shader stages
     // (vertex, fragment, compute) that exist get lowered and emitted.
     NodeRef pipelineRef = context.root;
+    std::string variantResolveError;
+    if (!parser.ResolveVariants(pipelineRef, &variantResolveError)) return 0;
+    std::string comptimeError;
+    if (!BWSL::Comptime::RunComptimeInterpreter(&context, &parser, pipelineRef, &comptimeError)) return 0;
+    parser.ResolveShaderStages(pipelineRef);
+
     const PipelineData& pipeline = context.ast.GetPipeline(pipelineRef);
     for (u32 p = 0; p < pipeline.passes.count; p++) {
         NodeRef passRef = pipeline.passes[p];

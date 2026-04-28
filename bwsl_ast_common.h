@@ -113,6 +113,8 @@ enum class ASTNodeType : u8 {
     COMPUTE_GRAPH,
     TYPE_PATTERN_MATCH,
     TYPE_PATTERN_ARM,
+    EVAL_BLOCK,
+    EVAL_IF,
     INVALID = 0xFF
 };
 

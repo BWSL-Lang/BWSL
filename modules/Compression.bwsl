@@ -1,7 +1,7 @@
-// Vertex data decompression utilities
+// Intrinsic-backed vertex data decompression utilities
 module Compression {
 
-// Decompress 10-10-10-2 packed position
+// Decode a packed 10-10-10 position
 decompressPosition_10_10_10 :: (uint packed) -> float3 {
     float x = float((packed >> 0) & 0x3FF) / 1023.0 * 2.0 - 1.0;
     float y = float((packed >> 10) & 0x3FF) / 1023.0 * 2.0 - 1.0;
@@ -9,12 +9,10 @@ decompressPosition_10_10_10 :: (uint packed) -> float3 {
     return float3(x, y, z);
 }
 
-// Decompress octahedral-encoded normal (16-bit)
+// Decode a 16-bit octahedral normal from two packed UNorm8 channels
 decompressOctahedral16 :: (uint packed) -> float3 {
-    float2 e = float2(
-        float(packed & 0xFFFF) / 65535.0 * 2.0 - 1.0,
-        float((packed >> 16) & 0xFFFF) / 65535.0 * 2.0 - 1.0
-    );
+    float4 decoded = unpack_unorm4x8(packed);
+    float2 e = float2(decoded.x * 2.0 - 1.0, decoded.y * 2.0 - 1.0);
     float3 v = float3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
     if (v.z < 0.0) {
         float oldX = v.x;
@@ -24,22 +22,16 @@ decompressOctahedral16 :: (uint packed) -> float3 {
     return normalize(v);
 }
 
-// Decompress 16-16 UV coordinates
+// Decode packed UNorm16 UV coordinates
 decompressUV16_16 :: (uint packed) -> float2 {
-    return float2(
-        float(packed & 0xFFFF) / 65535.0,
-        float((packed >> 16) & 0xFFFF) / 65535.0
-    );
+    return unpack_unorm2x16(packed);
 }
 
-// Decompress 8-8-8-8 color
+// Decode packed UNorm8 color
 decompressColor8888 :: (uint packed) -> float4 {
-    return float4(
-        float((packed >> 0) & 0xFF) / 255.0,
-        float((packed >> 8) & 0xFF) / 255.0,
-        float((packed >> 16) & 0xFF) / 255.0,
-        float((packed >> 24) & 0xFF) / 255.0
-    );
+    float4 rgb = unpack_unorm4x8(packed);
+    float alpha = float((packed >> 24) & 0xFF) / 255.0;
+    return float4(rgb.x, rgb.y, rgb.z, alpha);
 }
 
 }

@@ -1,23 +1,40 @@
 
-module PostFX{
+module PostFX {
 
 // Gamma correction
- gammaCorrect :: (float3 color) -> float3 {
+gammaCorrect :: (float3 color) -> float3 {
     return pow(color, 2.2);
 }
 
- inverseGammaCorrect :: (float3 color) -> float3 {
+inverseGammaCorrect :: (float3 color) -> float3 {
     return pow(color, 1.0 / 2.2);
 }
 
+linearToSRGB :: (float3 color) -> float3 {
+    return inverseGammaCorrect(color);
+}
+
+sRGBToLinear :: (float3 color) -> float3 {
+    return gammaCorrect(color);
+}
+
 // ACES Tone Mapping
- ACESFilm :: (float3 x) -> float3 {
+ACESFilm :: (float3 x) -> float3 {
     const float a = 2.51;
     const float b = 0.03;
     const float c = 2.43;
     const float d = 0.59;
     const float e = 0.14;
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+reinhardToneMap :: (float3 color) -> float3 {
+    return color / (color + float3(1.0));
+}
+
+reinhardExtendedToneMap :: (float3 color, float maxWhite) -> float3 {
+    float3 numerator = color * (1.0 + color / (maxWhite * maxWhite));
+    return numerator / (1.0 + color);
 }
 
 }

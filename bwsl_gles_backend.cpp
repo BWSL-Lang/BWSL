@@ -202,6 +202,21 @@ void GLESBuilder::EmitStructFieldName(u32 fieldHash) {
     }
 }
 
+void GLESBuilder::EmitStructFieldNameByIndex(u32 structHash, u16 fieldIdx) {
+    if (structHash != 0 && ir->structTypes && ir->structFieldNameHashes) {
+        for (u32 s = 0; s < ir->structTypeCount; s++) {
+            const IR::IRProgram::StructTypeInfo& info = ir->structTypes[s];
+            if (info.nameHash == structHash && fieldIdx < info.fieldCount) {
+                EmitStructFieldName(ir->structFieldNameHashes[info.fieldOffset + fieldIdx]);
+                return;
+            }
+        }
+    }
+
+    out.Lit("field_");
+    out.Uint(fieldIdx);
+}
+
 void GLESBuilder::EmitRegisterType(u16 reg) {
     CoreType regType = (ir->registerTypes && reg < ir->registerCount)
                            ? static_cast<CoreType>(ir->registerTypes[reg])
@@ -1885,21 +1900,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             out.Lit(" = ");
             EmitExpr(structReg);
             out.Chr('.');
-            bool emittedField = false;
-            if (structHash != 0 && ir->structTypes && ir->structFieldNameHashes) {
-                for (u32 s = 0; s < ir->structTypeCount; s++) {
-                    const IR::IRProgram::StructTypeInfo& info = ir->structTypes[s];
-                    if (info.nameHash == structHash && fieldIdx < info.fieldCount) {
-                        EmitStructFieldName(ir->structFieldNameHashes[info.fieldOffset + fieldIdx]);
-                        emittedField = true;
-                        break;
-                    }
-                }
-            }
-            if (!emittedField) {
-                out.Lit("field_");
-                out.Uint(fieldIdx);
-            }
+            EmitStructFieldNameByIndex(structHash, fieldIdx);
             out.Lit(";");
             return;
         }
@@ -1919,21 +1920,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             out.NL(indent);
             EmitRegWithDecl(dest);
             out.Chr('.');
-            bool emittedField = false;
-            if (structHash != 0 && ir->structTypes && ir->structFieldNameHashes) {
-                for (u32 s = 0; s < ir->structTypeCount; s++) {
-                    const IR::IRProgram::StructTypeInfo& info = ir->structTypes[s];
-                    if (info.nameHash == structHash && fieldIdx < info.fieldCount) {
-                        EmitStructFieldName(ir->structFieldNameHashes[info.fieldOffset + fieldIdx]);
-                        emittedField = true;
-                        break;
-                    }
-                }
-            }
-            if (!emittedField) {
-                out.Lit("field_");
-                out.Uint(fieldIdx);
-            }
+            EmitStructFieldNameByIndex(structHash, fieldIdx);
             out.Lit(" = ");
             EmitExpr(valueReg);
             out.Lit(";");
@@ -2717,21 +2704,7 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
                                  : 0;
             EmitExpr(structReg);
             out.Chr('.');
-            bool emittedField = false;
-            if (structHash != 0 && ir->structTypes && ir->structFieldNameHashes) {
-                for (u32 s = 0; s < ir->structTypeCount; s++) {
-                    const IR::IRProgram::StructTypeInfo& info = ir->structTypes[s];
-                    if (info.nameHash == structHash && fieldIdx < info.fieldCount) {
-                        EmitStructFieldName(ir->structFieldNameHashes[info.fieldOffset + fieldIdx]);
-                        emittedField = true;
-                        break;
-                    }
-                }
-            }
-            if (!emittedField) {
-                out.Lit("field_");
-                out.Uint(fieldIdx);
-            }
+            EmitStructFieldNameByIndex(structHash, fieldIdx);
             return;
         }
 

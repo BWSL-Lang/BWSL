@@ -6,9 +6,7 @@ namespace BWSL {
     
  u32 HashExpr(const ASTNode* node) {
         // Quick hash based on node type and immediate data
-        u32 hash = 2166136261u;
-        hash ^= static_cast<u32>(node->type);
-        hash *= 16777619u;
+        u32 hash = Utils::HashMix(Utils::FNV_OFFSET_BASIS, static_cast<u32>(node->type));
         
         switch (node->type) {
             case ASTNodeType::LITERAL:
@@ -29,8 +27,7 @@ namespace BWSL {
                 hash ^= static_cast<u32>(node->type);
                 break;
         }
-        hash *= 16777619u;
-        return hash;
+        return Utils::HashMix(hash, 0u);
     }
 
 }

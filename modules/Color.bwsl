@@ -1,6 +1,8 @@
 // Color space conversion and tone mapping
 module Color {
 
+import PostFX
+
 // sRGB to linear
 sRGBToLinear :: (float3 srgb) -> float3 {
     float3 lo = srgb / 12.92;
@@ -25,23 +27,17 @@ linearToSRGB :: (float3 linear) -> float3 {
 
 // ACES filmic tone mapping
 ACESFilm :: (float3 x) -> float3 {
-    float a = 2.51;
-    float b = 0.03;
-    float c = 2.43;
-    float d = 0.59;
-    float e = 0.14;
-    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
+    return PostFX::ACESFilm(x);
 }
 
 // Reinhard tone mapping
 reinhardToneMap :: (float3 hdr) -> float3 {
-    return hdr / (hdr + 1.0);
+    return PostFX::reinhardToneMap(hdr);
 }
 
 // Extended Reinhard with white point
 reinhardExtendedToneMap :: (float3 hdr, float whitePoint) -> float3 {
-    float wp2 = whitePoint * whitePoint;
-    return hdr * (1.0 + hdr / wp2) / (1.0 + hdr);
+    return PostFX::reinhardExtendedToneMap(hdr, whitePoint);
 }
 
 }

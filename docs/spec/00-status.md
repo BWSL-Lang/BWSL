@@ -53,10 +53,10 @@ The following features should be treated as implemented but still provisional:
 
 - `compute_graph`
   The parser accepts it, but there is not yet a settled public usage document.
-- `eval` execution model
-  Current behavior is parser-driven expansion and compile-time evaluation, but
-  the README explicitly calls out planned changes toward a cleaner comptime
-  model.
+- `eval` value model
+  `eval` execution now runs as a post-parse comptime pass, but the supported
+  value domain is still intentionally narrow: scalar and vector literals,
+  existing constants, enum/module constants, and variant constants.
 - `pass_block`
   The parser accepts `-> pass_block`, but the public docs do not yet treat it
   as a normal user-facing feature.
@@ -74,7 +74,8 @@ These behaviors should be documented as they exist today without pretending the
 wording is final:
 
 - Exact overload resolution details beyond the tested cases
-- Constant folding and when names are replaced with literals during parsing
+- Constant folding and the remaining early substitution of already-evaluated
+  constants during parsing
 - Auto-assignment details for enum values in flag-like enums
 - Interaction between pattern-arm lowering and compile-time evaluation
 - Some legacy or convenience syntax forms accepted by the parser but not yet
@@ -84,8 +85,6 @@ wording is final:
 
 The following are direction signals only:
 
-- A more explicit compile-time model replacing some parser-driven `eval`
-  behavior
 - Richer compile-time data and specialization facilities
 - A separate formal spec track for render-config files
 

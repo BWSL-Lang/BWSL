@@ -4,6 +4,7 @@
 module Globals {
 
 import Math
+import PostFX
 
 // ============================================
 // Constants
@@ -245,19 +246,19 @@ decompressBoneWeights8888 :: (uint packed) -> float4 {
 // ============================================
 
 gammaCorrect :: (float3 color) -> float3 {
-    return pow(color, 2.2);
+    return PostFX::gammaCorrect(color);
 }
 
 inverseGammaCorrect :: (float3 color) -> float3 {
-    return pow(color, 1.0 / 2.2);
+    return PostFX::inverseGammaCorrect(color);
 }
 
 linearToSRGB :: (float3 color) -> float3 {
-    return pow(color, 1.0 / 2.2);
+    return PostFX::linearToSRGB(color);
 }
 
 sRGBToLinear :: (float3 color) -> float3 {
-    return pow(color, 2.2);
+    return PostFX::sRGBToLinear(color);
 }
 
 // ============================================
@@ -265,22 +266,15 @@ sRGBToLinear :: (float3 color) -> float3 {
 // ============================================
 
 ACESFilm :: (float3 x) -> float3 {
-    const float a = 2.51;
-    const float b = 0.03;
-    const float c = 2.43;
-    const float d = 0.59;
-    const float e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+    return PostFX::ACESFilm(x);
 }
 
 reinhardToneMap :: (float3 color) -> float3 {
-    return color / (color + float3(1.0));
+    return PostFX::reinhardToneMap(color);
 }
 
 reinhardExtendedToneMap :: (float3 color, float maxWhite) -> float3 {
-    float3 numerator = color * (1.0 + (color / (maxWhite * maxWhite)));
-    return numerator / (1.0 + color);
+    return PostFX::reinhardExtendedToneMap(color, maxWhite);
 }
 
 }
-

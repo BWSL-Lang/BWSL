@@ -122,6 +122,96 @@ The current implementation supports:
 - `eval loop (...)`
 - `eval` function declarations
 
-Important note: the README explicitly says the compile-time execution model is
-expected to evolve. The syntax is stable enough to document, but some deeper
-semantic wording remains provisional.
+Eval syntax is parsed into AST markers and evaluated by a dedicated
+post-parse comptime pass before IR lowering. The parser is responsible for
+syntax and AST construction only; it does not execute eval blocks, unroll eval
+loops, substitute eval locals, or emit expanded runtime statements.
+
+The comptime pass owns:
+
+- eval scopes and compile-time bindings
+- execution of eval statements and control flow
+- emitted runtime statement lists
+- diagnostics for invalid compile-time execution
+- expansion and clone budgets
+
+IR lowering must not receive `eval` blocks or eval-marked control-flow nodes.
+Leaving one behind is a compiler error.
+
+### Eval Blocks
+
+`eval { ... }` executes at compile time. Statements that are purely compile-time
+state, such as eval declarations and assignments to eval bindings, affect only
+the comptime environment. Runtime statements emitted from the block are cloned
+into the surrounding runtime block after any visible comptime bindings have
+been substituted.
+
+Compile-time scopes are block-local. Runtime declarations are allowed to shadow
+visible comptime bindings without accidentally substituting that runtime name.
+
+### Eval Declarations and Assignments
+
+`eval` variable declarations require an initializer:
+
+```bwsl
+eval int taps = 4;
+```
+
+The initializer must evaluate to a compile-time value and must be compatible
+with the declared type. Assignments to visible eval bindings are executed by
+the comptime pass:
+
+```bwsl
+eval int sum = 0;
+sum = sum + 1;
+```
+
+The current comptime value domain is limited to scalar and vector literals plus
+existing enum, module, and variant constants. Richer comptime data is planned
+but not currently part of the language.
+
+### Eval If
+
+`eval if (condition)` requires `condition` to be a compile-time value. The
+selected branch is executed or emitted by the comptime pass. A condition that
+depends on runtime shader data is rejected.
+
+Example:
+
+```bwsl
+eval if (taps > 2) {
+    sum += 1.0;
+}
+```
+
+Invalid example:
+
+```bwsl
+bool runtime_cond = attributes.position.x > 0.0;
+eval if (runtime_cond) {
+    sum += 1.0;
+}
+```
+
+### Eval For
+
+`eval for` range bounds and step values must be compile-time integers. The loop
+is unrolled by executing the body once per compile-time iteration, with the
+iterator bound as a compile-time integer in a loop-local scope.
+
+```bwsl
+eval for (i in 0..4) {
+    sum += float(i);
+}
+```
+
+C-style `for` loops are not supported inside eval contexts.
+
+### Eval Loop
+
+`eval loop (count)` requires a compile-time integer count. `eval loop { ... }
+until (condition)` requires `condition` to be a compile-time value on each
+iteration. Infinite eval loops without an `until` condition are rejected.
+
+The pass enforces expansion budgets for executed statements, emitted
+statements, loop iterations, cloned nodes, and clone depth.

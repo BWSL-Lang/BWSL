@@ -1,0 +1,21 @@
+pipeline EvalIfRuntimeData {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float runtimeValue = attributes.position.x;
+            eval if (runtimeValue > 0.0) {
+                runtimeValue = 1.0;
+            }
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

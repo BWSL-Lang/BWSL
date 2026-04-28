@@ -209,6 +209,10 @@ struct Parser {
     bool BuildVariantReflection(NodeRef pipeline, const VariantSelectionData* selection,
                                 VariantReflectionData* outReflection,
                                 std::string* outError = nullptr);
+    bool ResolveVariants(NodeRef pipeline, std::string* outError = nullptr) {
+        return ResolvePipelineVariants(pipeline, outError);
+    }
+    void ResolveShaderStages(NodeRef pipeline) { ResolveShaderStageExpressions(pipeline); }
     NodeRef SpecializePipelineForVariants(NodeRef pipeline,
                                           const VariantSelectionData& selection,
                                           std::string* outError = nullptr);

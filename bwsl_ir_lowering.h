@@ -205,11 +205,10 @@ struct IRLowering {
     program.flags = (u16 *)pool->Allocate(initialSize * sizeof(u16), 64);
     program.destinations = (u16 *)pool->Allocate(initialSize * sizeof(u16), 64);
     program.operands = (u16 *)pool->Allocate(initialSize * 4 * sizeof(u16), 64);
-    // Initialize unused operand slots to 0x3FFF (max register index without
-    // constant flags) This value will be > registerCount so SSA will skip it,
-    // and SPIR-V backend ignores it
+    // Initialize unused operand slots to the explicit sentinel used by SSA and
+    // the backends.
     for (u32 i = 0; i < initialSize * 4; i++) {
-      program.operands[i] = 0x3FFF;
+      program.operands[i] = 0xFFFF;
     }
     program.metadata = (u32 *)pool->Allocate(initialSize * sizeof(u32), 64);
     memset(program.metadata, 0, initialSize * sizeof(u32));
@@ -1263,7 +1262,10 @@ struct IRLowering {
     // Check if we already computed this (keyed by packed NodeRef)
     auto it = nodeRegisters.find(ref.packed);
     if (it != nodeRegisters.end()) {
-      return it->second;
+      if (it->second != 0xFFFF) {
+        return it->second;
+      }
+      nodeRegisters.erase(it);
     }
 
     u16 result = 0;
@@ -1445,7 +1447,9 @@ struct IRLowering {
       break;
     }
 
-    nodeRegisters[ref.packed] = result;
+    if (result != 0xFFFF) {
+      nodeRegisters[ref.packed] = result;
+    }
     return result;
   }
 
@@ -2462,25 +2466,7 @@ struct IRLowering {
   }
 
   u32 ScalarComponentCount(CoreType type) {
-    switch (type) {
-    case CoreType::FLOAT2:
-    case CoreType::INT2:
-    case CoreType::UINT2:
-    case CoreType::BOOL2:
-      return 2;
-    case CoreType::FLOAT3:
-    case CoreType::INT3:
-    case CoreType::UINT3:
-    case CoreType::BOOL3:
-      return 3;
-    case CoreType::FLOAT4:
-    case CoreType::INT4:
-    case CoreType::UINT4:
-    case CoreType::BOOL4:
-      return 4;
-    default:
-      return 1;
-    }
+    return CoreTypeScalarComponentCount(type);
   }
 
   void AppendEnumPayloadLayout(CoreType type, u32 typeHash,
@@ -2730,82 +2716,12 @@ struct IRLowering {
 
   // std140 type sizes
   u32 GetTypeSize(CoreType type) {
-    switch (type) {
-    case CoreType::FLOAT:
-      return 4;
-    case CoreType::INT:
-      return 4;
-    case CoreType::UINT:
-      return 4;
-    case CoreType::BOOL:
-      return 4;
-    case CoreType::FLOAT2:
-      return 8;
-    case CoreType::FLOAT3:
-      return 12;
-    case CoreType::FLOAT4:
-      return 16;
-    case CoreType::INT2:
-      return 8;
-    case CoreType::INT3:
-      return 12;
-    case CoreType::INT4:
-      return 16;
-    case CoreType::UINT2:
-      return 8;
-    case CoreType::UINT3:
-      return 12;
-    case CoreType::UINT4:
-      return 16;
-    case CoreType::MAT2:
-      return 32; // 2 x float4
-    case CoreType::MAT3:
-      return 48; // 3 x float4
-    case CoreType::MAT4:
-      return 64; // 4 x float4
-    default:
-      return 4;
-    }
+    return CoreTypeStorageSize(type);
   }
 
   // std140 alignment rules
   u32 GetTypeAlignment(CoreType type) {
-    switch (type) {
-    case CoreType::FLOAT:
-      return 4;
-    case CoreType::INT:
-      return 4;
-    case CoreType::UINT:
-      return 4;
-    case CoreType::BOOL:
-      return 4;
-    case CoreType::FLOAT2:
-      return 8;
-    case CoreType::FLOAT3:
-      return 16; // vec3 aligned to vec4
-    case CoreType::FLOAT4:
-      return 16;
-    case CoreType::INT2:
-      return 8;
-    case CoreType::INT3:
-      return 16;
-    case CoreType::INT4:
-      return 16;
-    case CoreType::UINT2:
-      return 8;
-    case CoreType::UINT3:
-      return 16;
-    case CoreType::UINT4:
-      return 16;
-    case CoreType::MAT2:
-      return 16;
-    case CoreType::MAT3:
-      return 16;
-    case CoreType::MAT4:
-      return 16;
-    default:
-      return 4;
-    }
+    return CoreTypeStd140Alignment(type);
   }
 
   void LowerAssignment(NodeRef ref) {
@@ -4994,11 +4910,11 @@ struct IRLowering {
     const FunctionCallData &call = ast->GetFunctionCall(ref);
 
     // Collect argument registers
-    // Initialize to 0x3FFF sentinel (unused operand slot marker, skipped by
-    // SSA) Support up to 16 arguments for mat4 construction
-    u16 args[16] = {0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF,
-                    0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF,
-                    0x3FFF, 0x3FFF, 0x3FFF, 0x3FFF};
+    // Initialize to the unused operand sentinel. Supports up to 16 arguments
+    // for mat4 construction.
+    u16 args[16] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF,
+                    0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF,
+                    0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
     u32 argCount = call.arguments.count < 16 ? call.arguments.count : 16;
     for (u32 i = 0; i < argCount; i++) {
       args[i] = LowerExpression(call.arguments[i]);
@@ -5712,6 +5628,27 @@ struct IRLowering {
       }
       if (constructedType != CoreType::INVALID &&
           constructedType != CoreType::VOID) {
+        // A user function can intentionally use a core type word as its name
+        // (for example, `double :: (int x) -> int`). Prefer a matching
+        // overload before falling back to constructor/conversion semantics.
+        u16 inlinedResult = TryInlineFunction(call, args, argCount);
+        if (inlinedResult != 0xFFFF) {
+          builder.EmitInstruction(OP_STORE_REG, dest, inlinedResult);
+          CoreType resultType = GetRegisterType(inlinedResult);
+          if (resultType != CoreType::INVALID) {
+            SetRegisterType(dest, resultType);
+          }
+          if ((resultType == CoreType::CUSTOM ||
+               resultType == CoreType::ENUM) &&
+              dest < MAX_REGISTERS && inlinedResult < MAX_REGISTERS) {
+            u32 structHash = program.registerStructTypes[inlinedResult];
+            if (structHash != 0) {
+              program.registerStructTypes[dest] = structHash;
+            }
+          }
+          return dest;
+        }
+
         // Check if this is a scalar type conversion (float(x), int(x), uint(x))
         bool isScalarConversion = (constructedType == CoreType::FLOAT ||
                                    constructedType == CoreType::INT ||
@@ -5996,10 +5933,24 @@ struct IRLowering {
       return true;
     };
 
-    if (call.moduleIndex != 0xFFFFFFFF &&
-        call.moduleIndex < ast->modules.count) {
+    u32 targetModuleIndex = call.moduleIndex;
+    if ((targetModuleIndex == 0xFFFFFFFF ||
+         targetModuleIndex >= ast->modules.count) &&
+        !call.moduleObject.IsNull() &&
+        call.moduleObject.Type() == ASTNodeType::IDENTIFIER) {
+      const IdentifierData &moduleIdent = ast->GetIdentifier(call.moduleObject);
+      for (u32 m = 0; m < ast->modules.count; m++) {
+        if (ast->modules[m].name.nameHash == moduleIdent.name.nameHash) {
+          targetModuleIndex = m;
+          break;
+        }
+      }
+    }
+
+    if (targetModuleIndex != 0xFFFFFFFF &&
+        targetModuleIndex < ast->modules.count) {
       // Module-qualified call - search in the module's function list
-      const ModuleNodeData &module = ast->modules[call.moduleIndex];
+      const ModuleNodeData &module = ast->modules[targetModuleIndex];
 
       for (u32 i = 0; i < module.functions.count; i++) {
         NodeRef fnRef = module.functions[i];
@@ -6007,7 +5958,7 @@ struct IRLowering {
           const FunctionDeclData &fn = ast->GetFunction(fnRef);
           if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn)) {
             funcRef = fnRef;
-            foundModuleIndex = call.moduleIndex;
+            foundModuleIndex = targetModuleIndex;
             break;
           }
         }
@@ -6023,9 +5974,7 @@ struct IRLowering {
           NodeRef fnRef = module.functions[i];
           if (fnRef.Type() == ASTNodeType::FUNCTION) {
             const FunctionDeclData &fn = ast->GetFunction(fnRef);
-            // Check both plain name and qualified hash match
-            if (fn.name.nameHash == call.name.nameHash ||
-                fn.name.nameHash == call.moduleQualifiedHash) {
+            if (fn.name.nameHash == call.moduleQualifiedHash) {
               if (!matchesSignature(fn)) {
                 continue;
               }
@@ -6867,25 +6816,7 @@ struct IRLowering {
   // Get the number of components for a vector type (1 for scalars, 2-4 for
   // vectors)
   u32 GetVectorDimension(CoreType type) {
-    switch (type) {
-    case CoreType::FLOAT2:
-    case CoreType::INT2:
-    case CoreType::UINT2:
-    case CoreType::BOOL2:
-      return 2;
-    case CoreType::FLOAT3:
-    case CoreType::INT3:
-    case CoreType::UINT3:
-    case CoreType::BOOL3:
-      return 3;
-    case CoreType::FLOAT4:
-    case CoreType::INT4:
-    case CoreType::UINT4:
-    case CoreType::BOOL4:
-      return 4;
-    default:
-      return 1; // Scalar types
-    }
+    return CoreTypeScalarComponentCount(type);
   }
 
   // Get the vector type with a specific dimension for a base scalar/vector type

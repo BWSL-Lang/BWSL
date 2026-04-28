@@ -148,6 +148,9 @@ ERROR_CASE_TESTS = {
     "compute_with_vertex_stage.bwsl": "Compute passes cannot include vertex/fragment stages",
     "duplicate_compute_block.bwsl": "Only one compute block is allowed per pass",
     "array_size_overflow.bwsl": "Invalid array size. Max 256k elements",
+    "eval_if_runtime_data.bwsl": "Eval if condition must be a compile-time value",
+    "eval_for_runtime_bound.bwsl": "Eval for range bounds must be compile-time values",
+    "eval_loop_until_runtime_data.bwsl": "Eval loop until condition must be a compile-time value",
 }
 
 FORBIDDEN_SOURCE_ALIAS_NAMES = (

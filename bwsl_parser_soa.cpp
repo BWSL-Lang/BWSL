@@ -696,9 +696,10 @@ TokenRef Parser::Peek3() {
 }
 
 bool Parser::IsFunctionDeclStart() {
-    // Function declaration pattern: IDENTIFIER :: (
-    // Module-qualified pattern: IDENTIFIER :: IDENTIFIER
-    if (!Check(TokenType::IDENTIFIER)) return false;
+    // Function declaration pattern: name :: (. Names are normally identifiers,
+    // but overloaded helpers may intentionally use core type words such as
+    // `double`.
+    if (!Check(TokenType::IDENTIFIER) && !CheckMask(TokenMasks::CORE_TYPES)) return false;
     if (stream->GetType(PeekNext()) != TokenType::DOUBLE_COLON) return false;
     return stream->GetType(Peek3()) == TokenType::LEFT_PAREN;
 }
@@ -889,6 +890,7 @@ NodeRef Parser::ParsePipeline() {
                 }
                 if (typeOk) {
                     varData.isEval = true;
+                    varData.hasEvalValue = true;
                     varData.evalValue = constValue;
                 }
             }
@@ -922,7 +924,7 @@ NodeRef Parser::ParsePipeline() {
             if (constraintNode.IsValid()) {
                 ast->GetPipeline(pipeline).constraints.Push(arena, constraintNode);
             }
-        } else if (Check(TokenType::IDENTIFIER) && stream->GetType(PeekNext()) == TokenType::DOUBLE_COLON) {
+        } else if (IsFunctionDeclStart()) {
             NodeRef function = ParseFunction();
             if (function.IsValid()) {
                 ast->GetPipeline(pipeline).functions.Push(arena, function);
@@ -937,10 +939,6 @@ NodeRef Parser::ParsePipeline() {
     }
 
     Consume(TokenType::RIGHT_BRACE, "Expected '}' after pipeline body");
-
-    ResolvePipelineVariants(pipeline);
-    // Resolve deferred shader stage expressions before returning
-    ResolveShaderStageExpressions(pipeline);
 
     context->root = pipeline;
     PARSER_TIMING_PRINT();
@@ -1424,6 +1422,7 @@ void Parser::ParsePassBody(NodeRef pass) {
                 }
                 if (typeOk) {
                     varData.isEval = true;
+                    varData.hasEvalValue = true;
                     varData.evalValue = constValue;
                 }
             }
@@ -2485,7 +2484,7 @@ NodeRef Parser::ParseAssignment() {
             Symbol* sym = SymbolTable::LookupAny(&symbolTable, ast->GetIdentifier(expr).name);
             if (sym && sym->kind == SymbolKind::VARIABLE) {
                 const VariableData& varData = symbolTable.variables[sym->index];
-                if (varData.isConst) {
+                if (varData.isConst && !varData.isEval) {
                     ErrorAtPrevious("Cannot assign to const variable");
                     return expr;
                 }
@@ -2496,7 +2495,7 @@ NodeRef Parser::ParseAssignment() {
                 Symbol* sym = SymbolTable::LookupAny(&symbolTable, ast->GetIdentifier(arrayBase).name);
                 if (sym && sym->kind == SymbolKind::VARIABLE) {
                     const VariableData& varData = symbolTable.variables[sym->index];
-                    if (varData.isConst) {
+                    if (varData.isConst && !varData.isEval) {
                         ErrorAtPrevious("Cannot modify const array");
                         return expr;
                     }
@@ -2705,7 +2704,7 @@ NodeRef Parser::ParsePostfix() {
                     // Also check for VARIABLE kind (for const variables declared inside functions/scopes)
                     else if (sym && sym->kind == SymbolKind::VARIABLE) {
                         const VariableData& varData = symbolTable.variables[sym->index];
-                        if (varData.isEval || varData.isConst) {
+                        if (varData.hasEvalValue) {
                             // Replace with literal value
                             switch (varData.evalValue.type) {
                                 case LiteralValue::FLOAT:
@@ -2991,11 +2990,11 @@ NodeRef Parser::ParsePrimary() {
                     break;
             }
         }
-        // Also check for VARIABLE kind eval constants
+        // Evaluated const variables may still be substituted while parsing; unevaluated
+        // eval declarations are left as syntax for the comptime pass.
         else if (sym && sym->kind == SymbolKind::VARIABLE) {
             const VariableData& varData = symbolTable.variables[sym->index];
-            if (varData.isEval) {
-                // Replace with literal value
+            if (varData.hasEvalValue) {
                 switch (varData.evalValue.type) {
                     case LiteralValue::FLOAT:
                         return ASTFactory::MakeLiteralFloat(ast, varData.evalValue.floatValue, line, col);
@@ -3010,7 +3009,6 @@ NodeRef Parser::ParsePrimary() {
                 }
             }
         }
-
         // Regular identifier - use source-backed ArenaString so we can reconstruct name later
         ArenaString identArena = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
         NodeRef node = ASTFactory::MakeIdentifier(ast, identArena, line, col);
@@ -3051,7 +3049,6 @@ NodeRef Parser::ParseFunctionCall(NodeRef function) {
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     NodeRef call;
     ArenaString funcName;
-    bool isModuleQualified = false;
     u32 qualifiedNameHash = 0;
     
     if (function.Type() == ASTNodeType::IDENTIFIER) {
@@ -3065,13 +3062,19 @@ NodeRef Parser::ParseFunctionCall(NodeRef function) {
 
         if (access.isModuleQualified) {
             // Module-qualified function call: Module::functionName(args)
-            isModuleQualified = true;
             qualifiedNameHash = access.qualifiedNameHash;
 
             call = ASTFactory::MakeFunctionCall(ast, funcName, loc.line, loc.column);
             ast->GetFunctionCall(call).flags |= FunctionCallFlags::IS_MODULE_FUNCTION;
             ast->GetFunctionCall(call).moduleQualifiedHash = qualifiedNameHash;
             ast->GetFunctionCall(call).moduleObject = access.object;
+            if (access.object.Type() == ASTNodeType::IDENTIFIER) {
+                const IdentifierData& moduleIdent = ast->GetIdentifier(access.object);
+                u32 moduleIdx = SymbolTable::FindModuleByHash(&symbolTable, moduleIdent.name.nameHash);
+                if (moduleIdx != INVALID_INDEX) {
+                    ast->GetFunctionCall(call).moduleIndex = moduleIdx;
+                }
+            }
         } else {
             // Method call on object: object.method(args)
             // e.g., self.distance(p) or shape.distance(p)
@@ -3323,7 +3326,7 @@ bool Parser::ValidateAssignmentTarget(NodeRef target) {
             Symbol* sym = SymbolTable::LookupAny(&symbolTable, ast->GetIdentifier(target).name);
             if (sym && sym->kind == SymbolKind::VARIABLE) {
                 const VariableData& varData = symbolTable.variables[sym->index];
-                if (varData.isConst) {
+                if (varData.isConst && !varData.isEval) {
                     char msg[256];
                     snprintf(msg, sizeof(msg), "Cannot assign to const variable '%s'",
                             ast->GetIdentifier(target).name.ToString(sourceBase()).c_str());
@@ -3444,7 +3447,12 @@ bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
 
 NodeRef Parser::ParseFunction() {
     // Get function name
-    Consume(TokenType::IDENTIFIER, "Expected function name");
+    if (Check(TokenType::IDENTIFIER) || CheckMask(TokenMasks::CORE_TYPES)) {
+        Advance();
+    } else {
+        Error("Expected function name");
+        return NodeRef::Null();
+    }
     std::string functionName(stream->GetValue(previous));
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     u32 line = loc.line;
@@ -3773,7 +3781,7 @@ void Parser::ParseFunctionsBlockBody(NodeRef block) {
     // Parse a block of function definitions
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
         ProgressGuard _pg_(this);
-        if (Check(TokenType::IDENTIFIER) && stream->GetType(PeekNext()) == TokenType::DOUBLE_COLON) {
+        if (IsFunctionDeclStart()) {
             NodeRef func = ParseFunction();
             if (func.IsValid()) {
                 ast->GetBlock(block).statements.Push(arena, func);
@@ -4597,6 +4605,7 @@ bool Parser::BindCompileTimeVariable(NodeRef varDecl) {
 
     varData.isConst = true;
     varData.isEval = true;
+    varData.hasEvalValue = true;
     varData.evalValue = value;
     UpdateEvalBinding(decl.name.nameHash, value);
     return true;
@@ -4628,6 +4637,7 @@ bool Parser::ExecuteCompileTimeAssignment(NodeRef assignment) {
             return false;
         }
         varData.isEval = true;
+        varData.hasEvalValue = true;
         varData.evalValue = newValue;
     }
 
@@ -4927,27 +4937,21 @@ NodeRef Parser::ParseEvalBlock() {
 
     Consume(TokenType::LEFT_BRACE, "Expected '{' after 'eval'");
 
-    NodeRef block = ASTFactory::MakeBlock(ast, line, col);
+    NodeRef block = ASTFactory::MakeEvalBlock(ast, line, col);
     BlockData& outBlock = ast->GetBlock(block);
 
     SymbolTable::EnterScope(&symbolTable);
-    PushEvalBindingScope();
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
         ProgressGuard _pg_(this);
         NodeRef stmt = ParseStatement();
-        if (stmt.IsValid() && !ExpandEvalStatement(stmt, outBlock)) {
-            while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
-                ProgressGuard _pg_(this);
-                Advance();
-            }
-            break;
+        if (stmt.IsValid()) {
+            outBlock.statements.Push(arena, stmt);
         }
     }
 
     Consume(TokenType::RIGHT_BRACE, "Expected '}' after eval block");
 
-    PopEvalBindingScope();
     SymbolTable::ExitScope(&symbolTable);
     return block;
 }
@@ -4959,7 +4963,7 @@ NodeRef Parser::ParseEvalStatement() {
     // 'eval' already consumed
 
     // Check for function: eval funcName :: (params) -> type { ... }
-    if (Check(TokenType::IDENTIFIER) && stream->GetType(PeekNext()) == TokenType::DOUBLE_COLON) {
+    if (IsFunctionDeclStart()) {
         // It's an eval function
         NodeRef func = ParseFunction();
         if (func.IsValid()) {
@@ -4993,6 +4997,7 @@ NodeRef Parser::ParseEvalStatement() {
 
     // Get type info directly from token
     TokenType typeToken = static_cast<TokenType>(stream->GetType(previous));
+    std::string typeName(stream->GetValue(previous));
     TypeInfo typeInfo = GetTypeInfoFromToken(typeToken);
 
     // Check if it's actually a type token
@@ -5013,50 +5018,14 @@ NodeRef Parser::ParseEvalStatement() {
         return NodeRef::Null();
     }
 
-    // Compile-time evaluation using SoA evaluator
-    EvalStateSoA evalState;
-    CompileTimeEvaluatorSoA::Init(&evalState, this, ast, &context->evalCache, ast->arena);
-
-    LiteralValue value;
-    if (!CompileTimeEvaluatorSoA::EvaluateNode(&evalState, expr, &value)) {
-        if (evalState.hasError) {
-            Error(evalState.errorMsg);
-        } else {
-            Error("Eval expressions must be compile-time constants");
-        }
-        return NodeRef::Null();
-    }
-
-    // Type check the result
-    bool typeMatch = false;
-    switch (typeInfo.coreType) {
-        case CoreType::INT:
-        case CoreType::UINT:
-            typeMatch = (value.type == LiteralValue::INT);
-            break;
-        case CoreType::FLOAT:
-            typeMatch = (value.type == LiteralValue::FLOAT);
-            break;
-        case CoreType::BOOL:
-            typeMatch = (value.type == LiteralValue::BOOL);
-            break;
-        default:
-            Error("Invalid type for eval constant");
-            return NodeRef::Null();
-    }
-
-    if (!typeMatch) {
-        Error("Type mismatch: eval expression doesn't match declared type");
-        return NodeRef::Null();
-    }
-
     Consume(TokenType::SEMICOLON, "Expected ';'");
 
     // Create VARIABLE_DECL node
     NodeRef varDecl = ASTFactory::MakeVariableDecl(ast,
         ArenaString::MakeHashOnly(varName),
-        ArenaString::MakeHashOnly(0u),
-        NodeRef::Null(), true, line, col);
+        ArenaString::MakeHashOnly(typeName),
+        expr, true, line, col);
+    ast->GetVariableDecl(varDecl).isEval = true;
 
     // Add to symbol table
     Symbol* sym = SymbolTable::AddSymbol(&symbolTable,
@@ -5067,7 +5036,8 @@ NodeRef Parser::ParseEvalStatement() {
         varData.typeInfo = typeInfo;
         varData.isConst = true;
         varData.isEval = true;
-        varData.evalValue = value;
+        varData.constExpr = expr;
+        varData.hasEvalValue = false;
     } else {
         Error("Variable already declared in this scope");
         return NodeRef::Null();
@@ -5095,13 +5065,6 @@ NodeRef Parser::ParseEvalIf() {
     }
     Consume(TokenType::RIGHT_PAREN, "Expected ')' after condition");
 
-    // Try to evaluate condition at compile time
-    EvalStateSoA evalState;
-    CompileTimeEvaluatorSoA::Init(&evalState, this, ast, &context->evalCache, arena);
-    
-    LiteralValue condValue;
-    bool canEval = CompileTimeEvaluatorSoA::CanEvaluateNode(&evalState, condition);
-    
     // Parse the body (either a block or single statement)
     NodeRef body = NodeRef::Null();
     if (Check(TokenType::LEFT_BRACE)) {
@@ -5112,48 +5075,29 @@ NodeRef Parser::ParseEvalIf() {
         body = ParseStatement();
     }
 
-    if (canEval) {
-        // Can evaluate at compile time - include/exclude body
-        if (!CompileTimeEvaluatorSoA::EvaluateNode(&evalState, condition, &condValue)) {
-            // Evaluation failed - treat as runtime if
-            NodeRef ifNode = ASTFactory::MakeBlock(ast, line, col);
-            ast->GetBlock(ifNode).statements.Push(arena, condition);
-            ast->GetBlock(ifNode).statements.Push(arena, body);
-            return ifNode;
-        }
+    NodeRef ifStmt = ASTFactory::MakeEvalIfStatement(ast, line, col);
+    ast->GetBlock(ifStmt).statements.Push(arena, condition);
+    ast->GetBlock(ifStmt).statements.Push(arena, body);
 
-        // Convert result to bool
-        bool conditionTrue = false;
-        if (condValue.type == LiteralValue::BOOL) {
-            conditionTrue = condValue.boolValue;
-        } else if (condValue.type == LiteralValue::INT) {
-            conditionTrue = (condValue.intValue != 0);
-        } else if (condValue.type == LiteralValue::FLOAT) {
-            conditionTrue = (condValue.floatValue != 0.0f);
-        }
-
-        // If condition is true, return the body statements
-        // If false, return an empty block (no-op)
-        if (conditionTrue) {
-            return body;
+    if (Match(TokenType::ELSE)) {
+        if (Check(TokenType::IF)) {
+            NodeRef elseIfBody = ParseStatement();
+            ast->GetBlock(ifStmt).statements.Push(arena, elseIfBody);
+        } else if (Match(TokenType::LEFT_BRACE)) {
+            NodeRef elseBody = ParseBlock();
+            ast->GetBlock(ifStmt).statements.Push(arena, elseBody);
         } else {
-            // Return an empty block - the statement is compiled out
-            return ASTFactory::MakeBlock(ast, line, col);
+            SourceLocation elseLoc = getLocation(stream->GetOffset(current));
+            NodeRef elseBody = ASTFactory::MakeBlock(ast, elseLoc.line, elseLoc.column);
+            NodeRef elseStmt = ParseStatement();
+            if (elseStmt.IsValid()) {
+                ast->GetBlock(elseBody).statements.Push(arena, elseStmt);
+            }
+            ast->GetBlock(ifStmt).statements.Push(arena, elseBody);
         }
-    } else {
-        // Cannot evaluate at compile time - generate as regular if statement
-        // This allows eval if with runtime values like 'self' in enum methods
-        // The eval if becomes a normal if that may be optimized by the backend
-        
-        // Create an if statement node
-        // IF_STATEMENT uses BlockData: statements[0]=condition, [1]=then-body, [2]=else-body
-        NodeRef ifStmt = ASTFactory::MakeIfStatement(ast, line, col);
-        ast->GetBlock(ifStmt).statements.Push(arena, condition);
-        ast->GetBlock(ifStmt).statements.Push(arena, body);
-        // No else body for eval if
-        
-        return ifStmt;
     }
+
+    return ifStmt;
 }
 
 //==============================================================================
@@ -5533,30 +5477,6 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
     std::string varName(stream->GetValue(previous));
 
     // Compute array type info for symbol table
-    auto GetComponentCountLocal = [](CoreType t) -> u8 {
-        switch (t) {
-            case CoreType::INT: case CoreType::UINT: case CoreType::FLOAT:
-            case CoreType::INT64: case CoreType::UINT64: case CoreType::DOUBLE:
-            case CoreType::BOOL:
-                return 1;
-            case CoreType::INT2: case CoreType::UINT2: case CoreType::FLOAT2:
-            case CoreType::INT64X2: case CoreType::UINT64X2: case CoreType::DOUBLE2:
-                return 2;
-            case CoreType::INT3: case CoreType::UINT3: case CoreType::FLOAT3:
-            case CoreType::INT64X3: case CoreType::UINT64X3: case CoreType::DOUBLE3:
-                return 3;
-            case CoreType::INT4: case CoreType::UINT4: case CoreType::FLOAT4:
-            case CoreType::INT64X4: case CoreType::UINT64X4: case CoreType::DOUBLE4:
-                return 4;
-            case CoreType::MAT2: return 4;
-            case CoreType::MAT3: return 9;
-            case CoreType::MAT4: return 16;
-            case CoreType::DMAT2: return 4;
-            case CoreType::DMAT3: return 9;
-            case CoreType::DMAT4: return 16;
-            default: return 1;
-        }
-    };
     auto CalculateTypeSizeLocal = [](CoreType t, u8 comp) -> u32 {
         (void)t;
         return static_cast<u32>(comp) * 4u;
@@ -5573,7 +5493,7 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
 
     TypeInfo arrayInfo{};
     arrayInfo.coreType = elementType;
-    arrayInfo.componentCount = GetComponentCountLocal(elementType);
+    arrayInfo.componentCount = CoreTypeComponentCount(elementType);
     arrayInfo.arrayDimensions = static_cast<u8>(arrayDims.size());
     arrayInfo.customTypeHash = 0;
     arrayInfo.arrayLength = static_cast<u32>(totalSize);
@@ -6041,7 +5961,7 @@ NodeRef Parser::ParseEnum() {
         TokenRef loopStart = current;
         bool isCompileTime = Match(TokenType::EVAL);
 
-        if (Check(TokenType::IDENTIFIER) && stream->GetType(PeekNext()) == TokenType::DOUBLE_COLON) {
+        if (IsFunctionDeclStart()) {
             // Method declaration
             NodeRef method = ParseEnumMethod();
             if (method.IsValid()) {
@@ -6764,7 +6684,7 @@ NodeRef Parser::ParseModule() {
                     break;
                 }
             }
-        } else if (Check(TokenType::IDENTIFIER) && stream->GetType(PeekNext()) == TokenType::DOUBLE_COLON) {
+        } else if (IsFunctionDeclStart()) {
             // Module function (may be generic or regular)
             NodeRef func = ParseFunction();
             if (func.IsValid()) {
@@ -7453,14 +7373,21 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
             return ASTFactory::MakeAssignment(ast, target, value, line, col);
         }
 
-        case ASTNodeType::BLOCK: {
+        case ASTNodeType::BLOCK:
+        case ASTNodeType::EVAL_BLOCK: {
             const BlockData& src = ast->GetBlock(node);
-            NodeRef newBlock = ASTFactory::MakeBlock(ast, line, col);
-            BlockData& dst = ast->GetBlock(newBlock);
+            std::vector<NodeRef> statements;
+            statements.reserve(src.statements.count);
             for (u32 i = 0; i < src.statements.count; i++) {
-                NodeRef cloned = CloneNodeWithParams(src.statements[i], subs, subCount);
+                statements.push_back(src.statements[i]);
+            }
+            NodeRef newBlock = node.Type() == ASTNodeType::EVAL_BLOCK
+                ? ASTFactory::MakeEvalBlock(ast, line, col)
+                : ASTFactory::MakeBlock(ast, line, col);
+            for (NodeRef stmt : statements) {
+                NodeRef cloned = CloneNodeWithParams(stmt, subs, subCount);
                 if (cloned.IsValid()) {
-                    dst.statements.Push(arena, cloned);
+                    ast->GetBlock(newBlock).statements.Push(arena, cloned);
                 }
             }
             return newBlock;
@@ -7469,23 +7396,40 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
         case ASTNodeType::VARIABLE_DECL: {
             const VariableDeclData& src = ast->GetVariableDecl(node);
             NodeRef initializer = CloneNodeWithParams(src.initializer, subs, subCount);
-            return ASTFactory::MakeVariableDecl(ast, src.name, src.type, initializer, src.isConst,
-                                                 line, col, src.storageClass, src.arrayDimensions,
-                                                 src.arrayLength, src.arrayElementTypeHash);
+            NodeRef cloned = ASTFactory::MakeVariableDecl(ast, src.name, src.type, initializer, src.isConst,
+                                                          line, col, src.storageClass, src.arrayDimensions,
+                                                          src.arrayLength, src.arrayElementTypeHash);
+            ast->GetVariableDecl(cloned).isEval = src.isEval;
+            return cloned;
         }
 
         case ASTNodeType::FUNCTION_CALL: {
             const FunctionCallData& src = ast->GetFunctionCall(node);
-            NodeRef newCall = ASTFactory::MakeFunctionCall(ast, src.name, line, col);
-            FunctionCallData& dst = ast->GetFunctionCall(newCall);
-            dst.intrinsicIndex = src.intrinsicIndex;
-            dst.flags = src.flags;
-            dst.moduleIndex = src.moduleIndex;
-            dst.moduleQualifiedHash = src.moduleQualifiedHash;
-            dst.moduleObject = src.moduleObject.IsValid() ? CloneNodeWithParams(src.moduleObject, subs, subCount) : NodeRef::Null();
+            ArenaString name = src.name;
+            u16 intrinsicIndex = src.intrinsicIndex;
+            u8 flags = src.flags;
+            u32 moduleIndex = src.moduleIndex;
+            u32 moduleQualifiedHash = src.moduleQualifiedHash;
+            NodeRef moduleObject = src.moduleObject;
+            std::vector<NodeRef> args;
+            args.reserve(src.arguments.count);
             for (u32 i = 0; i < src.arguments.count; i++) {
-                NodeRef clonedArg = CloneNodeWithParams(src.arguments[i], subs, subCount);
-                dst.arguments.Push(arena, clonedArg);
+                args.push_back(src.arguments[i]);
+            }
+            NodeRef clonedModuleObject = moduleObject.IsValid()
+                ? CloneNodeWithParams(moduleObject, subs, subCount)
+                : NodeRef::Null();
+
+            NodeRef newCall = ASTFactory::MakeFunctionCall(ast, name, line, col);
+            FunctionCallData& dst = ast->GetFunctionCall(newCall);
+            dst.intrinsicIndex = intrinsicIndex;
+            dst.flags = flags;
+            dst.moduleIndex = moduleIndex;
+            dst.moduleQualifiedHash = moduleQualifiedHash;
+            dst.moduleObject = clonedModuleObject;
+            for (NodeRef arg : args) {
+                NodeRef clonedArg = CloneNodeWithParams(arg, subs, subCount);
+                ast->GetFunctionCall(newCall).arguments.Push(arena, clonedArg);
             }
             return newCall;
         }
@@ -7510,13 +7454,19 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
             return ASTFactory::MakeTernaryExpr(ast, condition, trueExpr, falseExpr, line, col);
         }
 
-        case ASTNodeType::IF_STATEMENT: {
+        case ASTNodeType::IF_STATEMENT:
+        case ASTNodeType::EVAL_IF: {
             // IF_STATEMENT uses BlockData: [condition, thenBranch, elseBranch?]
             const BlockData& src = ast->GetBlock(node);
-            if (!src.statements.count) {
+            std::vector<NodeRef> statements;
+            statements.reserve(src.statements.count);
+            for (u32 i = 0; i < src.statements.count; i++) {
+                statements.push_back(src.statements[i]);
+            }
+            if (statements.empty()) {
                 return ASTFactory::MakeBlock(ast, line, col);
             }
-            NodeRef condition = CloneNodeWithParams(src.statements[0], subs, subCount);
+            NodeRef condition = CloneNodeWithParams(statements[0], subs, subCount);
             if (!activeVariantBindings.empty()) {
                 EvalStateSoA evalState;
                 CompileTimeEvaluatorSoA::Init(&evalState, this, ast, &context->evalCache, ast->arena);
@@ -7525,23 +7475,24 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
                     CompileTimeEvaluatorSoA::EvaluateNode(&evalState, condition, &condValue)) {
                     bool conditionTrue = false;
                     if (ConvertLiteralToBool(condValue, &conditionTrue)) {
-                        if (conditionTrue && src.statements.count >= 2) {
-                            return CloneNodeWithParams(src.statements[1], subs, subCount);
+                        if (conditionTrue && statements.size() >= 2) {
+                            return CloneNodeWithParams(statements[1], subs, subCount);
                         }
-                        if (!conditionTrue && src.statements.count >= 3) {
-                            return CloneNodeWithParams(src.statements[2], subs, subCount);
+                        if (!conditionTrue && statements.size() >= 3) {
+                            return CloneNodeWithParams(statements[2], subs, subCount);
                         }
                         return ASTFactory::MakeBlock(ast, line, col);
                     }
                 }
             }
-            NodeRef newIf = ASTFactory::MakeIfStatement(ast, line, col);
-            BlockData& dst = ast->GetBlock(newIf);
-            dst.statements.Push(arena, condition);
-            for (u32 i = 1; i < src.statements.count; i++) {
-                NodeRef cloned = CloneNodeWithParams(src.statements[i], subs, subCount);
+            NodeRef newIf = node.Type() == ASTNodeType::EVAL_IF
+                ? ASTFactory::MakeEvalIfStatement(ast, line, col)
+                : ASTFactory::MakeIfStatement(ast, line, col);
+            ast->GetBlock(newIf).statements.Push(arena, condition);
+            for (u32 i = 1; i < statements.size(); i++) {
+                NodeRef cloned = CloneNodeWithParams(statements[i], subs, subCount);
                 if (cloned.IsValid()) {
-                    dst.statements.Push(arena, cloned);
+                    ast->GetBlock(newIf).statements.Push(arena, cloned);
                 }
             }
             return newIf;
@@ -7701,6 +7652,7 @@ NodeRef Parser::SpecializePipelineForVariants(NodeRef pipeline,
     const PipelineData& srcPipeline = ast->GetPipeline(pipeline);
     if (srcPipeline.variantDecls.count == 0 && srcPipeline.variantRules.count == 0) {
         (void)selection;
+        ResolveShaderStageExpressions(pipeline);
         return pipeline;
     }
 

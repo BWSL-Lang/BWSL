@@ -71,6 +71,12 @@ struct EvalStateSoA {
     // Limits for compile-time evaluation
     u32 iterationLimit;
     u32 iterationCount;
+
+    // Optional data-oriented comptime binding lookup. The parser/symbol-table
+    // path remains the default; the comptime interpreter installs this hook
+    // while executing expanded scopes.
+    void* comptimeUser;
+    bool (*lookupComptimeBinding)(void* user, u32 nameHash, LiteralValue* outValue);
 };
 
 // Compile-time evaluator for SoA AST

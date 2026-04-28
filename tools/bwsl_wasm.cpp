@@ -60,8 +60,10 @@ static constexpr bool USE_DIRECT_GLES = false;
 #include "../bwsl_ssa.h"
 #include "../bwsl_parser_soa.h"
 #include "../bwsl_resource_reflection.h"
+#include "../bwsl_reflection_json.h"
 #include "../bwsl_lexer.h"
 #include "../bwsl_eval_soa.h"
+#include "../bwsl_comptime_interpreter.h"
 #include "../bwsl_variant_system.h"
 #include "../bwsl_arena.h"
 #include "../bwsl_mem_pool.h"
@@ -73,6 +75,7 @@ static constexpr bool USE_DIRECT_GLES = false;
 #include "../bwsl_lexer.cpp"
 #include "../bwsl_parser_soa.cpp"
 #include "../bwsl_eval_soa.cpp"
+#include "../bwsl_comptime_interpreter.cpp"
 #include "../bwsl_module_cache.cpp"
 #include "../bwsl_ir_gen.cpp"
 #include "../bwsl_ir_analysis.cpp"
@@ -120,19 +123,7 @@ static const char* BarrierTypeToString(BarrierType type) {
 }
 
 static std::string EscapeJsonString(const std::string& str) {
-    std::string result;
-    result.reserve(str.length());
-    for (char c : str) {
-        switch (c) {
-            case '"':  result += "\\\""; break;
-            case '\\': result += "\\\\"; break;
-            case '\n': result += "\\n"; break;
-            case '\r': result += "\\r"; break;
-            case '\t': result += "\\t"; break;
-            default:   result += c; break;
-        }
-    }
-    return result;
+    return ReflectionJson::EscapeJsonString(str);
 }
 
 // ============= IR Dump Functions =============
@@ -453,46 +444,6 @@ static std::string DumpSpirvToString(const std::vector<u32>& spirv) {
     return out.str();
 }
 
-static const char* ResourceTypeToString(::ResourceBinding::Type type) {
-    switch (type) {
-        case ::ResourceBinding::UniformBuffer: return "uniform";
-        case ::ResourceBinding::StorageBuffer: return "storage_buffer";
-        case ::ResourceBinding::Texture: return "texture";
-        case ::ResourceBinding::Sampler: return "sampler";
-        case ::ResourceBinding::StorageImage: return "storage_image";
-        default: return "buffer";
-    }
-}
-
-static std::string StageFlagsToJsonArray(u8 stageFlags) {
-    std::string json = "[";
-    bool first = true;
-    auto appendStage = [&](const char* stageName, ShaderStage stage) {
-        if ((stageFlags & SymbolTable::ShaderStageToBit(stage)) == 0) return;
-        if (!first) json += ",";
-        json += "\"";
-        json += stageName;
-        json += "\"";
-        first = false;
-    };
-
-    appendStage("vertex", ShaderStage::Vertex);
-    appendStage("fragment", ShaderStage::Fragment);
-    appendStage("compute", ShaderStage::Compute);
-
-    json += "]";
-    return json;
-}
-
-static const char* ResourceAccessToString(BWSL::ResourceAccessMode access) {
-    switch (access) {
-        case BWSL::ResourceAccessMode::ReadOnly: return "readonly";
-        case BWSL::ResourceAccessMode::WriteOnly: return "writeonly";
-        case BWSL::ResourceAccessMode::ReadWrite: return "readwrite";
-        default: return "readonly";
-    }
-}
-
 static std::string ResolveArenaString(const ArenaString& value,
                                       const char* sourceBase,
                                       const std::string& fallback = {}) {
@@ -676,26 +627,7 @@ static void AppendNameBindingMap(std::ostringstream& json,
 
 static void AppendResourceReflectionJson(std::ostringstream& json,
                                          const std::vector<ReflectedResourceBinding>& resources) {
-    json << "\"resources\":[";
-    for (size_t i = 0; i < resources.size(); i++) {
-        const ReflectedResourceBinding& resource = resources[i];
-        if (i > 0) json << ",";
-        json << "{";
-        json << "\"name\":\"" << EscapeJsonString(resource.name) << "\",";
-        json << "\"type\":\"" << ResourceTypeToString(resource.type) << "\",";
-        json << "\"set\":" << resource.set << ",";
-        json << "\"binding\":" << resource.binding << ",";
-        json << "\"stages\":" << StageFlagsToJsonArray(resource.stages) << ",";
-        json << "\"access\":\"" << ResourceAccessToString(resource.access) << "\"";
-        if (resource.combinedSampledImage) {
-            json << ",\"abi\":\"combined_sampled_image\"";
-            if (!resource.combinedWith.empty()) {
-                json << ",\"combinedWith\":\"" << EscapeJsonString(resource.combinedWith) << "\"";
-            }
-        }
-        json << "}";
-    }
-    json << "]";
+    ReflectionJson::AppendCompactResourceReflectionJson(json, resources);
 }
 
 static void AppendWebGLStageJson(std::ostringstream& json,
@@ -1040,11 +972,27 @@ static std::string CompileToJson(const char* bwslSource,
         return errorJson;
     }
 
+    if (context.root.IsValid()) {
+        std::string variantResolveError;
+        if (!parser.ResolveVariants(context.root, &variantResolveError)) {
+            std::string msg = !variantResolveError.empty() ? variantResolveError : "Variant resolution failed";
+            return "{\"success\":false,\"errors\":[\"" + EscapeJsonString(msg) + "\"]}";
+        }
+    }
+
+    std::string comptimeError;
+    if (!BWSL::Comptime::RunComptimeInterpreter(&context, &parser, context.root, &comptimeError)) {
+        std::string msg = !comptimeError.empty() ? comptimeError : "Comptime interpretation failed";
+        return "{\"success\":false,\"errors\":[\"" + EscapeJsonString(msg) + "\"]}";
+    }
+
     if (context.ast.pipelines.count == 0) {
         return "{\"success\":false,\"errors\":[\"No pipeline found in source\"]}";
     }
 
     NodeRef originalPipelineRef = context.root;
+    parser.ResolveShaderStages(originalPipelineRef);
+
     VariantSelectionData variantSelection;
     VariantReflectionData variantReflection;
     std::string variantError;

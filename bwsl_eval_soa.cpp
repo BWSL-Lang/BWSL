@@ -30,6 +30,30 @@ static const u32 kVec4Hash = Utils::HashStr("vec4");
 static const u32 kIvec2Hash = Utils::HashStr("ivec2");
 static const u32 kIvec3Hash = Utils::HashStr("ivec3");
 static const u32 kIvec4Hash = Utils::HashStr("ivec4");
+static const u32 kFloatHash = Utils::HashStr("float");
+static const u32 kIntHash = Utils::HashStr("int");
+static const u32 kUintHash = Utils::HashStr("uint");
+static const u32 kBoolHash = Utils::HashStr("bool");
+
+static bool IsScalarConstructor(u32 nameHash, LiteralValue::Type* outType = nullptr) {
+    if (nameHash == kFloatHash) {
+        if (outType) *outType = LiteralValue::FLOAT;
+        return true;
+    }
+    if (nameHash == kIntHash) {
+        if (outType) *outType = LiteralValue::INT;
+        return true;
+    }
+    if (nameHash == kUintHash) {
+        if (outType) *outType = LiteralValue::UINT;
+        return true;
+    }
+    if (nameHash == kBoolHash) {
+        if (outType) *outType = LiteralValue::BOOL;
+        return true;
+    }
+    return false;
+}
 
 // Check if a function call is a vector constructor
 static bool IsVectorConstructor(u32 nameHash, LiteralValue::Type* outType = nullptr) {
@@ -73,6 +97,8 @@ void CompileTimeEvaluatorSoA::Init(EvalStateSoA* state, Parser* parser, AST* ast
     state->errorColumn = 0;
     state->iterationLimit = 10000;
     state->iterationCount = 0;
+    state->comptimeUser = nullptr;
+    state->lookupComptimeBinding = nullptr;
 }
 
 void CompileTimeEvaluatorSoA::SetError(EvalStateSoA* state, const char* msg) {
@@ -202,6 +228,10 @@ bool CompileTimeEvaluatorSoA::CanEvaluateNode(EvalStateSoA* state, NodeRef node)
         case ASTNodeType::IDENTIFIER: {
             // Check if identifier refers to an eval constant
             const IdentifierData& ident = state->ast->GetIdentifier(node);
+            if (state->lookupComptimeBinding &&
+                state->lookupComptimeBinding(state->comptimeUser, ident.name.nameHash, nullptr)) {
+                return true;
+            }
             if (state->parser->allowBareVariantLookup &&
                 state->parser->LookupActiveVariantBinding(ident.name.nameHash)) {
                 return true;
@@ -230,6 +260,11 @@ bool CompileTimeEvaluatorSoA::CanEvaluateNode(EvalStateSoA* state, NodeRef node)
         case ASTNodeType::FUNCTION_CALL: {
             // Only certain intrinsics can be evaluated at compile time
             const FunctionCallData& func = state->ast->GetFunctionCall(node);
+
+            if (IsScalarConstructor(func.name.nameHash)) {
+                if (func.arguments.count != 1) return false;
+                return CanEvaluateNode(state, func.arguments[0]);
+            }
 
             // Check for vector constructors first (float2, float3, float4, etc.)
             if (IsVectorConstructor(func.name.nameHash)) {
@@ -475,6 +510,48 @@ bool CompileTimeEvaluatorSoA::EvaluateFunctionCall(EvalStateSoA* state, NodeRef 
     // Handle common intrinsics
     u32 nameHash = func.name.nameHash;
 
+    LiteralValue::Type scalarType;
+    if (IsScalarConstructor(nameHash, &scalarType)) {
+        if (argCount != 1) {
+            SetError(state, "Scalar constructor requires exactly one argument");
+            return false;
+        }
+
+        outValue->type = scalarType;
+        switch (scalarType) {
+            case LiteralValue::FLOAT:
+                if (args[0].type == LiteralValue::FLOAT) outValue->floatValue = args[0].floatValue;
+                else if (args[0].type == LiteralValue::INT) outValue->floatValue = (float)args[0].intValue;
+                else if (args[0].type == LiteralValue::UINT) outValue->floatValue = (float)args[0].uintValue;
+                else if (args[0].type == LiteralValue::BOOL) outValue->floatValue = args[0].boolValue ? 1.0f : 0.0f;
+                else return false;
+                return true;
+            case LiteralValue::INT:
+                if (args[0].type == LiteralValue::INT) outValue->intValue = args[0].intValue;
+                else if (args[0].type == LiteralValue::UINT) outValue->intValue = (int)args[0].uintValue;
+                else if (args[0].type == LiteralValue::FLOAT) outValue->intValue = SafeFloatToInt(args[0].floatValue);
+                else if (args[0].type == LiteralValue::BOOL) outValue->intValue = args[0].boolValue ? 1 : 0;
+                else return false;
+                return true;
+            case LiteralValue::UINT:
+                if (args[0].type == LiteralValue::UINT) outValue->uintValue = args[0].uintValue;
+                else if (args[0].type == LiteralValue::INT) outValue->uintValue = args[0].intValue < 0 ? 0u : (u32)args[0].intValue;
+                else if (args[0].type == LiteralValue::FLOAT) outValue->uintValue = (u32)SafeFloatToInt(args[0].floatValue);
+                else if (args[0].type == LiteralValue::BOOL) outValue->uintValue = args[0].boolValue ? 1u : 0u;
+                else return false;
+                return true;
+            case LiteralValue::BOOL:
+                if (args[0].type == LiteralValue::BOOL) outValue->boolValue = args[0].boolValue;
+                else if (args[0].type == LiteralValue::INT) outValue->boolValue = args[0].intValue != 0;
+                else if (args[0].type == LiteralValue::UINT) outValue->boolValue = args[0].uintValue != 0;
+                else if (args[0].type == LiteralValue::FLOAT) outValue->boolValue = args[0].floatValue != 0.0f;
+                else return false;
+                return true;
+            default:
+                return false;
+        }
+    }
+
     // Handle vector constructors (float2, float3, float4, int2, int3, int4)
     LiteralValue::Type vecType;
     if (IsVectorConstructor(nameHash, &vecType)) {
@@ -686,6 +763,10 @@ bool CompileTimeEvaluatorSoA::EvaluateNode(EvalStateSoA* state, NodeRef node, Li
 
         case ASTNodeType::IDENTIFIER: {
             const IdentifierData& ident = state->ast->GetIdentifier(node);
+            if (state->lookupComptimeBinding &&
+                state->lookupComptimeBinding(state->comptimeUser, ident.name.nameHash, outValue)) {
+                return true;
+            }
             if (state->parser->allowBareVariantLookup &&
                 state->parser->LookupActiveVariantBinding(ident.name.nameHash, outValue)) {
                 return true;

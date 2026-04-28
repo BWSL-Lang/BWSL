@@ -1,0 +1,23 @@
+// Regression: Compression module helpers lower through bitfield and packing intrinsics.
+pipeline ModuleCompressionIntrinsics {
+    import Compression
+
+    attributes {
+        position: float3
+    }
+
+    pass "Compute" {
+        use attributes { position }
+
+        vertex {
+            uint seed = 0x7F804020u;
+
+            float3 position = Compression::decompressPosition_10_10_10(seed);
+            float3 normal = Compression::decompressOctahedral16(seed);
+            float2 uv = Compression::decompressUV16_16(seed);
+            float4 color = Compression::decompressColor8888(seed);
+
+            float sink = position.x + normal.y + uv.x + color.w;
+        }
+    }
+}

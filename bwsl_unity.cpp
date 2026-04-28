@@ -9,6 +9,7 @@
 #include "bwsl_lexer.cpp"
 #include "bwsl_parser_soa.cpp"
 #include "bwsl_eval_soa.cpp"
+#include "bwsl_comptime_interpreter.cpp"
 #include "bwsl_module_cache.cpp"
 #include "bwsl_ir_gen.cpp"
 #include "bwsl_ir_analysis.cpp"

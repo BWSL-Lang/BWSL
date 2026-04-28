@@ -49,20 +49,44 @@ namespace BWSL{
     namespace Utils{
 
             // FNV-1a hash
+            constexpr u32 FNV_OFFSET_BASIS = 2166136261u;
+            constexpr u32 FNV_PRIME = 16777619u;
+
+            constexpr u32 HashMix(u32 hash, u32 value) {
+                hash ^= value;
+                hash *= FNV_PRIME;
+                return hash;
+            }
+
+            inline u32 HashBytes(const void* buffer, u32 size) {
+                const u8* bytes = static_cast<const u8*>(buffer);
+                u32 hash = FNV_OFFSET_BASIS;
+                for (u32 i = 0; i < size; i++) {
+                    hash = HashMix(hash, bytes[i]);
+                }
+                return hash;
+            }
+
+            inline u32 HashWords(const u32* words, u32 count) {
+                u32 hash = FNV_OFFSET_BASIS;
+                for (u32 i = 0; i < count; i++) {
+                    hash = HashMix(hash, words[i]);
+                }
+                return hash;
+            }
+
             constexpr u32 HashStr(const char* str) {
-                u32 hash = 2166136261u;
+                u32 hash = FNV_OFFSET_BASIS;
                 while (*str) {
-                    hash ^= static_cast<u8>(*str++);
-                    hash *= 16777619u;
+                    hash = HashMix(hash, static_cast<u8>(*str++));
                 }
                 return hash;
             }
 
             constexpr u32 HashStr(const char* str, u16 length) {
-                u32 hash = 2166136261u;
+                u32 hash = FNV_OFFSET_BASIS;
                 for (u16 i = 0; i < length; i++) {
-                    hash ^= static_cast<u8>(str[i]);
-                    hash *= 16777619u;
+                    hash = HashMix(hash, static_cast<u8>(str[i]));
                 }
                 return hash;
             }

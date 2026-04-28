@@ -991,6 +991,49 @@ u32 SPIRVBuilder::GetCubeSampledImageTypeId() {
   return cubeSampledImageTypeId;
 }
 
+void SPIRVBuilder::GetSampledTextureTypeIds(u16 texSlot, u32* sampledImageType,
+                                            u32* imageType) {
+  if (textureIsArray[texSlot]) {
+    if (sampledImageType) *sampledImageType = GetArraySampledImageTypeId();
+    if (imageType) *imageType = GetArrayImageTypeId();
+  } else if (textureIsCubemap[texSlot]) {
+    if (sampledImageType) *sampledImageType = GetCubeSampledImageTypeId();
+    if (imageType) *imageType = GetCubeImageTypeId();
+  } else {
+    if (sampledImageType) *sampledImageType = GetSampledImageTypeId();
+    if (imageType) *imageType = GetImageTypeId();
+  }
+}
+
+bool SPIRVBuilder::LoadSampledTexture(u16 texReg, CoreType missingResultType,
+                                      u32 dest, bool needImage,
+                                      SampledTextureLoad* outLoad) {
+  SampledTextureLoad load{};
+  load.slot = texReg & 0x0FFF;
+  load.variableId = textureIds[load.slot];
+
+  if (load.variableId == 0) {
+    Emit(spv::OpUndef, GetTypeId(missingResultType), dest);
+    if (outLoad) *outLoad = load;
+    return false;
+  }
+
+  GetSampledTextureTypeIds(load.slot, &load.sampledImageTypeId,
+                           needImage ? &load.imageTypeId : nullptr);
+
+  load.sampledImageId = AllocateId();
+  Emit(spv::OpLoad, load.sampledImageTypeId, load.sampledImageId,
+       load.variableId);
+
+  if (needImage) {
+    load.imageId = AllocateId();
+    Emit(spv::OpImage, load.imageTypeId, load.imageId, load.sampledImageId);
+  }
+
+  if (outLoad) *outLoad = load;
+  return true;
+}
+
 u32 SPIRVBuilder::GetStorageImageTypeId() {
   if (storageImageTypeId != 0)
     return storageImageTypeId;
@@ -2532,28 +2575,6 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     }
     u32 result_type = GetTypeId(valType);
 
-    auto GetComponentCount = [](CoreType type) -> u32 {
-      switch (type) {
-      case CoreType::FLOAT2:
-      case CoreType::INT2:
-      case CoreType::UINT2:
-      case CoreType::BOOL2:
-        return 2;
-      case CoreType::FLOAT3:
-      case CoreType::INT3:
-      case CoreType::UINT3:
-      case CoreType::BOOL3:
-        return 3;
-      case CoreType::FLOAT4:
-      case CoreType::INT4:
-      case CoreType::UINT4:
-      case CoreType::BOOL4:
-        return 4;
-      default:
-        return 1;
-      }
-    };
-
     // Check if result is a vector - if so, we need to splat scalar bool
     // condition to bool vector
     CoreType destType = valType;
@@ -2581,7 +2602,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     }
 
     CoreType condType = GetOperandType(cond_reg);
-    u32 condComponents = GetComponentCount(condType);
+    u32 condComponents = CoreTypeScalarComponentCount(condType);
     bool condIsBool = (condType == CoreType::BOOL || condType == CoreType::BOOL2 ||
                        condType == CoreType::BOOL3 || condType == CoreType::BOOL4);
 
@@ -6090,35 +6111,14 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     // (OpTypeSampledImage)
     u16 tex_reg = ir->GetOperand(ir_idx, 0);
     u16 coord_reg = ir->GetOperand(ir_idx, 1);
-    u16 tex_slot = tex_reg & 0x0FFF; // Extract binding from 0x2000 | binding
     u32 coord_id = GetSpirvId(coord_reg);
-
-    // Get combined image sampler variable ID
-    u32 tex_var_id = textureIds[tex_slot];
-
-    if (tex_var_id == 0) {
-      // Texture not found - emit placeholder (OpUndef)
-      u32 result_type = GetTypeId(CoreType::FLOAT4);
-      Emit(spv::OpUndef, result_type, dest);
-      break;
-    }
 
     // Get result type (float4 for most texture samples)
     u32 result_type = GetTypeId(CoreType::FLOAT4);
-
-    // Get sampled image type for the load - use array/cube type if applicable
-    u32 sampled_img_type;
-    if (textureIsArray[tex_slot]) {
-      sampled_img_type = GetArraySampledImageTypeId();
-    } else if (textureIsCubemap[tex_slot]) {
-      sampled_img_type = GetCubeSampledImageTypeId();
-    } else {
-      sampled_img_type = GetSampledImageTypeId();
+    SampledTextureLoad texture{};
+    if (!LoadSampledTexture(tex_reg, CoreType::FLOAT4, dest, false, &texture)) {
+      break;
     }
-
-    // Load the combined sampled image
-    u32 sampled_img_id = AllocateId();
-    Emit(spv::OpLoad, sampled_img_type, sampled_img_id, tex_var_id);
 
     auto emitImageInst = [&](spv::Op imageOp, u32 resultType, u32 imageOperands,
                              const u32 *extraOperands, u32 extraCount) {
@@ -6128,7 +6128,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       currentFunction[currentFunctionSize++] = (wordCount << 16) | imageOp;
       currentFunction[currentFunctionSize++] = resultType;
       currentFunction[currentFunctionSize++] = dest;
-      currentFunction[currentFunctionSize++] = sampled_img_id;
+      currentFunction[currentFunctionSize++] = texture.sampledImageId;
       currentFunction[currentFunctionSize++] = coord_id;
       if (imageOperands != 0) {
         currentFunction[currentFunctionSize++] = imageOperands;
@@ -6202,33 +6202,10 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u16 tex_reg = ir->GetOperand(ir_idx, 0);
     u16 coord_reg = ir->GetOperand(ir_idx, 1);
     u16 lod_reg = ir->GetOperand(ir_idx, 2);
-    u16 tex_slot = tex_reg & 0x0FFF;
-
-    u32 tex_var_id = textureIds[tex_slot];
-    if (tex_var_id == 0) {
-      u32 result_type = GetTypeId(CoreType::FLOAT4);
-      Emit(spv::OpUndef, result_type, dest);
+    SampledTextureLoad texture{};
+    if (!LoadSampledTexture(tex_reg, CoreType::FLOAT4, dest, true, &texture)) {
       break;
     }
-
-    u32 sampled_img_type;
-    u32 image_type;
-    if (textureIsArray[tex_slot]) {
-      sampled_img_type = GetArraySampledImageTypeId();
-      image_type = GetArrayImageTypeId();
-    } else if (textureIsCubemap[tex_slot]) {
-      sampled_img_type = GetCubeSampledImageTypeId();
-      image_type = GetCubeImageTypeId();
-    } else {
-      sampled_img_type = GetSampledImageTypeId();
-      image_type = GetImageTypeId();
-    }
-
-    u32 sampled_img_id = AllocateId();
-    Emit(spv::OpLoad, sampled_img_type, sampled_img_id, tex_var_id);
-
-    u32 image_id = AllocateId();
-    Emit(spv::OpImage, image_type, image_id, sampled_img_id);
 
     u32 result_type = GetTypeId(CoreType::FLOAT4);
     u32 coord_id = GetSpirvId(coord_reg);
@@ -6248,7 +6225,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     currentFunction[currentFunctionSize++] = (wordCount << 16) | spv::OpImageFetch;
     currentFunction[currentFunctionSize++] = result_type;
     currentFunction[currentFunctionSize++] = dest;
-    currentFunction[currentFunctionSize++] = image_id;
+    currentFunction[currentFunctionSize++] = texture.imageId;
     currentFunction[currentFunctionSize++] = coord_id;
     currentFunction[currentFunctionSize++] = imageOperands;
     for (u32 i = 0; i < extraCount; i++) {
@@ -6262,27 +6239,12 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u16 tex_reg = ir->GetOperand(ir_idx, 0);
     u16 coord_reg = ir->GetOperand(ir_idx, 1);
     u16 component_reg = ir->GetOperand(ir_idx, 2);
-    u16 tex_slot = tex_reg & 0x0FFF;
     u32 coord_id = GetSpirvId(coord_reg);
 
-    u32 tex_var_id = textureIds[tex_slot];
-    if (tex_var_id == 0) {
-      u32 result_type = GetTypeId(CoreType::FLOAT4);
-      Emit(spv::OpUndef, result_type, dest);
+    SampledTextureLoad texture{};
+    if (!LoadSampledTexture(tex_reg, CoreType::FLOAT4, dest, false, &texture)) {
       break;
     }
-
-    u32 sampled_img_type;
-    if (textureIsArray[tex_slot]) {
-      sampled_img_type = GetArraySampledImageTypeId();
-    } else if (textureIsCubemap[tex_slot]) {
-      sampled_img_type = GetCubeSampledImageTypeId();
-    } else {
-      sampled_img_type = GetSampledImageTypeId();
-    }
-
-    u32 sampled_img_id = AllocateId();
-    Emit(spv::OpLoad, sampled_img_type, sampled_img_id, tex_var_id);
 
     u32 result_type = GetTypeId(CoreType::FLOAT4);
     u32 component_id = GetSpirvId(component_reg);
@@ -6301,7 +6263,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     currentFunction[currentFunctionSize++] = (wordCount << 16) | spv::OpImageGather;
     currentFunction[currentFunctionSize++] = result_type;
     currentFunction[currentFunctionSize++] = dest;
-    currentFunction[currentFunctionSize++] = sampled_img_id;
+    currentFunction[currentFunctionSize++] = texture.sampledImageId;
     currentFunction[currentFunctionSize++] = coord_id;
     currentFunction[currentFunctionSize++] = component_id;
     if (imageOperands != 0) {
@@ -6314,72 +6276,26 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_TEX_SIZE: {
     u16 tex_reg = ir->GetOperand(ir_idx, 0);
     u16 lod_reg = ir->GetOperand(ir_idx, 1);
-    u16 tex_slot = tex_reg & 0x0FFF;
-
-    u32 tex_var_id = textureIds[tex_slot];
-    if (tex_var_id == 0) {
-      u32 result_type = GetTypeId(CoreType::INT2);
-      Emit(spv::OpUndef, result_type, dest);
+    SampledTextureLoad texture{};
+    if (!LoadSampledTexture(tex_reg, CoreType::INT2, dest, true, &texture)) {
       break;
     }
 
-    u32 sampled_img_type;
-    u32 image_type;
-    if (textureIsArray[tex_slot]) {
-      sampled_img_type = GetArraySampledImageTypeId();
-      image_type = GetArrayImageTypeId();
-    } else if (textureIsCubemap[tex_slot]) {
-      sampled_img_type = GetCubeSampledImageTypeId();
-      image_type = GetCubeImageTypeId();
-    } else {
-      sampled_img_type = GetSampledImageTypeId();
-      image_type = GetImageTypeId();
-    }
-
-    u32 sampled_img_id = AllocateId();
-    Emit(spv::OpLoad, sampled_img_type, sampled_img_id, tex_var_id);
-
-    u32 image_id = AllocateId();
-    Emit(spv::OpImage, image_type, image_id, sampled_img_id);
-
     u32 result_type = GetResultType(ir->destinations[ir_idx], tex_reg);
     u32 lod_id = GetSpirvId(lod_reg);
-    Emit(spv::OpImageQuerySizeLod, result_type, dest, image_id, lod_id);
+    Emit(spv::OpImageQuerySizeLod, result_type, dest, texture.imageId, lod_id);
     break;
   }
 
   case IR::OP_TEX_LEVELS: {
     u16 tex_reg = ir->GetOperand(ir_idx, 0);
-    u16 tex_slot = tex_reg & 0x0FFF;
-
-    u32 tex_var_id = textureIds[tex_slot];
-    if (tex_var_id == 0) {
-      u32 result_type = GetTypeId(CoreType::INT);
-      Emit(spv::OpUndef, result_type, dest);
+    SampledTextureLoad texture{};
+    if (!LoadSampledTexture(tex_reg, CoreType::INT, dest, true, &texture)) {
       break;
     }
 
-    u32 sampled_img_type;
-    u32 image_type;
-    if (textureIsArray[tex_slot]) {
-      sampled_img_type = GetArraySampledImageTypeId();
-      image_type = GetArrayImageTypeId();
-    } else if (textureIsCubemap[tex_slot]) {
-      sampled_img_type = GetCubeSampledImageTypeId();
-      image_type = GetCubeImageTypeId();
-    } else {
-      sampled_img_type = GetSampledImageTypeId();
-      image_type = GetImageTypeId();
-    }
-
-    u32 sampled_img_id = AllocateId();
-    Emit(spv::OpLoad, sampled_img_type, sampled_img_id, tex_var_id);
-
-    u32 image_id = AllocateId();
-    Emit(spv::OpImage, image_type, image_id, sampled_img_id);
-
     u32 result_type = GetTypeId(CoreType::INT);
-    Emit(spv::OpImageQueryLevels, result_type, dest, image_id);
+    Emit(spv::OpImageQueryLevels, result_type, dest, texture.imageId);
     break;
   }
 
@@ -7686,46 +7602,6 @@ u32 SPIRVBuilder::CreateStorageBufferForAttribute(u32 attrIdx,
   return var_id;
 }
 
-// Helper: Get std140 size for a type
-static u32 GetStd140Size(CoreType type) {
-  switch (type) {
-  case CoreType::FLOAT:
-    return 4;
-  case CoreType::INT:
-    return 4;
-  case CoreType::UINT:
-    return 4;
-  case CoreType::BOOL:
-    return 4;
-  case CoreType::FLOAT2:
-    return 8;
-  case CoreType::FLOAT3:
-    return 16; // Aligned to vec4
-  case CoreType::FLOAT4:
-    return 16;
-  case CoreType::INT2:
-    return 8;
-  case CoreType::INT3:
-    return 16;
-  case CoreType::INT4:
-    return 16;
-  case CoreType::UINT2:
-    return 8;
-  case CoreType::UINT3:
-    return 16;
-  case CoreType::UINT4:
-    return 16;
-  case CoreType::MAT2:
-    return 32; // 2 * vec4
-  case CoreType::MAT3:
-    return 48; // 3 * vec4
-  case CoreType::MAT4:
-    return 64; // 4 * vec4
-  default:
-    return 16;
-  }
-}
-
 // Helper: Check if type is a matrix
 static bool IsMatrixType(CoreType type) {
   return type == CoreType::MAT2 || type == CoreType::MAT3 ||
@@ -8388,12 +8264,7 @@ void SPIRVBuilder::GrowIdArrays() {
 }
 
 u32 SPIRVBuilder::HashCompositeType(u32 *components, u32 count) {
-  u32 hash = 2166136261u;
-  for (u32 i = 0; i < count; i++) {
-    hash ^= components[i];
-    hash *= 16777619u;
-  }
-  return hash;
+  return Utils::HashWords(components, count);
 }
 
 } // namespace BWSL

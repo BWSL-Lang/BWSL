@@ -333,8 +333,20 @@ struct SPIRVBuilder {
     std::vector<u32> Finalize();
     
 private:
+    struct SampledTextureLoad {
+        u16 slot = 0;
+        u32 variableId = 0;
+        u32 sampledImageTypeId = 0;
+        u32 imageTypeId = 0;
+        u32 sampledImageId = 0;
+        u32 imageId = 0;
+    };
+
     void GrowSection(Section* section);
     void GrowCurrentFunction();
+    void GetSampledTextureTypeIds(u16 texSlot, u32* sampledImageType, u32* imageType);
+    bool LoadSampledTexture(u16 texReg, CoreType missingResultType, u32 dest,
+                            bool needImage, SampledTextureLoad* outLoad);
     
     // Fast parallel array helpers
     inline void SetSpirvId(u16 ir_reg, u32 spv_id) {

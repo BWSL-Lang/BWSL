@@ -72,7 +72,8 @@ Current array-size rules:
 
 - sizes must be compile-time values
 - integer literals are accepted
-- some compile-time constants are accepted where supported by the parser
+- already-evaluated compile-time constants are accepted where supported by the
+  parser
 - the implementation currently rejects sizes above 256k elements
 
 ## Structs
@@ -114,7 +115,8 @@ The parser accepts a few declaration conveniences that the public docs do not
 fully standardize yet. In particular:
 
 - parameter declarations support more than one concrete syntax form
-- some compile-time constants are substituted very early in parsing
+- some already-evaluated constants are still substituted during parsing for
+  legacy constant-expression paths
 
 Those details are documented further in later sections and should be treated as
 implementation-defined until the spec wording hardens.

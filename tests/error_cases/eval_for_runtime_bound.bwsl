@@ -1,0 +1,22 @@
+pipeline EvalForRuntimeBound {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int runtimeCount = int(attributes.position.x);
+            float sum = 0.0;
+            eval for (i in 0..runtimeCount) {
+                sum += float(i);
+            }
+            output.position = float4(attributes.position + float3(sum), 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

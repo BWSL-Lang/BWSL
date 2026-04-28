@@ -45,13 +45,7 @@ void ModuleCache::Initialize(void* sourceArena, u32 sourceArenaSize,
 
 
 u32 ModuleCache::HashBuffer(const void* buffer, u32 size) {
-    const u8* bytes = (const u8*)buffer;
-    u32 hash = 2166136261u;
-    for (u32 i = 0; i < size; i++) {
-        hash ^= bytes[i];
-        hash *= 16777619u;
-    }
-    return hash;
+    return Utils::HashBytes(buffer, size);
 }
 
 u32 ModuleCache::AddModule(const char* name, const char* source, u32 sourceLen) {

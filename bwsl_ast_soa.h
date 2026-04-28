@@ -116,9 +116,9 @@ struct VariableDeclData {
     ArenaString type;
     NodeRef initializer;
     bool isConst;
+    bool isEval;
     StorageClass storageClass;
     u8 arrayDimensions;
-    u8 _pad;
     u32 arrayLength;
     u32 arrayElementTypeHash;
 };
@@ -870,6 +870,24 @@ namespace ASTFactory {
         return NodeRef(ASTNodeType::BLOCK, index);
     }
 
+    inline NodeRef MakeEvalBlock(AST* ast, u32 line = 0, u32 col = 0) {
+        u32 index = ast->blocks.count;
+        BlockData data;
+        data.statements.Init(ast->arena, 8);
+        ast->blocks.Push(ast->arena, data);
+
+        if (ast->nodeCount >= ast->nodeCapacity) {
+            u32 newCapacity = ast->nodeCapacity * 2;
+            u32* newPositions = (u32*)ast->arena->Allocate(sizeof(u32) * newCapacity, 64);
+            memcpy(newPositions, ast->positions, ast->nodeCount * sizeof(u32));
+            ast->positions = newPositions;
+            ast->nodeCapacity = newCapacity;
+        }
+        ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
+
+        return NodeRef(ASTNodeType::EVAL_BLOCK, index);
+    }
+
     // If statement - uses same BlockData storage but with IF_STATEMENT type
     // statements[0] = condition, statements[1] = then-body, statements[2] = else-body (optional)
     inline NodeRef MakeIfStatement(AST* ast, u32 line = 0, u32 col = 0) {
@@ -890,6 +908,24 @@ namespace ASTFactory {
         return NodeRef(ASTNodeType::IF_STATEMENT, index);
     }
 
+    inline NodeRef MakeEvalIfStatement(AST* ast, u32 line = 0, u32 col = 0) {
+        u32 index = ast->blocks.count;
+        BlockData data;
+        data.statements.Init(ast->arena, 3);
+        ast->blocks.Push(ast->arena, data);
+
+        if (ast->nodeCount >= ast->nodeCapacity) {
+            u32 newCapacity = ast->nodeCapacity * 2;
+            u32* newPositions = (u32*)ast->arena->Allocate(sizeof(u32) * newCapacity, 64);
+            memcpy(newPositions, ast->positions, ast->nodeCount * sizeof(u32));
+            ast->positions = newPositions;
+            ast->nodeCapacity = newCapacity;
+        }
+        ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
+
+        return NodeRef(ASTNodeType::EVAL_IF, index);
+    }
+
     inline NodeRef MakeFunctionCall(AST* ast, const ArenaString& name, u32 line = 0, u32 col = 0) {
         u32 index = ast->functionCalls.count;
         FunctionCallData data;
@@ -897,7 +933,10 @@ namespace ASTFactory {
         data.arguments.Init(ast->arena, 4);
         data.intrinsicIndex = 0xFFFF;
         data.flags = 0;
+        data._padding = 0;
         data.moduleIndex = 0xFFFFFFFF;
+        data.moduleQualifiedHash = 0;
+        data.moduleObject = NodeRef::Null();
 
         // Check if it's an intrinsic at creation
         if (const auto* intrinsic = StdLib::IntrinsicLookup::Find(name.nameHash)) {
@@ -948,9 +987,9 @@ namespace ASTFactory {
         data.type = type;
         data.initializer = initializer;
         data.isConst = isConst;
+        data.isEval = false;
         data.storageClass = storageClass;
         data.arrayDimensions = arrayDimensions;
-        data._pad = 0;
         data.arrayLength = arrayLength;
         data.arrayElementTypeHash = arrayElementTypeHash;
         ast->variableDecls.Push(ast->arena, data);
@@ -1520,14 +1559,18 @@ namespace ASTClone {
         const BlockData& src = ctx.ast->GetBlock(blockRef);
         u32 line = ctx.ast->GetLine(blockRef);
         u32 col = ctx.ast->GetColumn(blockRef);
+        std::vector<NodeRef> statements;
+        statements.reserve(src.statements.count);
+        for (u32 i = 0; i < src.statements.count; i++) {
+            statements.push_back(src.statements[i]);
+        }
 
         NodeRef newBlock = ASTFactory::MakeBlock(ctx.ast, line, col);
-        BlockData& dst = ctx.ast->GetBlock(newBlock);
 
-        for (u32 i = 0; i < src.statements.count; i++) {
-            NodeRef cloned = CloneNode(ctx, src.statements[i]);
+        for (NodeRef stmt : statements) {
+            NodeRef cloned = CloneNode(ctx, stmt);
             if (cloned.IsValid()) {
-                dst.statements.Push(ctx.arena, cloned);
+                ctx.ast->GetBlock(newBlock).statements.Push(ctx.arena, cloned);
             }
         }
 
@@ -1539,19 +1582,33 @@ namespace ASTClone {
         const FunctionCallData& src = ctx.ast->GetFunctionCall(callRef);
         u32 line = ctx.ast->GetLine(callRef);
         u32 col = ctx.ast->GetColumn(callRef);
+        ArenaString name = src.name;
+        u16 intrinsicIndex = src.intrinsicIndex;
+        u8 flags = src.flags;
+        u32 moduleIndex = src.moduleIndex;
+        u32 moduleQualifiedHash = src.moduleQualifiedHash;
+        NodeRef moduleObject = src.moduleObject;
+        std::vector<NodeRef> args;
+        args.reserve(src.arguments.count);
+        for (u32 i = 0; i < src.arguments.count; i++) {
+            args.push_back(src.arguments[i]);
+        }
+        NodeRef clonedModuleObject = moduleObject.IsValid()
+            ? CloneNode(ctx, moduleObject)
+            : NodeRef::Null();
 
-        NodeRef newCall = ASTFactory::MakeFunctionCall(ctx.ast, src.name, line, col);
+        NodeRef newCall = ASTFactory::MakeFunctionCall(ctx.ast, name, line, col);
         FunctionCallData& dst = ctx.ast->GetFunctionCall(newCall);
 
-        dst.intrinsicIndex = src.intrinsicIndex;
-        dst.flags = src.flags;
-        dst.moduleIndex = src.moduleIndex;
-        dst.moduleQualifiedHash = src.moduleQualifiedHash;
-        dst.moduleObject = src.moduleObject.IsValid() ? CloneNode(ctx, src.moduleObject) : NodeRef::Null();
+        dst.intrinsicIndex = intrinsicIndex;
+        dst.flags = flags;
+        dst.moduleIndex = moduleIndex;
+        dst.moduleQualifiedHash = moduleQualifiedHash;
+        dst.moduleObject = clonedModuleObject;
 
-        for (u32 i = 0; i < src.arguments.count; i++) {
-            NodeRef clonedArg = CloneNode(ctx, src.arguments[i]);
-            dst.arguments.Push(ctx.arena, clonedArg);
+        for (NodeRef arg : args) {
+            NodeRef clonedArg = CloneNode(ctx, arg);
+            ctx.ast->GetFunctionCall(newCall).arguments.Push(ctx.arena, clonedArg);
         }
 
         return newCall;
@@ -1627,15 +1684,19 @@ namespace ASTClone {
         const BlockData& src = ctx.ast->GetBlock(ifRef);
         u32 line = ctx.ast->GetLine(ifRef);
         u32 col = ctx.ast->GetColumn(ifRef);
+        std::vector<NodeRef> statements;
+        statements.reserve(src.statements.count);
+        for (u32 i = 0; i < src.statements.count; i++) {
+            statements.push_back(src.statements[i]);
+        }
 
         NodeRef newIf = ASTFactory::MakeIfStatement(ctx.ast, line, col);
-        BlockData& dst = ctx.ast->GetBlock(newIf);
 
         // Clone all statements (condition, then branch, optional else branch)
-        for (u32 i = 0; i < src.statements.count; i++) {
-            NodeRef cloned = CloneNode(ctx, src.statements[i]);
+        for (NodeRef stmt : statements) {
+            NodeRef cloned = CloneNode(ctx, stmt);
             if (cloned.IsValid()) {
-                dst.statements.Push(ctx.arena, cloned);
+                ctx.ast->GetBlock(newIf).statements.Push(ctx.arena, cloned);
             }
         }
 

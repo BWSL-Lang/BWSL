@@ -601,8 +601,9 @@ struct IRBuilder {
     u32 intConstantCount;
     u32 uintConstantCount;
     
-    // Note: Unused operand slots default to 0x3FFF (invalid register, skipped by SSA)
-    void EmitInstruction(u16 opcode, u16 dest, u16 s0, u16 s1 = 0x3FFF, u16 s2 = 0x3FFF, u16 s3 = 0x3FFF) {
+    // Note: Unused operand slots default to 0xFFFF. SSA and backends treat
+    // this as the explicit unused operand sentinel.
+    void EmitInstruction(u16 opcode, u16 dest, u16 s0, u16 s1 = 0xFFFF, u16 s2 = 0xFFFF, u16 s3 = 0xFFFF) {
         // Hard cap on emitted instructions. Pathological fuzz inputs can
         // drive IR lowering to emit hundreds of thousands of instructions
         // from exponentially-nested function calls; the arena doubles its

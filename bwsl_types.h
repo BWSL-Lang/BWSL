@@ -178,6 +178,140 @@ inline bool IsArray(const TypeInfo& info) {
     return info.arrayDimensions > 0;
 }
 
+inline u32 CoreTypeScalarComponentCount(CoreType type) {
+    switch (type) {
+        case CoreType::FLOAT2:
+        case CoreType::INT2:
+        case CoreType::UINT2:
+        case CoreType::BOOL2:
+            return 2;
+        case CoreType::FLOAT3:
+        case CoreType::INT3:
+        case CoreType::UINT3:
+        case CoreType::BOOL3:
+            return 3;
+        case CoreType::FLOAT4:
+        case CoreType::INT4:
+        case CoreType::UINT4:
+        case CoreType::BOOL4:
+            return 4;
+        default:
+            return 1;
+    }
+}
+
+inline u8 CoreTypeComponentCount(CoreType type) {
+    switch (type) {
+        case CoreType::INT:
+        case CoreType::UINT:
+        case CoreType::FLOAT:
+        case CoreType::INT64:
+        case CoreType::UINT64:
+        case CoreType::DOUBLE:
+        case CoreType::BOOL:
+            return 1;
+        case CoreType::INT2:
+        case CoreType::UINT2:
+        case CoreType::FLOAT2:
+        case CoreType::INT64X2:
+        case CoreType::UINT64X2:
+        case CoreType::DOUBLE2:
+            return 2;
+        case CoreType::INT3:
+        case CoreType::UINT3:
+        case CoreType::FLOAT3:
+        case CoreType::INT64X3:
+        case CoreType::UINT64X3:
+        case CoreType::DOUBLE3:
+            return 3;
+        case CoreType::INT4:
+        case CoreType::UINT4:
+        case CoreType::FLOAT4:
+        case CoreType::INT64X4:
+        case CoreType::UINT64X4:
+        case CoreType::DOUBLE4:
+            return 4;
+        case CoreType::MAT2:
+        case CoreType::DMAT2:
+            return 4;
+        case CoreType::MAT3:
+        case CoreType::DMAT3:
+            return 9;
+        case CoreType::MAT4:
+        case CoreType::DMAT4:
+            return 16;
+        default:
+            return 1;
+    }
+}
+
+inline u32 CoreTypeStorageSize(CoreType type) {
+    switch (type) {
+        case CoreType::FLOAT:
+        case CoreType::INT:
+        case CoreType::UINT:
+        case CoreType::BOOL:
+            return 4;
+        case CoreType::FLOAT2:
+        case CoreType::INT2:
+        case CoreType::UINT2:
+            return 8;
+        case CoreType::FLOAT3:
+        case CoreType::INT3:
+        case CoreType::UINT3:
+            return 12;
+        case CoreType::FLOAT4:
+        case CoreType::INT4:
+        case CoreType::UINT4:
+            return 16;
+        case CoreType::MAT2:
+            return 32;
+        case CoreType::MAT3:
+            return 48;
+        case CoreType::MAT4:
+            return 64;
+        default:
+            return 4;
+    }
+}
+
+inline u32 CoreTypeStd140Alignment(CoreType type) {
+    switch (type) {
+        case CoreType::FLOAT:
+        case CoreType::INT:
+        case CoreType::UINT:
+        case CoreType::BOOL:
+            return 4;
+        case CoreType::FLOAT2:
+        case CoreType::INT2:
+        case CoreType::UINT2:
+            return 8;
+        case CoreType::FLOAT3:
+        case CoreType::FLOAT4:
+        case CoreType::INT3:
+        case CoreType::INT4:
+        case CoreType::UINT3:
+        case CoreType::UINT4:
+        case CoreType::MAT2:
+        case CoreType::MAT3:
+        case CoreType::MAT4:
+            return 16;
+        default:
+            return 4;
+    }
+}
+
+inline u32 CoreTypeStd140Size(CoreType type) {
+    switch (type) {
+        case CoreType::FLOAT3:
+        case CoreType::INT3:
+        case CoreType::UINT3:
+            return 16;
+        default:
+            return CoreTypeStorageSize(type);
+    }
+}
+
     using TokenMask = uint64_t;
     using TypeMask  = uint64_t;
 
