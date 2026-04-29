@@ -145,9 +145,8 @@ Notes:
 - Resources are declared once per pipeline.
 - Resources are used per pass via `use resources { ... }`.
 - Resources are read in shaders through `resources.<name>`.
-- When a pipeline declares `resources {}`, those declarations are the only valid
-  names for `use resources { ... }` and `resources.<name>` access, even if a
-  legacy `.rcfg` also declares resources.
+- Pipeline `resources {}` declarations are the only valid names for
+  `use resources { ... }` and `resources.<name>` access.
 - `?` in `use resources { foo? }` introduces an implicit variant named
   `has_resource_foo`.
 - The compiler can emit resolved resource bindings with `-bindings`; that
@@ -323,7 +322,7 @@ float3 worldPos = input.worldPos;
 
 ### `resources`
 
-External resources from `.rcfg` files are accessed through `resources.*`:
+Declared resources are accessed through `resources.*`:
 
 ```bwsl
 float4 albedo = sample(resources.albedoTexture, resources.textureSampler, input.uv);
@@ -548,7 +547,7 @@ Compute shaders support:
 
 ## Resource Access
 
-Resources declared in `.rcfg` are available to shader code as:
+Resources declared in the pipeline `resources` block are available to shader code as:
 
 - uniforms and buffers: `resources.name`
 - sampled textures: `sample(resources.textureName, resources.samplerName, uv)`

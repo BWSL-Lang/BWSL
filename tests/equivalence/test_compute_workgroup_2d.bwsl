@@ -1,9 +1,14 @@
 pipeline EquivComputeWorkgroup2D {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Exercises 2D workgroup dispatch: local_id/workgroup_id/global_id in
     // the .xy components, with workgroup size that isn't 1D.
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 2, 1] {
             uint2 coord = input.global_id.xy;
             uint2 localCoord = input.local_id.xy;

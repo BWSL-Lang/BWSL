@@ -3,10 +3,16 @@
 // Validates that multi-UBO descriptor binding at distinct slots matches
 // native SPIR-V across HLSL and GLSL cross-compilation.
 pipeline EquivRasterMultiUbo {
+
+    resources {
+        vscale: float
+        ftint: float4
+    }
     attributes {
     }
 
     pass "Main" {
+        use resources { vscale, ftint }
         vertex {
             float2[3] positions;
             positions[0] = float2(-1.0, -1.0);

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "bwsl_render_config.h"  // For ShaderStage
+#include "bwsl_compiler_types.h"  // For ShaderStage
 
 #include "bwsl_types.h"
 #include "bwsl_utils.h"

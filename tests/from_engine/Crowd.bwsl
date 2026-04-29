@@ -3,6 +3,24 @@
 // ============================================
 pipeline Crowd {
 
+    resources {
+        viewMatrix: mat4
+        projectionMatrix: mat4
+        previousViewProjMatrix: mat4
+        lightViewProjMatrix: mat4
+        taaJitter: float2
+        drawMetadata: buffer<DrawMetadata>
+        transformBuffer: buffer<mat4>
+        cameraPosition: float3
+        lightDirection: float3
+        lightColor: float3
+        lightIntensity: float
+        ambientColor: float3
+        tintColor: float4
+        albedoTexture: texture2D
+        textureSampler: sampler
+    }
+
 import Math
 import Compression
 import Color
@@ -41,6 +59,7 @@ calculateVelocity :: (float4 currentPos, float4 previousPos) -> float2 {
 // Shadow Pass - Depth Only
 // ============================================
 pass "ShadowPass" {
+        use resources { viewMatrix, projectionMatrix, previousViewProjMatrix, lightViewProjMatrix, taaJitter, drawMetadata, transformBuffer, cameraPosition, lightDirection, lightColor, lightIntensity, ambientColor, tintColor, albedoTexture, textureSampler }
     use attributes { position }
 
     vertex {
@@ -63,6 +82,7 @@ pass "ShadowPass" {
 // Opaque Pass - Rendering
 // ============================================
 pass "OpaquePass" {
+        use resources { viewMatrix, projectionMatrix, previousViewProjMatrix, lightViewProjMatrix, taaJitter, drawMetadata, transformBuffer, cameraPosition, lightDirection, lightColor, lightIntensity, ambientColor, tintColor, albedoTexture, textureSampler }
     use attributes { position, normal, texcoord }
 
     vertex {

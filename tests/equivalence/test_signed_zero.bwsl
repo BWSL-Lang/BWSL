@@ -1,10 +1,15 @@
 pipeline EquivSignedZero {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Signed-zero behavior: `1.0 / +0.0` is +inf, `1.0 / -0.0` is -inf.
     // Backends with fast-math / no-signed-zeros optimizations may collapse
     // these — this equivalence test asserts they don't.
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

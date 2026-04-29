@@ -1,5 +1,9 @@
 pipeline EquivInlineReturnLoop {
 
+    resources {
+        output: buffer<float>
+    }
+
     chooseLoop :: (int limit) -> int {
         for (int i = 0; i < limit; i = i + 1) {
             return 7;
@@ -8,6 +12,7 @@ pipeline EquivInlineReturnLoop {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             int limit = int(idx) - 2;  // mix of zero-iteration and one+

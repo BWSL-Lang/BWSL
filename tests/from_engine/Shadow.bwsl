@@ -3,6 +3,17 @@
 // ============================================
 pipeline Shadow {
 
+    resources {
+        lightViewProjMatrix: mat4
+        drawMetadata: buffer<DrawMetadata>
+        transformBuffer: buffer<mat4>
+        lightPosition: float3
+        farPlane: float
+        alphaThreshold: float
+        albedoTexture: texture2D
+        textureSampler: sampler
+    }
+
 import Math
 import Compression
 
@@ -29,6 +40,7 @@ attributes {
 // Directional Light Shadow Pass (Cascaded)
 // ============================================
 pass "ShadowPass" {
+        use resources { lightViewProjMatrix, drawMetadata, transformBuffer, lightPosition, farPlane, alphaThreshold, albedoTexture, textureSampler }
     use attributes { position }
 
     vertex {
@@ -54,6 +66,7 @@ pass "ShadowPass" {
 // Directional Light Shadow Pass with Alpha Test
 // ============================================
 pass "ShadowPassAlphaTest" {
+        use resources { lightViewProjMatrix, drawMetadata, transformBuffer, lightPosition, farPlane, alphaThreshold, albedoTexture, textureSampler }
     use attributes { position, texcoord }
 
     vertex {
@@ -86,6 +99,7 @@ pass "ShadowPassAlphaTest" {
 // Point Light Shadow Pass (Cube Map)
 // ============================================
 pass "PointShadowPass" {
+        use resources { lightViewProjMatrix, drawMetadata, transformBuffer, lightPosition, farPlane, alphaThreshold, albedoTexture, textureSampler }
     use attributes { position }
 
     vertex {
@@ -117,6 +131,7 @@ pass "PointShadowPass" {
 // Spot Light Shadow Pass
 // ============================================
 pass "SpotShadowPass" {
+        use resources { lightViewProjMatrix, drawMetadata, transformBuffer, lightPosition, farPlane, alphaThreshold, albedoTexture, textureSampler }
     use attributes { position }
 
     vertex {

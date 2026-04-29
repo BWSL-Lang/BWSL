@@ -2,7 +2,12 @@
 // Previously emitted mat OP scalar as FAdd/FSub/FDiv between
 // composite and scalar, failing SPIR-V validation.
 pipeline EquivMatrixScalarArith {
+
+    resources {
+        output: buffer<float>
+    }
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

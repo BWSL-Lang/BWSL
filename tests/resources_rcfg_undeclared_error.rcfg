@@ -1,3 +1,0 @@
-# Legacy-only resource used to verify it does not leak into a pipeline resources namespace.
-
-uniform legacyMatrix mat4 0 vertex

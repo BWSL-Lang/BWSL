@@ -1,5 +1,9 @@
 pipeline EquivTernaryStructDeep {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Struct-typed ternary, nested three levels deep (`a ? (b ? s1 : s2) : (c ? s3 : s4)`).
     // The per-field decomposition pass fires once per ternary node; this pins
     // down that nested struct selects produce the same value across backends.
@@ -12,6 +16,7 @@ pipeline EquivTernaryStructDeep {
     };
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

@@ -4,12 +4,22 @@
 
 pipeline BugShaderReuse {
 
+    resources {
+        viewMatrix: mat4
+        projectionMatrix: mat4
+        modelMatrix: mat4
+        viewProjMatrix: mat4
+        lightViewProjMatrix: mat4
+        particles: buffer<Particle>
+    }
+
 attributes {
     position: float3
     color: float4
 }
 
 pass "BasePass" {
+        use resources { viewMatrix, projectionMatrix, modelMatrix, viewProjMatrix, lightViewProjMatrix, particles }
     use attributes { position, color }
 
     vertex {
@@ -23,6 +33,7 @@ pass "BasePass" {
 }
 
 pass "ReusePass" {
+        use resources { viewMatrix, projectionMatrix, modelMatrix, viewProjMatrix, lightViewProjMatrix, particles }
     use attributes { position, color }
 
     // This should reuse the vertex shader from BasePass

@@ -1,5 +1,9 @@
 pipeline EquivInlineReturnStruct {
 
+    resources {
+        output: buffer<float>
+    }
+
     struct Payload {
         float2 uv;
         float value;
@@ -17,6 +21,7 @@ pipeline EquivInlineReturnStruct {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float v = float(idx) * 0.25;  // 0, 0.25, 0.5, 0.75, ... — spans both branches

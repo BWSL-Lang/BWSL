@@ -1,5 +1,9 @@
 pipeline EquivFunctionCall {
 
+    resources {
+        output: buffer<float>
+    }
+
     square :: (float x) -> float {
         return x * x;
     }
@@ -14,6 +18,7 @@ pipeline EquivFunctionCall {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             int i = int(idx);

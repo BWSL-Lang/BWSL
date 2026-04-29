@@ -252,6 +252,11 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
         if (varStructHash == 0) {
           varStructHash = program.registerStructTypes[varReg];
         }
+        if (varStructHash == 0 && program.registerStructTypes[initReg] != 0) {
+          varStructHash = program.registerStructTypes[initReg];
+          variableStructTypes[varDecl.name.nameHash] = varStructHash;
+          program.registerStructTypes[varReg] = varStructHash;
+        }
         if (varStructHash != 0 && program.registerStructTypes[initReg] == 0) {
           program.registerStructTypes[initReg] = varStructHash;
           SetRegisterType(initReg, CoreType::CUSTOM);
@@ -1957,4 +1962,3 @@ inline CompressionFormat IRLowering::GetAttributeCompression(u32 attrIndex) {
   }
   return CompressionFormat::NONE;
 }
-

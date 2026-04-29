@@ -1,5 +1,9 @@
 pipeline EquivGenericsAdvanced {
 
+    resources {
+        output: buffer<float>
+    }
+
     constraint FloatVectors = float2 | float3 | float4;
     constraint Vec3Or4 = float3 | float4;
 
@@ -20,6 +24,7 @@ pipeline EquivGenericsAdvanced {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) / 7.0;

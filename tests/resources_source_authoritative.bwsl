@@ -1,0 +1,24 @@
+// Test: pipeline resources are the authoritative resource declaration source.
+
+pipeline ResourcesSourceAuthoritative {
+    attributes {
+        position: float3
+    }
+
+    resources {
+        viewProj: mat4
+    }
+
+    pass "Main" {
+        use attributes { position }
+        use resources { viewProj }
+
+        vertex {
+            output.position = resources.viewProj * float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

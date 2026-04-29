@@ -1,5 +1,9 @@
 pipeline EquivNestedAccess4Level {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Four levels of struct-in-struct access, mixed scalar / vector /
     // matrix fields at each level. Exercises OP_STRUCT_EXTRACT /
     // OP_STRUCT_INSERT chains and std430 layout for deeply-nested types.
@@ -26,6 +30,7 @@ pipeline EquivNestedAccess4Level {
     };
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) * 0.25;

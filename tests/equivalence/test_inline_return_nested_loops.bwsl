@@ -1,5 +1,9 @@
 pipeline EquivInlineReturnNestedLoops {
 
+    resources {
+        output: buffer<float>
+    }
+
     chooseNested :: (int limit) -> int {
         for (int i = 0; i < limit; i = i + 1) {
             for (int j = 0; j < limit; j = j + 1) {
@@ -10,6 +14,7 @@ pipeline EquivInlineReturnNestedLoops {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             int limit = int(idx);  // 0 -> outer skipped; >=1 -> inner returns

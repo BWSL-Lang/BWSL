@@ -1,11 +1,16 @@
 pipeline EquivMathBitopsVec {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Bitwise AND/OR/XOR/shift/popcnt/clz on int and uint vectors plus
     // scalar-vector and vector-vector forms. Existing test_xor_bitwise
     // only covers scalar paths — vector lowering goes through a
     // different codegen branch for some ops (splat vs per-component).
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
 

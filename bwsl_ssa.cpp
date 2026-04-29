@@ -393,6 +393,29 @@ void SSAConstructor::Rename() {
     }
     ir->registerCount = static_cast<u16>(newCapacity);
 
+    // SSA can introduce one undef per variable without an entry definition,
+    // plus more for unfilled PHI operands. The IR starts with a small fixed
+    // undef table; grow it here so large inlined enum-method bodies do not
+    // silently lose undef metadata and leave SPIR-V PHIs pointing at
+    // never-defined IDs.
+    u32 neededUndefCapacity =
+        ir->undefRegCount + variableCount + estimatedPhiOperands + 64;
+    if (ir->undefRegCapacity < neededUndefCapacity) {
+        u16* newUndefRegs =
+            (u16*)arena->Allocate(neededUndefCapacity * sizeof(u16), 64);
+        u16* newUndefTypes =
+            (u16*)arena->Allocate(neededUndefCapacity * sizeof(u16), 64);
+        if (ir->undefRegs && ir->undefRegCount > 0) {
+            memcpy(newUndefRegs, ir->undefRegs,
+                   ir->undefRegCount * sizeof(u16));
+            memcpy(newUndefTypes, ir->undefRegTypes,
+                   ir->undefRegCount * sizeof(u16));
+        }
+        ir->undefRegs = newUndefRegs;
+        ir->undefRegTypes = newUndefTypes;
+        ir->undefRegCapacity = neededUndefCapacity;
+    }
+
     // For variables that don't have a definition in the entry block, we need to
     // push an "undef" register onto their stack. This ensures that if a Phi node
     // references this variable from a path without a definition, it gets a valid

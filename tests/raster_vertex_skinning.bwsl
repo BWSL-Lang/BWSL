@@ -4,6 +4,13 @@
 // fragment consumption of tangent-space output from a skinned vertex.
 
 pipeline RasterVertexSkinning {
+
+    resources {
+        modelMatrix: mat4
+        viewProjMatrix: mat4
+        lightViewProjMatrix: mat4
+        boneMatrices: buffer<mat4>
+    }
     attributes {
         position:    float3
         normal:      float3
@@ -14,6 +21,7 @@ pipeline RasterVertexSkinning {
     }
 
     pass "SkinnedMesh" {
+        use resources { modelMatrix, viewProjMatrix, lightViewProjMatrix, boneMatrices }
         use attributes { position, normal, tangent, texcoord, boneIndices, boneWeights }
 
         vertex {
@@ -94,6 +102,7 @@ pipeline RasterVertexSkinning {
     }
 
     pass "SkinnedShadow" {
+        use resources { modelMatrix, viewProjMatrix, lightViewProjMatrix, boneMatrices }
         use attributes { position, boneIndices, boneWeights }
 
         vertex {

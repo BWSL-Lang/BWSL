@@ -89,5 +89,5 @@ module files.
 
 ## Out of Scope
 
-The external `.rcfg` render-config format is not defined here. It remains
-documented separately in `docs/render-config.md`.
+Backend ABI packaging and engine-side binding setup are outside this source
+language structure section.

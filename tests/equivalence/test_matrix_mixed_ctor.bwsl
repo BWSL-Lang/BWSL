@@ -1,10 +1,15 @@
 pipeline EquivMatrixMixedCtor {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Matrix construction from varied operand mixes — a common point of
     // cross-backend divergence (column-major vs row-major interpretation,
     // vector vs scalar unpacking order).
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

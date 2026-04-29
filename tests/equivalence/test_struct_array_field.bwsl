@@ -1,11 +1,16 @@
 pipeline EquivStructArrayField {
 
+    resources {
+        output: buffer<float>
+    }
+
 struct Poly {
     float4 vertices[4];
     float weight;
 };
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) * 0.5;

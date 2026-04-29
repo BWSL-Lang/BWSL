@@ -1,5 +1,9 @@
 pipeline EquivEnumFlags {
 
+    resources {
+        output: buffer<float>
+    }
+
     enum Channels : uint {
         Red   = 0b0001,
         Green = 0b0010,
@@ -8,6 +12,7 @@ pipeline EquivEnumFlags {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
 

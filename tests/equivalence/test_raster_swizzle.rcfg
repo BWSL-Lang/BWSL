@@ -1,8 +1,0 @@
-pipeline EquivRasterSwizzle
-
-target MainColor RGBA32Float 16 16
-
-pass Main
-  type geometry
-  color MainColor clear 0.0 0.0 0.0 0.0 store
-  depends none

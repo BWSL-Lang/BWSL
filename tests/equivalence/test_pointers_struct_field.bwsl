@@ -1,11 +1,16 @@
 pipeline EquivPointersStructField {
 
+    resources {
+        output: buffer<float>
+    }
+
     struct Particle {
         float3 pos;
         float w;
     };
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
 

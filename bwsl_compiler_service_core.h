@@ -471,9 +471,6 @@ private:
         shaderSet.cachedParser = std::make_unique<Parser>();
         shaderSet.cachedParser->Init(lexer.get(), shaderSet.cachedContext.get());
         
-        // Initialize symbol table with render config
-        SymbolTable::InitFromRenderConfig(&shaderSet.cachedParser->symbolTable, *renderConfig);
-        
         // Parse the pipeline
         shaderSet.cachedParser->ParsePipeline();
         

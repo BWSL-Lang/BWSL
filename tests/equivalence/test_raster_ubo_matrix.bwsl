@@ -3,10 +3,15 @@
 // (std140 vs HLSL cbuffer vs GLSL std140) produces identical output across
 // all three backends.
 pipeline EquivRasterUboMatrix {
+
+    resources {
+        xform: mat4
+    }
     attributes {
     }
 
     pass "Main" {
+        use resources { xform }
         vertex {
             float2[3] positions;
             positions[0] = float2(-1.0, -1.0);

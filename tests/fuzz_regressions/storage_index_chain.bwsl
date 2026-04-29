@@ -1,6 +1,6 @@
 // Chain of storage-buffer accesses modeled via a local array of
 // structs. Tests the OP_STORAGE_FIELD / OP_STORAGE_INDEX ordering
-// when simulated locally. The fuzz harness runs with no rcfg, so
+// when simulated locally. The fuzz harness runs with no external resource config, so
 // we use local-array semantics.
 pipeline StorageIndexChain {
     struct Cell {

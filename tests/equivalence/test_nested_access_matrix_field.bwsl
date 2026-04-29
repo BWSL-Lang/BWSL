@@ -1,5 +1,9 @@
 pipeline EquivNestedAccessMatrixField {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Matrix-valued struct fields. Column / row indexing (`m[i]`, `m[i][j]`),
     // swizzle on an extracted column, and writing back through both forms.
     // Matrix-in-struct historically hit a different std140 alignment path
@@ -18,6 +22,7 @@ pipeline EquivNestedAccessMatrixField {
     };
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) * 0.25 + 0.1;

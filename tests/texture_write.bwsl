@@ -3,7 +3,12 @@
 
 pipeline TextureWrite {
 
+    resources {
+        outputImage: image2D
+    }
+
     pass "Compute" {
+        use resources { outputImage }
         compute "WriteGradient" [8, 8, 1] {
             uint3 gid = input.global_id;
             int2 coords = int2(int(gid.x), int(gid.y));

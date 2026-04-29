@@ -3,10 +3,15 @@
 // them up by floor(gl_FragCoord.y). This validates that cross-compiled
 // HLSL/GLSL descriptor-set plumbing for raster SSBOs matches native.
 pipeline EquivRasterSsboRead {
+
+    resources {
+        lut: buffer<float>
+    }
     attributes {
     }
 
     pass "Main" {
+        use resources { lut }
         vertex {
             float2[3] positions;
             positions[0] = float2(-1.0, -1.0);

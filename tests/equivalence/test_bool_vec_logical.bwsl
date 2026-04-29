@@ -1,7 +1,12 @@
 // Vector-boolean !, &&, ||, != must use logical SPIR-V ops
 // (OpLogicalNot/And/Or/NotEqual) instead of bitwise/integer ops.
 pipeline EquivBoolVecLogical {
+
+    resources {
+        output: buffer<float>
+    }
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

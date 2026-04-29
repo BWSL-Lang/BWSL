@@ -1,0 +1,136 @@
+module Sampling {
+
+import Math
+import Random
+import Spaces
+
+const float INV_UINT_MAX = 2.3283064365386963e-10;
+
+/// Computes the base-2 Van der Corput radical inverse using bit reversal.
+/// Reference: https://en.wikipedia.org/wiki/Van_der_Corput_sequence
+radical_inverse_vdc :: (uint bits) -> float {
+    return float(reverse_bits(bits)) * INV_UINT_MAX;
+}
+
+/// Returns a 2D Hammersley point for quasi-Monte Carlo sampling.
+/// Reference: https://en.wikipedia.org/wiki/Low-discrepancy_sequence
+hammersley :: (uint index, uint count) -> float2 {
+    return float2(float(index) / max(float(count), 1.0), radical_inverse_vdc(index));
+}
+
+/// Returns the R2 low-discrepancy sequence point based on the plastic constant.
+/// Reference: http://extremelearning.com.au/unreasonable-effectiveness-of-quasirandom-sequences/
+r2 :: (uint index) -> float2 {
+    float g = 1.32471795724;
+    float a1 = 1.0 / g;
+    float a2 = 1.0 / (g * g);
+    return fract(float2(0.5) + float(index) * float2(a1, a2));
+}
+
+/// Returns a deterministic random 2D sample from a seed and sequence index.
+seeded_2d :: (uint seed, uint index) -> float2 {
+    uint s = Random::hash_combine(seed, index);
+    return Random::rand_float2(s);
+}
+
+/// Maps a uniform square sample to a uniform disk sample.
+/// Reference: https://en.wikipedia.org/wiki/Polar_coordinate_system
+uniform_disk :: (float2 xi) -> float2 {
+    float r = sqrt(xi.x);
+    float phi = Math::TAU * xi.y;
+    return float2(r * cos(phi), r * sin(phi));
+}
+
+/// Maps a scalar sample to a point on the unit circle.
+uniform_circle :: (float xi) -> float2 {
+    float phi = Math::TAU * xi;
+    return float2(cos(phi), sin(phi));
+}
+
+/// Maps a uniform square sample to a direction uniformly distributed on the unit sphere.
+/// Reference: https://en.wikipedia.org/wiki/Sphere#Spherical_coordinates
+uniform_sphere :: (float2 xi) -> float3 {
+    float z = 1.0 - 2.0 * xi.x;
+    float r = sqrt(max(0.0, 1.0 - z * z));
+    float phi = Math::TAU * xi.y;
+    return float3(r * cos(phi), r * sin(phi), z);
+}
+
+/// Maps a uniform square sample to a local +Z hemisphere direction.
+uniform_hemisphere_z :: (float2 xi) -> float3 {
+    float z = xi.x;
+    float r = sqrt(max(0.0, 1.0 - z * z));
+    float phi = Math::TAU * xi.y;
+    return float3(r * cos(phi), r * sin(phi), z);
+}
+
+/// Maps a uniform square sample to a cosine-weighted local +Z hemisphere direction.
+/// Reference: https://www.pbr-book.org/4ed/Sampling_Algorithms/Sampling_Multidimensional_Functions
+cosine_hemisphere_z :: (float2 xi) -> float3 {
+    float2 d = uniform_disk(xi);
+    float z = sqrt(max(0.0, 1.0 - dot(d, d)));
+    return float3(d.x, d.y, z);
+}
+
+/// Maps a uniform square sample to a world-space hemisphere direction around normal.
+uniform_hemisphere :: (float2 xi, float3 normal) -> float3 {
+    Spaces::Basis basis = Spaces::make_basis(normal);
+    return Spaces::tangent_to_world(uniform_hemisphere_z(xi), basis);
+}
+
+/// Maps a uniform square sample to a cosine-weighted world-space hemisphere direction around normal.
+cosine_hemisphere :: (float2 xi, float3 normal) -> float3 {
+    Spaces::Basis basis = Spaces::make_basis(normal);
+    return Spaces::tangent_to_world(cosine_hemisphere_z(xi), basis);
+}
+
+/// Samples a GGX/Trowbridge-Reitz half vector in local +Z space.
+/// Reference: https://en.wikipedia.org/wiki/Specular_highlight#Microfacet_models
+/// Background: https://pharr.org/matt/blog/2022/05/06/trowbridge-reitz.html
+ggx_half_vector_z :: (float2 xi, float roughness) -> float3 {
+    float a = max(roughness * roughness, Math::EPSILON);
+    float a2 = a * a;
+    float phi = Math::TAU * xi.x;
+    float cosTheta = sqrt((1.0 - xi.y) / (1.0 + (a2 - 1.0) * xi.y));
+    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+    return float3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta);
+}
+
+/// Samples a GGX/Trowbridge-Reitz half vector around a world-space normal.
+/// Reference: https://en.wikipedia.org/wiki/Specular_highlight#Microfacet_models
+ggx_half_vector :: (float2 xi, float roughness, float3 normal) -> float3 {
+    Spaces::Basis basis = Spaces::make_basis(normal);
+    return Spaces::tangent_to_world(ggx_half_vector_z(xi, roughness), basis);
+}
+
+/// Returns the PDF for cosine-weighted hemisphere sampling.
+cosine_hemisphere_pdf :: (float cosTheta) -> float {
+    return max(cosTheta, 0.0) * Math::INV_PI;
+}
+
+/// Returns the constant PDF for uniform sphere sampling.
+uniform_sphere_pdf :: () -> float {
+    return 1.0 / (4.0 * Math::PI);
+}
+
+/// Returns the constant PDF for uniform hemisphere sampling.
+uniform_hemisphere_pdf :: () -> float {
+    return 1.0 / (2.0 * Math::PI);
+}
+
+/// Evaluates the GGX/Trowbridge-Reitz normal distribution function.
+/// Reference: https://en.wikipedia.org/wiki/Specular_highlight#Microfacet_models
+ggx_ndf :: (float NdotH, float roughness) -> float {
+    float a = max(roughness * roughness, Math::EPSILON);
+    float a2 = a * a;
+    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / max(Math::PI * denom * denom, Math::EPSILON);
+}
+
+/// Returns the reflected-direction PDF for GGX half-vector sampling.
+ggx_reflection_pdf :: (float NdotH, float VdotH, float roughness) -> float {
+    float d = ggx_ndf(max(NdotH, 0.0), roughness);
+    return d * max(NdotH, 0.0) / max(4.0 * max(VdotH, 0.0), Math::EPSILON);
+}
+
+}

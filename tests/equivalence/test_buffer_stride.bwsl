@@ -1,5 +1,11 @@
 pipeline EquivBufferStride {
+
+    resources {
+        inbuf: buffer<float>
+        output: buffer<float>
+    }
     pass "Compute" {
+        use resources { inbuf, output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float v = resources.inbuf[idx];

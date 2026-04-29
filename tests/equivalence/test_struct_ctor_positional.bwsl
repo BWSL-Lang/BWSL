@@ -2,11 +2,16 @@
 // all fields, including nested structs and structs with more than 4
 // fields (which require iterative OpCompositeInsert chains).
 pipeline EquivStructCtorPositional {
+
+    resources {
+        output: buffer<float>
+    }
     struct Pair { float a; float b; };
     struct Quint { float a; float b; float c; float d; float e; };
     struct Nested { Pair first; Pair second; float scale; };
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

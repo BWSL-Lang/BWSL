@@ -1,5 +1,9 @@
 pipeline EquivInlineReturnEnum {
 
+    resources {
+        output: buffer<float>
+    }
+
     enum Mode {
         Low,
         High
@@ -13,6 +17,7 @@ pipeline EquivInlineReturnEnum {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float v = float(idx) - 3.5;  // negative and positive

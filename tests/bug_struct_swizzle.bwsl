@@ -1,6 +1,10 @@
 // Test case with module imports - matching MaterialPreview pattern
 pipeline LargeStructSwizzleTest {
 
+    resources {
+        material: GPUMaterialData
+    }
+
 import Color
 
 struct GPUMaterialData {
@@ -29,6 +33,7 @@ const uint MAT_HAS_ALBEDO = 0x01u;
 const uint MAT_HAS_NORMAL = 0x02u;
 
 pass "pass0" {
+        use resources { material }
     vertex {
         output.position = float4(0.0, 0.0, 0.0, 1.0);
     }

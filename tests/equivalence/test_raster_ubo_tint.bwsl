@@ -3,10 +3,15 @@
 // a UV gradient by its rgb. Verifies that cross-compiled HLSL/GLSL UBO
 // descriptor plumbing matches the native SPIR-V path.
 pipeline EquivRasterUboTint {
+
+    resources {
+        tint: float4
+    }
     attributes {
     }
 
     pass "Main" {
+        use resources { tint }
         vertex {
             float2[3] positions;
             positions[0] = float2(-1.0, -1.0);

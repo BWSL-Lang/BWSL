@@ -1,5 +1,10 @@
 pipeline EquivStructBuffer {
 
+    resources {
+        particles: buffer<Particle>
+        output: buffer<float>
+    }
+
 struct Particle {
     float3 position;
     float mass;
@@ -8,6 +13,7 @@ struct Particle {
 };
 
     pass "Compute" {
+        use resources { particles, output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             Particle p = resources.particles[idx];

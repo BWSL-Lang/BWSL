@@ -1,9 +1,14 @@
 pipeline EquivXorBitwise {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Exercises the parser disambiguation of `^` as XOR operator in integer
     // bitwise expressions (distinct from address-of/dereference contexts).
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             int a = int(idx) + 5;

@@ -1,5 +1,9 @@
 pipeline EquivChainFnReturn {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Function that returns a struct, then chained access on the result.
     // Tests that struct-return values carry correct register/type info
     // across inlining and that downstream member/swizzle accesses work.
@@ -25,6 +29,7 @@ pipeline EquivChainFnReturn {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

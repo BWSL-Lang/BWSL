@@ -1,8 +1,0 @@
-pipeline EquivBufferStride
-
-buffer inbuf float 0 readonly compute
-buffer output float 1 readwrite compute
-
-pass Compute
-  type compute
-  depends none

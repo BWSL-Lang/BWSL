@@ -1,5 +1,9 @@
 pipeline EquivNestedStruct {
 
+    resources {
+        output: buffer<float>
+    }
+
 struct Inner {
     float2 uv;
     float factor;
@@ -11,6 +15,7 @@ struct Outer {
 };
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) * 0.5;

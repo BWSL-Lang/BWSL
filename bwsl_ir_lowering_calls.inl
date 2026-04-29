@@ -18,15 +18,53 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
 
   // Check for enum variant construction (e.g., SDFShape::Sphere(0.5))
   // The moduleObject will reference the enum type identifier
-  if (!call.moduleObject.IsNull() &&
-      call.moduleObject.Type() == ASTNodeType::IDENTIFIER) {
-    const IdentifierData &enumIdent = ast->GetIdentifier(call.moduleObject);
-    u32 enumHash = enumIdent.name.nameHash;
+  auto resolveConstructorEnum =
+      [&](NodeRef enumObject, u32 *outEnumHash) -> Symbol * {
+    if (outEnumHash) {
+      *outEnumHash = 0;
+    }
+    if (enumObject.IsNull()) {
+      return nullptr;
+    }
 
-    // Look up in symbol table to check if it's an enum type
-    // ENUM for module enums, ENUM_SYMBOL for pipeline-local enums
-    Symbol *enumSym = SymbolTable::LookupByHash(
-        const_cast<SymbolTableData *>(symbols), enumHash);
+    if (enumObject.Type() == ASTNodeType::IDENTIFIER) {
+      const IdentifierData &enumIdent = ast->GetIdentifier(enumObject);
+      u32 enumHash = enumIdent.name.nameHash;
+      if (outEnumHash) {
+        *outEnumHash = enumHash;
+      }
+      return SymbolTable::LookupByHash(const_cast<SymbolTableData *>(symbols),
+                                       enumHash);
+    }
+
+    if (enumObject.Type() == ASTNodeType::MEMBER_ACCESS) {
+      const MemberAccessData &access = ast->GetMemberAccess(enumObject);
+      if (access.isModuleQualified &&
+          access.object.Type() == ASTNodeType::IDENTIFIER) {
+        const IdentifierData &moduleIdent = ast->GetIdentifier(access.object);
+        std::string syntheticQualifiedName;
+        syntheticQualifiedName.reserve(2 + 10 + 10);
+        syntheticQualifiedName.append("m")
+            .append(std::to_string(moduleIdent.name.nameHash));
+        syntheticQualifiedName.append("::e")
+            .append(std::to_string(access.member.nameHash));
+        if (outEnumHash) {
+          *outEnumHash = access.member.nameHash;
+        }
+        return SymbolTable::LookupByHash(
+            const_cast<SymbolTableData *>(symbols),
+            Utils::HashStr(syntheticQualifiedName.c_str()));
+      }
+    }
+
+    return nullptr;
+  };
+
+  if (!call.moduleObject.IsNull()) {
+    u32 enumHash = 0;
+    // Look up in symbol table to check if it's an enum type. ENUM is used for
+    // module enums, ENUM_SYMBOL for pipeline-local enums.
+    Symbol *enumSym = resolveConstructorEnum(call.moduleObject, &enumHash);
     if (enumSym && (enumSym->kind == SymbolKind::ENUM ||
                     enumSym->kind == SymbolKind::ENUM_SYMBOL)) {
       const EnumData &enumData = symbols->enums[enumSym->index];
@@ -42,7 +80,8 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
 
       if (variantIndex != 0xFFFFFFFF) {
         // Register the enum as a struct type if not already done
-        u32 enumStructHash = LookupOrRegisterStructType(enumHash);
+        u32 enumStructHash =
+            LookupOrRegisterStructType(enumData.name.nameHash);
 
         // Emit OP_ENUM_CONSTRUCT
         // operands[0..3] = argument values (field data)
@@ -51,7 +90,8 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         // metadata = (variantIndex << 16) | (argCount << 8) | enumStructHash
         // lower bits
         program.metadata[builder.currentInstruction - 1] =
-            (variantIndex << 16) | (argCount << 8) | (enumHash & 0xFF);
+            (variantIndex << 16) | (argCount << 8) |
+            ((enumHash != 0 ? enumHash : enumData.name.nameHash) & 0xFF);
 
         // Set register type to the enum struct type
         SetRegisterType(dest, CoreType::CUSTOM);
@@ -77,16 +117,59 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
 
       if (receiverStructHash != 0) {
         // Look up the enum type by its struct hash
-        // ENUM for module enums, ENUM_SYMBOL for pipeline-local enums
+        // ENUM for module enums, ENUM_SYMBOL for pipeline-local enums.
         Symbol *enumSym = SymbolTable::LookupByHash(
             const_cast<SymbolTableData *>(symbols), receiverStructHash);
+        const EnumData *resolvedEnumData = nullptr;
         if (enumSym && (enumSym->kind == SymbolKind::ENUM ||
                         enumSym->kind == SymbolKind::ENUM_SYMBOL)) {
-          const EnumData &enumData = symbols->enums[enumSym->index];
+          resolvedEnumData = &symbols->enums[enumSym->index];
+        } else {
+          resolvedEnumData =
+              SymbolTable::ResolveEnumDataByHash(symbols, receiverStructHash);
+        }
+        if (resolvedEnumData) {
+          const EnumData &enumData = *resolvedEnumData;
 
           // Find the method by name
           NodeRef methodRef = NodeRef::Null();
+          u32 methodModuleIndex = 0xFFFFFFFF;
+          for (u32 e = 0; e < ast->enumDecls.count; e++) {
+            const EnumDeclData &enumDecl = ast->enumDecls[e];
+            if (enumDecl.name.nameHash != enumData.name.nameHash) {
+              continue;
+            }
+            NodeRef enumRef(ASTNodeType::ENUM_DECL, e);
+            for (u32 m = 0; m < ast->modules.count; m++) {
+              const ModuleNodeData &module = ast->modules[m];
+              for (u32 ei = 0; ei < module.enums.count; ei++) {
+                if (module.enums[ei] == enumRef) {
+                  methodModuleIndex = m;
+                  break;
+                }
+              }
+              if (methodModuleIndex != 0xFFFFFFFF) {
+                break;
+              }
+            }
+            for (u32 m = 0; m < enumDecl.methods.count; m++) {
+              NodeRef mRef = enumDecl.methods[m];
+              if (mRef.Type() == ASTNodeType::FUNCTION) {
+                const FunctionDeclData &fn = ast->GetFunction(mRef);
+                if (fn.name.nameHash == call.name.nameHash) {
+                  methodRef = mRef;
+                  break;
+                }
+              }
+            }
+            if (!methodRef.IsNull()) {
+              break;
+            }
+          }
+
           for (u32 i = 0; i < enumData.methodIndices.count; i++) {
+            if (!methodRef.IsNull())
+              break;
             u32 funcIdx = enumData.methodIndices[i];
             if (funcIdx < symbols->functions.count) {
               const FunctionData &funcData = symbols->functions[funcIdx];
@@ -287,7 +370,12 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
 
                 u16 armResult = 0;
                 if (!arm.body.IsNull()) {
+                  u32 savedInlineModuleIndex = inlineModuleIndex;
+                  if (methodModuleIndex != 0xFFFFFFFF) {
+                    inlineModuleIndex = methodModuleIndex;
+                  }
                   armResult = LowerExpression(arm.body);
+                  inlineModuleIndex = savedInlineModuleIndex;
                 }
 
                 u16 newResult = AllocateRegister();
@@ -341,7 +429,12 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
               }
 
               // Evaluate the method body
+              u32 savedInlineModuleIndex = inlineModuleIndex;
+              if (methodModuleIndex != 0xFFFFFFFF) {
+                inlineModuleIndex = methodModuleIndex;
+              }
               u16 bodyResult = LowerExpression(method.body);
+              inlineModuleIndex = savedInlineModuleIndex;
 
               // Restore variableRegisters
               variableRegisters = savedVarRegs;
@@ -1672,4 +1765,3 @@ inline OpCode IRLowering::IntrinsicToOpcode(StdLib::Intrinsic intrinsic) {
     return OP_NOP;
   }
 }
-

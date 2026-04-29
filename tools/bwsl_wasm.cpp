@@ -1339,7 +1339,7 @@ const char* compile(const char* bwslSource, const char* rcfgSource, const char* 
 
 // Version info
 const char* getVersion() {
-    return "BWSL Compiler 1.0.0 (WASM)";
+    return "BWSL Compiler 0.7.5 (WASM)";
 }
 
 // ============= Symbol Export for Autocomplete =============

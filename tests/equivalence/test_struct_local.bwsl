@@ -1,5 +1,9 @@
 pipeline EquivStructLocal {
 
+    resources {
+        output: buffer<float>
+    }
+
 struct Point {
     float3 pos;
     float weight;
@@ -11,6 +15,7 @@ struct Point {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) * 0.5;

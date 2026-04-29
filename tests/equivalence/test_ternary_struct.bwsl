@@ -1,5 +1,9 @@
 pipeline EquivTernaryStruct {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Ternary with struct-typed operands. Pre-1.4 SPIR-V's OpSelect
     // doesn't accept struct composites, so the IR lowering decomposes
     // into per-field OpSelect + OpCompositeInsert. This test pins down
@@ -12,6 +16,7 @@ pipeline EquivTernaryStruct {
     };
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

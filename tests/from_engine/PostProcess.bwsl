@@ -3,6 +3,33 @@
 // ============================================
 pipeline PostProcess {
 
+    resources {
+        screenSize: float2
+        sourceSize: float2
+        currentFrameBuffer: texture2D
+        velocityBuffer: texture2D
+        historyBuffer: texture2D
+        sceneColor: texture2D
+        sourceTexture: texture2D
+        previousMipTexture: texture2D
+        bloomTexture: texture2D
+        bloomThreshold: float
+        bloomKnee: float
+        bloomIntensity: float
+        hdrBuffer: texture2D
+        exposure: float
+        tonemapOperator: int
+        whitePoint: float
+        vignetteEnabled: int
+        vignetteIntensity: float
+        filmGrainEnabled: int
+        filmGrainIntensity: float
+        time: float
+        inputTexture: texture2D
+        pointSampler: sampler
+        linearSampler: sampler
+    }
+
 import Math
 import Color
 
@@ -35,6 +62,7 @@ fullscreenVertex :: () -> vertex_function {
 // Temporal Anti-Aliasing (TAA) Pass
 // ============================================
 pass "TAAPass" {
+        use resources { screenSize, sourceSize, currentFrameBuffer, velocityBuffer, historyBuffer, sceneColor, sourceTexture, previousMipTexture, bloomTexture, bloomThreshold, bloomKnee, bloomIntensity, hdrBuffer, exposure, tonemapOperator, whitePoint, vignetteEnabled, vignetteIntensity, filmGrainEnabled, filmGrainIntensity, time, inputTexture, pointSampler, linearSampler }
     
     vertex = fullscreenVertex()
     
@@ -92,6 +120,7 @@ pass "TAAPass" {
 // Bloom Extraction Pass (Bright pixels)
 // ============================================
 pass "BloomExtract" {
+        use resources { screenSize, sourceSize, currentFrameBuffer, velocityBuffer, historyBuffer, sceneColor, sourceTexture, previousMipTexture, bloomTexture, bloomThreshold, bloomKnee, bloomIntensity, hdrBuffer, exposure, tonemapOperator, whitePoint, vignetteEnabled, vignetteIntensity, filmGrainEnabled, filmGrainIntensity, time, inputTexture, pointSampler, linearSampler }
     
     vertex = fullscreenVertex()
     
@@ -119,6 +148,7 @@ pass "BloomExtract" {
 // Bloom Downsample Pass (Gaussian Blur)
 // ============================================
 pass "BloomDownsample" {
+        use resources { screenSize, sourceSize, currentFrameBuffer, velocityBuffer, historyBuffer, sceneColor, sourceTexture, previousMipTexture, bloomTexture, bloomThreshold, bloomKnee, bloomIntensity, hdrBuffer, exposure, tonemapOperator, whitePoint, vignetteEnabled, vignetteIntensity, filmGrainEnabled, filmGrainIntensity, time, inputTexture, pointSampler, linearSampler }
     
     vertex = fullscreenVertex()
     
@@ -159,6 +189,7 @@ pass "BloomDownsample" {
 // Bloom Upsample Pass (Tent Filter)
 // ============================================
 pass "BloomUpsample" {
+        use resources { screenSize, sourceSize, currentFrameBuffer, velocityBuffer, historyBuffer, sceneColor, sourceTexture, previousMipTexture, bloomTexture, bloomThreshold, bloomKnee, bloomIntensity, hdrBuffer, exposure, tonemapOperator, whitePoint, vignetteEnabled, vignetteIntensity, filmGrainEnabled, filmGrainIntensity, time, inputTexture, pointSampler, linearSampler }
     
     vertex = fullscreenVertex()
     
@@ -192,6 +223,7 @@ pass "BloomUpsample" {
 // Bloom Composite Pass
 // ============================================
 pass "BloomPass" {
+        use resources { screenSize, sourceSize, currentFrameBuffer, velocityBuffer, historyBuffer, sceneColor, sourceTexture, previousMipTexture, bloomTexture, bloomThreshold, bloomKnee, bloomIntensity, hdrBuffer, exposure, tonemapOperator, whitePoint, vignetteEnabled, vignetteIntensity, filmGrainEnabled, filmGrainIntensity, time, inputTexture, pointSampler, linearSampler }
     
     vertex = fullscreenVertex()
     
@@ -210,6 +242,7 @@ pass "BloomPass" {
 // Tone Mapping Pass (HDR to LDR)
 // ============================================
 pass "ToneMappingPass" {
+        use resources { screenSize, sourceSize, currentFrameBuffer, velocityBuffer, historyBuffer, sceneColor, sourceTexture, previousMipTexture, bloomTexture, bloomThreshold, bloomKnee, bloomIntensity, hdrBuffer, exposure, tonemapOperator, whitePoint, vignetteEnabled, vignetteIntensity, filmGrainEnabled, filmGrainIntensity, time, inputTexture, pointSampler, linearSampler }
     
     vertex = fullscreenVertex()
     
@@ -279,6 +312,7 @@ pass "ToneMappingPass" {
 // FXAA Pass (Fast Approximate Anti-Aliasing)
 // ============================================
 pass "FXAAPass" {
+        use resources { screenSize, sourceSize, currentFrameBuffer, velocityBuffer, historyBuffer, sceneColor, sourceTexture, previousMipTexture, bloomTexture, bloomThreshold, bloomKnee, bloomIntensity, hdrBuffer, exposure, tonemapOperator, whitePoint, vignetteEnabled, vignetteIntensity, filmGrainEnabled, filmGrainIntensity, time, inputTexture, pointSampler, linearSampler }
     
     vertex = fullscreenVertex()
     
@@ -355,9 +389,9 @@ uncharted2Tonemap :: (float3 x) -> float3 {
 }
 
 // ============================================
-// Auto-Exposure Compute Passes (TODO: enable when resources are configured)
+// Auto-Exposure Compute Passes (TODO: enable when resources are declared)
 // ============================================
-// These require additional compute-stage resources in the rcfg:
+// These require additional compute-stage resources:
 // - tilesX, tilesY, tileCount, screenWidth, screenHeight
 // - luminanceTiles buffer, exposureOutput buffer
 // - targetMiddleGray, adaptationSpeed, deltaTime, minExposure, maxExposure
@@ -377,4 +411,3 @@ uncharted2Tonemap :: (float3 x) -> float3 {
 // }
 
 }
-

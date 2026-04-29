@@ -1,7 +1,12 @@
 // Matrix-typed ternary must decompose into per-column selects
 // (OpSelect doesn't support composite matrix types pre-SPIRV-1.4).
 pipeline EquivTernaryMatrix {
+
+    resources {
+        output: buffer<float>
+    }
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

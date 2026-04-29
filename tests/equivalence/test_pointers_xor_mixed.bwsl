@@ -1,5 +1,9 @@
 pipeline EquivPointersXorMixed {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Same body has both XOR bitwise and pointer ^ (address-of/deref)
     // operators. Ensures the parser disambiguation and codegen don't
     // interfere when the two forms live in the same expression block.
@@ -7,6 +11,7 @@ pipeline EquivPointersXorMixed {
     // the codegen guard since it parses as `(a^) - 1`.
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
 

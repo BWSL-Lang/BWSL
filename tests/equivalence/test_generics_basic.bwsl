@@ -1,5 +1,9 @@
 pipeline EquivGenericsBasic {
 
+    resources {
+        output: buffer<float>
+    }
+
     constraint FloatVectors = float2 | float3 | float4;
     constraint AllFloats = float | float2 | float3 | float4;
 
@@ -16,6 +20,7 @@ pipeline EquivGenericsBasic {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float f = float(idx) + 1.0;

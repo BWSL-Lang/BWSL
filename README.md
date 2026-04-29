@@ -93,9 +93,6 @@ On Windows, the repo now also includes `build.bat` and `make.bat`. `build.bat` b
 ./build/bwslc shader.bwsl -glsl            # SPIR-V + GLSL 450
 ./build/bwslc shader.bwsl -gles            # SPIR-V + GLSL ES 300 (WebGL 2.0)
 
-# With render config
-./build/bwslc shader.bwsl -config render.rcfg -all
-
 # Output to specific directory
 ./build/bwslc shader.bwsl -o output_dir/ -all
 
@@ -118,7 +115,6 @@ On Windows, the repo now also includes `build.bat` and `make.bat`. `build.bat` b
 |--------|-------------|
 | `-o <dir>` | Output directory (default: current directory) |
 | `-modules <dir>` | Add module search path (can be used multiple times) |
-| `-config <file>` | Render config file path |
 | `-pass <name>` | Compile specific pass (default: all) |
 | `-stage <name>` | Compile specific stage: vertex, fragment, compute (default: all) |
 | `-metal` | Generate Metal Shading Language output |
@@ -172,8 +168,7 @@ Supported WASM flags:
 - `-internals`
 - `-modules <path>` (repeatable)
 
-See [docs/language.md](docs/language.md) for the language reference and
-[docs/render-config.md](docs/render-config.md) for `.rcfg` syntax and examples.
+See [docs/language.md](docs/language.md) for the language reference.
 
 ## Language Overview
 
@@ -226,39 +221,10 @@ Near-term planned work:
 - Add compile-time parameters and const-generic style specialization.
 - Continue tightening diagnostics and conformance coverage for nested eval scopes, loop expansion, and budget limits.
 
-## Render Config Overview
+## Resources Overview
 
-External render configuration files (`.rcfg`) define resources, render targets, pass metadata, and compute dispatch details that BWSL shaders access through `resources.*`.
-
-Top-level `.rcfg` entries currently include:
-
-- `pipeline <name>`
-- `pass <name>`
-- `target <name> <format> <viewport|WxH> [array N]`
-- `uniform <name> <type> <binding> <stage>`
-- `texture <name> <binding> [array] [cubemap] [vertex|fragment|both]`
-- `sampler <name> <binding> [vertex|fragment|both]`
-- `buffer <name> <type> <binding> [readonly|readwrite] [vertex|fragment|both]`
-- `image <name> <binding> [readonly|writeonly|readwrite] [compute|fragment|vertex]`
-- `instanced <count>`
-
-Indented pass properties include:
-
-- `type geometry|standard|shadow|fullscreen|postprocess|compute|ui|editor|custom`
-- `color ...`
-- `depth ...`
-- `depends ...`
-- `bind <uniform_name> <target_name>`
-- `dispatch <x> <y> <z>`
-- `pipeline <name>`
-
-Examples:
-
-- `tests/MaterialPreview_min.rcfg`
-- `tests/from_engine/World.rcfg`
-- `tests/texture_write.rcfg`
-
-Full reference: [docs/render-config.md](docs/render-config.md)
+Resources are declared directly in BWSL source with pipeline-level
+`resources { ... }` blocks and imported into passes with `use resources { ... }`.
 
 ## Example Shader
 

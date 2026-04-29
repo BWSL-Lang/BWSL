@@ -1,5 +1,9 @@
 pipeline EquivChainArrayOfStructs {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Local array-of-structs indexed by a runtime value, then chained
     // field/swizzle/math access on the result. Also a struct holding an
     // array indexed dynamically.
@@ -11,6 +15,7 @@ pipeline EquivChainArrayOfStructs {
     };
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

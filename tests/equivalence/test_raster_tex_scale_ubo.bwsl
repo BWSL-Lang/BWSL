@@ -4,10 +4,17 @@
 // and a UNIFORM_BUFFER at binding 2, on the same set. All three
 // backends should produce identical RGBA32F framebuffer bytes.
 pipeline EquivRasterTexScaleUbo {
+
+    resources {
+        colorTex: texture2D
+        colorSampler: sampler
+        scale: float
+    }
     attributes {
     }
 
     pass "Main" {
+        use resources { colorTex, colorSampler, scale }
         vertex {
             float2[3] positions;
             positions[0] = float2(-1.0, -1.0);

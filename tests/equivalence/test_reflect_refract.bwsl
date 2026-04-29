@@ -1,11 +1,16 @@
 pipeline EquivReflectRefract {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Vector reflection / refraction math. Common divergence point: the
     // GLSL `refract` spec says total internal reflection returns 0,
     // Metal/HLSL match, but custom implementations sometimes differ. Also
     // exercises `faceforward`, which negates N based on dot(I, Nref).
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) * 0.125;  // 0..0.875

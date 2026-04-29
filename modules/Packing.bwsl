@@ -1,0 +1,178 @@
+module Packing {
+
+import Math
+
+/// Packs RGBA color to 8-bit unsigned normalized channels using the built-in intrinsic.
+/// Reference: https://registry.khronos.org/SPIR-V/specs/unified1/GLSL.std.450.html
+pack_rgba8_unorm :: (float4 color) -> uint {
+    return pack_unorm4x8(saturate(color));
+}
+
+/// Unpacks RGBA color from 8-bit unsigned normalized channels using the built-in intrinsic.
+/// Reference: https://registry.khronos.org/SPIR-V/specs/unified1/GLSL.std.450.html
+unpack_rgba8_unorm :: (uint packed) -> float4 {
+    return unpack_unorm4x8(packed);
+}
+
+/// Packs RG color to 16-bit unsigned normalized channels using the built-in intrinsic.
+pack_rg16_unorm :: (float2 value) -> uint {
+    return pack_unorm2x16(saturate(value));
+}
+
+/// Unpacks RG color from 16-bit unsigned normalized channels using the built-in intrinsic.
+unpack_rg16_unorm :: (uint packed) -> float2 {
+    return unpack_unorm2x16(packed);
+}
+
+/// Packs RGBA values to 8-bit signed normalized channels using the built-in intrinsic.
+pack_rgba8_snorm :: (float4 value) -> uint {
+    return pack_snorm4x8(clamp(value, -1.0, 1.0));
+}
+
+/// Unpacks RGBA values from 8-bit signed normalized channels using the built-in intrinsic.
+unpack_rgba8_snorm :: (uint packed) -> float4 {
+    return unpack_snorm4x8(packed);
+}
+
+/// Packs RG values to 16-bit signed normalized channels using the built-in intrinsic.
+pack_rg16_snorm :: (float2 value) -> uint {
+    return pack_snorm2x16(clamp(value, -1.0, 1.0));
+}
+
+/// Unpacks RG values from 16-bit signed normalized channels using the built-in intrinsic.
+unpack_rg16_snorm :: (uint packed) -> float2 {
+    return unpack_snorm2x16(packed);
+}
+
+/// Packs two 32-bit floats to two IEEE 754 half-precision lanes using the built-in intrinsic.
+/// Reference: https://en.wikipedia.org/wiki/Half-precision_floating-point_format
+pack_half2 :: (float2 value) -> uint {
+    return pack_half2x16(value);
+}
+
+/// Unpacks two IEEE 754 half-precision lanes to two 32-bit floats using the built-in intrinsic.
+/// Reference: https://en.wikipedia.org/wiki/Half-precision_floating-point_format
+unpack_half2 :: (uint packed) -> float2 {
+    return unpack_half2x16(packed);
+}
+
+/// Folds an octahedral coordinate across the diagonal seam.
+/// Reference: https://knarkowicz.wordpress.com/2014/04/16/octahedron-normal-vector-encoding/
+oct_wrap :: (float2 v) -> float2 {
+    return (1.0 - abs(v.yx)) * float2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+}
+
+/// Encodes a unit normal into octahedral 2D coordinates.
+/// Reference: https://jcgt.org/published/0003/02/01/
+encode_octahedral :: (float3 n) -> float2 {
+    float3 v = Math::safe_normalize(n);
+    v = v / (abs(v.x) + abs(v.y) + abs(v.z));
+    if (v.z < 0.0) {
+        float2 wrapped = oct_wrap(float2(v.x, v.y));
+        v.x = wrapped.x;
+        v.y = wrapped.y;
+    }
+    return float2(v.x, v.y);
+}
+
+/// Decodes octahedral 2D coordinates back to a unit normal.
+/// Reference: https://jcgt.org/published/0003/02/01/
+decode_octahedral :: (float2 e) -> float3 {
+    float3 v = float3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    if (v.z < 0.0) {
+        float2 wrapped = oct_wrap(float2(v.x, v.y));
+        v.x = wrapped.x;
+        v.y = wrapped.y;
+    }
+    return Math::safe_normalize(v);
+}
+
+/// Packs a normal into two 8-bit signed normalized octahedral components.
+/// Uses a uint container for compatibility with byte-packed vertex streams.
+pack_octahedral_16 :: (float3 n) -> uint {
+    float2 e = encode_octahedral(n);
+    return pack_snorm4x8(float4(e.x, e.y, 0.0, 0.0));
+}
+
+/// Unpacks a normal from two 8-bit signed normalized octahedral components.
+unpack_octahedral_16 :: (uint packed) -> float3 {
+    float4 e = unpack_snorm4x8(packed);
+    return decode_octahedral(float2(e.x, e.y));
+}
+
+/// Packs a normal into two 16-bit signed normalized octahedral components.
+pack_octahedral_32 :: (float3 n) -> uint {
+    float2 e = encode_octahedral(n);
+    return pack_snorm2x16(e);
+}
+
+/// Unpacks a normal from two 16-bit signed normalized octahedral components.
+unpack_octahedral_32 :: (uint packed) -> float3 {
+    return decode_octahedral(unpack_snorm2x16(packed));
+}
+
+/// Packs a signed vector in [-1, 1] into 10-10-10 unsigned storage.
+/// This matches the existing vertex decompression convention in Compression.bwsl.
+pack_snorm10_10_10 :: (float3 value) -> uint {
+    float3 v = saturate(value * 0.5 + 0.5);
+    uint x = uint(v.x * 1023.0 + 0.5) & 0x3FFu;
+    uint y = uint(v.y * 1023.0 + 0.5) & 0x3FFu;
+    uint z = uint(v.z * 1023.0 + 0.5) & 0x3FFu;
+    return x | (y << 10u) | (z << 20u);
+}
+
+/// Unpacks a signed vector from 10-10-10 unsigned storage into [-1, 1].
+unpack_snorm10_10_10 :: (uint packed) -> float3 {
+    float x = float((packed >> 0u) & 0x3FFu) / 1023.0 * 2.0 - 1.0;
+    float y = float((packed >> 10u) & 0x3FFu) / 1023.0 * 2.0 - 1.0;
+    float z = float((packed >> 20u) & 0x3FFu) / 1023.0 * 2.0 - 1.0;
+    return float3(x, y, z);
+}
+
+/// Packs HDR color into Radiance-style RGBE: 8 bits per color channel plus shared exponent.
+/// Reference: https://en.wikipedia.org/wiki/RGBE_image_format
+pack_rgbe :: (float3 color) -> uint {
+    float maxChannel = max(max(color.r, color.g), color.b);
+    if (maxChannel <= 1e-9) {
+        return 0u;
+    }
+
+    float exponent = ceil(log2(maxChannel));
+    float scale = exp2(exponent) / 255.0;
+    uint r = uint(clamp(color.r / scale, 0.0, 255.0)) & 0xFFu;
+    uint g = uint(clamp(color.g / scale, 0.0, 255.0)) & 0xFFu;
+    uint b = uint(clamp(color.b / scale, 0.0, 255.0)) & 0xFFu;
+    uint e = uint(exponent + 128.0) & 0xFFu;
+    return r | (g << 8u) | (b << 16u) | (e << 24u);
+}
+
+/// Unpacks Radiance-style RGBE color into linear HDR RGB.
+/// Reference: https://en.wikipedia.org/wiki/RGBE_image_format
+unpack_rgbe :: (uint packed) -> float3 {
+    uint e = (packed >> 24u) & 0xFFu;
+    if (e == 0u) {
+        return float3(0.0);
+    }
+
+    float scale = exp2(float(e) - 128.0) / 255.0;
+    float r = float(packed & 0xFFu) * scale;
+    float g = float((packed >> 8u) & 0xFFu) * scale;
+    float b = float((packed >> 16u) & 0xFFu) * scale;
+    return float3(r, g, b);
+}
+
+/// Encodes HDR color into RGBM with a caller-provided max range.
+/// Reference: https://graphicrants.blogspot.com/2009/04/rgbm-color-encoding.html
+encode_rgbm :: (float3 color, float maxRange) -> float4 {
+    float maxChannel = max(max(color.r, color.g), color.b);
+    float m = clamp(ceil(maxChannel / maxRange * 255.0) / 255.0, 1.0 / 255.0, 1.0);
+    return float4(color / (m * maxRange), m);
+}
+
+/// Decodes RGBM color with the same max range used for encoding.
+/// Reference: https://graphicrants.blogspot.com/2009/04/rgbm-color-encoding.html
+decode_rgbm :: (float4 rgbm, float maxRange) -> float3 {
+    return rgbm.rgb * rgbm.a * maxRange;
+}
+
+}

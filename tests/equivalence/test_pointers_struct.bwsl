@@ -1,7 +1,12 @@
 pipeline EquivPointersStruct {
+
+    resources {
+        output: buffer<float>
+    }
     struct Inner { float a; float b; };
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
 

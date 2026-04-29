@@ -1,5 +1,9 @@
 pipeline EquivMathInverseTrig {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Inverse trigonometric functions across their full defined range,
     // including atan2 quadrant coverage (all four quadrants plus the
     // ±y=0 axis). Existing test_trig only exercises sin/cos/tan/atan2
@@ -7,6 +11,7 @@ pipeline EquivMathInverseTrig {
     // every atan2 quadrant.
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) * 0.125;   // 0, 0.125, ..., 0.875

@@ -1,5 +1,9 @@
 pipeline EquivPointersInLoop {
 
+    resources {
+        output: buffer<float>
+    }
+
     // HANDOFF.md short-term item #3: pointer + loop + phi cross-product.
     // Exercises a pointer variable that is (a) assigned once and (b)
     // reassigned across branches, with writes both inside the loop
@@ -13,6 +17,7 @@ pipeline EquivPointersInLoop {
     };
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             int n = int(idx) + 1;

@@ -1,5 +1,9 @@
 pipeline EquivGenericsTypePattern {
 
+    resources {
+        output: buffer<float>
+    }
+
     constraint FloatVectors = float2 | float3 | float4;
 
     vecProcess :: (FloatVectors v) -> FloatVectors {
@@ -14,6 +18,7 @@ pipeline EquivGenericsTypePattern {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) + 0.5;

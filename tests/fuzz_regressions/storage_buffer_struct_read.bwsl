@@ -1,5 +1,5 @@
 // Local struct-array read pattern — mirrors the chained [i].field
-// access semantics of SSBO reads but runs without an rcfg so the
+// access semantics of SSBO reads but runs without external resource config so the
 // fuzz_regressions harness can compile it stand-alone.
 pipeline StorageBufferStructRead {
     struct Particle {

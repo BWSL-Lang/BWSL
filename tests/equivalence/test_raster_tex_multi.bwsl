@@ -3,10 +3,18 @@
 // descriptors at distinct bindings resolve correctly in every backend,
 // with sample ordering and per-channel blending preserved bit-for-bit.
 pipeline EquivRasterTexMulti {
+
+    resources {
+        texA: texture2D
+        sampA: sampler
+        texB: texture2D
+        sampB: sampler
+    }
     attributes {
     }
 
     pass "Main" {
+        use resources { texA, sampA, texB, sampB }
         vertex {
             float2[3] positions;
             positions[0] = float2(-1.0, -1.0);

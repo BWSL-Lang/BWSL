@@ -1,5 +1,9 @@
 pipeline EquivStepSmoothstep {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Exact-boundary behavior of step / smoothstep / lerp. When x == edge
     // step() returns 1.0 (per GLSL spec), smoothstep() returns 0.0 at the
     // low edge and 1.0 at the high edge. Backends sometimes use an FMA
@@ -7,6 +11,7 @@ pipeline EquivStepSmoothstep {
     // that.
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float x = float(idx) * 0.25;  // 0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75

@@ -27,7 +27,7 @@ standalone compile targets.
 
 The current regression suite covers:
 
-- graphics passes, multipass pipelines, and render-config-backed resources
+- graphics passes, multipass pipelines, and source-declared resources
 - compute shaders, workgroup sizes, shared memory, barriers, atomics, and wave operations
 - structs, arrays, matrix and vector construction, swizzles, and member access
 - overloads, scoped functions, inline returns, and stage-function selection

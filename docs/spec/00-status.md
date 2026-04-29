@@ -86,7 +86,6 @@ wording is final:
 The following are direction signals only:
 
 - Richer compile-time data and specialization facilities
-- A separate formal spec track for render-config files
 
 ## Rule for Conflicts
 

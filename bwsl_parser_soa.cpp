@@ -318,6 +318,11 @@ static void RegisterParsedResource(SymbolTableData* table,
         data.isArrayTexture = true;
         return;
     }
+    if (typeName == "image2D") {
+        data.type = ResourceBinding::StorageImage;
+        data.coreType = static_cast<u8>(CoreType::TEXTURE2D);
+        return;
+    }
 
     std::string innerType = ParseInnerResourceType(typeName, "buffer<");
     if (!innerType.empty()) {
@@ -1323,7 +1328,6 @@ NodeRef Parser::ParsePass() {
 
     NodeRef pass = ASTFactory::MakePass(ast, passName.ToString(sourceBase()), loc.line, loc.column);
 
-    SymbolTable::SetCurrentPass(&symbolTable, passName);
     currentPass = pass;
 
     // Enter a pass scope for pass-local symbols
@@ -2365,11 +2369,19 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
         // Store the unqualified type hash for later use
         unqualifiedTypeHash = localTypeArena.nameHash;
 
-        // Build internal qualified name: m<moduleHash>::s<typeHash>
+        // Build internal qualified names. Structs and enums live in separate
+        // synthetic namespaces (`::s` vs `::e`), but source uses the same
+        // Module::Type spelling for both.
         std::string internalName = "m" + std::to_string(moduleArena.nameHash) +
                                    "::s" + std::to_string(localTypeArena.nameHash);
         ArenaString internalArena = ArenaString::MakeHashOnly(internalName);
         typeSym = SymbolTable::LookupAny(&symbolTable, internalArena);
+        if (!typeSym) {
+            internalName = "m" + std::to_string(moduleArena.nameHash) +
+                           "::e" + std::to_string(localTypeArena.nameHash);
+            internalArena = ArenaString::MakeHashOnly(internalName);
+            typeSym = SymbolTable::LookupAny(&symbolTable, internalArena);
+        }
     } else {
         typeSym = SymbolTable::LookupAny(&symbolTable, typeArena);
     }
@@ -2789,6 +2801,17 @@ NodeRef Parser::ParsePostfix() {
                 if (!found) {
                     Error("Unknown enum variant '" + variantName + "'");
                     return NodeRef::Null();
+                }
+
+                if (enumData.flags & EnumData::IS_SUM_TYPE) {
+                    ArenaString variantArena = ArenaString::MakeHashOnly(variantName);
+                    expr = ASTFactory::MakeMemberAccess(ast, expr, variantArena, loc.line, loc.column);
+                    MemberAccessData& access = ast->GetMemberAccess(expr);
+                    access.isModuleQualified = true;
+                    std::string qualifiedName = moduleName.ToString(sourceBase()) + "::" +
+                                                enumName.ToString(sourceBase()) + "::" + variantName;
+                    access.qualifiedNameHash = Utils::HashStr(qualifiedName.c_str());
+                    continue;
                 }
 
                 CoreType baseType = enumData.underlyingType;

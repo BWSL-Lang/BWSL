@@ -1,10 +1,15 @@
 pipeline EquivNanIsnan {
 
+    resources {
+        output: buffer<float>
+    }
+
     // NaN detection via isnan() intrinsic. We never compare raw NaN floats
     // across backends (NaN != NaN anywhere); only the bool result folded
     // to 0.0/1.0.
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

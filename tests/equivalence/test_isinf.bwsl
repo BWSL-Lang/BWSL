@@ -1,9 +1,14 @@
 pipeline EquivIsinf {
 
+    resources {
+        output: buffer<float>
+    }
+
     // isinf() detects +/-infinity. Pairs with test_nan_isnan; exists to
     // lock down the second float-classification intrinsic.
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

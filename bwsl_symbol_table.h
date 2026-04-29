@@ -11,7 +11,7 @@
 #include <cstdio>
 
 #include "bwsl_defs.h"
-#include "bwsl_render_config.h"
+#include "bwsl_compiler_types.h"
 namespace BWSL {
 
 enum class NamespaceKind : u8 {
@@ -171,20 +171,12 @@ struct ResourceData {
     ResourceBinding::Type type = ResourceBinding::Buffer;
     u32 bindingIndex = 0;
     u8 stageFlags = 0;
-    u8 coreType = static_cast<u8>(CoreType::FLOAT4);  // CoreType for uniform buffers (from render config)
+    u8 coreType = static_cast<u8>(CoreType::FLOAT4);
     bool isArrayTexture = false;   // For texture arrays (sampler2DArray)
     bool isCubemapTexture = false; // For cubemap textures (samplerCube)
     u32 structTypeHash = 0;  // For struct types (storage buffers), hash of the fully qualified type name
     ArenaString renderTargetName;
-    ArenaString typeName;  // Raw type name string from render config (e.g., "Globals::LightSourcesSoA")
-};
-
-struct PassContextData {
-    ArenaString passName;
-    PassType passType;
-    ArenaArray<ResourceBinding> availableBindings;
-    ArenaArray<BufferGroupLayout::GroupType> activeBufferGroups;
-    ArenaString pipelineName;
+    ArenaString typeName;
 };
 
 struct StructData {
@@ -343,16 +335,6 @@ struct SymbolTableData {
     u32 currentScope;
     ArenaArray<u32> scopeStartIndices;  // Where each scope starts in symbols array
     
-    //---------------------------- Render context ----------------------------------//
-    
-    const RenderConfig* renderConfig;
-    PassContextData currentPass;
-    
-    //------------ Resource lookup tables (built from RenderConfig) ---------------//
-    
-    ArenaArray<std::pair<ArenaString, ResourceData>> renderTargets;
-    ArenaArray<std::pair<ArenaString, BufferGroupLayout::GroupType>> bufferGroups;
-
     //---------------------------- Module data -----------------------------------//
     
     static constexpr u32 MODULE_HASH_TABLE_SIZE = 64; // Power of 2
@@ -417,13 +399,10 @@ namespace SymbolTable {
         table->enums.Init(arena, 32);
         table->constraints.Init(arena, 16);
         table->scopeStartIndices.Init(arena, 16);
-        table->renderTargets.Init(arena, 32);
-        table->bufferGroups.Init(arena, 16);
         table->evalConstants.Init(arena, 16);      // Initialize eval constants array
         table->evalFunctionIndices.Init(arena, 8); // Initialize eval function indices
         table->specializationRegistry.count = 0;   // Initialize specialization registry
         table->currentScope = 0;
-        table->renderConfig = nullptr;
         table->importedModules.Init(arena, 8);
         table->currentModuleIndex = INVALID_INDEX;
         table->inModuleScope = false;
@@ -703,158 +682,6 @@ namespace SymbolTable {
         return CoreType::CUSTOM;  // Unknown type - treat as custom struct
     }
 
-    inline void InitFromRenderConfig(SymbolTableData* table, const RenderConfig& config) {
-        table->renderConfig = &config;
-
-        // Pre-populate render targets
-        for (const auto& rt : config.renderTargets) {
-            ResourceData data;
-            data.type = ResourceBinding::Texture;
-            data.bindingIndex = 0;  // Will be set per-pass
-            data.stageFlags = 0;
-            data.renderTargetName = ArenaString::MakeHashOnly(rt.name);
-            table->renderTargets.Push(table->arena,
-                std::make_pair(ArenaString::MakeHashOnly(rt.name), data));
-        }
-
-        // Pre-populate buffer groups
-        for (const auto& bg : config.bufferGroups) {
-            table->bufferGroups.Push(table->arena,
-                std::make_pair(ArenaString::MakeHashOnly(bg.name), bg.type));
-        }
-
-        // Register uniform buffers as resources
-        // Use just the short name - RESOURCES namespace disambiguates
-        for (const auto& ub : config.uniformBuffers) {
-            ArenaString name = ArenaString::MakeHashOnly(ub.name);
-
-            // Manually add resource symbol (AddSymbol is defined later)
-            Symbol sym;
-            sym.name = name;
-            sym.moduleIndex = INVALID_INDEX;
-            sym.namespaceKind = NamespaceKind::RESOURCES;
-            sym.kind = SymbolKind::RESOURCE;
-            sym.scopeLevel = 0;
-            sym.index = table->resources.count;
-
-            ResourceData resData;
-            resData.type = ResourceBinding::UniformBuffer;
-            resData.bindingIndex = ub.bindingIndex;
-            // Parser stores stage flags as bitmask directly (1=vertex, 2=fragment, 3=both)
-            resData.stageFlags = static_cast<u8>(ub.stages);
-            // Store the explicit type from render config
-            resData.typeName = ArenaString::MakeHashOnly(ub.typeName);
-            ReverseLookup::Register(resData.typeName.nameHash, ub.typeName.c_str());
-            CoreType uniformType = ParseTypeName(ub.typeName);
-            resData.coreType = static_cast<u8>(uniformType);
-            if (uniformType == CoreType::CUSTOM) {
-                resData.structTypeHash = Utils::HashStr(ub.typeName.c_str());
-            }
-            table->resources.Push(table->arena, resData);
-            table->symbols.Push(table->arena, sym);
-        }
-
-        // Register textures as resources
-        // Use just the short name - RESOURCES namespace disambiguates
-        for (const auto& tex : config.textures) {
-            ArenaString name = ArenaString::MakeHashOnly(tex.name);
-
-            Symbol sym;
-            sym.name = name;
-            sym.moduleIndex = INVALID_INDEX;
-            sym.namespaceKind = NamespaceKind::RESOURCES;
-            sym.kind = SymbolKind::RESOURCE;
-            sym.scopeLevel = 0;
-            sym.index = table->resources.count;
-
-            ResourceData resData;
-            resData.type = ResourceBinding::Texture;
-            resData.bindingIndex = tex.bindingIndex;
-            resData.stageFlags = static_cast<u8>(tex.stages);
-            resData.isArrayTexture = tex.isArray;
-            resData.isCubemapTexture = tex.isCubemap;
-            table->resources.Push(table->arena, resData);
-            table->symbols.Push(table->arena, sym);
-        }
-
-        // Register samplers as resources
-        // Use just the short name - RESOURCES namespace disambiguates
-        for (const auto& samp : config.samplers) {
-            ArenaString name = ArenaString::MakeHashOnly(samp.name);
-
-            Symbol sym;
-            sym.name = name;
-            sym.moduleIndex = INVALID_INDEX;
-            sym.namespaceKind = NamespaceKind::RESOURCES;
-            sym.kind = SymbolKind::RESOURCE;
-            sym.scopeLevel = 0;
-            sym.index = table->resources.count;
-
-            ResourceData resData;
-            resData.type = ResourceBinding::Sampler;
-            resData.bindingIndex = samp.bindingIndex;
-            resData.stageFlags = static_cast<u8>(samp.stages);
-            table->resources.Push(table->arena, resData);
-            table->symbols.Push(table->arena, sym);
-        }
-
-        // Register storage buffers as resources
-        // Use just the short name - RESOURCES namespace disambiguates
-        for (const auto& buf : config.storageBuffers) {
-            ArenaString name = ArenaString::MakeHashOnly(buf.name);
-
-            Symbol sym;
-            sym.name = name;
-            sym.moduleIndex = INVALID_INDEX;
-            sym.namespaceKind = NamespaceKind::RESOURCES;
-            sym.kind = SymbolKind::RESOURCE;
-            sym.scopeLevel = 0;
-            sym.index = table->resources.count;
-
-            ResourceData resData;
-            resData.type = ResourceBinding::StorageBuffer;
-            resData.bindingIndex = buf.bindingIndex;
-            resData.stageFlags = static_cast<u8>(buf.stages);
-            // Store the type name for struct lookup during IR lowering
-            resData.typeName = ArenaString::MakeHashOnly(buf.typeName);
-
-            // Parse the type - primitive types (mat4, float4, etc.) vs custom structs
-            CoreType coreType = ParseTypeName(buf.typeName);
-            resData.coreType = static_cast<u8>(coreType);
-
-            // Only set structTypeHash for custom struct types, not primitives
-            // Module structs are registered with their qualified name (e.g., "Globals::LightSourcesSoA")
-            if (coreType == CoreType::CUSTOM) {
-                resData.structTypeHash = Utils::HashStr(buf.typeName.c_str());
-            } else {
-                resData.structTypeHash = 0;  // Primitive type - no struct lookup needed
-            }
-
-            table->resources.Push(table->arena, resData);
-            table->symbols.Push(table->arena, sym);
-        }
-
-        // Register storage images as resources
-        for (const auto& img : config.storageImages) {
-            ArenaString name = ArenaString::MakeHashOnly(img.name);
-
-            Symbol sym;
-            sym.name = name;
-            sym.moduleIndex = INVALID_INDEX;
-            sym.namespaceKind = NamespaceKind::RESOURCES;
-            sym.kind = SymbolKind::RESOURCE;
-            sym.scopeLevel = 0;
-            sym.index = table->resources.count;
-
-            ResourceData resData;
-            resData.type = ResourceBinding::StorageImage;
-            resData.bindingIndex = img.bindingIndex;
-            resData.stageFlags = static_cast<u8>(img.stages);
-            table->resources.Push(table->arena, resData);
-            table->symbols.Push(table->arena, sym);
-        }
-    }
-
     inline void EnterScope(SymbolTableData* table) {
         table->currentScope++;
         table->scopeStartIndices.Push(table->arena, table->symbols.count);
@@ -1032,64 +859,6 @@ namespace SymbolTable {
             return nullptr;
     }
     
-    inline void SetCurrentPass(SymbolTableData* table, const ArenaString& passName) {
-        if (!table->renderConfig) return;
-        
-        // Find pass in config
-        for (const auto& pass : table->renderConfig->passes) {
-            if (Utils::HashStr(pass.name.c_str()) == passName.nameHash) {
-                table->currentPass.passName = passName;
-                table->currentPass.passType = pass.type;
-                table->currentPass.pipelineName = ArenaString::MakeHashOnly(pass.descriptor.pipelineName);
-                
-                // Copy bindings
-                table->currentPass.availableBindings.Init(table->arena, pass.descriptor.resourceBindings.size());
-                for (const auto& binding : pass.descriptor.resourceBindings) {
-                    table->currentPass.availableBindings.Push(table->arena, binding);
-                }
-                
-                // Copy buffer groups
-                table->currentPass.activeBufferGroups.Init(table->arena, pass.descriptor.bufferGroupTypes.size());
-                for (auto groupType : pass.descriptor.bufferGroupTypes) {
-                    table->currentPass.activeBufferGroups.Push(table->arena, groupType);
-                }
-                
-                // Add pass resources to symbol table
-                EnterScope(table);
-                for (const auto& binding : pass.descriptor.resourceBindings) {
-                    std::string fullNameStr = std::string("resources.") + binding.resourceName;
-                    ArenaString fullName = ArenaString::MakeHashOnly(fullNameStr);
-                    // Register for debug symbol lookup (both full path and short name)
-                    ReverseLookup::Register(fullName.nameHash, fullNameStr.c_str());
-                    ArenaString shortName = ArenaString::MakeHashOnly(binding.resourceName);
-                    ReverseLookup::Register(shortName.nameHash, binding.resourceName.c_str());
-
-                    // Use AddResource to ensure proper namespace
-                    Symbol* sym = AddSymbol(table, fullName, SymbolKind::RESOURCE,
-                                           NamespaceKind::RESOURCES, INVALID_INDEX);
-                    if (sym) {
-                        // New resource - initialize all fields
-                        ResourceData& data = table->resources[sym->index];
-                        data.type = binding.type;
-                        data.bindingIndex = binding.bindingIndex;
-                        // stages is already a bitmask (1=vertex, 2=fragment, 3=both)
-                        data.stageFlags = binding.stages;
-                        data.renderTargetName = ArenaString::MakeHashOnly(binding.resourceName);
-                    } else {
-                        // Resource already exists - update stage flags to support both stages
-                        Symbol* existing = LookupResource(table, fullName);
-                        if (existing) {
-                            ResourceData& data = table->resources[existing->index];
-                            data.stageFlags |= binding.stages;
-                        }
-                    }
-                }
-                
-                break;
-            }
-        }
-    }
-    
     inline bool ValidateResourceAccess(SymbolTableData* table, const ArenaString& resourceName, ShaderStage stage, [[maybe_unused]] const char* sourceBase = nullptr) {
         // Resources are registered with their short name in the RESOURCES namespace
         // The namespace disambiguates them from other symbols
@@ -1132,38 +901,6 @@ namespace SymbolTable {
         return AddSymbol(table, name, SymbolKind::ATTRIBUTE,
                         NamespaceKind::ATTRIBUTES, INVALID_INDEX);
     }
-
-    // Get available attributes based on buffer groups
-    inline u32 GetAvailableAttributes(SymbolTableData* table, ArenaString* outAttributes, u32 maxCount) {
-        u32 count = 0;
-        
-        // Check each active buffer group
-        for (u32 i = 0; i < table->currentPass.activeBufferGroups.count; i++) {
-            auto groupType = table->currentPass.activeBufferGroups[i];
-            
-            // Add attributes based on group type
-            switch (groupType) {
-                case BufferGroupLayout::GroupType::OPAQUE_STATIC:
-                case BufferGroupLayout::GroupType::OPAQUE_DYNAMIC:
-                    if (count < maxCount) outAttributes[count++] = ArenaString::MakeHashOnly("position");
-                    if (count < maxCount) outAttributes[count++] = ArenaString::MakeHashOnly("normal");
-                    if (count < maxCount) outAttributes[count++] = ArenaString::MakeHashOnly("texcoord");
-                    if (count < maxCount) outAttributes[count++] = ArenaString::MakeHashOnly("tangent");
-                    break;
-                    
-                case BufferGroupLayout::GroupType::SHADOW_CASTERS:
-                    if (count < maxCount) outAttributes[count++] = ArenaString::MakeHashOnly("position");
-                    break;
-                    
-                default:
-                    break;
-            }
-        }
-        
-        return count;
-    }
-
-
 
     inline u32 AddModule(SymbolTableData* table, const ArenaString& name) {
         u32 hash = name.nameHash;
@@ -1261,29 +998,6 @@ namespace SymbolTable {
         return sym;
     }
 
-    inline bool ValidateResourceInPass(SymbolTableData* table, const ArenaString& resourceName, ShaderStage stage) {
-        // Check if resource is in current pass's available bindings
-        for (u32 i = 0; i < table->currentPass.availableBindings.count; i++) {
-            const auto& binding = table->currentPass.availableBindings[i];
-            if (Utils::HashStr(binding.resourceName.c_str()) == resourceName.nameHash) {
-                // Check shader stage compatibility (stages is a bitmask)
-                return HasShaderStage(binding.stages, stage);
-            }
-        }
-        return false;
-    }
-
-    // Get resources available in current pass
-    inline void GetPassResources(SymbolTableData* table, ShaderStage stage, ArenaArray<ArenaString>& outResources) {
-        for (u32 i = 0; i < table->currentPass.availableBindings.count; i++) {
-            const auto& binding = table->currentPass.availableBindings[i];
-            // stages is a bitmask
-            if (HasShaderStage(binding.stages, stage)) {
-                outResources.Push(table->arena,
-                    ArenaString::MakeHashOnly(binding.resourceName));
-            }
-        }
-    }
     enum class AddConstraintResult {
         SUCCESS,
         DUPLICATE_IN_SCOPE,

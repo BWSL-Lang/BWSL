@@ -1,5 +1,10 @@
 pipeline EquivWhileLoop {
+
+    resources {
+        output: buffer<int>
+    }
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             int n = int(idx) + 1;

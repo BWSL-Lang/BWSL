@@ -81,7 +81,7 @@ namespace fs = std::filesystem;
 using namespace BWSL;
 using namespace BWSL::IR;
 
-#define VERSION "0.4.0"
+#define VERSION "0.7.5"
 
 // ============= Configuration =============
 
@@ -97,9 +97,7 @@ struct CompilerConfig {
     std::string inputFile;
     std::string outputDir = ".";
     std::vector<std::string> modulePaths;  // Additional module search paths
-    std::string renderConfigPath;          // if using external render config, if empty will use default
-    RenderConfig renderConfig;             // the render config to use
-    RenderConfigParser::GeometryConfig geometryConfig;  // Geometry configuration (instancing, etc.)
+    RenderConfig renderConfig;             // synthetic config derived from source resources
     std::string passFilter;                // Empty = all passes
     std::string stageFilter;               // Empty = all stages
     bool outputSpirv = true;               // SPIR-V always generated
@@ -192,7 +190,7 @@ void print_splash() {
     │ ░▒▓█ B W S L █▓▒░                   │
     │ ─────────────────────────────       │
     │ » Brawl Shading Language            │
-    │ » Compiler v 0.5.0                  │
+    │ » Compiler v 0.7.5                  │
     │ » Made by Alexander Presthus        │
     │ » https://github.com/apresthus/bwsl │
     │                                     │
@@ -207,7 +205,6 @@ void PrintUsage(const char* programName) {
     printf("Options:\n");
     printf("  -o <dir>       Output directory (default: current directory)\n");
     printf("  -modules <dir> Add module search path (can be used multiple times)\n");
-    printf("  -config <file> Add render config path\n");
     printf("  -variant <k=v> Set a named variant value (repeatable)\n");
     printf("  -dump-variant-space  Print variant reflection JSON and exit\n");
     printf("  -pass <name>   Compile specific pass (default: all passes)\n");
@@ -237,7 +234,6 @@ void PrintUsage(const char* programName) {
     printf("  %s shader.bwsl -metal               # SPIR-V + Metal\n", programName);
     printf("  %s shader.bwsl -metal -hlsl -gles   # SPIR-V + Metal + HLSL + WebGL\n", programName);
     printf("  %s shader.bwsl -format all          # All formats\n", programName);
-    printf("  %s shader.bwsl -config render.rcfg -gles  # Use render config with WebGL output\n", programName);
     printf("  %s shader.bwsl -variant lighting=Clustered -variant skinning=true\n", programName);
 }
 
@@ -1029,7 +1025,6 @@ static std::string BuildWebGLSidecarJson(const PassData& pass,
                                          const SymbolTableData& symbols,
                                          const IRAnalysis& analysis,
                                          const char* sourceBase,
-                                         const RenderConfigParser::GeometryConfig& geometryConfig,
                                          bool includeAttributes,
                                          const AST* ast = nullptr,
                                          const PipelineData* pipeline = nullptr) {
@@ -1095,15 +1090,7 @@ static std::string BuildWebGLSidecarJson(const PassData& pass,
     }
 
     appendMap(json, "uniforms", uniforms, true);
-    appendMap(json, "samplers", samplers,
-              geometryConfig.type == RenderConfigParser::GeometryConfig::Type::Instanced);
-
-    if (geometryConfig.type == RenderConfigParser::GeometryConfig::Type::Instanced) {
-        json += "  \"geometry\": {\n";
-        json += "    \"type\": \"instanced\",\n";
-        json += "    \"instanceCount\": " + std::to_string(geometryConfig.instanceCount) + "\n";
-        json += "  }\n";
-    }
+    appendMap(json, "samplers", samplers, false);
 
     json += "}\n";
     return json;
@@ -1286,22 +1273,133 @@ struct CompileResult {
     ShaderTiming timing;
 };
 
-RenderConfig CreateDefaultRenderConfig(const std::string& pipelineName) {
-    RenderConfig config;
-    config.name = pipelineName;
+static std::string ResolveArenaStringForConfig(const ArenaString& value,
+                                               const char* sourceBase,
+                                               const std::string& fallback = "") {
+    if (!value.isHashOnly() && sourceBase) {
+        return std::string(value.view(sourceBase));
+    }
 
-    config.renderTargets = {
-        RenderTargetHelpers::ColorTarget("SceneColor", 1.0f, PixelFormat::RGBA16Float),
-        RenderTargetHelpers::ColorTarget("Velocity", 1.0f, PixelFormat::RG16Float),
-        RenderTargetHelpers::DepthTarget("SceneDepth", 1.0f),
+    std::string reversed = ReverseLookup::GetString(value.nameHash);
+    if (!reversed.empty()) {
+        return reversed;
+    }
+
+    std::string resolved = value.ToString(sourceBase);
+    if (resolved.find("<hash:") == std::string::npos) {
+        return resolved;
+    }
+
+    return fallback;
+}
+
+RenderConfig CreateSyntheticRenderConfig(const AST& ast,
+                                         const PipelineData& pipeline,
+                                         const SymbolTableData& symbols,
+                                         const char* sourceBase) {
+    RenderConfig config;
+    config.name = ResolveArenaStringForConfig(pipeline.name, sourceBase, "Pipeline");
+
+    auto appendResource = [&](const std::string& resourceName,
+                              const std::string& typeName,
+                              const ResourceData& resource) {
+        switch (resource.type) {
+            case ResourceBinding::UniformBuffer: {
+                UniformBufferBinding binding;
+                binding.name = resourceName;
+                binding.typeName = typeName;
+                binding.bindingIndex = resource.bindingIndex;
+                binding.stages = resource.stageFlags;
+                config.uniformBuffers.push_back(std::move(binding));
+                break;
+            }
+            case ResourceBinding::Texture: {
+                TextureBinding binding;
+                binding.name = resourceName;
+                binding.bindingIndex = resource.bindingIndex;
+                binding.isArray = resource.isArrayTexture;
+                binding.isCubemap = resource.isCubemapTexture;
+                binding.stages = resource.stageFlags;
+                config.textures.push_back(std::move(binding));
+                break;
+            }
+            case ResourceBinding::Sampler: {
+                SamplerBinding binding;
+                binding.name = resourceName;
+                binding.bindingIndex = resource.bindingIndex;
+                binding.stages = resource.stageFlags;
+                config.samplers.push_back(std::move(binding));
+                break;
+            }
+            case ResourceBinding::StorageBuffer: {
+                StorageBufferBinding binding;
+                binding.name = resourceName;
+                binding.typeName = typeName;
+                binding.bindingIndex = resource.bindingIndex;
+                binding.readOnly = true;
+                binding.stages = resource.stageFlags;
+                config.storageBuffers.push_back(std::move(binding));
+                break;
+            }
+            case ResourceBinding::StorageImage: {
+                StorageImageBinding binding;
+                binding.name = resourceName;
+                binding.bindingIndex = resource.bindingIndex;
+                binding.accessMode = ResourceAccessMode::ReadWrite;
+                binding.stages = resource.stageFlags;
+                config.storageImages.push_back(std::move(binding));
+                break;
+            }
+            default:
+                break;
+        }
     };
 
-    RenderConfig::PassData mainPass;
-    mainPass.name = "Main";
-    mainPass.type = PassType::Standard;
-    mainPass.descriptor.name = "Main";
-    mainPass.descriptor.pipelineName = pipelineName;
-    config.passes.push_back(mainPass);
+    if (pipeline.resources.count > 0) {
+        for (u32 i = 0; i < pipeline.resources.count; i++) {
+            const ResourceDeclData& decl = ast.GetResourceDecl(pipeline.resources[i]);
+            Symbol* sym = SymbolTable::LookupResource(const_cast<SymbolTableData*>(&symbols), decl.name);
+            if (!sym || sym->index >= symbols.resources.count) {
+                continue;
+            }
+
+            const ResourceData& resource = symbols.resources[sym->index];
+            std::string resourceName = ResolveArenaStringForConfig(
+                decl.name,
+                sourceBase,
+                GetResourceNameByIndex(symbols, sym->index, sourceBase)
+            );
+            if (resourceName.empty()) {
+                continue;
+            }
+
+            appendResource(resourceName,
+                           ResolveArenaStringForConfig(decl.typeName, sourceBase),
+                           resource);
+        }
+    } else {
+        for (u32 resourceIndex = 0; resourceIndex < symbols.resources.count; resourceIndex++) {
+            const ResourceData& resource = symbols.resources[resourceIndex];
+            std::string resourceName = GetResourceNameByIndex(symbols, resourceIndex, sourceBase);
+            if (resourceName.empty()) {
+                continue;
+            }
+
+            appendResource(resourceName,
+                           ResolveArenaStringForConfig(resource.typeName, sourceBase),
+                           resource);
+        }
+    }
+
+    for (u32 i = 0; i < pipeline.passes.count; i++) {
+        const PassData& pass = ast.GetPass(pipeline.passes[i]);
+        RenderConfig::PassData passConfig;
+        passConfig.name = ResolveArenaStringForConfig(pass.name, sourceBase, "pass" + std::to_string(i));
+        passConfig.type = pass.computeShader.IsNull() ? PassType::Standard : PassType::Compute;
+        passConfig.descriptor.name = passConfig.name;
+        passConfig.descriptor.pipelineName = config.name;
+        config.passes.push_back(std::move(passConfig));
+    }
 
     return config;
 }
@@ -1585,8 +1683,7 @@ static bool WriteCrossCompileOutput(bool enabled,
     return false;
 }
 
-static void WriteWebGLSidecarIfNeeded(const CompilerConfig& config,
-                                      const CompileResult& result,
+static void WriteWebGLSidecarIfNeeded(const CompileResult& result,
                                       const std::string& outBase,
                                       const PassData& pass,
                                       const Parser& parser,
@@ -1599,7 +1696,7 @@ static void WriteWebGLSidecarIfNeeded(const CompilerConfig& config,
 
     std::string json = BuildWebGLSidecarJson(
         pass, parser.symbolTable, result.analysis,
-        sourceBase, config.geometryConfig, isVertexStage,
+        sourceBase, isVertexStage,
         &context.ast, &pipeline);
     std::string jsonPath = outBase + ".json";
     if (WriteTextFile(jsonPath, json)) {
@@ -1678,7 +1775,7 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
             if (WriteTextFile(glslEsPath, glesSource)) {
                 printf("    -> %s\n", glslEsPath.c_str());
             }
-            WriteWebGLSidecarIfNeeded(config, result, outBase, pass, parser,
+            WriteWebGLSidecarIfNeeded(result, outBase, pass, parser,
                                       sourceBase, context, pipeline,
                                       writeWebGLSidecar, isVertexStage);
         } else {
@@ -1724,7 +1821,7 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
             if (WriteTextFile(glslEsPath, glslEsSource)) {
                 printf("    -> %s\n", glslEsPath.c_str());
             }
-            WriteWebGLSidecarIfNeeded(config, result, outBase, pass, parser,
+            WriteWebGLSidecarIfNeeded(result, outBase, pass, parser,
                                       sourceBase, context, pipeline,
                                       writeWebGLSidecar, isVertexStage);
         } else {
@@ -1799,8 +1896,6 @@ int main(int argc, char* argv[]) {
             config.outputBindings = true;
         } else if (arg == "-modules" && i + 1 < argc) {
             config.modulePaths.push_back(argv[++i]);
-        } else if (arg == "-config" && i + 1 < argc) {
-            config.renderConfigPath = argv[++i];
         } else if (arg == "-variant" && i + 1 < argc) {
             std::string spec = argv[++i];
             size_t eq = spec.find('=');
@@ -1889,28 +1984,6 @@ int main(int argc, char* argv[]) {
         printf("Parsing...\n");
     }
 
-    // Load render config (from file or use default)
-    if (config.renderConfigPath.empty()) {
-        config.renderConfig = CreateDefaultRenderConfig(baseName);
-    } else {
-        auto parseResult = RenderConfigParser::ParseFile(config.renderConfigPath);
-        if (!parseResult.success) {
-            fprintf(stderr, "Error parsing render config: %s\n", parseResult.error.c_str());
-            return 1;
-        }
-        config.renderConfig = std::move(parseResult.config);
-        config.geometryConfig = parseResult.geometry;
-
-        if (config.verbose) {
-            printf("Loaded render config '%s' with %zu passes\n",
-                   config.renderConfig.name.c_str(),
-                   config.renderConfig.passes.size());
-            if (config.geometryConfig.type == RenderConfigParser::GeometryConfig::Type::Instanced) {
-                printf("  Geometry: instanced with %u instances\n", config.geometryConfig.instanceCount);
-            }
-        }
-    }
-
     // Split source into lines for error reporting
     std::vector<std::string> sourceLines = SplitLines(source);
 
@@ -1933,7 +2006,6 @@ int main(int argc, char* argv[]) {
     auto parseStart = Clock::now();
     Parser parser;
     parser.Init(&lexer, &stream, &context);
-    SymbolTable::InitFromRenderConfig(&parser.symbolTable, config.renderConfig);
 
     // Check first token to determine file type (Init already advanced to first token)
     bool isModule = (parser.CurrentTokenType() == TokenType::MODULE);
@@ -2033,6 +2105,11 @@ int main(int argc, char* argv[]) {
 
     // Get source base for string lookups
     const char* sourceBase = lexer.GetSourceBase();
+
+    config.renderConfig = CreateSyntheticRenderConfig(context.ast,
+                                                      pipeline,
+                                                      parser.symbolTable,
+                                                      sourceBase);
 
     ComputeGraphCompileResult graphResult = CompileComputeGraph(
         context.ast, context.ast.GetPipeline(originalPipelineRef), config.renderConfig, sourceBase);

@@ -1,0 +1,157 @@
+module Debug {
+
+import Math
+
+/// Returns the standard debug red color.
+debug_red :: () -> float3 { return float3(1.0, 0.0, 0.0); }
+
+/// Returns the standard debug green color.
+debug_green :: () -> float3 { return float3(0.0, 1.0, 0.0); }
+
+/// Returns the standard debug blue color.
+debug_blue :: () -> float3 { return float3(0.0, 0.2, 1.0); }
+
+/// Returns the standard debug cyan color.
+debug_cyan :: () -> float3 { return float3(0.0, 1.0, 1.0); }
+
+/// Returns the standard debug yellow color.
+debug_yellow :: () -> float3 { return float3(1.0, 1.0, 0.0); }
+
+/// Returns the standard debug magenta color, commonly used here to mark NaN values.
+debug_magenta :: () -> float3 { return float3(1.0, 0.0, 1.0); }
+
+/// Returns black for checkerboards, masks, and low-end debug ramps.
+debug_black :: () -> float3 { return float3(0.0); }
+
+/// Returns white for checkerboards, masks, and high-end debug ramps.
+debug_white :: () -> float3 { return float3(1.0); }
+
+/// Computes Rec. 709 relative luminance from linear RGB.
+/// Reference: https://en.wikipedia.org/wiki/Rec._709
+luminance :: (float3 color) -> float {
+    return dot(color, float3(0.2126, 0.7152, 0.0722));
+}
+
+/// Maps a normal from signed [-1, 1] space into displayable [0, 1] RGB.
+normal_color :: (float3 n) -> float3 {
+    return Math::safe_normalize(n) * 0.5 + 0.5;
+}
+
+/// Maps a signed vector from [-1, 1] into [0, 1] without normalizing it.
+signed_color :: (float3 value) -> float3 {
+    return saturate(value * 0.5 + 0.5);
+}
+
+/// Returns green for true and red for false, useful for visualizing predicates.
+mask_color :: (bool value) -> float3 {
+    return value ? debug_green() : debug_red();
+}
+
+/// Returns true when a scalar is NaN or infinite.
+/// Reference: https://en.wikipedia.org/wiki/NaN
+is_bad :: (float value) -> bool {
+    return isnan(value) || isinf(value);
+}
+
+/// Returns true when any component is NaN or infinite.
+has_bad :: (float2 value) -> bool {
+    return is_bad(value.x) || is_bad(value.y);
+}
+
+/// Returns true when any component is NaN or infinite.
+has_bad :: (float3 value) -> bool {
+    return is_bad(value.x) || is_bad(value.y) || is_bad(value.z);
+}
+
+/// Returns true when any component is NaN or infinite.
+has_bad :: (float4 value) -> bool {
+    return is_bad(value.x) || is_bad(value.y) || is_bad(value.z) || is_bad(value.w);
+}
+
+/// Replaces a scalar's normal debug color with magenta for NaN or yellow for infinity.
+bad_value_color :: (float value, float3 okColor) -> float3 {
+    if (isnan(value)) {
+        return debug_magenta();
+    }
+    if (isinf(value)) {
+        return debug_yellow();
+    }
+    return okColor;
+}
+
+/// Replaces a vector's normal debug color with magenta for NaN or yellow for infinity.
+bad_value_color :: (float3 value, float3 okColor) -> float3 {
+    if (has_bad(value)) {
+        if (isnan(value.x) || isnan(value.y) || isnan(value.z)) {
+            return debug_magenta();
+        }
+        return debug_yellow();
+    }
+    return okColor;
+}
+
+/// Maps a normalized scalar to a blue-cyan-green-yellow-red heatmap.
+/// Useful for visualizing depth, roughness, overdraw, lighting cost, and scalar fields.
+heatmap :: (float value) -> float3 {
+    float t = saturate(value);
+    if (t < 0.25) {
+        return lerp(debug_blue(), debug_cyan(), t * 4.0);
+    }
+    if (t < 0.5) {
+        return lerp(debug_cyan(), debug_green(), (t - 0.25) * 4.0);
+    }
+    if (t < 0.75) {
+        return lerp(debug_green(), debug_yellow(), (t - 0.5) * 4.0);
+    }
+    return lerp(debug_yellow(), debug_red(), (t - 0.75) * 4.0);
+}
+
+/// Remaps a scalar range to [0, 1] and displays it with heatmap().
+heatmap_range :: (float value, float minValue, float maxValue) -> float3 {
+    return heatmap(Math::inverse_lerp(minValue, maxValue, value));
+}
+
+/// Displays linear depth as grayscale between nearPlane and farPlane.
+depth_gray :: (float depth, float nearPlane, float farPlane) -> float3 {
+    float t = Math::inverse_lerp(nearPlane, farPlane, depth);
+    return float3(saturate(t));
+}
+
+/// Displays repeating colored depth bands for spotting precision and ordering issues.
+depth_bands :: (float depth, float bandCount) -> float3 {
+    float bands = max(bandCount, 1.0);
+    float t = fract(depth * bands);
+    return heatmap(t);
+}
+
+/// Creates a procedural black/white checkerboard in UV space.
+checker :: (float2 uv, float scale) -> float3 {
+    float2 cell = floor(uv * scale);
+    float c = fmod(cell.x + cell.y, 2.0);
+    return c < 1.0 ? debug_black() : debug_white();
+}
+
+/// Displays UV coordinates directly as red/green color channels.
+uv_color :: (float2 uv) -> float3 {
+    return float3(fract(uv), 0.0);
+}
+
+/// Colors a direction by its dominant axis: X red, Y green, Z blue.
+axis_color :: (float3 direction) -> float3 {
+    float3 d = abs(Math::safe_normalize(direction));
+    if (d.x > d.y && d.x > d.z) {
+        return debug_red();
+    }
+    if (d.y > d.z) {
+        return debug_green();
+    }
+    return debug_blue();
+}
+
+/// Returns a heatmapped color with alpha proportional to count / maxCount.
+overdraw_tint :: (float count, float maxCount) -> float4 {
+    float t = saturate(count / max(maxCount, 1.0));
+    return float4(heatmap(t), t);
+}
+
+}

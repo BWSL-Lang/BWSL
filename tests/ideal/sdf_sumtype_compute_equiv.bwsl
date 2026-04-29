@@ -1,0 +1,33 @@
+// Ideal-world test: imported module sum-type enum dispatch should work in
+// compute and produce deterministic numeric output suitable for equivalence.
+
+pipeline IdealSDFSumtypeComputeEquiv {
+
+    resources {
+        output: buffer<float>
+    }
+    import SDFIdeal
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float t = float(idx) / 7.0;
+
+            SDFIdeal::SDFShape shape = SDFShape::Sphere(0.75);
+            if ((idx % 4u) == 1u) {
+                shape = SDFShape::Box(float3(0.5, 0.35, 0.25));
+            } else if ((idx % 4u) == 2u) {
+                shape = SDFShape::Torus(0.6, 0.15);
+            } else if ((idx % 4u) == 3u) {
+                shape = SDFShape::Capsule(float3(-0.5, 0.0, 0.0), float3(0.5, 0.0, 0.0), 0.2);
+            }
+
+            float3 p = float3(t - 0.5, t * 0.25, 0.2 - t * 0.1);
+            float d = shape.distance(p);
+            float3 n = shape.normal(p, 0.01);
+
+            resources.output[idx] = d + n.x * 0.1 + n.y * 0.01 + n.z * 0.001;
+        }
+    }
+}

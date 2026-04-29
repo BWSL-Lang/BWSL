@@ -24,9 +24,8 @@ Current intended model:
 
 - `resources.*` names are pipeline-scoped.
 - A resource declaration gives a name plus a type.
-- When a pipeline declares `resources {}`, those declarations are authoritative
-  for `use resources {}` and `resources.*` access. Legacy `.rcfg` resource
-  declarations do not extend that namespace.
+- Pipeline `resources {}` declarations are authoritative for
+  `use resources {}` and `resources.*` access.
 - Binding numbers and stage visibility are compiler-managed details, not part of
   the surface syntax.
 - The compiler may emit resolved resource reflection as part of compilation
@@ -180,11 +179,8 @@ vertex-stage writes.
 
 ## Resources
 
-`resources.*` names come from the pipeline `resources` block.
-
-Legacy render-config-driven resource injection still exists in the current
-implementation for older shaders, but the intended language surface is a
-pipeline `resources` block plus pass `use resources`.
+`resources.*` names come from the pipeline `resources` block plus pass
+`use resources` selection.
 
 ## Variants
 

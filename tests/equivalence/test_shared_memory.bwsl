@@ -1,5 +1,10 @@
 pipeline EquivSharedMemory {
+
+    resources {
+        output: buffer<float>
+    }
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             shared float tile[8];
 

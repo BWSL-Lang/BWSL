@@ -3,6 +3,35 @@
 // ============================================
 pipeline World {
 
+    resources {
+        viewMatrix: mat4
+        projectionMatrix: mat4
+        previousViewProjMatrix: mat4
+        lightViewProjMatrix: mat4
+        taaJitter: float2
+        drawMetadata: buffer<DrawMetadata>
+        transformBuffer: buffer<mat4>
+        materialBuffer: buffer<GPUMaterialData>
+        cameraPosition: float3
+        ambientColor: float3
+        albedoTexture: texture2D
+        normalMap: texture2D
+        roughnessMap: texture2D
+        metallicMap: texture2D
+        aoMap: texture2D
+        textureSampler: sampler
+        materialTextureArray: texture2DArray
+        materialSampler: sampler
+        lightCount: uint
+        lightBuffer: buffer<LightSourcesSoA>
+        shadowData: buffer<ShadowData>
+        shadowMapArray: texture2DArray
+        shadowSampler: sampler
+        pointShadowCube0: textureCube
+        pointShadowCube1: textureCube
+        pointShadowFarPlane: float
+    }
+
 import Math
 import Compression
 import Color
@@ -212,6 +241,7 @@ samplePointShadow :: (float3 worldPos, float3 lightPos, uint lightIndex) -> floa
 // Shadow Pass - Depth Only
 // ============================================
 pass "ShadowPass" {
+        use resources { viewMatrix, projectionMatrix, previousViewProjMatrix, lightViewProjMatrix, taaJitter, drawMetadata, transformBuffer, materialBuffer, cameraPosition, ambientColor, albedoTexture, normalMap, roughnessMap, metallicMap, aoMap, textureSampler, materialTextureArray, materialSampler, lightCount, lightBuffer, shadowData, shadowMapArray, shadowSampler, pointShadowCube0, pointShadowCube1, pointShadowFarPlane }
     use attributes { position }
 
     vertex {
@@ -234,6 +264,7 @@ pass "ShadowPass" {
 // Opaque Pass - PBR Rendering with Material Buffer
 // ============================================
 pass "OpaquePass" {
+        use resources { viewMatrix, projectionMatrix, previousViewProjMatrix, lightViewProjMatrix, taaJitter, drawMetadata, transformBuffer, materialBuffer, cameraPosition, ambientColor, albedoTexture, normalMap, roughnessMap, metallicMap, aoMap, textureSampler, materialTextureArray, materialSampler, lightCount, lightBuffer, shadowData, shadowMapArray, shadowSampler, pointShadowCube0, pointShadowCube1, pointShadowFarPlane }
     use attributes { position, normal, texcoord, tangent, bitangent }
 
     vertex {

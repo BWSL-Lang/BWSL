@@ -3,6 +3,14 @@
 // TBN construction, homogeneous clip-space output, world-to-view normals.
 
 pipeline RasterVertexTransform {
+
+    resources {
+        modelMatrix: mat4
+        viewMatrix: mat4
+        projMatrix: mat4
+        lightViewMatrix: mat4
+        lightProjMatrix: mat4
+    }
     attributes {
         position: float3
         normal:   float3
@@ -11,6 +19,7 @@ pipeline RasterVertexTransform {
     }
 
     pass "Opaque" {
+        use resources { modelMatrix, viewMatrix, projMatrix, lightViewMatrix, lightProjMatrix }
         use attributes { position, normal, tangent, texcoord }
 
         vertex {
@@ -73,6 +82,7 @@ pipeline RasterVertexTransform {
     }
 
     pass "Shadow" {
+        use resources { modelMatrix, viewMatrix, projMatrix, lightViewMatrix, lightProjMatrix }
         use attributes { position }
 
         vertex {
@@ -89,6 +99,7 @@ pipeline RasterVertexTransform {
     }
 
     pass "OrthoProject" {
+        use resources { modelMatrix, viewMatrix, projMatrix, lightViewMatrix, lightProjMatrix }
         use attributes { position, texcoord }
 
         vertex {

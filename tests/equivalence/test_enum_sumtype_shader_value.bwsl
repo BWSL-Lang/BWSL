@@ -1,5 +1,9 @@
 pipeline EquivEnumSumtypeShaderValue {
 
+    resources {
+        output: buffer<float>
+    }
+
     enum ShaderValue {
         Constant(float4),
         Sampled(float2),
@@ -22,6 +26,7 @@ pipeline EquivEnumSumtypeShaderValue {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

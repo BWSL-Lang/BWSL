@@ -1,5 +1,10 @@
 pipeline EquivLongChain {
+
+    resources {
+        output: buffer<float>
+    }
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) * 0.1 + 0.5;

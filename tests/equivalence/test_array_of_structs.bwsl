@@ -1,5 +1,10 @@
 pipeline EquivArrayOfStructs {
 
+    resources {
+        verts: buffer<Vertex>
+        output: buffer<float>
+    }
+
 struct Vertex {
     float3 position;
     float life;
@@ -8,6 +13,7 @@ struct Vertex {
 };
 
     pass "Compute" {
+        use resources { verts, output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             Vertex mine = resources.verts[idx];

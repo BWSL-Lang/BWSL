@@ -3,7 +3,12 @@
 // kept its hash mapped to the int register after the loop, causing
 // later reads of the outer `float i` to be wrong-typed.
 pipeline EquivLoopVarScope {
+
+    resources {
+        output: buffer<float>
+    }
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             float x = 10.0;

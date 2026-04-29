@@ -6,7 +6,7 @@
 #include "bwsl_symbol_table.h"
 #include "bwsl_ast_soa.h"
 #include "bwsl_defs.h"
-#include "bwsl_render_config.h"  // For ShaderStage, VertexAttributeType
+#include "bwsl_compiler_types.h"  // For ShaderStage, VertexAttributeType
 #include "bwsl_arena.h"
 #include "vendor/SPIRV-Headers/include/spirv/unified1/spirv.hpp"
 #include <vector>

@@ -1,11 +1,16 @@
 pipeline EquivIntShifts {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Integer shifts: SPIR-V's OpShiftRightArithmetic vs Logical, and
     // shift-by-width behavior (undefined in C, well-defined in SPIR-V as
     // zero). Also mixes signed/unsigned shifts in const-folded and
     // runtime paths so the backend's int type tracking has to stay sharp.
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             int a = int(idx) * 0x01010101;     // 0, 0x01010101, 0x02020202, ...

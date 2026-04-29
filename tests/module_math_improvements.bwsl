@@ -1,0 +1,38 @@
+pipeline ModuleMathImprovements {
+    import Math
+
+    attributes {
+        position: float3
+        normal: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, normal, texcoord }
+
+        vertex {
+            float t = Math::inverse_lerp_clamped(0.0, 1.0, attributes.texcoord.x);
+            float remapped = Math::remap_clamped(t, 0.0, 1.0, -1.0, 1.0);
+            float3 n = Math::safe_normalize(attributes.normal);
+            float3 tangent = Math::orthonormal_tangent(n);
+            float3 rotated = Math::rotate_axis_angle(attributes.position, n, t * Math::TAU);
+            float3 projected = Math::project_onto(rotated, tangent);
+            float3 rejected = Math::reject_from(rotated, tangent);
+            float d = Math::saturate_dot(n, float3(0.0, 1.0, 0.0));
+            float p = Math::pow5(1.0 - d);
+            float wave = Math::triangle_wave(t * 4.0) + Math::sawtooth_wave(t);
+            float2 stepped = Math::smootherstep(float2(0.0), float2(1.0), attributes.texcoord);
+
+            float3 pos = projected * 0.01 + rejected * 0.01 + attributes.position;
+            pos.x += remapped * 0.001 + p * 0.001 + wave * 0.001 + stepped.x * 0.001;
+            output.position = float4(pos, 1.0);
+            output.texcoord = attributes.texcoord;
+        }
+
+        fragment {
+            float t = Math::linear_step(0.0, 1.0, input.texcoord.x);
+            float eased = Math::ease_in_out_cubic(t);
+            output.color = float4(eased, Math::sin01(t * Math::TAU), Math::cos01(t * Math::TAU), 1.0);
+        }
+    }
+}

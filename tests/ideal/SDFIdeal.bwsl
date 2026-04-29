@@ -1,0 +1,113 @@
+module SDFIdeal {
+
+import Math
+
+/// Distance to a sphere centered at the origin.
+sd_sphere :: (float3 p, float radius) -> float {
+    return length(p) - radius;
+}
+
+/// Distance to an axis-aligned box centered at the origin.
+sd_box :: (float3 p, float3 halfExtents) -> float {
+    float3 q = abs(p) - halfExtents;
+    float outside = length(max(q, 0.0));
+    float inside = min(max(q.x, max(q.y, q.z)), 0.0);
+    return outside + inside;
+}
+
+/// Distance to a torus centered at the origin and aligned around the Y axis.
+sd_torus :: (float3 p, float majorRadius, float minorRadius) -> float {
+    float2 q = float2(length(p.xz) - majorRadius, p.y);
+    return length(q) - minorRadius;
+}
+
+/// Distance to a capsule segment from a to b with radius.
+sd_capsule :: (float3 p, float3 a, float3 b, float radius) -> float {
+    float3 pa = p - a;
+    float3 ba = b - a;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), Math::EPSILON), 0.0, 1.0);
+    return length(pa - ba * h) - radius;
+}
+
+/// Sum-type wrapper for common SDF primitives. This is the API we want the
+/// shipped SDF module to expose once imported sum-type lowering is robust.
+enum SDFShape {
+    Sphere(float radius),
+    Box(float3 halfExtents),
+    Torus(float majorRadius, float minorRadius),
+    Capsule(float3 a, float3 b, float radius),
+
+    /// Evaluates signed distance for this shape at point p.
+    eval distance :: (float3 p) -> float {
+        Sphere(radius): sd_sphere(p, radius)
+        Box(halfExtents): sd_box(p, halfExtents)
+        Torus(majorRadius, minorRadius): sd_torus(p, majorRadius, minorRadius)
+        Capsule(a, b, radius): sd_capsule(p, a, b, radius)
+    }
+
+    /// Estimates a normal from central differences.
+    eval normal :: (float3 p, float eps) -> float3 {
+        float3 ex = float3(eps, 0.0, 0.0);
+        float3 ey = float3(0.0, eps, 0.0);
+        float3 ez = float3(0.0, 0.0, eps);
+        return Math::safe_normalize(float3(
+            self.distance(p + ex) - self.distance(p - ex),
+            self.distance(p + ey) - self.distance(p - ey),
+            self.distance(p + ez) - self.distance(p - ez)
+        ));
+    }
+}
+
+struct Ray {
+    float3 origin;
+    float3 direction;
+};
+
+struct RaymarchResult {
+    bool hit;
+    int steps;
+    float distance;
+    float3 position;
+    float surfaceDistance;
+};
+
+make_ray :: (float3 origin, float3 direction) -> Ray {
+    Ray ray;
+    ray.origin = origin;
+    ray.direction = Math::safe_normalize(direction);
+    return ray;
+}
+
+raymarch_shape :: (SDFShape shape, Ray ray, float minDistance, float maxDistance, float hitEpsilon, int maxSteps) -> RaymarchResult {
+    RaymarchResult result;
+    result.hit = false;
+    result.steps = 0;
+    result.distance = minDistance;
+    result.position = ray.origin + ray.direction * minDistance;
+    result.surfaceDistance = 0.0;
+
+    float t = minDistance;
+    for (int i = 0; i < maxSteps; i++) {
+        float3 p = ray.origin + ray.direction * t;
+        float d = shape.distance(p);
+
+        result.steps = i + 1;
+        result.distance = t;
+        result.position = p;
+        result.surfaceDistance = d;
+
+        if (abs(d) <= hitEpsilon) {
+            result.hit = true;
+            return result;
+        }
+
+        t += d;
+        if (t > maxDistance) {
+            return result;
+        }
+    }
+
+    return result;
+}
+
+}

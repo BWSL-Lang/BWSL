@@ -3,6 +3,22 @@
 // ============================================
 pipeline Character {
 
+    resources {
+        modelMatrix: mat4
+        viewMatrix: mat4
+        projectionMatrix: mat4
+        cameraPosition: float4
+        lightDirection: float4
+        lightColor: float4
+        lightIntensity: float
+        albedoTexture: texture2D
+        normalMap: texture2D
+        roughnessMap: texture2D
+        metallicMap: texture2D
+        aoMap: texture2D
+        textureSampler: sampler
+    }
+
 import Math
 import Compression, Color
 
@@ -59,6 +75,7 @@ geometrySmith :: (float3 N, float3 V, float3 L, float roughness) -> float {
 // Opaque Pass - PBR Rendering
 // ============================================
 pass "OpaquePass" {
+        use resources { modelMatrix, viewMatrix, projectionMatrix, cameraPosition, lightDirection, lightColor, lightIntensity, albedoTexture, normalMap, roughnessMap, metallicMap, aoMap, textureSampler }
     use attributes { position, normal, texcoord, tangent?, bitangent? }
 
     vertex {

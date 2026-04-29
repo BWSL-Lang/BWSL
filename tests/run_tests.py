@@ -168,7 +168,7 @@ FORBIDDEN_SOURCE_ALIAS_NAMES = (
 )
 
 TOP_LEVEL_EXPECTED_ERROR_TESTS = {
-    "resources_rcfg_undeclared_error": "Resource not declared in pipeline resources block",
+    "resources_undeclared_error": "Resource not declared in pipeline resources block",
 }
 
 TEXT_GOLDEN_SUFFIXES = {".metal", ".hlsl", ".glsl", ".gles"}
@@ -363,19 +363,6 @@ def is_module_file(path: Path) -> bool:
     return False
 
 
-def config_args_for_test(script_dir: Path, test_name: str) -> list[str]:
-    exact = script_dir / f"{test_name}.rcfg"
-    if exact.exists():
-        return ["-config", str(exact)]
-
-    prefix = test_name.split("_", 1)[0]
-    prefixed = script_dir / f"{prefix}_test.rcfg"
-    if prefixed.exists():
-        return ["-config", str(prefixed)]
-
-    return []
-
-
 def check_inline_return_jump(path: Path) -> tuple[bool, str]:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
@@ -471,7 +458,7 @@ def check_variant_reflection(data: dict, expected_declared: dict[str, tuple[str,
 
 
 def compile_variant_outputs(bwslc: Path, root: Path, test_file: Path, modules_dir: Path,
-                            output_dir: Path, config_args: list[str],
+                            output_dir: Path,
                             extra_args: list[str] | None = None) -> subprocess.CompletedProcess[str]:
     shutil.rmtree(output_dir, ignore_errors=True)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -482,7 +469,6 @@ def compile_variant_outputs(bwslc: Path, root: Path, test_file: Path, modules_di
         str(output_dir),
         "-modules",
         str(modules_dir),
-        *config_args,
         "-all",
         "-internals",
     ]
@@ -1283,10 +1269,8 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
     for spec_file in sorted(equiv_dir.glob("*.json")):
         test_name = spec_file.stem
         shader_file = equiv_dir / f"{test_name}.bwsl"
-        config_file = equiv_dir / f"{test_name}.rcfg"
-
-        if not shader_file.exists() or not config_file.exists():
-            print(f"[{YELLOW}SKIP{NC}] {test_name} (missing shader or rcfg)")
+        if not shader_file.exists():
+            print(f"[{YELLOW}SKIP{NC}] {test_name} (missing shader)")
             continue
 
         with spec_file.open("r", encoding="utf-8") as f:
@@ -1299,7 +1283,6 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
             [
                 str(bwslc),
                 str(shader_file),
-                "-config", str(config_file),
                 "-o", str(test_out),
                 "-modules", str(modules_dir),
                 "-all",
@@ -1561,7 +1544,6 @@ def main() -> int:
             skipped += 1
             continue
 
-        config_args = config_args_for_test(script_dir, test_name)
         translation_expectations = TRANSLATION_EXPECTATION_TESTS.get(test_name)
         text_goldens = find_text_golden_files(golden_dir, test_name)
         compile_args: list[str] = []
@@ -1593,7 +1575,6 @@ def main() -> int:
                 str(output_dir),
                 "-modules",
                 str(modules_dir),
-                *config_args,
                 *compile_args,
             ],
             cwd=root,
@@ -1612,10 +1593,7 @@ def main() -> int:
                 print(f"       Error: expected '{expected_error}' in error output, got: {error_text}")
                 failed += 1
                 continue
-            if config_args:
-                print(f"[{GREEN}PASS{NC}] {test_name} (config: {Path(config_args[1]).name})")
-            else:
-                print(f"[{GREEN}PASS{NC}] {test_name}")
+            print(f"[{GREEN}PASS{NC}] {test_name}")
             passed += 1
             continue
 
@@ -1642,10 +1620,7 @@ def main() -> int:
             if spv_val_failed:
                 continue
 
-        if config_args:
-            print(f"[{GREEN}PASS{NC}] {test_name} (config: {Path(config_args[1]).name})")
-        else:
-            print(f"[{GREEN}PASS{NC}] {test_name}")
+        print(f"[{GREEN}PASS{NC}] {test_name}")
         passed += 1
 
         if test_name in INLINE_RETURN_JUMP_TESTS:
@@ -1791,7 +1766,6 @@ def main() -> int:
                     test_file,
                     modules_dir,
                     default_output_dir,
-                    config_args,
                 )
                 if default_result.returncode != 0:
                     error_text = default_result.stdout.strip() or f"variant default compile exited with code {default_result.returncode}"
@@ -1820,7 +1794,6 @@ def main() -> int:
                     test_file,
                     modules_dir,
                     override_output_dir,
-                    config_args,
                     variant_expectations["override_args"],
                 )
                 if override_result.returncode != 0:

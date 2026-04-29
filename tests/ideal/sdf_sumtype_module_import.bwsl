@@ -1,0 +1,42 @@
+// Ideal-world test: imported module sum-type enum with payloads and eval
+// methods should compile across raster stages and all cross-compilation targets.
+
+pipeline IdealSDFSumtypeModuleImport {
+    import SDFIdeal
+
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            SDFIdeal::SDFShape sphere = SDFShape::Sphere(0.75);
+            SDFIdeal::SDFShape box = SDFShape::Box(float3(0.5, 0.35, 0.25));
+            SDFIdeal::SDFShape torus = SDFShape::Torus(0.6, 0.15);
+
+            float3 p = attributes.position;
+            float d0 = sphere.distance(p);
+            float d1 = box.distance(p - float3(0.25, 0.0, 0.0));
+            float d2 = torus.distance(p);
+            float combined = min(d0, min(d1, d2));
+            float3 n = sphere.normal(p, 0.01);
+
+            output.position = float4(p + n * combined * 0.01, 1.0);
+            output.distanceValue = combined;
+            output.texcoord = attributes.texcoord;
+        }
+
+        fragment {
+            SDFIdeal::SDFShape capsule = SDFShape::Capsule(float3(-0.5, 0.0, 0.0), float3(0.5, 0.0, 0.0), 0.2);
+            SDFIdeal::Ray ray = SDFIdeal::make_ray(float3(input.texcoord * 2.0 - 1.0, -2.0), float3(0.0, 0.0, 1.0));
+            SDFIdeal::RaymarchResult march = SDFIdeal::raymarch_shape(capsule, ray, 0.0, 5.0, 0.001, 32);
+
+            float mask = saturate(0.5 - input.distanceValue / 0.05);
+            float hit = march.hit ? 1.0 : 0.0;
+            output.color = float4(mask, float(march.steps) / 32.0, hit, 1.0);
+        }
+    }
+}

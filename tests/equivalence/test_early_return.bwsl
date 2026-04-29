@@ -1,5 +1,9 @@
 pipeline EquivEarlyReturn {
 
+    resources {
+        output: buffer<float>
+    }
+
     classify :: (int v) -> float {
         if (v < 0) {
             return -1.0;
@@ -18,6 +22,7 @@ pipeline EquivEarlyReturn {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             int v = int(idx) - 2;

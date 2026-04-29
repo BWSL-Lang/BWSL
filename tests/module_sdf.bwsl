@@ -1,0 +1,40 @@
+pipeline ModuleSDF {
+    import SDF
+
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 p = attributes.position;
+            SDF::SDFShape sphere = SDF::SDFShape::Sphere(0.75);
+            SDF::SDFShape box = SDF::SDFShape::Box(float3(0.5, 0.35, 0.25));
+            SDF::SDFShape torus = SDF::SDFShape::Torus(0.6, 0.15);
+
+            float d0 = sphere.distance(p);
+            float d1 = box.distance(SDF::translate(p, float3(0.25, 0.0, 0.0)));
+            float d2 = torus.distance(p);
+            float combined = SDF::combine(SDF::SDFCombineOp::SmoothUnion, SDF::op_union(d0, d2), d1, 0.2);
+            float3 n = sphere.normal(p, 0.01);
+
+            output.position = float4(p + n * combined * 0.01, 1.0);
+            output.distanceValue = combined;
+            output.texcoord = attributes.texcoord;
+        }
+
+        fragment {
+            SDF::Ray ray = SDF::make_ray(float3(input.texcoord * 2.0 - 1.0, -2.0), float3(0.0, 0.0, 1.0));
+            SDF::SDFShape capsule = SDF::SDFShape::Capsule(float3(-0.5, 0.0, 0.0), float3(0.5, 0.0, 0.0), 0.2);
+            SDF::RaymarchResult march = SDF::raymarch_shape(capsule, ray, 0.0, 5.0, 0.001, 32);
+
+            float mask = SDF::soft_mask(input.distanceValue, 0.05);
+            float lines = SDF::contour(input.distanceValue, 0.1, 0.01);
+            float hit = march.hit ? 1.0 : 0.0;
+            output.color = float4(mask, lines, hit, 1.0);
+        }
+    }
+}

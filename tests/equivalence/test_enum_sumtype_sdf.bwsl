@@ -1,5 +1,9 @@
 pipeline EquivEnumSumtypeSdf {
 
+    resources {
+        output: buffer<float>
+    }
+
     enum SDFShape {
         Sphere(float radius),
         Box(float3 size),
@@ -21,6 +25,7 @@ pipeline EquivEnumSumtypeSdf {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) * 0.3;

@@ -1,5 +1,9 @@
 pipeline EquivSaturate {
 
+    resources {
+        output: buffer<float>
+    }
+
     // `saturate` is a Metal/HLSL native, emitted as clamp(x, 0.0, 1.0) on
     // GLSL and as GLSLstd450FClamp(x, 0, 1) in SPIR-V. Three different
     // lowerings — this test pins down that they produce the same result
@@ -7,6 +11,7 @@ pipeline EquivSaturate {
     // ends).
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) - 3.5;     // spans [-3.5, 4.5]

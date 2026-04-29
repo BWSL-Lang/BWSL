@@ -1,5 +1,9 @@
 pipeline EquivInlineReturnLoopUntil {
 
+    resources {
+        output: buffer<float>
+    }
+
     chooseUntil :: (int limit) -> int {
         int i = 0;
         loop {
@@ -12,6 +16,7 @@ pipeline EquivInlineReturnLoopUntil {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             int limit = int(idx) - 3;  // mix of negatives (takes until-exit) and positives

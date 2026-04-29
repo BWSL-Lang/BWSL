@@ -1,5 +1,9 @@
 pipeline EquivPointersControlFlow {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Pointers used inside control flow (conditional writes / reads), plus
     // pointer reassignment across branches. Both forms previously tripped
     // an SSA construction bug where OP_LOCAL_STORE (emitted with dest=0)
@@ -7,6 +11,7 @@ pipeline EquivPointersControlFlow {
     // (the compute thread index).
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
 

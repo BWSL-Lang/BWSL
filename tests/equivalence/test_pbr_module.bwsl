@@ -1,5 +1,9 @@
 pipeline EquivPbrModule {
 
+    resources {
+        output: buffer<float>
+    }
+
     import PBR
 
     // PBR lighting math — purely numeric, so despite modules_pbr_lighting
@@ -8,6 +12,7 @@ pipeline EquivPbrModule {
     // and module-qualified function calls (PBR::calculateDirectLighting).
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) / 7.0;

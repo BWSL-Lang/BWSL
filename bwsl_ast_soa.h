@@ -8,6 +8,7 @@
 #include "bwsl_types.h"
 #include "bwsl_stdlib.h"
 #include "bwsl_ast_common.h"
+#include "bwsl_compiler_types.h"
 
 namespace BWSL {
 
@@ -258,12 +259,6 @@ struct PassData {
     NodeRef computeShader;
     u32 optionalAttributesMask;     // Bitmask of optional attributes (from ? syntax)
     u32 optionalResourcesMask;      // Bitmask of optional resources (from ? syntax)
-};
-
-enum class ResourceAccessMode : u8 {
-    ReadOnly,
-    ReadWrite,
-    WriteOnly
 };
 
 struct GraphResourceRef {

@@ -1,0 +1,20 @@
+// Ideal-world test: imported sum-type enum constructors should support the
+// fully module-qualified form SDFIdeal::SDFShape::Sphere(...).
+
+pipeline IdealSDFSumtypeQualifiedConstructor {
+    import SDFIdeal
+
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            SDFIdeal::SDFShape sphere = SDFIdeal::SDFShape::Sphere(0.75);
+            float d = sphere.distance(attributes.position);
+            output.position = float4(attributes.position + float3(d * 0.01, 0.0, 0.0), 1.0);
+        }
+    }
+}

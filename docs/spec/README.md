@@ -44,9 +44,9 @@ non-normative. It may simplify syntax, omit edge cases, or lag implementation.
 
 ## Scope
 
-This draft covers the BWSL source language. The external render-config format
-(`.rcfg`) remains documented separately in `docs/render-config.md` and should
-eventually gain its own spec track.
+This draft covers the BWSL source language. Pipeline resources are declared in
+source with `resources { ... }` blocks and selected per pass with
+`use resources { ... }`.
 
 ## Editing Rule
 

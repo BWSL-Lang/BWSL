@@ -4,6 +4,16 @@
 // ============================================
 pipeline MaterialPreview {
 
+    resources {
+        viewMatrix: mat4
+        projMatrix: mat4
+        cameraPosition: float3
+        material: GPUMaterialData
+        previewLight: PreviewLight
+        materialTextureArray: texture2DArray
+        materialSampler: sampler
+    }
+
 import Color
 import PBR
 
@@ -43,6 +53,7 @@ struct PreviewLight {
 }
 
 pass "PreviewPass" {
+        use resources { viewMatrix, projMatrix, cameraPosition, material, previewLight, materialTextureArray, materialSampler }
     use attributes { position, normal, texcoord }
 
     vertex {

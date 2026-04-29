@@ -1,5 +1,9 @@
 pipeline EquivControlSwitch {
 
+    resources {
+        output: buffer<float>
+    }
+
     enum RenderMode {
         Solid,
         Wireframe,
@@ -30,6 +34,7 @@ pipeline EquivControlSwitch {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
 

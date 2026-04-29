@@ -1,5 +1,9 @@
 pipeline EquivFloatToInt {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Float → int conversion rounding. SPIR-V's OpConvertFToS truncates
     // toward zero, but the source language's `int(x)` cast and `floor()`
     // differ for negative values (-1.5 truncates to -1, floors to -2).
@@ -7,6 +11,7 @@ pipeline EquivFloatToInt {
     // and on NaN inputs.
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             // Values that straddle integer boundaries both signs.

@@ -1,11 +1,16 @@
 pipeline EquivMultipassChain {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Three compute passes that chain through one shared buffer. Each
     // pass reads the previous pass's writes and applies a transform.
     // Validates that the runner's per-pass memory barrier correctly
     // orders reads-after-writes for all three backends.
 
     pass "Init" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             resources.output[idx] = float(idx);
@@ -13,6 +18,7 @@ pipeline EquivMultipassChain {
     }
 
     pass "Square" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float v = resources.output[idx];
@@ -21,6 +27,7 @@ pipeline EquivMultipassChain {
     }
 
     pass "Offset" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float v = resources.output[idx];

@@ -1,11 +1,16 @@
 pipeline EquivMathExpLogRoundtrip {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Round-trip identities for exp / log / pow / sqrt families. Catches
     // drift when any backend swaps the underlying instruction (e.g.
     // glsl.std.450 Exp2 vs an emulated variant) because the identities
     // amplify precision mismatches.
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) * 0.5 + 0.25;     // 0.25 .. 3.75

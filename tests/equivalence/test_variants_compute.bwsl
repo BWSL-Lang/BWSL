@@ -1,5 +1,9 @@
 pipeline EquivVariantsCompute {
 
+    resources {
+        output: buffer<float>
+    }
+
     enum Mode {
         Low,
         Medium,
@@ -15,6 +19,7 @@ pipeline EquivVariantsCompute {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

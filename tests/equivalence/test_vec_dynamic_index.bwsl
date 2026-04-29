@@ -1,5 +1,9 @@
 pipeline EquivVecDynamicIndex {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Writing to a vector component via a runtime index (`v[i] = x`).
     // Previously miscompiled — emitted OpCompositeInsert with a runtime
     // register as the literal index. Now routed through
@@ -7,6 +11,7 @@ pipeline EquivVecDynamicIndex {
     // (`v[i]` RHS, already supported via OpVectorExtractDynamic).
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
 

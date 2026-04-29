@@ -46,7 +46,7 @@ struct Symbol {
 | Context | Convention | Examples |
 |---------|------------|----------|
 | Public/namespace functions | PascalCase | `Init()`, `AddSymbol()`, `LookupByHash()` |
-| Accessors | Get/Set prefix | `GetTypeId()`, `GetSpirvId()`, `SetCurrentPass()` |
+| Accessors | Get/Set prefix | `GetTypeId()`, `GetSpirvId()`, `SetStage()` |
 | Parser methods | PascalCase | `Match()`, `Consume()`, `Advance()`, `ParseExpression()` |
 | Private helpers | PascalCase or lambda | See pattern section |
 
@@ -391,7 +391,6 @@ inline void Init(SymbolTableData* table, BWSL_Arena* arena) {
     table->scopeStartIndices.Init(arena, 16);
     // ...
     table->currentScope = 0;
-    table->renderConfig = nullptr;
 }
 ```
 

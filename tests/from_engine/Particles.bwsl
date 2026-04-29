@@ -3,6 +3,23 @@
 // ============================================
 pipeline Particles {
 
+    resources {
+        viewMatrix: mat4
+        projectionMatrix: mat4
+        particlePositions: buffer<float3>
+        particleSizes: buffer<float>
+        particleRotations: buffer<float>
+        particleColors: buffer<float4>
+        particleLives: buffer<float>
+        particleTexIndices: buffer<uint>
+        screenSize: float2
+        softParticleFactor: float
+        particleTexture: texture2D
+        textureSampler: sampler
+        depthBuffer: texture2D
+        depthSampler: sampler
+    }
+
 import Math
 
 // ============================================
@@ -16,6 +33,7 @@ attributes {
 // Particle Pass - Billboard Rendering
 // ============================================
 pass "ParticlePass" {
+        use resources { viewMatrix, projectionMatrix, particlePositions, particleSizes, particleRotations, particleColors, particleLives, particleTexIndices, screenSize, softParticleFactor, particleTexture, textureSampler, depthBuffer, depthSampler }
     use attributes { position }
 
     vertex {
@@ -102,6 +120,7 @@ pass "ParticlePass" {
 // Additive Blend Pass (for fire, sparks, etc.)
 // ============================================
 pass "ParticlePassAdditive" {
+        use resources { viewMatrix, projectionMatrix, particlePositions, particleSizes, particleRotations, particleColors, particleLives, particleTexIndices, screenSize, softParticleFactor, particleTexture, textureSampler, depthBuffer, depthSampler }
     use attributes { position }
 
     vertex {

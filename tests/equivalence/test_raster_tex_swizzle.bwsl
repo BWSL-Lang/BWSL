@@ -3,10 +3,16 @@
 // fetch, confirming that channel re-ordering survives SPIRV-Cross round
 // trips through both HLSL and GLSL.
 pipeline EquivRasterTexSwizzle {
+
+    resources {
+        colorTex: texture2D
+        colorSampler: sampler
+    }
     attributes {
     }
 
     pass "Main" {
+        use resources { colorTex, colorSampler }
         vertex {
             float2[3] positions;
             positions[0] = float2(-1.0, -1.0);

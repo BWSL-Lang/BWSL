@@ -4,10 +4,16 @@
 // GLSL->SPIR-V paths when a texel is fetched and echoed to the
 // framebuffer.
 pipeline EquivRasterTexRead {
+
+    resources {
+        colorTex: texture2D
+        colorSampler: sampler
+    }
     attributes {
     }
 
     pass "Main" {
+        use resources { colorTex, colorSampler }
         vertex {
             float2[3] positions;
             positions[0] = float2(-1.0, -1.0);

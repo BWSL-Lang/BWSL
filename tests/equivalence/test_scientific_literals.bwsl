@@ -1,11 +1,16 @@
 pipeline EquivScientificLiterals {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Scientific-notation float literal parsing + backend emission. The
     // compiler could emit these as decimal expansions, hex bit patterns,
     // or the original literal form — all must round-trip to the same
     // runtime value.
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

@@ -4,6 +4,10 @@
 // instead of `Side::Left`).
 
 pipeline EnumSwitchMemberAccess {
+
+    resources {
+        output: buffer<float>
+    }
     enum Side { Left, Right, Center }
 
     resolve :: (s: Side) -> float {
@@ -16,6 +20,7 @@ pipeline EnumSwitchMemberAccess {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             Side s = (idx == 0u) ? Side::Left :

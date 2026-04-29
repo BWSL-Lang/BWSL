@@ -1,5 +1,9 @@
 pipeline EquivMatParam {
 
+    resources {
+        output: buffer<float>
+    }
+
     apply_transform :: (mat4 M, float4 p) -> float4 {
         return M * p;
     }
@@ -13,6 +17,7 @@ pipeline EquivMatParam {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) * 0.25;

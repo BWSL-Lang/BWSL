@@ -1,5 +1,9 @@
 pipeline EquivChainMatrixStruct {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Matrix / struct / swizzle access chains in single expressions.
     // Common hand-written shader patterns that combine 3-4 access levels
     // in one line — each step is fine in isolation, but the compiler must
@@ -12,6 +16,7 @@ pipeline EquivChainMatrixStruct {
     };
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

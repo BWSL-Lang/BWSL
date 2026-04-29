@@ -1,0 +1,164 @@
+module Spaces {
+
+import Math
+
+struct Ray {
+    float3 origin;
+    float3 direction;
+};
+
+struct Basis {
+    float3 tangent;
+    float3 bitangent;
+    float3 normal;
+};
+
+/// Transforms a position by a 4x4 matrix and performs perspective divide when w is nonzero.
+/// Reference: https://en.wikipedia.org/wiki/Homogeneous_coordinates
+transform_point :: (mat4 m, float3 p) -> float3 {
+    float4 h = m * float4(p, 1.0);
+    float3 xyz = float3(h.x, h.y, h.z);
+    if (abs(h.w) > Math::EPSILON) {
+        return xyz / h.w;
+    }
+    return xyz;
+}
+
+/// Transforms a direction or offset by a 4x4 matrix without translation.
+transform_vector :: (mat4 m, float3 v) -> float3 {
+    float4 h = m * float4(v, 0.0);
+    return float3(h.x, h.y, h.z);
+}
+
+/// Transforms and normalizes a direction or offset by a 4x4 matrix.
+transform_direction :: (mat4 m, float3 v) -> float3 {
+    return Math::safe_normalize(transform_vector(m, v));
+}
+
+/// Transforms a normal by the inverse-transpose of an object-to-world matrix.
+/// Reference: https://en.wikipedia.org/wiki/Normal_(geometry)
+transform_normal :: (mat4 objectToWorld, float3 n) -> float3 {
+    mat4 normalMatrix = transpose(inverse(objectToWorld));
+    float4 h = normalMatrix * float4(n, 0.0);
+    return Math::safe_normalize(float3(h.x, h.y, h.z));
+}
+
+/// Projects a world-space position to clip space with a view-projection matrix.
+project_point :: (mat4 viewProjection, float3 worldPos) -> float4 {
+    return viewProjection * float4(worldPos, 1.0);
+}
+
+/// Converts clip-space coordinates to normalized device coordinates by dividing by w.
+/// Reference: https://en.wikipedia.org/wiki/Viewing_frustum
+clip_to_ndc :: (float4 clipPos) -> float3 {
+    float3 xyz = float3(clipPos.x, clipPos.y, clipPos.z);
+    if (abs(clipPos.w) > Math::EPSILON) {
+        return xyz / clipPos.w;
+    }
+    return xyz;
+}
+
+/// Converts normalized device coordinates in [-1, 1] to texture UV coordinates in [0, 1].
+ndc_to_uv :: (float2 ndc) -> float2 {
+    return ndc * 0.5 + float2(0.5);
+}
+
+/// Converts texture UV coordinates in [0, 1] to normalized device coordinates in [-1, 1].
+uv_to_ndc :: (float2 uv) -> float2 {
+    return uv * 2.0 - float2(1.0);
+}
+
+/// Converts pixel coordinates to normalized UV coordinates using viewport size.
+screen_to_uv :: (float2 pixel, float2 viewportSize) -> float2 {
+    return pixel / max(viewportSize, float2(1.0));
+}
+
+/// Converts normalized UV coordinates to pixel coordinates using viewport size.
+uv_to_screen :: (float2 uv, float2 viewportSize) -> float2 {
+    return uv * viewportSize;
+}
+
+/// Linearizes a hardware depth value in [0, 1] to normalized view depth.
+/// Reference: https://developer.nvidia.com/content/depth-precision-visualized
+linearize_depth_01 :: (float depth, float nearPlane, float farPlane) -> float {
+    return (2.0 * nearPlane) / (farPlane + nearPlane - depth * (farPlane - nearPlane));
+}
+
+/// Linearizes an NDC depth value in [-1, 1] to view-space depth units.
+linearize_depth_ndc :: (float ndcDepth, float nearPlane, float farPlane) -> float {
+    return (2.0 * nearPlane * farPlane) / (farPlane + nearPlane - ndcDepth * (farPlane - nearPlane));
+}
+
+/// Reconstructs view-space position from UV, depth, and inverse projection.
+/// Reference: https://mynameismjp.wordpress.com/2009/03/10/reconstructing-position-from-depth/
+reconstruct_view_position :: (float2 uv, float depth, mat4 inverseProjection) -> float3 {
+    float4 clip = float4(uv_to_ndc(uv), depth * 2.0 - 1.0, 1.0);
+    float4 view = inverseProjection * clip;
+    float3 xyz = float3(view.x, view.y, view.z);
+    if (abs(view.w) > Math::EPSILON) {
+        return xyz / view.w;
+    }
+    return xyz;
+}
+
+/// Reconstructs world-space position from UV, depth, and inverse view-projection.
+/// Reference: https://mynameismjp.wordpress.com/2009/03/10/reconstructing-position-from-depth/
+reconstruct_world_position :: (float2 uv, float depth, mat4 inverseViewProjection) -> float3 {
+    float4 clip = float4(uv_to_ndc(uv), depth * 2.0 - 1.0, 1.0);
+    float4 world = inverseViewProjection * clip;
+    float3 xyz = float3(world.x, world.y, world.z);
+    if (abs(world.w) > Math::EPSILON) {
+        return xyz / world.w;
+    }
+    return xyz;
+}
+
+/// Builds an orthonormal tangent basis around a normal.
+/// Reference: https://en.wikipedia.org/wiki/Orthonormal_basis
+make_basis :: (float3 normal) -> Basis {
+    float3 n = Math::safe_normalize(normal);
+    float3 up = abs(n.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
+    float3 tangent = Math::safe_normalize(cross(up, n));
+
+    Basis basis;
+    basis.tangent = tangent;
+    basis.bitangent = cross(n, tangent);
+    basis.normal = n;
+    return basis;
+}
+
+/// Converts a tangent-space vector to world space using a Basis.
+tangent_to_world :: (float3 tangentSpaceVector, Basis basis) -> float3 {
+    return basis.tangent * tangentSpaceVector.x +
+           basis.bitangent * tangentSpaceVector.y +
+           basis.normal * tangentSpaceVector.z;
+}
+
+/// Converts a tangent-space vector to world space from explicit tangent, bitangent, and normal.
+tangent_to_world :: (float3 tangentSpaceVector, float3 tangent, float3 bitangent, float3 normal) -> float3 {
+    return tangent * tangentSpaceVector.x +
+           bitangent * tangentSpaceVector.y +
+           normal * tangentSpaceVector.z;
+}
+
+/// Converts a world-space vector into tangent space using a Basis.
+world_to_tangent :: (float3 worldVector, Basis basis) -> float3 {
+    return float3(
+        dot(worldVector, basis.tangent),
+        dot(worldVector, basis.bitangent),
+        dot(worldVector, basis.normal)
+    );
+}
+
+/// Builds a view-space ray through a screen UV from an inverse projection matrix.
+view_ray_from_uv :: (float2 uv, mat4 inverseProjection) -> Ray {
+    float3 nearPos = reconstruct_view_position(uv, 0.0, inverseProjection);
+    float3 farPos = reconstruct_view_position(uv, 1.0, inverseProjection);
+
+    Ray ray;
+    ray.origin = nearPos;
+    ray.direction = Math::safe_normalize(farPos - nearPos);
+    return ray;
+}
+
+}

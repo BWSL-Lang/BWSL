@@ -1,5 +1,9 @@
 pipeline EquivSwitchFallthrough {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Exercises switch fall-through semantics: cases without `break` fall
     // through to the next case. Backend divergence risk is high here —
     // GLSL/HLSL/SPIRV have subtly different handling of missing-break.
@@ -27,6 +31,7 @@ pipeline EquivSwitchFallthrough {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             int v = int(idx) - 1;  // -1, 0, 1, 2, 3, 4, 5, 6 -> hits default/0/1/2/3/4/default/default

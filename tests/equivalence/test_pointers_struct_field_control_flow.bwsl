@@ -1,5 +1,9 @@
 pipeline EquivPointersStructFieldControlFlow {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Struct-field pointer combined with if/else branches. Companion to
     // test_pointers_struct_field — that one exercises straight-line flow,
     // this one forces the SPIR-V OpAccessChain to participate in PHI nodes
@@ -12,6 +16,7 @@ pipeline EquivPointersStructFieldControlFlow {
     };
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
 

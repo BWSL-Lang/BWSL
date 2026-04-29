@@ -168,9 +168,6 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     Parser parser;
     parser.Init(&lexer, &stream, &context);
 
-    RenderConfig defaultConfig;
-    SymbolTable::InitFromRenderConfig(&parser.symbolTable, defaultConfig);
-
     bool isModule = (parser.CurrentTokenType() == TokenType::MODULE);
     if (isModule) {
         (void) parser.ParseModuleFile();

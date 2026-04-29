@@ -3,10 +3,16 @@
 // (column lookup). Exercises cross-stage descriptor-set replication across
 // native, HLSL, and GLSL backends.
 pipeline EquivRasterUboPlusSsbo {
+
+    resources {
+        scale: float
+        cols: buffer<float>
+    }
     attributes {
     }
 
     pass "Main" {
+        use resources { scale, cols }
         vertex {
             float2[3] positions;
             positions[0] = float2(-1.0, -1.0);

@@ -1,18 +1,28 @@
 // TEST: Direct resource access for matrices
 // Note: Nested struct access (resources.uniforms.X) would require a struct-typed
-// uniform buffer declaration in the config. This test uses direct uniform access instead.
+// resource declaration. This test uses direct uniform access instead.
 
 pipeline BugNestedResourceAccess {
+
+    resources {
+        viewMatrix: mat4
+        projectionMatrix: mat4
+        modelMatrix: mat4
+        viewProjMatrix: mat4
+        lightViewProjMatrix: mat4
+        particles: buffer<Particle>
+    }
 
 attributes {
     position: float3
 }
 
 pass "Test" {
+        use resources { viewMatrix, projectionMatrix, modelMatrix, viewProjMatrix, lightViewProjMatrix, particles }
     use attributes { position }
 
     vertex {
-        // Direct access to uniforms (as declared in bug_test.rcfg)
+        // Direct access to uniforms declared in the pipeline resources block.
         mat4 viewProjMatrix = resources.projectionMatrix * resources.viewMatrix;
         output.position = viewProjMatrix * float4(attributes.position, 1.0);
     }

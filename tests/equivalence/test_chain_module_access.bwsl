@@ -1,5 +1,9 @@
 pipeline EquivChainModuleAccess {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Cross-scope access chains: module constants and functions mixed into
     // arithmetic chains with local structs / vectors. A common real-shader
     // pattern; each individual piece is tested elsewhere, but the
@@ -15,6 +19,7 @@ pipeline EquivChainModuleAccess {
     };
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

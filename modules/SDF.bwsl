@@ -1,0 +1,297 @@
+module SDF {
+
+import Math
+
+/// A ray with origin and normalized direction.
+struct Ray {
+    float3 origin;
+    float3 direction;
+};
+
+/// Result returned by raymarch helpers.
+struct RaymarchResult {
+    bool hit;
+    int steps;
+    float distance;
+    float3 position;
+    float surfaceDistance;
+};
+
+// ============================================
+// Primitive Distance Functions
+// ============================================
+
+/// Distance to a sphere centered at the origin.
+/// Reference: https://iquilezles.org/articles/distfunctions/
+sd_sphere :: (float3 p, float radius) -> float {
+    return length(p) - radius;
+}
+
+/// Distance to an axis-aligned box centered at the origin.
+/// halfExtents is the positive half-size along each axis.
+/// Reference: https://iquilezles.org/articles/distfunctions/
+sd_box :: (float3 p, float3 halfExtents) -> float {
+    float3 q = abs(p) - halfExtents;
+    float outside = length(max(q, 0.0));
+    float inside = min(max(q.x, max(q.y, q.z)), 0.0);
+    return outside + inside;
+}
+
+/// Distance to a rounded axis-aligned box centered at the origin.
+/// Reference: https://iquilezles.org/articles/distfunctions/
+sd_round_box :: (float3 p, float3 halfExtents, float radius) -> float {
+    return sd_box(p, halfExtents) - radius;
+}
+
+/// Distance to a torus centered at the origin and aligned around the Y axis.
+/// Reference: https://en.wikipedia.org/wiki/Torus
+sd_torus :: (float3 p, float majorRadius, float minorRadius) -> float {
+    float2 q = float2(length(p.xz) - majorRadius, p.y);
+    return length(q) - minorRadius;
+}
+
+/// Distance to a capsule segment from a to b with radius.
+/// Reference: https://en.wikipedia.org/wiki/Capsule_(geometry)
+sd_capsule :: (float3 p, float3 a, float3 b, float radius) -> float {
+    float3 pa = p - a;
+    float3 ba = b - a;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), Math::EPSILON), 0.0, 1.0);
+    return length(pa - ba * h) - radius;
+}
+
+/// Distance to a vertical cylinder centered at the origin and aligned to the Y axis.
+/// radius controls XZ radius; halfHeight controls positive/negative Y extent.
+/// Reference: https://en.wikipedia.org/wiki/Cylinder
+sd_cylinder :: (float3 p, float radius, float halfHeight) -> float {
+    float2 d = abs(float2(length(p.xz), p.y)) - float2(radius, halfHeight);
+    return min(max(d.x, d.y), 0.0) + length(max(d, 0.0));
+}
+
+/// Distance to a plane where dot(p, normal) + offset = 0.
+/// normal is normalized internally for predictable distances.
+/// Reference: https://en.wikipedia.org/wiki/Plane_(geometry)
+sd_plane :: (float3 p, float3 normal, float offset) -> float {
+    float3 n = Math::safe_normalize(normal);
+    return dot(p, n) + offset;
+}
+
+/// Analytic normal for a sphere centered at the origin.
+normal_sphere :: (float3 p) -> float3 {
+    return Math::safe_normalize(p);
+}
+
+/// Analytic normal for a plane.
+normal_plane :: (float3 normal) -> float3 {
+    return Math::safe_normalize(normal);
+}
+
+/// Sum-type wrapper for common SDF primitives.
+enum SDFShape {
+    Sphere(float radius),
+    Box(float3 halfExtents),
+    RoundBox(float3 halfExtents, float radius),
+    Torus(float majorRadius, float minorRadius),
+    Capsule(float3 a, float3 b, float radius),
+    Cylinder(float radius, float halfHeight),
+    Plane(float3 normal, float offset),
+
+    /// Evaluates signed distance for this shape at point p.
+    eval distance :: (float3 p) -> float {
+        Sphere(radius): sd_sphere(p, radius)
+        Box(halfExtents): sd_box(p, halfExtents)
+        RoundBox(halfExtents, radius): sd_round_box(p, halfExtents, radius)
+        Torus(majorRadius, minorRadius): sd_torus(p, majorRadius, minorRadius)
+        Capsule(a, b, radius): sd_capsule(p, a, b, radius)
+        Cylinder(radius, halfHeight): sd_cylinder(p, radius, halfHeight)
+        Plane(normal, offset): sd_plane(p, normal, offset)
+    }
+
+    /// Estimates a normal from central differences.
+    eval normal :: (float3 p, float eps) -> float3 {
+        float3 ex = float3(eps, 0.0, 0.0);
+        float3 ey = float3(0.0, eps, 0.0);
+        float3 ez = float3(0.0, 0.0, eps);
+        return Math::safe_normalize(float3(
+            self.distance(p + ex) - self.distance(p - ex),
+            self.distance(p + ey) - self.distance(p - ey),
+            self.distance(p + ez) - self.distance(p - ez)
+        ));
+    }
+}
+
+/// Boolean composition operation for combine().
+enum SDFCombineOp : int {
+    Union = 0,
+    Intersection = 1,
+    Subtract = 2,
+    SmoothUnion = 3,
+    SmoothIntersection = 4,
+    SmoothSubtract = 5
+}
+
+// ============================================
+// Domain Helpers
+// ============================================
+
+/// Moves the SDF sample point into a translated object's local space.
+translate :: (float3 p, float3 offset) -> float3 {
+    return p - offset;
+}
+
+/// Uniformly scales the SDF sample point. Multiply returned distances by scale.
+scale_uniform :: (float3 p, float scale) -> float3 {
+    return p / max(scale, Math::EPSILON);
+}
+
+/// Repeats the sample point in a grid of cells with the given spacing.
+/// Reference: https://iquilezles.org/articles/distfunctions/
+repeat :: (float3 p, float3 spacing) -> float3 {
+    float3 s = max(spacing, float3(Math::EPSILON));
+    return p - s * floor(p / s + float3(0.5));
+}
+
+/// Repeats the sample point on XZ while leaving Y unchanged.
+repeat_xz :: (float3 p, float2 spacing) -> float3 {
+    float2 s = max(spacing, float2(Math::EPSILON));
+    float2 xz = p.xz - s * floor(p.xz / s + float2(0.5));
+    return float3(xz.x, p.y, xz.y);
+}
+
+// ============================================
+// Boolean Composition
+// ============================================
+
+/// Union of two signed distances.
+op_union :: (float a, float b) -> float {
+    return min(a, b);
+}
+
+/// Intersection of two signed distances.
+op_intersection :: (float a, float b) -> float {
+    return max(a, b);
+}
+
+/// Difference of signed distance a minus b.
+op_subtract :: (float a, float b) -> float {
+    return max(a, -b);
+}
+
+/// Smooth polynomial union of two signed distances.
+/// Reference: https://iquilezles.org/articles/smin/
+smooth_union :: (float a, float b, float k) -> float {
+    float h = saturate(0.5 + 0.5 * (b - a) / max(k, Math::EPSILON));
+    return lerp(b, a, h) - k * h * (1.0 - h);
+}
+
+/// Smooth polynomial intersection of two signed distances.
+/// Reference: https://iquilezles.org/articles/smin/
+smooth_intersection :: (float a, float b, float k) -> float {
+    return -smooth_union(-a, -b, k);
+}
+
+/// Smooth polynomial subtraction of signed distance b from a.
+/// Reference: https://iquilezles.org/articles/smin/
+smooth_subtract :: (float a, float b, float k) -> float {
+    return smooth_intersection(a, -b, k);
+}
+
+/// Combines two signed distances using an enum-selected operation.
+/// Smooth operations use k as the blend radius; hard operations ignore k.
+combine :: (SDFCombineOp op, float a, float b, float k) -> float {
+    if (op == SDFCombineOp::Union) {
+        return op_union(a, b);
+    }
+    if (op == SDFCombineOp::Intersection) {
+        return op_intersection(a, b);
+    }
+    if (op == SDFCombineOp::Subtract) {
+        return op_subtract(a, b);
+    }
+    if (op == SDFCombineOp::SmoothUnion) {
+        return smooth_union(a, b, k);
+    }
+    if (op == SDFCombineOp::SmoothIntersection) {
+        return smooth_intersection(a, b, k);
+    }
+    if (op == SDFCombineOp::SmoothSubtract) {
+        return smooth_subtract(a, b, k);
+    }
+    return a;
+}
+
+// ============================================
+// Shading Helpers
+// ============================================
+
+/// Returns a soft inside/outside mask for distance d.
+soft_mask :: (float d, float feather) -> float {
+    return saturate(0.5 - d / max(feather, Math::EPSILON));
+}
+
+/// Returns a contour line mask around multiples of spacing.
+contour :: (float d, float spacing, float width) -> float {
+    float s = max(spacing, Math::EPSILON);
+    float w = max(width, Math::EPSILON);
+    float line = abs(fract(d / s + 0.5) - 0.5) * s;
+    return 1.0 - smoothstep(0.0, w, line);
+}
+
+/// Returns a simple surface color blend based on signed distance.
+distance_color :: (float d, float bandWidth, float3 insideColor, float3 outsideColor) -> float3 {
+    float t = soft_mask(d, bandWidth);
+    return lerp(outsideColor, insideColor, t);
+}
+
+// ============================================
+// Ray Marching
+// ============================================
+
+/// Builds a ray and safely normalizes its direction.
+make_ray :: (float3 origin, float3 direction) -> Ray {
+    Ray ray;
+    ray.origin = origin;
+    ray.direction = Math::safe_normalize(direction);
+    return ray;
+}
+
+/// Raymarches one shape.
+/// Reference: https://en.wikipedia.org/wiki/Ray_marching
+raymarch_shape :: (SDFShape shape, Ray ray, float minDistance, float maxDistance, float hitEpsilon, int maxSteps) -> RaymarchResult {
+    RaymarchResult result;
+    result.hit = false;
+    result.steps = 0;
+    result.distance = minDistance;
+    result.position = ray.origin + ray.direction * minDistance;
+    result.surfaceDistance = 0.0;
+
+    float t = minDistance;
+    for (int i = 0; i < maxSteps; i++) {
+        float3 p = ray.origin + ray.direction * t;
+        float d = shape.distance(p);
+
+        result.steps = i + 1;
+        result.distance = t;
+        result.position = p;
+        result.surfaceDistance = d;
+
+        if (abs(d) <= hitEpsilon) {
+            result.hit = true;
+            return result;
+        }
+
+        t += d;
+        if (t > maxDistance) {
+            return result;
+        }
+    }
+
+    return result;
+}
+
+/// Convenience wrapper for the common single-sphere case.
+raymarch_sphere :: (float radius, Ray ray, float minDistance, float maxDistance, float hitEpsilon, int maxSteps) -> RaymarchResult {
+    SDFShape shape = SDFShape::Sphere(radius);
+    return raymarch_shape(shape, ray, minDistance, maxDistance, hitEpsilon, maxSteps);
+}
+
+}

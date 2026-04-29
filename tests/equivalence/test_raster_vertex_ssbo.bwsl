@@ -3,10 +3,15 @@
 // Validates that vertex-stage SSBO descriptor plumbing is identical across
 // native SPIR-V, HLSL->SPIR-V, and GLSL->SPIR-V.
 pipeline EquivRasterVertexSsbo {
+
+    resources {
+        offsets: buffer<float>
+    }
     attributes {
     }
 
     pass "Main" {
+        use resources { offsets }
         vertex {
             // Base fullscreen triangle positions.
             float2[3] positions;

@@ -3,31 +3,110 @@ module Math {
     // ============================================
     // Constants
     // ============================================
+
+    /// Circle constant pi.
+    /// Reference: https://en.wikipedia.org/wiki/Pi
     const float PI = 3.14159265358979323846;
+
+    /// Circle constant tau, equal to 2*pi.
+    /// Reference: https://en.wikipedia.org/wiki/Turn_(angle)#Tau_proposal
     const float TAU = 6.28318530717958647692;
+
+    /// Euler's number.
+    /// Reference: https://en.wikipedia.org/wiki/E_(mathematical_constant)
     const float E = 2.71828182845904523536;
+
+    /// Golden ratio.
+    /// Reference: https://en.wikipedia.org/wiki/Golden_ratio
     const float PHI = 1.61803398874989484820;
+
+    /// Reciprocal of pi.
     const float INV_PI = 0.31830988618379067154;
+
+    /// Reciprocal of tau.
     const float INV_TAU = 0.15915494309189533577;
+
+    /// Small epsilon for safe division and normalization guards.
     const float EPSILON = 1e-6;
+
+    /// Square root of 2.
     const float SQRT_2 = 1.41421356237309504880;
+
+    /// Reciprocal square root of 2.
     const float INV_SQRT_2 = 0.70710678118654752440;
 
     // ============================================
     // Range Mapping
     // ============================================
+
+    /// Returns the interpolation factor for value in the range [a, b].
     inverse_lerp :: (float a, float b, float value) -> float {
         return (value - a) / (b - a);
     }
 
+    /// Returns the component-wise interpolation factor for value in [a, b].
+    inverse_lerp :: (float2 a, float2 b, float2 value) -> float2 {
+        return (value - a) / (b - a);
+    }
+
+    /// Returns the component-wise interpolation factor for value in [a, b].
+    inverse_lerp :: (float3 a, float3 b, float3 value) -> float3 {
+        return (value - a) / (b - a);
+    }
+
+    /// Returns the component-wise interpolation factor for value in [a, b].
+    inverse_lerp :: (float4 a, float4 b, float4 value) -> float4 {
+        return (value - a) / (b - a);
+    }
+
+    /// Returns saturate(inverse_lerp(a, b, value)).
+    inverse_lerp_clamped :: (float a, float b, float value) -> float {
+        return saturate(inverse_lerp(a, b, value));
+    }
+
+    /// Remaps a scalar from one range to another.
     remap :: (float value, float in_min, float in_max, float out_min, float out_max) -> float {
-        float t = (value - in_min) / (in_max - in_min);
+        float t = inverse_lerp(in_min, in_max, value);
         return out_min + t * (out_max - out_min);
     }
 
-    // ============================================ 
+    /// Remaps a vector from one range to another component-wise.
+    remap :: (float2 value, float2 in_min, float2 in_max, float2 out_min, float2 out_max) -> float2 {
+        float2 t = inverse_lerp(in_min, in_max, value);
+        return out_min + t * (out_max - out_min);
+    }
+
+    /// Remaps a vector from one range to another component-wise.
+    remap :: (float3 value, float3 in_min, float3 in_max, float3 out_min, float3 out_max) -> float3 {
+        float3 t = inverse_lerp(in_min, in_max, value);
+        return out_min + t * (out_max - out_min);
+    }
+
+    /// Remaps a vector from one range to another component-wise.
+    remap :: (float4 value, float4 in_min, float4 in_max, float4 out_min, float4 out_max) -> float4 {
+        float4 t = inverse_lerp(in_min, in_max, value);
+        return out_min + t * (out_max - out_min);
+    }
+
+    /// Remaps a scalar from one range to another, clamping the input range factor to [0, 1].
+    remap_clamped :: (float value, float in_min, float in_max, float out_min, float out_max) -> float {
+        float t = saturate(inverse_lerp(in_min, in_max, value));
+        return out_min + t * (out_max - out_min);
+    }
+
+    // ============================================
     // Safe Operations
     // ============================================
+
+    /// Returns 1 / x, or 0 when x is too close to zero.
+    safe_rcp :: (float x) -> float {
+        if (abs(x) > EPSILON) {
+            return 1.0 / x;
+        }
+        return 0.0;
+    }
+
+    /// Returns a / b, or 0 when b is too close to zero.
     safe_divide :: (float a, float b) -> float {
         if (abs(b) > EPSILON) {
             return a / b;
@@ -35,22 +114,30 @@ module Math {
         return 0.0;
     }
 
-    safe_normalize :: (float3 v) -> float3 {
-        float len_sq = dot(v, v);
-        if (len_sq > EPSILON * EPSILON) {
-            return v * rsqrt(len_sq);
-        }
-        return float3(0.0, 1.0, 0.0);
-    }
-
-    safe_normalize_with_fallback :: (float3 v, float3 fallback) -> float3 {
-        float len_sq = dot(v, v);
-        if (len_sq > EPSILON * EPSILON) {
-            return v * rsqrt(len_sq);
+    /// Returns a / b, or fallback when b is too close to zero.
+    safe_divide :: (float a, float b, float fallback) -> float {
+        if (abs(b) > EPSILON) {
+            return a / b;
         }
         return fallback;
     }
 
+    /// Returns component-wise a / b, using zero for near-zero denominators.
+    safe_divide :: (float2 a, float2 b) -> float2 {
+        return float2(safe_divide(a.x, b.x), safe_divide(a.y, b.y));
+    }
+
+    /// Returns component-wise a / b, using zero for near-zero denominators.
+    safe_divide :: (float3 a, float3 b) -> float3 {
+        return float3(safe_divide(a.x, b.x), safe_divide(a.y, b.y), safe_divide(a.z, b.z));
+    }
+
+    /// Returns component-wise a / b, using zero for near-zero denominators.
+    safe_divide :: (float4 a, float4 b) -> float4 {
+        return float4(safe_divide(a.x, b.x), safe_divide(a.y, b.y), safe_divide(a.z, b.z), safe_divide(a.w, b.w));
+    }
+
+    /// Normalizes a float2, returning +X when length is too small.
     safe_normalize :: (float2 v) -> float2 {
         float len_sq = dot(v, v);
         if (len_sq > EPSILON * EPSILON) {
@@ -59,6 +146,7 @@ module Math {
         return float2(1.0, 0.0);
     }
 
+    /// Normalizes a float2, returning fallback when length is too small.
     safe_normalize_with_fallback :: (float2 v, float2 fallback) -> float2 {
         float len_sq = dot(v, v);
         if (len_sq > EPSILON * EPSILON) {
@@ -67,62 +155,265 @@ module Math {
         return fallback;
     }
 
+    /// Normalizes a float3, returning +Y when length is too small.
+    safe_normalize :: (float3 v) -> float3 {
+        float len_sq = dot(v, v);
+        if (len_sq > EPSILON * EPSILON) {
+            return v * rsqrt(len_sq);
+        }
+        return float3(0.0, 1.0, 0.0);
+    }
+
+    /// Normalizes a float3, returning fallback when length is too small.
+    safe_normalize_with_fallback :: (float3 v, float3 fallback) -> float3 {
+        float len_sq = dot(v, v);
+        if (len_sq > EPSILON * EPSILON) {
+            return v * rsqrt(len_sq);
+        }
+        return fallback;
+    }
+
+    /// Normalizes a float4, returning +W when length is too small.
+    safe_normalize :: (float4 v) -> float4 {
+        float len_sq = dot(v, v);
+        if (len_sq > EPSILON * EPSILON) {
+            return v * rsqrt(len_sq);
+        }
+        return float4(0.0, 0.0, 0.0, 1.0);
+    }
+
+    /// Normalizes a float4, returning fallback when length is too small.
+    safe_normalize_with_fallback :: (float4 v, float4 fallback) -> float4 {
+        float len_sq = dot(v, v);
+        if (len_sq > EPSILON * EPSILON) {
+            return v * rsqrt(len_sq);
+        }
+        return fallback;
+    }
+
+    // ============================================
+    // Vector Metrics
+    // ============================================
+
+    /// Returns dot(v, v) without taking a square root.
+    length_squared :: (float2 v) -> float {
+        return dot(v, v);
+    }
+
+    /// Returns dot(v, v) without taking a square root.
+    length_squared :: (float3 v) -> float {
+        return dot(v, v);
+    }
+
+    /// Returns dot(v, v) without taking a square root.
+    length_squared :: (float4 v) -> float {
+        return dot(v, v);
+    }
+
+    /// Returns squared distance between two points without taking a square root.
+    distance_squared :: (float2 a, float2 b) -> float {
+        return length_squared(a - b);
+    }
+
+    /// Returns squared distance between two points without taking a square root.
+    distance_squared :: (float3 a, float3 b) -> float {
+        return length_squared(a - b);
+    }
+
+    /// Returns squared distance between two points without taking a square root.
+    distance_squared :: (float4 a, float4 b) -> float {
+        return length_squared(a - b);
+    }
+
+    /// Returns max(dot(a, b), 0), common in lighting equations.
+    saturate_dot :: (float3 a, float3 b) -> float {
+        return max(dot(a, b), 0.0);
+    }
+
+    /// Returns clamp(dot(a, b), -1, 1), useful before acos.
+    clamped_dot :: (float3 a, float3 b) -> float {
+        return clamp(dot(a, b), -1.0, 1.0);
+    }
+
+    /// Returns the angle in radians between two vectors.
+    /// Reference: https://en.wikipedia.org/wiki/Dot_product
+    angle_between :: (float3 a, float3 b) -> float {
+        float3 na = safe_normalize(a);
+        float3 nb = safe_normalize(b);
+        return acos(clamped_dot(na, nb));
+    }
+
+    /// Projects vector v onto vector onto.
+    /// Reference: https://en.wikipedia.org/wiki/Vector_projection
+    project_onto :: (float3 v, float3 onto) -> float3 {
+        float denom = dot(onto, onto);
+        if (denom > EPSILON * EPSILON) {
+            return onto * (dot(v, onto) / denom);
+        }
+        return float3(0.0);
+    }
+
+    /// Rejects vector v from vector onto, returning the component perpendicular to onto.
+    /// Reference: https://en.wikipedia.org/wiki/Vector_projection
+    reject_from :: (float3 v, float3 onto) -> float3 {
+        return v - project_onto(v, onto);
+    }
+
+    /// Returns any normalized tangent perpendicular to normal.
+    /// Reference: https://en.wikipedia.org/wiki/Orthonormal_basis
+    orthonormal_tangent :: (float3 normal) -> float3 {
+        float3 n = safe_normalize(normal);
+        float3 up = abs(n.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
+        return safe_normalize(cross(up, n));
+    }
+
+    /// Returns a unit vector facing the same hemisphere as reference.
+    face_same_hemisphere :: (float3 v, float3 reference) -> float3 {
+        return dot(v, reference) < 0.0 ? -v : v;
+    }
+
     // ============================================
     // Power Shortcuts
     // ============================================
+
+    /// Returns x squared.
     square :: (float x) -> float {
         return x * x;
     }
 
+    /// Returns x squared component-wise.
     square :: (float2 x) -> float2 {
         return x * x;
     }
 
+    /// Returns x squared component-wise.
     square :: (float3 x) -> float3 {
         return x * x;
     }
 
+    /// Returns x squared component-wise.
+    square :: (float4 x) -> float4 {
+        return x * x;
+    }
+
+    /// Returns x cubed.
     cube :: (float x) -> float {
         return x * x * x;
     }
 
+    /// Returns x cubed component-wise.
+    cube :: (float2 x) -> float2 {
+        return x * x * x;
+    }
+
+    /// Returns x cubed component-wise.
     cube :: (float3 x) -> float3 {
         return x * x * x;
     }
 
+    /// Returns x cubed component-wise.
+    cube :: (float4 x) -> float4 {
+        return x * x * x;
+    }
+
+    /// Returns x^4.
+    pow4 :: (float x) -> float {
+        float x2 = x * x;
+        return x2 * x2;
+    }
+
+    /// Returns x^5, common in Schlick Fresnel approximations.
+    /// Reference: https://en.wikipedia.org/wiki/Schlick%27s_approximation
+    pow5 :: (float x) -> float {
+        float x2 = x * x;
+        return x2 * x2 * x;
+    }
+
+    /// Returns x^5 component-wise.
+    pow5 :: (float3 x) -> float3 {
+        float3 x2 = x * x;
+        return x2 * x2 * x;
+    }
+
     // ============================================
-    // 2D Transformations
+    // Transformations
     // ============================================
+
+    /// Rotates a 2D point around the origin by angle radians.
+    /// Reference: https://en.wikipedia.org/wiki/Rotation_matrix
     rotate_2d :: (float2 p, float angle) -> float2 {
         float c = cos(angle);
         float s = sin(angle);
         return float2(p.x * c - p.y * s, p.x * s + p.y * c);
     }
 
+    /// Rotates a 3D vector around an axis using Rodrigues' rotation formula.
+    /// Reference: https://en.wikipedia.org/wiki/Rodrigues%27_rotation_formula
+    rotate_axis_angle :: (float3 v, float3 axis, float angle) -> float3 {
+        float3 a = safe_normalize(axis);
+        float c = cos(angle);
+        float s = sin(angle);
+        return v * c + cross(a, v) * s + a * dot(a, v) * (1.0 - c);
+    }
+
     // ============================================
     // Step Functions
     // ============================================
+
+    /// Returns a clamped linear step from edge0 to edge1.
     linear_step :: (float edge0, float edge1, float x) -> float {
         return saturate((x - edge0) / (edge1 - edge0));
     }
 
-    // Perlin's improved smoothstep (quintic, zero 1st and 2nd derivatives at edges)
+    /// Returns a clamped linear step from edge0 to edge1 component-wise.
+    linear_step :: (float2 edge0, float2 edge1, float2 x) -> float2 {
+        return saturate((x - edge0) / (edge1 - edge0));
+    }
+
+    /// Returns a clamped linear step from edge0 to edge1 component-wise.
+    linear_step :: (float3 edge0, float3 edge1, float3 x) -> float3 {
+        return saturate((x - edge0) / (edge1 - edge0));
+    }
+
+    /// Returns Perlin's quintic smootherstep with zero first and second derivatives at edges.
+    /// Reference: https://en.wikipedia.org/wiki/Smoothstep
     smootherstep :: (float edge0, float edge1, float x) -> float {
         float t = saturate((x - edge0) / (edge1 - edge0));
+        return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+    }
+
+    /// Returns Perlin's quintic smootherstep component-wise.
+    /// Reference: https://en.wikipedia.org/wiki/Smoothstep
+    smootherstep :: (float2 edge0, float2 edge1, float2 x) -> float2 {
+        float2 t = saturate((x - edge0) / (edge1 - edge0));
+        return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+    }
+
+    /// Returns Perlin's quintic smootherstep component-wise.
+    /// Reference: https://en.wikipedia.org/wiki/Smoothstep
+    smootherstep :: (float3 edge0, float3 edge1, float3 x) -> float3 {
+        float3 t = saturate((x - edge0) / (edge1 - edge0));
         return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
     }
 
     // ============================================
     // Easing Functions - Quadratic
     // ============================================
+
+    /// Quadratic ease-in curve for t in [0, 1].
+    /// Reference: https://easings.net/#easeInQuad
     ease_in_quad :: (float t) -> float {
         return t * t;
     }
 
+    /// Quadratic ease-out curve for t in [0, 1].
+    /// Reference: https://easings.net/#easeOutQuad
     ease_out_quad :: (float t) -> float {
         return t * (2.0 - t);
     }
 
+    /// Quadratic ease-in-out curve for t in [0, 1].
+    /// Reference: https://easings.net/#easeInOutQuad
     ease_in_out_quad :: (float t) -> float {
         if (t < 0.5) {
             return 2.0 * t * t;
@@ -133,15 +424,22 @@ module Math {
     // ============================================
     // Easing Functions - Cubic
     // ============================================
+
+    /// Cubic ease-in curve for t in [0, 1].
+    /// Reference: https://easings.net/#easeInCubic
     ease_in_cubic :: (float t) -> float {
         return t * t * t;
     }
 
+    /// Cubic ease-out curve for t in [0, 1].
+    /// Reference: https://easings.net/#easeOutCubic
     ease_out_cubic :: (float t) -> float {
         float u = 1.0 - t;
         return 1.0 - u * u * u;
     }
 
+    /// Cubic ease-in-out curve for t in [0, 1].
+    /// Reference: https://easings.net/#easeInOutCubic
     ease_in_out_cubic :: (float t) -> float {
         if (t < 0.5) {
             return 4.0 * t * t * t;
@@ -152,15 +450,22 @@ module Math {
     // ============================================
     // Easing Functions - Quartic
     // ============================================
+
+    /// Quartic ease-in curve for t in [0, 1].
+    /// Reference: https://easings.net/#easeInQuart
     ease_in_quart :: (float t) -> float {
         return t * t * t * t;
     }
 
+    /// Quartic ease-out curve for t in [0, 1].
+    /// Reference: https://easings.net/#easeOutQuart
     ease_out_quart :: (float t) -> float {
         float u = 1.0 - t;
         return 1.0 - u * u * u * u;
     }
 
+    /// Quartic ease-in-out curve for t in [0, 1].
+    /// Reference: https://easings.net/#easeInOutQuart
     ease_in_out_quart :: (float t) -> float {
         if (t < 0.5) {
             return 8.0 * t * t * t * t;
@@ -169,8 +474,11 @@ module Math {
     }
 
     // ============================================
-    // Easing Functions - Exponential
+    // Easing Functions - Exponential / Elastic / Bounce
     // ============================================
+
+    /// Exponential ease-in curve for t in [0, 1].
+    /// Reference: https://easings.net/#easeInExpo
     ease_in_expo :: (float t) -> float {
         if (t <= 0.0) {
             return 0.0;
@@ -178,6 +486,8 @@ module Math {
         return exp2(10.0 * (t - 1.0));
     }
 
+    /// Exponential ease-out curve for t in [0, 1].
+    /// Reference: https://easings.net/#easeOutExpo
     ease_out_expo :: (float t) -> float {
         if (t >= 1.0) {
             return 1.0;
@@ -185,9 +495,8 @@ module Math {
         return 1.0 - exp2(-10.0 * t);
     }
 
-    // ============================================
-    // Easing Functions - Elastic
-    // ============================================
+    /// Elastic ease-out curve for t in [0, 1].
+    /// Reference: https://easings.net/#easeOutElastic
     ease_out_elastic :: (float t) -> float {
         if (t <= 0.0) {
             return 0.0;
@@ -198,10 +507,12 @@ module Math {
         return exp2(-10.0 * t) * sin((t * 10.0 - 0.75) * TAU / 3.0) + 1.0;
     }
 
+    /// Bounce ease-out curve for t in [0, 1].
+    /// Reference: https://easings.net/#easeOutBounce
     ease_out_bounce :: (float t) -> float {
-        const float n1 = 7.5625;
-        const float d1 = 2.75;
-        
+        float n1 = 7.5625;
+        float d1 = 2.75;
+
         if (t < 1.0 / d1) {
             return n1 * t * t;
         } else if (t < 2.0 / d1) {
@@ -219,13 +530,30 @@ module Math {
     // ============================================
     // Periodic / Wave Functions
     // ============================================
-    
-    // Triangle wave, period 1, range [0, 1]
+
+    /// Triangle wave with period 1 and range [0, 1].
+    /// Reference: https://en.wikipedia.org/wiki/Triangle_wave
     triangle_wave :: (float x) -> float {
         return abs(fract(x) * 2.0 - 1.0);
     }
 
-    // Attempt at a cheap sin approximation for [0, TAU], reasonable for visuals
+    /// Sawtooth wave with period 1 and range [0, 1].
+    /// Reference: https://en.wikipedia.org/wiki/Sawtooth_wave
+    sawtooth_wave :: (float x) -> float {
+        return fract(x);
+    }
+
+    /// Sine wave remapped to [0, 1].
+    sin01 :: (float x) -> float {
+        return sin(x) * 0.5 + 0.5;
+    }
+
+    /// Cosine wave remapped to [0, 1].
+    cos01 :: (float x) -> float {
+        return cos(x) * 0.5 + 0.5;
+    }
+
+    /// Cheap sine approximation for visual effects. Best for inputs in radians.
     fast_sin :: (float x) -> float {
         float t = fract(x * INV_TAU);
         float t2 = t * (1.0 - t);

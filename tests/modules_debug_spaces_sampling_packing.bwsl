@@ -1,0 +1,44 @@
+pipeline ModulesDebugSpacesSamplingPacking {
+    import Debug
+    import Packing
+    import Sampling
+    import Spaces
+
+    attributes {
+        position: float3
+        normal: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, normal, texcoord }
+
+        vertex {
+            mat4 identity = mat4(
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0
+            );
+
+            float3 worldPos = Spaces::transform_point(identity, attributes.position);
+            float3 worldNormal = Spaces::transform_direction(identity, attributes.normal);
+            float2 xi = float2(0.25, 0.75);
+            float3 sampleDir = Sampling::cosine_hemisphere(xi, worldNormal);
+            uint packedNormal = Packing::pack_octahedral_32(sampleDir);
+            float3 unpackedNormal = Packing::unpack_octahedral_32(packedNormal);
+            float3 debugColor = Debug::normal_color(unpackedNormal);
+
+            output.position = float4(worldPos + debugColor * 0.001, 1.0);
+            output.texcoord = attributes.texcoord;
+        }
+
+        fragment {
+            float3 heat = Debug::heatmap(input.texcoord.x);
+            uint packed = Packing::pack_rgba8_unorm(float4(heat, 1.0));
+            float4 unpacked = Packing::unpack_rgba8_unorm(packed);
+            float3 checked = Debug::bad_value_color(float3(unpacked.x, unpacked.y, unpacked.z), float3(unpacked.x, unpacked.y, unpacked.z));
+            output.color = float4(checked, unpacked.w);
+        }
+    }
+}

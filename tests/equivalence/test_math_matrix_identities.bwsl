@@ -1,5 +1,9 @@
 pipeline EquivMathMatrixIdentities {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Algebraic identities on matrices. A bug in any matrix op (transpose,
     // inverse, scalar-multiply, or mat*mat) typically breaks at least one
     // identity. Running them cross-backend catches drift when a backend
@@ -11,6 +15,7 @@ pipeline EquivMathMatrixIdentities {
     // vectors pulled out of the matrix.
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) * 0.2 + 0.1;

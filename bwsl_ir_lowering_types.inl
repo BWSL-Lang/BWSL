@@ -185,6 +185,34 @@ inline u32 IRLowering::LookupOrRegisterStructType(u32 typeNameHash) {
       return 0;
     }
 
+    const EnumData *resolvedEnum =
+        SymbolTable::ResolveEnumDataByHash(symbols, typeNameHash);
+    if (resolvedEnum && (resolvedEnum->flags & EnumData::IS_SUM_TYPE)) {
+      u32 enumIndex = 0xFFFFFFFF;
+      for (u32 i = 0; i < symbols->enums.count; i++) {
+        if (&symbols->enums[i] == resolvedEnum) {
+          enumIndex = i;
+          break;
+        }
+      }
+      if (enumIndex != 0xFFFFFFFF) {
+        u32 canonicalHash = resolvedEnum->name.nameHash;
+        auto canonIt = structTypeMap.find(canonicalHash);
+        if (canonIt != structTypeMap.end()) {
+          if (typeNameHash != canonicalHash) {
+            structTypeMap[typeNameHash] = canonIt->second;
+          }
+          return program.structTypes[canonIt->second].nameHash;
+        }
+
+        u32 result = RegisterEnumAsStructType(canonicalHash, enumIndex);
+        if (result != 0 && typeNameHash != canonicalHash) {
+          structTypeMap[typeNameHash] = structTypeMap[canonicalHash];
+        }
+        return result;
+      }
+    }
+
     // Try looking up via global custom type registry
     StructData *structData = g_customTypes.LookupType(typeNameHash);
     if (structData) {
@@ -1034,6 +1062,20 @@ inline CoreType IRLowering::ResolveCoreTypeFromHash(u32 typeHash, u32 *outCustom
     return baseType;
   }
 
+  const EnumData *resolvedEnum =
+      SymbolTable::ResolveEnumDataByHash(symbols, typeHash);
+  if (resolvedEnum) {
+    if (resolvedEnum->flags & EnumData::IS_SUM_TYPE) {
+      if (outCustomHash) {
+        *outCustomHash = resolvedEnum->name.nameHash;
+      }
+      return CoreType::CUSTOM;
+    }
+
+    CoreType baseType = resolvedEnum->underlyingType;
+    return baseType == CoreType::INVALID ? CoreType::INT : baseType;
+  }
+
   if (sym && sym->kind == SymbolKind::CUSTOM_TYPE) {
     if (outCustomHash) {
       // Use the struct's unqualified name hash for consistency
@@ -1069,4 +1111,3 @@ inline OverloadTypeMask IRLowering::MakeOverloadMaskFromResolvedTypeHash(u32 typ
   }
   return MakeOverloadMaskFromTypeHash(typeHash);
 }
-

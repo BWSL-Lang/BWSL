@@ -1,5 +1,9 @@
 pipeline EquivDeepNesting {
 
+    resources {
+        output: buffer<int>
+    }
+
     classify :: (int v) -> int {
         if (v < 0) {
             return -1;
@@ -28,6 +32,7 @@ pipeline EquivDeepNesting {
     }
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             resources.output[idx] = classify(int(idx) - 2);

@@ -5,6 +5,15 @@
 
 pipeline BugBufferDynamicIndex {
 
+    resources {
+        viewMatrix: mat4
+        projectionMatrix: mat4
+        modelMatrix: mat4
+        viewProjMatrix: mat4
+        lightViewProjMatrix: mat4
+        particles: buffer<Particle>
+    }
+
 struct Particle {
     float3 position;
     float size;
@@ -16,6 +25,7 @@ attributes {
 }
 
 pass "Test" {
+        use resources { viewMatrix, projectionMatrix, modelMatrix, viewProjMatrix, lightViewProjMatrix, particles }
     use attributes { position }
 
     vertex {

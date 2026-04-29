@@ -1,5 +1,10 @@
 pipeline EquivAtomic {
+
+    resources {
+        output: buffer<int>
+    }
     pass "Compute" {
+        use resources { output }
         compute "Main" [16, 1, 1] {
             shared uint counter[1];
 

@@ -1,11 +1,16 @@
 pipeline EquivMatrixNegate {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Unary minus on mat2/mat3/mat4. Previously emitted OpSNegate on a
     // float matrix (invalid SPIR-V); now lowered via
     // OpMatrixTimesScalar(m, -1.0) in the SPIR-V backend. This test pins
     // down cross-backend equivalence on the common sign-flip pattern.
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [8, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx);

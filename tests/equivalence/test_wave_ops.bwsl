@@ -1,5 +1,9 @@
 pipeline EquivWaveOps {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Wave/subgroup operations — results depend on the hardware subgroup
     // size, but since all three backends (native SPIR-V, HLSL→SPIR-V,
     // GLSL→SPIR-V) compile to the same Vulkan subgroup ops and run on the
@@ -12,6 +16,7 @@ pipeline EquivWaveOps {
     // still matches across backends since they share a driver.
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [32, 1, 1] {
             uint idx = input.global_id.x;
             uint lid = input.local_index;

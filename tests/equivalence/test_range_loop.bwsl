@@ -1,5 +1,10 @@
 pipeline EquivRangeLoop {
+
+    resources {
+        output: buffer<int>
+    }
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             int limit = int(idx) + 3;

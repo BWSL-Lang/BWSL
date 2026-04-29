@@ -1,5 +1,9 @@
 pipeline EquivNestedAccessArrayChain {
 
+    resources {
+        output: buffer<float>
+    }
+
     // Array field inside a nested struct: `outer.items[i].inner.field`.
     // Also covers dynamic indexing of the inner array with a loop-carried
     // variable — SSA has to fold the indexing through both the struct
@@ -16,6 +20,7 @@ pipeline EquivNestedAccessArrayChain {
     };
 
     pass "Compute" {
+        use resources { output }
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
             float t = float(idx) * 0.25;
