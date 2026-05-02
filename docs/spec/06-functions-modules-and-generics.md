@@ -4,8 +4,8 @@ Status: `stable` for the current constraint-based model
 
 Primary implementation sources:
 
-- `bwsl_parser_soa.cpp`
-- `bwsl_types.h`
+- `phases/parser/bwsl_parser_soa.cpp`
+- `core/bwsl_types.h`
 
 ## Function Declaration Form
 

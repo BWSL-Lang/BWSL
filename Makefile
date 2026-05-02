@@ -70,6 +70,15 @@ SPIRV_CROSS_DIR = vendor/SPIRV-Cross
 SPIRV_CROSS_INCLUDES = -I$(SPIRV_CROSS_DIR)
 SPIRV_CROSS_FLAGS = -DUSE_SPIRV_CROSS_LIB
 
+BWSL_INCLUDE_DIRS = -I. -Icore -Icore/middleware \
+	-Iphases/lexing -Iphases/parser -Iphases/evaluation \
+	-Iphases/ir_generation -Iphases/ir_lowering -Iphases/control_flow \
+	-Iphases/ssa -Iphases/backends/spirv -Iphases/backends/gles
+MSVC_BWSL_INCLUDE_DIRS = /I. /Icore /Icore/middleware \
+	/Iphases/lexing /Iphases/parser /Iphases/evaluation \
+	/Iphases/ir_generation /Iphases/ir_lowering /Iphases/control_flow \
+	/Iphases/ssa /Iphases/backends/spirv /Iphases/backends/gles
+
 # Native Unix toolchain
 ifeq ($(origin CXX), default)
 CXX = clang++
@@ -79,7 +88,7 @@ CXXFLAGS_DEBUG ?= -g -O0 -std=c++20 -Wall -Wextra
 
 # Native Windows MSVC toolchain
 MSVC_CXX ?= cl
-MSVC_COMMON_FLAGS = /nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB /I$(SPIRV_CROSS_DIR) /I.
+MSVC_COMMON_FLAGS = /nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB /I$(SPIRV_CROSS_DIR) $(MSVC_BWSL_INCLUDE_DIRS)
 MSVC_RELEASE_FLAGS ?= /O2 /W4
 MSVC_DEBUG_FLAGS ?= /Zi /Od /W4
 MSVC_LINK_FLAGS ?= /link /STACK:8388608
@@ -106,9 +115,9 @@ MKDIR_BUILD = cmd /C if not exist "$(WIN_BUILD_DIR)" mkdir "$(WIN_BUILD_DIR)"
 MKDIR_WASM = cmd /C if not exist "$(WIN_WASM_DIR)" mkdir "$(WIN_WASM_DIR)"
 CLEAN_BUILD = cmd /C if exist "$(WIN_BUILD_DIR)" rmdir /S /Q "$(WIN_BUILD_DIR)"
 else
-NATIVE_BWSLC_CMD = $(CXX) $(CXXFLAGS) $(SPIRV_CROSS_FLAGS) $(SPIRV_CROSS_INCLUDES) -I. \
+NATIVE_BWSLC_CMD = $(CXX) $(CXXFLAGS) $(SPIRV_CROSS_FLAGS) $(SPIRV_CROSS_INCLUDES) $(BWSL_INCLUDE_DIRS) \
 	-o $(BWSLC_OUT) $(SPIRV_CROSS_WRAPPER) $(BWSLC_SRC)
-NATIVE_BWSLC_DEBUG_CMD = $(CXX) $(CXXFLAGS_DEBUG) $(SPIRV_CROSS_FLAGS) $(SPIRV_CROSS_INCLUDES) -I. \
+NATIVE_BWSLC_DEBUG_CMD = $(CXX) $(CXXFLAGS_DEBUG) $(SPIRV_CROSS_FLAGS) $(SPIRV_CROSS_INCLUDES) $(BWSL_INCLUDE_DIRS) \
 	-o $(BWSLC_DEBUG_OUT) $(SPIRV_CROSS_WRAPPER) $(BWSLC_SRC)
 MKDIR_BUILD = mkdir -p $(BUILD_DIR)
 MKDIR_WASM = mkdir -p $(WASM_DIR)
@@ -137,9 +146,9 @@ WASM_RELEASE_OPT = -O3 -DNDEBUG -flto
 WASM_DEBUG_OPT = -O0 -g -s ASSERTIONS=2 -s SAFE_HEAP=1
 
 # BWSL sources need defs_wasm.h for BSD type compatibility
-WASM_BWSL_INCLUDES = -I. -Itools -include tools/defs_wasm.h
+WASM_BWSL_INCLUDES = $(BWSL_INCLUDE_DIRS) -Itools -include tools/defs_wasm.h
 # SPIRV-Cross wrapper must NOT have defs_wasm.h (conflicts with f32/f64 member names)
-WASM_SPIRV_INCLUDES = -I. -Itools
+WASM_SPIRV_INCLUDES = $(BWSL_INCLUDE_DIRS) -Itools
 
 # ============================================================================
 # Targets
@@ -192,7 +201,7 @@ endif
 
 bwslc-sanitize: $(BUILD_DIR)
 	$(SANITIZE_CXX) $(SANITIZE_FLAGS) $(SANITIZE_LINK_FLAGS) $(SPIRV_CROSS_FLAGS) \
-		$(SPIRV_CROSS_INCLUDES) -I. \
+		$(SPIRV_CROSS_INCLUDES) $(BWSL_INCLUDE_DIRS) \
 		-o $(BWSLC_SANITIZE_OUT) $(SPIRV_CROSS_WRAPPER) $(BWSLC_SRC)
 	@echo "Built: $(BWSLC_SANITIZE_OUT)"
 
@@ -234,7 +243,7 @@ FUZZ_LINK_FLAGS = -stdlib=libc++ -L/usr/local/opt/llvm/lib/c++ \
 endif
 
 bwslc-fuzz: $(BUILD_DIR)
-	$(FUZZ_CXX) $(FUZZ_FLAGS) $(FUZZ_LINK_FLAGS) -I. -o $(FUZZ_OUT) $(FUZZ_SRC)
+	$(FUZZ_CXX) $(FUZZ_FLAGS) $(FUZZ_LINK_FLAGS) $(BWSL_INCLUDE_DIRS) -o $(FUZZ_OUT) $(FUZZ_SRC)
 	@echo "Built: $(FUZZ_OUT)"
 
 ifeq ($(HOST_OS),windows)
@@ -253,12 +262,12 @@ endif
 
 bwslc-win-zig: $(BUILD_DIR)
 	$(ZIG) c++ -target $(ZIG_WIN_TARGET) $(ZIG_RELEASE_FLAGS) $(SPIRV_CROSS_FLAGS) \
-		$(SPIRV_CROSS_INCLUDES) -I. -o $(BWSLC_WIN_ZIG_OUT) $(SPIRV_CROSS_WRAPPER) $(BWSLC_SRC)
+		$(SPIRV_CROSS_INCLUDES) $(BWSL_INCLUDE_DIRS) -o $(BWSLC_WIN_ZIG_OUT) $(SPIRV_CROSS_WRAPPER) $(BWSLC_SRC)
 	@echo "Built: $(BWSLC_WIN_ZIG_OUT)"
 
 bwslc-win-zig-debug: $(BUILD_DIR)
 	$(ZIG) c++ -target $(ZIG_WIN_TARGET) $(ZIG_DEBUG_FLAGS) $(SPIRV_CROSS_FLAGS) \
-		$(SPIRV_CROSS_INCLUDES) -I. -o $(BWSLC_WIN_ZIG_DEBUG_OUT) $(SPIRV_CROSS_WRAPPER) $(BWSLC_SRC)
+		$(SPIRV_CROSS_INCLUDES) $(BWSL_INCLUDE_DIRS) -o $(BWSLC_WIN_ZIG_DEBUG_OUT) $(SPIRV_CROSS_WRAPPER) $(BWSLC_SRC)
 	@echo "Built: $(BWSLC_WIN_ZIG_DEBUG_OUT)"
 
 $(BUILD_DIR):

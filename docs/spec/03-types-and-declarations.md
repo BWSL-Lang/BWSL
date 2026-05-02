@@ -4,9 +4,9 @@ Status: `stable` with a few `provisional` compatibility aliases
 
 Primary implementation sources:
 
-- `bwsl_token_defs.h`
-- `bwsl_types.h`
-- `bwsl_parser_soa.cpp`
+- `phases/lexing/bwsl_token_defs.h`
+- `core/bwsl_types.h`
+- `phases/parser/bwsl_parser_soa.cpp`
 
 ## Canonical Source Types
 

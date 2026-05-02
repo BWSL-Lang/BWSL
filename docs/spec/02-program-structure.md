@@ -4,7 +4,7 @@ Status: `stable`
 
 Primary implementation source:
 
-- `bwsl_parser_soa.cpp`
+- `phases/parser/bwsl_parser_soa.cpp`
 
 ## File Kinds
 

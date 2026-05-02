@@ -4,7 +4,7 @@ Status: `stable`, with some auto-value behavior still `implementation-defined`
 
 Primary implementation source:
 
-- `bwsl_parser_soa.cpp`
+- `phases/parser/bwsl_parser_soa.cpp`
 
 ## Enum Declarations
 

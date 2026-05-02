@@ -4,8 +4,8 @@ Status: `stable`, with `compute_graph` still `provisional`
 
 Primary implementation sources:
 
-- `bwsl_parser_soa.cpp`
-- `bwsl_ir_lowering.h`
+- `phases/parser/bwsl_parser_soa.cpp`
+- `phases/ir_lowering/bwsl_ir_lowering.h`
 
 ## Resources
 

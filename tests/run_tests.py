@@ -323,8 +323,37 @@ def has_glsl_tooling() -> bool:
     return shutil.which("glslangValidator") is not None
 
 
+def find_tool(name: str) -> Path | None:
+    path = shutil.which(name)
+    if path is not None:
+        return Path(path)
+
+    candidates: list[Path] = []
+    vulkan_sdk = os.environ.get("VULKAN_SDK")
+    if vulkan_sdk:
+        candidates.append(Path(vulkan_sdk) / "bin")
+
+    sdk_root = Path.home() / "VulkanSDK"
+    if sdk_root.exists():
+        candidates.extend(sdk_root.glob("*/*/bin"))
+        candidates.extend(sdk_root.glob("*/bin"))
+
+    candidates.extend(Path(p) for p in ("/usr/local/bin", "/opt/homebrew/bin"))
+
+    names = [name]
+    if os.name == "nt" and not name.lower().endswith(".exe"):
+        names.insert(0, f"{name}.exe")
+
+    for directory in candidates:
+        for exe_name in names:
+            candidate = directory / exe_name
+            if candidate.is_file():
+                return candidate
+    return None
+
+
 def has_spirv_val_tooling() -> bool:
-    return shutil.which("spirv-val") is not None
+    return find_tool("spirv-val") is not None
 
 
 def validate_spirv(spv_path: Path,
@@ -335,8 +364,12 @@ def validate_spirv(spv_path: Path,
     binding decorations, missing types, invalid control flow, etc. Cheap
     enough (~1ms/shader) to run on every backend output in the suite.
     """
+    spirv_val = find_tool("spirv-val")
+    if spirv_val is None:
+        return False, "spirv-val was not found in PATH, VULKAN_SDK, or common install locations"
+
     result = run_command([
-        "spirv-val", "--target-env", target_env, str(spv_path),
+        str(spirv_val), "--target-env", target_env, str(spv_path),
     ])
     if result.returncode != 0:
         return False, result.stdout.strip()
@@ -1971,10 +2004,14 @@ def main() -> int:
             print(f"[{GREEN}PASS{NC}] error_cases/{test_file.stem}")
             passed += 1
 
-    stdlib_source = (root / "bwsl_stdlib.h").read_text(encoding="utf-8")
+    stdlib_source = (root / "core" / "bwsl_stdlib.h").read_text(encoding="utf-8")
     token_sources = "\n".join(
         (root / path).read_text(encoding="utf-8")
-        for path in ("bwsl_token_defs.h", "bwsl_token_stream.h", "bwsl_lexer.cpp")
+        for path in (
+            "phases/lexing/bwsl_token_defs.h",
+            "phases/lexing/bwsl_token_stream.h",
+            "phases/lexing/bwsl_lexer.cpp",
+        )
     )
     forbidden_hits: list[str] = []
     for name in FORBIDDEN_SOURCE_ALIAS_NAMES:

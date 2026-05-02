@@ -20,11 +20,11 @@ non-normative. It may simplify syntax, omit edge cases, or lag implementation.
 
 ## Main Sources
 
-- Lexical and token surface: `bwsl_token_defs.h`, `bwsl_lexer.cpp`
-- Syntax and AST construction: `bwsl_parser_soa.cpp`, `bwsl_parser_soa.h`
-- Core type model: `bwsl_types.h`
-- Intrinsics and stage metadata: `bwsl_stdlib.h`
-- Built-ins and shader I/O semantics: `bwsl_ir_lowering.h`
+- Lexical and token surface: `phases/lexing/bwsl_token_defs.h`, `phases/lexing/bwsl_lexer.cpp`
+- Syntax and AST construction: `phases/parser/bwsl_parser_soa.cpp`, `phases/parser/bwsl_parser_soa.h`
+- Core type model: `core/bwsl_types.h`
+- Intrinsics and stage metadata: `core/bwsl_stdlib.h`
+- Built-ins and shader I/O semantics: `phases/ir_lowering/bwsl_ir_lowering.h`
 - Conformance coverage: `tests/run_tests.py`, `tests/*.bwsl`,
   `tests/error_cases/*.bwsl`
 

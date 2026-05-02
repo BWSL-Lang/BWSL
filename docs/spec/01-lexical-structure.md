@@ -4,8 +4,8 @@ Status: `stable`
 
 Primary implementation sources:
 
-- `bwsl_token_defs.h`
-- `bwsl_lexer.cpp`
+- `phases/lexing/bwsl_token_defs.h`
+- `phases/lexing/bwsl_lexer.cpp`
 
 ## Character Classes
 

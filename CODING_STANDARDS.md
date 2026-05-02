@@ -177,12 +177,12 @@ The codebase uses a unity build where `tools/bwslc.cpp` includes all implementat
 
 ```cpp
 // tools/bwslc.cpp
-#include "../bwsl_lexer.cpp"
-#include "../bwsl_parser_soa.cpp"
-#include "../bwsl_ir_gen.cpp"
-#include "../bwsl_cfg.cpp"
-#include "../bwsl_ssa.cpp"
-#include "../bwsl_spirv_backend.cpp"
+#include "../phases/lexing/bwsl_lexer.cpp"
+#include "../phases/parser/bwsl_parser_soa.cpp"
+#include "../phases/ir_generation/bwsl_ir_gen.cpp"
+#include "../phases/control_flow/bwsl_cfg.cpp"
+#include "../phases/ssa/bwsl_ssa.cpp"
+#include "../phases/backends/spirv/bwsl_spirv_backend.cpp"
 ```
 
 **Exception:** `spirv_cross_wrapper.cpp` is compiled separately to avoid macro conflicts.

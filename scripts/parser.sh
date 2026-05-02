@@ -15,14 +15,14 @@ if [ ! -f "$SPIRV_INCLUDE/spirv/1.2/GLSL.std.450.h" ]; then
     exit 1
 fi
 
-FLAGS="-std=c++17 -g -I. -I.. -I$SPIRV_INCLUDE"
+FLAGS="-std=c++20 -g -I. -I.. -I../core -I../core/middleware -I../phases/lexing -I../phases/parser -I../phases/evaluation -I../phases/ir_generation -I../phases/ir_lowering -I../phases/control_flow -I../phases/ssa -I../phases/backends/spirv -I../phases/backends/gles -I$SPIRV_INCLUDE"
 
 SOURCES=(
-    "../bwsl_lexer.cpp"
-    "../bwsl_parser.cpp"
-    "../bwsl_eval.cpp"
-    "../bwsl_custom_type_registry.cpp"
-    "../bwsl_eval_cache.cpp"
+    "../phases/lexing/bwsl_lexer.cpp"
+    "../phases/parser/bwsl_parser_soa.cpp"
+    "../phases/evaluation/bwsl_eval_soa.cpp"
+    "../core/bwsl_custom_type_registry.cpp"
+    "../phases/evaluation/bwsl_eval_cache.cpp"
 
 )
 

@@ -25,6 +25,9 @@
 #include <algorithm>
 #include <future>
 #include <thread>
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
 
 // SPIRV-Cross for in-process cross-compilation (much faster than CLI)
 // Must be included as a separate compilation unit due to macro conflicts with defs.h
@@ -38,40 +41,40 @@ namespace spirv_cross_wrapper {
 }
 #endif
 
-#include "../bwsl_spirv_backend.h"
-#include "../bwsl_ir_gen.h"
-#include "../bwsl_ir_lowering.h"
-#include "../bwsl_ir_analysis.h"
-#include "../bwsl_cfg.h"
-#include "../bwsl_ssa.h"
-#include "../bwsl_parser_soa.h"
-#include "../bwsl_resource_reflection.h"
-#include "../bwsl_reflection_json.h"
-#include "../bwsl_lexer.h"
-#include "../bwsl_eval_soa.h"
-#include "../bwsl_comptime_interpreter.h"
-#include "../bwsl_variant_system.h"
-#include "../bwsl_arena.h"
-#include "../bwsl_mem_pool.h"
-#include "../bwsl_render_config.h"
-#include "../bwsl_compute_graph.h"
+#include "bwsl_spirv_backend.h"
+#include "bwsl_ir_gen.h"
+#include "bwsl_ir_lowering.h"
+#include "bwsl_ir_analysis.h"
+#include "bwsl_cfg.h"
+#include "bwsl_ssa.h"
+#include "bwsl_parser_soa.h"
+#include "bwsl_resource_reflection.h"
+#include "bwsl_reflection_json.h"
+#include "bwsl_lexer.h"
+#include "bwsl_eval_soa.h"
+#include "bwsl_comptime_interpreter.h"
+#include "bwsl_variant_system.h"
+#include "bwsl_arena.h"
+#include "bwsl_mem_pool.h"
+#include "bwsl_render_config.h"
+#include "bwsl_compute_graph.h"
 
 // Unity build: include all implementation files
-#include "../bwsl_lexer.cpp"
+#include "../phases/lexing/bwsl_lexer.cpp"
 // #define BWSL_PARSER_TIMING  // Enable parser timing instrumentation (disabled for benchmarking)
-#include "../bwsl_parser_soa.cpp"
-#include "../bwsl_eval_soa.cpp"
-#include "../bwsl_comptime_interpreter.cpp"
-#include "../bwsl_module_cache.cpp"
-#include "../bwsl_ir_gen.cpp"
-#include "../bwsl_ir_analysis.cpp"
-#include "../bwsl_cfg.cpp"
-#include "../bwsl_ssa.cpp"
-#include "../bwsl_spirv_backend.cpp"
-#include "../bwsl_gles_backend.cpp"
-#include "../bwsl_compute_graph.cpp"
-#include "../bwsl_custom_type_registry.cpp"
-#include "../bwsl_variant_system.cpp"
+#include "../phases/parser/bwsl_parser_soa.cpp"
+#include "../phases/evaluation/bwsl_eval_soa.cpp"
+#include "../phases/evaluation/bwsl_comptime_interpreter.cpp"
+#include "../core/bwsl_module_cache.cpp"
+#include "../phases/ir_generation/bwsl_ir_gen.cpp"
+#include "../phases/ir_generation/bwsl_ir_analysis.cpp"
+#include "../phases/control_flow/bwsl_cfg.cpp"
+#include "../phases/ssa/bwsl_ssa.cpp"
+#include "../phases/backends/spirv/bwsl_spirv_backend.cpp"
+#include "../phases/backends/gles/bwsl_gles_backend.cpp"
+#include "../phases/ir_generation/bwsl_compute_graph.cpp"
+#include "../core/bwsl_custom_type_registry.cpp"
+#include "../core/bwsl_variant_system.cpp"
 
 // Note: SPIRV-Cross is compiled separately (spirv_cross_wrapper.cpp) to avoid
 // macro conflicts with defs.h (u32, f32, f64 macros)
@@ -93,6 +96,24 @@ enum class CompilerFlags {
     OUTPUT_METAL = 1 << 3,
     OUTPUT_HLSL  = 1 << 4,
 };
+
+enum class ValidationMode {
+    Auto,
+    Strict,
+    Off,
+};
+
+enum class ValidationStatus {
+    Passed,
+    Failed,
+    ToolMissing,
+};
+
+struct ValidationResult {
+    ValidationStatus status = ValidationStatus::Passed;
+    std::string message;
+};
+
 struct CompilerConfig {
     std::string inputFile;
     std::string outputDir = ".";
@@ -110,7 +131,7 @@ struct CompilerConfig {
     bool dumpIr      = false;
     bool debugNames  = false;              // Emit debug names in SPIR-V for easier debugging
     bool showTiming  = false;              // Print timing information
-    bool skipValidation = false;           // Skip SPIR-V validation (faster but less safe)
+    ValidationMode validationMode = ValidationMode::Auto;
     bool outputInternals = false;          // Output IR dump + SPIR-V disassembly to JSON file
     bool outputBindings = false;           // Output resolved resource bindings JSON
     bool dumpVariantSpace = false;         // Dump variant schema/reflection JSON
@@ -225,7 +246,9 @@ void PrintUsage(const char* programName) {
     printf("  -timing        Print timing information\n");
     printf("  -dump-ir       Dump BWSL IR\n");
     printf("  -debug-names   Emit debug names in SPIR-V output\n");
-    printf("  -no-validate   Skip SPIR-V validation (faster compilation)\n");
+    printf("  -validation <auto|strict|off>\n");
+    printf("                 SPIR-V validation mode (default: auto)\n");
+    printf("  -no-validate   Alias for -validation off (faster compilation)\n");
     printf("  -internals     Output SPIR-V disassembly and BWSL IR dump to JSON file\n");
     printf("  -h, --help     Show this help\n");
     printf("----------------------------------------\n");
@@ -343,27 +366,137 @@ std::string GetTempSpirvPath() {
     return (tempDir / "bwslc_temp.spv").string();
 }
 
-std::string RunCommand(const std::string& cmd) {
+struct CommandResult {
+    bool launched = false;
+    int exitCode = -1;
+    std::string output;
+};
+
+CommandResult RunCommandWithStatus(const std::string& cmd) {
+    CommandResult commandResult;
     FILE* pipe = nullptr;
 #if defined(_WIN32)
     pipe = _popen(cmd.c_str(), "r");
 #else
     pipe = popen(cmd.c_str(), "r");
 #endif
-    if (!pipe) return "";
+    if (!pipe) return commandResult;
+
+    commandResult.launched = true;
 
     char buffer[512];
-    std::string result;
     while (fgets(buffer, sizeof(buffer), pipe)) {
-        result += buffer;
+        commandResult.output += buffer;
     }
 
 #if defined(_WIN32)
-    _pclose(pipe);
+    commandResult.exitCode = _pclose(pipe);
 #else
-    pclose(pipe);
+    int status = pclose(pipe);
+    if (status == -1) {
+        commandResult.exitCode = -1;
+    } else if (WIFEXITED(status)) {
+        commandResult.exitCode = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        commandResult.exitCode = 128 + WTERMSIG(status);
+    } else {
+        commandResult.exitCode = status;
+    }
 #endif
-    return result;
+    return commandResult;
+}
+
+std::string RunCommand(const std::string& cmd) {
+    return RunCommandWithStatus(cmd).output;
+}
+
+std::string ShellQuote(const fs::path& path) {
+    std::string text = path.string();
+#if defined(_WIN32)
+    std::string out = "\"";
+    for (char ch : text) {
+        if (ch == '"') out += "\\\"";
+        else out += ch;
+    }
+    out += "\"";
+    return out;
+#else
+    std::string out = "'";
+    for (char ch : text) {
+        if (ch == '\'') out += "'\\''";
+        else out += ch;
+    }
+    out += "'";
+    return out;
+#endif
+}
+
+static void AddPathCandidate(std::vector<fs::path>& dirs, const fs::path& dir) {
+    if (dir.empty()) return;
+    if (std::find(dirs.begin(), dirs.end(), dir) == dirs.end()) {
+        dirs.push_back(dir);
+    }
+}
+
+std::string FindTool(const char* toolName) {
+    std::vector<fs::path> dirs;
+
+    if (const char* pathEnv = std::getenv("PATH")) {
+#if defined(_WIN32)
+        const char separator = ';';
+#else
+        const char separator = ':';
+#endif
+        std::stringstream paths(pathEnv);
+        std::string item;
+        while (std::getline(paths, item, separator)) {
+            AddPathCandidate(dirs, fs::path(item));
+        }
+    }
+
+    if (const char* sdk = std::getenv("VULKAN_SDK")) {
+        AddPathCandidate(dirs, fs::path(sdk) / "bin");
+    }
+
+    if (const char* home = std::getenv("HOME")) {
+        fs::path sdkRoot = fs::path(home) / "VulkanSDK";
+        std::error_code ec;
+        if (fs::exists(sdkRoot, ec)) {
+            for (const auto& versionDir : fs::directory_iterator(sdkRoot, ec)) {
+                if (ec || !versionDir.is_directory()) continue;
+                for (const auto& platformDir : fs::directory_iterator(versionDir.path(), ec)) {
+                    if (ec || !platformDir.is_directory()) continue;
+                    AddPathCandidate(dirs, platformDir.path() / "bin");
+                }
+                AddPathCandidate(dirs, versionDir.path() / "bin");
+            }
+        }
+    }
+
+#if defined(_WIN32)
+    const char* exeName = toolName;
+    std::string withExt = std::string(toolName) + ".exe";
+#else
+    const char* exeName = toolName;
+#endif
+    AddPathCandidate(dirs, "/usr/local/bin");
+    AddPathCandidate(dirs, "/opt/homebrew/bin");
+
+    std::error_code ec;
+    for (const fs::path& dir : dirs) {
+#if defined(_WIN32)
+        fs::path candidate = dir / withExt;
+        if (fs::exists(candidate, ec) && !fs::is_directory(candidate, ec)) {
+            return candidate.string();
+        }
+#endif
+        fs::path candidate = dir / exeName;
+        if (fs::exists(candidate, ec) && !fs::is_directory(candidate, ec)) {
+            return candidate.string();
+        }
+    }
+
+    return "";
 }
 
 // Cross-compilation using CLI tools (fallback)
@@ -1242,18 +1375,51 @@ std::string DumpIRToString(const IRProgram& prog) {
 
 // Get SPIR-V disassembly using spirv-dis
 std::string GetSpirvDisassembly(const std::string& spirvFile) {
-    std::string cmd = "spirv-dis \"" + spirvFile + "\" 2>&1";
+    std::string spirvDis = FindTool("spirv-dis");
+    if (spirvDis.empty()) {
+        return "spirv-dis was not found in PATH, VULKAN_SDK, or common install locations";
+    }
+    std::string cmd = ShellQuote(spirvDis) + " " + ShellQuote(spirvFile) + " 2>&1";
     return RunCommand(cmd);
 }
 
-// Returns empty string on success, error message on failure
-std::string ValidateSpirv(const std::string& spirvFile) {
-    std::string cmd = "spirv-val \"" + spirvFile + "\" 2>&1";
-    std::string result = RunCommand(cmd);
-    if (result.empty() || result.find("error") == std::string::npos) {
-        return "";  // Success
+bool HasSpirvValidator() {
+    return !FindTool("spirv-val").empty();
+}
+
+ValidationResult ValidateSpirv(const std::string& spirvFile) {
+    static bool validatorAvailableCached = false;
+    static bool validatorAvailable = false;
+    if (!validatorAvailableCached) {
+        validatorAvailable = HasSpirvValidator();
+        validatorAvailableCached = true;
     }
-    return result;  // Return error message
+
+    if (!validatorAvailable) {
+        return {
+            ValidationStatus::ToolMissing,
+            "spirv-val was not found in PATH, VULKAN_SDK, or common install locations"
+        };
+    }
+
+    std::string spirvVal = FindTool("spirv-val");
+    std::string cmd = ShellQuote(spirvVal) + " " + ShellQuote(spirvFile) + " 2>&1";
+    CommandResult result = RunCommandWithStatus(cmd);
+    if (!result.launched) {
+        return {
+            ValidationStatus::ToolMissing,
+            "failed to launch spirv-val"
+        };
+    }
+
+    if (result.exitCode == 0) {
+        return {ValidationStatus::Passed, ""};
+    }
+
+    std::string message = result.output.empty()
+        ? "spirv-val exited with code " + std::to_string(result.exitCode)
+        : result.output;
+    return {ValidationStatus::Failed, message};
 }
 
 
@@ -1729,16 +1895,30 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         printf("    -> %s\n", spvPath.c_str());
     }
 
-    if (!config.skipValidation) {
+    if (config.validationMode != ValidationMode::Off) {
         using Clock = std::chrono::high_resolution_clock;
         auto valStart = Clock::now();
-        std::string validationError = ValidateSpirv(spvPath);
+        ValidationResult validation = ValidateSpirv(spvPath);
         auto valEnd = Clock::now();
         shaderTime.validationMs = std::chrono::duration<double, std::milli>(valEnd - valStart).count();
 
-        if (!validationError.empty()) {
+        if (validation.status == ValidationStatus::ToolMissing) {
+            if (config.validationMode == ValidationMode::Strict) {
+                fprintf(stderr, "    Error: SPIR-V validation requested but %s\n",
+                        validation.message.c_str());
+                output.skipRemainingPass = true;
+                return output;
+            }
+
+            static bool warnedMissingValidator = false;
+            if (!warnedMissingValidator) {
+                fprintf(stderr, "    Warning: %s; skipping SPIR-V validation (-validation auto)\n",
+                        validation.message.c_str());
+                warnedMissingValidator = true;
+            }
+        } else if (validation.status == ValidationStatus::Failed) {
             fprintf(stderr, "    Error: SPIR-V validation failed:\n");
-            fprintf(stderr, "      %s\n", validationError.c_str());
+            fprintf(stderr, "      %s\n", validation.message.c_str());
             output.skipRemainingPass = true;
             return output;
         }
@@ -1909,6 +2089,33 @@ int main(int argc, char* argv[]) {
             config.variantOverrides.push_back(std::move(overrideValue));
         } else if (arg == "-dump-variant-space") {
             config.dumpVariantSpace = true;
+        } else if ((arg == "-validation" || arg == "--validation") && i + 1 < argc) {
+            std::string mode = argv[++i];
+            if (mode == "auto") {
+                config.validationMode = ValidationMode::Auto;
+            } else if (mode == "strict") {
+                config.validationMode = ValidationMode::Strict;
+            } else if (mode == "off") {
+                config.validationMode = ValidationMode::Off;
+            } else {
+                fprintf(stderr, "Error: -validation expects auto, strict, or off\n");
+                return 1;
+            }
+        } else if (arg == "-validation" || arg == "--validation") {
+            fprintf(stderr, "Error: -validation expects auto, strict, or off\n");
+            return 1;
+        } else if (arg.rfind("--validation=", 0) == 0) {
+            std::string mode = arg.substr(strlen("--validation="));
+            if (mode == "auto") {
+                config.validationMode = ValidationMode::Auto;
+            } else if (mode == "strict") {
+                config.validationMode = ValidationMode::Strict;
+            } else if (mode == "off") {
+                config.validationMode = ValidationMode::Off;
+            } else {
+                fprintf(stderr, "Error: --validation expects auto, strict, or off\n");
+                return 1;
+            }
         } else if (arg[0] != '-') {
             config.inputFile = arg;
         } else if (arg == "-dump-ir") {
@@ -1918,7 +2125,7 @@ int main(int argc, char* argv[]) {
         } else if (arg == "-timing") {
             config.showTiming = true;
         } else if (arg == "-no-validate") {
-            config.skipValidation = true;
+            config.validationMode = ValidationMode::Off;
         } else if (arg == "-internals") {
             config.outputInternals = true;
         } else if (arg == "-bindings") {

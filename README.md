@@ -127,7 +127,8 @@ On Windows, the repo now also includes `build.bat` and `make.bat`. `build.bat` b
 | `-timing` | Print timing information |
 | `-dump-ir` | Dump BWSL IR |
 | `-debug-names` | Emit debug names in SPIR-V |
-| `-no-validate` | Skip SPIR-V validation |
+| `-validation auto\|strict\|off` | Control SPIR-V validation (`auto` is default) |
+| `-no-validate` | Alias for `-validation off` |
 | `-internals` | Output SPIR-V disassembly and IR to JSON |
 
 ### WebAssembly Module
@@ -257,18 +258,25 @@ pipeline Demo {
 bwsl/
 ├── Makefile                 # Build system
 ├── build/                   # Build outputs
+├── core/                    # Shared compiler types, arenas, AST, services
+├── phases/
+│   ├── lexing/              # Token definitions, token stream, lexer
+│   ├── parser/              # SoA parser and parser slices
+│   ├── evaluation/          # Compile-time/eval helpers
+│   ├── ir_generation/       # IR, analysis, compute graph
+│   ├── ir_lowering/         # AST-to-IR lowering
+│   ├── control_flow/        # CFG construction
+│   ├── ssa/                 # SSA conversion and verification
+│   └── backends/
+│       ├── spirv/           # SPIR-V backend
+│       └── gles/            # Direct GLES backend
 ├── tools/
-│   ├── bwslc.cpp           # CLI compiler
-│   ├── bwsl_wasm.cpp       # WASM entry point
+│   ├── bwslc.cpp            # CLI compiler
+│   ├── bwsl_wasm.cpp        # WASM entry point
 │   └── spirv_cross_wrapper.cpp
 ├── vendor/                  # Git submodules
-│   ├── SPIRV-Cross/        # Shader cross-compilation
-│   ├── SPIRV-Tools/        # SPIR-V validation
-│   ├── SPIRV-Headers/      # SPIR-V definitions
-│   └── simde/              # Portable SIMD intrinsics
 ├── modules/                 # Standard library modules
-├── tests/                   # Regression tests
-└── *.cpp, *.h              # Compiler source
+└── tests/                   # Regression tests
 ```
 
 ## Attribution

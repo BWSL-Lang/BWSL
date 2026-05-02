@@ -4,7 +4,7 @@ Status: `stable`, with `eval` details still partly `provisional`
 
 Primary implementation source:
 
-- `bwsl_parser_soa.cpp`
+- `phases/parser/bwsl_parser_soa.cpp`
 
 ## Blocks
 

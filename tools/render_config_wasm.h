@@ -8,7 +8,7 @@
 #include <vector>
 #include <cstdint>
 
-#include "../bwsl_compiler_types.h"
+#include "bwsl_compiler_types.h"
 
 // ============= Types from defs.h =============
 // These are already defined as macros by defs_wasm.h (force-included)

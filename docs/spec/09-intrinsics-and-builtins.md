@@ -5,12 +5,12 @@ Status: `stable` for the catalog, with some stage-policy details still
 
 Primary implementation sources:
 
-- `bwsl_stdlib.h`
-- `bwsl_ir_lowering.h`
+- `core/bwsl_stdlib.h`
+- `phases/ir_lowering/bwsl_ir_lowering.h`
 
 ## Source of Truth
 
-The canonical intrinsic catalog is the table in `bwsl_stdlib.h`.
+The canonical intrinsic catalog is the table in `core/bwsl_stdlib.h`.
 
 That table currently defines families for:
 
@@ -64,7 +64,7 @@ are handled during target emission rather than accepted as source-level aliases.
 ## Arity and Validation
 
 The parser validates intrinsic argument counts using the metadata in
-`bwsl_stdlib.h`.
+`core/bwsl_stdlib.h`.
 
 Some texture intrinsics also support multiple call shapes. For example, the
 current implementation supports both combined and split texture/sampler forms

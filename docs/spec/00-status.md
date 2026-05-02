@@ -21,11 +21,11 @@ which parts of the language are stable enough to be treated as normative today.
 
 The current baseline is the language surface implemented by:
 
-- `bwsl_lexer.cpp`
-- `bwsl_parser_soa.cpp`
-- `bwsl_types.h`
-- `bwsl_stdlib.h`
-- `bwsl_ir_lowering.h`
+- `phases/lexing/bwsl_lexer.cpp`
+- `phases/parser/bwsl_parser_soa.cpp`
+- `core/bwsl_types.h`
+- `core/bwsl_stdlib.h`
+- `phases/ir_lowering/bwsl_ir_lowering.h`
 - `tests/run_tests.py` and the associated test corpus
 
 This matches the intent already stated in `docs/language.md`: the supported
@@ -45,7 +45,7 @@ The following areas are mature enough for a normative draft:
 - Shader-stage composition for `vertex`, `fragment`, and `compute`
 - Built-in shader namespaces: `attributes`, `input`, `output`, `resources`
 - Variant declarations and rule syntax
-- The intrinsic catalog exposed through `bwsl_stdlib.h`
+- The intrinsic catalog exposed through `core/bwsl_stdlib.h`
 
 ## Provisional Areas
 
