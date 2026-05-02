@@ -458,7 +458,13 @@ std::string FindTool(const char* toolName) {
         AddPathCandidate(dirs, fs::path(sdk) / "bin");
     }
 
-    if (const char* home = std::getenv("HOME")) {
+    const char* home = std::getenv("HOME");
+#if defined(_WIN32)
+    if (home == nullptr || home[0] == '\0') {
+        home = std::getenv("USERPROFILE");
+    }
+#endif
+    if (home != nullptr && home[0] != '\0') {
         fs::path sdkRoot = fs::path(home) / "VulkanSDK";
         std::error_code ec;
         if (fs::exists(sdkRoot, ec)) {
@@ -485,9 +491,9 @@ std::string FindTool(const char* toolName) {
     std::error_code ec;
     for (const fs::path& dir : dirs) {
 #if defined(_WIN32)
-        fs::path candidate = dir / withExt;
-        if (fs::exists(candidate, ec) && !fs::is_directory(candidate, ec)) {
-            return candidate.string();
+        fs::path candidateWithExt = dir / withExt;
+        if (fs::exists(candidateWithExt, ec) && !fs::is_directory(candidateWithExt, ec)) {
+            return candidateWithExt.string();
         }
 #endif
         fs::path candidate = dir / exeName;
