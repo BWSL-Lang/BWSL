@@ -431,6 +431,14 @@ std::string ShellQuote(const fs::path& path) {
 #endif
 }
 
+std::string ExternalCommand(const fs::path& executable) {
+#if defined(_WIN32)
+    return "call " + ShellQuote(executable);
+#else
+    return ShellQuote(executable);
+#endif
+}
+
 static void AddPathCandidate(std::vector<fs::path>& dirs, const fs::path& dir) {
     if (dir.empty()) return;
     if (std::find(dirs.begin(), dirs.end(), dir) == dirs.end()) {
@@ -1385,7 +1393,7 @@ std::string GetSpirvDisassembly(const std::string& spirvFile) {
     if (spirvDis.empty()) {
         return "spirv-dis was not found in PATH, VULKAN_SDK, or common install locations";
     }
-    std::string cmd = ShellQuote(spirvDis) + " " + ShellQuote(spirvFile) + " 2>&1";
+    std::string cmd = ExternalCommand(spirvDis) + " " + ShellQuote(spirvFile) + " 2>&1";
     return RunCommand(cmd);
 }
 
@@ -1409,7 +1417,7 @@ ValidationResult ValidateSpirv(const std::string& spirvFile) {
     }
 
     std::string spirvVal = FindTool("spirv-val");
-    std::string cmd = ShellQuote(spirvVal) + " " + ShellQuote(spirvFile) + " 2>&1";
+    std::string cmd = ExternalCommand(spirvVal) + " " + ShellQuote(spirvFile) + " 2>&1";
     CommandResult result = RunCommandWithStatus(cmd);
     if (!result.launched) {
         return {
