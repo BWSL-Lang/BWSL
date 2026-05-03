@@ -3,6 +3,10 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+env:
+  BWSL_OPEN_BETA_VERSION: "0.7.5"
 
 jobs:
   unix:
@@ -71,3 +75,52 @@ jobs:
       - name: Run regression tests
         shell: cmd
         run: build.bat test
+
+      - name: Package Windows binary
+        shell: pwsh
+        run: |
+          $version = $env:BWSL_OPEN_BETA_VERSION
+          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -match '^v?(.+)$') {
+            $version = $Matches[1]
+          }
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item build\bwslc.exe "dist\bwslc-windows-x64-$version.exe"
+
+      - name: Upload Windows binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: bwslc-windows-x64
+          path: dist/*.exe
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs:
+      - unix
+      - windows
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download Windows binary
+        uses: actions/download-artifact@v4
+        with:
+          name: bwslc-windows-x64
+          path: dist
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --title "BWSL $version Open Beta" \
+              --generate-notes \
+              --verify-tag
+          fi
