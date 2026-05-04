@@ -4,17 +4,108 @@ This document describes the coding standards, paradigms, and patterns used throu
 
 ## Table of Contents
 
-1. [Naming Conventions](#naming-conventions)
-2. [Code Organization](#code-organization)
-3. [Data Structures - Structure of Arrays (SoA)](#data-structures---structure-of-arrays-soa)
-4. [Memory Management](#memory-management)
-5. [Error Handling](#error-handling)
-6. [Type System](#type-system)
-7. [Commenting Style](#commenting-style)
-8. [Include Patterns](#include-patterns)
-9. [Macro Usage](#macro-usage)
-10. [Performance Optimizations](#performance-optimizations)
-11. [Common Code Patterns](#common-code-patterns)
+1. [Guiding Philosophy: Data-Oriented Design](#guiding-philosophy-data-oriented-design)
+2. [Architecture](#architecture)
+3. [Naming Conventions](#naming-conventions)
+4. [Code Organization](#code-organization)
+5. [Data Structures - Structure of Arrays (SoA)](#data-structures---structure-of-arrays-soa)
+6. [Memory Management](#memory-management)
+7. [Error Handling](#error-handling)
+8. [Type System](#type-system)
+9. [Commenting Style](#commenting-style)
+10. [Include Patterns](#include-patterns)
+11. [Macro Usage](#macro-usage)
+12. [Performance Optimizations](#performance-optimizations)
+13. [Common Code Patterns](#common-code-patterns)
+
+---
+
+## Guiding Philosophy: Data-Oriented Design
+
+BWSL is written in a **data-oriented** style. The compiler processes large
+homogeneous batches of data — millions of tokens, AST nodes, IR instructions,
+SPIR-V words — and the codebase is shaped around that fact rather than around
+classical OO encapsulation.
+
+The five rules that follow from this philosophy show up everywhere in the
+code, and new code is expected to respect them:
+
+1. **Data is plain.** Components are `struct`s containing only data members.
+   No virtual methods, no constructors with side effects, no hidden lifetime
+   contracts. A struct is an inert layout description; reading the struct
+   tells you exactly what it owns.
+
+2. **Operations are free functions in namespaces.** Logic lives in
+   `namespace Component { void DoThing(ComponentData* d, ...); }`, not in
+   methods on `ComponentData`. This separates *what the data is* from
+   *what gets done with it*, makes the call site explicit about which data
+   is being touched, and keeps types small and copyable.
+
+3. **Prefer Structure-of-Arrays over Array-of-Structs.** Hot data — AST
+   nodes, IR instructions, SPIR-V IDs — is stored in parallel arrays so a
+   pass that only touches one field walks contiguous memory. The
+   `_soa` filename suffix marks the major SoA datastores
+   (`bwsl_ast_soa.{h,cpp}`, `bwsl_eval_soa.{h,cpp}`, etc.).
+
+4. **All allocation goes through the arena.** Long-lived state lives in a
+   `BWSL_Arena` per compilation. There is no `new`/`delete` and no
+   per-component lifetime to track — when the compilation ends, the arena
+   is reset and everything goes away at once. Per-type pools and
+   `ArenaArray<T>` are layered on top.
+
+5. **Identifiers, not pointers, into pools.** Cross-references between
+   components are 4-byte indices into SoA pools (`NodeRef`, `TokenRef`,
+   IR register IDs, SPIR-V IDs), not raw pointers. This keeps data dense,
+   serializable, and stable across pool growth.
+
+Concrete patterns enforcing each of these rules are documented in the
+sections below. When a new component doesn't fit one of these patterns,
+that's worth a comment explaining *why* — most exceptions in the current
+codebase are at FFI boundaries (SPIRV-Cross, libFuzzer, the Metal
+middleware) where the data-oriented layout meets a third-party API.
+
+---
+
+## Architecture
+
+The compiler is organized as a pipeline of passes, with one directory per
+phase under `phases/` and shared building blocks under `core/`. Each phase
+has its own data type (`TokenStream`, `AST`, `IRProgram`, `CFG`, etc.) that
+the next phase consumes.
+
+```
+Source (.bwsl)
+  → phases/lexing          → TokenStream  (SoA)
+  → phases/parser          → AST          (SoA)
+  → phases/evaluation        comptime / eval-block expansion over the AST
+  → phases/ir_generation   → IRProgram    (SoA, register-based)
+  → phases/ir_lowering       AST → IR (split across *.inl shards)
+  → phases/control_flow    → CFG
+  → phases/ssa             → SSA-form IR
+  → phases/backends/spirv  → SPIR-V words
+  → phases/backends/gles     direct GLSL ES emission for WebGL targets
+  → tools/spirv_cross_wrapper.cpp → Metal / HLSL / GLSL
+```
+
+`core/` contains the shared infrastructure every phase depends on:
+
+- `bwsl_arena.h`, `bwsl_mem_pool.h` — arena allocator and per-type pools
+- `bwsl_defs.h`, `bwsl_types.h`, `bwsl_ast_common.h` — shared scalar and
+  AST primitives (`CoreType`, `ArenaString`, `NodeRef`)
+- `bwsl_symbol_table.h` — scope/overload/module-aware symbol resolution
+- `bwsl_module_cache.{h,cpp}`, `bwsl_module_integration.h` — module loading
+- `bwsl_custom_type_registry.{h,cpp}`, `bwsl_variant_system.{h,cpp}`,
+  `bwsl_cast_registry.{h,cpp}` — user-type and variant machinery
+- `bwsl_stdlib.h` — built-in intrinsic table
+- `bwsl_reflection_json.h`, `bwsl_resource_reflection.h`,
+  `bwsl_render_config.h` — reflection and pipeline metadata emitted
+  alongside generated shaders
+- `bwsl_compiler_service.h`, `bwsl_compiler_service_core.h`,
+  `middleware/` — embeddable runtime compiler service
+
+`tools/` holds the binaries: `bwslc.cpp` (CLI, also the unity-build
+aggregator), `bwslc_fuzz.cpp`, `equiv_runner.cpp`, `bwsl_wasm.cpp`, and
+`spirv_cross_wrapper.cpp`.
 
 ---
 
@@ -108,8 +199,10 @@ constexpr u32 NO_EXT_INST = 0xFFFFFFFF;
 
 | Type | Convention | Examples |
 |------|------------|----------|
-| Core components | `bwsl_<component>.h/cpp` | `bwsl_lexer.h`, `bwsl_parser_soa.h` |
+| Phase components | `phases/<phase>/bwsl_<component>.{h,cpp}` | `phases/lexing/bwsl_lexer.h`, `phases/parser/bwsl_parser_soa.h` |
+| Core components | `core/bwsl_<component>.{h,cpp}` | `core/bwsl_arena.h`, `core/bwsl_symbol_table.h` |
 | SoA implementations | `_soa` suffix | `bwsl_ast_soa.h`, `bwsl_eval_soa.h` |
+| IR-lowering shards | `_<topic>.inl` included from header | `bwsl_ir_lowering_calls.inl`, `bwsl_ir_lowering_expr.inl` |
 | Tools | `tools/<name>.cpp` | `tools/bwslc.cpp`, `tools/spirv_cross_wrapper.cpp` |
 
 ---
@@ -173,19 +266,29 @@ namespace ASTFactory {
 
 ### Unity Build Pattern
 
-The codebase uses a unity build where `tools/bwslc.cpp` includes all implementation files:
+The codebase uses a unity build where `tools/bwslc.cpp` includes every implementation `.cpp` directly, in pipeline order:
 
 ```cpp
-// tools/bwslc.cpp
+// tools/bwslc.cpp (excerpt)
 #include "../phases/lexing/bwsl_lexer.cpp"
 #include "../phases/parser/bwsl_parser_soa.cpp"
+#include "../phases/evaluation/bwsl_eval_soa.cpp"
+#include "../phases/evaluation/bwsl_comptime_interpreter.cpp"
+#include "../core/bwsl_module_cache.cpp"
 #include "../phases/ir_generation/bwsl_ir_gen.cpp"
+#include "../phases/ir_generation/bwsl_ir_analysis.cpp"
 #include "../phases/control_flow/bwsl_cfg.cpp"
 #include "../phases/ssa/bwsl_ssa.cpp"
 #include "../phases/backends/spirv/bwsl_spirv_backend.cpp"
+#include "../phases/backends/gles/bwsl_gles_backend.cpp"
+#include "../phases/ir_generation/bwsl_compute_graph.cpp"
+#include "../core/bwsl_custom_type_registry.cpp"
+#include "../core/bwsl_variant_system.cpp"
 ```
 
-**Exception:** `spirv_cross_wrapper.cpp` is compiled separately to avoid macro conflicts.
+**Exception:** `tools/spirv_cross_wrapper.cpp` is compiled as a separate translation unit because BWSL's type aliases (`u32`, `f32`, `f64` from `core/bwsl_defs.h`) collide with member names in SPIRV-Cross.
+
+The IR-lowering phase splits its body across `.inl` shards (`bwsl_ir_lowering_*.inl`) included from `bwsl_ir_lowering.h` so each file stays reviewable while still benefiting from the unity build.
 
 ### Header Organization
 
@@ -541,7 +644,7 @@ void Parser::Synchronize() {
 
 ## Type System
 
-### Type Aliases (bwsl_defs.h)
+### Type Aliases (core/bwsl_defs.h)
 
 ```cpp
 using u8  = uint8_t;
