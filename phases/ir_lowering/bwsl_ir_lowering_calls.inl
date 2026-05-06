@@ -980,6 +980,13 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         SetRegisterType(dest, constructedType);
       }
     } else {
+      u32 callHash = call.name.nameHash;
+      if (callHash == Utils::HashStr("float2x2") ||
+          callHash == Utils::HashStr("float3x3") ||
+          callHash == Utils::HashStr("float4x4")) {
+        ReportError("Error: Matrix aliases float2x2/float3x3/float4x4 are not supported; use mat2, mat3, or mat4\n");
+      }
+
       // Try to inline user function call
       u16 inlinedResult = TryInlineFunction(call, args, argCount);
       if (inlinedResult != 0xFFFF) {

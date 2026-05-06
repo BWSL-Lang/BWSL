@@ -18,10 +18,10 @@ pipeline EquivMatrixMixedCtor {
             float3 c0 = float3(t,        t + 1.0,  t + 2.0);
             float3 c1 = float3(t + 10.0, t + 11.0, t + 12.0);
             float3 c2 = float3(t + 20.0, t + 21.0, t + 22.0);
-            float3x3 m3 = float3x3(c0, c1, c2);
+            mat3 m3 = mat3(c0, c1, c2);
 
             // mat4 from 16 scalars
-            float4x4 m4 = float4x4(
+            mat4 m4 = mat4(
                 t,        t + 1.0,  t + 2.0,  t + 3.0,
                 t + 4.0,  t + 5.0,  t + 6.0,  t + 7.0,
                 t + 8.0,  t + 9.0,  t + 10.0, t + 11.0,

@@ -672,9 +672,9 @@ namespace SymbolTable {
         if (baseType == "uint64x2") return CoreType::UINT64X2;
         if (baseType == "uint64x3") return CoreType::UINT64X3;
         if (baseType == "uint64x4") return CoreType::UINT64X4;
-        if (baseType == "mat2" || baseType == "float2x2") return CoreType::MAT2;
-        if (baseType == "mat3" || baseType == "float3x3") return CoreType::MAT3;
-        if (baseType == "mat4" || baseType == "float4x4") return CoreType::MAT4;
+        if (baseType == "mat2") return CoreType::MAT2;
+        if (baseType == "mat3") return CoreType::MAT3;
+        if (baseType == "mat4") return CoreType::MAT4;
         if (baseType == "dmat2") return CoreType::DMAT2;
         if (baseType == "dmat3") return CoreType::DMAT3;
         if (baseType == "dmat4") return CoreType::DMAT4;

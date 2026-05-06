@@ -77,7 +77,7 @@ pipeline LoopsForeach {
             // evenSum = 0 + 2 + 4 + 6 + 8 = 20
 
             // Nested foreach loops
-            float3x3 matrix = float3x3(0.0);
+            mat3 matrix = mat3(0.0);
             foreach (row in 0..3) {
                 foreach (col in 0..3) {
                     if (row == col) {

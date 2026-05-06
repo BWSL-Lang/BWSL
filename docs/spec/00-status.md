@@ -60,10 +60,6 @@ The following features should be treated as implemented but still provisional:
 - `pass_block`
   The parser accepts `-> pass_block`, but the public docs do not yet treat it
   as a normal user-facing feature.
-- Compatibility aliases such as `float3x3`
-  The implementation accepts them in type resolution and constructors; the spec
-  still needs a final decision on whether they are canonical syntax or
-  compatibility aliases.
 - Stage validation details for some compute-oriented intrinsics
   The overall feature set is clear, but some validation still lives partly in
   lowering rather than in a clean front-end rule system.

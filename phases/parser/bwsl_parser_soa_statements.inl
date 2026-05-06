@@ -465,6 +465,10 @@ NodeRef Parser::ParseStatement() {
 // Custom type variable declaration parsing
 //==============================================================================
 
+static bool IsRemovedMatrixAlias(const std::string& typeName) {
+    return typeName == "float2x2" || typeName == "float3x3" || typeName == "float4x4";
+}
+
 NodeRef Parser::ParseCustomTypeVarDecl() {
     SourceLocation loc = getLocation(stream->GetOffset(current));
     u32 line = loc.line;
@@ -486,6 +490,12 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
         // Simple type name
         Consume(TokenType::IDENTIFIER, "Expected type name");
         typeName = std::string(stream->GetValue(previous));
+    }
+
+    if (IsRemovedMatrixAlias(typeName)) {
+        Error("Matrix aliases float2x2/float3x3/float4x4 are not supported; use mat2, mat3, or mat4");
+        Synchronize();
+        return NodeRef::Null();
     }
 
     // Check for pointer type: `CustomType^ name` (matches core-type path in

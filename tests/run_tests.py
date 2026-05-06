@@ -141,6 +141,7 @@ ERROR_CASE_TESTS = {
     "unknown_module_import.bwsl": "Unknown module 'DoesNotExist'",
     "workgroup_id_wrong_stage.bwsl": "input.workgroup_id is only available in compute shaders",
     "local_id_wrong_stage.bwsl": "input.local_id is only available in compute shaders",
+    "matrix_alias_rejected.bwsl": "Matrix aliases float2x2/float3x3/float4x4 are not supported",
     "dereference_non_pointer.bwsl": "dereference (`^` postfix) applied to a non-pointer value",
     "pointer_in_ternary.bwsl": "ternary expression with pointer operands is not supported",
     "recursion_not_supported.bwsl": "recursion is not supported",

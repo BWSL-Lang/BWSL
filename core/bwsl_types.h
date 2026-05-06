@@ -897,14 +897,6 @@ namespace TypeHashes {
     constexpr u32 DMAT2       = Utils::HashStr("dmat2");
     constexpr u32 DMAT3       = Utils::HashStr("dmat3");
     constexpr u32 DMAT4       = Utils::HashStr("dmat4");
-    // HLSL-style aliases for matrix types: `floatNxN` resolves to MAT{N}.
-    // Without these, `float3x3(...)` as a constructor call lowers as a user
-    // function call (OP_CALL/OpUndef), even though `float3x3 x = ...;`
-    // declarations resolve via ParseTypeName. Cross-backend tests could mask
-    // this because all backends convert the OpUndef result identically.
-    constexpr u32 FLOAT2X2    = Utils::HashStr("float2x2");
-    constexpr u32 FLOAT3X3    = Utils::HashStr("float3x3");
-    constexpr u32 FLOAT4X4    = Utils::HashStr("float4x4");
     constexpr u32 VOID        = Utils::HashStr("void");
     constexpr u32 ENUM        = Utils::HashStr("enum");
     constexpr u32 CONSTRAINT  = Utils::HashStr("constraint");
@@ -961,9 +953,6 @@ namespace TypeHashes {
         {DMAT2,  TYPE_INFO(CoreType::DMAT2,  4,  true)},
         {DMAT3,  TYPE_INFO(CoreType::DMAT3,  9,  true)},
         {DMAT4,  TYPE_INFO(CoreType::DMAT4,  16, true)},
-        {FLOAT2X2, TYPE_INFO(CoreType::MAT2, 4,  true)},
-        {FLOAT3X3, TYPE_INFO(CoreType::MAT3, 9,  true)},
-        {FLOAT4X4, TYPE_INFO(CoreType::MAT4, 16, true)},
         {T, TYPE_INFO(CoreType::GENERIC_T, 1,  true)},
         {U, TYPE_INFO(CoreType::GENERIC_U, 1,  true)},
         {V, TYPE_INFO(CoreType::GENERIC_V, 1,  true)},

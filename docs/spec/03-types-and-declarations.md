@@ -34,18 +34,6 @@ User-defined nominal types include:
 - `enum` types
 - module-qualified custom types such as `Module::Type`
 
-## Compatibility Aliases
-
-The implementation accepts:
-
-- `float2x2`
-- `float3x3`
-- `float4x4`
-
-These currently resolve as aliases for `mat2`, `mat3`, and `mat4`. The spec
-draft treats them as accepted compatibility syntax, but the canonical spellings
-remain `mat2`, `mat3`, and `mat4`.
-
 ## Variable Declarations
 
 The language supports ordinary variable declarations and `const` declarations.

@@ -1,0 +1,12 @@
+pipeline MatrixAliasRejected {
+    pass "Main" {
+        vertex {
+            float4x4 m = float4x4(1.0);
+            output.position = m * float4(0.0, 0.0, 0.0, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}
