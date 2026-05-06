@@ -456,7 +456,7 @@ static NodeRef CloneNode(ComptimeState* state, NodeRef node) {
                                              CloneNode(state, src.condition),
                                              CloneNode(state, src.increment),
                                              CloneNode(state, src.body),
-                                             src.isEval, line, col);
+                                             src.isEval, line, col, src.isWhile);
         }
         case ASTNodeType::FOR_RANGE: {
             const ForRangeData& src = state->ast->GetForRange(node);
@@ -735,6 +735,32 @@ static bool ExecuteEvalLoop(ComptimeState* state, NodeRef stmt, BlockData& outBl
     }
 }
 
+static bool ExecuteEvalWhile(ComptimeState* state, NodeRef stmt, BlockData& outBlock) {
+    const ForCStyleData& loop = state->ast->GetForCStyle(stmt);
+
+    while (true) {
+        LiteralValue conditionValue;
+        if (!EvalExpression(state, loop.condition, &conditionValue)) {
+            Report(state, loop.condition, "Eval while condition must be a compile-time value");
+            return false;
+        }
+
+        bool conditionTrue = false;
+        if (!LiteralToBool(conditionValue, &conditionTrue)) {
+            Report(state, loop.condition, "Eval while condition must resolve to bool, int, uint, or float");
+            return false;
+        }
+        if (!conditionTrue) return true;
+
+        if (++state->budget.loopIterations > state->budget.maxLoopIterations) {
+            Report(state, stmt, "Eval while exceeded iteration limit");
+            return false;
+        }
+        ExecuteStatement(state, loop.body, outBlock, true);
+        if (state->hadError) return false;
+    }
+}
+
 static bool ExecuteStatement(ComptimeState* state, NodeRef stmt, BlockData& outBlock, bool evalContext) {
     if (stmt.IsNull()) return true;
     if (!CheckExecutedBudget(state, stmt)) return false;
@@ -795,6 +821,7 @@ static bool ExecuteStatement(ComptimeState* state, NodeRef stmt, BlockData& outB
         case ASTNodeType::FOR_CSTYLE: {
             const ForCStyleData& loop = state->ast->GetForCStyle(stmt);
             if (evalContext || loop.isEval) {
+                if (loop.isWhile) return ExecuteEvalWhile(state, stmt, outBlock);
                 Report(state, stmt, "C-style for loops are not supported in eval contexts");
                 return false;
             }

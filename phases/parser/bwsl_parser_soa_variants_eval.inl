@@ -1044,8 +1044,38 @@ bool Parser::ExpandEvalStatement(NodeRef stmt, BlockData& outBlock) {
         }
 
         case ASTNodeType::FOR_CSTYLE:
-            Error("C-style for loops are not yet supported inside eval blocks");
-            return false;
+        {
+            const ForCStyleData& loop = ast->GetForCStyle(stmt);
+            if (!loop.isWhile) {
+                Error("C-style for loops are not yet supported inside eval blocks");
+                return false;
+            }
+
+            constexpr u32 MAX_EVAL_ITERATIONS = 10000;
+            u32 iterationCount = 0;
+            while (true) {
+                LiteralValue conditionValue;
+                if (!EvaluateNodeWithEvalBindings(loop.condition, &conditionValue)) {
+                    Error("Eval while conditions must be compile-time constants");
+                    return false;
+                }
+
+                bool conditionTrue = false;
+                if (!ConvertLiteralToBool(conditionValue, &conditionTrue)) {
+                    Error("Eval while conditions must resolve to bool, int, uint, or float");
+                    return false;
+                }
+                if (!conditionTrue) return true;
+
+                if (++iterationCount > MAX_EVAL_ITERATIONS) {
+                    Error("Eval while exceeded iteration limit");
+                    return false;
+                }
+                if (!ExpandEvalStatement(loop.body, outBlock)) {
+                    return false;
+                }
+            }
+        }
 
         case ASTNodeType::LOOP: {
             const LoopData& loop = ast->GetLoop(stmt);
@@ -1534,6 +1564,22 @@ return ASTFactory::MakeForCollection(ast, firstPart, rangeStart, body, isEval, l
 // Loop statement parsing
 //==============================================================================
 
+NodeRef Parser::ParseWhileStatement(bool isEval) {
+    SourceLocation loc = getLocation(stream->GetOffset(previous));
+
+    Consume(TokenType::LEFT_PAREN, "Expected '(' after 'while'");
+    NodeRef condition = ParseExpression();
+    Consume(TokenType::RIGHT_PAREN, "Expected ')' after while condition");
+
+    SymbolTable::EnterScope(&symbolTable);
+    Consume(TokenType::LEFT_BRACE, "Expected '{' after while");
+    NodeRef body = ParseBlock();
+    SymbolTable::ExitScope(&symbolTable);
+
+    return ASTFactory::MakeForCStyle(ast, NodeRef::Null(), condition, NodeRef::Null(), body,
+                                     isEval, loc.line, loc.column, true);
+}
+
 NodeRef Parser::ParseLoopStatement(bool isEval) {
     SourceLocation loc = getLocation(stream->GetOffset(previous));
 
@@ -1637,4 +1683,3 @@ NodeRef Parser::ParseSwitch() {
     }
 
     Consume(TokenType::RIGHT_BRACE, "Expected '}' after switch body");
-

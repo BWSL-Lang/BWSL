@@ -151,6 +151,7 @@ enum TokenType : uint8_t {
     COMPUTE_FUNCTION,
     FRAGMENT_FUNCTION,
     LOOP,
+    WHILE,
     UNTIL,
     BY,
     SKIP,

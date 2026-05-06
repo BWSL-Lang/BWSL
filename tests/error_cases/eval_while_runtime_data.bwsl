@@ -1,0 +1,22 @@
+pipeline EvalWhileRuntimeData {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            bool done = attributes.position.x > 0.0;
+            float sum = 0.0;
+            eval while (!done) {
+                sum += 1.0;
+            }
+            output.position = float4(attributes.position + float3(sum), 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

@@ -1,0 +1,19 @@
+pipeline EvalWhileBadConditionType {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            eval while (float2(1.0, 0.0)) {
+                output.position = float4(attributes.position, 1.0);
+            }
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

@@ -74,6 +74,10 @@ The current parser accepts several loop families:
   ```bwsl
   for (int i = 0; i < n; i++) { ... }
   ```
+- while loops
+  ```bwsl
+  while (cond) { ... }
+  ```
 - range loops
   ```bwsl
   for (i in 0..n) { ... }
@@ -120,6 +124,7 @@ The current implementation supports:
 - `eval if (...)`
 - `eval for (...)`
 - `eval loop (...)`
+- `eval while (...)`
 - `eval` function declarations
 
 Eval syntax is parsed into AST markers and evaluated by a dedicated

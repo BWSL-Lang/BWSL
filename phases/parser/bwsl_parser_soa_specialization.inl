@@ -389,7 +389,7 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
             NodeRef increment = CloneNodeWithParams(src.increment, subs, subCount);
             NodeRef body = CloneNodeWithParams(src.body, subs, subCount);
             NodeRef newFor = ASTFactory::MakeForCStyle(ast, init, condition, increment, body,
-                                                       src.isEval, line, col);
+                                                       src.isEval, line, col, src.isWhile);
             return newFor;
         }
 
@@ -658,4 +658,3 @@ void Parser::ResolveShaderStageExpressions(NodeRef pipeline) {
         }
     }
 }
-

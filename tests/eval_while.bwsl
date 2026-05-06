@@ -1,0 +1,65 @@
+// Test: eval while loops
+// Tests: compile-time pre-condition loop expansion, zero-iteration while,
+// nested eval while, eval-block while, and runtime statement emission
+
+pipeline EvalWhile {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float emitted = 0.0;
+
+            eval int i = 0;
+            eval int sum = 0;
+            eval while (i < 5) {
+                sum = sum + i;
+                i = i + 1;
+            }
+
+            eval int zero = 0;
+            eval while (zero < 0) {
+                zero = zero + 100;
+            }
+
+            eval int outer = 0;
+            eval int nested = 0;
+            eval while (outer < 3) {
+                eval int inner = 0;
+                eval while (inner < 2) {
+                    nested = nested + outer + inner;
+                    inner = inner + 1;
+                }
+                outer = outer + 1;
+            }
+
+            eval int blockValue = 0;
+            eval {
+                eval int j = 0;
+                while (j < 4) {
+                    blockValue = blockValue + j;
+                    emitted += 0.25;
+                    j = j + 1;
+                }
+            }
+
+            eval int emitCount = 0;
+            eval while (emitCount < 3) {
+                emitted += 1.0;
+                emitCount = emitCount + 1;
+            }
+
+            output.position = float4(
+                attributes.position + float3(float(sum + zero + nested + blockValue) * 0.01 + emitted * 0.001),
+                1.0
+            );
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

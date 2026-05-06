@@ -151,6 +151,9 @@ ERROR_CASE_TESTS = {
     "eval_if_runtime_data.bwsl": "Eval if condition must be a compile-time value",
     "eval_for_runtime_bound.bwsl": "Eval for range bounds must be compile-time values",
     "eval_loop_until_runtime_data.bwsl": "Eval loop until condition must be a compile-time value",
+    "eval_while_bad_condition_type.bwsl": "Eval while condition must resolve to bool, int, uint, or float",
+    "eval_while_iteration_limit.bwsl": "Eval while exceeded iteration limit",
+    "eval_while_runtime_data.bwsl": "Eval while condition must be a compile-time value",
 }
 
 FORBIDDEN_SOURCE_ALIAS_NAMES = (

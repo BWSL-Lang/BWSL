@@ -292,6 +292,7 @@ private:
     NodeRef ParseShaderStageExpression(ASTNodeType stageType);  // Parse vertex = expr or fragment = expr
     NodeRef ParseSwitch();
     NodeRef ParseForStatement(bool isEval);
+    NodeRef ParseWhileStatement(bool isEval);
     NodeRef ParseLoopStatement(bool isEval);
     NodeRef ParseEnum();
     NodeRef ParseEnumVariant();

@@ -458,6 +458,7 @@ inline u32 CoreTypeStd140Size(CoreType type) {
         TYPE_INFO(CoreType::COMPUTE_FUNCTION,  0, false),  // COMPUTE_FUNCTION
         TYPE_INFO(CoreType::FRAGMENT_FUNCTION, 0, false),  // FRAGMENT_FUNCTION
         TYPE_INFO(CoreType::INVALID, 0, false),  // LOOP
+        TYPE_INFO(CoreType::INVALID, 0, false),  // WHILE
         TYPE_INFO(CoreType::INVALID, 0, false),  // UNTIL
         TYPE_INFO(CoreType::INVALID, 0, false),  // STEP
         TYPE_INFO(CoreType::INVALID, 0, false),  // SKIP

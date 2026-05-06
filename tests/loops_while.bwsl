@@ -1,0 +1,51 @@
+// Test: runtime while loops
+// Tests: zero-iteration behavior, break, skip, and nested while loops
+
+pipeline LoopsWhile {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int zero = 0;
+            while (zero < 0) {
+                zero = zero + 100;
+            }
+
+            int i = 0;
+            int sum = 0;
+            while (i < 10) {
+                i = i + 1;
+                skip if (i % 2 == 0);
+                sum = sum + i;
+            }
+
+            int capped = 0;
+            while (capped < 100) {
+                capped = capped + 1;
+                break if (capped >= 4);
+            }
+
+            int outer = 0;
+            int nested = 0;
+            while (outer < 3) {
+                int inner = 0;
+                while (inner < 2) {
+                    nested = nested + outer + inner;
+                    inner = inner + 1;
+                }
+                outer = outer + 1;
+            }
+
+            float total = float(zero + sum + capped + nested);
+            output.position = float4(attributes.position + float3(total * 0.001), 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

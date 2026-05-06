@@ -161,7 +161,8 @@ struct ForCStyleData {
     NodeRef increment;
     NodeRef body;
     bool isEval;
-    u8 _pad[3];
+    bool isWhile;
+    u8 _pad[2];
 };
 
 // 28 bytes
@@ -1186,7 +1187,8 @@ namespace ASTFactory {
     }
 
     inline NodeRef MakeForCStyle(AST* ast, NodeRef init, NodeRef condition, NodeRef increment,
-                                  NodeRef body, bool isEval, u32 line = 0, u32 col = 0) {
+                                  NodeRef body, bool isEval, u32 line = 0, u32 col = 0,
+                                  bool isWhile = false) {
         u32 index = ast->forCStyles.count;
         ForCStyleData data;
         data.init = init;
@@ -1194,6 +1196,7 @@ namespace ASTFactory {
         data.increment = increment;
         data.body = body;
         data.isEval = isEval;
+        data.isWhile = isWhile;
         ast->forCStyles.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {

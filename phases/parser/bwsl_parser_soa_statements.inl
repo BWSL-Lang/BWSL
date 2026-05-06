@@ -37,6 +37,10 @@ NodeRef Parser::ParseStatement() {
             Advance();
             return ParseLoopStatement(true);
         }
+        if (Check(TokenType::WHILE)) {
+            Advance();
+            return ParseWhileStatement(true);
+        }
         if (Check(TokenType::IF)) {
             Advance();
             return ParseEvalIf();
@@ -240,6 +244,10 @@ NodeRef Parser::ParseStatement() {
 
     if (Match(TokenType::LOOP)) {
         return ParseLoopStatement(false);
+    }
+
+    if (Match(TokenType::WHILE)) {
+        return ParseWhileStatement(false);
     }
 
     if (Match(TokenType::SWITCH)) {
@@ -664,4 +672,3 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
 //==============================================================================
 // Expression parsing
 //==============================================================================
-
