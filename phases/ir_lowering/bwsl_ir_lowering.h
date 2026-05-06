@@ -338,6 +338,8 @@ struct IRLowering {
 
   u16 EmitConstantUint(u32 value);
 
+  u16 ConvertRegisterToType(u16 reg, CoreType targetType);
+
   u16 GetOrAllocateVariable(u32 nameHash);
 
   // ==========================================================================

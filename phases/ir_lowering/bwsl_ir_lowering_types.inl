@@ -788,6 +788,35 @@ inline u16 IRLowering::EmitConstantUint(u32 value) {
   return 0x2000 | slot;
 }
 
+inline u16 IRLowering::ConvertRegisterToType(u16 reg, CoreType targetType) {
+  CoreType sourceType = GetRegisterType(reg);
+  if (sourceType == targetType) {
+    return reg;
+  }
+
+  OpCode convOp = OP_NOP;
+  if (targetType == CoreType::FLOAT) {
+    if (sourceType == CoreType::INT) {
+      convOp = OP_I2F;
+    } else if (sourceType == CoreType::UINT) {
+      convOp = OP_U2F;
+    }
+  } else if (targetType == CoreType::INT && sourceType == CoreType::UINT) {
+    convOp = OP_U2I;
+  } else if (targetType == CoreType::UINT && sourceType == CoreType::INT) {
+    convOp = OP_I2U;
+  }
+
+  if (convOp == OP_NOP) {
+    return reg;
+  }
+
+  u16 converted = AllocateRegister();
+  builder.EmitInstruction(convOp, converted, reg);
+  SetRegisterType(converted, targetType);
+  return converted;
+}
+
 inline u16 IRLowering::GetOrAllocateVariable(u32 nameHash) {
   auto it = variableRegisters.find(nameHash);
   if (it != variableRegisters.end()) {

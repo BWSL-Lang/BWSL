@@ -263,9 +263,10 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
   }
   case UnaryOpType::PRE_INCREMENT: {
     // ++x: Add 1 to operand, store back, return new value
-    u16 one = EmitConstantInt(1);
     CoreType type = GetRegisterType(operand);
-    op = (mask(type) & TypeMasks::FLOAT_TYPES) ? OP_FADD : OP_IADD;
+    bool isFloat = (mask(type) & TypeMasks::FLOAT_TYPES) != 0;
+    u16 one = isFloat ? builder.EmitConstant(1.0f) : EmitConstantInt(1);
+    op = isFloat ? OP_FADD : OP_IADD;
     builder.EmitInstruction(op, dest, operand, one);
     SetRegisterType(dest, type);
     // Store back to the operand location (assuming it's a variable)
@@ -274,9 +275,10 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
   }
   case UnaryOpType::PRE_DECREMENT: {
     // --x: Subtract 1 from operand, store back, return new value
-    u16 one = EmitConstantInt(1);
     CoreType type = GetRegisterType(operand);
-    op = (mask(type) & TypeMasks::FLOAT_TYPES) ? OP_FSUB : OP_ISUB;
+    bool isFloat = (mask(type) & TypeMasks::FLOAT_TYPES) != 0;
+    u16 one = isFloat ? builder.EmitConstant(1.0f) : EmitConstantInt(1);
+    op = isFloat ? OP_FSUB : OP_ISUB;
     builder.EmitInstruction(op, dest, operand, one);
     SetRegisterType(dest, type);
     builder.EmitInstruction(OP_STORE_REG, operand, dest);
@@ -287,9 +289,10 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
     CoreType type = GetRegisterType(operand);
     builder.EmitInstruction(OP_STORE_REG, dest, operand); // dest = old value
     SetRegisterType(dest, type);
-    u16 one = EmitConstantInt(1);
+    bool isFloat = (mask(type) & TypeMasks::FLOAT_TYPES) != 0;
+    u16 one = isFloat ? builder.EmitConstant(1.0f) : EmitConstantInt(1);
     u16 newVal = AllocateRegister();
-    op = (mask(type) & TypeMasks::FLOAT_TYPES) ? OP_FADD : OP_IADD;
+    op = isFloat ? OP_FADD : OP_IADD;
     builder.EmitInstruction(op, newVal, operand, one);
     SetRegisterType(newVal, type);
     builder.EmitInstruction(OP_STORE_REG, operand, newVal);
@@ -301,9 +304,10 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
     CoreType type = GetRegisterType(operand);
     builder.EmitInstruction(OP_STORE_REG, dest, operand); // dest = old value
     SetRegisterType(dest, type);
-    u16 one = EmitConstantInt(1);
+    bool isFloat = (mask(type) & TypeMasks::FLOAT_TYPES) != 0;
+    u16 one = isFloat ? builder.EmitConstant(1.0f) : EmitConstantInt(1);
     u16 newVal = AllocateRegister();
-    op = (mask(type) & TypeMasks::FLOAT_TYPES) ? OP_FSUB : OP_ISUB;
+    op = isFloat ? OP_FSUB : OP_ISUB;
     builder.EmitInstruction(op, newVal, operand, one);
     SetRegisterType(newVal, type);
     builder.EmitInstruction(OP_STORE_REG, operand, newVal);
@@ -444,6 +448,46 @@ inline u16 IRLowering::LowerBinaryOp(NodeRef ref) {
   CoreType rightType = GetRegisterType(right);
   TypeMask leftMask = mask(leftType);
   TypeMask rightMask = mask(rightType);
+
+  auto allowsFloatPromotion = [](BinaryOpType op) {
+    switch (op) {
+    case BinaryOpType::ADD:
+    case BinaryOpType::SUBTRACT:
+    case BinaryOpType::MULTIPLY:
+    case BinaryOpType::DIVIDE:
+    case BinaryOpType::MODULO:
+    case BinaryOpType::EQUALS:
+    case BinaryOpType::NOT_EQUALS:
+    case BinaryOpType::LESS:
+    case BinaryOpType::LESS_EQUAL:
+    case BinaryOpType::GREATER:
+    case BinaryOpType::GREATER_EQUAL:
+      return true;
+    default:
+      return false;
+    }
+  };
+
+  if (allowsFloatPromotion(binop.op)) {
+    bool leftFloatLike = (leftMask & (TypeMasks::FLOAT_TYPES |
+                                      TypeMasks::MATRIX_TYPES)) != 0;
+    bool rightFloatLike = (rightMask & (TypeMasks::FLOAT_TYPES |
+                                        TypeMasks::MATRIX_TYPES)) != 0;
+    bool leftIntegerScalar = leftType == CoreType::INT ||
+                             leftType == CoreType::UINT;
+    bool rightIntegerScalar = rightType == CoreType::INT ||
+                              rightType == CoreType::UINT;
+
+    if (leftFloatLike && rightIntegerScalar) {
+      right = ConvertRegisterToType(right, CoreType::FLOAT);
+      rightType = GetRegisterType(right);
+      rightMask = mask(rightType);
+    } else if (rightFloatLike && leftIntegerScalar) {
+      left = ConvertRegisterToType(left, CoreType::FLOAT);
+      leftType = GetRegisterType(left);
+      leftMask = mask(leftType);
+    }
+  }
 
   OpCode op = OP_NOP;
   CoreType resultType = leftType;
@@ -1067,4 +1111,3 @@ inline u16 IRLowering::LowerBinaryOp(NodeRef ref) {
   SetRegisterType(dest, isComparison ? CoreType::BOOL : resultType);
   return dest;
 }
-

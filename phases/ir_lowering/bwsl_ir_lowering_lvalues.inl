@@ -228,26 +228,27 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
 
   SetRegisterType(varReg, coreType);
 
+  CoreType arrayElementType = coreType;
+  u32 arrayElementStructHash = 0;
+
   // Register local arrays (with or without initializer)
   if (isArray && arrayLength > 0) {
     // Get element type from the variable's array element type hash
-    CoreType elementType = coreType;
-    u32 elementStructHash = 0;
     if (varDecl.arrayElementTypeHash != 0) {
-      elementType = ResolveCoreTypeFromHash(varDecl.arrayElementTypeHash,
-                                            &elementStructHash);
+      arrayElementType = ResolveCoreTypeFromHash(varDecl.arrayElementTypeHash,
+                                                 &arrayElementStructHash);
     } else if (varData) {
-      elementType = varData->typeInfo.coreType;
-      elementStructHash = varData->typeInfo.customTypeHash;
+      arrayElementType = varData->typeInfo.coreType;
+      arrayElementStructHash = varData->typeInfo.customTypeHash;
     }
     // For struct element types, ensure we have the struct type registered
-    if ((elementType == CoreType::CUSTOM ||
-         elementType == CoreType::INVALID) &&
-        elementStructHash == 0 && varDecl.arrayElementTypeHash != 0) {
-      elementStructHash =
+    if ((arrayElementType == CoreType::CUSTOM ||
+         arrayElementType == CoreType::INVALID) &&
+        arrayElementStructHash == 0 && varDecl.arrayElementTypeHash != 0) {
+      arrayElementStructHash =
           LookupOrRegisterStructType(varDecl.arrayElementTypeHash);
-      if (elementStructHash != 0) {
-        elementType = CoreType::CUSTOM;
+      if (arrayElementStructHash != 0) {
+        arrayElementType = CoreType::CUSTOM;
       }
     }
 
@@ -255,9 +256,9 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
     program.localArrayNameHashes[program.localArrayCount] =
         varDecl.name.nameHash;
     program.localArrayTypes[program.localArrayCount] =
-        static_cast<u16>(elementType);
+        static_cast<u16>(arrayElementType);
     program.localArrayStructTypes[program.localArrayCount] =
-        elementStructHash;
+        arrayElementStructHash;
     program.localArraySizes[program.localArrayCount] = arrayLength;
     program.localArrayRegisters[program.localArrayCount] = varReg;
     program.localArrayCount++;
@@ -279,6 +280,7 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
            i++) {
         NodeRef elementExpr = initBlock.statements[i];
         u16 elementReg = LowerExpression(elementExpr);
+        elementReg = ConvertRegisterToType(elementReg, arrayElementType);
 
         // Emit array store: store element at index i
         u16 indexReg = EmitConstantUint(i);
@@ -332,7 +334,8 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
         }
       }
 
-      builder.EmitInstruction(OP_STORE_REG, varReg, initReg);
+      u16 storedInitReg = ConvertRegisterToType(initReg, coreType);
+      builder.EmitInstruction(OP_STORE_REG, varReg, storedInitReg);
       // Propagate pointer storage info if the init expression is a pointer
       if (initReg < MAX_REGISTERS && (program.registerStorageInfo[initReg] &
                                       IR::IRProgram::STORAGE_IS_PTR)) {
@@ -386,6 +389,7 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
   if (target.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &ident = ast->GetIdentifier(target);
     u16 varReg = GetOrAllocateVariable(ident.name.nameHash);
+    valueReg = ConvertRegisterToType(valueReg, GetRegisterType(varReg));
     builder.EmitInstruction(OP_STORE_REG, varReg, valueReg);
     // Propagate pointer storage info if the value is a pointer
     if (valueReg < MAX_REGISTERS && (program.registerStorageInfo[valueReg] &

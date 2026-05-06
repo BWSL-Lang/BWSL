@@ -1,0 +1,22 @@
+// Regression: integer literals in float initializer context must become floats.
+// `float totalParticles = 10000;` used to leave the initializer as an int
+// constant, then emit float arithmetic using an int operand.
+
+pipeline FloatIntLiteralContext {
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+
+        compute "Main" [64, 1, 1] {
+            uint idx = input.global_id.x;
+            float totalParticles = 10000;
+            float normalized = float(idx) / totalParticles;
+            totalParticles = 5000;
+            float adjusted = float(idx) / totalParticles;
+            resources.output[idx] = normalized + adjusted;
+        }
+    }
+}
