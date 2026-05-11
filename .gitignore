@@ -28,6 +28,9 @@ build/
 *.swo
 *~
 
+# Local agent worktrees
+.claude/worktrees/
+
 # Temporary files
 *.tmp
 *.bak
