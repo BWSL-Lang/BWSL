@@ -40,6 +40,40 @@ jobs:
       - name: Run regression tests
         run: make test
 
+      - name: Package Unix binary
+        id: package
+        shell: bash
+        run: |
+          version="$BWSL_OPEN_BETA_VERSION"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          fi
+
+          case "$RUNNER_OS" in
+            Linux) os="linux" ;;
+            macOS) os="macos" ;;
+            *) os="$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')" ;;
+          esac
+
+          case "$(uname -m)" in
+            x86_64|amd64) arch="x64" ;;
+            arm64|aarch64) arch="arm64" ;;
+            *) arch="$(uname -m)" ;;
+          esac
+
+          artifact_name="bwslc-$os-$arch"
+          mkdir -p dist
+          cp build/bwslc "dist/$artifact_name-$version"
+          chmod +x "dist/$artifact_name-$version"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Unix binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: dist/bwslc-*
+          if-no-files-found: error
+
   windows:
     name: windows-latest
     runs-on: windows-latest
@@ -105,11 +139,12 @@ jobs:
       actions: read
       contents: write
     steps:
-      - name: Download Windows binary
+      - name: Download CLI binaries
         uses: actions/download-artifact@v4
         with:
-          name: bwslc-windows-x64
+          pattern: bwslc-*
           path: dist
+          merge-multiple: true
 
       - name: Create or update GitHub release
         env:
