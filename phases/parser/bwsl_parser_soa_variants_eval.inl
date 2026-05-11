@@ -500,7 +500,8 @@ bool Parser::BuildVariantSelection(NodeRef pipeline, const VariantSelectionData*
         value.enumTypeHash = 0;
         value.value.type = LiteralValue::BOOL;
         value.value.boolValue = hasAttributeMask
-            ? ((attributeMask & (1u << attr.attributeIndex)) != 0)
+            ? (attr.attributeIndex < 32 &&
+               (attributeMask & (1u << attr.attributeIndex)) != 0)
             : true;
         value.isImplicit = true;
         value.implicitKind = ImplicitVariantKind::Attribute;

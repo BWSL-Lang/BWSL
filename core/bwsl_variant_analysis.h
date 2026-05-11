@@ -2,7 +2,6 @@
 #include "bwsl_types.h"
 #include "bwsl_ast_soa.h"
 #include "bwsl_symbol_table.h"
-#include "bwsl_compiler_types.h"  // For VertexAttributeType
 
 namespace BWSL {
 

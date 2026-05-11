@@ -20,7 +20,7 @@ struct ResourceReflectionConfig {
     };
 
     VertexPullingMode vertexPullingMode = VertexPullingMode::Disabled;
-    u8 attributeMask = 0;
+    u32 attributeMask = 0;
     u32 baseBufferBinding = 0;
     u32 descriptorSet = 0;
 };

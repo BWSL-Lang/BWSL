@@ -385,9 +385,14 @@ void SPIRVBuilder::DeclareVertexPullingBuffers() {
   if (vertexPullingConfig.mode == VertexInputMode::SeparateBuffers) {
     // Declare one storage buffer per attribute
     u32 binding = vertexPullingConfig.baseBufferBinding;
+    const u32 activeAttributeMask =
+        vertexPullingConfig.attributeMask != 0 ? vertexPullingConfig.attributeMask
+                                               : analysis.usedAttributeMask;
 
-    for (u32 attrIdx = 0; attrIdx < 8; attrIdx++) {
+    for (u32 attrIdx = 0; attrIdx < 16; attrIdx++) {
       if (!(analysis.usedAttributeMask & (1 << attrIdx)))
+        continue;
+      if (!(activeAttributeMask & (1 << attrIdx)))
         continue;
 
       // Get type from analysis or fallback
@@ -589,12 +594,10 @@ u32 SPIRVBuilder::CreateStorageBufferForAttribute(u32 attrIdx,
 
   // Name decoration for debugging
   // Emit debug names for attribute buffers if enabled
-  if (emitDebugNames && attrIdx < 8) {
-    static const char *attrNames[] = {
-        "position_buffer",    "normal_buffer",     "texcoord_buffer",
-        "tangent_buffer",     "bitangent_buffer",  "color_buffer",
-        "boneIndices_buffer", "boneWeights_buffer"};
-    EmitName(var_id, attrNames[attrIdx]);
+  if (emitDebugNames) {
+    char attrName[32];
+    snprintf(attrName, sizeof(attrName), "attribute_%u_buffer", attrIdx);
+    EmitName(var_id, attrName);
   }
 
   return var_id;

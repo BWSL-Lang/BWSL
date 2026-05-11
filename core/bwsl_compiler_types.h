@@ -3,38 +3,6 @@
 #include "bwsl_defs.h"
 #include <string>
 
-// Shared compiler-facing pipeline, shader-stage, attribute, and resource types.
-
-enum class VertexAttributeType : u8 {
-    POSITION = 0,
-    NORMAL = 1,
-    TEXCOORD = 2,
-    COLOR = 3,
-    TANGENT = 4,
-    BITANGENT = 5,
-    BONE_INDICES = 6,
-    BONE_WEIGHTS = 7,
-    COUNT
-};
-
-constexpr u8 AttributeMask(VertexAttributeType type) {
-    return 1 << static_cast<u8>(type);
-}
-
-inline const char* GetAttributeTypeName(VertexAttributeType type) {
-    switch (type) {
-        case VertexAttributeType::POSITION:     return "position";
-        case VertexAttributeType::NORMAL:       return "normal";
-        case VertexAttributeType::TEXCOORD:     return "texcoord";
-        case VertexAttributeType::COLOR:        return "color";
-        case VertexAttributeType::TANGENT:      return "tangent";
-        case VertexAttributeType::BITANGENT:    return "bitangent";
-        case VertexAttributeType::BONE_INDICES: return "boneIndices";
-        case VertexAttributeType::BONE_WEIGHTS: return "boneWeights";
-        default: return "unknown";
-    }
-}
-
 enum class ShaderStage : u8 {
     Vertex = 0,
     Fragment = 1,
@@ -67,11 +35,8 @@ enum class ResourceAccessMode : u8 {
 };
 
 namespace BWSL {
-using ::AttributeMask;
-using ::GetAttributeTypeName;
 using ::PassType;
 using ::ResourceAccessMode;
 using ::ResourceBinding;
 using ::ShaderStage;
-using ::VertexAttributeType;
 } // namespace BWSL

@@ -1133,7 +1133,7 @@ std::string EscapeJsonString(const std::string& str) {
     return ReflectionJson::EscapeJsonString(str);
 }
 
-static u8 BuildPassAttributeMask(const AST& ast, NodeRef pipelineRef, NodeRef passRef) {
+static u32 BuildPassAttributeMask(const AST& ast, NodeRef pipelineRef, NodeRef passRef) {
     if (pipelineRef.IsNull() || passRef.IsNull()) {
         return 0;
     }
@@ -1141,28 +1141,32 @@ static u8 BuildPassAttributeMask(const AST& ast, NodeRef pipelineRef, NodeRef pa
     const PipelineData& pipeline = ast.GetPipeline(pipelineRef);
     const PassData& pass = ast.GetPass(passRef);
 
-    u8 mask = 0;
+    u32 mask = 0;
 
-    auto addAttributeMask = [&](const ArenaString& attributeName) {
+    auto addAttributeMask = [&](u32 attributeNameHash) {
         for (u32 i = 0; i < pipeline.attributes.count; i++) {
             const AttributeDeclData& attr = ast.GetAttributeDecl(pipeline.attributes[i]);
-            if (attr.name.nameHash == attributeName.nameHash) {
+            if (attr.name.nameHash == attributeNameHash && attr.attributeIndex < 32) {
                 mask |= (1u << attr.attributeIndex);
                 return;
             }
         }
     };
 
+    addAttributeMask(Utils::HashStr("position"));
+
     if (pass.usedAttributes.count > 0) {
         for (u32 i = 0; i < pass.usedAttributes.count; i++) {
-            addAttributeMask(pass.usedAttributes[i]);
+            addAttributeMask(pass.usedAttributes[i].nameHash);
         }
         return mask;
     }
 
     for (u32 i = 0; i < pipeline.attributes.count; i++) {
         const AttributeDeclData& attr = ast.GetAttributeDecl(pipeline.attributes[i]);
-        mask |= (1u << attr.attributeIndex);
+        if (attr.attributeIndex < 32) {
+            mask |= (1u << attr.attributeIndex);
+        }
     }
 
     return mask;
@@ -2506,7 +2510,7 @@ int main(int argc, char* argv[]) {
             reflectionConfig.attributeMask = 0;
             if (!config.outputGlslEs) {
                 reflectionConfig.attributeMask = haveVertexReflectionAnalysis
-                    ? static_cast<u8>(vertexReflectionAnalysis.usedAttributeMask)
+                    ? vertexReflectionAnalysis.usedAttributeMask
                     : BuildPassAttributeMask(context.ast, specializedPipelineRef, pipeline.passes[passIdx]);
             }
             reflectionConfig.baseBufferBinding = 0;

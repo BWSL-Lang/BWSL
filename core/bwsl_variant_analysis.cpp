@@ -21,7 +21,9 @@ void AnalyzeNode(VariantAnalysisData* data, ASTNode* node, const SymbolTableData
                             point.nodeIndex = data->branchNodes.count;
                             point.optionalAttr.attributeIndex = attr.attributeIndex;
                             data->variantPoints.Push(data->arena, point);
-                            data->optionalAttributeMask |= (1 << attr.attributeIndex);
+                            if (attr.attributeIndex < 32) {
+                                data->optionalAttributeMask |= (1u << attr.attributeIndex);
+                            }
                         }
                     }
                 }

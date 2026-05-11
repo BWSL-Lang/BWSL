@@ -83,18 +83,9 @@ public:
     MetalCompiledVariant* GetOrCompileVariant(
         const std::string& pipelineName,
         const std::string& passName,
-        u8 attributeMask,
+        u32 attributeMask,
         BWSL::VertexInputMode vertexMode = BWSL::VertexInputMode::SeparateBuffers
     ) {
-        // Create variant key
-        std::string variantKey = MakeVariantKey(pipelineName, passName, attributeMask);
-        
-        // Check Metal cache first
-        auto it = metalVariants_.find(variantKey);
-        if (it != metalVariants_.end()) {
-            return &it->second;
-        }
-        
         // Configure compilation
         BWSL::CompilationConfig config;
         config.targetBackend = BWSL::TargetBackend::Metal;
@@ -107,6 +98,15 @@ public:
         
         if (!coreVariant || !metalMiddleware_) {
             return nullptr;
+        }
+
+        const std::string variantKey = MakeVariantKey(
+            pipelineName, passName, coreVariant->attributeMask);
+
+        // Check Metal cache after the core service resolves shader-declared defaults.
+        auto it = metalVariants_.find(variantKey);
+        if (it != metalVariants_.end()) {
+            return &it->second;
         }
         
         // Compile to Metal via middleware 
@@ -124,7 +124,7 @@ public:
         metalVariant.functionName = "main";  // Default entry point for SPIR-V compiled shaders
         metalVariant.vertexLib = (__bridge_transfer id<MTLLibrary>)result.handle.vertexShader;
         metalVariant.fragmentLib = (__bridge_transfer id<MTLLibrary>)result.handle.fragmentShader;
-        metalVariant.attributeMask = attributeMask;
+        metalVariant.attributeMask = coreVariant->attributeMask;
         metalVariant.coreVariant = coreVariant;
         
         return &metalVariant;
@@ -136,21 +136,41 @@ public:
         const std::string& passName,
         const std::vector<std::string>& activeAttributes
     ) {
-        u8 mask = CalculateAttributeMask(activeAttributes);
-        return GetOrCompileVariant(pipelineName, passName, mask);
-    }
-    
-    // Convenience: Get variant using VertexAttributeType list
-    MetalCompiledVariant* GetOrCompileVariant(
-        const std::string& pipelineName,
-        const std::string& passName,
-        const std::vector<VertexAttributeType>& activeAttributes
-    ) {
-        u8 mask = 0;
-        for (auto attr : activeAttributes) {
-            mask |= AttributeMask(attr);
+        BWSL::CompilationConfig config;
+        config.targetBackend = BWSL::TargetBackend::Metal;
+        config.vertexPulling.mode = BWSL::VertexInputMode::SeparateBuffers;
+
+        BWSL::CompiledVariant* coreVariant = coreService_.GetOrCompileVariant(
+            pipelineName, passName, activeAttributes, config);
+
+        if (!coreVariant || !metalMiddleware_) {
+            return nullptr;
         }
-        return GetOrCompileVariant(pipelineName, passName, mask);
+
+        const std::string variantKey = MakeVariantKey(
+            pipelineName, passName, coreVariant->attributeMask);
+
+        auto it = metalVariants_.find(variantKey);
+        if (it != metalVariants_.end()) {
+            return &it->second;
+        }
+
+        BWSL::MiddlewareCompilationResult result = metalMiddleware_->CompileVariant(*coreVariant);
+        if (!result.success) {
+            return nullptr;
+        }
+
+        MetalCompiledVariant& metalVariant = metalVariants_[variantKey];
+        metalVariant.variantKey = variantKey;
+        metalVariant.vertexSource = result.vertexSource;
+        metalVariant.fragmentSource = result.fragmentSource;
+        metalVariant.functionName = "main";
+        metalVariant.vertexLib = (__bridge_transfer id<MTLLibrary>)result.handle.vertexShader;
+        metalVariant.fragmentLib = (__bridge_transfer id<MTLLibrary>)result.handle.fragmentShader;
+        metalVariant.attributeMask = coreVariant->attributeMask;
+        metalVariant.coreVariant = coreVariant;
+
+        return &metalVariant;
     }
     
     // ========================================================================
@@ -162,7 +182,7 @@ public:
         config.targetBackend = BWSL::TargetBackend::Metal;
         config.vertexPulling.mode = BWSL::VertexInputMode::SeparateBuffers;
         
-        coreService_.PrecompileCommonVariants(config);
+        coreService_.PrecompileDeclaredVariants(config);
     }
     
     // ========================================================================
@@ -198,26 +218,10 @@ private:
     // Metal-specific variant cache
     std::unordered_map<std::string, MetalCompiledVariant> metalVariants_;
     
-    static std::string MakeVariantKey(const std::string& pipeline, const std::string& pass, u8 mask) {
+    static std::string MakeVariantKey(const std::string& pipeline, const std::string& pass, u32 mask) {
         char buffer[128];
-        snprintf(buffer, sizeof(buffer), "%s.%s.0x%02X", pipeline.c_str(), pass.c_str(), mask);
+        snprintf(buffer, sizeof(buffer), "%s.%s.0x%08X", pipeline.c_str(), pass.c_str(), mask);
         return buffer;
-    }
-    
-    static u8 CalculateAttributeMask(const std::vector<std::string>& attributes) {
-        static const std::unordered_map<std::string, u8> attributeBits = {
-            {"position", 0}, {"normal", 1}, {"texcoord", 2}, {"color", 3},
-            {"tangent", 4}, {"bitangent", 5}, {"boneIndices", 6}, {"boneWeights", 7}
-        };
-        
-        u8 mask = 0;
-        for (const auto& attr : attributes) {
-            auto it = attributeBits.find(attr);
-            if (it != attributeBits.end()) {
-                mask |= (1 << it->second);
-            }
-        }
-        return mask;
     }
     
     void HandlePipelineRecompiled(const std::string& pipelineName) {

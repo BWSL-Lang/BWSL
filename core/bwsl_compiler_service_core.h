@@ -19,6 +19,8 @@
 #include <filesystem>
 #include <cstdio>
 #include <array>
+#include <algorithm>
+#include <memory>
 
 namespace BWSL {
 
@@ -40,9 +42,9 @@ enum class VertexInputMode : u8 {
 struct VertexPullingConfig {
     VertexInputMode mode = VertexInputMode::SeparateBuffers;
     
-    // Which attributes are active (bitmask from VertexAttributeType)
-    // e.g., AttributeMask(POSITION) | AttributeMask(NORMAL) | AttributeMask(TEXCOORD)
-    u8 attributeMask = 0;
+    // Active attribute streams. Bits are assigned from the shader's attributes {}
+    // declaration order; position is validated as index 0 by the parser.
+    u32 attributeMask = 0;
     
     // Base binding index for attribute buffers
     // For SeparateBuffers: position at baseBinding, normal at baseBinding+1, etc.
@@ -158,7 +160,8 @@ struct CompiledVariant {
     
     // Vertex input layout (for validation/debugging)
     struct AttributeBinding {
-        VertexAttributeType type;
+        std::string name;
+        u32 attributeIndex;
         u32 binding;
         u32 location;
     };
@@ -178,7 +181,10 @@ struct PipelineShaderSet {
     std::time_t lastModified;
     
     // Cached AST for this pipeline (avoid re-parsing)
+    std::string cachedSource;
     std::unique_ptr<CompilationContext> cachedContext;
+    std::unique_ptr<TokenStream> cachedTokenStream;
+    std::unique_ptr<Lexer> cachedLexer;
     std::unique_ptr<Parser> cachedParser;
     bool astCached = false;
     
@@ -221,7 +227,7 @@ public:
     CompiledVariant* GetOrCompileVariant(
         const std::string& pipelineName,
         const std::string& passName,
-        u8 attributeMask,
+        u32 attributeMask,
         const CompilationConfig& config = CompilationConfig()
     ) {
         // Find pipeline shader set
@@ -229,21 +235,24 @@ public:
         if (pipelineIt == pipelineShaders.end()) {
             return nullptr;
         }
+
+        const u32 resolvedAttributeMask =
+            ResolveAttributeMaskForPass(pipelineIt->second, passName, attributeMask);
         
         // Create variant key
-        std::string variantKey = MakeVariantKey(pipelineName, passName, attributeMask);
+        std::string variantKey = MakeVariantKey(pipelineName, passName, resolvedAttributeMask);
         
         // Check if already compiled
         auto variantIt = pipelineIt->second.variants.find(variantKey);
         if (variantIt != pipelineIt->second.variants.end()) {
             // Track usage for hot reload
-            TrackVariantUsage(pipelineName, passName, attributeMask);
+            TrackVariantUsage(pipelineName, passName, resolvedAttributeMask);
             return &variantIt->second;
         }
         
         // Compile on demand
         CompilationConfig variantConfig = config;
-        variantConfig.vertexPulling.attributeMask = attributeMask;
+        variantConfig.vertexPulling.attributeMask = resolvedAttributeMask;
         
         if (!CompileVariant(pipelineIt->second, passName, variantConfig)) {
             return nullptr;
@@ -257,50 +266,57 @@ public:
     CompiledVariant* GetOrCompileVariant(
         const std::string& pipelineName,
         const std::string& passName,
-        const std::vector<VertexAttributeType>& activeAttributes,
+        const std::vector<std::string>& activeAttributes,
         const CompilationConfig& config = CompilationConfig()
     ) {
-        u8 mask = CalculateAttributeMask(activeAttributes);
+        auto pipelineIt = pipelineShaders.find(pipelineName);
+        if (pipelineIt == pipelineShaders.end()) {
+            return nullptr;
+        }
+        if (!EnsureASTCached(pipelineIt->second)) {
+            return nullptr;
+        }
+
+        const AST& ast = pipelineIt->second.cachedContext->ast;
+        if (ast.pipelines.count == 0) {
+            return nullptr;
+        }
+
+        const u32 mask = BuildNamedAttributeMask(
+            ast,
+            ast.pipelines[0],
+            activeAttributes);
         return GetOrCompileVariant(pipelineName, passName, mask, config);
     }
-    
-    // ========================================================================
-    // Precompilation
-    // ========================================================================
-    
-    // Precompile common variants based on usage patterns
-    void PrecompileCommonVariants(const CompilationConfig& config = CompilationConfig()) {
-        // Common attribute combinations
-        const u8 commonMasks[] = {
-            // Static meshes: position + normal + texcoord
-            AttributeMask(VertexAttributeType::POSITION) | 
-            AttributeMask(VertexAttributeType::NORMAL) | 
-            AttributeMask(VertexAttributeType::TEXCOORD),
-            
-            // Static meshes with tangents (for normal mapping)
-            AttributeMask(VertexAttributeType::POSITION) | 
-            AttributeMask(VertexAttributeType::NORMAL) | 
-            AttributeMask(VertexAttributeType::TEXCOORD) |
-            AttributeMask(VertexAttributeType::TANGENT) |
-            AttributeMask(VertexAttributeType::BITANGENT),
-            
-            // Animated meshes: full attribute set
-            AttributeMask(VertexAttributeType::POSITION) | 
-            AttributeMask(VertexAttributeType::NORMAL) | 
-            AttributeMask(VertexAttributeType::TEXCOORD) |
-            AttributeMask(VertexAttributeType::BONE_INDICES) |
-            AttributeMask(VertexAttributeType::BONE_WEIGHTS),
-        };
-        
+
+    // Precompile one declared-attribute variant per pass. Unlike the old
+    // "common mesh" presets, this is derived only from the shader source.
+    void PrecompileDeclaredVariants(const CompilationConfig& config = CompilationConfig()) {
         for (auto& [pipelineName, shaderSet] : pipelineShaders) {
-            // Get pass names from render config
-            for (const auto& pass : renderConfig->passes) {
-                if (pass.descriptor.pipelineName == pipelineName) {
-                    for (u8 mask : commonMasks) {
-                        CompilationConfig variantConfig = config;
-                        variantConfig.vertexPulling.attributeMask = mask;
-                        CompileVariant(shaderSet, pass.name, variantConfig);
+            if (!EnsureASTCached(shaderSet)) {
+                continue;
+            }
+            AST& ast = shaderSet.cachedContext->ast;
+            if (ast.pipelines.count == 0) {
+                continue;
+            }
+
+            const PipelineData& pipeline = ast.pipelines[0];
+            for (const auto& passConfig : renderConfig->passes) {
+                if (passConfig.descriptor.pipelineName != pipelineName) {
+                    continue;
+                }
+                for (u32 i = 0; i < pipeline.passes.count; i++) {
+                    const PassData& pass = ast.GetPass(pipeline.passes[i]);
+                    if (pass.name.view(shaderSet.cachedParser->sourceBase()) != passConfig.name) {
+                        continue;
                     }
+
+                    CompilationConfig variantConfig = config;
+                    variantConfig.vertexPulling.attributeMask =
+                        BuildPassAttributeMask(ast, pipeline, pass);
+                    CompileVariant(shaderSet, passConfig.name, variantConfig);
+                    break;
                 }
             }
         }
@@ -315,8 +331,11 @@ public:
             if (shaderSet.bwslPath == bwslPath) {
                 // Invalidate cached AST
                 shaderSet.astCached = false;
-                shaderSet.cachedContext.reset();
                 shaderSet.cachedParser.reset();
+                shaderSet.cachedLexer.reset();
+                shaderSet.cachedTokenStream.reset();
+                shaderSet.cachedContext.reset();
+                shaderSet.cachedSource.clear();
                 
                 // Clear all variants
                 shaderSet.variants.clear();
@@ -367,7 +386,7 @@ private:
     struct VariantUsage {
         std::string pipelineName;
         std::string passName;
-        u8 attributeMask;
+        u32 attributeMask;
         u32 frameLastUsed;
     };
     std::vector<VariantUsage> recentVariants;
@@ -377,21 +396,97 @@ private:
     // Internal Implementation
     // ========================================================================
     
-    static std::string MakeVariantKey(const std::string& pipeline, const std::string& pass, u8 mask) {
+    static std::string MakeVariantKey(const std::string& pipeline, const std::string& pass, u32 mask) {
         char buffer[128];
-        snprintf(buffer, sizeof(buffer), "%s.%s.0x%02X", pipeline.c_str(), pass.c_str(), mask);
+        snprintf(buffer, sizeof(buffer), "%s.%s.0x%08X", pipeline.c_str(), pass.c_str(), mask);
         return buffer;
     }
     
-    static u8 CalculateAttributeMask(const std::vector<VertexAttributeType>& attributes) {
-        u8 mask = 0;
-        for (auto attr : attributes) {
-            mask |= AttributeMask(attr);
+    static bool MaskContainsAttribute(u32 mask, u32 attributeIndex) {
+        return attributeIndex < 32 && (mask & (1u << attributeIndex)) != 0;
+    }
+
+    static u32 BuildPassAttributeMask(const AST& ast,
+                                      const PipelineData& pipeline,
+                                      const PassData& pass) {
+        u32 mask = 0;
+
+        auto addDeclaredAttribute = [&](u32 nameHash) {
+            for (u32 i = 0; i < pipeline.attributes.count; i++) {
+                const AttributeDeclData& attr = ast.GetAttributeDecl(pipeline.attributes[i]);
+                if (attr.name.nameHash == nameHash && attr.attributeIndex < 32) {
+                    mask |= (1u << attr.attributeIndex);
+                    return;
+                }
+            }
+        };
+
+        addDeclaredAttribute(Utils::HashStr("position"));
+
+        if (pass.usedAttributes.count > 0) {
+            for (u32 i = 0; i < pass.usedAttributes.count; i++) {
+                addDeclaredAttribute(pass.usedAttributes[i].nameHash);
+            }
+            return mask;
+        }
+
+        for (u32 i = 0; i < pipeline.attributes.count; i++) {
+            const AttributeDeclData& attr = ast.GetAttributeDecl(pipeline.attributes[i]);
+            if (attr.attributeIndex < 32) {
+                mask |= (1u << attr.attributeIndex);
+            }
+        }
+
+        return mask;
+    }
+
+    static u32 BuildNamedAttributeMask(const AST& ast,
+                                       const PipelineData& pipeline,
+                                       const std::vector<std::string>& activeAttributes) {
+        u32 mask = 0;
+
+        auto addDeclaredAttribute = [&](u32 nameHash) {
+            for (u32 i = 0; i < pipeline.attributes.count; i++) {
+                const AttributeDeclData& attr = ast.GetAttributeDecl(pipeline.attributes[i]);
+                if (attr.name.nameHash == nameHash && attr.attributeIndex < 32) {
+                    mask |= (1u << attr.attributeIndex);
+                    return;
+                }
+            }
+        };
+
+        addDeclaredAttribute(Utils::HashStr("position"));
+        for (const std::string& attributeName : activeAttributes) {
+            addDeclaredAttribute(Utils::HashStr(attributeName.c_str()));
         }
         return mask;
     }
+
+    u32 ResolveAttributeMaskForPass(PipelineShaderSet& shaderSet,
+                                    const std::string& passName,
+                                    u32 requestedMask) {
+        if (requestedMask != 0) {
+            return requestedMask;
+        }
+        if (!EnsureASTCached(shaderSet)) {
+            return 0;
+        }
+        AST& ast = shaderSet.cachedContext->ast;
+        if (ast.pipelines.count == 0) {
+            return 0;
+        }
+
+        const PipelineData& pipeline = ast.pipelines[0];
+        for (u32 i = 0; i < pipeline.passes.count; i++) {
+            const PassData& pass = ast.GetPass(pipeline.passes[i]);
+            if (pass.name.view(shaderSet.cachedParser->sourceBase()) == passName) {
+                return BuildPassAttributeMask(ast, pipeline, pass);
+            }
+        }
+        return 0;
+    }
     
-    void TrackVariantUsage(const std::string& pipeline, const std::string& pass, u8 mask) {
+    void TrackVariantUsage(const std::string& pipeline, const std::string& pass, u32 mask) {
         // Remove old entry if exists
         recentVariants.erase(
             std::remove_if(recentVariants.begin(), recentVariants.end(),
@@ -459,17 +554,26 @@ private:
             return false;
         }
         
-        std::string source((std::istreambuf_iterator<char>(file)),
-                           std::istreambuf_iterator<char>());
+        shaderSet.cachedSource.assign(std::istreambuf_iterator<char>(file),
+                                      std::istreambuf_iterator<char>());
         file.close();
         
         // Create compilation context
         shaderSet.cachedContext = std::make_unique<CompilationContext>();
+        shaderSet.cachedTokenStream = std::make_unique<TokenStream>();
+        shaderSet.cachedTokenStream->Init(&shaderSet.cachedContext->arena,
+                                          shaderSet.cachedSource.c_str(),
+                                          shaderSet.cachedSource.length());
         
-        // Create lexer and parser
-        auto lexer = std::make_unique<Lexer>(source);
+        // Create lexer and parser. The parser keeps pointers to both, so the
+        // shader set owns them for as long as the AST is cached.
+        shaderSet.cachedLexer = std::make_unique<Lexer>(shaderSet.cachedSource,
+                                                        *shaderSet.cachedTokenStream);
+        shaderSet.cachedLexer->Tokenize();
         shaderSet.cachedParser = std::make_unique<Parser>();
-        shaderSet.cachedParser->Init(lexer.get(), shaderSet.cachedContext.get());
+        shaderSet.cachedParser->Init(shaderSet.cachedLexer.get(),
+                                     shaderSet.cachedTokenStream.get(),
+                                     shaderSet.cachedContext.get());
         
         // Parse the pipeline
         shaderSet.cachedParser->ParsePipeline();
@@ -504,9 +608,7 @@ private:
             return false;
         }
         
-        u8 attributeMask = config.vertexPulling.attributeMask;
-        std::string variantKey = MakeVariantKey(shaderSet.pipelineName, passName, attributeMask);
-        
+        u32 attributeMask = config.vertexPulling.attributeMask;
         // Find the pass in AST
         AST& ast = shaderSet.cachedContext->ast;
         if (ast.pipelines.count == 0) {
@@ -529,6 +631,12 @@ private:
         }
         
         const PassData& targetPass = ast.GetPass(targetPassRef);
+        if (attributeMask == 0) {
+            attributeMask = BuildPassAttributeMask(ast, pipeline, targetPass);
+        }
+        CompilationConfig resolvedConfig = config;
+        resolvedConfig.vertexPulling.attributeMask = attributeMask;
+        std::string variantKey = MakeVariantKey(shaderSet.pipelineName, passName, attributeMask);
         
         // Create the compiled variant
         CompiledVariant& variant = shaderSet.variants[variantKey];
@@ -546,7 +654,7 @@ private:
         // Compile vertex shader if present
         if (!targetPass.vertexShader.IsNull()) {
             if (!CompileShaderStage(shaderSet, targetPass.vertexShader, 
-                                    ShaderStage::Vertex, config, variant.vertexSpirv,
+                                    ShaderStage::Vertex, resolvedConfig, variant.vertexSpirv,
                                     &vertexAnalysis, &reflectionSamplerUses)) {
                 shaderSet.variants.erase(variantKey);
                 return false;
@@ -556,7 +664,7 @@ private:
         
         // Compile fragment shader if present
         if (!targetPass.fragmentShader.IsNull()) {
-            CompilationConfig fragConfig = config;
+            CompilationConfig fragConfig = resolvedConfig;
             fragConfig.stage = ShaderStage::Fragment;
             if (!CompileShaderStage(shaderSet, targetPass.fragmentShader,
                                     ShaderStage::Fragment, fragConfig, variant.fragmentSpirv,
@@ -568,8 +676,8 @@ private:
         }
 
         // Populate attribute bindings for reflection
-        PopulateAttributeBindings(variant, config);
-        PopulateResourceBindings(shaderSet, pipeline, targetPass, config, variant,
+        PopulateAttributeBindings(variant, ast, pipeline, shaderSet.cachedParser->sourceBase(), resolvedConfig);
+        PopulateResourceBindings(shaderSet, pipeline, targetPass, resolvedConfig, variant,
                                  hasVertexAnalysis ? &vertexAnalysis : nullptr,
                                  hasFragmentAnalysis ? &fragmentAnalysis : nullptr,
                                  nullptr,
@@ -633,6 +741,10 @@ private:
         // Specialize for this variant's attribute mask
         IR::OptimizationPass optimizer;
         optimizer.SpecializeForVariant(&lowering.program, config.vertexPulling.attributeMask);
+        if (config.vertexPulling.attributeMask != 0) {
+            optimizer.EliminateUnavailableAttributes(&lowering.program,
+                                                     config.vertexPulling.attributeMask);
+        }
         
         // Dead code elimination - removes unused attribute code paths
         optimizer.EliminateDeadCode(&lowering.program);
@@ -712,15 +824,22 @@ private:
         builder.SetVertexPullingConfig(vpConfig);
     }
     
-    void PopulateAttributeBindings(CompiledVariant& variant, const CompilationConfig& config) {
+    void PopulateAttributeBindings(CompiledVariant& variant,
+                                   const AST& ast,
+                                   const PipelineData& pipeline,
+                                   const char* sourceBase,
+                                   const CompilationConfig& config) {
         u32 binding = config.vertexPulling.baseBufferBinding;
+        variant.attributeBindings.clear();
         
-        for (u8 i = 0; i < static_cast<u8>(VertexAttributeType::COUNT); i++) {
-            if (variant.attributeMask & (1 << i)) {
+        for (u32 i = 0; i < pipeline.attributes.count; i++) {
+            const AttributeDeclData& attr = ast.GetAttributeDecl(pipeline.attributes[i]);
+            if (MaskContainsAttribute(variant.attributeMask, attr.attributeIndex)) {
                 CompiledVariant::AttributeBinding attrBinding;
-                attrBinding.type = static_cast<VertexAttributeType>(i);
+                attrBinding.name = attr.name.ToString(sourceBase);
+                attrBinding.attributeIndex = attr.attributeIndex;
                 attrBinding.binding = binding;
-                attrBinding.location = i;
+                attrBinding.location = attr.attributeIndex;
                 variant.attributeBindings.push_back(attrBinding);
                 
                 if (config.vertexPulling.mode == VertexInputMode::SeparateBuffers) {
@@ -762,7 +881,7 @@ private:
             : ResourceReflectionConfig::VertexPullingMode::SeparateBuffers;
         reflectionConfig.attributeMask = config.vertexPulling.attributeMask;
         if (reflectionConfig.attributeMask == 0 && vertexAnalysis) {
-            reflectionConfig.attributeMask = static_cast<u8>(vertexAnalysis->usedAttributeMask);
+            reflectionConfig.attributeMask = vertexAnalysis->usedAttributeMask;
         }
         reflectionConfig.baseBufferBinding = config.vertexPulling.baseBufferBinding;
         reflectionConfig.descriptorSet = config.vertexPulling.descriptorSet;

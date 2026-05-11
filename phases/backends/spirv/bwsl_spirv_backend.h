@@ -6,7 +6,7 @@
 #include "bwsl_symbol_table.h"
 #include "bwsl_ast_soa.h"
 #include "bwsl_defs.h"
-#include "bwsl_compiler_types.h"  // For ShaderStage, VertexAttributeType
+#include "bwsl_compiler_types.h"  // For ShaderStage
 #include "bwsl_arena.h"
 #include "vendor/SPIRV-Headers/include/spirv/unified1/spirv.hpp"
 #include <vector>
@@ -206,7 +206,7 @@ struct SPIRVBuilder {
     
     struct VertexPullingConfig {
         VertexInputMode mode = VertexInputMode::SeparateBuffers;
-        u8 attributeMask = 0;          // Which attributes are active
+        u32 attributeMask = 0;         // Active bits from attributes {} declaration order
         u32 baseBufferBinding = 0;     // Starting binding index for attribute buffers
         u32 descriptorSet = 0;         // Descriptor set for vertex buffers
         u32 vertexIdBinding = 0;       // Binding for vertex ID (when using pulling)
@@ -215,8 +215,8 @@ struct SPIRVBuilder {
     VertexPullingConfig vertexPullingConfig;
     
     // Storage buffer IDs for vertex pulling (one per attribute)
-    u32 attributeBufferIds[8] = {0};
-    u32 attributeBufferPtrTypeIds[8] = {0};
+    u32 attributeBufferIds[16] = {0};
+    u32 attributeBufferPtrTypeIds[16] = {0};
     
     // Built-in input variables (vertex shader)
     u32 vertexIdVarId = 0;     // BuiltIn VertexIndex (gl_VertexID)
