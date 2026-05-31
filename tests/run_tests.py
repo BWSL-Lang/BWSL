@@ -360,6 +360,10 @@ def has_spirv_val_tooling() -> bool:
     return find_tool("spirv-val") is not None
 
 
+def has_spirv_dis_tooling() -> bool:
+    return find_tool("spirv-dis") is not None
+
+
 def validate_spirv(spv_path: Path,
                    target_env: str = "vulkan1.2") -> tuple[bool, str]:
     """Run spirv-val on a SPIR-V binary. Returns (ok, stderr-on-failure).
@@ -574,13 +578,15 @@ def check_translation_expectations(output_dir: Path, test_name: str,
                     return False, f"{stage}: {message}"
                 texts[key] = path.read_text(encoding="utf-8")
 
+        spirv_dis_available = has_spirv_dis_tooling()
         if any(name.startswith("ir_") or name.startswith("spirv_") for name in expectations):
             path, message = find_stage_file(output_dir, test_name, stage, "internals.json")
             if path is None:
                 return False, f"{stage}: {message}"
             data = json.loads(path.read_text(encoding="utf-8"))
             texts["ir"] = data.get("ir", "")
-            texts["spirv"] = data.get("spirv_dis", "")
+            if spirv_dis_available:
+                texts["spirv"] = data.get("spirv_dis", "")
 
         for key, label in (
             ("ir", "IR"),
@@ -752,12 +758,14 @@ def check_variant_specialization(output_dir: Path, test_name: str, expectations:
     vert_internals = json.loads(vert_internals_path.read_text(encoding="utf-8"))
     frag_internals = json.loads(frag_internals_path.read_text(encoding="utf-8"))
 
+    spirv_dis_available = has_spirv_dis_tooling()
+    frag_spirv_dis = frag_internals.get("spirv_dis", "") if spirv_dis_available else ""
     checks = [
         ("vertex metal", vert_metal, expectations.get("vert_metal_contains"), expectations.get("vert_metal_not_contains")),
         ("vertex hlsl", vert_hlsl, expectations.get("vert_hlsl_contains"), expectations.get("vert_hlsl_not_contains")),
         ("vertex ir", vert_internals.get("ir", ""), expectations.get("vert_ir_contains"), expectations.get("vert_ir_not_contains")),
         ("fragment ir", frag_internals.get("ir", ""), expectations.get("frag_ir_contains"), expectations.get("frag_ir_not_contains")),
-        ("fragment spirv", frag_internals.get("spirv_dis", ""), expectations.get("frag_spirv_contains"), expectations.get("frag_spirv_not_contains")),
+        ("fragment spirv", frag_spirv_dis, expectations.get("frag_spirv_contains") if spirv_dis_available else None, expectations.get("frag_spirv_not_contains") if spirv_dis_available else None),
     ]
 
     for label, text, contains, not_contains in checks:
