@@ -38,6 +38,8 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   }
   program.metadata = (u32 *)pool->Allocate(initialSize * sizeof(u32), 64);
   memset(program.metadata, 0, initialSize * sizeof(u32));
+  memset(program.outputInterpolations, 0, sizeof(program.outputInterpolations));
+  memset(program.inputInterpolations, 0, sizeof(program.inputInterpolations));
   program.branchTrueTargets =
       (u32 *)pool->Allocate(initialSize * sizeof(u32), 64);
   program.branchFalseTargets =
@@ -269,4 +271,3 @@ inline void IRLowering::LowerBlock(NodeRef blockRef) {
   variableRegisters = savedVariableRegisters;
   variableStructTypes = savedVariableStructTypes;
 }
-

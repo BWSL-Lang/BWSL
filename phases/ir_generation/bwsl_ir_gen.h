@@ -65,6 +65,10 @@ struct IRProgram {
     alignas(64) u8* resourceStageFlags;   // Which stages need this
     u32 resourceCount;
 
+    // Interpolation mode per vertex output / fragment input slot.
+    u8 outputInterpolations[32];
+    u8 inputInterpolations[32];
+
     alignas(64) u32* structureInfo;  // Packed: type:4 | mergeTarget:28
     alignas(64) u32* continueInfo;   // Continue target for loops (instruction index), 0xFFFFFFFF = none
 

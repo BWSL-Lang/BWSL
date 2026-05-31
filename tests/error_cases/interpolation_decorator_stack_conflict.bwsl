@@ -1,0 +1,19 @@
+pipeline InterpolationDecoratorStackConflict {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            @flat @noperspective output.value = 1.0;
+        }
+
+        fragment {
+            float value = input.value;
+            output.color = float4(value, value, value, 1.0);
+        }
+    }
+}

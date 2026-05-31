@@ -1,0 +1,17 @@
+pipeline InterpolationDecoratorBuiltinOutput {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            @flat output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

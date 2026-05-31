@@ -71,6 +71,12 @@ struct ArenaString {
     }
 };
 
+enum class InterpolationMode : u8 {
+    Default = 0,
+    Flat,
+    NoPerspective,
+};
+
 enum class CoreType : u8 {
     
     // Invalid/Not a type

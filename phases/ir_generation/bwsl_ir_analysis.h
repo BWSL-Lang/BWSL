@@ -56,6 +56,8 @@ struct IRAnalysis {
     u8 attributeTypes[16];        // CoreType for each attribute
     u8 outputTypes[32];           // CoreType for each output slot
     u8 inputTypes[16];            // CoreType for each fragment input
+    u8 outputInterpolations[32];   // InterpolationMode per output slot
+    u8 inputInterpolations[32];    // InterpolationMode per input slot
     
     // Capability requirements (flags)
     enum CapabilityFlags : u32 {

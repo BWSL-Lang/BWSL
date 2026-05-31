@@ -6,6 +6,30 @@
 namespace BWSL {
 namespace GLES {
 
+static const char* InterpolationQualifier(InterpolationMode interpolation) {
+    switch (interpolation) {
+        case InterpolationMode::Flat:
+            return "flat ";
+        case InterpolationMode::NoPerspective:
+            return "noperspective ";
+        case InterpolationMode::Default:
+        default:
+            return "";
+    }
+}
+
+static bool UsesNoPerspectiveInterpolation(const IR::PassVaryingContext* varyings) {
+    if (!varyings) {
+        return false;
+    }
+    for (u32 i = 0; i < varyings->count; i++) {
+        if (varyings->varyings[i].interpolation == InterpolationMode::NoPerspective) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ============================================================================
 // Analysis Pass - Count register uses for inlining decisions
 // ============================================================================
@@ -111,6 +135,9 @@ void GLESBuilder::EmitHeader() {
         out.Lit("#version 310 es\n");
     } else {
         out.Lit("#version 300 es\n");
+        if (UsesNoPerspectiveInterpolation(varyings)) {
+            out.Lit("#extension GL_NV_shader_noperspective_interpolation : require\n");
+        }
     }
     out.Lit("precision highp float;\n");
     out.Lit("precision highp int;\n");
@@ -297,6 +324,7 @@ void GLESBuilder::EmitInputs() {
         // Fragment inputs are varyings from vertex shader
         if (varyings) {
             for (u32 i = 0; i < varyings->count; i++) {
+                out.Str(InterpolationQualifier(varyings->varyings[i].interpolation));
                 out.Lit("in ");
                 EmitType(static_cast<u16>(varyings->varyings[i].type));
                 out.Lit(" v_");
@@ -352,6 +380,7 @@ void GLESBuilder::EmitOutputs() {
         // Vertex outputs are varyings to fragment shader
         if (varyings) {
             for (u32 i = 0; i < varyings->count; i++) {
+                out.Str(InterpolationQualifier(varyings->varyings[i].interpolation));
                 out.Lit("out ");
                 EmitType(static_cast<u16>(varyings->varyings[i].type));
                 out.Lit(" v_");

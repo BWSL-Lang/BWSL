@@ -155,6 +155,11 @@ ERROR_CASE_TESTS = {
     "eval_while_bad_condition_type.bwsl": "Eval while condition must resolve to bool, int, uint, or float",
     "eval_while_iteration_limit.bwsl": "Eval while exceeded iteration limit",
     "eval_while_runtime_data.bwsl": "Eval while condition must be a compile-time value",
+    "interpolation_decorator_builtin_output.bwsl": "interpolation decorators can only be used on vertex-to-fragment varyings",
+    "interpolation_decorator_conflict.bwsl": "conflicting interpolation decorators for varying",
+    "interpolation_decorator_non_output.bwsl": "@flat and @noperspective can only decorate output assignments",
+    "interpolation_decorator_noperspective_int.bwsl": "@noperspective can only be used on floating-point varyings",
+    "interpolation_decorator_stack_conflict.bwsl": "Conflicting interpolation decorators on output assignment",
 }
 
 FORBIDDEN_SOURCE_ALIAS_NAMES = (
@@ -180,6 +185,50 @@ TEXT_GOLDEN_SUFFIXES = {".metal", ".hlsl", ".glsl", ".gles"}
 EQUIV_BACKENDS = ("spirv", "hlsl", "glsl")
 
 TRANSLATION_EXPECTATION_TESTS = {
+    "interpolation_decorators": {
+        "vert": {
+            "spirv_contains": [
+                "OpDecorate %varying0 Flat",
+                "OpDecorate %varying1 NoPerspective",
+            ],
+            "hlsl_contains": [
+                "nointerpolation float varying0 : TEXCOORD0",
+                "noperspective float2 varying1 : TEXCOORD1",
+            ],
+            "glsl_contains": [
+                "layout(location = 0) flat out float varying0",
+                "layout(location = 1) noperspective out vec2 varying1",
+            ],
+            "gles_contains": [
+                "#extension GL_NV_shader_noperspective_interpolation : require",
+                "flat out float varying0",
+                "noperspective out vec2 varying1",
+            ],
+        },
+        "frag": {
+            "spirv_contains": [
+                "OpDecorate %varying0 Flat",
+                "OpDecorate %varying1 NoPerspective",
+            ],
+            "metal_contains": [
+                "float varying0 [[user(locn0), flat]]",
+                "float2 varying1 [[user(locn1), center_no_perspective]]",
+            ],
+            "hlsl_contains": [
+                "nointerpolation float varying0 : TEXCOORD0",
+                "noperspective float2 varying1 : TEXCOORD1",
+            ],
+            "glsl_contains": [
+                "layout(location = 0) flat in float varying0",
+                "layout(location = 1) noperspective in vec2 varying1",
+            ],
+            "gles_contains": [
+                "#extension GL_NV_shader_noperspective_interpolation : require",
+                "flat in highp float varying0",
+                "noperspective in highp vec2 varying1",
+            ],
+        },
+    },
     "ssa_complex": {
         "vert": {
             "ir_contains": ["PHI", "BRANCH"],

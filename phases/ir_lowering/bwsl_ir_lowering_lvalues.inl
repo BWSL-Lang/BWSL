@@ -419,8 +419,8 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
             nameBuf[len] = '\0';
             nameStr = nameBuf;
           }
-          u32 slot =
-              ResolveOutputSlotForStore(outputNameHash, outputType, nameStr);
+          u32 slot = ResolveOutputSlotForStore(outputNameHash, outputType,
+                                               nameStr, assign.interpolation);
 
           u16 outputReg = AllocateRegister();
           SetRegisterType(outputReg, outputType);
@@ -518,7 +518,8 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
           nameBuf[len] = '\0';
           nameStr = nameBuf;
         }
-        u32 slot = ResolveOutputSlotForStore(nameHash, valueType, nameStr);
+        u32 slot = ResolveOutputSlotForStore(nameHash, valueType, nameStr,
+                                             assign.interpolation);
 
         // Emit OP_STORE_OUTPUT with slot in operand
         builder.EmitInstruction(OP_STORE_OUTPUT, valueReg, slot);
@@ -1590,6 +1591,11 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
     // Map varying name to slot index using pass context if available
     u32 inputSlot = GetInputSlotIndex(memberHash);
     builder.EmitInstruction(OP_LOAD_INPUT, dest, inputSlot);
+    if (inputSlot < 32 && currentPassVaryings) {
+      u32 varyingIndex = inputSlot - OutputSlot::VARYING0;
+      program.inputInterpolations[inputSlot] =
+          static_cast<u8>(currentPassVaryings->GetInterpolation(varyingIndex));
+    }
 
     // Get type from varying context if available (preferred)
     // Otherwise fall back to pipeline attribute declarations
@@ -1764,15 +1770,41 @@ inline CoreType IRLowering::GetBuiltinOutputType(u32 nameHash) {
   return CoreType::INVALID;
 }
 
-inline u32 IRLowering::ResolveOutputSlotForStore(u32 nameHash, CoreType valueType,
-                              const char *nameStr) {
+static inline bool IsPerspectiveInterpolationType(CoreType type) {
+  return type == CoreType::FLOAT || type == CoreType::FLOAT2 ||
+         type == CoreType::FLOAT3 || type == CoreType::FLOAT4;
+}
+
+inline u32 IRLowering::ResolveOutputSlotForStore(
+    u32 nameHash, CoreType valueType, const char *nameStr,
+    InterpolationMode interpolation) {
   if (IsBuiltinOutput(nameHash)) {
+    if (interpolation != InterpolationMode::Default) {
+      ReportError("Error: interpolation decorators can only be used on vertex-to-fragment varyings\n");
+    }
     return GetBuiltinOutputSlot(nameHash);
   }
+  if (interpolation == InterpolationMode::NoPerspective &&
+      !IsPerspectiveInterpolationType(valueType)) {
+    ReportError("Error: @noperspective can only be used on floating-point varyings\n");
+  }
+  if (interpolation != InterpolationMode::Default &&
+      (currentStage != ShaderStage::Vertex || !currentPassVaryings)) {
+    ReportError("Error: interpolation decorators can only be used on vertex-to-fragment varyings\n");
+  }
   if (currentPassVaryings && currentStage == ShaderStage::Vertex) {
-    u32 varyingIndex =
-        currentPassVaryings->AddOrGetSlot(nameHash, valueType, nameStr);
-    return OutputSlot::VARYING0 + varyingIndex;
+    bool conflict = false;
+    u32 varyingIndex = currentPassVaryings->AddOrGetSlot(
+        nameHash, valueType, nameStr, interpolation, &conflict);
+    if (conflict) {
+      ReportError("Error: conflicting interpolation decorators for varying\n");
+    }
+    u32 slot = OutputSlot::VARYING0 + varyingIndex;
+    if (slot < 32) {
+      program.outputInterpolations[slot] = static_cast<u8>(
+          currentPassVaryings->GetInterpolation(varyingIndex));
+    }
+    return slot;
   }
   return OutputSlot::VARYING0;
 }

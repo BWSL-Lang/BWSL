@@ -35,6 +35,7 @@ struct VaryingInfo {
   u32 nameHash;  // Hash of the varying name (e.g., "worldPos")
   u32 slot;      // Assigned slot index (0, 1, 2, ...)
   CoreType type; // Type of the varying (FLOAT3, FLOAT4, etc.)
+  InterpolationMode interpolation;
   char name[32]; // Actual name string for GLES output
 };
 
@@ -43,10 +44,22 @@ struct PassVaryingContext {
   u32 count = 0;
 
   // Add a new varying or return existing slot
-  u32 AddOrGetSlot(u32 nameHash, CoreType type, const char *nameStr = nullptr) {
+  u32 AddOrGetSlot(u32 nameHash, CoreType type, const char *nameStr = nullptr,
+                   InterpolationMode interpolation = InterpolationMode::Default,
+                   bool *conflict = nullptr) {
+    if (conflict) {
+      *conflict = false;
+    }
     // Check if already exists
     for (u32 i = 0; i < count; i++) {
       if (varyings[i].nameHash == nameHash) {
+        if (interpolation != InterpolationMode::Default) {
+          if (varyings[i].interpolation == InterpolationMode::Default) {
+            varyings[i].interpolation = interpolation;
+          } else if (varyings[i].interpolation != interpolation && conflict) {
+            *conflict = true;
+          }
+        }
         return varyings[i].slot;
       }
     }
@@ -59,6 +72,7 @@ struct PassVaryingContext {
     varyings[count].nameHash = nameHash;
     varyings[count].slot = slot;
     varyings[count].type = type;
+    varyings[count].interpolation = interpolation;
     // Store actual name for GLES output
     if (nameStr) {
       strncpy(varyings[count].name, nameStr, 31);
@@ -84,6 +98,12 @@ struct PassVaryingContext {
     if (slot < count)
       return varyings[slot].type;
     return CoreType::FLOAT3;
+  }
+
+  InterpolationMode GetInterpolation(u32 slot) const {
+    if (slot < count)
+      return varyings[slot].interpolation;
+    return InterpolationMode::Default;
   }
 };
 
@@ -357,7 +377,8 @@ struct IRLowering {
   CoreType GetBuiltinOutputType(u32 nameHash);
 
   u32 ResolveOutputSlotForStore(u32 nameHash, CoreType valueType,
-                                const char *nameStr);
+                                const char *nameStr,
+                                InterpolationMode interpolation);
 
   u32 ResolveOutputSlotForLoad(u32 nameHash);
 

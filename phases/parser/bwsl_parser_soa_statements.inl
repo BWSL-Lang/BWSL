@@ -1,6 +1,28 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Blocks, statements, and local/custom variable declarations.
 
+static bool IsOutputAssignmentTarget(AST* ast, NodeRef target) {
+    if (!target.IsValid()) {
+        return false;
+    }
+
+    if (target.Type() == ASTNodeType::ARRAY_ACCESS) {
+        return IsOutputAssignmentTarget(ast, ast->GetArrayAccess(target).array);
+    }
+
+    if (target.Type() != ASTNodeType::MEMBER_ACCESS) {
+        return false;
+    }
+
+    const MemberAccessData& access = ast->GetMemberAccess(target);
+    if (access.object.Type() == ASTNodeType::IDENTIFIER) {
+        const IdentifierData& obj = ast->GetIdentifier(access.object);
+        return obj.identifierKind == SpecialIdentifier::OUTPUT;
+    }
+
+    return IsOutputAssignmentTarget(ast, access.object);
+}
+
 NodeRef Parser::ParseBlock() {
     PARSER_TIME_BLOCK();
     SourceLocation loc = getLocation(stream->GetOffset(previous));
@@ -24,6 +46,39 @@ NodeRef Parser::ParseStatement() {
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     u32 line = loc.line;
     u32 col = loc.column;
+
+    if (Match(TokenType::AT)) {
+        u32 decoHash = Utils::HashStr(stream->GetValue(previous).data(),
+                                      static_cast<u16>(stream->GetLength(previous)));
+        InterpolationMode interpolation = InterpolationMode::Default;
+        if (decoHash == Utils::HashStr("flat")) {
+            interpolation = InterpolationMode::Flat;
+        } else if (decoHash == Utils::HashStr("noperspective")) {
+            interpolation = InterpolationMode::NoPerspective;
+        } else {
+            Error("Expected @flat or @noperspective before output assignment");
+            return NodeRef::Null();
+        }
+
+        NodeRef stmt = ParseStatement();
+        if (!stmt.IsValid()) {
+            return stmt;
+        }
+        if (stmt.Type() != ASTNodeType::ASSIGNMENT ||
+            !IsOutputAssignmentTarget(ast, ast->GetAssignment(stmt).target)) {
+            Error("@flat and @noperspective can only decorate output assignments");
+            return stmt;
+        }
+
+        AssignmentData& assign = ast->GetAssignment(stmt);
+        if (assign.interpolation != InterpolationMode::Default &&
+            assign.interpolation != interpolation) {
+            Error("Conflicting interpolation decorators on output assignment");
+            return stmt;
+        }
+        assign.interpolation = interpolation;
+        return stmt;
+    }
 
     if (Match(TokenType::EVAL)) {
         if (Check(TokenType::LEFT_BRACE)) {
