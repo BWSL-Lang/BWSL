@@ -1,0 +1,23 @@
+// Regression: fragment output.depth must write the backend depth output.
+pipeline OutputDepthBuiltin {
+    attributes { }
+
+    pass "Main" {
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.5, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float depth = 0.25 + input.uv.x * 0.5;
+            output.color = float4(input.uv.x, input.uv.y, depth, 1.0);
+            output.depth = depth;
+        }
+    }
+}

@@ -1091,7 +1091,11 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             u16 valueReg = dest;  // Value is in destination, not operand
 
             if (stage == ShaderStage::Fragment) {
-                out.Lit("fragColor = ");
+                if (outputIdx == OutputSlot::DEPTH) {
+                    out.Lit("gl_FragDepth = ");
+                } else {
+                    out.Lit("fragColor = ");
+                }
             } else if (stage == ShaderStage::Vertex) {
                 if (outputIdx == 0) {  // Position output (slot 0)
                     out.Lit("gl_Position = ");

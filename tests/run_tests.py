@@ -229,6 +229,18 @@ TRANSLATION_EXPECTATION_TESTS = {
             ],
         },
     },
+    "output_depth_builtin": {
+        "frag": {
+            "spirv_contains": [
+                "BuiltIn FragDepth",
+                "OpStore %gl_FragDepth",
+            ],
+            "metal_contains": ["[[depth(any)]]"],
+            "hlsl_contains": ["SV_Depth"],
+            "glsl_contains": ["gl_FragDepth"],
+            "gles_contains": ["gl_FragDepth"],
+        },
+    },
     "ssa_complex": {
         "vert": {
             "ir_contains": ["PHI", "BRANCH"],

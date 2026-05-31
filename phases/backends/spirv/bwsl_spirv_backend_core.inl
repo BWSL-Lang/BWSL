@@ -315,6 +315,10 @@ void SPIRVBuilder::EmitEntryPoint() {
       u32 execModeOps[] = {entryPointId, spv::ExecutionModeOriginUpperLeft};
       EmitToSection(&executionModes, spv::OpExecutionMode, execModeOps, 2);
     }
+    if (analysis.usedOutputMask & (1 << OutputSlot::DEPTH)) {
+      u32 execModeOps[] = {entryPointId, spv::ExecutionModeDepthReplacing};
+      EmitToSection(&executionModes, spv::OpExecutionMode, execModeOps, 2);
+    }
     break;
   case ShaderStage::Compute:
     // LocalSize - workgroup size (default 1,1,1 - should be configurable)

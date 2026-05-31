@@ -230,7 +230,6 @@ void SPIRVBuilder::DeclareInputOutput() {
       outputIds[outputCount] = var_id;
       // Store the slot ID (DEPTH=16) for OP_STORE_OUTPUT lookup
       outputLocations[outputCount] = OutputSlot::DEPTH;
-      outputLocations[outputCount] = 0xFF; // Mark as builtin
       outputCount++;
     }
   }
