@@ -70,6 +70,22 @@ SPIRV_CROSS_DIR = vendor/SPIRV-Cross
 SPIRV_CROSS_INCLUDES = -I$(SPIRV_CROSS_DIR)
 SPIRV_CROSS_FLAGS = -DUSE_SPIRV_CROSS_LIB
 
+# SPIRV-Tools (spirv-val, spirv-dis) — built from vendor when not on PATH.
+# Windows users are expected to supply these via the Vulkan SDK instead.
+SPIRV_TOOLS_SRC   = vendor/SPIRV-Tools
+SPIRV_HEADERS_SRC = vendor/SPIRV-Headers
+SPIRV_TOOLS_BUILD = $(BUILD_DIR)/spirv-tools-build
+SPIRV_TOOLS_STAMP = $(SPIRV_TOOLS_BUILD)/.bwsl-built
+
+SPIRV_TEST_DEPS =
+ifneq ($(HOST_OS),windows)
+HAS_SPIRV_VAL := $(shell command -v spirv-val 2>/dev/null)
+HAS_SPIRV_DIS := $(shell command -v spirv-dis 2>/dev/null)
+ifeq ($(and $(HAS_SPIRV_VAL),$(HAS_SPIRV_DIS)),)
+SPIRV_TEST_DEPS = spirv-tools
+endif
+endif
+
 BWSL_INCLUDE_DIRS = -I. -Icore -Icore/middleware \
 	-Iphases/lexing -Iphases/parser -Iphases/evaluation \
 	-Iphases/ir_generation -Iphases/ir_lowering -Iphases/control_flow \
@@ -196,7 +212,7 @@ WASM_SPIRV_INCLUDES = $(BWSL_INCLUDE_DIRS) -Itools
 
 .PHONY: all help bwslc bwslc-debug bwslc-sanitize bwslc-msvc bwslc-msvc-debug \
 	bwslc-win-zig bwslc-win-zig-debug clean wasm wasm-debug test test-sanitize \
-	install equiv_runner
+	install equiv_runner spirv-tools
 
 all: bwslc
 
@@ -208,6 +224,7 @@ help:
 	@echo "  make bwslc-win-zig      Windows cross-build with Zig"
 	@echo "  make wasm               WebAssembly module"
 	@echo "  make wasm-debug         WebAssembly module with debug info"
+	@echo "  make spirv-tools        Build spirv-val/spirv-dis from vendor (auto on make test)"
 	@echo "  make install DOCS_DIR=/path/to/site/public/wasm"
 	@echo "  make clean              Remove build artifacts"
 
@@ -257,6 +274,20 @@ equiv_runner: $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(VULKAN_INCLUDE) -o $(EQUIV_RUNNER_OUT) \
 		$(EQUIV_RUNNER_SRC) $(VULKAN_LIBS)
 	@echo "Built: $(EQUIV_RUNNER_OUT)"
+
+spirv-tools: $(SPIRV_TOOLS_STAMP)
+
+$(SPIRV_TOOLS_STAMP): $(SPIRV_TOOLS_SRC)/CMakeLists.txt | $(BUILD_DIR)
+	cmake -S $(SPIRV_TOOLS_SRC) \
+		-B $(SPIRV_TOOLS_BUILD) \
+		-DCMAKE_BUILD_TYPE=Release \
+		"-DSPIRV-Headers_SOURCE_DIR=$(abspath $(SPIRV_HEADERS_SRC))" \
+		-DSPIRV_SKIP_TESTS=ON \
+		-DSPIRV_WERROR=OFF \
+		-DSPIRV_BUILD_FUZZER=OFF
+	cmake --build $(SPIRV_TOOLS_BUILD) --target spirv-val spirv-dis --parallel
+	@touch $@
+	@echo "Built: $(SPIRV_TOOLS_BUILD)/tools/spirv-val spirv-dis"
 
 # libFuzzer build. Apple's bundled clang ships without libclang_rt.fuzzer on
 # some Xcode versions, so default to Homebrew LLVM when it's installed.
@@ -370,8 +401,8 @@ test:
 		exit 1; \
 	fi
 else
-test: bwslc
-	./tests/run_tests.sh
+test: bwslc $(SPIRV_TEST_DEPS)
+	PATH="$(abspath $(SPIRV_TOOLS_BUILD)/tools):$$PATH" ./tests/run_tests.sh
 endif
 
 # ============================================================================
