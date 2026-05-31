@@ -104,6 +104,10 @@ WIN_WASM_DIR = $(subst /,\,$(WASM_DIR))
 WIN_BWSLC_OUT = $(subst /,\,$(BWSLC_OUT))
 WIN_BWSLC_DEBUG_OUT = $(subst /,\,$(BWSLC_DEBUG_OUT))
 
+# ============================================================================
+# Platform-specific commands and object file rules
+# ============================================================================
+
 ifeq ($(HOST_OS),windows)
 SPIRV_CROSS_WRAPPER_OBJ = $(BUILD_DIR)/spirv_cross_wrapper.obj
 SPIRV_CROSS_WRAPPER_DEBUG_OBJ = $(BUILD_DIR)/spirv_cross_wrapper_debug.obj
