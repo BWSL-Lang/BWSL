@@ -127,6 +127,33 @@ vertex = "Base".vertex
 fragment = null
 ```
 
+## Fragment Outputs
+
+Graphics passes may declare fragment color outputs with an `outputs` block:
+
+```bwsl
+pass "GBuffer" {
+    outputs {
+        color: float4        // location 0
+        bloom: float4        // location 1
+        material: float4 @location(3)
+    }
+
+    fragment {
+        output.color = float4(1.0);
+        output.bloom = float4(0.0);
+        output.material = float4(0.0, 0.5, 1.0, 1.0);
+    }
+}
+```
+
+If a pass omits `outputs`, the fragment stage defaults to the legacy surface:
+`output.color` as color attachment location 0 and `output.depth` as the depth
+builtin. Extra fragment outputs require an explicit `outputs` declaration.
+
+The `outputs` block declares color attachments only. `output.depth` remains a
+builtin depth output and is not listed in `outputs`.
+
 ## Compute Stage Form
 
 Compute stages use:
@@ -164,10 +191,13 @@ The current implementation enforces:
 The current lowering model treats:
 
 - `output.position` as a builtin output in all vertex stages
-- `output.color` as a builtin output in fragment stages
+- `output.color` as a builtin fragment color output when no `outputs` block is
+  specified, or when declared in an `outputs` block
 - `output.depth` as a builtin output in fragment stages
 
-Other `output.*` names become varyings from vertex to fragment.
+Other vertex-stage `output.*` names become varyings from vertex to fragment.
+Other fragment-stage `output.*` names must be declared in the pass `outputs`
+block.
 
 ## Varyings
 

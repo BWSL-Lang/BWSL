@@ -1,0 +1,9 @@
+{
+    "mode": "raster",
+    "width": 8,
+    "height": 8,
+    "mrt": 2,
+    "output_size": 2048,
+    "output_type": "float",
+    "tolerance": 0.0001
+}

@@ -156,6 +156,14 @@ struct ResourceDeclData {
     u8 _pad[3];
 };
 
+struct FragmentOutputDeclData {
+    ArenaString name;
+    ArenaString typeName;
+    TypeInfo typeInfo;
+    u8 location;
+    u8 _pad[3];
+};
+
 // 24 bytes
 struct ForCStyleData {
     NodeRef init;
@@ -255,6 +263,7 @@ struct PassData {
     ArenaString name;
     ArenaArray<ArenaString> usedAttributes;
     ArenaArray<ArenaString> usedResources;
+    ArenaArray<FragmentOutputDeclData> fragmentOutputs;
     ArenaArray<NodeRef> consts;     // Pass-scoped constants
     ArenaArray<NodeRef> functions;  // Pass-scoped functions
     NodeRef vertexShader;
@@ -262,6 +271,8 @@ struct PassData {
     NodeRef computeShader;
     u32 optionalAttributesMask;     // Bitmask of optional attributes (from ? syntax)
     u32 optionalResourcesMask;      // Bitmask of optional resources (from ? syntax)
+    bool hasFragmentOutputs;
+    u8 _pad[3];
 };
 
 struct GraphResourceRef {
@@ -1085,6 +1096,7 @@ namespace ASTFactory {
         data.name = ArenaString::MakeHashOnly(name);
         data.usedAttributes.Init(ast->arena, 8);
         data.usedResources.Init(ast->arena, 8);
+        data.fragmentOutputs.Init(ast->arena, 4);
         data.consts.Init(ast->arena, 4);
         data.functions.Init(ast->arena, 8);  // Pass-scoped functions
         data.vertexShader = NodeRef::Null();
@@ -1092,6 +1104,7 @@ namespace ASTFactory {
         data.computeShader = NodeRef::Null();
         data.optionalAttributesMask = 0;
         data.optionalResourcesMask = 0;
+        data.hasFragmentOutputs = false;
         ast->passes.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {

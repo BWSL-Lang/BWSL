@@ -207,19 +207,23 @@ void SPIRVBuilder::DeclareInputOutput() {
       inputCount++;
     }
 
-    // --- Output: Fragment color (if used) ---
-    if (analysis.usedOutputMask & (1 << OutputSlot::COLOR)) {
-      CoreType type =
-          static_cast<CoreType>(analysis.outputTypes[OutputSlot::COLOR]);
+    // --- Outputs: Fragment color attachments (if used) ---
+    for (u32 location = 0; location < FragmentOutput::MAX_COLOR_ATTACHMENTS;
+         location++) {
+      u32 slot = OutputSlot::FragmentColor(location);
+      if (!(analysis.usedOutputMask & (1 << slot)))
+        continue;
+
+      CoreType type = static_cast<CoreType>(analysis.outputTypes[slot]);
       if (type == CoreType::VOID || type == CoreType::INVALID) {
         type = CoreType::FLOAT4;
       }
-      u32 var_id = CreateInterfaceVariable(type, spv::StorageClassOutput, 0,
-                                           spv::BuiltInMax);
+      u32 var_id = CreateInterfaceVariable(type, spv::StorageClassOutput,
+                                           location, spv::BuiltInMax);
       outputIds[outputCount] = var_id;
-      // Store the slot ID (COLOR=1) for OP_STORE_OUTPUT lookup, not SPIR-V
-      // location
-      outputLocations[outputCount] = OutputSlot::COLOR;
+      // Store the internal slot ID for OP_STORE_OUTPUT lookup, not the
+      // SPIR-V location.
+      outputLocations[outputCount] = static_cast<u8>(slot);
       outputCount++;
     }
 

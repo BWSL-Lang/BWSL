@@ -473,6 +473,10 @@ NodeRef Parser::ClonePassWithActiveVariants(NodeRef passRef) {
     for (u32 i = 0; i < srcPass.usedResources.count; i++) {
         dstPass.usedResources.Push(arena, srcPass.usedResources[i]);
     }
+    dstPass.hasFragmentOutputs = srcPass.hasFragmentOutputs;
+    for (u32 i = 0; i < srcPass.fragmentOutputs.count; i++) {
+        dstPass.fragmentOutputs.Push(arena, srcPass.fragmentOutputs[i]);
+    }
     dstPass.optionalAttributesMask = srcPass.optionalAttributesMask;
     dstPass.optionalResourcesMask = srcPass.optionalResourcesMask;
 

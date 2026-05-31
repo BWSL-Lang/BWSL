@@ -1,0 +1,28 @@
+// Equivalence: fragment outputs block writes two render targets.
+pipeline EquivRasterMRT {
+    attributes { }
+
+    pass "Main" {
+        outputs {
+            color: float4
+            bloom: float4
+        }
+
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            output.color = float4(uv.x, uv.y, 0.25, 1.0);
+            output.bloom = float4(max(uv.x, uv.y), min(uv.x, uv.y), 0.0, 1.0);
+        }
+    }
+}

@@ -750,6 +750,7 @@ static ShaderOutput CompileShaderStage(
                         const_cast<AST*>(&context.ast), sourceBase);
     lowering.currentStage = stage;
     lowering.currentPipeline = pipelineRef;
+    lowering.currentPassData = &pass;
     lowering.currentPassVaryings = varyingContext;
 
     for (u32 i = 0; i < pass.consts.count; i++) {

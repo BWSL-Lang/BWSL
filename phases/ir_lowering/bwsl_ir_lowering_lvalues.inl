@@ -520,6 +520,12 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
         }
         u32 slot = ResolveOutputSlotForStore(nameHash, valueType, nameStr,
                                              assign.interpolation);
+        CoreType declaredOutputType = GetFragmentOutputType(nameHash);
+        if (currentStage == ShaderStage::Fragment &&
+            declaredOutputType != CoreType::INVALID &&
+            valueType != declaredOutputType) {
+          ReportError("Error: fragment output assignment type does not match outputs declaration\n");
+        }
 
         // Emit OP_STORE_OUTPUT with slot in operand
         builder.EmitInstruction(OP_STORE_OUTPUT, valueReg, slot);
@@ -1736,12 +1742,11 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
 
 inline bool IRLowering::IsBuiltinOutput(u32 nameHash) {
   static const u32 HASH_POSITION = Utils::HashStr("position");
-  static const u32 HASH_COLOR = Utils::HashStr("color");
   static const u32 HASH_DEPTH = Utils::HashStr("depth");
   if (nameHash == HASH_POSITION)
-    return true;
+    return currentStage == ShaderStage::Vertex;
   if (currentStage == ShaderStage::Fragment) {
-    return nameHash == HASH_COLOR || nameHash == HASH_DEPTH;
+    return nameHash == HASH_DEPTH || IsAllowedFragmentOutput(nameHash);
   }
   return false;
 }
@@ -1752,10 +1757,17 @@ inline u32 IRLowering::GetBuiltinOutputSlot(u32 nameHash) {
   static const u32 HASH_DEPTH = Utils::HashStr("depth");
   if (nameHash == HASH_POSITION)
     return OutputSlot::POSITION;
-  if (nameHash == HASH_COLOR)
-    return OutputSlot::COLOR;
   if (nameHash == HASH_DEPTH)
     return OutputSlot::DEPTH;
+  if (currentStage == ShaderStage::Fragment) {
+    const FragmentOutputDeclData *decl = FindFragmentOutput(nameHash);
+    if (decl) {
+      return OutputSlot::FragmentColor(decl->location);
+    }
+    if (nameHash == HASH_COLOR && (!currentPassData || !currentPassData->hasFragmentOutputs)) {
+      return OutputSlot::COLOR;
+    }
+  }
   return OutputSlot::VARYING0; // Fallback
 }
 
@@ -1763,11 +1775,53 @@ inline CoreType IRLowering::GetBuiltinOutputType(u32 nameHash) {
   static const u32 HASH_POSITION = Utils::HashStr("position");
   static const u32 HASH_COLOR = Utils::HashStr("color");
   static const u32 HASH_DEPTH = Utils::HashStr("depth");
-  if (nameHash == HASH_POSITION || nameHash == HASH_COLOR)
+  if (nameHash == HASH_POSITION)
     return CoreType::FLOAT4;
   if (nameHash == HASH_DEPTH)
     return CoreType::FLOAT;
+  if (currentStage == ShaderStage::Fragment) {
+    CoreType fragmentType = GetFragmentOutputType(nameHash);
+    if (fragmentType != CoreType::INVALID) {
+      return fragmentType;
+    }
+    if (nameHash == HASH_COLOR && (!currentPassData || !currentPassData->hasFragmentOutputs)) {
+      return CoreType::INVALID;
+    }
+  }
   return CoreType::INVALID;
+}
+
+inline const FragmentOutputDeclData *
+IRLowering::FindFragmentOutput(u32 nameHash) const {
+  if (!currentPassData || !currentPassData->hasFragmentOutputs) {
+    return nullptr;
+  }
+  for (u32 i = 0; i < currentPassData->fragmentOutputs.count; i++) {
+    if (currentPassData->fragmentOutputs[i].name.nameHash == nameHash) {
+      return &currentPassData->fragmentOutputs[i];
+    }
+  }
+  return nullptr;
+}
+
+inline bool IRLowering::IsAllowedFragmentOutput(u32 nameHash) const {
+  static const u32 HASH_COLOR = Utils::HashStr("color");
+  static const u32 HASH_DEPTH = Utils::HashStr("depth");
+  if (nameHash == HASH_DEPTH) {
+    return true;
+  }
+  if (!currentPassData || !currentPassData->hasFragmentOutputs) {
+    return nameHash == HASH_COLOR;
+  }
+  return FindFragmentOutput(nameHash) != nullptr;
+}
+
+inline CoreType IRLowering::GetFragmentOutputType(u32 nameHash) const {
+  const FragmentOutputDeclData *decl = FindFragmentOutput(nameHash);
+  if (!decl) {
+    return CoreType::INVALID;
+  }
+  return decl->typeInfo.coreType;
 }
 
 static inline bool IsPerspectiveInterpolationType(CoreType type) {
@@ -1778,6 +1832,19 @@ static inline bool IsPerspectiveInterpolationType(CoreType type) {
 inline u32 IRLowering::ResolveOutputSlotForStore(
     u32 nameHash, CoreType valueType, const char *nameStr,
     InterpolationMode interpolation) {
+  if (currentStage == ShaderStage::Fragment && !IsBuiltinOutput(nameHash)) {
+    char msg[256];
+    if (nameStr && nameStr[0] != '\0') {
+      snprintf(msg, sizeof(msg),
+               "Error: fragment output '%s' is not declared in this pass's outputs block\n",
+               nameStr);
+    } else {
+      snprintf(msg, sizeof(msg),
+               "Error: fragment output is not declared in this pass's outputs block\n");
+    }
+    ReportError(msg);
+    return OutputSlot::COLOR;
+  }
   if (IsBuiltinOutput(nameHash)) {
     if (interpolation != InterpolationMode::Default) {
       ReportError("Error: interpolation decorators can only be used on vertex-to-fragment varyings\n");
@@ -1810,6 +1877,10 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
 }
 
 inline u32 IRLowering::ResolveOutputSlotForLoad(u32 nameHash) {
+  if (currentStage == ShaderStage::Fragment && !IsBuiltinOutput(nameHash)) {
+    ReportError("Error: fragment output load refers to an undeclared output\n");
+    return OutputSlot::COLOR;
+  }
   if (IsBuiltinOutput(nameHash)) {
     return GetBuiltinOutputSlot(nameHash);
   }

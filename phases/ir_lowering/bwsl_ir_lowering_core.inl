@@ -18,6 +18,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   builder.nextRegister = 0;
   recursionDiagnosed = false;
   hadError = false;
+  currentPassData = nullptr;
 
   // Allocate IR arrays. instructionCount must be zeroed explicitly — it's
   // a plain u32 field with no inline initializer, and the enclosing
@@ -201,6 +202,7 @@ inline void IRLowering::LowerPassConstants(const PassData &pass) {
 inline void IRLowering::LowerPass(NodeRef passRef) {
   const PassData &pass = ast->GetPass(passRef);
   currentPass = passRef; // Track current pass for pass-scoped function lookup
+  currentPassData = &pass;
 
   // Create varying context for this pass - tracks vertex outputs
   // so fragment shader can resolve input.xxx to matching slots
@@ -229,6 +231,7 @@ inline void IRLowering::LowerPass(NodeRef passRef) {
   }
 
   currentPassVaryings = nullptr;
+  currentPassData = nullptr;
   currentPass = NodeRef::Null();
 }
 
