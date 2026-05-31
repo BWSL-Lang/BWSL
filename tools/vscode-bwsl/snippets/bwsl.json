@@ -1,0 +1,208 @@
+{
+  "Pipeline": {
+    "prefix": "pipeline",
+    "description": "BWSL pipeline skeleton",
+    "body": [
+      "pipeline ${1:${TM_FILENAME_BASE}} {",
+      "\tattributes {",
+      "\t\tposition: float3",
+      "\t}",
+      "",
+      "\tresources {",
+      "\t\t${2:viewProj}: mat4",
+      "\t}",
+      "",
+      "\tpass \"${3:Main}\" {",
+      "\t\tuse attributes { position }",
+      "\t\tuse resources { ${2:viewProj} }",
+      "",
+      "\t\tvertex {",
+      "\t\t\toutput.position = resources.${2} * float4(attributes.position, 1.0);",
+      "\t\t}",
+      "",
+      "\t\tfragment {",
+      "\t\t\toutput.color = float4(${4:1.0, 1.0, 1.0}, 1.0);",
+      "\t\t}",
+      "\t}",
+      "}"
+    ]
+  },
+  "Module": {
+    "prefix": "module",
+    "description": "BWSL module skeleton",
+    "body": [
+      "module ${1:${TM_FILENAME_BASE}} {",
+      "\t${2:functionName} :: (${3:float x}) -> ${4:float} {",
+      "\t\treturn ${5:x};",
+      "\t}",
+      "}"
+    ]
+  },
+  "Function": {
+    "prefix": "fn",
+    "description": "BWSL function declaration",
+    "body": [
+      "${1:name} :: (${2:float x}) -> ${3:float} {",
+      "\t${4:return x;}",
+      "}"
+    ]
+  },
+  "Eval Function": {
+    "prefix": "evalfn",
+    "description": "Compile-time BWSL function declaration",
+    "body": [
+      "eval ${1:name} :: (${2:float x}) -> ${3:float} {",
+      "\t${4:return x;}",
+      "}"
+    ]
+  },
+  "Pass": {
+    "prefix": "pass",
+    "description": "Graphics pass with vertex and fragment stages",
+    "body": [
+      "pass \"${1:Main}\" {",
+      "\tuse attributes { ${2:position} }",
+      "\tuse resources { ${3:viewProj} }",
+      "",
+      "\tvertex {",
+      "\t\toutput.position = resources.${3} * float4(attributes.${2}, 1.0);",
+      "\t}",
+      "",
+      "\tfragment {",
+      "\t\toutput.color = float4(${4:1.0, 1.0, 1.0}, 1.0);",
+      "\t}",
+      "}"
+    ]
+  },
+  "Compute Pass": {
+    "prefix": "computepass",
+    "description": "Compute pass with explicit workgroup size",
+    "body": [
+      "pass \"${1:Compute}\" {",
+      "\tuse resources { ${2:output} }",
+      "",
+      "\tcompute \"${3:Main}\" [${4:64}, ${5:1}, ${6:1}] {",
+      "\t\tuint idx = input.global_id.x;",
+      "\t\t${7:// compute work}",
+      "\t}",
+      "}"
+    ]
+  },
+  "Vertex Stage": {
+    "prefix": "vertex",
+    "description": "Vertex stage block",
+    "body": [
+      "vertex {",
+      "\toutput.position = ${1:float4(attributes.position, 1.0)};",
+      "\t$0",
+      "}"
+    ]
+  },
+  "Fragment Stage": {
+    "prefix": "fragment",
+    "description": "Fragment stage block",
+    "body": [
+      "fragment {",
+      "\toutput.color = ${1:float4(1.0, 1.0, 1.0, 1.0)};",
+      "\t$0",
+      "}"
+    ]
+  },
+  "Compute Stage": {
+    "prefix": "compute",
+    "description": "Compute stage block",
+    "body": [
+      "compute \"${1:Main}\" [${2:64}, ${3:1}, ${4:1}] {",
+      "\tuint idx = input.global_id.x;",
+      "\t$0",
+      "}"
+    ]
+  },
+  "Attributes Block": {
+    "prefix": "attributes",
+    "description": "Pipeline attributes block",
+    "body": [
+      "attributes {",
+      "\tposition: float3",
+      "\t${1:normal}: ${2:float3}",
+      "}"
+    ]
+  },
+  "Resources Block": {
+    "prefix": "resources",
+    "description": "Pipeline resources block",
+    "body": [
+      "resources {",
+      "\t${1:viewProj}: ${2:mat4}",
+      "\t${3:colorTex}: ${4:texture2D}",
+      "\t${5:colorSampler}: sampler",
+      "}"
+    ]
+  },
+  "Struct": {
+    "prefix": "struct",
+    "description": "BWSL struct declaration",
+    "body": [
+      "struct ${1:Name} {",
+      "\t${2:float3} ${3:value};",
+      "}"
+    ]
+  },
+  "Enum": {
+    "prefix": "enum",
+    "description": "BWSL enum declaration",
+    "body": [
+      "enum ${1:Name} {",
+      "\t${2:First},",
+      "\t${3:Second}",
+      "}"
+    ]
+  },
+  "Constraint": {
+    "prefix": "constraint",
+    "description": "BWSL type constraint declaration",
+    "body": [
+      "constraint ${1:FloatVectors} = ${2:float2 | float3 | float4};"
+    ]
+  },
+  "Variants Block": {
+    "prefix": "variants",
+    "description": "Pipeline variants block with rules",
+    "body": [
+      "variants {",
+      "\t${1:enabled}: bool = ${2:false};",
+      "",
+      "\trules {",
+      "\t\trequire ${1:enabled} -> ${3:has_normal};",
+      "\t}",
+      "}"
+    ]
+  },
+  "Range Loop": {
+    "prefix": "forrange",
+    "description": "BWSL range loop",
+    "body": [
+      "for (${1:i} in ${2:0}..${3:count}) {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "Foreach": {
+    "prefix": "foreach",
+    "description": "BWSL multi-range foreach loop",
+    "body": [
+      "foreach (${1:x} in ${2:0}..${3:width}, ${4:y} in ${5:0}..${6:height}) {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "Eval Block": {
+    "prefix": "eval",
+    "description": "Compile-time eval block",
+    "body": [
+      "eval {",
+      "\t$0",
+      "}"
+    ]
+  }
+}

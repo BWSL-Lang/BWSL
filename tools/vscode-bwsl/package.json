@@ -1,0 +1,56 @@
+{
+  "name": "bwsl-language-support",
+  "displayName": "BWSL Language Support",
+  "description": "Syntax highlighting, language configuration, and snippets for BWSL shader files.",
+  "version": "0.1.0",
+  "publisher": "bwsl",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/apresthus/BWSL.git",
+    "directory": "tools/vscode-bwsl"
+  },
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "keywords": [
+    "bwsl",
+    "shader",
+    "spir-v",
+    "metal",
+    "hlsl",
+    "glsl"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "bwsl",
+        "aliases": [
+          "BWSL",
+          "bwsl"
+        ],
+        "extensions": [
+          ".bwsl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "bwsl",
+        "scopeName": "source.bwsl",
+        "path": "./syntaxes/bwsl.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "bwsl",
+        "path": "./snippets/bwsl.json"
+      }
+    ]
+  }
+}
