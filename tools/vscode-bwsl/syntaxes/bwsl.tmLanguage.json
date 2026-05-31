@@ -1,0 +1,533 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "BWSL",
+  "scopeName": "source.bwsl",
+  "fileTypes": [
+    "bwsl"
+  ],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#decorators"
+    },
+    {
+      "include": "#declarations"
+    },
+    {
+      "include": "#qualified-access"
+    },
+    {
+      "include": "#builtins"
+    },
+    {
+      "include": "#intrinsics"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#function-calls"
+    },
+    {
+      "include": "#swizzles"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.bwsl",
+          "begin": "//",
+          "end": "$",
+          "patterns": [
+            {
+              "include": "#comment-tags"
+            }
+          ]
+        },
+        {
+          "name": "comment.block.bwsl",
+          "begin": "/\\*",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.begin.bwsl"
+            }
+          },
+          "end": "\\*/",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.end.bwsl"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#comment-tags"
+            }
+          ]
+        }
+      ]
+    },
+    "comment-tags": {
+      "patterns": [
+        {
+          "name": "keyword.other.documentation.tag.bwsl",
+          "match": "\\b(?:TODO|FIXME|NOTE|HACK|BUG|XXX)\\b:?"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.bwsl",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.bwsl"
+            }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.bwsl"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.bwsl",
+              "match": "\\\\(?:[\"\\\\nrt0]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4})"
+            },
+            {
+              "name": "invalid.illegal.escape.bwsl",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "decorators": {
+      "patterns": [
+        {
+          "name": "meta.annotation.bwsl",
+          "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.annotation.bwsl"
+            },
+            "2": {
+              "name": "storage.type.annotation.bwsl"
+            }
+          }
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "name": "meta.function.declaration.bwsl",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*(?=\\()",
+          "captures": {
+            "1": {
+              "name": "entity.name.function.bwsl"
+            },
+            "2": {
+              "name": "keyword.operator.declaration.function.bwsl"
+            }
+          }
+        },
+        {
+          "name": "meta.pipeline.declaration.bwsl",
+          "match": "\\b(pipeline)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.pipeline.bwsl"
+            },
+            "2": {
+              "name": "entity.name.type.pipeline.bwsl"
+            }
+          }
+        },
+        {
+          "name": "meta.module.declaration.bwsl",
+          "match": "\\b(module)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.module.bwsl"
+            },
+            "2": {
+              "name": "entity.name.namespace.module.bwsl"
+            }
+          }
+        },
+        {
+          "name": "meta.type.declaration.bwsl",
+          "match": "\\b(struct|enum|constraint)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.type.bwsl"
+            },
+            "2": {
+              "name": "entity.name.type.bwsl"
+            }
+          }
+        },
+        {
+          "name": "meta.pass.declaration.bwsl",
+          "match": "\\b(pass)\\s+(\\\"(?:\\\\.|[^\\\"\\\\])*\\\")",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.pass.bwsl"
+            },
+            "2": {
+              "name": "string.quoted.double.pass-name.bwsl"
+            }
+          }
+        },
+        {
+          "name": "meta.compute-stage.declaration.bwsl",
+          "match": "\\b(compute)\\s+(\\\"(?:\\\\.|[^\\\"\\\\])*\\\")\\s*(?=\\[)",
+          "captures": {
+            "1": {
+              "name": "storage.type.stage.compute.bwsl"
+            },
+            "2": {
+              "name": "string.quoted.double.compute-kernel-name.bwsl"
+            }
+          }
+        },
+        {
+          "name": "meta.use.declaration.bwsl",
+          "match": "\\b(use)\\s+(attributes|resources)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.use.bwsl"
+            },
+            "2": {
+              "name": "support.variable.namespace.bwsl"
+            }
+          }
+        },
+        {
+          "name": "meta.import.declaration.bwsl",
+          "begin": "\\b(import)\\b",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.declaration.import.bwsl"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "name": "entity.name.namespace.import.bwsl",
+              "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+            },
+            {
+              "name": "punctuation.separator.comma.bwsl",
+              "match": ","
+            }
+          ]
+        }
+      ]
+    },
+    "qualified-access": {
+      "patterns": [
+        {
+          "name": "meta.path.qualified.three-part.bwsl",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(::)([A-Za-z_][A-Za-z0-9_]*)(::)([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "entity.name.namespace.bwsl"
+            },
+            "2": {
+              "name": "punctuation.accessor.double-colon.bwsl"
+            },
+            "3": {
+              "name": "entity.name.type.bwsl"
+            },
+            "4": {
+              "name": "punctuation.accessor.double-colon.bwsl"
+            },
+            "5": {
+              "name": "variable.other.member.bwsl"
+            }
+          }
+        },
+        {
+          "name": "meta.path.qualified.bwsl",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(::)([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "entity.name.namespace.bwsl"
+            },
+            "2": {
+              "name": "punctuation.accessor.double-colon.bwsl"
+            },
+            "3": {
+              "name": "variable.other.member.bwsl"
+            }
+          }
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "meta.input.builtin.bwsl",
+          "match": "\\b(input)(\\.)(vertex_id|instance_id|global_id|local_id|workgroup_id|num_workgroups|local_index|position)\\b",
+          "captures": {
+            "1": {
+              "name": "support.variable.namespace.builtin.bwsl"
+            },
+            "2": {
+              "name": "punctuation.accessor.dot.bwsl"
+            },
+            "3": {
+              "name": "support.variable.property.builtin.bwsl"
+            }
+          }
+        },
+        {
+          "name": "meta.output.builtin.bwsl",
+          "match": "\\b(output)(\\.)(position|color|depth)\\b",
+          "captures": {
+            "1": {
+              "name": "support.variable.namespace.builtin.bwsl"
+            },
+            "2": {
+              "name": "punctuation.accessor.dot.bwsl"
+            },
+            "3": {
+              "name": "support.variable.property.builtin.bwsl"
+            }
+          }
+        },
+        {
+          "name": "support.variable.namespace.builtin.bwsl",
+          "match": "\\b(?:attributes|input|output|resources|variants)\\b"
+        }
+      ]
+    },
+    "intrinsics": {
+      "patterns": [
+        {
+          "name": "support.function.intrinsic.bwsl",
+          "match": "\\b(?:lerp|smoothstep|saturate|fract|step|clamp|sign|abs|min|max|floor|ceil|round|trunc|mod|fmod|fma|pow|sqrt|rsqrt|rcp|exp|exp2|log|log2|log10|frexp|ldexp|modf|sin|cos|tan|asin|acos|atan|atan2|sincos|sinh|cosh|tanh|degrees|radians|dot|cross|normalize|length|distance|reflect|refract|faceforward|transpose|determinant|inverse|ddx|ddy|ddx_fine|ddy_fine|ddx_coarse|ddy_coarse|fwidth|fwidth_fine|fwidth_coarse|sample|sample_lod|sample_grad|sample_bias|sample_cmp|sample_offset|sample_lod_offset|sample_bias_offset|gather|gather_offset|load|load_offset|store|texture_size|texture_levels|barrier|memoryBarrier|storageBarrier|wave_sum|wave_product|wave_min|wave_max|wave_all|wave_any|wave_broadcast|wave_read_first|atomic_add|atomic_min|atomic_max|atomic_and|atomic_or|atomic_xor|atomic_exchange|atomic_cmp_exchange|count_bits|reverse_bits|first_bit_low|first_bit_high|bitfield_extract|bitfield_insert|pack_unorm2x16|unpack_unorm2x16|pack_unorm4x8|unpack_unorm4x8|pack_snorm2x16|unpack_snorm2x16|pack_snorm4x8|unpack_snorm4x8|pack_half2x16|unpack_half2x16|f32tof16|f16tof32|asfloat|asint|asuint|select|any|all|isnan|isinf|isfinite|isnormal)\\b(?=\\s*\\()"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.primitive.bwsl",
+          "match": "\\b(?:bool|void|int(?:2|3|4)?|uint(?:2|3|4)?|float(?:2|3|4)?|double(?:2|3|4)?|int64(?:x[234])?|uint64(?:x[234])?|mat[234]|dmat[234])\\b"
+        },
+        {
+          "name": "storage.type.resource.bwsl",
+          "match": "\\b(?:texture(?:2D(?:Array)?|3D|Cube)|sampler(?:2D(?:Array)?|3D|Cube)?|buffer|cbuffer)\\b"
+        },
+        {
+          "name": "storage.type.stage-function.bwsl",
+          "match": "\\b(?:vertex_function|fragment_function|compute_function|pass_block)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.bwsl",
+          "match": "\\b(?:true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.bwsl",
+          "match": "\\bnull\\b"
+        },
+        {
+          "name": "variable.language.self.bwsl",
+          "match": "\\bself\\b"
+        },
+        {
+          "name": "variable.language.implicit-iterator.bwsl",
+          "match": "\\bit\\b"
+        },
+        {
+          "name": "variable.language.wildcard.bwsl",
+          "match": "\\b_\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.bwsl",
+          "match": "\\b(?:if|else|for|foreach|while|loop|until|switch|case|default|break|skip|return|discard)\\b"
+        },
+        {
+          "name": "keyword.operator.word.bwsl",
+          "match": "\\b(?:in|by|is|as)\\b"
+        },
+        {
+          "name": "keyword.declaration.bwsl",
+          "match": "\\b(?:pipeline|module|import|use|pass|node|shader|inputs|outputs|resources|attributes|variants|rules|require|conflict|const|shared|extend|extends|readonly|readwrite|writeonly|slot|out|eval|enum|struct|constraint|where|range)\\b"
+        },
+        {
+          "name": "storage.type.stage.bwsl",
+          "match": "\\b(?:vertex|fragment|compute|compute_graph)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.integer.hexadecimal.bwsl",
+          "match": "\\b0[xX][0-9A-Fa-f]+[uU]?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.binary.bwsl",
+          "match": "\\b0[bB][01]+[uU]?\\b"
+        },
+        {
+          "name": "constant.numeric.float.bwsl",
+          "match": "\\b(?:[0-9]+\\.[0-9]*|[0-9]+(?:[eE][+-]?[0-9]+))[fF]?\\b"
+        },
+        {
+          "name": "constant.numeric.float.bwsl",
+          "match": "\\b[0-9]+[fF]\\b"
+        },
+        {
+          "name": "constant.numeric.integer.decimal.bwsl",
+          "match": "\\b[0-9]+[uU]?\\b"
+        }
+      ]
+    },
+    "function-calls": {
+      "patterns": [
+        {
+          "name": "entity.name.function.call.bwsl",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b(?=\\s*\\()"
+        }
+      ]
+    },
+    "swizzles": {
+      "patterns": [
+        {
+          "name": "meta.member.swizzle.xyzw.bwsl",
+          "match": "(\\.)([xyzw]{1,4})(?![A-Za-z0-9_])",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.dot.bwsl"
+            },
+            "2": {
+              "name": "support.variable.property.swizzle.bwsl"
+            }
+          }
+        },
+        {
+          "name": "meta.member.swizzle.rgba.bwsl",
+          "match": "(\\.)([rgba]{1,4})(?![A-Za-z0-9_])",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.dot.bwsl"
+            },
+            "2": {
+              "name": "support.variable.property.swizzle.bwsl"
+            }
+          }
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.compound.bwsl",
+          "match": "<<=|>>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^="
+        },
+        {
+          "name": "keyword.operator.assignment.bwsl",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.logical.bwsl",
+          "match": "&&|\\|\\||!"
+        },
+        {
+          "name": "keyword.operator.comparison.bwsl",
+          "match": "==|!=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.arithmetic.bwsl",
+          "match": "\\+\\+|--|\\+|-|\\*|/|%"
+        },
+        {
+          "name": "keyword.operator.bitwise.bwsl",
+          "match": "<<|>>|&|\\||\\^|~"
+        },
+        {
+          "name": "keyword.operator.range.bwsl",
+          "match": "\\.\\.=|\\.\\."
+        },
+        {
+          "name": "keyword.operator.arrow.bwsl",
+          "match": "->"
+        },
+        {
+          "name": "punctuation.accessor.double-colon.bwsl",
+          "match": "::"
+        },
+        {
+          "name": "keyword.operator.ternary.bwsl",
+          "match": "\\?|:"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.section.block.bwsl",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.section.group.bwsl",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.section.brackets.bwsl",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.separator.comma.bwsl",
+          "match": ","
+        },
+        {
+          "name": "punctuation.terminator.statement.bwsl",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.accessor.dot.bwsl",
+          "match": "\\."
+        }
+      ]
+    }
+  }
+}
