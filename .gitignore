@@ -21,6 +21,9 @@ build/
 # macOS
 .DS_Store
 
+# Claude Code runtime files
+.claude/
+
 # IDE/Editor
 .vscode/
 .idea/
