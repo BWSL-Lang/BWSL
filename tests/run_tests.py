@@ -725,6 +725,9 @@ def check_wave_operations(output_dir: Path) -> tuple[bool, str]:
         ],
     }
 
+    if not has_spirv_dis_tooling():
+        return True, ""
+
     for file_name, patterns in expectations.items():
         path = output_dir / file_name
         if not path.exists():
@@ -1989,6 +1992,11 @@ def main() -> int:
         for test_file in sorted(error_case_dir.glob("*.bwsl")):
             expected_error = ERROR_CASE_TESTS.get(test_file.name)
             if expected_error is None:
+                continue
+
+            if "SPIR-V validation" in expected_error and not has_spirv_val_tooling():
+                print(f"[{YELLOW}SKIP{NC}] error_cases/{test_file.stem} (spirv-val not available)")
+                skipped += 1
                 continue
 
             result = run_command(
