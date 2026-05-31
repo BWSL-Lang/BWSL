@@ -1,0 +1,31 @@
+// Test: interpolation decorators are preserved through lowering and backends
+
+pipeline InterpolationDecorators {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+            int instanceIndex = input.instance_id;
+
+            output.position = float4(pos, 1.0);
+            @flat output.materialIndex = float(instanceIndex);
+            @noperspective output.screenUV = uv;
+        }
+
+        fragment {
+            float materialIndex = input.materialIndex;
+            float2 screenUV = input.screenUV;
+            float checker = floor(screenUV.x * 4.0) + floor(screenUV.y * 4.0);
+            float tint = materialIndex * 0.01 + checker * 0.0;
+
+            output.color = float4(screenUV, tint, 1.0);
+        }
+    }
+}

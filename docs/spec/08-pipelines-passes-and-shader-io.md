@@ -177,6 +177,24 @@ vertex stage and reading the matching field from `input` in the fragment stage.
 The current implementation builds the varying set dynamically from actual
 vertex-stage writes.
 
+Vertex-stage varying writes may be decorated with interpolation qualifiers:
+
+```bwsl
+vertex {
+    @flat output.materialIndex = meta.materialIndex;
+    @noperspective output.screenUV = uv;
+}
+```
+
+Current rules:
+
+- `@flat` and `@noperspective` may only decorate `output.*` assignments.
+- The decorated output must be a vertex-to-fragment varying, not a built-in
+  output such as `output.position`.
+- Later writes to the same varying may omit the qualifier, but may not specify a
+  conflicting qualifier.
+- `@noperspective` is only valid for floating-point scalar/vector varyings.
+
 ## Resources
 
 `resources.*` names come from the pipeline `resources` block plus pass

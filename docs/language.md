@@ -127,6 +127,24 @@ attributes {
 }
 ```
 
+## Varying Interpolation
+
+Vertex-to-fragment varyings are created implicitly by assigning `output.<name>`
+in a vertex stage and reading `input.<name>` in a fragment stage.
+
+Use statement decorators on vertex output assignments to request non-default
+interpolation:
+
+```bwsl
+vertex {
+    @flat output.materialIndex = meta.materialIndex;
+    @noperspective output.screenUV = uv;
+}
+```
+
+`@flat` and `@noperspective` apply only to user varyings, not built-ins such as
+`output.position`, `output.color`, or `output.depth`.
+
 ## Resources
 
 Pipeline shader resources are declared in a `resources` block:

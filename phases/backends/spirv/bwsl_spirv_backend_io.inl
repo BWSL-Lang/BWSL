@@ -1,6 +1,21 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Interface variables, stage inputs/outputs, builtins, shared variables, and vertex pulling declarations.
 
+static void EmitInterpolationDecoration(SPIRVBuilder& builder, u32 var_id,
+                                        InterpolationMode interpolation) {
+  switch (interpolation) {
+  case InterpolationMode::Flat:
+    builder.EmitDecoration(var_id, spv::DecorationFlat, nullptr, 0);
+    break;
+  case InterpolationMode::NoPerspective:
+    builder.EmitDecoration(var_id, spv::DecorationNoPerspective, nullptr, 0);
+    break;
+  case InterpolationMode::Default:
+  default:
+    break;
+  }
+}
+
 u32 SPIRVBuilder::CreateInterfaceVariable(CoreType type,
                                           spv::StorageClass storage,
                                           u32 location, spv::BuiltIn builtin) {
@@ -130,6 +145,9 @@ void SPIRVBuilder::DeclareInputOutput() {
 
       u32 var_id = CreateInterfaceVariable(type, spv::StorageClassOutput,
                                            locationCounter, spv::BuiltInMax);
+      EmitInterpolationDecoration(
+          *this, var_id,
+          static_cast<InterpolationMode>(analysis.outputInterpolations[slot]));
 
       // Emit consistent varying names for WebGL compatibility
       // (GLSL ES 300 matches varyings by name, not location)
@@ -173,6 +191,9 @@ void SPIRVBuilder::DeclareInputOutput() {
       u32 location = slot - OutputSlot::VARYING0;
       u32 var_id = CreateInterfaceVariable(type, spv::StorageClassInput,
                                            location, spv::BuiltInMax);
+      EmitInterpolationDecoration(
+          *this, var_id,
+          static_cast<InterpolationMode>(analysis.inputInterpolations[slot]));
 
       // Emit consistent varying names for WebGL compatibility
       // (GLSL ES 300 matches varyings by name, not location)

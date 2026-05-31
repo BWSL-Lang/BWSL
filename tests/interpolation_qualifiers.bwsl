@@ -60,8 +60,8 @@ pipeline InterpolationQualifiers {
             output.vertexColor = vertexColor;
             output.diffuse = diffuse;
             output.bary = bary;
-            output.instanceId = float(instanceIndex);
-            output.materialId = materialId;
+            @flat output.instanceId = float(instanceIndex);
+            @flat output.materialId = materialId;
         }
 
         fragment {
@@ -132,9 +132,9 @@ pipeline InterpolationQualifiers {
             );
 
             output.position = float4(pos, 1.0);
-            output.faceNormal = faceNormal;
-            output.primColor = primColor;
-            output.primId = float(primId);
+            @flat output.faceNormal = faceNormal;
+            @flat output.primColor = primColor;
+            @flat output.primId = float(primId);
         }
 
         fragment {
@@ -172,7 +172,7 @@ pipeline InterpolationQualifiers {
 
             output.position = float4(pos, 1.0);
             output.perspectiveUV = perspectiveUV;
-            output.screenUV = screenUV;
+            @noperspective output.screenUV = screenUV;
             output.depth = depth;
         }
 

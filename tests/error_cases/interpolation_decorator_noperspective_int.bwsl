@@ -1,0 +1,19 @@
+pipeline InterpolationDecoratorNoPerspectiveInt {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            @noperspective output.instanceId = input.instance_id;
+        }
+
+        fragment {
+            int instanceId = input.instanceId;
+            output.color = float4(float(instanceId), 0.0, 0.0, 1.0);
+        }
+    }
+}
