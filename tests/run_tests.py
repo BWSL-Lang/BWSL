@@ -1989,6 +1989,8 @@ def main() -> int:
                     str(test_file),
                     "-modules",
                     str(modules_dir),
+                    "-o",
+                    str(output_dir),
                 ],
                 cwd=root,
             )
@@ -2041,7 +2043,7 @@ def main() -> int:
         for test_file in sorted(fuzz_regr_dir.glob("*.bwsl")):
             try:
                 result = subprocess.run(
-                    [str(bwslc), str(test_file), "-modules", str(modules_dir)],
+                    [str(bwslc), str(test_file), "-modules", str(modules_dir), "-o", str(output_dir)],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
