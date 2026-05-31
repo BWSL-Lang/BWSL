@@ -531,6 +531,26 @@ NodeRef Parser::ParseResourceDecl() {
 // Pass parsing
 //==============================================================================
 
+static bool IsValidFragmentOutputCoreType(CoreType type) {
+    switch (type) {
+        case CoreType::FLOAT:
+        case CoreType::FLOAT2:
+        case CoreType::FLOAT3:
+        case CoreType::FLOAT4:
+        case CoreType::INT:
+        case CoreType::INT2:
+        case CoreType::INT3:
+        case CoreType::INT4:
+        case CoreType::UINT:
+        case CoreType::UINT2:
+        case CoreType::UINT3:
+        case CoreType::UINT4:
+            return true;
+        default:
+            return false;
+    }
+}
+
 NodeRef Parser::ParsePass() {
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     Consume(TokenType::STRING, "Expected pass name in quotes");
@@ -567,6 +587,12 @@ void Parser::ParsePassBody(NodeRef pass) {
             } else {
                 Error("Expected 'attributes' or 'resources' after 'use'");
             }
+        } else if (Match(TokenType::OUTPUTS)) {
+            if (ast->GetPass(pass).hasFragmentOutputs) {
+                Error("Only one outputs block is allowed per pass");
+                continue;
+            }
+            ParsePassOutputs(pass);
         } else if (Match(TokenType::CONST)) {
             SourceLocation loc = getLocation(stream->GetOffset(previous));
             if (!MatchMask(TokenMasks::CORE_TYPES)) {
@@ -703,10 +729,116 @@ void Parser::ParsePassBody(NodeRef pass) {
                 ast->GetPass(pass).functions.Push(arena, function);
             }
         } else {
-            ErrorAtCurrent("Expected 'use', 'vertex', 'fragment', 'compute', or function declaration in pass body");
+            ErrorAtCurrent("Expected 'use', 'outputs', 'vertex', 'fragment', 'compute', or function declaration in pass body");
             Advance();
         }
     }
+}
+
+void Parser::ParsePassOutputs(NodeRef pass) {
+    PassData& passData = ast->GetPass(pass);
+    passData.hasFragmentOutputs = true;
+
+    Consume(TokenType::LEFT_BRACE, "Expected '{' after outputs");
+
+    u32 nextLocation = 0;
+    while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
+
+        if (!Consume(TokenType::IDENTIFIER, "Expected fragment output name")) {
+            if (stream->GetType(current) != TokenType::RIGHT_BRACE &&
+                stream->GetType(current) != TokenType::EOF_TOKEN) {
+                Advance();
+            }
+            continue;
+        }
+        ArenaString name = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
+
+        if (!Consume(TokenType::COLON, "Expected ':' after fragment output name")) {
+            if (stream->GetType(current) != TokenType::RIGHT_BRACE &&
+                stream->GetType(current) != TokenType::EOF_TOKEN) {
+                Advance();
+            }
+            continue;
+        }
+
+        if (!MatchMask(TokenMasks::CORE_TYPES)) {
+            Error("Expected scalar or vector numeric type after ':'");
+            if (stream->GetType(current) != TokenType::RIGHT_BRACE &&
+                stream->GetType(current) != TokenType::EOF_TOKEN) {
+                Advance();
+            }
+            continue;
+        }
+
+        TokenType typeToken = static_cast<TokenType>(stream->GetType(previous));
+        ArenaString typeName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
+        TypeInfo typeInfo = GetTypeInfoFromToken(typeToken);
+
+        if (!IsValidFragmentOutputCoreType(typeInfo.coreType)) {
+            Error("Fragment outputs must use float/int/uint scalar or vector types");
+        }
+
+        u32 location = nextLocation;
+
+        while (Match(TokenType::AT)) {
+            std::string decorator(stream->GetValue(previous));
+            if (decorator == "location") {
+                Consume(TokenType::LEFT_PAREN, "Expected '(' after @location");
+                Consume(TokenType::NUMBER, "Expected numeric location");
+                location = SafeParseU32(stream->GetValue(previous), 0);
+                Consume(TokenType::RIGHT_PAREN, "Expected ')' after @location");
+            } else {
+                Error("Unknown fragment output decorator");
+            }
+        }
+
+        if (location >= FragmentOutput::MAX_COLOR_ATTACHMENTS) {
+            Error("Fragment output location exceeds supported color attachment count");
+        }
+
+        static const u32 HASH_DEPTH = Utils::HashStr("depth");
+        if (name.nameHash == HASH_DEPTH) {
+            Error("output.depth is a builtin depth output and is not declared in outputs");
+        }
+
+        bool duplicateName = false;
+        bool duplicateLocation = false;
+        for (u32 i = 0; i < passData.fragmentOutputs.count; i++) {
+            if (passData.fragmentOutputs[i].name.nameHash == name.nameHash) {
+                duplicateName = true;
+            }
+            if (passData.fragmentOutputs[i].location == location) {
+                duplicateLocation = true;
+            }
+        }
+        if (duplicateName) {
+            Error("Duplicate fragment output name");
+        }
+        if (duplicateLocation) {
+            Error("Duplicate fragment output location");
+        }
+
+        if (!duplicateName && !duplicateLocation &&
+            location < FragmentOutput::MAX_COLOR_ATTACHMENTS &&
+            name.nameHash != HASH_DEPTH &&
+            IsValidFragmentOutputCoreType(typeInfo.coreType)) {
+            FragmentOutputDeclData decl{};
+            decl.name = name;
+            decl.typeName = typeName;
+            decl.typeInfo = typeInfo;
+            decl.location = static_cast<u8>(location);
+            passData.fragmentOutputs.Push(arena, decl);
+        }
+
+        if (location >= nextLocation) {
+            nextLocation = location + 1;
+        }
+        while (Match(TokenType::COMMA) || Match(TokenType::SEMICOLON)) {
+        }
+    }
+
+    Consume(TokenType::RIGHT_BRACE, "Expected '}' after outputs");
 }
 
 void Parser::ParseUseAttributes(NodeRef pass) {
@@ -1023,4 +1155,3 @@ NodeRef Parser::ParseShaderStageExpression(ASTNodeType stageType) {
 //==============================================================================
 // Block and statement parsing
 //==============================================================================
-

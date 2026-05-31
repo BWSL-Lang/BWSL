@@ -1650,6 +1650,7 @@ CompileResult CompileShaderStage(
     lowering.currentStage = stage;
     lowering.currentPipeline = pipelineRef;
     lowering.currentPass = passRef;  // For pass-scoped function lookup
+    lowering.currentPassData = &pass;
     lowering.currentPassVaryings = varyingContext;  // Set varying context for vertex->fragment data flow
 
     for (u32 i = 0; i < pass.consts.count; i++) {

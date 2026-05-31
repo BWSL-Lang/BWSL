@@ -187,6 +187,7 @@ struct IRLowering {
 
   // Current pass for pass-scoped function lookup
   NodeRef currentPass;
+  const PassData *currentPassData = nullptr;
 
   // Current pass varying context for vertex-to-fragment data flow
   PassVaryingContext *currentPassVaryings = nullptr;
@@ -375,6 +376,10 @@ struct IRLowering {
   u32 GetBuiltinOutputSlot(u32 nameHash);
 
   CoreType GetBuiltinOutputType(u32 nameHash);
+
+  const FragmentOutputDeclData *FindFragmentOutput(u32 nameHash) const;
+  bool IsAllowedFragmentOutput(u32 nameHash) const;
+  CoreType GetFragmentOutputType(u32 nameHash) const;
 
   u32 ResolveOutputSlotForStore(u32 nameHash, CoreType valueType,
                                 const char *nameStr,

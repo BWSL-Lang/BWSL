@@ -160,6 +160,12 @@ enum class SpecialIdentifier : u8 {
     VARIANTS = 6    // Compiler-defined variant namespace
 };
 
+namespace FragmentOutput {
+    // BWSL's compiler-side MRT cap. Runtime backends still need to respect
+    // device/API limits; WebGL/GLES portability can be lower than this.
+    constexpr u32 MAX_COLOR_ATTACHMENTS = 8;
+}
+
 enum class BackendType {
     Metal,
     HLSL,      // DirectX

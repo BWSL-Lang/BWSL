@@ -160,6 +160,7 @@ ERROR_CASE_TESTS = {
     "interpolation_decorator_non_output.bwsl": "@flat and @noperspective can only decorate output assignments",
     "interpolation_decorator_noperspective_int.bwsl": "@noperspective can only be used on floating-point varyings",
     "interpolation_decorator_stack_conflict.bwsl": "Conflicting interpolation decorators on output assignment",
+    "undeclared_fragment_output.bwsl": "fragment output 'bloom' is not declared",
 }
 
 FORBIDDEN_SOURCE_ALIAS_NAMES = (

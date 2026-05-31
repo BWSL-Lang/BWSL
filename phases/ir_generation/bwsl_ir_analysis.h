@@ -113,12 +113,21 @@ struct IRAnalysis {
 namespace OutputSlot {
     constexpr u32 POSITION = 0;       // output.position -> BuiltIn Position
     constexpr u32 COLOR    = 1;       // output.color -> Location 0 (fragment)
+    constexpr u32 COLOR0   = COLOR;
     constexpr u32 VARYING0 = 2;       // First varying output
     constexpr u32 VARYING1 = 3;
     constexpr u32 VARYING2 = 4;
     constexpr u32 VARYING3 = 5;
     // Fragment depth
     constexpr u32 DEPTH    = 16;      // output.depth -> BuiltIn FragDepth
+
+    inline constexpr u32 FragmentColor(u32 location) {
+        return COLOR0 + location;
+    }
+
+    inline constexpr u32 FragmentColorLocation(u32 slot) {
+        return slot - COLOR0;
+    }
 }
 
 // Built-in input slot definitions (for vertex shader built-ins)

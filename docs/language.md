@@ -330,6 +330,26 @@ output.position = float4(attributes.position, 1.0);
 output.color = float4(1.0, 1.0, 1.0, 1.0);
 ```
 
+Fragment passes can declare multiple color outputs. Declaration order assigns
+locations unless `@location(n)` is used:
+
+```bwsl
+pass "GBuffer" {
+    outputs {
+        color: float4
+        bloom: float4
+    }
+
+    fragment {
+        output.color = float4(1.0);
+        output.bloom = float4(0.0);
+    }
+}
+```
+
+Without an `outputs` block, fragment output defaults to `output.color` at
+location 0 plus builtin `output.depth`.
+
 Named varyings are created by writing fields in vertex and reading matching
 fields in fragment:
 

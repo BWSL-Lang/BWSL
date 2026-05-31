@@ -257,6 +257,7 @@ private:
     void ParseComputeGraphOutputs(ComputeGraphNode& node);
 
     NodeRef ParsePass();
+    void ParsePassOutputs(NodeRef pass);
     NodeRef ParseAttributeDecl();
     NodeRef ParseResourceDecl();
     NodeRef ParseBlock();

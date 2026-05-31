@@ -371,8 +371,10 @@ Args parse_args(int argc, char **argv) {
     if (a.output_path.empty() || a.output_size == 0) {
       die("raster: --output, --output-size required");
     }
-    if (a.output_size != (size_t)a.width * a.height * 16) {
-      die("raster: --output-size must equal width*height*16 (RGBA32F)");
+    size_t expected_output_size =
+        (size_t)a.width * a.height * 16 * a.color_attachment_count;
+    if (a.output_size != expected_output_size) {
+      die("raster: --output-size must equal width*height*16*mrt (RGBA32F)");
     }
     return a;
   }

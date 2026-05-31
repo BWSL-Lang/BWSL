@@ -427,8 +427,32 @@ void GLESBuilder::EmitOutputs() {
             }
         }
     } else if (stage == ShaderStage::Fragment) {
-        // Fragment outputs - typically just color
-        out.Lit("layout(location = 0) out vec4 fragColor;\n");
+        // Fragment color attachments.
+        bool emittedColor = false;
+        if (analysis) {
+            for (u32 location = 0; location < FragmentOutput::MAX_COLOR_ATTACHMENTS; location++) {
+                u32 slot = OutputSlot::FragmentColor(location);
+                if (!(analysis->usedOutputMask & (1 << slot))) continue;
+
+                CoreType type = static_cast<CoreType>(analysis->outputTypes[slot]);
+                if (type == CoreType::VOID || type == CoreType::INVALID) {
+                    type = CoreType::FLOAT4;
+                }
+
+                out.Lit("layout(location = ");
+                out.Uint(location);
+                out.Lit(") out ");
+                EmitType(static_cast<u16>(type));
+                out.Lit(" fragColor");
+                out.Uint(location);
+                out.Lit(";\n");
+                emittedColor = true;
+            }
+        }
+
+        if (!emittedColor) {
+            out.Lit("layout(location = 0) out vec4 fragColor0;\n");
+        }
     }
     out.NL(0);
 }
@@ -1094,7 +1118,9 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
                 if (outputIdx == OutputSlot::DEPTH) {
                     out.Lit("gl_FragDepth = ");
                 } else {
-                    out.Lit("fragColor = ");
+                    out.Lit("fragColor");
+                    out.Uint(OutputSlot::FragmentColorLocation(outputIdx));
+                    out.Lit(" = ");
                 }
             } else if (stage == ShaderStage::Vertex) {
                 if (outputIdx == 0) {  // Position output (slot 0)
@@ -1148,7 +1174,14 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             u16 outputIdx = Op(instIdx, 0);
             EmitRegWithDecl(dest);
             out.Lit(" = ");
-            if (stage == ShaderStage::Vertex && outputIdx == 0) {
+            if (stage == ShaderStage::Fragment) {
+                if (outputIdx == OutputSlot::DEPTH) {
+                    out.Lit("gl_FragDepth");
+                } else {
+                    out.Lit("fragColor");
+                    out.Uint(OutputSlot::FragmentColorLocation(outputIdx));
+                }
+            } else if (stage == ShaderStage::Vertex && outputIdx == 0) {
                 out.Lit("gl_Position");
             } else if (varyings) {
                 // Convert IR slot (VARYING0=2, etc.) to VaryingInfo slot (0-based)
