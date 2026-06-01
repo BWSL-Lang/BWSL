@@ -19,7 +19,12 @@ set "COMMON_FLAGS=/nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB /Ivendor\SPIRV-
 set "RELEASE_FLAGS=/O2 /W4"
 set "DEBUG_FLAGS=/Zi /Od /W4"
 set "LINK_FLAGS=/link /STACK:8388608"
-set "SOURCES=tools\spirv_cross_wrapper.cpp tools\bwslc.cpp"
+set "WRAPPER_SRC=tools\spirv_cross_wrapper.cpp"
+set "BWSLC_SRC=tools\bwslc.cpp"
+
+set "COMPILER=cl"
+where sccache >nul 2>&1
+if not errorlevel 1 set "COMPILER=sccache cl"
 
 if /I "%TARGET%"=="bwslc" goto :build_release
 if /I "%TARGET%"=="release" goto :build_release
@@ -33,13 +38,21 @@ echo Unknown target: %TARGET%
 goto :help
 
 :build_release
-cl %RELEASE_FLAGS% %COMMON_FLAGS% /Fobuild\ /Febuild\bwslc.exe %SOURCES% %LINK_FLAGS%
+%COMPILER% %RELEASE_FLAGS% %COMMON_FLAGS% /c /Fobuild\spirv_cross_wrapper.obj %WRAPPER_SRC%
+if errorlevel 1 exit /b 1
+%COMPILER% %RELEASE_FLAGS% %COMMON_FLAGS% /c /Fobuild\bwslc.obj %BWSLC_SRC%
+if errorlevel 1 exit /b 1
+cl /nologo /Febuild\bwslc.exe build\spirv_cross_wrapper.obj build\bwslc.obj %LINK_FLAGS%
 if errorlevel 1 exit /b 1
 echo Built: build\bwslc.exe
 exit /b 0
 
 :build_debug
-cl %DEBUG_FLAGS% %COMMON_FLAGS% /Fobuild\ /Fdbuild\bwslc-debug.pdb /Febuild\bwslc-debug.exe %SOURCES% %LINK_FLAGS%
+%COMPILER% %DEBUG_FLAGS% %COMMON_FLAGS% /c /Fobuild\spirv_cross_wrapper_debug.obj %WRAPPER_SRC%
+if errorlevel 1 exit /b 1
+%COMPILER% %DEBUG_FLAGS% %COMMON_FLAGS% /c /Fdbuild\bwslc-debug.pdb /Fobuild\bwslc_debug.obj %BWSLC_SRC%
+if errorlevel 1 exit /b 1
+cl /nologo /Fdbuild\bwslc-debug.pdb /Febuild\bwslc-debug.exe build\spirv_cross_wrapper_debug.obj build\bwslc_debug.obj %LINK_FLAGS%
 if errorlevel 1 exit /b 1
 echo Built: build\bwslc-debug.exe
 exit /b 0
