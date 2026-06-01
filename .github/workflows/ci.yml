@@ -23,17 +23,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Build SPIRV-Tools CLI
-        run: |
-          cmake -S vendor/SPIRV-Tools -B build/spirv-tools \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DSPIRV_WERROR=OFF \
-            -DSPIRV_SKIP_TESTS=ON \
-            -DSPIRV-Headers_SOURCE_DIR="$GITHUB_WORKSPACE/vendor/SPIRV-Headers"
-          cmake --build build/spirv-tools --target spirv-dis spirv-val --parallel
-          echo "$GITHUB_WORKSPACE/build/spirv-tools/tools" >> "$GITHUB_PATH"
-
       - name: Build bwslc
         run: make bwslc
 
