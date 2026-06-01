@@ -70,6 +70,27 @@ SPIRV_CROSS_DIR = vendor/SPIRV-Cross
 SPIRV_CROSS_INCLUDES = -I$(SPIRV_CROSS_DIR)
 SPIRV_CROSS_FLAGS = -DUSE_SPIRV_CROSS_LIB
 
+# SPIRV-Tools (spirv-val, spirv-dis) — built from vendor when not on PATH.
+# Windows users are expected to supply these via the Vulkan SDK instead.
+SPIRV_TOOLS_SRC   = vendor/SPIRV-Tools
+SPIRV_HEADERS_SRC = vendor/SPIRV-Headers
+SPIRV_TOOLS_BUILD = $(BUILD_DIR)/spirv-tools-build
+SPIRV_TOOLS_STAMP = $(SPIRV_TOOLS_BUILD)/.bwsl-built
+
+CCACHE := $(shell command -v ccache 2>/dev/null)
+SPIRV_CMAKE_LAUNCHER = $(if $(CCACHE),\
+	-DCMAKE_C_COMPILER_LAUNCHER=ccache \
+	-DCMAKE_CXX_COMPILER_LAUNCHER=ccache,)
+
+SPIRV_TEST_DEPS =
+ifneq ($(HOST_OS),windows)
+HAS_SPIRV_VAL := $(shell command -v spirv-val 2>/dev/null)
+HAS_SPIRV_DIS := $(shell command -v spirv-dis 2>/dev/null)
+ifeq ($(and $(HAS_SPIRV_VAL),$(HAS_SPIRV_DIS)),)
+SPIRV_TEST_DEPS = spirv-tools
+endif
+endif
+
 BWSL_INCLUDE_DIRS = -I. -Icore -Icore/middleware \
 	-Iphases/lexing -Iphases/parser -Iphases/evaluation \
 	-Iphases/ir_generation -Iphases/ir_lowering -Iphases/control_flow \
@@ -82,6 +103,11 @@ MSVC_BWSL_INCLUDE_DIRS = /I. /Icore /Icore/middleware \
 # Native Unix toolchain
 ifeq ($(origin CXX), default)
 CXX = clang++
+endif
+ifneq ($(CCACHE),)
+ifeq ($(findstring ccache,$(firstword $(CXX))),)
+CXX := $(CCACHE) $(CXX)
+endif
 endif
 CXXFLAGS ?= -O3 -march=native -std=c++20 -Wall -Wextra
 CXXFLAGS_DEBUG ?= -g -O0 -std=c++20 -Wall -Wextra
@@ -113,8 +139,10 @@ SPIRV_CROSS_WRAPPER_OBJ = $(BUILD_DIR)/spirv_cross_wrapper.obj
 SPIRV_CROSS_WRAPPER_DEBUG_OBJ = $(BUILD_DIR)/spirv_cross_wrapper_debug.obj
 BWSLC_OBJ = $(BUILD_DIR)/bwslc.obj
 BWSLC_DEBUG_OBJ = $(BUILD_DIR)/bwslc_debug.obj
-BWSLC_PREREQS = $(SPIRV_CROSS_WRAPPER_OBJ) $(BWSLC_OBJ)
-BWSLC_DEBUG_PREREQS = $(SPIRV_CROSS_WRAPPER_DEBUG_OBJ) $(BWSLC_DEBUG_OBJ)
+BWSLC_PREREQS = $(SPIRV_CROSS_WRAPPER_OBJ)
+BWSLC_DEBUG_PREREQS = $(SPIRV_CROSS_WRAPPER_DEBUG_OBJ)
+BWSLC_COMPILE_CMD = $(MSVC_CXX) $(MSVC_RELEASE_FLAGS) $(MSVC_COMMON_FLAGS) /c /Fo$(BWSLC_OBJ) $(BWSLC_SRC)
+BWSLC_DEBUG_COMPILE_CMD = $(MSVC_CXX) $(MSVC_DEBUG_FLAGS) $(MSVC_COMMON_FLAGS) /Fd$(WIN_BUILD_DIR)\bwslc-debug.pdb /c /Fo$(BWSLC_DEBUG_OBJ) $(BWSLC_SRC)
 NATIVE_BWSLC_CMD = $(MSVC_CXX) $(MSVC_RELEASE_FLAGS) $(MSVC_COMMON_FLAGS) \
 	/Fe$(WIN_BWSLC_OUT) $(SPIRV_CROSS_WRAPPER_OBJ) $(BWSLC_OBJ) $(MSVC_LINK_FLAGS)
 NATIVE_BWSLC_DEBUG_CMD = $(MSVC_CXX) $(MSVC_DEBUG_FLAGS) $(MSVC_COMMON_FLAGS) \
@@ -139,8 +167,12 @@ SPIRV_CROSS_WRAPPER_OBJ = $(BUILD_DIR)/spirv_cross_wrapper.o
 SPIRV_CROSS_WRAPPER_DEBUG_OBJ = $(BUILD_DIR)/spirv_cross_wrapper_debug.o
 BWSLC_OBJ = $(BUILD_DIR)/bwslc.o
 BWSLC_DEBUG_OBJ = $(BUILD_DIR)/bwslc_debug.o
-BWSLC_PREREQS = $(SPIRV_CROSS_WRAPPER_OBJ) $(BWSLC_OBJ)
-BWSLC_DEBUG_PREREQS = $(SPIRV_CROSS_WRAPPER_DEBUG_OBJ) $(BWSLC_DEBUG_OBJ)
+BWSLC_PREREQS = $(SPIRV_CROSS_WRAPPER_OBJ)
+BWSLC_DEBUG_PREREQS = $(SPIRV_CROSS_WRAPPER_DEBUG_OBJ)
+BWSLC_COMPILE_CMD = $(CXX) -c $(CXXFLAGS) $(SPIRV_CROSS_FLAGS) $(SPIRV_CROSS_INCLUDES) $(BWSL_INCLUDE_DIRS) \
+	-o $(BWSLC_OBJ) $(BWSLC_SRC)
+BWSLC_DEBUG_COMPILE_CMD = $(CXX) -c $(CXXFLAGS_DEBUG) $(SPIRV_CROSS_FLAGS) $(SPIRV_CROSS_INCLUDES) $(BWSL_INCLUDE_DIRS) \
+	-o $(BWSLC_DEBUG_OBJ) $(BWSLC_SRC)
 NATIVE_BWSLC_CMD = $(CXX) $(CXXFLAGS) -o $(BWSLC_OUT) $(SPIRV_CROSS_WRAPPER_OBJ) $(BWSLC_OBJ)
 NATIVE_BWSLC_DEBUG_CMD = $(CXX) $(CXXFLAGS_DEBUG) -o $(BWSLC_DEBUG_OUT) $(SPIRV_CROSS_WRAPPER_DEBUG_OBJ) $(BWSLC_DEBUG_OBJ)
 MKDIR_BUILD = mkdir -p $(BUILD_DIR)
@@ -196,7 +228,7 @@ WASM_SPIRV_INCLUDES = $(BWSL_INCLUDE_DIRS) -Itools
 
 .PHONY: all help bwslc bwslc-debug bwslc-sanitize bwslc-msvc bwslc-msvc-debug \
 	bwslc-win-zig bwslc-win-zig-debug clean wasm wasm-debug test test-sanitize \
-	install equiv_runner
+	install equiv_runner spirv-tools
 
 all: bwslc
 
@@ -208,16 +240,25 @@ help:
 	@echo "  make bwslc-win-zig      Windows cross-build with Zig"
 	@echo "  make wasm               WebAssembly module"
 	@echo "  make wasm-debug         WebAssembly module with debug info"
+	@echo "  make spirv-tools        Build spirv-val/spirv-dis from vendor (auto on make test)"
 	@echo "  make install DOCS_DIR=/path/to/site/public/wasm"
 	@echo "  make clean              Remove build artifacts"
 
 bwslc: $(BWSLC_PREREQS)
+	$(BWSLC_COMPILE_CMD)
 	$(NATIVE_BWSLC_CMD)
 	@echo "Built: $(BWSLC_OUT)"
 
 bwslc-debug: $(BWSLC_DEBUG_PREREQS)
+	$(BWSLC_DEBUG_COMPILE_CMD)
 	$(NATIVE_BWSLC_DEBUG_CMD)
 	@echo "Built: $(BWSLC_DEBUG_OUT)"
+
+$(BWSLC_OUT): $(SPIRV_CROSS_WRAPPER_OBJ) $(BWSLC_OBJ)
+	$(NATIVE_BWSLC_CMD)
+
+$(BWSLC_DEBUG_OUT): $(SPIRV_CROSS_WRAPPER_DEBUG_OBJ) $(BWSLC_DEBUG_OBJ)
+	$(NATIVE_BWSLC_DEBUG_CMD)
 
 # Sanitizer build: ASan + UBSan, no optimization, frame pointers retained.
 # Used by the regression harness (`make test-sanitize`) to catch memory and
@@ -257,6 +298,21 @@ equiv_runner: $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(VULKAN_INCLUDE) -o $(EQUIV_RUNNER_OUT) \
 		$(EQUIV_RUNNER_SRC) $(VULKAN_LIBS)
 	@echo "Built: $(EQUIV_RUNNER_OUT)"
+
+spirv-tools: $(SPIRV_TOOLS_STAMP)
+
+$(SPIRV_TOOLS_STAMP): $(SPIRV_TOOLS_SRC)/CMakeLists.txt | $(BUILD_DIR)
+	cmake -S $(SPIRV_TOOLS_SRC) \
+		-B $(SPIRV_TOOLS_BUILD) \
+		-DCMAKE_BUILD_TYPE=Release \
+		"-DSPIRV-Headers_SOURCE_DIR=$(abspath $(SPIRV_HEADERS_SRC))" \
+		$(SPIRV_CMAKE_LAUNCHER) \
+		-DSPIRV_SKIP_TESTS=ON \
+		-DSPIRV_WERROR=OFF \
+		-DSPIRV_BUILD_FUZZER=OFF
+	cmake --build $(SPIRV_TOOLS_BUILD) --target spirv-val spirv-dis --parallel
+	@touch $@
+	@echo "Built: $(SPIRV_TOOLS_BUILD)/tools/spirv-val spirv-dis"
 
 # libFuzzer build. Apple's bundled clang ships without libclang_rt.fuzzer on
 # some Xcode versions, so default to Homebrew LLVM when it's installed.
@@ -370,8 +426,8 @@ test:
 		exit 1; \
 	fi
 else
-test: bwslc
-	./tests/run_tests.sh
+test: bwslc $(SPIRV_TEST_DEPS)
+	PATH="$(abspath $(SPIRV_TOOLS_BUILD)/tools):$$PATH" ./tests/run_tests.sh
 endif
 
 # ============================================================================
