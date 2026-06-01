@@ -555,6 +555,9 @@ NodeRef Parser::SpecializePipelineForVariants(NodeRef pipeline,
     for (u32 i = 0; i < srcPipeline.imports.count; i++) {
         dstPipeline.imports.Push(arena, srcPipeline.imports[i]);
     }
+    for (u32 i = 0; i < srcPipeline.usingImports.count; i++) {
+        dstPipeline.usingImports.Push(arena, srcPipeline.usingImports[i]);
+    }
     for (u32 i = 0; i < srcPipeline.attributes.count; i++) {
         dstPipeline.attributes.Push(arena, srcPipeline.attributes[i]);
     }

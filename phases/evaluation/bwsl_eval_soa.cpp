@@ -317,11 +317,15 @@ bool CompileTimeEvaluatorSoA::CanEvaluateNode(EvalStateSoA* state, NodeRef node)
                     return true;
                 }
 
-                // Look up as a qualified name (Module::member)
-                std::string moduleName = moduleIdent.name.ToString(state->parser->sourceBase());
-                std::string memberName = access.member.ToString(state->parser->sourceBase());
-                std::string qualifiedName = moduleName + "::" + memberName;
-                u32 qualifiedHash = Utils::HashStr(qualifiedName.c_str());
+                // Look up as a qualified name (Module::member). The parser
+                // canonicalizes aliases when it creates the member access.
+                u32 qualifiedHash = access.qualifiedNameHash;
+                if (qualifiedHash == 0) {
+                    std::string moduleName = moduleIdent.name.ToString(state->parser->sourceBase());
+                    std::string memberName = access.member.ToString(state->parser->sourceBase());
+                    std::string qualifiedName = moduleName + "::" + memberName;
+                    qualifiedHash = Utils::HashStr(qualifiedName.c_str());
+                }
 
                 Symbol* sym = SymbolTable::LookupByHash(&state->parser->symbolTable, qualifiedHash);
                 if (sym && sym->kind == SymbolKind::EVAL_CONSTANT) return true;

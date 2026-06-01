@@ -213,7 +213,8 @@ NodeRef Parser::ParseFunction() {
         // Check for module-qualified type: Module::Type
         if (Match(TokenType::DOUBLE_COLON)) {
             Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
-            customReturnTypeName = returnTypeName + "::" + std::string(stream->GetValue(previous));
+            customReturnTypeName = CanonicalizeModuleQualifiedName(
+                returnTypeName, std::string(stream->GetValue(previous)));
         } else {
             customReturnTypeName = returnTypeName;
         }
@@ -416,7 +417,7 @@ void Parser::ParseFunctionParameters(NodeRef function) {
                 std::string moduleName = identifierStr;
                 Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
                 std::string typeName(stream->GetValue(previous));
-                paramType = moduleName + "::" + typeName;
+                paramType = CanonicalizeModuleQualifiedName(moduleName, typeName);
 
                 // Now expect parameter name
                 if (Check(TokenType::IDENTIFIER)) {
@@ -442,7 +443,8 @@ void Parser::ParseFunctionParameters(NodeRef function) {
                     // Check for module-qualified type after colon
                     if (Match(TokenType::DOUBLE_COLON)) {
                         Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
-                        paramType = typeIdent + "::" + std::string(stream->GetValue(previous));
+                        paramType = CanonicalizeModuleQualifiedName(
+                            typeIdent, std::string(stream->GetValue(previous)));
                     } else {
                         paramType = typeIdent;
                     }
@@ -528,4 +530,3 @@ void Parser::ParseFunctionsBlockBody(NodeRef block) {
 //==============================================================================
 // Eval statement parsing
 //==============================================================================
-

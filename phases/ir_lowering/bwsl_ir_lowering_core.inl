@@ -5,6 +5,16 @@ inline void IRLowering::ReportError(const char *message) {
   hadError = true;
 }
 
+inline NamespaceKind IRLowering::AliasOwnerKind() const {
+  return (inlineModuleIndex != 0xFFFFFFFF)
+             ? NamespaceKind::MODULE
+             : NamespaceKind::GLOBAL;
+}
+
+inline u32 IRLowering::AliasOwnerModuleIndex() const {
+  return (inlineModuleIndex != 0xFFFFFFFF) ? inlineModuleIndex : INVALID_INDEX;
+}
+
 inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData *symTable,
                 AST *astData, const char *srcBase) {
   pool = memPool;

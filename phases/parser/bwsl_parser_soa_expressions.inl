@@ -213,8 +213,7 @@ NodeRef Parser::ParsePostfix() {
                 }
 
                 // Look up in symbol table for module constants
-                u32 moduleHash = moduleName.nameHash;
-                u32 moduleIdx = SymbolTable::FindModuleByHash(&symbolTable, moduleHash);
+                u32 moduleIdx = ResolveModuleIndexByWrittenName(moduleName);
                 if (moduleIdx != INVALID_INDEX) {
                     // Check for module constant using Lookup with MODULE namespace
                     Symbol* sym = SymbolTable::Lookup(&symbolTable, memberArena,
@@ -263,7 +262,8 @@ NodeRef Parser::ParsePostfix() {
                 MemberAccessData& access = ast->GetMemberAccess(expr);
                 access.isModuleQualified = true;
                 // Pre-compute the qualified hash since memberArena is hash-only and ToString() won't work later
-                std::string qualifiedName = moduleName.ToString(sourceBase()) + "::" + memberName;
+                std::string qualifiedName =
+                    CanonicalizeModuleQualifiedName(moduleName.ToString(sourceBase()), memberName);
                 access.qualifiedNameHash = Utils::HashStr(qualifiedName.c_str());
             }
             // Case 2: Module::Enum::Variant (expr is MemberAccess with isModuleQualified=true)
@@ -287,16 +287,18 @@ NodeRef Parser::ParsePostfix() {
                     return NodeRef::Null();
                 }
                 const ArenaString& moduleName = ast->GetIdentifier(prevAccess.object).name;
-                u32 moduleIdx = SymbolTable::FindModuleByHash(&symbolTable, moduleName.nameHash);
+                u32 moduleIdx = ResolveModuleIndexByWrittenName(moduleName);
 
                 if (moduleIdx == INVALID_INDEX) {
                     Error("Unknown module '" + moduleName.ToString(sourceBase()) + "'");
                     return NodeRef::Null();
                 }
 
+                u32 resolvedModuleHash = SymbolTable::ResolveModuleNameHash(&symbolTable, moduleName.nameHash);
+
                 std::string syntheticQualifiedName;
                 syntheticQualifiedName.reserve(2 + 10 + 10);
-                syntheticQualifiedName.append("m").append(std::to_string(moduleName.nameHash));
+                syntheticQualifiedName.append("m").append(std::to_string(resolvedModuleHash));
                 syntheticQualifiedName.append("::");
                 syntheticQualifiedName.append("e").append(std::to_string(enumName.nameHash));
                 Symbol* enumSym = SymbolTable::LookupByHash(&symbolTable,
@@ -331,8 +333,9 @@ NodeRef Parser::ParsePostfix() {
                     expr = ASTFactory::MakeMemberAccess(ast, expr, variantArena, loc.line, loc.column);
                     MemberAccessData& access = ast->GetMemberAccess(expr);
                     access.isModuleQualified = true;
-                    std::string qualifiedName = moduleName.ToString(sourceBase()) + "::" +
-                                                enumName.ToString(sourceBase()) + "::" + variantName;
+                    std::string qualifiedName =
+                        CanonicalizeModuleQualifiedName(moduleName.ToString(sourceBase()),
+                                                        enumName.ToString(sourceBase()) + "::" + variantName);
                     access.qualifiedNameHash = Utils::HashStr(qualifiedName.c_str());
                     continue;
                 }
@@ -616,7 +619,7 @@ NodeRef Parser::ParseFunctionCall(NodeRef function) {
             ast->GetFunctionCall(call).moduleObject = access.object;
             if (access.object.Type() == ASTNodeType::IDENTIFIER) {
                 const IdentifierData& moduleIdent = ast->GetIdentifier(access.object);
-                u32 moduleIdx = SymbolTable::FindModuleByHash(&symbolTable, moduleIdent.name.nameHash);
+                u32 moduleIdx = ResolveModuleIndexByWrittenName(moduleIdent.name);
                 if (moduleIdx != INVALID_INDEX) {
                     ast->GetFunctionCall(call).moduleIndex = moduleIdx;
                 }
@@ -814,4 +817,3 @@ NodeRef Parser::FlattenMultiDimArrayAccess(NodeRef access) {
 //==============================================================================
 // Helper functions
 //==============================================================================
-

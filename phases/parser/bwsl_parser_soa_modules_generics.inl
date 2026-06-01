@@ -35,59 +35,9 @@ NodeRef Parser::ParseModule() {
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
         ProgressGuard _pg_(this);
         if (Match(TokenType::IMPORT)) {
-            // Parse module imports
-            static constexpr u32 MAX_IMPORTS = 32;
-            u32 importedHashes[MAX_IMPORTS];
-            u32 importCount = 0;
-
-            while (Check(TokenType::IDENTIFIER)) {
-                std::string depModuleName(stream->GetValue(current));
-                Advance();
-
-                u32 depHash = Utils::HashStr(depModuleName.c_str());
-
-                // Check for duplicate imports
-                bool alreadyImported = false;
-                for (u32 i = 0; i < importCount; i++) {
-                    if (importedHashes[i] == depHash) {
-                        alreadyImported = true;
-                        break;
-                    }
-                }
-
-                if (!alreadyImported) {
-                    // Try to find or register the module
-                    u32 depModuleIdx = SymbolTable::FindModuleByHash(&symbolTable, depHash);
-                    if (depModuleIdx == INVALID_INDEX) {
-                        if (TryRegisterModuleFromDisk(depModuleName)) {
-                            depModuleIdx = SymbolTable::FindModuleByHash(&symbolTable, depHash);
-                        }
-                    }
-
-                    if (depModuleIdx != INVALID_INDEX) {
-                        ArenaString depName = ArenaString::MakeHashOnly(depModuleName);
-                        ast->GetModule(module).imports.Push(arena, depName);
-
-                        if (importCount < MAX_IMPORTS) {
-                            importedHashes[importCount++] = depHash;
-                        }
-
-                        symbolTable.importedModules.Push(arena, depModuleIdx);
-                    } else {
-                        char msg[256];
-                        snprintf(msg, sizeof(msg),
-                                 "Unknown module '%s'. Module not found in search paths",
-                                 depModuleName.c_str());
-                        ErrorAtPrevious(msg);
-                    }
-                }
-
-                if (Check(TokenType::COMMA)) {
-                    Advance();
-                } else {
-                    break;
-                }
-            }
+            ParseModuleImportList(module, false);
+        } else if (Match(TokenType::USING)) {
+            ParseUsingDeclaration(module, false);
         } else if (IsFunctionDeclStart()) {
             // Module function (may be generic or regular)
             NodeRef func = ParseFunction();
@@ -422,6 +372,21 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
         return *cached;  // Cache hit
     }
 
+    std::string canonicalTypeName = CanonicalizeTypeName(typeName);
+    if (canonicalTypeName != typeName) {
+        TypeInfo resolved = ResolveType(canonicalTypeName);
+        typeCache.Insert(typeHash, resolved);
+        return resolved;
+    }
+
+    u32 resolvedAliasHash = SymbolTable::ResolveTypeAliasHash(&symbolTable, typeHash);
+    if (resolvedAliasHash != typeHash) {
+        std::string resolvedName = ReverseLookup::GetString(resolvedAliasHash);
+        TypeInfo resolved = ResolveType(resolvedName);
+        typeCache.Insert(typeHash, resolved);
+        return resolved;
+    }
+
     // Fast path 3: Check pre-computed core type hashes. GENERIC_T/U/V are
     // the short names `T`, `U`, `V` — but a user may have defined a
     // struct or enum with exactly that name (real-world shader code uses
@@ -491,8 +456,43 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
         }
     } else {
         // Module-qualified type: Module::Type
+        std::string moduleName(typeName.c_str(), colonColon - typeName.c_str());
+        std::string localTypeName(colonColon + 2);
+        ArenaString moduleArena = ArenaString::MakeHashOnly(moduleName);
+        ArenaString localTypeArena = ArenaString::MakeHashOnly(localTypeName);
+        u32 resolvedModuleHash = SymbolTable::ResolveModuleNameHash(&symbolTable, moduleArena.nameHash);
+
+        std::string internalName = "m" + std::to_string(resolvedModuleHash) +
+                                   "::s" + std::to_string(localTypeArena.nameHash);
+        Symbol* sym = SymbolTable::LookupByHash(&symbolTable,
+            Utils::HashStr(internalName.c_str()));
+        if (!sym) {
+            internalName = "m" + std::to_string(resolvedModuleHash) +
+                           "::e" + std::to_string(localTypeArena.nameHash);
+            sym = SymbolTable::LookupByHash(&symbolTable,
+                Utils::HashStr(internalName.c_str()));
+        }
+        if (sym && sym->kind == SymbolKind::CUSTOM_TYPE) {
+            result = GetTypeInfoFromSymbol(sym);
+            result.customTypeHash = localTypeArena.nameHash;
+            typeCache.Insert(typeHash, result);
+            return result;
+        }
+        if (sym && (sym->kind == SymbolKind::ENUM || sym->kind == SymbolKind::ENUM_SYMBOL)) {
+            EnumData& enumData = symbolTable.enums[sym->index];
+            if (enumData.flags & EnumData::IS_SUM_TYPE) {
+                result = TypeInfo{CoreType::CUSTOM, 1, 0, 0, enumData.name.nameHash, 0, 0};
+            } else {
+                CoreType baseType = enumData.underlyingType;
+                if (baseType == CoreType::INVALID) baseType = CoreType::INT;
+                result = TYPE_INFO(baseType, 1, false);
+            }
+            typeCache.Insert(typeHash, result);
+            return result;
+        }
+
         // First check symbol table for imported types
-        Symbol* sym = SymbolTable::LookupByHash(&symbolTable, typeHash);
+        sym = SymbolTable::LookupByHash(&symbolTable, typeHash);
         if (sym && sym->kind == SymbolKind::CUSTOM_TYPE) {
             result = GetTypeInfoFromSymbol(sym);
             typeCache.Insert(typeHash, result);
@@ -520,4 +520,3 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
 // Shader Stage Expression Resolution
 // Resolves deferred shader expressions (function calls/ternaries) at compile-time
 //==============================================================================
-

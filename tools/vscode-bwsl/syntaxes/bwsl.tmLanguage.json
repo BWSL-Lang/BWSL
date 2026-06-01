@@ -389,7 +389,7 @@
         },
         {
           "name": "keyword.declaration.bwsl",
-          "match": "\\b(?:pipeline|module|import|use|pass|node|shader|inputs|outputs|resources|attributes|variants|rules|require|conflict|const|shared|extend|extends|readonly|readwrite|writeonly|slot|out|eval|enum|struct|constraint|where|range)\\b"
+          "match": "\\b(?:pipeline|module|import|using|use|pass|node|shader|inputs|outputs|resources|attributes|variants|rules|require|conflict|const|shared|extend|extends|readonly|readwrite|writeonly|slot|out|eval|enum|struct|constraint|where|range)\\b"
         },
         {
           "name": "storage.type.stage.bwsl",

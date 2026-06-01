@@ -27,6 +27,7 @@ The parser currently accepts the following top-level declarations inside a
 `pipeline` body:
 
 - `import`
+- `using`
 - `attributes { ... }`
 - `variants { ... }`
 - `compute_graph { ... }`
@@ -54,6 +55,7 @@ The parser currently accepts the following top-level declarations inside a
 `module` body:
 
 - `import`
+- `using`
 - function declarations
 - `struct`
 - `enum`
@@ -66,9 +68,25 @@ Imports name modules by identifier and may be comma-separated:
 ```bwsl
 import Math
 import Math, Noise
+import PBR as BRDF
 ```
 
 Module resolution depends on the compiler's configured module search paths.
+
+`using ModuleName` opts an already-imported module into unqualified lookup. It
+does not import the module:
+
+```bwsl
+import Math as M
+using M
+```
+
+`using Alias = Type` declares a scoped type alias:
+
+```bwsl
+import PBR as BRDF
+using Material = BRDF::PBRMaterial
+```
 
 ## Pass Naming
 
