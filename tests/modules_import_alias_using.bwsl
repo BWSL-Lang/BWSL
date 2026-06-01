@@ -1,0 +1,70 @@
+pipeline ModuleImportAliasUsing {
+    module AliasClient {
+        import Math as M
+        import Debug
+        using Debug
+
+        alias_area :: (float radius) -> float {
+            return M::PI * radius * radius;
+        }
+
+        alias_normal :: (float3 n) -> float3 {
+            return M::safe_normalize(n);
+        }
+
+        using_heat :: (float value) -> float3 {
+            return heatmap(saturate(value));
+        }
+    }
+
+    import Math as MyAwesomeModule, Random as RNG
+    import PBR as BRDF
+    import AliasClient as Client
+    import Debug
+    using Material = BRDF::PBRMaterial
+    using MyAwesomeModule
+    using Debug
+
+    alias_lighting :: (Material mat, float3 normal, float3 viewDir, float3 lightDir, float3 radiance) -> float3 {
+        return BRDF::calculateDirectLighting(mat, normal, viewDir, lightDir, radiance);
+    }
+
+    attributes {
+        position: float3
+        normal: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, normal, texcoord }
+
+        vertex {
+            float3 normal = MyAwesomeModule::safe_normalize(attributes.normal + float3(0.01, 0.02, 0.03));
+            float angle = attributes.texcoord.x * MyAwesomeModule::TAU;
+            float wave = triangle_wave(angle * INV_TAU);
+            float randomValue = RNG::rand(uint(17));
+
+            Material mat;
+            mat.albedo = float3(0.6, 0.4, 0.2);
+            mat.roughness = 0.5;
+            mat.metallic = 0.1;
+            mat.ao = 1.0;
+
+            float3 viewDir = Client::alias_normal(float3(0.0, 0.0, 1.0));
+            float3 lightDir = Client::alias_normal(float3(0.4, 0.6, 1.0));
+            float3 radiance = float3(1.0, 0.9, 0.8);
+            float3 lit = alias_lighting(mat, normal, viewDir, lightDir, radiance);
+
+            float aliasArea = Client::alias_area(0.5);
+            float3 heat = heatmap(saturate(randomValue + aliasArea * 0.01 + wave * 0.1));
+            float3 clientHeat = Client::using_heat(randomValue);
+
+            output.position = float4(attributes.position + normal * 0.01, 1.0);
+            output.normal = saturate(lit + heat * 0.05 + clientHeat * 0.05);
+        }
+
+        fragment {
+            output.color = float4(saturate(input.normal), 1.0);
+        }
+    }
+}

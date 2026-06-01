@@ -135,6 +135,7 @@ public:
         table[DMAT2] = 5;
         table[DMAT3] = 5;
         table[DMAT4] = 5;
+        table[USING] = 5;
         table[WHERE] = 5;
         table[FALSE] = 5;
         table[CONST] = 5;
@@ -381,6 +382,7 @@ inline const char* TokenTypeName(TokenType type) {
         case SWITCH: return "SWITCH";
         case DEFAULT: return "DEFAULT";
         case VOID: return "VOID";
+        case USING: return "USING";
         default: return "UNKNOWN";
     }
 }

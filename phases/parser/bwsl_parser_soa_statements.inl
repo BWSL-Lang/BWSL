@@ -539,7 +539,7 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
         Advance(); // consume ::
         Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
         std::string localTypeName(stream->GetValue(previous));
-        typeName = moduleName + "::" + localTypeName;
+        typeName = CanonicalizeModuleQualifiedName(moduleName, localTypeName);
         isModuleQualified = true;
     } else {
         // Simple type name
@@ -625,6 +625,7 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
 
         ArenaString moduleArena = ArenaString::MakeHashOnly(moduleName);
         ArenaString localTypeArena = ArenaString::MakeHashOnly(localTypeName);
+        u32 resolvedModuleHash = SymbolTable::ResolveModuleNameHash(&symbolTable, moduleArena.nameHash);
 
         // Store the unqualified type hash for later use
         unqualifiedTypeHash = localTypeArena.nameHash;
@@ -632,12 +633,12 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
         // Build internal qualified names. Structs and enums live in separate
         // synthetic namespaces (`::s` vs `::e`), but source uses the same
         // Module::Type spelling for both.
-        std::string internalName = "m" + std::to_string(moduleArena.nameHash) +
+        std::string internalName = "m" + std::to_string(resolvedModuleHash) +
                                    "::s" + std::to_string(localTypeArena.nameHash);
         ArenaString internalArena = ArenaString::MakeHashOnly(internalName);
         typeSym = SymbolTable::LookupAny(&symbolTable, internalArena);
         if (!typeSym) {
-            internalName = "m" + std::to_string(moduleArena.nameHash) +
+            internalName = "m" + std::to_string(resolvedModuleHash) +
                            "::e" + std::to_string(localTypeArena.nameHash);
             internalArena = ArenaString::MakeHashOnly(internalName);
             typeSym = SymbolTable::LookupAny(&symbolTable, internalArena);
@@ -645,6 +646,7 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
     } else {
         typeSym = SymbolTable::LookupAny(&symbolTable, typeArena);
     }
+    TypeInfo resolvedDeclType = ResolveType(typeName);
 
     u32 arrayElementTypeHash = 0;
     if (!arrayDims.empty()) {
@@ -690,7 +692,9 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
     Symbol* varSym = SymbolTable::AddSymbol(&symbolTable,
         ArenaString::MakeHashOnly(varName), SymbolKind::VARIABLE);
     if (varSym) {
-        if (typeSym && (typeSym->kind == SymbolKind::ENUM || typeSym->kind == SymbolKind::ENUM_SYMBOL)) {
+        if (resolvedDeclType.coreType != CoreType::INVALID) {
+            symbolTable.variables[varSym->index].typeInfo = resolvedDeclType;
+        } else if (typeSym && (typeSym->kind == SymbolKind::ENUM || typeSym->kind == SymbolKind::ENUM_SYMBOL)) {
             EnumData& enumData = symbolTable.enums[typeSym->index];
             if (enumData.flags & EnumData::IS_SUM_TYPE) {
                 symbolTable.variables[varSym->index].typeInfo.coreType = CoreType::CUSTOM;

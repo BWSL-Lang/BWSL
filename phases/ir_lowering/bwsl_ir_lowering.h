@@ -196,6 +196,8 @@ struct IRLowering {
   const char *sourceBase = nullptr;
 
   void ReportError(const char *message);
+  NamespaceKind AliasOwnerKind() const;
+  u32 AliasOwnerModuleIndex() const;
 
   void Initialize(IRMemoryPool *memPool, const SymbolTableData *symTable,
                   AST *astData, const char *srcBase = nullptr);

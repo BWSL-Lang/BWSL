@@ -1,0 +1,17 @@
+pipeline ModuleAliasScopeIsolation {
+    module AliasClient {
+        import Math as M
+
+        area :: (float radius) -> float {
+            return M::PI * radius * radius;
+        }
+    }
+
+    import AliasClient
+
+    pass "Main" {
+        compute "Main" [1, 1, 1] {
+            float value = M::PI;
+        }
+    }
+}

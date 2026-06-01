@@ -1,0 +1,9 @@
+pipeline ImportAliasConflict {
+    import Math as Tools, Random as Tools
+
+    pass "Main" {
+        compute "Main" [1, 1, 1] {
+            uint idx = input.global_id.x;
+        }
+    }
+}

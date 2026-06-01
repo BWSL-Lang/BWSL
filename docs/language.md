@@ -39,6 +39,7 @@ pipeline Demo {
 A pipeline file can contain:
 
 - `import`
+- `using`
 - `attributes { ... }`
 - `resources { ... }`
 - `const`
@@ -428,9 +429,44 @@ pipeline Demo {
 }
 ```
 
+Imports can be aliased with `as`. A `using ModuleName` declaration makes an
+already-imported module available for unqualified function and constant lookup;
+it does not import the module by itself.
+
+```bwsl
+pipeline Demo {
+    import TestMath as TM
+    using TM
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float area = square(2.0) * TM::PI;
+            output.position = float4(attributes.position, 1.0);
+        }
+    }
+}
+```
+
+`using Alias = Type` creates a scoped type alias. Module-qualified targets may
+use either the real module name or an import alias.
+
+```bwsl
+pipeline MaterialDemo {
+    import PBR as BRDF
+    using Material = BRDF::PBRMaterial
+
+    shade :: (Material mat, float3 normal) -> float3 {
+        return mat.albedo * saturate(normal.y);
+    }
+}
+```
+
 Supported module contents:
 
 - `import`
+- `using`
 - `const`
 - functions
 - `struct`

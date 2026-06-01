@@ -162,6 +162,24 @@ inline u16 IRLowering::EmitZeroConstant(CoreType type) {
 }
 
 inline u32 IRLowering::LookupOrRegisterStructType(u32 typeNameHash) {
+  u32 resolvedAliasHash = SymbolTable::ResolveTypeAliasHashInScope(
+      symbols, typeNameHash, AliasOwnerKind(), AliasOwnerModuleIndex());
+  if (resolvedAliasHash != typeNameHash) {
+    u32 result = LookupOrRegisterStructType(resolvedAliasHash);
+    if (result != 0) {
+      auto resolvedIt = structTypeMap.find(resolvedAliasHash);
+      if (resolvedIt != structTypeMap.end()) {
+        structTypeMap[typeNameHash] = resolvedIt->second;
+      } else {
+        auto canonicalIt = structTypeMap.find(result);
+        if (canonicalIt != structTypeMap.end()) {
+          structTypeMap[typeNameHash] = canonicalIt->second;
+        }
+      }
+    }
+    return result;
+  }
+
   // Check if already registered with this hash
   auto it = structTypeMap.find(typeNameHash);
   if (it != structTypeMap.end()) {
@@ -1052,6 +1070,9 @@ inline CoreType IRLowering::ResolveCoreTypeFromHash(u32 typeHash, u32 *outCustom
     *outCustomHash = 0;
   }
 
+  typeHash = SymbolTable::ResolveTypeAliasHashInScope(
+      symbols, typeHash, AliasOwnerKind(), AliasOwnerModuleIndex());
+
   CoreType coreType = LookupCoreType(typeHash);
   // GENERIC_T/U/V collide with single-letter user struct names (`V`,
   // `T`, `U` — common in shader code for vertex, texture, etc.). Prefer
@@ -1112,6 +1133,50 @@ inline CoreType IRLowering::ResolveCoreTypeFromHash(u32 typeHash, u32 *outCustom
       *outCustomHash = structData.name.nameHash;
     }
     return CoreType::CUSTOM;
+  }
+
+  std::string typeName = ReverseLookup::GetString(typeHash);
+  size_t scopePos = typeName.find("::");
+  if (scopePos != std::string::npos && typeName.rfind("<hash:", 0) != 0) {
+    std::string moduleName = typeName.substr(0, scopePos);
+    std::string localTypeName = typeName.substr(scopePos + 2);
+    u32 moduleHash = SymbolTable::ResolveModuleNameHashInScope(
+        const_cast<SymbolTableData *>(symbols),
+        Utils::HashStr(moduleName.c_str()),
+        AliasOwnerKind(), AliasOwnerModuleIndex());
+    u32 localHash = Utils::HashStr(localTypeName.c_str());
+
+    auto lookupModuleType = [&](const char *prefix) -> Symbol * {
+      std::string internalName;
+      internalName.reserve(2 + 10 + 10);
+      internalName.append("m").append(std::to_string(moduleHash));
+      internalName.append(prefix).append(std::to_string(localHash));
+      return SymbolTable::LookupByHash(
+          const_cast<SymbolTableData *>(symbols),
+          Utils::HashStr(internalName.c_str()));
+    };
+
+    sym = lookupModuleType("::s");
+    if (sym && sym->kind == SymbolKind::CUSTOM_TYPE) {
+      if (outCustomHash) {
+        *outCustomHash = localHash;
+      }
+      return CoreType::CUSTOM;
+    }
+
+    sym = lookupModuleType("::e");
+    if (sym && (sym->kind == SymbolKind::ENUM ||
+                sym->kind == SymbolKind::ENUM_SYMBOL)) {
+      const EnumData &enumData = symbols->enums[sym->index];
+      if (enumData.flags & EnumData::IS_SUM_TYPE) {
+        if (outCustomHash) {
+          *outCustomHash = enumData.name.nameHash;
+        }
+        return CoreType::CUSTOM;
+      }
+      CoreType baseType = enumData.underlyingType;
+      return baseType == CoreType::INVALID ? CoreType::INT : baseType;
+    }
   }
 
   // Fall back to global custom type registry

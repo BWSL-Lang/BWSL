@@ -18,6 +18,8 @@ NodeRef Parser::ParsePipeline() {
         ProgressGuard _pg_(this);
         if (Match(TokenType::IMPORT)) {
             ParseImports(pipeline);
+        } else if (Match(TokenType::USING)) {
+            ParseUsing(pipeline);
         } else if (Match(TokenType::ATTRIBUTES)) {
             ParseAttributes(pipeline);
         } else if (Match(TokenType::RESOURCES)) {
@@ -145,7 +147,7 @@ NodeRef Parser::ParsePipeline() {
                 ast->GetPipeline(pipeline).functions.Push(arena, function);
             }
         } else {
-            ErrorAtCurrent("Expected 'import', 'attributes', 'resources', 'variants', 'compute_graph', 'constraint', 'enum', 'eval', 'module', 'struct', or 'pass'");
+            ErrorAtCurrent("Expected 'import', 'using', 'attributes', 'resources', 'variants', 'compute_graph', 'constraint', 'enum', 'eval', 'module', 'struct', or 'pass'");
             Advance();
         }
         
@@ -164,7 +166,50 @@ NodeRef Parser::ParsePipeline() {
 // Import parsing
 //==============================================================================
 
+u32 Parser::ResolveModuleIndexByWrittenName(const ArenaString& moduleName) {
+    return SymbolTable::ResolveModuleIndexByHash(&symbolTable, moduleName.nameHash);
+}
+
+std::string Parser::CanonicalizeModuleQualifiedName(const std::string& moduleName,
+                                                    const std::string& memberName) {
+    ArenaString written = ArenaString::MakeHashOnly(moduleName);
+    u32 moduleIdx = SymbolTable::ResolveModuleIndexByHash(&symbolTable, written.nameHash);
+    std::string resolvedName = moduleName;
+    if (moduleIdx != INVALID_INDEX && moduleIdx < symbolTable.modules.count) {
+        resolvedName = symbolTable.modules[moduleIdx].name.ToString(sourceBase());
+    }
+    std::string canonical = resolvedName + "::" + memberName;
+    ReverseLookup::Register(Utils::HashStr(canonical.c_str()), canonical.c_str());
+    return canonical;
+}
+
+std::string Parser::CanonicalizeTypeName(const std::string& typeName) {
+    std::string baseName = typeName;
+    std::string pointerSuffix;
+    while (!baseName.empty() && baseName.back() == '^') {
+        pointerSuffix.push_back('^');
+        baseName.pop_back();
+    }
+
+    size_t scopePos = baseName.find("::");
+    if (scopePos == std::string::npos) {
+        return typeName;
+    }
+
+    std::string moduleName = baseName.substr(0, scopePos);
+    std::string localName = baseName.substr(scopePos + 2);
+    return CanonicalizeModuleQualifiedName(moduleName, localName) + pointerSuffix;
+}
+
 void Parser::ParseImports(NodeRef pipeline) {
+    ParseModuleImportList(pipeline, true);
+}
+
+void Parser::ParseUsing(NodeRef pipeline) {
+    ParseUsingDeclaration(pipeline, true);
+}
+
+void Parser::ParseModuleImportList(NodeRef owner, bool ownerIsPipeline) {
     static constexpr u32 MAX_IMPORTS = 32;
     u32 importedHashes[MAX_IMPORTS];
     u32 importCount = 0;
@@ -174,6 +219,15 @@ void Parser::ParseImports(NodeRef pipeline) {
         Advance();
 
         u32 moduleHash = Utils::HashStr(moduleNameStr.c_str());
+        bool hasAlias = false;
+        std::string aliasNameStr;
+
+        if (Match(TokenType::AS)) {
+            if (Consume(TokenType::IDENTIFIER, "Expected module alias after 'as'")) {
+                aliasNameStr = std::string(stream->GetValue(previous));
+                hasAlias = true;
+            }
+        }
 
         bool alreadyImported = false;
         for (u32 i = 0; i < importCount; i++) {
@@ -206,13 +260,29 @@ void Parser::ParseImports(NodeRef pipeline) {
 
         if (moduleIdx != INVALID_INDEX) {
             ArenaString moduleName = ArenaString::MakeHashOnly(moduleNameStr);
-            ast->GetPipeline(pipeline).imports.Push(arena, moduleName);
+            if (ownerIsPipeline) {
+                ast->GetPipeline(owner).imports.Push(arena, moduleName);
+            } else {
+                ast->GetModule(owner).imports.Push(arena, moduleName);
+            }
 
             if (importCount < MAX_IMPORTS) {
                 importedHashes[importCount++] = moduleHash;
             }
 
-            symbolTable.importedModules.Push(arena, moduleIdx);
+            SymbolTable::AddImportedModule(&symbolTable, moduleIdx);
+
+            if (hasAlias) {
+                ArenaString aliasName = ArenaString::MakeHashOnly(aliasNameStr);
+                ReverseLookup::Register(aliasName.nameHash, aliasNameStr.c_str());
+                if (!SymbolTable::RegisterModuleAlias(&symbolTable, aliasName, moduleName, moduleIdx)) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                             "Module alias '%s' conflicts with an existing module or alias",
+                             aliasNameStr.c_str());
+                    ErrorAtPrevious(msg);
+                }
+            }
         } else {
             char msg[256];
             snprintf(msg, sizeof(msg),
@@ -227,8 +297,166 @@ void Parser::ParseImports(NodeRef pipeline) {
                 Error("Expected module name after ','");
                 break;
             }
-        } else if (Check(TokenType::IDENTIFIER)) {
+        } else if (Check(TokenType::IDENTIFIER) &&
+                   stream->GetType(PeekNext()) != TokenType::DOUBLE_COLON) {
             Error("Expected ',' between module names");
+            break;
+        } else {
+            break;
+        }
+    }
+}
+
+void Parser::ParseUsingDeclaration(NodeRef owner, bool ownerIsPipeline) {
+    if (Check(TokenType::IDENTIFIER) &&
+        stream->GetType(PeekNext()) == TokenType::ASSIGN) {
+        ParseUsingTypeAliasList();
+        return;
+    }
+
+    ParseUsingModuleList(owner, ownerIsPipeline);
+}
+
+void Parser::ParseUsingTypeAliasList() {
+    auto parseTypeAliasTarget = [&]() -> std::string {
+        if (MatchMask(TokenMasks::CORE_TYPES)) {
+            return std::string(stream->GetValue(previous));
+        }
+
+        Consume(TokenType::IDENTIFIER, "Expected type name after '='");
+        std::string typeName(stream->GetValue(previous));
+        if (Match(TokenType::DOUBLE_COLON)) {
+            std::string moduleName = typeName;
+            Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
+            typeName = CanonicalizeModuleQualifiedName(
+                moduleName, std::string(stream->GetValue(previous)));
+        }
+
+        while (Match(TokenType::BITWISE_XOR)) {
+            typeName += "^";
+        }
+        return typeName;
+    };
+
+    while (Check(TokenType::IDENTIFIER)) {
+        TokenRef aliasToken = current;
+        std::string aliasNameStr(stream->GetValue(current));
+        Advance();
+        Consume(TokenType::ASSIGN, "Expected '=' after type alias name");
+
+        TokenRef targetToken = current;
+        std::string targetNameStr = parseTypeAliasTarget();
+        if (targetNameStr.empty()) {
+            break;
+        }
+
+        TypeInfo targetInfo = ResolveType(targetNameStr);
+        if (targetInfo.coreType == CoreType::INVALID) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Unknown type '%s' in using alias",
+                     targetNameStr.c_str());
+            ErrorAt(targetToken, msg);
+        } else {
+            ArenaString aliasName = ArenaString::MakeHashOnly(aliasNameStr);
+            ArenaString targetName = ArenaString::MakeHashOnly(targetNameStr);
+            ReverseLookup::Register(aliasName.nameHash, aliasNameStr.c_str());
+            ReverseLookup::Register(targetName.nameHash, targetNameStr.c_str());
+            if (!SymbolTable::RegisterTypeAlias(&symbolTable, aliasName, targetName)) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                         "Type alias '%s' conflicts with an existing name",
+                         aliasNameStr.c_str());
+                ErrorAt(aliasToken, msg);
+            }
+            typeCache.Clear();
+        }
+
+        if (Check(TokenType::COMMA)) {
+            Advance();
+            if (!Check(TokenType::IDENTIFIER)) {
+                Error("Expected type alias name after ','");
+                break;
+            }
+        } else {
+            Match(TokenType::SEMICOLON);
+            break;
+        }
+    }
+}
+
+void Parser::ParseUsingModuleList(NodeRef owner, bool ownerIsPipeline) {
+    auto ownerHasImport = [&](u32 moduleNameHash) {
+        const ArenaArray<ArenaString>& imports = ownerIsPipeline
+            ? ast->GetPipeline(owner).imports
+            : ast->GetModule(owner).imports;
+        for (u32 i = 0; i < imports.count; i++) {
+            if (imports[i].nameHash == moduleNameHash) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto ownerHasUsing = [&](u32 moduleNameHash) {
+        const ArenaArray<ArenaString>& usingImports = ownerIsPipeline
+            ? ast->GetPipeline(owner).usingImports
+            : ast->GetModule(owner).usingImports;
+        for (u32 i = 0; i < usingImports.count; i++) {
+            if (usingImports[i].nameHash == moduleNameHash) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    while (Check(TokenType::IDENTIFIER)) {
+        TokenRef moduleToken = current;
+        std::string moduleNameStr(stream->GetValue(current));
+        Advance();
+
+        if (Match(TokenType::AS)) {
+            ErrorAtPrevious("'using' does not create aliases; import the module with 'as' first");
+            if (Check(TokenType::IDENTIFIER)) {
+                Advance();
+            }
+        }
+
+        ArenaString writtenName = ArenaString::MakeHashOnly(moduleNameStr);
+        u32 moduleIdx = ResolveModuleIndexByWrittenName(writtenName);
+
+        if (moduleIdx == INVALID_INDEX || moduleIdx >= symbolTable.modules.count) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "Module '%s' must be imported before it can be used",
+                     moduleNameStr.c_str());
+            ErrorAt(moduleToken, msg);
+        } else {
+            ArenaString moduleName = symbolTable.modules[moduleIdx].name;
+            if (!ownerHasImport(moduleName.nameHash)) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                         "Module '%s' must be imported before it can be used",
+                         moduleNameStr.c_str());
+                ErrorAt(moduleToken, msg);
+            } else if (!ownerHasUsing(moduleName.nameHash)) {
+                if (ownerIsPipeline) {
+                    ast->GetPipeline(owner).usingImports.Push(arena, moduleName);
+                } else {
+                    ast->GetModule(owner).usingImports.Push(arena, moduleName);
+                }
+            }
+        }
+
+        if (Check(TokenType::COMMA)) {
+            Advance();
+            if (!Check(TokenType::IDENTIFIER)) {
+                Error("Expected module name after ','");
+                break;
+            }
+        } else if (Check(TokenType::IDENTIFIER) &&
+                   stream->GetType(PeekNext()) != TokenType::DOUBLE_COLON) {
+            Error("Expected ',' between module names");
+            break;
         } else {
             break;
         }

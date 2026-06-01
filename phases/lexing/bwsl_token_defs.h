@@ -191,6 +191,7 @@ enum TokenType : uint8_t {
     DMAT2,
     DMAT3,
     DMAT4,
+    USING,
     TOKEN_COUNT
 };
 

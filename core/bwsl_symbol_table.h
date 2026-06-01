@@ -343,10 +343,33 @@ struct SymbolTableData {
         u32 moduleIndex;
         u32 nextIndex;  // For collision chaining
     };
+
+    static constexpr u32 MODULE_ALIAS_TABLE_SIZE = 128; // Power of 2
+    struct ModuleAliasEntry {
+        ArenaString alias;
+        ArenaString moduleName;
+        u32 aliasHash;
+        u32 moduleNameHash;
+        u32 moduleIndex;
+        NamespaceKind ownerKind;
+        u32 ownerModuleIndex;
+    };
+
+    static constexpr u32 TYPE_ALIAS_TABLE_SIZE = 128; // Power of 2
+    struct TypeAliasEntry {
+        ArenaString alias;
+        ArenaString target;
+        u32 aliasHash;
+        u32 targetHash;
+        NamespaceKind ownerKind;
+        u32 ownerModuleIndex;
+    };
     
     ModuleHashEntry moduleHashTable[MODULE_HASH_TABLE_SIZE];
     u32 moduleHashChain[ModuleCache::MAX_MODULES * 2];  // Collision overflow
     u32 moduleHashChainUsed;
+    ModuleAliasEntry moduleAliasTable[MODULE_ALIAS_TABLE_SIZE];
+    TypeAliasEntry typeAliasTable[TYPE_ALIAS_TABLE_SIZE];
     
     // module data is indexed by hash
     ArenaArray<u32> moduleNameHashes;  // Parallel array for fast validation
@@ -381,6 +404,19 @@ namespace SymbolTable {
         for (u32 i = 0; i < SymbolTableData::MODULE_HASH_TABLE_SIZE; i++) {
             table->moduleHashTable[i].moduleIndex = 0xFFFFFFFF;
             table->moduleHashTable[i].nextIndex = 0xFFFFFFFF;
+        }
+        for (u32 i = 0; i < SymbolTableData::MODULE_ALIAS_TABLE_SIZE; i++) {
+            table->moduleAliasTable[i].aliasHash = 0;
+            table->moduleAliasTable[i].moduleNameHash = 0;
+            table->moduleAliasTable[i].moduleIndex = INVALID_INDEX;
+            table->moduleAliasTable[i].ownerKind = NamespaceKind::GLOBAL;
+            table->moduleAliasTable[i].ownerModuleIndex = INVALID_INDEX;
+        }
+        for (u32 i = 0; i < SymbolTableData::TYPE_ALIAS_TABLE_SIZE; i++) {
+            table->typeAliasTable[i].aliasHash = 0;
+            table->typeAliasTable[i].targetHash = 0;
+            table->typeAliasTable[i].ownerKind = NamespaceKind::GLOBAL;
+            table->typeAliasTable[i].ownerModuleIndex = INVALID_INDEX;
         }
         table->moduleHashChainUsed = 0;
         
@@ -617,6 +653,292 @@ namespace SymbolTable {
         
         return INVALID_INDEX;
     }
+
+    inline void CurrentAliasOwner(const SymbolTableData* table, NamespaceKind* ownerKind,
+                                  u32* ownerModuleIndex) {
+        bool moduleOwned = table && table->inModuleScope &&
+                           table->currentModuleIndex != INVALID_INDEX;
+        if (ownerKind) {
+            *ownerKind = moduleOwned ? NamespaceKind::MODULE : NamespaceKind::GLOBAL;
+        }
+        if (ownerModuleIndex) {
+            *ownerModuleIndex = moduleOwned ? table->currentModuleIndex : INVALID_INDEX;
+        }
+    }
+
+    inline bool AliasOwnerMatches(NamespaceKind entryKind, u32 entryModuleIndex,
+                                  NamespaceKind ownerKind, u32 ownerModuleIndex) {
+        if (entryKind != ownerKind) {
+            return false;
+        }
+        if (entryKind == NamespaceKind::MODULE) {
+            return entryModuleIndex == ownerModuleIndex;
+        }
+        return true;
+    }
+
+    inline Symbol* FindSymbolInAliasScope(SymbolTableData* table, u32 nameHash,
+                                          NamespaceKind ownerKind, u32 ownerModuleIndex) {
+        for (int i = table->symbols.count - 1; i >= 0; i--) {
+            Symbol& sym = table->symbols[i];
+            if (sym.name.nameHash != nameHash || sym.namespaceKind != ownerKind) {
+                continue;
+            }
+            if (ownerKind == NamespaceKind::MODULE && sym.moduleIndex != ownerModuleIndex) {
+                continue;
+            }
+            return &sym;
+        }
+        return nullptr;
+    }
+
+    inline u32 FindModuleByAliasHashInScope(SymbolTableData* table, u32 aliasHash,
+                                            NamespaceKind ownerKind, u32 ownerModuleIndex) {
+        u32 slot = aliasHash & (SymbolTableData::MODULE_ALIAS_TABLE_SIZE - 1);
+        for (u32 probe = 0; probe < SymbolTableData::MODULE_ALIAS_TABLE_SIZE; probe++) {
+            SymbolTableData::ModuleAliasEntry& entry =
+                table->moduleAliasTable[(slot + probe) &
+                                        (SymbolTableData::MODULE_ALIAS_TABLE_SIZE - 1)];
+            if (entry.moduleIndex == INVALID_INDEX) {
+                return INVALID_INDEX;
+            }
+            if (entry.aliasHash == aliasHash &&
+                AliasOwnerMatches(entry.ownerKind, entry.ownerModuleIndex,
+                                  ownerKind, ownerModuleIndex)) {
+                return entry.moduleIndex;
+            }
+        }
+        return INVALID_INDEX;
+    }
+
+    inline u32 FindModuleByAliasHash(SymbolTableData* table, u32 aliasHash) {
+        NamespaceKind ownerKind;
+        u32 ownerModuleIndex;
+        CurrentAliasOwner(table, &ownerKind, &ownerModuleIndex);
+        return FindModuleByAliasHashInScope(table, aliasHash, ownerKind, ownerModuleIndex);
+    }
+
+    inline u32 ResolveModuleIndexByHashInScope(SymbolTableData* table, u32 moduleOrAliasHash,
+                                               NamespaceKind ownerKind, u32 ownerModuleIndex) {
+        u32 moduleIndex = FindModuleByHash(table, moduleOrAliasHash);
+        if (moduleIndex != INVALID_INDEX) {
+            return moduleIndex;
+        }
+        return FindModuleByAliasHashInScope(table, moduleOrAliasHash,
+                                            ownerKind, ownerModuleIndex);
+    }
+
+    inline u32 ResolveModuleIndexByHash(SymbolTableData* table, u32 moduleOrAliasHash) {
+        NamespaceKind ownerKind;
+        u32 ownerModuleIndex;
+        CurrentAliasOwner(table, &ownerKind, &ownerModuleIndex);
+        return ResolveModuleIndexByHashInScope(table, moduleOrAliasHash,
+                                               ownerKind, ownerModuleIndex);
+    }
+
+    inline u32 ResolveModuleNameHashInScope(SymbolTableData* table, u32 moduleOrAliasHash,
+                                            NamespaceKind ownerKind, u32 ownerModuleIndex) {
+        u32 moduleIndex = ResolveModuleIndexByHashInScope(table, moduleOrAliasHash,
+                                                          ownerKind, ownerModuleIndex);
+        if (moduleIndex != INVALID_INDEX && moduleIndex < table->moduleNameHashes.count) {
+            return table->moduleNameHashes[moduleIndex];
+        }
+        return moduleOrAliasHash;
+    }
+
+    inline u32 ResolveModuleNameHash(SymbolTableData* table, u32 moduleOrAliasHash) {
+        NamespaceKind ownerKind;
+        u32 ownerModuleIndex;
+        CurrentAliasOwner(table, &ownerKind, &ownerModuleIndex);
+        return ResolveModuleNameHashInScope(table, moduleOrAliasHash,
+                                            ownerKind, ownerModuleIndex);
+    }
+
+    inline ArenaString ResolveModuleNameInScope(SymbolTableData* table,
+                                                const ArenaString& moduleOrAlias,
+                                                NamespaceKind ownerKind,
+                                                u32 ownerModuleIndex) {
+        u32 moduleIndex = ResolveModuleIndexByHashInScope(table, moduleOrAlias.nameHash,
+                                                          ownerKind, ownerModuleIndex);
+        if (moduleIndex != INVALID_INDEX && moduleIndex < table->modules.count) {
+            return table->modules[moduleIndex].name;
+        }
+        return moduleOrAlias;
+    }
+
+    inline ArenaString ResolveModuleName(SymbolTableData* table, const ArenaString& moduleOrAlias) {
+        NamespaceKind ownerKind;
+        u32 ownerModuleIndex;
+        CurrentAliasOwner(table, &ownerKind, &ownerModuleIndex);
+        return ResolveModuleNameInScope(table, moduleOrAlias, ownerKind, ownerModuleIndex);
+    }
+
+    inline SymbolTableData::TypeAliasEntry* FindTypeAliasEntryInScope(
+        SymbolTableData* table, u32 aliasHash,
+        NamespaceKind ownerKind, u32 ownerModuleIndex) {
+        u32 slot = aliasHash & (SymbolTableData::TYPE_ALIAS_TABLE_SIZE - 1);
+        for (u32 probe = 0; probe < SymbolTableData::TYPE_ALIAS_TABLE_SIZE; probe++) {
+            SymbolTableData::TypeAliasEntry& entry =
+                table->typeAliasTable[(slot + probe) &
+                                      (SymbolTableData::TYPE_ALIAS_TABLE_SIZE - 1)];
+            if (entry.aliasHash == 0) {
+                return nullptr;
+            }
+            if (entry.aliasHash == aliasHash &&
+                AliasOwnerMatches(entry.ownerKind, entry.ownerModuleIndex,
+                                  ownerKind, ownerModuleIndex)) {
+                return &entry;
+            }
+        }
+        return nullptr;
+    }
+
+    inline const SymbolTableData::TypeAliasEntry* FindTypeAliasEntryInScope(
+        const SymbolTableData* table, u32 aliasHash,
+        NamespaceKind ownerKind, u32 ownerModuleIndex) {
+        return FindTypeAliasEntryInScope(const_cast<SymbolTableData*>(table),
+                                         aliasHash, ownerKind, ownerModuleIndex);
+    }
+
+    inline SymbolTableData::TypeAliasEntry* FindTypeAliasEntry(SymbolTableData* table,
+                                                               u32 aliasHash) {
+        NamespaceKind ownerKind;
+        u32 ownerModuleIndex;
+        CurrentAliasOwner(table, &ownerKind, &ownerModuleIndex);
+        return FindTypeAliasEntryInScope(table, aliasHash, ownerKind, ownerModuleIndex);
+    }
+
+    inline const SymbolTableData::TypeAliasEntry* FindTypeAliasEntry(const SymbolTableData* table,
+                                                                     u32 aliasHash) {
+        return FindTypeAliasEntry(const_cast<SymbolTableData*>(table), aliasHash);
+    }
+
+    inline u32 ResolveTypeAliasHashInScope(const SymbolTableData* table, u32 typeHash,
+                                           NamespaceKind ownerKind, u32 ownerModuleIndex) {
+        u32 resolvedHash = typeHash;
+        for (u32 depth = 0; depth < 16; depth++) {
+            const SymbolTableData::TypeAliasEntry* entry =
+                FindTypeAliasEntryInScope(table, resolvedHash,
+                                          ownerKind, ownerModuleIndex);
+            if (!entry || entry->targetHash == 0 || entry->targetHash == resolvedHash) {
+                break;
+            }
+            resolvedHash = entry->targetHash;
+        }
+        return resolvedHash;
+    }
+
+    inline u32 ResolveTypeAliasHash(const SymbolTableData* table, u32 typeHash) {
+        NamespaceKind ownerKind;
+        u32 ownerModuleIndex;
+        CurrentAliasOwner(table, &ownerKind, &ownerModuleIndex);
+        return ResolveTypeAliasHashInScope(table, typeHash, ownerKind, ownerModuleIndex);
+    }
+
+    inline ArenaString ResolveTypeAliasTarget(const SymbolTableData* table,
+                                              const ArenaString& typeName) {
+        const SymbolTableData::TypeAliasEntry* entry =
+            FindTypeAliasEntry(table, typeName.nameHash);
+        if (entry && entry->targetHash != 0) {
+            return entry->target;
+        }
+        return typeName;
+    }
+
+    inline bool RegisterModuleAlias(SymbolTableData* table, const ArenaString& alias,
+                                    const ArenaString& moduleName, u32 moduleIndex) {
+        NamespaceKind ownerKind;
+        u32 ownerModuleIndex;
+        CurrentAliasOwner(table, &ownerKind, &ownerModuleIndex);
+
+        u32 existingModule = FindModuleByHash(table, alias.nameHash);
+        if (existingModule != INVALID_INDEX) {
+            return false;
+        }
+        if (FindTypeAliasEntryInScope(table, alias.nameHash,
+                                      ownerKind, ownerModuleIndex) != nullptr) {
+            return false;
+        }
+        if (FindSymbolInAliasScope(table, alias.nameHash,
+                                   ownerKind, ownerModuleIndex) != nullptr) {
+            return false;
+        }
+
+        u32 slot = alias.nameHash & (SymbolTableData::MODULE_ALIAS_TABLE_SIZE - 1);
+        for (u32 probe = 0; probe < SymbolTableData::MODULE_ALIAS_TABLE_SIZE; probe++) {
+            SymbolTableData::ModuleAliasEntry& entry =
+                table->moduleAliasTable[(slot + probe) &
+                                        (SymbolTableData::MODULE_ALIAS_TABLE_SIZE - 1)];
+            if (entry.moduleIndex == INVALID_INDEX) {
+                entry.alias = alias;
+                entry.moduleName = moduleName;
+                entry.aliasHash = alias.nameHash;
+                entry.moduleNameHash = moduleName.nameHash;
+                entry.moduleIndex = moduleIndex;
+                entry.ownerKind = ownerKind;
+                entry.ownerModuleIndex = ownerModuleIndex;
+                return true;
+            }
+            if (entry.aliasHash == alias.nameHash &&
+                AliasOwnerMatches(entry.ownerKind, entry.ownerModuleIndex,
+                                  ownerKind, ownerModuleIndex)) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    inline bool RegisterTypeAlias(SymbolTableData* table, const ArenaString& alias,
+                                  const ArenaString& target) {
+        NamespaceKind ownerKind;
+        u32 ownerModuleIndex;
+        CurrentAliasOwner(table, &ownerKind, &ownerModuleIndex);
+
+        if (alias.nameHash == 0 || target.nameHash == 0 ||
+            alias.nameHash == target.nameHash) {
+            return false;
+        }
+        for (u32 i = 0; i < TypeHashes::HASH_TABLE_SIZE; i++) {
+            if (TypeHashes::HASH_TABLE[i].hash == alias.nameHash) {
+                return false;
+            }
+        }
+        if (FindModuleByHash(table, alias.nameHash) != INVALID_INDEX ||
+            FindModuleByAliasHashInScope(table, alias.nameHash,
+                                         ownerKind, ownerModuleIndex) != INVALID_INDEX ||
+            FindSymbolInAliasScope(table, alias.nameHash,
+                                   ownerKind, ownerModuleIndex) != nullptr) {
+            return false;
+        }
+
+        u32 existingTarget = ResolveTypeAliasHashInScope(table, alias.nameHash,
+                                                         ownerKind, ownerModuleIndex);
+        if (existingTarget != alias.nameHash) {
+            return false;
+        }
+
+        u32 slot = alias.nameHash & (SymbolTableData::TYPE_ALIAS_TABLE_SIZE - 1);
+        for (u32 probe = 0; probe < SymbolTableData::TYPE_ALIAS_TABLE_SIZE; probe++) {
+            SymbolTableData::TypeAliasEntry& entry =
+                table->typeAliasTable[(slot + probe) &
+                                      (SymbolTableData::TYPE_ALIAS_TABLE_SIZE - 1)];
+            if (entry.aliasHash == 0) {
+                entry.alias = alias;
+                entry.target = target;
+                entry.aliasHash = alias.nameHash;
+                entry.targetHash = target.nameHash;
+                entry.ownerKind = ownerKind;
+                entry.ownerModuleIndex = ownerModuleIndex;
+                return true;
+            }
+            if (entry.aliasHash == alias.nameHash &&
+                AliasOwnerMatches(entry.ownerKind, entry.ownerModuleIndex,
+                                  ownerKind, ownerModuleIndex)) {
+                return false;
+            }
+        }
+        return false;
+    }
     
     // We keep the string version for convenience but have it use the hash version
     inline u32 FindModule(SymbolTableData* table, const ArenaString& moduleName) {
@@ -630,6 +952,12 @@ namespace SymbolTable {
             }
         }
         return false;
+    }
+
+    inline void AddImportedModule(SymbolTableData* table, u32 moduleIndex) {
+        if (!IsModuleImported(table, moduleIndex)) {
+            table->importedModules.Push(table->arena, moduleIndex);
+        }
     }
 
     inline u8 ShaderStageToBit(ShaderStage stage) {
@@ -699,6 +1027,12 @@ namespace SymbolTable {
     
     inline Symbol* AddSymbol(SymbolTableData* table, const ArenaString& name, 
         SymbolKind kind, NamespaceKind ns = NamespaceKind::GLOBAL, u32 moduleIndex = INVALID_INDEX) {
+            if ((ns == NamespaceKind::GLOBAL || ns == NamespaceKind::MODULE) &&
+                (FindTypeAliasEntryInScope(table, name.nameHash, ns, moduleIndex) != nullptr ||
+                 FindModuleByAliasHashInScope(table, name.nameHash, ns, moduleIndex) != INVALID_INDEX)) {
+                return nullptr;
+            }
+
             // Check for duplicates in same namespace/module
             u32 scopeStart = table->scopeStartIndices[table->currentScope];
             for (u32 i = scopeStart; i < table->symbols.count; i++) {

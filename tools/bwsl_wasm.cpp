@@ -1471,7 +1471,7 @@ static std::string GetSymbolsJson(const char* bwslSource, const char* rcfgSource
     // Add keywords
     json << "\"keywords\":[";
     json << "\"pipeline\",\"pass\",\"vertex\",\"fragment\",\"compute\",";
-    json << "\"attributes\",\"use\",\"resources\",";
+    json << "\"attributes\",\"use\",\"using\",\"resources\",";
     json << "\"output\",\"input\",\"if\",\"else\",\"for\",\"while\",\"return\",";
     json << "\"const\",\"eval\",\"struct\",\"enum\"";
     json << "]}";

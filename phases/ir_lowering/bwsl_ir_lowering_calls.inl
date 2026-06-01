@@ -42,10 +42,13 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       if (access.isModuleQualified &&
           access.object.Type() == ASTNodeType::IDENTIFIER) {
         const IdentifierData &moduleIdent = ast->GetIdentifier(access.object);
+        u32 moduleHash = SymbolTable::ResolveModuleNameHashInScope(
+            const_cast<SymbolTableData *>(symbols), moduleIdent.name.nameHash,
+            AliasOwnerKind(), AliasOwnerModuleIndex());
         std::string syntheticQualifiedName;
         syntheticQualifiedName.reserve(2 + 10 + 10);
         syntheticQualifiedName.append("m")
-            .append(std::to_string(moduleIdent.name.nameHash));
+            .append(std::to_string(moduleHash));
         syntheticQualifiedName.append("::e")
             .append(std::to_string(access.member.nameHash));
         if (outEnumHash) {
@@ -1080,10 +1083,13 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
           }
         }
 
-        // Fallback: emit OP_CALL (will produce OpUndef in SPIR-V)
-        builder.EmitInstruction(OP_CALL, dest, call.name.nameHash);
-        program.metadata[builder.currentInstruction - 1] =
-            (args[0] << 16) | (args[1] << 8) | args[2];
+        std::string functionName = call.name.isHashOnly()
+            ? ReverseLookup::GetString(call.name.nameHash)
+            : call.name.ToString(sourceBase);
+        char msg[256];
+        snprintf(msg, sizeof(msg), "Error: Function not found: %s\n",
+                 functionName.c_str());
+        ReportError(msg);
       }
     }
   }
@@ -1131,12 +1137,9 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
       !call.moduleObject.IsNull() &&
       call.moduleObject.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &moduleIdent = ast->GetIdentifier(call.moduleObject);
-    for (u32 m = 0; m < ast->modules.count; m++) {
-      if (ast->modules[m].name.nameHash == moduleIdent.name.nameHash) {
-        targetModuleIndex = m;
-        break;
-      }
-    }
+    targetModuleIndex = SymbolTable::ResolveModuleIndexByHashInScope(
+        const_cast<SymbolTableData *>(symbols), moduleIdent.name.nameHash,
+        AliasOwnerKind(), AliasOwnerModuleIndex());
   }
 
   if (targetModuleIndex != 0xFFFFFFFF &&
@@ -1196,6 +1199,41 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
           break;
         }
       }
+    }
+  }
+
+  auto searchImportedModule = [&](u32 moduleIndex) {
+    if (!funcRef.IsNull() || moduleIndex >= ast->modules.count) {
+      return;
+    }
+    const ModuleNodeData &module = ast->modules[moduleIndex];
+    for (u32 i = 0; i < module.functions.count; i++) {
+      NodeRef fnRef = module.functions[i];
+      if (fnRef.Type() == ASTNodeType::FUNCTION) {
+        const FunctionDeclData &fn = ast->GetFunction(fnRef);
+        if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn)) {
+          funcRef = fnRef;
+          foundModuleIndex = moduleIndex;
+          break;
+        }
+      }
+    }
+  };
+
+  auto searchUsingList = [&](const ArenaArray<ArenaString> &usingImports) {
+    for (u32 i = 0; i < usingImports.count && funcRef.IsNull(); i++) {
+      u32 moduleIndex = SymbolTable::FindModuleByHash(
+          const_cast<SymbolTableData *>(symbols), usingImports[i].nameHash);
+      searchImportedModule(moduleIndex);
+    }
+  };
+
+  if (funcRef.IsNull() && call.moduleObject.IsNull()) {
+    if (inlineModuleIndex != 0xFFFFFFFF &&
+        inlineModuleIndex < ast->modules.count) {
+      searchUsingList(ast->modules[inlineModuleIndex].usingImports);
+    } else if (!currentPipeline.IsNull()) {
+      searchUsingList(ast->GetPipeline(currentPipeline).usingImports);
     }
   }
 

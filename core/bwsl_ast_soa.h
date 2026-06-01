@@ -295,6 +295,7 @@ struct ComputeGraphData {
 struct ModuleNodeData {
     ArenaString name;
     ArenaArray<ArenaString> imports;  // Module dependencies
+    ArenaArray<ArenaString> usingImports;
     ArenaArray<NodeRef> functions;
     ArenaArray<NodeRef> structs;
     ArenaArray<NodeRef> enums;
@@ -384,6 +385,7 @@ struct TernaryExprData {
 struct PipelineData {
     ArenaString name;
     ArenaArray<ArenaString> imports;
+    ArenaArray<ArenaString> usingImports;
     ArenaArray<NodeRef> attributes;
     ArenaArray<NodeRef> resources;
     ArenaArray<PipelineVariantDeclData> variantDecls;
@@ -1124,6 +1126,7 @@ namespace ASTFactory {
         PipelineData data;
         data.name = ArenaString::MakeHashOnly(name);
         data.imports.Init(ast->arena, 4);
+        data.usingImports.Init(ast->arena, 4);
         data.attributes.Init(ast->arena, 16);
         data.resources.Init(ast->arena, 16);
         data.variantDecls.Init(ast->arena, 4);
@@ -1472,6 +1475,7 @@ namespace ASTFactory {
         ModuleNodeData data;
         data.name = ArenaString::MakeHashOnly(name);
         data.imports.Init(ast->arena, 4);
+        data.usingImports.Init(ast->arena, 4);
         data.functions.Init(ast->arena, 16);
         data.structs.Init(ast->arena, 8);
         ast->modules.Push(ast->arena, data);

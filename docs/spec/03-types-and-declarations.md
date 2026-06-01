@@ -34,6 +34,19 @@ User-defined nominal types include:
 - `enum` types
 - module-qualified custom types such as `Module::Type`
 
+## Type Aliases
+
+Scoped type aliases use `using Alias = Type`:
+
+```bwsl
+import PBR as BRDF
+using Material = BRDF::PBRMaterial
+```
+
+Aliases may target built-in types, local custom types, or module-qualified
+custom types. They are resolved before declaration type checking and do not
+create a new nominal type.
+
 ## Variable Declarations
 
 The language supports ordinary variable declarations and `const` declarations.

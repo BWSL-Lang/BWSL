@@ -1,0 +1,14 @@
+pipeline TypeAliasScopeIsolation {
+    module AliasTypes {
+        import PBR as BRDF
+        using Material = BRDF::PBRMaterial
+    }
+
+    using LeakedMaterial = Material
+
+    pass "Main" {
+        compute "Main" [1, 1, 1] {
+            uint idx = input.global_id.x;
+        }
+    }
+}

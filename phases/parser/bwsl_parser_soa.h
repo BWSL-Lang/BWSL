@@ -240,6 +240,11 @@ private:
 
     //------------------ Parsing functions ------------------------//
     void ParseImports(NodeRef pipeline);
+    void ParseUsing(NodeRef pipeline);
+    void ParseModuleImportList(NodeRef owner, bool ownerIsPipeline);
+    void ParseUsingDeclaration(NodeRef owner, bool ownerIsPipeline);
+    void ParseUsingModuleList(NodeRef owner, bool ownerIsPipeline);
+    void ParseUsingTypeAliasList();
     void ParseAttributes(NodeRef pipeline);
     void ParseResources(NodeRef pipeline);
     void ParseVariants(NodeRef pipeline);
@@ -316,6 +321,10 @@ private:
 
     //----------------- Helper functions ------------------------//
     bool TryRegisterModuleFromDisk(const std::string& moduleName);
+    std::string CanonicalizeModuleQualifiedName(const std::string& moduleName,
+                                                const std::string& memberName);
+    std::string CanonicalizeTypeName(const std::string& typeName);
+    u32 ResolveModuleIndexByWrittenName(const ArenaString& moduleName);
     ResourceType GetResourceType(TokenType type);
     CoreType TokenTypeToReturnType(TokenType type);
     BinaryOpType TokenTypeToBinaryOp(TokenType type);

@@ -403,6 +403,7 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             if (memcmp(str, "dmat2", 5) == 0) return TokenType::DMAT2;
             if (memcmp(str, "dmat3", 5) == 0) return TokenType::DMAT3;
             if (memcmp(str, "dmat4", 5) == 0) return TokenType::DMAT4;
+            if (memcmp(str, "using", 5) == 0) return TokenType::USING;
             if (memcmp(str, "false", 5) == 0) return TokenType::FALSE;
             if (memcmp(str, "const", 5) == 0) return TokenType::CONST;
             if (memcmp(str, "uint2", 5) == 0) return TokenType::UINT2;

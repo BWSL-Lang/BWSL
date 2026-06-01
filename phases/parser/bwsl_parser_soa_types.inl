@@ -978,8 +978,10 @@ NodeRef Parser::ParseStruct() {
         } else if (Match(TokenType::IDENTIFIER)) {
             fieldTypeName = std::string(stream->GetValue(previous));
             if (Match(TokenType::DOUBLE_COLON)) {
+                std::string moduleName = fieldTypeName;
                 Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
-                fieldTypeName += "::" + std::string(stream->GetValue(previous));
+                fieldTypeName = CanonicalizeModuleQualifiedName(
+                    moduleName, std::string(stream->GetValue(previous)));
             }
             fieldType = ResolveType(fieldTypeName);
         } else {
@@ -1163,4 +1165,3 @@ NodeRef Parser::ParseStruct() {
 //==============================================================================
 // Module parsing
 //==============================================================================
-

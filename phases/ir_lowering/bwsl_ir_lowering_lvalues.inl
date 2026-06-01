@@ -1024,12 +1024,14 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
 
   // Sum-type enum variant with no payload, e.g. `Curve::Linear`.
   // Payload variants with arguments lower through LowerFunctionCall.
+  // Any remaining module-qualified expression must resolve here; otherwise
+  // unknown `Module::member` expressions fall through as struct accesses.
   if (access.isModuleQualified &&
       access.object.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &enumIdent = ast->GetIdentifier(access.object);
-    u32 enumHash = enumIdent.name.nameHash;
+    u32 qualifierHash = enumIdent.name.nameHash;
     Symbol *enumSym = SymbolTable::LookupByHash(
-        const_cast<SymbolTableData *>(symbols), enumHash);
+        const_cast<SymbolTableData *>(symbols), qualifierHash);
     if (enumSym && (enumSym->kind == SymbolKind::ENUM ||
                     enumSym->kind == SymbolKind::ENUM_SYMBOL)) {
       const EnumData &enumData = symbols->enums[enumSym->index];
@@ -1039,11 +1041,11 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
           if (variant.name.nameHash == access.member.nameHash &&
               variant.associatedTypes.count == 0) {
             u16 dest = AllocateRegister();
-            u32 enumStructHash = LookupOrRegisterStructType(enumHash);
+            u32 enumStructHash = LookupOrRegisterStructType(qualifierHash);
             builder.EmitInstruction(OP_ENUM_CONSTRUCT, dest, 0x3FFF,
                                     0x3FFF, 0x3FFF, 0x3FFF);
             program.metadata[builder.currentInstruction - 1] =
-                (v << 16) | (0u << 8) | (enumHash & 0xFF);
+                (v << 16) | (0u << 8) | (qualifierHash & 0xFF);
             SetRegisterType(dest, CoreType::CUSTOM);
             if (dest < MAX_REGISTERS) {
               program.registerStructTypes[dest] = enumStructHash;
@@ -1052,7 +1054,29 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
           }
         }
       }
+      std::string message = "Error: Unknown enum variant: " +
+                            ReverseLookup::GetString(qualifierHash) + "::" +
+                            ReverseLookup::GetString(access.member.nameHash) +
+                            "\n";
+      ReportError(message.c_str());
+      return 0;
     }
+
+    u32 moduleIndex = SymbolTable::ResolveModuleIndexByHashInScope(
+        const_cast<SymbolTableData *>(symbols), qualifierHash,
+        AliasOwnerKind(), AliasOwnerModuleIndex());
+    if (moduleIndex == INVALID_INDEX) {
+      std::string message = "Error: Unknown module or enum: " +
+                            ReverseLookup::GetString(qualifierHash) + "\n";
+      ReportError(message.c_str());
+      return 0;
+    }
+    std::string message = "Error: Unknown module member: " +
+                          ReverseLookup::GetString(qualifierHash) + "::" +
+                          ReverseLookup::GetString(access.member.nameHash) +
+                          "\n";
+    ReportError(message.c_str());
+    return 0;
   }
 
   // Resolve `variants.<name>` to the variant's current value as a

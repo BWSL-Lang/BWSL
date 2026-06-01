@@ -135,10 +135,17 @@ VARIANT_ERROR_TESTS = {
 }
 
 ERROR_CASE_TESTS = {
-    "backend_spelling_alias_rejected.bwsl": "SPIR-V validation failed",
+    "backend_spelling_alias_rejected.bwsl": "Function not found: mix",
     "invalid_intrinsic_arity.bwsl": "'sin' accepts at most 1 arguments, got 2",
     "missing_semicolon.bwsl": "Expected ';' after expression",
     "unknown_module_import.bwsl": "Unknown module 'DoesNotExist'",
+    "import_alias_conflict.bwsl": "Module alias 'Tools' conflicts",
+    "using_without_import.bwsl": "Module 'Debug' must be imported before it can be used",
+    "import_without_using_unqualified.bwsl": "Function not found",
+    "module_alias_scope_isolation.bwsl": "Unknown module or enum: M",
+    "type_alias_unknown_target.bwsl": "Unknown type 'DoesNotExist::Thing' in using alias",
+    "type_alias_conflict.bwsl": "Type alias 'Material' conflicts",
+    "type_alias_scope_isolation.bwsl": "Unknown type 'Material' in using alias",
     "workgroup_id_wrong_stage.bwsl": "input.workgroup_id is only available in compute shaders",
     "local_id_wrong_stage.bwsl": "input.local_id is only available in compute shaders",
     "matrix_alias_rejected.bwsl": "Matrix aliases float2x2/float3x3/float4x4 are not supported",

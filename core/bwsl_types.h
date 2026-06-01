@@ -508,6 +508,7 @@ inline u32 CoreTypeStd140Size(CoreType type) {
         TYPE_INFO(CoreType::DMAT2,    4,  true ),  // DMAT2
         TYPE_INFO(CoreType::DMAT3,    9,  true ),  // DMAT3
         TYPE_INFO(CoreType::DMAT4,    16, true ),  // DMAT4
+        TYPE_INFO(CoreType::INVALID, 0, false),    // USING
     };
 
     static_assert(

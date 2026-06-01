@@ -70,15 +70,25 @@ These helpers can be assigned into pass stages.
 ## Modules
 
 Modules are declared with `module Name { ... }` and imported with `import Name`.
+Imports may use an alias:
+
+```bwsl
+import Math as M
+```
 
 Module-qualified access uses `::`:
 
 ```bwsl
 Math::square(2.0)
 Math::PI
+M::square(2.0)
 ```
 
-Module bodies currently accept imports, functions, structs, enums, and consts.
+`using M` makes an already-imported module available for unqualified lookup in
+the current pipeline or module scope.
+
+Module bodies currently accept imports, `using`, functions, structs, enums, and
+consts.
 
 ## Constraint-Based Generics
 
