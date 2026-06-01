@@ -77,6 +77,11 @@ SPIRV_HEADERS_SRC = vendor/SPIRV-Headers
 SPIRV_TOOLS_BUILD = $(BUILD_DIR)/spirv-tools-build
 SPIRV_TOOLS_STAMP = $(SPIRV_TOOLS_BUILD)/.bwsl-built
 
+CCACHE := $(shell command -v ccache 2>/dev/null)
+SPIRV_CMAKE_LAUNCHER = $(if $(CCACHE),\
+	-DCMAKE_C_COMPILER_LAUNCHER=ccache \
+	-DCMAKE_CXX_COMPILER_LAUNCHER=ccache,)
+
 SPIRV_TEST_DEPS =
 ifneq ($(HOST_OS),windows)
 HAS_SPIRV_VAL := $(shell command -v spirv-val 2>/dev/null)
@@ -266,6 +271,7 @@ $(SPIRV_TOOLS_STAMP): $(SPIRV_TOOLS_SRC)/CMakeLists.txt | $(BUILD_DIR)
 		-B $(SPIRV_TOOLS_BUILD) \
 		-DCMAKE_BUILD_TYPE=Release \
 		"-DSPIRV-Headers_SOURCE_DIR=$(abspath $(SPIRV_HEADERS_SRC))" \
+		$(SPIRV_CMAKE_LAUNCHER) \
 		-DSPIRV_SKIP_TESTS=ON \
 		-DSPIRV_WERROR=OFF \
 		-DSPIRV_BUILD_FUZZER=OFF
