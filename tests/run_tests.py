@@ -169,6 +169,7 @@ ERROR_CASE_TESTS = {
     "interpolation_decorator_stack_conflict.bwsl": "Conflicting interpolation decorators on output assignment",
     "undeclared_fragment_output.bwsl": "fragment output 'bloom' is not declared",
     "attributes_used_as_value.bwsl": "New error message goes here",
+    "missing_variable.bwsl": "New error message goes here",
 }
 
 FORBIDDEN_SOURCE_ALIAS_NAMES = (

@@ -1,0 +1,13 @@
+pipeline MissingVariable {
+    attributes {
+        position: float4
+        myVar: float2
+    }
+    pass "Main" {
+        vertex {
+            // i_position isn't declared anywhere
+            float2 broken = i_position.xy - float2(1);
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+        }
+    }
+}
