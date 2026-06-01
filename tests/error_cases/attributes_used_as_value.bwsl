@@ -1,0 +1,13 @@
+pipeline VecIntrinsicUsage {
+    attributes {
+        position: float4
+        myVar: float2
+    }
+    pass "Main" {
+        vertex {
+            // typo: should be "attributes.myVar" instead of "attributes-myVar"
+            float2 broken = attributes-myVar;
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+        }
+    }
+}
