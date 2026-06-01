@@ -168,8 +168,8 @@ ERROR_CASE_TESTS = {
     "interpolation_decorator_noperspective_int.bwsl": "@noperspective can only be used on floating-point varyings",
     "interpolation_decorator_stack_conflict.bwsl": "Conflicting interpolation decorators on output assignment",
     "undeclared_fragment_output.bwsl": "fragment output 'bloom' is not declared",
-    "attributes_used_as_value.bwsl": "New error message goes here",
-    "missing_variable.bwsl": "New error message goes here",
+    "attributes_used_as_value.bwsl": "'attributes' cannot be used as a value",
+    "missing_variable.bwsl": "Unknown identifier 'i_position'",
 }
 
 FORBIDDEN_SOURCE_ALIAS_NAMES = (

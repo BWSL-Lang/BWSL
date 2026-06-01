@@ -455,6 +455,7 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             break;
             
         case 8:
+            if (memcmp(str, "continue", 8) == 0) return TokenType::SKIP;
             if (memcmp(str, "uint64x2", 8) == 0) return TokenType::UINT64X2;
             if (memcmp(str, "uint64x3", 8) == 0) return TokenType::UINT64X3;
             if (memcmp(str, "uint64x4", 8) == 0) return TokenType::UINT64X4;
