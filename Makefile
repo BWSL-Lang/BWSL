@@ -104,6 +104,11 @@ MSVC_BWSL_INCLUDE_DIRS = /I. /Icore /Icore/middleware \
 ifeq ($(origin CXX), default)
 CXX = clang++
 endif
+ifneq ($(CCACHE),)
+ifeq ($(findstring ccache,$(firstword $(CXX))),)
+CXX := $(CCACHE) $(CXX)
+endif
+endif
 CXXFLAGS ?= -O3 -march=native -std=c++20 -Wall -Wextra
 CXXFLAGS_DEBUG ?= -g -O0 -std=c++20 -Wall -Wextra
 
