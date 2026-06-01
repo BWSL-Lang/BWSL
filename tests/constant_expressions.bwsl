@@ -185,7 +185,7 @@ pipeline ConstantExpressions {
                 color = float3(0.0, 0.5 + tauPattern * 0.5, 0.0);
             } else if (region < 3.0) {
                 // E visualization (exponential)
-                float expPattern = exp(-uv.y * E);
+                float expPattern = exp(-uv.y * E_CONST);
                 color = float3(0.0, 0.0, expPattern);
             } else if (region < 4.0) {
                 // SQRT2 visualization

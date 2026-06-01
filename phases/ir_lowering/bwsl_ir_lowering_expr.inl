@@ -1,5 +1,18 @@
 // Part of the header-only IRLowering implementation. Include via bwsl_ir_lowering.h only.
 
+namespace {
+
+inline std::string IdentifierNameForDiagnostic(const IdentifierData &ident,
+                                               const char *sourceBase) {
+  if (!ident.name.isHashOnly() && sourceBase != nullptr) {
+    return std::string(ident.name.view(sourceBase));
+  }
+
+  return ReverseLookup::GetString(ident.name.nameHash);
+}
+
+} // namespace
+
 inline u16 IRLowering::LowerExpression(NodeRef ref) {
   if (ref.IsNull())
     return 0;
@@ -410,15 +423,48 @@ inline u16 IRLowering::LowerIdentifier(NodeRef ref) {
     return reg;
   }
 
-  // Fallback: allocate register but emit a zero initialization
-  // This handles undefined variables (likely a semantic error, but we need
-  // valid IR)
+  if (currentStage == ShaderStage::Vertex && currentPassData != nullptr) {
+    bool isUsedAttribute = false;
+    for (u32 i = 0; i < currentPassData->usedAttributes.count; i++) {
+      if (currentPassData->usedAttributes[i].nameHash == ident.name.nameHash) {
+        isUsedAttribute = true;
+        break;
+      }
+    }
+
+    if (isUsedAttribute) {
+      u16 reg = AllocateRegister();
+      u32 attrIndex = GetAttributeIndex(ident.name.nameHash);
+      builder.EmitInstruction(OP_LOAD_ATTR, reg, attrIndex);
+
+      CompressionFormat compression = GetAttributeCompression(attrIndex);
+      CoreType attrType = compression == CompressionFormat::NONE
+                              ? GetInputTypeFromAttribute(ident.name.nameHash)
+                              : GetRawTypeForCompression(compression);
+      SetRegisterType(reg, attrType);
+      variableRegisters[ident.name.nameHash] = reg;
+      return reg;
+    }
+  }
+
+  std::string name = IdentifierNameForDiagnostic(ident, sourceBase);
+  if (ident.identifierKind != SpecialIdentifier::NONE) {
+    std::string message = "Error: '" + name +
+                          "' cannot be used as a value; use '" + name +
+                          ".<member>' instead\n";
+    ReportError(message.c_str());
+  } else {
+    std::string message = "Error: Unknown identifier '" + name + "'\n";
+    ReportError(message.c_str());
+  }
+
+  // Give the rest of lowering a typed placeholder after reporting the fatal
+  // diagnostic, so error cases do not cascade into malformed IR.
   u16 reg = AllocateRegister();
   variableRegisters[ident.name.nameHash] = reg;
-  // Emit a zero constant as fallback value to ensure the register is defined
   u16 zero = builder.EmitConstant(0.0f);
   builder.EmitInstruction(OP_STORE_REG, reg, zero);
-  SetRegisterType(reg, CoreType::FLOAT); // Default to float
+  SetRegisterType(reg, CoreType::FLOAT);
   return reg;
 }
 

@@ -168,6 +168,8 @@ ERROR_CASE_TESTS = {
     "interpolation_decorator_noperspective_int.bwsl": "@noperspective can only be used on floating-point varyings",
     "interpolation_decorator_stack_conflict.bwsl": "Conflicting interpolation decorators on output assignment",
     "undeclared_fragment_output.bwsl": "fragment output 'bloom' is not declared",
+    "attributes_used_as_value.bwsl": "'attributes' cannot be used as a value",
+    "missing_variable.bwsl": "Unknown identifier 'i_position'",
 }
 
 FORBIDDEN_SOURCE_ALIAS_NAMES = (
@@ -2061,6 +2063,7 @@ def main() -> int:
         for test_file in sorted(error_case_dir.glob("*.bwsl")):
             expected_error = ERROR_CASE_TESTS.get(test_file.name)
             if expected_error is None:
+                print(f"[{YELLOW}SKIP{NC}] error_cases/{test_file} (error expectation not defined)")
                 continue
 
             if "SPIR-V validation" in expected_error and not has_spirv_val_tooling():
