@@ -25,6 +25,18 @@ static bool StartsWith(std::string_view value, std::string_view prefix) {
     return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
 }
 
+static bool IsIdentifierName(std::string_view value) {
+    if (value.empty()) return false;
+    unsigned char first = static_cast<unsigned char>(value.front());
+    if (!std::isalpha(first) && value.front() != '_') return false;
+
+    for (char ch : value.substr(1)) {
+        unsigned char c = static_cast<unsigned char>(ch);
+        if (!std::isalnum(c) && ch != '_') return false;
+    }
+    return true;
+}
+
 static std::string ParseInnerResourceType(std::string_view typeName, std::string_view prefix) {
     if (!StartsWith(typeName, prefix) || typeName.size() <= prefix.size() + 1 || typeName.back() != '>') {
         return {};
@@ -102,6 +114,27 @@ static TypeInfo MakeCustomTypeInfo(SymbolTableData* table, u32 typeHash) {
     return TypeInfo{CoreType::CUSTOM, 1, 0, 0, typeHash, 0, 0};
 }
 
+static CoreType ResolveResourceCoreType(const TypeInfo& resolvedType,
+                                        const std::string& baseType) {
+    if (resolvedType.coreType != CoreType::INVALID &&
+        resolvedType.coreType != CoreType::VOID) {
+        return resolvedType.coreType;
+    }
+    return SymbolTable::ParseTypeName(baseType);
+}
+
+static u32 ResolveResourceStructHash(const TypeInfo& resolvedType,
+                                     CoreType coreType,
+                                     const std::string& baseType) {
+    if (coreType == CoreType::CUSTOM || coreType == CoreType::ENUM) {
+        if (resolvedType.customTypeHash != 0) {
+            return resolvedType.customTypeHash;
+        }
+        return Utils::HashStr(baseType.c_str());
+    }
+    return 0;
+}
+
 static TypeInfo MakeTypeInfoForResource(SymbolTableData* table, const ResourceData& data) {
     CoreType coreType = static_cast<CoreType>(data.coreType);
 
@@ -153,20 +186,21 @@ static TypeInfo MakeTypeInfoForResource(SymbolTableData* table, const ResourceDa
     }
 }
 
-static void RegisterParsedResource(SymbolTableData* table,
-                                   const std::string& resourceName,
-                                   const std::string& typeName,
-                                   u32 bindingIndex) {
+} // namespace
+
+void Parser::RegisterParsedResource(const std::string& resourceName,
+                                    const std::string& typeName,
+                                    u32 bindingIndex) {
     ArenaString resourceArena = ArenaString::MakeHashOnly(resourceName);
-    Symbol* sym = SymbolTable::AddResource(table, resourceArena);
+    Symbol* sym = SymbolTable::AddResource(&symbolTable, resourceArena);
     if (!sym) {
-        sym = SymbolTable::LookupResource(table, resourceArena);
+        sym = SymbolTable::LookupResource(&symbolTable, resourceArena);
         if (!sym || sym->kind != SymbolKind::RESOURCE) return;
     }
 
     ReverseLookup::Register(resourceArena.nameHash, resourceName.c_str());
 
-    ResourceData& data = table->resources[sym->index];
+    ResourceData& data = symbolTable.resources[sym->index];
     data = ResourceData{};
     data.bindingIndex = bindingIndex;
     data.stageFlags = SymbolTable::ShaderStageToBit(ShaderStage::Vertex) |
@@ -214,11 +248,10 @@ static void RegisterParsedResource(SymbolTableData* table,
         data.typeName = ArenaString::MakeHashOnly(innerType);
         ReverseLookup::Register(data.typeName.nameHash, innerType.c_str());
         std::string baseType = StripFixedArraySuffixes(innerType);
-        CoreType coreType = SymbolTable::ParseTypeName(baseType);
+        TypeInfo resolvedType = ResolveType(baseType);
+        CoreType coreType = ResolveResourceCoreType(resolvedType, baseType);
         data.coreType = static_cast<u8>(coreType);
-        if (coreType == CoreType::CUSTOM) {
-            data.structTypeHash = Utils::HashStr(baseType.c_str());
-        }
+        data.structTypeHash = ResolveResourceStructHash(resolvedType, coreType, baseType);
         return;
     }
 
@@ -228,24 +261,20 @@ static void RegisterParsedResource(SymbolTableData* table,
         data.typeName = ArenaString::MakeHashOnly(innerType);
         ReverseLookup::Register(data.typeName.nameHash, innerType.c_str());
         std::string baseType = StripFixedArraySuffixes(innerType);
-        CoreType coreType = SymbolTable::ParseTypeName(baseType);
+        TypeInfo resolvedType = ResolveType(baseType);
+        CoreType coreType = ResolveResourceCoreType(resolvedType, baseType);
         data.coreType = static_cast<u8>(coreType);
-        if (coreType == CoreType::CUSTOM) {
-            data.structTypeHash = Utils::HashStr(baseType.c_str());
-        }
+        data.structTypeHash = ResolveResourceStructHash(resolvedType, coreType, baseType);
         return;
     }
 
     data.type = ResourceBinding::UniformBuffer;
     std::string baseType = StripFixedArraySuffixes(typeName);
-    CoreType coreType = SymbolTable::ParseTypeName(baseType);
+    TypeInfo resolvedType = ResolveType(baseType);
+    CoreType coreType = ResolveResourceCoreType(resolvedType, baseType);
     data.coreType = static_cast<u8>(coreType);
-    if (coreType == CoreType::CUSTOM) {
-        data.structTypeHash = Utils::HashStr(baseType.c_str());
-    }
+    data.structTypeHash = ResolveResourceStructHash(resolvedType, coreType, baseType);
 }
-
-} // namespace
 
 // Global module search paths - can be extended by external tools (e.g., bwslc)
 static std::vector<std::string> g_additionalModuleSearchPaths;
@@ -674,4 +703,3 @@ BinaryOpType Parser::TokenTypeToBinaryOp(TokenType type) {
 //==============================================================================
 // Main parsing function
 //==============================================================================
-

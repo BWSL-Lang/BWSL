@@ -193,7 +193,19 @@ std::string Parser::CanonicalizeTypeName(const std::string& typeName) {
 
     size_t scopePos = baseName.find("::");
     if (scopePos == std::string::npos) {
-        return typeName;
+        size_t dotPos = baseName.find('.');
+        if (dotPos == std::string::npos ||
+            baseName.find('.', dotPos + 1) != std::string::npos) {
+            return typeName;
+        }
+
+        std::string moduleName = baseName.substr(0, dotPos);
+        std::string localName = baseName.substr(dotPos + 1);
+        if (!IsIdentifierName(moduleName) || !IsIdentifierName(localName)) {
+            return typeName;
+        }
+
+        return CanonicalizeModuleQualifiedName(moduleName, localName) + pointerSuffix;
     }
 
     std::string moduleName = baseName.substr(0, scopePos);
@@ -517,8 +529,7 @@ void Parser::ParseResources(NodeRef pipeline) {
             ast->GetPipeline(pipeline).resources.Push(arena, resource);
 
             const ResourceDeclData& decl = ast->GetResourceDecl(resource);
-            RegisterParsedResource(&symbolTable,
-                                   decl.name.ToString(sourceBase()),
+            RegisterParsedResource(decl.name.ToString(sourceBase()),
                                    decl.typeName.ToString(sourceBase()),
                                    resourceIndex);
             resourceIndex++;
