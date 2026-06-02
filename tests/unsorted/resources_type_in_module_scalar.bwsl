@@ -1,0 +1,27 @@
+pipeline ResourceTypeInModuleScalar {
+  module MyModule {
+    struct UboBlock {
+        float value;
+    };
+  }
+  attributes {
+    position: float3
+  }
+
+  resources {
+    render: MyModule.UboBlock
+  }
+
+  pass "Base" {
+    use attributes { position }
+    use resources { render }
+
+    vertex {
+      output.position = float4(resources.render.value * attributes.position, 1.0);
+    }
+
+    fragment {
+      output.color = input.color;
+    }
+  }
+}

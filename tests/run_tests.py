@@ -1592,6 +1592,7 @@ def main() -> int:
 
     script_dir = Path(__file__).resolve().parent
     root = script_dir.parent
+    unsorted_dir = script_dir / "unsorted"
     output_dir = script_dir / "output"
     golden_dir = script_dir / "golden"
     modules_dir = root / "modules"
@@ -1655,7 +1656,7 @@ def main() -> int:
         print(f"Mode: {BLUE}updating golden files{NC}")
     print()
 
-    for test_file in sorted(script_dir.glob("*.bwsl")):
+    for test_file in sorted(unsorted_dir.glob("*.bwsl")):
         test_name = test_file.stem
 
         if is_module_file(test_file):

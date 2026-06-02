@@ -42,6 +42,141 @@ inline bool DecodeSwizzleByHash(u32 nameHash, u16 lengthHint, u8 outIndices[4],
   return false;
 }
 
+inline u32 FindStructTypeIndex(IRLowering *lowering, u32 structTypeHash) {
+  if (!lowering || structTypeHash == 0) return 0xFFFFFFFF;
+
+  u32 canonicalHash = lowering->LookupOrRegisterStructType(structTypeHash);
+  if (canonicalHash != 0) {
+    auto canonicalIt = lowering->structTypeMap.find(canonicalHash);
+    if (canonicalIt != lowering->structTypeMap.end()) {
+      return canonicalIt->second;
+    }
+  }
+
+  auto directIt = lowering->structTypeMap.find(structTypeHash);
+  if (directIt != lowering->structTypeMap.end()) {
+    return directIt->second;
+  }
+
+  return 0xFFFFFFFF;
+}
+
+inline u32 ResolveStructHashForStaticAccess(IRLowering *lowering, NodeRef expr) {
+  if (!lowering || expr.IsNull()) return 0;
+
+  switch (expr.Type()) {
+  case ASTNodeType::IDENTIFIER: {
+    const IdentifierData &ident = lowering->ast->GetIdentifier(expr);
+    auto varIt = lowering->variableStructTypes.find(ident.name.nameHash);
+    if (varIt != lowering->variableStructTypes.end()) {
+      return varIt->second;
+    }
+
+    Symbol *sym = SymbolTable::LookupAny(
+        const_cast<SymbolTableData *>(lowering->symbols), ident.name);
+    if (sym && sym->kind == SymbolKind::VARIABLE &&
+        sym->index < lowering->symbols->variables.count) {
+      const VariableData &varData = lowering->symbols->variables[sym->index];
+      if (varData.typeInfo.coreType == CoreType::CUSTOM ||
+          varData.typeInfo.coreType == CoreType::ENUM) {
+        return varData.typeInfo.customTypeHash;
+      }
+    }
+    return 0;
+  }
+
+  case ASTNodeType::MEMBER_ACCESS: {
+    const MemberAccessData &access = lowering->ast->GetMemberAccess(expr);
+
+    if (access.object.Type() == ASTNodeType::IDENTIFIER) {
+      const IdentifierData &obj = lowering->ast->GetIdentifier(access.object);
+      if (obj.identifierKind == SpecialIdentifier::RESOURCES) {
+        Symbol *sym = SymbolTable::LookupResource(
+            const_cast<SymbolTableData *>(lowering->symbols), access.member);
+        if (sym && sym->index < lowering->symbols->resources.count) {
+          const ResourceData &resData = lowering->symbols->resources[sym->index];
+          if (resData.structTypeHash != 0) {
+            return resData.structTypeHash;
+          }
+          if (static_cast<CoreType>(resData.coreType) == CoreType::CUSTOM) {
+            return resData.typeName.nameHash;
+          }
+        }
+        return 0;
+      }
+    }
+
+    u32 objectStructHash =
+        ResolveStructHashForStaticAccess(lowering, access.object);
+    u32 structIdx = FindStructTypeIndex(lowering, objectStructHash);
+    if (structIdx == 0xFFFFFFFF) return 0;
+
+    const IRProgram::StructTypeInfo &info =
+        lowering->program.structTypes[structIdx];
+    for (u32 i = 0; i < info.fieldCount; i++) {
+      u32 fieldOffset = info.fieldOffset + i;
+      if (lowering->program.structFieldNameHashes[fieldOffset] !=
+          access.member.nameHash) {
+        continue;
+      }
+
+      CoreType fieldType =
+          static_cast<CoreType>(lowering->program.structFieldTypes[fieldOffset]);
+      if (fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) {
+        return lowering->program.structFieldTypeHashes[fieldOffset];
+      }
+      return 0;
+    }
+    return 0;
+  }
+
+  case ASTNodeType::ARRAY_ACCESS: {
+    const ArrayAccessData &arrayAccess = lowering->ast->GetArrayAccess(expr);
+    return ResolveStructHashForStaticAccess(lowering, arrayAccess.array);
+  }
+
+  default:
+    return 0;
+  }
+}
+
+inline u32 ResolveStaticArrayLength(IRLowering *lowering, NodeRef expr) {
+  if (!lowering || expr.IsNull()) return 0;
+
+  if (expr.Type() == ASTNodeType::IDENTIFIER) {
+    const IdentifierData &ident = lowering->ast->GetIdentifier(expr);
+    Symbol *sym = SymbolTable::LookupAny(
+        const_cast<SymbolTableData *>(lowering->symbols), ident.name);
+    if (sym && sym->kind == SymbolKind::VARIABLE &&
+        sym->index < lowering->symbols->variables.count) {
+      return lowering->symbols->variables[sym->index].typeInfo.arrayLength;
+    }
+    return 0;
+  }
+
+  if (expr.Type() != ASTNodeType::MEMBER_ACCESS) {
+    return 0;
+  }
+
+  const MemberAccessData &access = lowering->ast->GetMemberAccess(expr);
+  u32 objectStructHash =
+      ResolveStructHashForStaticAccess(lowering, access.object);
+  u32 structIdx = FindStructTypeIndex(lowering, objectStructHash);
+  if (structIdx == 0xFFFFFFFF) return 0;
+
+  const IRProgram::StructTypeInfo &info =
+      lowering->program.structTypes[structIdx];
+  for (u32 i = 0; i < info.fieldCount; i++) {
+    u32 fieldOffset = info.fieldOffset + i;
+    if (lowering->program.structFieldNameHashes[fieldOffset] ==
+        access.member.nameHash) {
+      return lowering->program.structFieldArraySizes[fieldOffset];
+    }
+  }
+
+  return 0;
+}
+
 } // namespace
 
 inline u16 IRLowering::TryLowerLocalFieldAddressOf(NodeRef memberRef) {
@@ -1021,6 +1156,14 @@ inline u16 IRLowering::LowerStoragePointerForAtomic(NodeRef ref) {
 
 inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
   const MemberAccessData &access = ast->GetMemberAccess(ref);
+  static const u32 HASH_LENGTH = Utils::HashStr("length");
+
+  if (access.member.nameHash == HASH_LENGTH) {
+    u32 arrayLength = ResolveStaticArrayLength(this, access.object);
+    if (arrayLength > 0) {
+      return EmitConstantInt(arrayLength);
+    }
+  }
 
   // Sum-type enum variant with no payload, e.g. `Curve::Linear`.
   // Payload variants with arguments lower through LowerFunctionCall.
