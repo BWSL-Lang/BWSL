@@ -247,6 +247,9 @@ private:
     void ParseUsingTypeAliasList();
     void ParseAttributes(NodeRef pipeline);
     void ParseResources(NodeRef pipeline);
+    void RegisterParsedResource(const std::string& resourceName,
+                                const std::string& typeName,
+                                u32 bindingIndex);
     void ParseVariants(NodeRef pipeline);
     void ParseVariantRules(NodeRef pipeline);
     void ParsePassBody(NodeRef pass);
