@@ -13,25 +13,27 @@ class BwslLexer : LexerBase() {
     private var currentToken: IElementType? = null
 
     companion object {
-        private val KEYWORDS: Set<String> = hashSetOf(
-            // Structure
-            "module", "pipeline", "import", "using", "as",
+        // Structural block-level keywords — get their own highlight color.
+        // attributes/resources/variants also appear in expressions; they keep this color there too.
+        private val BLOCK_KEYWORDS: Set<String> = hashSetOf(
+            "module", "pipeline",
             "pass", "vertex", "fragment", "compute", "compute_graph",
             "attributes", "resources", "variants",
-            "const", "struct", "enum", "eval", "constraint",
-            "node", "inputs", "outputs", "rules", "require", "conflict",
-            "use", "shared",
-            // Control flow
+            "struct", "enum", "eval",
+            "node", "inputs", "outputs"
+        )
+
+        // Control-flow, declaration, and misc keywords.
+        private val KEYWORDS: Set<String> = hashSetOf(
+            "import", "using", "as",
+            "use", "const", "shared", "constraint",
+            "rules", "require", "conflict",
             "return", "if", "else", "for", "foreach", "while", "loop",
             "switch", "case", "default", "break", "skip", "continue",
             "discard", "in", "by", "until",
-            // Literals / special values
             "true", "false", "null", "self",
-            // Access modifiers
             "readonly", "readwrite", "writeonly",
-            // Return-type keywords
             "vertex_function", "fragment_function", "compute_function", "pass_block",
-            // Decorator identifiers
             "flat", "noperspective", "compressed", "instance", "location"
         )
 
@@ -198,9 +200,11 @@ class BwslLexer : LexerBase() {
         }
         val word = buffer.subSequence(tokenStart, tokenEnd).toString()
         return when {
-            TYPE_KEYWORDS.contains(word) -> BwslTokenTypes.TYPE_KEYWORD
-            KEYWORDS.contains(word) -> BwslTokenTypes.KEYWORD
-            else -> BwslTokenTypes.IDENTIFIER
+            BLOCK_KEYWORDS.contains(word) -> BwslTokenTypes.BLOCK_KEYWORD
+            TYPE_KEYWORDS.contains(word)  -> BwslTokenTypes.TYPE_KEYWORD
+            KEYWORDS.contains(word)       -> BwslTokenTypes.KEYWORD
+            isFollowedByColonColon()      -> BwslTokenTypes.FUNCTION_NAME
+            else                          -> BwslTokenTypes.IDENTIFIER
         }
     }
 
@@ -235,7 +239,17 @@ class BwslLexer : LexerBase() {
             '/' -> { if (peek(0) == '=') tokenEnd++; BwslTokenTypes.OPERATOR }
             '%' -> { if (peek(0) == '=') tokenEnd++; BwslTokenTypes.OPERATOR }
             '~' -> BwslTokenTypes.OPERATOR
-            '@' -> BwslTokenTypes.OPERATOR
+            '@' -> {
+                // Consume @identifier as one decorator token (e.g. @flat, @location).
+                if (tokenEnd < bufferEnd && (buffer[tokenEnd].isLetter() || buffer[tokenEnd] == '_')) {
+                    while (tokenEnd < bufferEnd && (buffer[tokenEnd].isLetterOrDigit() || buffer[tokenEnd] == '_')) {
+                        tokenEnd++
+                    }
+                    BwslTokenTypes.DECORATOR
+                } else {
+                    BwslTokenTypes.OPERATOR
+                }
+            }
 
             '!' -> { if (peek(0) == '=') tokenEnd++; BwslTokenTypes.OPERATOR }
             '=' -> { if (peek(0) == '=') tokenEnd++; BwslTokenTypes.OPERATOR }
@@ -271,6 +285,14 @@ class BwslLexer : LexerBase() {
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
+
+    // Returns true when the identifier just consumed is a function/method name,
+    // i.e. it is followed (ignoring whitespace) by '::'.
+    private fun isFollowedByColonColon(): Boolean {
+        var i = tokenEnd
+        while (i < bufferEnd && buffer[i].isWhitespace()) i++
+        return i + 1 < bufferEnd && buffer[i] == ':' && buffer[i + 1] == ':'
+    }
 
     private fun peek(offset: Int): Char {
         val idx = tokenEnd + offset

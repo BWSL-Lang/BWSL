@@ -13,9 +13,17 @@ class BwslSyntaxHighlighter : SyntaxHighlighterBase() {
 
     companion object {
         @JvmField
-        val KEYWORD = createTextAttributesKey("BWSL_KEYWORD", DefaultLanguageHighlighterColors.KEYWORD)
+        val DECORATOR = createTextAttributesKey("BWSL_DECORATOR", DefaultLanguageHighlighterColors.METADATA)
         @JvmField
-        val TYPE_KEYWORD = createTextAttributesKey("BWSL_TYPE_KEYWORD", DefaultLanguageHighlighterColors.KEYWORD)
+        val BLOCK_KEYWORD = createTextAttributesKey("BWSL_BLOCK_KEYWORD", DefaultLanguageHighlighterColors.FUNCTION_DECLARATION)
+        @JvmField
+        val FUNCTION_NAME = createTextAttributesKey("BWSL_FUNCTION_NAME", DefaultLanguageHighlighterColors.FUNCTION_DECLARATION)
+        // Standard keyword color (orange in Darcula, blue-bold in light).
+        @JvmField
+        val KEYWORD = createTextAttributesKey("BWSL_KEYWORD", DefaultLanguageHighlighterColors.KEYWORD)
+        // Class-reference color (teal/cyan in many themes) — distinct from both KEYWORD and BLOCK_KEYWORD.
+        @JvmField
+        val TYPE_KEYWORD = createTextAttributesKey("BWSL_TYPE_KEYWORD", DefaultLanguageHighlighterColors.CLASS_REFERENCE)
         @JvmField
         val NUMBER = createTextAttributesKey("BWSL_NUMBER", DefaultLanguageHighlighterColors.NUMBER)
         @JvmField
@@ -31,6 +39,9 @@ class BwslSyntaxHighlighter : SyntaxHighlighterBase() {
         @JvmField
         val BAD_CHARACTER = createTextAttributesKey("BWSL_BAD_CHARACTER", HighlighterColors.BAD_CHARACTER)
 
+        private val DECORATOR_KEYS     = arrayOf(DECORATOR)
+        private val BLOCK_KEYWORD_KEYS = arrayOf(BLOCK_KEYWORD)
+        private val FUNCTION_NAME_KEYS = arrayOf(FUNCTION_NAME)
         private val KEYWORD_KEYS       = arrayOf(KEYWORD)
         private val TYPE_KEYWORD_KEYS  = arrayOf(TYPE_KEYWORD)
         private val NUMBER_KEYS        = arrayOf(NUMBER)
@@ -46,7 +57,10 @@ class BwslSyntaxHighlighter : SyntaxHighlighterBase() {
     override fun getHighlightingLexer(): Lexer = BwslLexer()
 
     override fun getTokenHighlights(tokenType: IElementType): Array<TextAttributesKey> = when (tokenType) {
-        BwslTokenTypes.KEYWORD       -> KEYWORD_KEYS
+        BwslTokenTypes.DECORATOR      -> DECORATOR_KEYS
+        BwslTokenTypes.BLOCK_KEYWORD  -> BLOCK_KEYWORD_KEYS
+        BwslTokenTypes.FUNCTION_NAME  -> FUNCTION_NAME_KEYS
+        BwslTokenTypes.KEYWORD        -> KEYWORD_KEYS
         BwslTokenTypes.TYPE_KEYWORD  -> TYPE_KEYWORD_KEYS
         BwslTokenTypes.NUMBER        -> NUMBER_KEYS
         BwslTokenTypes.STRING        -> STRING_KEYS
