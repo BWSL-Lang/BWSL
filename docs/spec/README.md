@@ -41,6 +41,7 @@ non-normative. It may simplify syntax, omit edge cases, or lag implementation.
 - [08-pipelines-passes-and-shader-io.md](08-pipelines-passes-and-shader-io.md)
 - [09-intrinsics-and-builtins.md](09-intrinsics-and-builtins.md)
 - [10-conformance.md](10-conformance.md)
+- [bwsl.bnf](bwsl.bnf)
 
 ## Scope
 
