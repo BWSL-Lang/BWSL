@@ -471,8 +471,7 @@ private:
         shaderSet.cachedParser = std::make_unique<Parser>();
         shaderSet.cachedParser->Init(lexer.get(), shaderSet.cachedContext.get());
         
-        // Parse the pipeline
-        shaderSet.cachedParser->ParsePipeline();
+        shaderSet.cachedParser->ParseDocument();
         
         if (shaderSet.cachedParser->hadError) {
             return false;

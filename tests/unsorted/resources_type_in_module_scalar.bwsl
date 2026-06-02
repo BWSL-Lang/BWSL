@@ -1,9 +1,12 @@
+module MyModule {
+  struct UboBlock {
+      float value;
+  };
+}
+
 pipeline ResourceTypeInModuleScalar {
-  module MyModule {
-    struct UboBlock {
-        float value;
-    };
-  }
+  import MyModule
+
   attributes {
     position: float3
   }

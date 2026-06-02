@@ -1,0 +1,10 @@
+pipeline MixedModuleImportUser {
+    import mixed_module_export
+
+    pass "Main" {
+        compute "Main" [1, 1, 1] {
+            float value = mixed_module_export::scale(4.0);
+            uint idx = input.global_id.x;
+        }
+    }
+}

@@ -400,7 +400,10 @@ Functions can be:
 
 ## Modules
 
-Modules define reusable code in `.bwsl` files that begin with `module`.
+Modules define reusable code and are declared at file scope. They can live in
+their own `.bwsl` file or in the same file as a pipeline; in either case the
+pipeline imports the module normally. `module` declarations are not valid inside
+`pipeline` blocks.
 
 ```bwsl
 module TestMath {
@@ -409,6 +412,10 @@ module TestMath {
     square :: (float x) -> float {
         return x * x;
     }
+}
+
+pipeline Demo {
+    import TestMath
 }
 ```
 

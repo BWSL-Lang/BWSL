@@ -2229,16 +2229,7 @@ int main(int argc, char* argv[]) {
     Parser parser;
     parser.Init(&lexer, &stream, &context);
 
-    // Check first token to determine file type (Init already advanced to first token)
-    bool isModule = (parser.CurrentTokenType() == TokenType::MODULE);
-
-    if (isModule) {
-        // Parse as module file
-        (void)parser.ParseModuleFile();
-    } else {
-        // Parse as pipeline
-        (void)parser.ParsePipeline();
-    }
+    (void)parser.ParseDocument();
     auto parseEnd = Clock::now();
     timing.parseMs = std::chrono::duration<double, std::milli>(parseEnd - parseStart).count();
 
@@ -2256,6 +2247,8 @@ int main(int argc, char* argv[]) {
 
         return 1;
     }
+
+    bool isModule = (context.ast.pipelines.count == 0 && context.ast.modules.count > 0);
 
     if (!isModule && context.root.IsValid()) {
         std::string variantResolveError;

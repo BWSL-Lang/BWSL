@@ -1,9 +1,9 @@
-pipeline TypeAliasScopeIsolation {
-    module AliasTypes {
-        import PBR as BRDF
-        using Material = BRDF::PBRMaterial
-    }
+module AliasTypes {
+    import PBR as BRDF
+    using Material = BRDF::PBRMaterial
+}
 
+pipeline TypeAliasScopeIsolation {
     using LeakedMaterial = Material
 
     pass "Main" {

@@ -1,0 +1,16 @@
+pipeline FileScopeModuleAfterPipeline {
+    import LateHelpers
+
+    pass "Main" {
+        compute "Main" [1, 1, 1] {
+            float value = LateHelpers::scale(2.0);
+            uint idx = input.global_id.x;
+        }
+    }
+}
+
+module LateHelpers {
+    scale :: (float x) -> float {
+        return x * 2.0;
+    }
+}

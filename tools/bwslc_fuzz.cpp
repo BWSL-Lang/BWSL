@@ -168,12 +168,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     Parser parser;
     parser.Init(&lexer, &stream, &context);
 
-    bool isModule = (parser.CurrentTokenType() == TokenType::MODULE);
-    if (isModule) {
-        (void) parser.ParseModuleFile();
-        return 0;
-    }
-    (void) parser.ParsePipeline();
+    (void) parser.ParseDocument();
 
     if (parser.hadError) return 0;
     if (context.ast.pipelines.count == 0) return 0;
