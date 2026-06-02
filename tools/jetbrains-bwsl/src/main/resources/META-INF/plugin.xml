@@ -1,0 +1,34 @@
+<idea-plugin>
+    <id>com.bwsl.jetbrains-plugin</id>
+    <name>BWSL Language</name>
+    <version>1.0.0</version>
+    <vendor>BWSL</vendor>
+
+    <description>
+        Syntax highlighting for the BWSL shader language (.bwsl files).
+        Highlights keywords, type names, numbers, strings, and comments.
+        Includes a color-settings page under Settings → Editor → Color Scheme → BWSL.
+    </description>
+
+    <idea-version since-build="241"/>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+
+        <fileType
+            name="BWSL"
+            implementationClass="com.bwsl.plugin.BwslFileType"
+            fieldName="INSTANCE"
+            language="BWSL"
+            extensions="bwsl"/>
+
+        <lang.syntaxHighlighterFactory
+            language="BWSL"
+            implementationClass="com.bwsl.plugin.BwslSyntaxHighlighterFactory"/>
+
+        <colorSettingsPage
+            implementation="com.bwsl.plugin.BwslColorSettingsPage"/>
+
+    </extensions>
+</idea-plugin>
