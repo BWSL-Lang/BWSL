@@ -1,22 +1,22 @@
-pipeline ModuleImportAliasUsing {
-    module AliasClient {
-        import Math as M
-        import Debug
-        using Debug
+module AliasClient {
+    import Math as M
+    import Debug
+    using Debug
 
-        alias_area :: (float radius) -> float {
-            return M::PI * radius * radius;
-        }
-
-        alias_normal :: (float3 n) -> float3 {
-            return M::safe_normalize(n);
-        }
-
-        using_heat :: (float value) -> float3 {
-            return heatmap(saturate(value));
-        }
+    alias_area :: (float radius) -> float {
+        return M::PI * radius * radius;
     }
 
+    alias_normal :: (float3 n) -> float3 {
+        return M::safe_normalize(n);
+    }
+
+    using_heat :: (float value) -> float3 {
+        return heatmap(saturate(value));
+    }
+}
+
+pipeline ModuleImportAliasUsing {
     import Math as MyAwesomeModule, Random as RNG
     import PBR as BRDF
     import AliasClient as Client

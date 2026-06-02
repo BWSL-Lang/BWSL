@@ -1478,6 +1478,7 @@ namespace ASTFactory {
         data.usingImports.Init(ast->arena, 4);
         data.functions.Init(ast->arena, 16);
         data.structs.Init(ast->arena, 8);
+        data.enums.Init(ast->arena, 4);
         ast->modules.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {

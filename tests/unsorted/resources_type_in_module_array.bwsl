@@ -1,9 +1,12 @@
+module MyModule {
+  struct UboBlock {
+      float4 transformations[9];
+  };
+}
+
 pipeline ResourceTypeInModuleArray {
-  module MyModule {
-    struct UboBlock {
-        float4 transformations[9];
-    };
-  }
+  import MyModule
+
   attributes {
     position: float3
   }

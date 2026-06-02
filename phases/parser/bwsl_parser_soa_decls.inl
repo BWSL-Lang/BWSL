@@ -1,8 +1,84 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Pipeline, import, attribute, resource, pass, and shader stage declarations.
 
+NodeRef Parser::ParseDocument() {
+    TokenRef documentStart = current;
+    TokenRef previousStart = previous;
+
+    // First collect file-scope modules so pipelines can import modules declared
+    // later in the same BWSL document.
+    while (!Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
+        if (Match(TokenType::MODULE)) {
+            (void)ParseModule();
+        } else if (Check(TokenType::PIPELINE)) {
+            SkipBracedDeclaration(false);
+        } else {
+            Advance();
+        }
+        panicMode = false;
+    }
+
+    current = documentStart;
+    previous = previousStart;
+    hasLookahead = false;
+    has3TokenLookahead = false;
+    lookahead = INVALID_TOKEN;
+    lookahead3 = INVALID_TOKEN;
+    currentPipeline = NodeRef::Null();
+    currentPass = NodeRef::Null();
+    inShaderStage = false;
+
+    NodeRef lastPipeline = NodeRef::Null();
+    while (!Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
+        if (Check(TokenType::PIPELINE)) {
+            NodeRef pipeline = ParsePipeline();
+            if (pipeline.IsValid()) {
+                lastPipeline = pipeline;
+            }
+        } else if (Check(TokenType::MODULE)) {
+            SkipBracedDeclaration(false);
+        } else {
+            ErrorAtCurrent("Expected file-scope 'module' or 'pipeline' declaration");
+            Advance();
+        }
+        panicMode = false;
+    }
+
+    if (lastPipeline.IsValid()) {
+        context->root = lastPipeline;
+    }
+    return context->root;
+}
+
+void Parser::SkipBracedDeclaration(bool keywordAlreadyConsumed) {
+    if (!keywordAlreadyConsumed && !Check(TokenType::EOF_TOKEN)) {
+        Advance();
+    }
+
+    if (Check(TokenType::IDENTIFIER) || Check(TokenType::STRING)) {
+        Advance();
+    }
+
+    if (!Match(TokenType::LEFT_BRACE)) {
+        return;
+    }
+
+    u32 depth = 1;
+    while (depth > 0 && !Check(TokenType::EOF_TOKEN)) {
+        if (Match(TokenType::LEFT_BRACE)) {
+            depth++;
+        } else if (Match(TokenType::RIGHT_BRACE)) {
+            depth--;
+        } else {
+            Advance();
+        }
+    }
+}
+
 NodeRef Parser::ParsePipeline() {
-    SourceLocation loc = getLocation(stream->GetOffset(previous));
+    SourceLocation loc = getLocation(stream->GetOffset(current));
     u32 line = loc.line;
     u32 col = loc.column;
 
@@ -124,12 +200,8 @@ NodeRef Parser::ParsePipeline() {
                 ast->GetPipeline(pipeline).enums.Push(arena, enumDecl);
             }
         } else if (Match(TokenType::MODULE)) {
-            // Inline module definition (for testing)
-            NodeRef module = ParseModule();
-            if (module.IsValid()) {
-                // Store module in AST's module pool (already done by MakeModule)
-                // The module is accessible via symbol table for imports
-            }
+            ErrorAtPrevious("Module declarations must be declared at file scope, outside pipeline blocks");
+            SkipBracedDeclaration(true);
         } else if (Match(TokenType::STRUCT)) {
             // Top-level struct
             NodeRef structNode = ParseStruct();

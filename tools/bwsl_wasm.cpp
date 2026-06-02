@@ -927,8 +927,7 @@ static std::string CompileToJson(const char* bwslSource,
     Parser parser;
     parser.Init(&lexer, &stream, &context);
 
-    // Parse as pipeline
-    parser.ParsePipeline();
+    parser.ParseDocument();
 
     if (parser.hadError) {
         std::string errorJson = "{\"success\":false,\"errors\":[";
@@ -1388,7 +1387,7 @@ static std::string GetSymbolsJson(const char* bwslSource, const char* rcfgSource
     parser.Init(&lexer, &stream, &context);
 
     // Try to parse - continue even if there are errors
-    parser.ParsePipeline();
+    parser.ParseDocument();
 
     const char* sourceBase = lexer.GetSourceBase();
     const SymbolTableData& symTable = parser.symbolTable;

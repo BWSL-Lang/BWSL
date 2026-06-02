@@ -186,6 +186,7 @@ struct Parser {
     }
 
     // Main parse functions
+    NodeRef ParseDocument();
     NodeRef ParsePipeline();
 
     // Parse a standalone module file
@@ -224,6 +225,7 @@ private:
     bool Match(TokenType type);
     bool Consume(TokenType type, const char* message);
     void Synchronize();
+    void SkipBracedDeclaration(bool keywordAlreadyConsumed);
     TokenRef PeekNext();
     TokenRef Peek3();  // Look 3 tokens ahead (for distinguishing IDENTIFIER :: ( from IDENTIFIER :: IDENTIFIER)
     bool IsFunctionDeclStart();  // Check if current position starts a function declaration

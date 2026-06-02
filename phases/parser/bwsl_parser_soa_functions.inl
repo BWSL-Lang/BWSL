@@ -127,8 +127,15 @@ bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
     TokenStream* savedStream = stream;
     bool savedHasLookahead = hasLookahead;
     TokenRef savedLookahead = lookahead;
+    bool savedHas3TokenLookahead = has3TokenLookahead;
+    TokenRef savedLookahead3 = lookahead3;
     bool savedInModuleScope = symbolTable.inModuleScope;
     u32 savedCurrentModuleIdx = symbolTable.currentModuleIndex;
+    NodeRef savedRoot = context->root;
+    NodeRef savedCurrentPipeline = currentPipeline;
+    NodeRef savedCurrentPass = currentPass;
+    bool savedInShaderStage = inShaderStage;
+    ShaderStage savedCurrentShaderStage = currentShaderStage;
 
     // Create new TokenStream and lexer for arena-persistent module source
     TokenStream moduleStream;
@@ -138,26 +145,36 @@ bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
     lexer = &moduleLexer;
     stream = &moduleStream;
     hasLookahead = false;
+    has3TokenLookahead = false;
+    lookahead = INVALID_TOKEN;
+    lookahead3 = INVALID_TOKEN;
 
-    // Reset token position and advance to first token
-    current = static_cast<TokenRef>(-1);  // Will become 0 after Advance()
-    previous = static_cast<TokenRef>(0);
-    Advance();
-
-    // Parse the module - look for 'module' keyword
     bool success = false;
-    if (Match(TokenType::MODULE)) {
-        NodeRef moduleNode = ParseModule();
-        success = moduleNode.IsValid();
+    current = 0;
+    previous = 0;
 
-        // Store source pointer in module data for lifetime tracking
-        if (success) {
-            u32 moduleIdx = SymbolTable::FindModuleByHash(&symbolTable, Utils::HashStr(moduleName.c_str()));
-            if (moduleIdx != INVALID_INDEX && moduleIdx < symbolTable.modules.count) {
-                symbolTable.modules[moduleIdx].sourcePtr = persistentSource;
-                symbolTable.modules[moduleIdx].sourceLength = static_cast<u32>(moduleSource.size());
+    while (!Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
+        if (Match(TokenType::MODULE)) {
+            NodeRef moduleNode = ParseModule();
+            if (moduleNode.IsValid()) {
+                const ModuleNodeData& moduleData = ast->GetModule(moduleNode);
+                u32 parsedModuleIdx = SymbolTable::FindModuleByHash(&symbolTable,
+                    moduleData.name.nameHash);
+                if (parsedModuleIdx != INVALID_INDEX && parsedModuleIdx < symbolTable.modules.count) {
+                    symbolTable.modules[parsedModuleIdx].sourcePtr = persistentSource;
+                    symbolTable.modules[parsedModuleIdx].sourceLength = static_cast<u32>(moduleSource.size());
+                }
+                if (moduleData.name.nameHash == moduleHash) {
+                    success = true;
+                }
             }
+        } else if (Check(TokenType::PIPELINE)) {
+            SkipBracedDeclaration(false);
+        } else {
+            Advance();
         }
+        panicMode = false;
     }
 
     // Restore parser state
@@ -167,8 +184,15 @@ bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
     stream = savedStream;
     hasLookahead = savedHasLookahead;
     lookahead = savedLookahead;
+    has3TokenLookahead = savedHas3TokenLookahead;
+    lookahead3 = savedLookahead3;
     symbolTable.inModuleScope = savedInModuleScope;
     symbolTable.currentModuleIndex = savedCurrentModuleIdx;
+    context->root = savedRoot;
+    currentPipeline = savedCurrentPipeline;
+    currentPass = savedCurrentPass;
+    inShaderStage = savedInShaderStage;
+    currentShaderStage = savedCurrentShaderStage;
 
     return success;
 }

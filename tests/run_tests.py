@@ -170,6 +170,7 @@ ERROR_CASE_TESTS = {
     "undeclared_fragment_output.bwsl": "fragment output 'bloom' is not declared",
     "attributes_used_as_value.bwsl": "'attributes' cannot be used as a value",
     "missing_variable.bwsl": "Unknown identifier 'i_position'",
+    "module_inside_pipeline.bwsl": "Module declarations must be declared at file scope",
 }
 
 FORBIDDEN_SOURCE_ALIAS_NAMES = (
@@ -469,10 +470,15 @@ def stage_from_filename(path: Path) -> str | None:
 
 def is_module_file(path: Path) -> bool:
     pattern = re.compile(r"^(module|pipeline)\b")
+    saw_module = False
     for line in path.read_text(encoding="utf-8").splitlines():
-        if pattern.match(line):
-            return line.split()[0] == "module"
-    return False
+        match = pattern.match(line)
+        if not match:
+            continue
+        if match.group(1) == "pipeline":
+            return False
+        saw_module = True
+    return saw_module
 
 
 def check_inline_return_jump(path: Path) -> tuple[bool, str]:

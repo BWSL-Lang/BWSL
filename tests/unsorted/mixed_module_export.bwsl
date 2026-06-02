@@ -1,0 +1,16 @@
+module mixed_module_export {
+    scale :: (float x) -> float {
+        return x * 3.0;
+    }
+}
+
+pipeline MixedModuleExportOwner {
+    import mixed_module_export
+
+    pass "Main" {
+        compute "Main" [1, 1, 1] {
+            float value = mixed_module_export::scale(2.0);
+            uint idx = input.global_id.x;
+        }
+    }
+}

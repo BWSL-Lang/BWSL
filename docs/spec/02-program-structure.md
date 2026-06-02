@@ -6,18 +6,21 @@ Primary implementation source:
 
 - `phases/parser/bwsl_parser_soa.cpp`
 
-## File Kinds
+## File Structure
 
-BWSL source files are currently divided into two top-level kinds:
+BWSL source files may contain file-scope `module` and `pipeline`
+declarations. Modules may live in their own files or in the same file as a
+pipeline.
 
-- `pipeline` files
-- `module` files
+File-scope modules are registered before pipelines are parsed, so a pipeline
+can import a module declared elsewhere in the same source file.
 
 ```bwsl
-pipeline Demo {
+module Math {
 }
 
-module Math {
+pipeline Demo {
+    import Math
 }
 ```
 
@@ -35,12 +38,14 @@ The parser currently accepts the following top-level declarations inside a
 - `pass "Name" { ... }`
 - `eval` declarations
 - `enum`
-- inline `module`
 - `struct`
 - `constraint`
 - top-level function declarations
 
 Top-level declaration order is largely free.
+
+`module` declarations are not valid inside a `pipeline` body; declare them at
+file scope instead.
 
 ## Pipeline Cardinality Rules
 
@@ -98,12 +103,6 @@ pass "Main" {
 ```
 
 This is part of the current concrete syntax, not just a documentation style.
-
-## Inline Modules
-
-The pipeline parser accepts inline `module` declarations. These are useful for
-tests and local organization, but the main user-facing model remains separate
-module files.
 
 ## Out of Scope
 
