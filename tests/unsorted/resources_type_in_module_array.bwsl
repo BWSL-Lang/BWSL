@@ -1,0 +1,33 @@
+pipeline ResourceTypeInModuleArray {
+  module MyModule {
+    struct UboBlock {
+        float4 transformations[9];
+    };
+  }
+  attributes {
+    position: float3
+  }
+
+  resources {
+    render: MyModule.UboBlock
+  }
+
+  pass "Base" {
+    use attributes { position }
+    use resources { render }
+
+    vertex {
+      float2 tmp = attributes.position.xy;
+      for (int i = resources.render.transformations.length - 1; i >= 0; i--) {
+          float2 offset = resources.render.transformations[i].xy;
+          float2 scale = resources.render.transformations[i].zw;
+          tmp = tmp * scale + offset;
+      }
+      output.position = float4(tmp, attributes.position.z, 1.0);
+    }
+
+    fragment {
+      output.color = input.color;
+    }
+  }
+}
