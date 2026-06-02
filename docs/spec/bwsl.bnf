@@ -1,0 +1,915 @@
+# BWSL Backus-Naur Form
+#
+# This grammar describes the source syntax implemented by the current BWSL
+# lexer/parser. It is syntax-oriented: semantic restrictions such as duplicate
+# block checks, stage availability, overload resolution, eval execution, and
+# resource validation are outside the grammar.
+#
+# Notation:
+# - Nonterminals are written as <name>.
+# - Terminals are quoted with single quotes.
+# - <empty> is the empty production.
+# - Productions ending in -opt and -list encode optional and repeated syntax.
+#
+# Notes:
+# - Whitespace, line comments, and block comments are ignored between tokens.
+# - The lexer recognizes both 'skip' and 'continue' as the same continue-like
+#   statement token.
+# - The lexer recognizes 'void', but the parser's current declaration/return
+#   type masks do not accept it in normal type positions. It is therefore not
+#   included in <core-type> below.
+# - Resource declarations parse their type text until ';', '}', or the next
+#   resource-name ':' pair. The productions below describe the supported type
+#   text used by the compiler.
+
+<document> ::= <file-item-list>
+
+<file-item-list> ::= <file-item> <file-item-list>
+                   | <empty>
+
+<file-item> ::= <module-decl>
+              | <pipeline-decl>
+
+
+# Program structure
+
+<module-decl> ::= 'module' <identifier> '{' <module-item-list> '}'
+
+<module-item-list> ::= <module-item> <module-item-list>
+                     | <empty>
+
+<module-item> ::= <import-decl>
+                | <using-decl>
+                | <function-decl>
+                | <struct-decl> <semicolon-opt>
+                | <enum-decl>
+                | <module-const-decl>
+
+<pipeline-decl> ::= 'pipeline' <identifier> '{' <pipeline-item-list> '}'
+
+<pipeline-item-list> ::= <pipeline-item> <pipeline-item-list>
+                       | <empty>
+
+<pipeline-item> ::= <import-decl>
+                  | <using-decl>
+                  | <attributes-block>
+                  | <resources-block>
+                  | <variants-block>
+                  | <compute-graph-block>
+                  | <pipeline-const-decl>
+                  | <pass-decl>
+                  | <eval-decl>
+                  | <enum-decl>
+                  | <struct-decl> <semicolon-opt>
+                  | <constraint-decl>
+                  | <function-decl>
+
+<import-decl> ::= 'import' <module-import-list>
+
+<module-import-list> ::= <module-import>
+                       | <module-import> ',' <module-import-list>
+
+<module-import> ::= <identifier> <import-alias-opt>
+
+<import-alias-opt> ::= 'as' <identifier>
+                     | <empty>
+
+<using-decl> ::= 'using' <using-module-list>
+               | 'using' <type-alias-list> <semicolon-opt>
+
+<using-module-list> ::= <identifier>
+                      | <identifier> ',' <using-module-list>
+
+<type-alias-list> ::= <type-alias>
+                    | <type-alias> ',' <type-alias-list>
+
+<type-alias> ::= <identifier> '=' <type-alias-target>
+
+<type-alias-target> ::= <core-type> <pointer-suffix-list>
+                      | <qualified-type-name> <pointer-suffix-list>
+
+
+# Pipeline declarations
+
+<attributes-block> ::= 'attributes' '{' <attribute-decl-list> '}'
+
+<attribute-decl-list> ::= <attribute-decl> <attribute-decl-list>
+                        | <empty>
+
+<attribute-decl> ::= <identifier> ':' <attribute-type> <attribute-decorator-list>
+
+<attribute-type> ::= <type-ref>
+
+<attribute-decorator-list> ::= <attribute-decorator> <attribute-decorator-list>
+                             | <empty>
+
+<attribute-decorator> ::= '@' 'compressed' '(' <decorator-payload> ')'
+                        | '@' 'instance'
+
+<resources-block> ::= 'resources' '{' <resource-decl-list> '}'
+
+<resource-decl-list> ::= <resource-decl> <resource-decl-list>
+                       | <empty>
+
+<resource-decl> ::= <identifier> ':' <resource-type> <semicolon-opt>
+
+<resource-type> ::= 'sampler'
+                  | 'texture2D'
+                  | 'texture3D'
+                  | 'textureCube'
+                  | 'texture2DArray'
+                  | 'image2D'
+                  | 'buffer' '<' <resource-element-type> '>'
+                  | 'cbuffer' '<' <resource-element-type> '>'
+                  | <qualified-type-name> <fixed-array-suffix-list>
+
+<resource-element-type> ::= <type-ref> <fixed-array-suffix-list>
+
+<variants-block> ::= 'variants' '{' <variant-item-list> '}'
+
+<variant-item-list> ::= <variant-item> <variant-item-list>
+                      | <empty>
+
+<variant-item> ::= <variant-decl>
+                 | <variant-rules-block>
+
+<variant-decl> ::= <identifier> ':' <variant-type> '=' <expression> ';'
+
+<variant-type> ::= 'bool'
+                 | <qualified-type-name>
+
+<variant-rules-block> ::= 'rules' '{' <variant-rule-list> '}'
+
+<variant-rule-list> ::= <variant-rule> <variant-rule-list>
+                      | <empty>
+
+<variant-rule> ::= 'require' <expression> '->' <expression> ';'
+                 | 'conflict' <expression> ',' <expression> ';'
+
+<compute-graph-block> ::= 'compute_graph' '{' <compute-graph-node-list> '}'
+
+<compute-graph-node-list> ::= <compute-graph-node> <compute-graph-node-list>
+                            | <empty>
+
+<compute-graph-node> ::= 'node' <string-literal> '{' <compute-graph-node-item-list> '}'
+
+<compute-graph-node-item-list> ::= <compute-graph-node-item> <compute-graph-node-item-list>
+                                 | <empty>
+
+<compute-graph-node-item> ::= <compute-graph-inputs>
+                            | <compute-graph-outputs>
+
+<compute-graph-inputs> ::= 'inputs' '{' <graph-input-list-opt> '}'
+
+<graph-input-list-opt> ::= <graph-input-list>
+                         | <empty>
+
+<graph-input-list> ::= <graph-input>
+                     | <graph-input> ',' <graph-input-list>
+
+<graph-input> ::= <identifier> <resource-access-opt>
+
+<resource-access-opt> ::= 'readonly'
+                        | 'readwrite'
+                        | 'writeonly'
+                        | <empty>
+
+<compute-graph-outputs> ::= 'outputs' '{' <identifier-list-opt> '}'
+
+
+# Passes and shader stages
+
+<pass-decl> ::= 'pass' <string-literal> '{' <pass-item-list> '}'
+
+<pass-item-list> ::= <pass-item> <pass-item-list>
+                   | <empty>
+
+<pass-item> ::= <pass-use-decl>
+              | <pass-outputs-block>
+              | <pass-const-decl>
+              | <vertex-pass-item>
+              | <fragment-pass-item>
+              | <compute-pass-item>
+              | <function-decl>
+
+<pass-use-decl> ::= 'use' 'attributes' '{' <use-name-list-opt> '}'
+                  | 'use' 'resources' '{' <use-name-list-opt> '}'
+
+<use-name-list-opt> ::= <use-name-list>
+                      | <empty>
+
+<use-name-list> ::= <use-name>
+                  | <use-name> ',' <use-name-list>
+
+<use-name> ::= <identifier> <question-opt>
+
+<pass-outputs-block> ::= 'outputs' '{' <pass-output-list> '}'
+
+<pass-output-list> ::= <pass-output-decl> <pass-output-list>
+                     | <empty>
+
+<pass-output-decl> ::= <identifier> ':' <fragment-output-type> <output-decorator-list> <output-separator-list>
+
+<fragment-output-type> ::= 'float'
+                         | 'float2'
+                         | 'float3'
+                         | 'float4'
+                         | 'int'
+                         | 'int2'
+                         | 'int3'
+                         | 'int4'
+                         | 'uint'
+                         | 'uint2'
+                         | 'uint3'
+                         | 'uint4'
+
+<output-decorator-list> ::= <output-decorator> <output-decorator-list>
+                          | <empty>
+
+<output-decorator> ::= '@' 'location' '(' <number-literal> ')'
+
+<output-separator-list> ::= <output-separator> <output-separator-list>
+                          | <empty>
+
+<output-separator> ::= ','
+                     | ';'
+
+<vertex-pass-item> ::= 'vertex' <shader-stage-block>
+                     | 'vertex' '=' <stage-assignment>
+
+<fragment-pass-item> ::= 'fragment' <shader-stage-block>
+                       | 'fragment' '=' <fragment-stage-assignment>
+
+<fragment-stage-assignment> ::= 'null'
+                              | <stage-assignment>
+
+<stage-assignment> ::= <stage-inheritance>
+                     | <expression>
+
+<stage-inheritance> ::= <string-literal> '.' <stage-name>
+
+<stage-name> ::= 'vertex'
+               | 'fragment'
+
+<compute-pass-item> ::= 'compute' <string-literal> '[' <number-literal> ',' <number-literal> ',' <number-literal> ']' <shader-stage-block>
+
+<shader-stage-block> ::= '{' <statement-list> '}'
+
+
+# Constants, constraints, functions, structs, enums
+
+<pipeline-const-decl> ::= 'const' <core-type> <identifier> '=' <expression> ';'
+
+<pass-const-decl> ::= 'const' <core-type> <identifier> '=' <expression> ';'
+
+<module-const-decl> ::= 'const' <core-type> <identifier> '=' <expression> ';'
+
+<constraint-decl> ::= 'constraint' <identifier> '=' <constraint-type-expr> ';'
+
+<constraint-type-expr> ::= <constraint-type>
+                         | <constraint-type> '|' <constraint-type-expr>
+
+<constraint-type> ::= <core-type>
+                    | <identifier>
+
+<function-decl> ::= <function-name> '::' '(' <parameter-list-opt> ')' '->' <return-type> <function-body>
+
+<function-name> ::= <identifier>
+                  | <core-type>
+
+<parameter-list-opt> ::= <parameter-list>
+                       | <empty>
+
+<parameter-list> ::= <parameter>
+                   | <parameter> ',' <parameter-list>
+
+<parameter> ::= <type-ref> <parameter-name-opt>
+              | <type-ref> <fixed-array-suffix> <parameter-name-opt>
+              | <identifier> ':' <type-ref>
+              | <qualified-type-name> <parameter-name-opt>
+              | <qualified-type-name> <fixed-array-suffix> <parameter-name-opt>
+
+<parameter-name-opt> ::= <identifier>
+                       | <empty>
+
+<return-type> ::= <type-ref>
+                | 'vertex_function'
+                | 'fragment_function'
+                | 'compute_function'
+                | 'pass_block'
+
+<function-body> ::= '{' <statement-list> '}'
+                  | '{' <type-pattern-arm-list> '}'
+                  | '{' 'vertex' <shader-stage-block> '}'
+                  | '{' 'fragment' <shader-stage-block> '}'
+                  | '{' <pass-item-list> '}'
+
+<type-pattern-arm-list> ::= <type-pattern-arm> <type-pattern-arm-list>
+                          | <type-pattern-arm>
+
+<type-pattern-arm> ::= <core-type> ':' <pattern-arm-body>
+                     | 'default' ':' <pattern-arm-body>
+
+<struct-decl> ::= 'struct' <identifier> '{' <struct-field-list> '}'
+
+<struct-field-list> ::= <struct-field> <struct-field-list>
+                      | <empty>
+
+<struct-field> ::= <field-type> <fixed-array-suffix-opt> <identifier> <fixed-array-suffix-opt> <semicolon-opt>
+
+<field-type> ::= <core-type>
+               | <qualified-type-name>
+
+<enum-decl> ::= 'enum' <identifier> <enum-underlying-opt> '{' <enum-item-list> '}'
+
+<enum-underlying-opt> ::= ':' <integer-core-type>
+                        | <empty>
+
+<enum-item-list> ::= <enum-item> <enum-item-list>
+                   | <empty>
+
+<enum-item> ::= <enum-variant> <comma-opt>
+              | 'eval' <enum-method>
+              | <enum-method>
+
+<enum-variant> ::= <identifier> <enum-payload-opt> <enum-value-opt>
+
+<enum-payload-opt> ::= '(' <enum-payload-list-opt> ')'
+                     | <empty>
+
+<enum-payload-list-opt> ::= <enum-payload-list>
+                          | <empty>
+
+<enum-payload-list> ::= <enum-payload>
+                      | <enum-payload> ',' <enum-payload-list>
+
+<enum-payload> ::= <enum-payload-type> <parameter-name-opt>
+
+<enum-payload-type> ::= <core-type>
+                      | <identifier>
+
+<enum-value-opt> ::= '=' <number-literal>
+                   | <empty>
+
+<enum-method> ::= <identifier> '::' '(' <parameter-list-opt> ')' '->' <return-type> <enum-method-body>
+
+<enum-method-body> ::= '{' <statement-list> '}'
+                     | '{' <pattern-arm-list> '}'
+
+<pattern-arm-list> ::= <pattern-arm> <pattern-arm-list>
+                     | <pattern-arm>
+
+<pattern-arm> ::= <pattern> ':' <pattern-arm-body>
+
+<pattern> ::= 'default'
+            | <identifier> <pattern-binding-list-opt>
+
+<pattern-binding-list-opt> ::= '(' <pattern-binding-list-inner-opt> ')'
+                             | <empty>
+
+<pattern-binding-list-inner-opt> ::= <pattern-binding-list>
+                                   | <empty>
+
+<pattern-binding-list> ::= <pattern-binding>
+                         | <pattern-binding> ',' <pattern-binding-list>
+
+<pattern-binding> ::= <identifier>
+                    | '_'
+
+<pattern-arm-body> ::= <expression> <semicolon-opt>
+                     | '{' <statement-list> '}'
+
+
+# Statements
+
+<statement-list> ::= <statement> <statement-list>
+                   | <empty>
+
+<statement> ::= <interpolation-decorator> <statement>
+              | <eval-stmt>
+              | <return-stmt>
+              | <break-stmt>
+              | <skip-stmt>
+              | <discard-stmt>
+              | <const-local-decl>
+              | <if-stmt>
+              | <for-stmt>
+              | <foreach-stmt>
+              | <loop-stmt>
+              | <while-stmt>
+              | <switch-stmt>
+              | <block-stmt>
+              | <var-decl>
+              | <expression-stmt>
+              | ';'
+
+<interpolation-decorator> ::= '@' 'flat'
+                            | '@' 'noperspective'
+
+<block-stmt> ::= '{' <statement-list> '}'
+
+<eval-stmt> ::= 'eval' <eval-form>
+
+<eval-form> ::= '{' <statement-list> '}'
+              | 'if' '(' <expression> ')' <eval-if-body> <else-clause-opt>
+              | 'for' <for-tail>
+              | 'foreach' <foreach-tail>
+              | 'loop' <loop-tail>
+              | 'while' <while-tail>
+              | <eval-decl-tail>
+
+<eval-if-body> ::= <block-stmt>
+                 | <statement>
+
+<eval-decl> ::= 'eval' <eval-decl-tail>
+
+<eval-decl-tail> ::= <function-decl>
+                   | <core-type> <identifier> '=' <expression> ';'
+
+<return-stmt> ::= 'return' <return-tail>
+
+<return-tail> ::= 'if' '(' <expression> ')' <expression-opt> ';'
+                | <expression-opt> <trailing-if-opt> ';'
+
+<trailing-if-opt> ::= 'if' '(' <expression> ')'
+                    | <empty>
+
+<break-stmt> ::= 'break' <conditional-control-tail>
+
+<skip-stmt> ::= <skip-keyword> <conditional-control-tail>
+
+<skip-keyword> ::= 'skip'
+                 | 'continue'
+
+<conditional-control-tail> ::= 'if' '(' <expression> ')' ';'
+                             | ';'
+
+<discard-stmt> ::= 'discard' ';'
+
+<const-local-decl> ::= 'const' <type-ref> <identifier> '=' <expression> ';'
+
+<if-stmt> ::= 'if' '(' <expression> ')' <statement-body> <else-clause-opt>
+
+<else-clause-opt> ::= 'else' <statement-body>
+                    | <empty>
+
+<statement-body> ::= <block-stmt>
+                   | <statement>
+
+<for-stmt> ::= 'for' <for-tail>
+
+<for-tail> ::= '(' <for-init-opt> ';' <expression-opt> ';' <expression-opt> ')' <block-stmt>
+             | '(' <for-init> 'in' <for-in-source> ')' <block-stmt>
+             | '(' <expression> ')' <block-stmt>
+
+<for-init-opt> ::= <for-init>
+                 | <empty>
+
+<for-init> ::= <for-var-init>
+             | <expression>
+
+<for-var-init> ::= <type-ref> <identifier> <initializer-opt>
+
+<for-in-source> ::= <range-expr>
+                  | <expression>
+
+<range-expr> ::= <expression> <range-operator> <expression> <range-step-opt>
+
+<range-operator> ::= '..'
+                   | '..='
+
+<range-step-opt> ::= 'by' <expression>
+                   | <empty>
+
+<foreach-stmt> ::= 'foreach' <foreach-tail>
+
+<foreach-tail> ::= '(' <foreach-clause-list> ')' <block-stmt>
+
+<foreach-clause-list> ::= <foreach-clause>
+                        | <foreach-clause> ',' <foreach-clause-list>
+
+<foreach-clause> ::= <identifier> 'in' <range-expr>
+
+<while-stmt> ::= 'while' <while-tail>
+
+<while-tail> ::= '(' <expression> ')' <block-stmt>
+
+<loop-stmt> ::= 'loop' <loop-tail>
+
+<loop-tail> ::= <loop-count-opt> <block-stmt> <until-opt>
+
+<loop-count-opt> ::= '(' <expression> ')'
+                   | <empty>
+
+<until-opt> ::= 'until' '(' <expression> ')'
+              | <empty>
+
+<switch-stmt> ::= 'switch' '(' <expression> ')' '{' <switch-case-list> '}'
+
+<switch-case-list> ::= <switch-case> <switch-case-list>
+                     | <empty>
+
+<switch-case> ::= 'case' <expression-list> ':' <statement-list>
+                | 'default' ':' <statement-list>
+
+<var-decl> ::= <type-ref> <fixed-array-suffix-list> <identifier> <fixed-array-suffix-list> <initializer-opt> ';'
+             | 'shared' <type-ref> <fixed-array-suffix-list> <identifier> <fixed-array-suffix-list> <initializer-opt> ';'
+
+<initializer-opt> ::= '=' <initializer>
+                    | <empty>
+
+<initializer> ::= <expression>
+                | <array-initializer>
+
+<array-initializer> ::= '{' <expression-list-opt> '}'
+
+<expression-stmt> ::= <expression> ';'
+
+
+# Expressions
+
+<expression> ::= <assignment-expr>
+
+<assignment-expr> ::= <ternary-expr>
+                    | <ternary-expr> <assignment-op> <assignment-expr>
+
+<assignment-op> ::= '='
+                  | '+='
+                  | '-='
+                  | '*='
+                  | '/='
+                  | '%='
+                  | '&='
+                  | '|='
+                  | '^='
+                  | '<<='
+                  | '>>='
+
+<ternary-expr> ::= <logical-or-expr>
+                 | <logical-or-expr> '?' <expression> ':' <ternary-expr>
+
+<logical-or-expr> ::= <logical-and-expr>
+                    | <logical-or-expr> '||' <logical-and-expr>
+
+<logical-and-expr> ::= <bitwise-or-expr>
+                     | <logical-and-expr> '&&' <bitwise-or-expr>
+
+<bitwise-or-expr> ::= <bitwise-xor-expr>
+                    | <bitwise-or-expr> '|' <bitwise-xor-expr>
+
+<bitwise-xor-expr> ::= <bitwise-and-expr>
+                     | <bitwise-xor-expr> '^' <bitwise-and-expr>
+
+<bitwise-and-expr> ::= <equality-expr>
+                     | <bitwise-and-expr> '&' <equality-expr>
+
+<equality-expr> ::= <comparison-expr>
+                  | <equality-expr> '==' <comparison-expr>
+                  | <equality-expr> '!=' <comparison-expr>
+
+<comparison-expr> ::= <shift-expr>
+                    | <comparison-expr> '<' <shift-expr>
+                    | <comparison-expr> '>' <shift-expr>
+                    | <comparison-expr> '<=' <shift-expr>
+                    | <comparison-expr> '>=' <shift-expr>
+
+<shift-expr> ::= <additive-expr>
+               | <shift-expr> '<<' <additive-expr>
+               | <shift-expr> '>>' <additive-expr>
+
+<additive-expr> ::= <multiplicative-expr>
+                  | <additive-expr> '+' <multiplicative-expr>
+                  | <additive-expr> '-' <multiplicative-expr>
+
+<multiplicative-expr> ::= <unary-expr>
+                        | <multiplicative-expr> '*' <unary-expr>
+                        | <multiplicative-expr> '/' <unary-expr>
+                        | <multiplicative-expr> '%' <unary-expr>
+
+<unary-expr> ::= <postfix-expr>
+               | '!' <unary-expr>
+               | '+' <unary-expr>
+               | '-' <unary-expr>
+               | '++' <unary-expr>
+               | '--' <unary-expr>
+               | '~' <unary-expr>
+               | '^' <unary-expr>
+
+<postfix-expr> ::= <primary-expr> <postfix-tail-list>
+
+<postfix-tail-list> ::= <postfix-tail> <postfix-tail-list>
+                      | <empty>
+
+<postfix-tail> ::= '(' <argument-list-opt> ')'
+                 | '.' <identifier>
+                 | '[' <expression> ']'
+                 | '::' <identifier>
+                 | '++'
+                 | '--'
+                 | '^'
+
+<primary-expr> ::= <literal>
+                 | <identifier>
+                 | 'resources'
+                 | 'attributes'
+                 | 'variants'
+                 | 'self'
+                 | <texture-type-name>
+                 | <type-constructor>
+                 | <inline-array-constructor>
+                 | '(' <expression> ')'
+
+<type-constructor> ::= <core-type> '(' <argument-list-opt> ')'
+
+<inline-array-constructor> ::= <core-type> '[' <number-literal> ']' '[' <expression-list-opt> ']'
+
+<argument-list-opt> ::= <expression-list>
+                      | <empty>
+
+<expression-list-opt> ::= <expression-list>
+                        | <empty>
+
+<expression-list> ::= <expression>
+                    | <expression> ',' <expression-list>
+
+<literal> ::= <number-literal>
+            | <string-literal>
+            | 'true'
+            | 'false'
+
+
+# Types
+
+<type-ref> ::= <type-name> <pointer-suffix-list>
+
+<type-name> ::= <core-type>
+              | <qualified-type-name>
+
+<qualified-type-name> ::= <identifier>
+                        | <identifier> '::' <identifier>
+                        | <identifier> '.' <identifier>
+
+<core-type> ::= <scalar-type>
+              | <vector-type>
+              | <matrix-type>
+
+<scalar-type> ::= 'bool'
+                | 'int'
+                | 'uint'
+                | 'float'
+                | 'double'
+                | 'int64'
+                | 'uint64'
+
+<vector-type> ::= 'int2'
+                | 'int3'
+                | 'int4'
+                | 'uint2'
+                | 'uint3'
+                | 'uint4'
+                | 'float2'
+                | 'float3'
+                | 'float4'
+                | 'double2'
+                | 'double3'
+                | 'double4'
+                | 'int64x2'
+                | 'int64x3'
+                | 'int64x4'
+                | 'uint64x2'
+                | 'uint64x3'
+                | 'uint64x4'
+
+<matrix-type> ::= 'mat2'
+                | 'mat3'
+                | 'mat4'
+                | 'dmat2'
+                | 'dmat3'
+                | 'dmat4'
+
+<integer-core-type> ::= 'int'
+                      | 'int2'
+                      | 'int3'
+                      | 'int4'
+                      | 'uint'
+                      | 'uint2'
+                      | 'uint3'
+                      | 'uint4'
+                      | 'int64'
+                      | 'int64x2'
+                      | 'int64x3'
+                      | 'int64x4'
+                      | 'uint64'
+                      | 'uint64x2'
+                      | 'uint64x3'
+                      | 'uint64x4'
+
+<texture-type-name> ::= 'texture2D'
+                      | 'texture3D'
+                      | 'textureCube'
+                      | 'texture2DArray'
+
+<pointer-suffix-list> ::= '^' <pointer-suffix-list>
+                        | <empty>
+
+<fixed-array-suffix-list> ::= <fixed-array-suffix> <fixed-array-suffix-list>
+                            | <empty>
+
+<fixed-array-suffix-opt> ::= <fixed-array-suffix>
+                           | <empty>
+
+<fixed-array-suffix> ::= '[' <array-size> ']'
+
+<array-size> ::= <number-literal>
+               | <identifier>
+
+
+# Shared list/option helpers
+
+<identifier-list-opt> ::= <identifier-list>
+                        | <empty>
+
+<identifier-list> ::= <identifier>
+                    | <identifier> ',' <identifier-list>
+
+<expression-opt> ::= <expression>
+                   | <empty>
+
+<question-opt> ::= '?'
+                 | <empty>
+
+<comma-opt> ::= ','
+              | <empty>
+
+<semicolon-opt> ::= ';'
+                  | <empty>
+
+
+# Lexical grammar
+
+<identifier> ::= <identifier-start> <identifier-rest-list>
+
+<identifier-rest-list> ::= <identifier-rest> <identifier-rest-list>
+                         | <empty>
+
+<identifier-start> ::= <letter>
+                     | '_'
+
+<identifier-rest> ::= <identifier-start>
+                    | <digit>
+
+<number-literal> ::= <hex-integer>
+                   | <binary-integer>
+                   | <decimal-number>
+
+<hex-integer> ::= '0x' <hex-digit-list> <unsigned-suffix-opt>
+                | '0X' <hex-digit-list> <unsigned-suffix-opt>
+
+<binary-integer> ::= '0b' <binary-digit-list> <unsigned-suffix-opt>
+                   | '0B' <binary-digit-list> <unsigned-suffix-opt>
+
+<decimal-number> ::= <digit-list> <decimal-fraction-opt> <decimal-exponent-opt> <decimal-suffix-opt>
+
+<decimal-fraction-opt> ::= '.' <digit-list-opt>
+                         | <empty>
+
+<decimal-exponent-opt> ::= <exponent-marker> <sign-opt> <digit-list>
+                         | <empty>
+
+<decimal-suffix-opt> ::= 'f'
+                       | 'F'
+                       | <unsigned-suffix-opt>
+
+<unsigned-suffix-opt> ::= 'u'
+                        | 'U'
+                        | <empty>
+
+<sign-opt> ::= '+'
+             | '-'
+             | <empty>
+
+<exponent-marker> ::= 'e'
+                    | 'E'
+
+<string-literal> ::= '"' <string-char-list> '"'
+
+<string-char-list> ::= <string-char> <string-char-list>
+                     | <empty>
+
+<string-char> ::= <non-quote-non-backslash-char>
+                | '\' <escaped-char>
+
+<decorator-payload> ::= <decorator-token-list>
+                      | <empty>
+
+<decorator-token-list> ::= <decorator-token> <decorator-token-list>
+                         | <decorator-token>
+
+<decorator-token> ::= <identifier>
+                    | <number-literal>
+                    | '_'
+                    | ','
+                    | '.'
+                    | '-'
+                    | '+'
+
+<digit-list-opt> ::= <digit-list>
+                   | <empty>
+
+<digit-list> ::= <digit>
+               | <digit> <digit-list>
+
+<hex-digit-list> ::= <hex-digit>
+                   | <hex-digit> <hex-digit-list>
+
+<binary-digit-list> ::= <binary-digit>
+                      | <binary-digit> <binary-digit-list>
+
+<binary-digit> ::= '0'
+                 | '1'
+
+<digit> ::= '0'
+          | '1'
+          | '2'
+          | '3'
+          | '4'
+          | '5'
+          | '6'
+          | '7'
+          | '8'
+          | '9'
+
+<hex-digit> ::= <digit>
+              | 'a'
+              | 'b'
+              | 'c'
+              | 'd'
+              | 'e'
+              | 'f'
+              | 'A'
+              | 'B'
+              | 'C'
+              | 'D'
+              | 'E'
+              | 'F'
+
+<letter> ::= 'a'
+           | 'b'
+           | 'c'
+           | 'd'
+           | 'e'
+           | 'f'
+           | 'g'
+           | 'h'
+           | 'i'
+           | 'j'
+           | 'k'
+           | 'l'
+           | 'm'
+           | 'n'
+           | 'o'
+           | 'p'
+           | 'q'
+           | 'r'
+           | 's'
+           | 't'
+           | 'u'
+           | 'v'
+           | 'w'
+           | 'x'
+           | 'y'
+           | 'z'
+           | 'A'
+           | 'B'
+           | 'C'
+           | 'D'
+           | 'E'
+           | 'F'
+           | 'G'
+           | 'H'
+           | 'I'
+           | 'J'
+           | 'K'
+           | 'L'
+           | 'M'
+           | 'N'
+           | 'O'
+           | 'P'
+           | 'Q'
+           | 'R'
+           | 'S'
+           | 'T'
+           | 'U'
+           | 'V'
+           | 'W'
+           | 'X'
+           | 'Y'
+           | 'Z'
+
+<non-quote-non-backslash-char> ::= <implementation-defined-source-character>
+
+<escaped-char> ::= <implementation-defined-source-character>
+
+<implementation-defined-source-character> ::= 'any source character accepted by the lexer'
+
+<empty> ::=
