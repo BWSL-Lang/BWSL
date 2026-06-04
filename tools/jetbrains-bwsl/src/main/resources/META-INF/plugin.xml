@@ -16,6 +16,15 @@
 
     <extensions defaultExtensionNs="com.intellij">
 
+        <applicationService
+            serviceImplementation="com.bwsl.plugin.BwslSettings"/>
+
+        <applicationConfigurable
+            instance="com.bwsl.plugin.BwslSettingsConfigurable"
+            id="com.bwsl.plugin.settings"
+            displayName="BWSL"/>
+
+
         <fileType
             name="BWSL"
             implementationClass="com.bwsl.plugin.BwslFileType"
