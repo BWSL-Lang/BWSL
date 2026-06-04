@@ -38,7 +38,7 @@ intellijPlatform {
 }
 
 generateLexer {
-    sourceFile = file('src/main/java/com/bwsl/plugin/BwslLexer.flex')
+    sourceFile = file('src/main/resources/BwslLexer.flex')
     targetOutputDir = layout.projectDirectory.dir('generated/com/bwsl/plugin')
     purgeOldFiles = true
 }
