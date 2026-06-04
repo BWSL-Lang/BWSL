@@ -7,6 +7,7 @@
 #include "bwsl_eval_soa.h"
 #include "bwsl_variant_system.h"
 #include "bwsl_custom_type_registry.h"
+#include "bwsl_diagnostics.h"
 #include <cstddef>
 #include <unordered_map>
 #include <string>
@@ -34,12 +35,15 @@ struct CompilationContext {
     AST ast;                    // New SoA AST structure
     NodeRef root;               // Root node reference (usually pipeline)
     EvalCache evalCache;
+    DiagnosticStream diagnostics;
+    DiagnosticStream* diagnosticSink;
 
-    CompilationContext() : root(NodeRef::Null()) {
+    CompilationContext() : root(NodeRef::Null()), diagnosticSink(&diagnostics) {
         memory = malloc(DEFAULT_ARENA_SIZE);
         arena.Initialize(memory, DEFAULT_ARENA_SIZE);
         ast.Init(&arena, 2048);  // Larger initial capacity for modules
         evalCache.Init();
+        diagnostics.Init(&arena);
         // g_customTypes is a static global that stores raw pointers into the
         // previous compilation's arena. Without this reset, a second
         // compilation in the same process (fuzzer, batch, tests) dereferences
@@ -57,6 +61,12 @@ struct CompilationContext {
         arena.Reset();
         ast.Init(&arena, 256);
         root = NodeRef::Null();
+        diagnostics.Init(&arena);
+        diagnosticSink = &diagnostics;
+    }
+
+    DiagnosticStream& Diag() {
+        return diagnosticSink ? *diagnosticSink : diagnostics;
     }
 };
 
@@ -102,6 +112,7 @@ struct Parser {
     bool inShaderStage;
     bool hasLookahead;
     bool has3TokenLookahead;
+    DiagnosticPhase diagnosticPhase;
 
     ArenaArray<ParseError> errors;
     u32 loopDepth;
@@ -162,6 +173,7 @@ struct Parser {
         ast = &ctx->ast;
         hadError = false;
         panicMode = false;
+        diagnosticPhase = DiagnosticPhase::Parse;
         loopDepth = 0;
         functionDepth = 0;
         errors.Init(arena, 16);
