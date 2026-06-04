@@ -17,7 +17,7 @@ VSCode language support for BWSL shader files.
 
 Open `tools/vscode-bwsl` in VSCode and press `F5` to launch an Extension Development Host.
 
-Diagnostics auto-detect `build/bwslc` from the workspace or use `bwslc` from `PATH`. If needed, set:
+Diagnostics auto-detect `build/bwslc` from the workspace or use `bwslc` from `PATH`. The extension runs `bwslc -check --stdin --source-file <path> -errors-json` so unsaved edits are checked without writing shader outputs. If needed, set:
 
 ```json
 {

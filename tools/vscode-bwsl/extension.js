@@ -1,7 +1,6 @@
 const vscode = require('vscode');
 const childProcess = require('child_process');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 
 const LANGUAGE_ID = 'bwsl';
@@ -94,31 +93,25 @@ class BwslDiagnosticsController {
     const validationMode = config.get('diagnostics.validation', 'off');
     const timeoutMs = config.get('diagnostics.timeoutMs', 10000);
 
-    let tempDir;
     try {
-      tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bwsl-vscode-'));
       const originalFile = document.uri.scheme === 'file' ? document.uri.fsPath : undefined;
-      const inputFileName = originalFile ? path.basename(originalFile) : 'untitled.bwsl';
-      const tempInput = path.join(tempDir, inputFileName);
-      const tempOutput = path.join(tempDir, 'out');
-
-      await fs.promises.mkdir(tempOutput, { recursive: true });
-      await fs.promises.writeFile(tempInput, document.getText(), 'utf8');
+      const sourceFile = originalFile || 'untitled.bwsl';
 
       const args = [
-        tempInput,
+        '-check',
+        '--stdin',
+        '--source-file',
+        sourceFile,
         '-errors-json',
         '-validation',
-        validationMode,
-        '-o',
-        tempOutput
+        validationMode
       ];
 
       for (const modulePath of this.collectModulePaths(config, workspaceFolder, originalFile)) {
         args.push('-modules', modulePath);
       }
 
-      const result = await this.runCompiler(key, compilerPath, args, workspaceFolder, timeoutMs);
+      const result = await this.runCompiler(key, compilerPath, args, workspaceFolder, timeoutMs, document.getText());
       if (this.generations.get(key) !== generation) return;
 
       if (result.launchError) {
@@ -141,13 +134,10 @@ class BwslDiagnosticsController {
       if (child && child.killed) {
         this.children.delete(key);
       }
-      if (tempDir) {
-        await removeDirectory(tempDir);
-      }
     }
   }
 
-  runCompiler(key, compilerPath, args, workspaceFolder, timeoutMs) {
+  runCompiler(key, compilerPath, args, workspaceFolder, timeoutMs, stdinText) {
     return new Promise((resolve) => {
       const options = {
         cwd: workspaceFolder ? workspaceFolder.uri.fsPath : undefined,
@@ -177,6 +167,11 @@ class BwslDiagnosticsController {
 
         resolve({ stdout, stderr, launchError: undefined });
       });
+
+      if (typeof stdinText === 'string' && child.stdin) {
+        child.stdin.on('error', () => {});
+        child.stdin.end(stdinText);
+      }
 
       this.children.set(key, child);
     });
@@ -413,14 +408,6 @@ function uniquePaths(paths) {
     result.push(normalized);
   }
   return result;
-}
-
-async function removeDirectory(directory) {
-  try {
-    await fs.promises.rm(directory, { recursive: true, force: true });
-  } catch (_) {
-    // Temporary diagnostics files are best-effort cleanup.
-  }
 }
 
 function isPositiveInteger(value) {

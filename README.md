@@ -107,6 +107,12 @@ On Windows, the repo now also includes `build.bat` and `make.bat`. `build.bat` b
 
 # Generate GLSL ES directly from BWSL IR
 ./build/bwslc shader.bwsl -gles-direct
+
+# Check diagnostics without writing shader outputs
+./build/bwslc shader.bwsl -check -errors-json
+
+# Check unsaved editor text from stdin while reporting against a real source path
+./build/bwslc -check --stdin --source-file shader.bwsl -errors-json < shader.bwsl
 ```
 
 ### CLI Options
@@ -123,6 +129,9 @@ On Windows, the repo now also includes `build.bat` and `make.bat`. `build.bat` b
 | `-gles` / `-webgl` | Generate GLSL ES output (version 300 es) |
 | `-gles-direct` | Generate GLSL ES directly from BWSL IR |
 | `-all` | Generate all output formats |
+| `-check` | Run diagnostics without writing shader outputs |
+| `--stdin` | Read BWSL source from stdin |
+| `--source-file <path>` | Source path used for diagnostics and module resolution with `--stdin` |
 | `-v` | Verbose output |
 | `-timing` | Print timing information |
 | `-dump-ir` | Dump BWSL IR |
