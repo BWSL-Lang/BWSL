@@ -23,9 +23,17 @@
             language="BWSL"
             extensions="bwsl"/>
 
+        <lang.parserDefinition
+            language="BWSL"
+            implementationClass="com.bwsl.plugin.BwslParserDefinition"/>
+
         <lang.syntaxHighlighterFactory
             language="BWSL"
             implementationClass="com.bwsl.plugin.BwslSyntaxHighlighterFactory"/>
+
+        <annotator
+            language="BWSL"
+            implementationClass="com.bwsl.plugin.BwslAnnotator"/>
 
         <colorSettingsPage
             implementation="com.bwsl.plugin.BwslColorSettingsPage"/>

@@ -2,3 +2,4 @@
 .intellijPlatform
 build
 .gradle
+generated

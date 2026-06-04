@@ -1,0 +1,71 @@
+import org.jetbrains.intellij.platform.gradle.TestFrameworkType
+
+plugins {
+    id 'java'
+    id 'org.jetbrains.kotlin.jvm' version '2.3.21'
+    id 'org.jetbrains.intellij.platform' version '2.16.0'
+    id 'org.jetbrains.grammarkit' version '2023.3.0.3'
+}
+
+group = 'com.bwsl.jetbrains_plugin'
+version = '1.0.0'
+
+repositories {
+    mavenCentral()
+    intellijPlatform {
+        defaultRepositories()
+    }
+}
+
+dependencies {
+    intellijPlatform {
+        intellijIdea('2026.1.2')
+        testFramework(TestFrameworkType.Platform.INSTANCE)
+    }
+
+    testImplementation 'junit:junit:4.13.2'
+}
+
+
+intellijPlatform {
+    pluginConfiguration
+    pluginConfiguration {
+        ideaVersion {
+            sinceBuild = '261'
+        }
+        changeNotes = 'Initial version'
+    }
+}
+
+generateLexer {
+    sourceFile = file('src/main/java/com/bwsl/plugin/BwslLexer.flex')
+    targetOutputDir = layout.projectDirectory.dir('generated/com/bwsl/plugin')
+    purgeOldFiles = true
+}
+
+sourceSets {
+    main {
+        java {
+            srcDir 'generated'
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    dependsOn generateLexer
+    sourceCompatibility = '21'
+    targetCompatibility = '21'
+}
+
+compileKotlin {
+    dependsOn generateLexer
+}
+
+test {
+    systemProperty 'bwsl.test.compiler_test_dir', file('../../tests/unsorted').canonicalPath
+    systemProperty 'java.util.logging.config.file', file('src/test/resources/test-log.properties').canonicalPath
+}
+
+buildSearchableOptions {
+    enabled = false
+}
