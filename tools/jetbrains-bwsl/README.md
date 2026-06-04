@@ -1,11 +1,11 @@
 # BWSL JetBrains Plugin
 
-Syntax highlighting and error detection for the [BWSL shader language](https://www.bwsl.dev/) in IntelliJ-based IDEs.
+Syntax highlighting and compiler error reporting for the [BWSL shader language](https://www.bwsl.dev/) in IntelliJ-based IDEs.
 
 ## Features
 
-- Syntax highlighting — block keywords, control-flow keywords, types, decorators, function names, strings, numbers, comments
-- Parse error highlighting — invalid syntax is underlined red
+- Syntax highlighting — block keywords, control-flow keywords, types, decorators, intrinsic functions, strings, numbers, comments
+- Compiler error and warning annotations — powered by the `bwslc` compiler's JSON diagnostics
 - Color scheme customisation under **Settings → Editor → Color Scheme → BWSL**
 
 ## Prerequisites
@@ -13,8 +13,14 @@ Syntax highlighting and error detection for the [BWSL shader language](https://w
 | Tool | Version |
 |---|---|
 | IntelliJ IDEA | 2026.1+ |
-| JDK | 25 |
+| JDK | 21+ |
 | Gradle | 9.5.1 (via wrapper) |
+
+## Setup
+
+After installing the plugin, point it at the compiler:
+
+**Settings → BWSL → Compiler path** — select the `bwslc` executable.
 
 ## Building
 
@@ -42,14 +48,6 @@ Opens a fresh IntelliJ IDEA instance with the plugin installed. Open any `.bwsl`
 
 ## Code generation
 
-### `src/main/java/com/bwsl/plugin/BwslLexer.flex`
+### `src/main/resources/BwslLexer.flex`
 
-A [JFlex](https://jflex.de/) lexer definition.
-
-JFlex reads this file and generates:
-
-| Generated file | Purpose |
-|---|---|
-| `build/generated/sources/grammarkit-lexer/…/_BwslLexer.java` | The tokeniser used by the parser and syntax highlighter |
-
-The lexer emits the token-type constants defined in `BwslTypes` (produced by Grammar-Kit above), so the two generators must be run in order: `generateParser` first, then `generateLexer`. The Gradle task dependencies enforce this automatically.
+A [JFlex](https://jflex.de/) lexer definition. The `generateLexer` Gradle task compiles it to `generated/com/bwsl/plugin/_BwslLexer.java`, which is the tokeniser used for syntax highlighting. Token type constants are defined in `BwslTokenTypes.kt`.
