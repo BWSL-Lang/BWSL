@@ -47,5 +47,9 @@
         <colorSettingsPage
             implementation="com.bwsl.plugin.BwslColorSettingsPage"/>
 
+        <externalAnnotator
+            language="BWSL"
+            implementationClass="com.bwsl.plugin.BwslExternalAnnotator"/>
+
     </extensions>
 </idea-plugin>
