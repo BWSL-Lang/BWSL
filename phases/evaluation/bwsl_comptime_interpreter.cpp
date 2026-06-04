@@ -64,6 +64,23 @@ static void Report(ComptimeState* state, NodeRef node, const char* message, u32 
     err.column = diag.column;
     err.token = INVALID_TOKEN;
     state->parser->errors.Push(state->parser->arena, err);
+
+    if (state->context) {
+        DiagnosticSpan span;
+        span.line = diag.line;
+        span.column = diag.column;
+        if (diag.line > 0 && diag.column > 0) {
+            span.SetLocation();
+        }
+        state->context->Diag().AddRaw(DiagnosticSeverity::Error,
+                                      DiagnosticPhase::Comptime,
+                                      message ? message : "Comptime interpretation failed",
+                                      span,
+                                      "",
+                                      "",
+                                      "",
+                                      DiagnosticMessageId::ComptimeError);
+    }
 }
 
 static u32 PushScope(ComptimeState* state) {

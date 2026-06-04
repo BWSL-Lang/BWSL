@@ -1300,12 +1300,11 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   for (u32 i = 0; i < inlineStackDepth; i++) {
     if (inlineStackPacked[i] == funcRef.packed) {
       if (!recursionDiagnosed) {
-        fprintf(stderr,
-                "Error: recursion is not supported — a function calls "
-                "itself (directly or through another function). SPIR-V "
-                "execution is stack-less; rewrite the algorithm "
-                "iteratively.\n");
         recursionDiagnosed = true;
+        ReportError("Error: recursion is not supported — a function calls "
+                    "itself (directly or through another function). SPIR-V "
+                    "execution is stack-less; rewrite the algorithm "
+                    "iteratively.\n");
       }
       return 0xFFFF;
     }

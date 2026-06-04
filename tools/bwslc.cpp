@@ -10,6 +10,7 @@
 //   -pass <name>   Compile specific pass (default: all passes)
 //   -stage <name>  Compile specific stage: vertex, fragment, compute (default: all)
 //   -format <fmt>  Output format: spv, metal, hlsl, all (default: all)
+//   -errors-json    Print machine-readable diagnostics as JSON
 //   -v             Verbose output
 //   -h, --help     Show help
 
@@ -25,6 +26,7 @@
 #include <algorithm>
 #include <future>
 #include <thread>
+#include <memory>
 #ifndef _WIN32
 #include <sys/wait.h>
 #endif
@@ -134,6 +136,7 @@ struct CompilerConfig {
     ValidationMode validationMode = ValidationMode::Auto;
     bool outputInternals = false;          // Output IR dump + SPIR-V disassembly to JSON file
     bool outputBindings = false;           // Output resolved resource bindings JSON
+    bool errorsJson = false;               // Print diagnostics as JSON for IDE integrations
     bool dumpVariantSpace = false;         // Dump variant schema/reflection JSON
     std::vector<VariantOverride> variantOverrides;
 };
@@ -239,6 +242,7 @@ void PrintUsage(const char* programName) {
     printf("  -gles-direct   Generate GLSL ES directly from IR (bypass SPIRV-Cross, faster)\n");
     printf("  -webgl         Alias for -gles\n");
     printf("  -bindings      Output resolved resource bindings JSON\n");
+    printf("  -errors-json   Print machine-readable diagnostics JSON for IDE integrations\n");
     printf("  -all           Generate all outputs\n");
     printf("----------------------------------------\n");
     printf("Debug options:\n");
@@ -279,56 +283,6 @@ std::vector<std::string> SplitLines(const std::string& source) {
         lines.push_back(line);
     }
     return lines;
-}
-
-// Print error with source context (nice formatting)
-void PrintErrorWithContext(const ParseError& err, const std::vector<std::string>& lines,
-                           const std::string& source, const TokenStream& stream) {
-    fprintf(stderr, "\n  ┌─ Error at line %u, column %u\n", err.line, err.column);
-    fprintf(stderr, "  │\n");
-
-    // Show context: 2 lines before, the error line, 2 lines after
-    int startLine = std::max(1, (int)err.line - 2);
-    int endLine = std::min((int)lines.size(), (int)err.line + 2);
-
-    for (int i = startLine; i <= endLine; i++) {
-        if (i <= 0 || i > (int)lines.size()) continue;
-
-        const std::string& line = lines[i - 1];
-
-        if (i == (int)err.line) {
-            // Error line - highlight it
-            fprintf(stderr, "  │ %4d │ %s\n", i, line.c_str());
-
-            // Print caret pointing to error column
-            fprintf(stderr, "  │      │ ");
-            for (u32 j = 0; j < err.column && j < line.length(); j++) {
-                if (line[j] == '\t') {
-                    fprintf(stderr, "    ");  // Tab = 4 spaces
-                } else {
-                    fprintf(stderr, " ");
-                }
-            }
-            fprintf(stderr, "^\n");
-
-            // Print error message
-            fprintf(stderr, "  │      └─ %s\n", err.message ? err.message : "(no message)");
-        } else {
-            // Context line
-            fprintf(stderr, "  │ %4d │ %s\n", i, line.c_str());
-        }
-    }
-
-    fprintf(stderr, "  │\n");
-
-    // Show token info if available
-    if (err.token != INVALID_TOKEN && stream.GetLength(err.token) > 0) {
-        std::string_view tokenValue = stream.GetValue(err.token);
-        fprintf(stderr, "  │ Token: '%.*s' (type %d)\n",
-               (int)tokenValue.length(), tokenValue.data(), (int)stream.GetType(err.token));
-    }
-
-    fprintf(stderr, "  └─\n");
 }
 
 bool WriteBinaryFile(const fs::path& path, const std::vector<u32>& data) {
@@ -1133,6 +1087,338 @@ std::string EscapeJsonString(const std::string& str) {
     return ReflectionJson::EscapeJsonString(str);
 }
 
+static bool IsErrorsJsonArg(const std::string& arg) {
+    return arg == "-errors-json" || arg == "--errors-json" ||
+           arg == "-json-errors" || arg == "--json-errors";
+}
+
+static bool ArgsRequestErrorsJson(int argc, char* argv[]) {
+    for (int i = 1; i < argc; i++) {
+        if (IsErrorsJsonArg(argv[i])) return true;
+    }
+    return false;
+}
+
+static std::string TrimDiagnosticMessage(std::string message) {
+    while (!message.empty() &&
+           (message.back() == '\n' || message.back() == '\r' ||
+            message.back() == ' ' || message.back() == '\t')) {
+        message.pop_back();
+    }
+    const std::string prefix = "Error:";
+    if (message.rfind(prefix, 0) == 0) {
+        message.erase(0, prefix.size());
+        while (!message.empty() && (message.front() == ' ' || message.front() == '\t')) {
+            message.erase(message.begin());
+        }
+    }
+    return message;
+}
+
+static const char* DiagnosticSeverityTitle(DiagnosticSeverity severity) {
+    switch (severity) {
+        case DiagnosticSeverity::Error: return "Error";
+        case DiagnosticSeverity::Warning: return "Warning";
+        case DiagnosticSeverity::Note: return "Note";
+        case DiagnosticSeverity::Hint: return "Hint";
+        default: return "Error";
+    }
+}
+
+static void CountDiagnostics(const DiagnosticStream& diagnostics,
+                             u32& errorCount,
+                             u32& warningCount,
+                             u32& noteCount,
+                             u32& hintCount) {
+    errorCount = 0;
+    warningCount = 0;
+    noteCount = 0;
+    hintCount = 0;
+    for (u32 i = 0; i < diagnostics.Count(); i++) {
+        switch (diagnostics.GetSeverity(i)) {
+            case DiagnosticSeverity::Error: errorCount++; break;
+            case DiagnosticSeverity::Warning: warningCount++; break;
+            case DiagnosticSeverity::Note: noteCount++; break;
+            case DiagnosticSeverity::Hint: hintCount++; break;
+            default: errorCount++; break;
+        }
+    }
+}
+
+static void PrintDiagnosticText(const CompilerConfig& config,
+                                const DiagnosticStream& diagnostics,
+                                DiagnosticRef ref,
+                                const TokenStream* stream = nullptr,
+                                const std::vector<std::string>* sourceLines = nullptr) {
+    DiagnosticSeverity severity = diagnostics.GetSeverity(ref);
+    const char* severityTitle = DiagnosticSeverityTitle(severity);
+    std::string code = diagnostics.GetCode(ref);
+    const u32 spanFlags = diagnostics.spanFlags[ref];
+    const bool hasLocation = DiagnosticSpan::HasAll(spanFlags, DiagnosticSpan::HasLocationFlag);
+    std::string message = TrimDiagnosticMessage(diagnostics.FormatMessage(ref));
+    std::string file = diagnostics.GetFile(ref);
+    std::string pass = diagnostics.GetPass(ref);
+    std::string stage = diagnostics.GetStage(ref);
+    if (file.empty()) file = config.inputFile;
+
+    if (!hasLocation) {
+        fprintf(stderr, "%s[%s]: %s",
+                severityTitle,
+                code.c_str(),
+                message.empty() ? "(no message)" : message.c_str());
+        if (!file.empty()) {
+            fprintf(stderr, " [%s]", file.c_str());
+        }
+        if (!pass.empty() || !stage.empty()) {
+            fprintf(stderr, " (");
+            if (!pass.empty()) fprintf(stderr, "pass %s", pass.c_str());
+            if (!pass.empty() && !stage.empty()) fprintf(stderr, ", ");
+            if (!stage.empty()) fprintf(stderr, "stage %s", stage.c_str());
+            fprintf(stderr, ")");
+        }
+        fprintf(stderr, "\n");
+        return;
+    }
+
+    const u32 line = diagnostics.lines[ref];
+    const u32 column = diagnostics.columns[ref];
+    fprintf(stderr, "\n  ┌─ %s[%s] at line %u, column %u\n",
+            severityTitle, code.c_str(), line, column);
+    if (!file.empty()) {
+        fprintf(stderr, "  │ File: %s\n", file.c_str());
+    }
+    if (!pass.empty() || !stage.empty()) {
+        fprintf(stderr, "  │ Context:");
+        if (!pass.empty()) fprintf(stderr, " pass %s", pass.c_str());
+        if (!stage.empty()) fprintf(stderr, " stage %s", stage.c_str());
+        fprintf(stderr, "\n");
+    }
+    fprintf(stderr, "  │\n");
+
+    if (sourceLines) {
+        int startLine = std::max(1, static_cast<int>(line) - 2);
+        int endLine = std::min(static_cast<int>(sourceLines->size()), static_cast<int>(line) + 2);
+
+        for (int i = startLine; i <= endLine; i++) {
+            if (i <= 0 || i > static_cast<int>(sourceLines->size())) continue;
+
+            const std::string& sourceLine = (*sourceLines)[i - 1];
+            if (i == static_cast<int>(line)) {
+                fprintf(stderr, "  │ %4d │ %s\n", i, sourceLine.c_str());
+                fprintf(stderr, "  │      │ ");
+                for (u32 j = 1; j < column && j <= sourceLine.length(); j++) {
+                    if (sourceLine[j - 1] == '\t') {
+                        fprintf(stderr, "    ");
+                    } else {
+                        fprintf(stderr, " ");
+                    }
+                }
+                fprintf(stderr, "^\n");
+                fprintf(stderr, "  │      └─ %s\n", message.empty() ? "(no message)" : message.c_str());
+            } else {
+                fprintf(stderr, "  │ %4d │ %s\n", i, sourceLine.c_str());
+            }
+        }
+    } else {
+        fprintf(stderr, "  │ %s\n", message.empty() ? "(no message)" : message.c_str());
+    }
+
+    fprintf(stderr, "  │\n");
+
+    if (stream && diagnostics.tokens[ref] != INVALID_DIAGNOSTIC_TOKEN) {
+        u32 token = diagnostics.tokens[ref];
+        if (!stream->IsEOF(token) && stream->GetLength(token) > 0) {
+            std::string_view tokenValue = stream->GetValue(token);
+            fprintf(stderr, "  │ Token: '%.*s' (type %s)\n",
+                    static_cast<int>(tokenValue.length()), tokenValue.data(),
+                    TokenTypeName(stream->GetType(token)));
+        }
+    }
+
+    fprintf(stderr, "  └─\n");
+}
+
+static void PrintDiagnosticsText(const CompilerConfig& config,
+                                 const DiagnosticStream& diagnostics,
+                                 const TokenStream* stream = nullptr,
+                                 const std::vector<std::string>* sourceLines = nullptr,
+                                 u32 maxDiagnostics = 10) {
+    if (diagnostics.Count() == 0) return;
+
+    u32 errorCount = 0;
+    u32 warningCount = 0;
+    u32 noteCount = 0;
+    u32 hintCount = 0;
+    CountDiagnostics(diagnostics, errorCount, warningCount, noteCount, hintCount);
+
+    fprintf(stderr, "\nDiagnostics: %u error(s), %u warning(s)", errorCount, warningCount);
+    if (noteCount > 0) fprintf(stderr, ", %u note(s)", noteCount);
+    if (hintCount > 0) fprintf(stderr, ", %u hint(s)", hintCount);
+    fprintf(stderr, "\n");
+
+    u32 shown = 0;
+    for (u32 i = 0; i < diagnostics.Count(); i++) {
+        if (shown >= maxDiagnostics) break;
+        PrintDiagnosticText(config, diagnostics, i, stream, sourceLines);
+        shown++;
+    }
+
+    if (diagnostics.Count() > shown) {
+        fprintf(stderr, "\n  ... and %u more diagnostic(s)\n", diagnostics.Count() - shown);
+    }
+}
+
+static void AppendJsonComma(std::string& json, bool& first) {
+    if (!first) json += ",\n";
+    first = false;
+}
+
+static void AppendJsonStringField(std::string& json,
+                                  const char* name,
+                                  const std::string& value,
+                                  bool& first,
+                                  bool omitEmpty = true) {
+    if (omitEmpty && value.empty()) return;
+    AppendJsonComma(json, first);
+    json += "      \"";
+    json += name;
+    json += "\": \"";
+    json += EscapeJsonString(value);
+    json += "\"";
+}
+
+static void AppendJsonUintField(std::string& json,
+                                const char* name,
+                                u32 value,
+                                bool& first) {
+    AppendJsonComma(json, first);
+    json += "      \"";
+    json += name;
+    json += "\": ";
+    json += std::to_string(value);
+}
+
+static void AddStageDiagnostic(DiagnosticStream& diagnostics,
+                               DiagnosticSeverity severity,
+                               DiagnosticPhase phase,
+                               DiagnosticMessageId messageId,
+                               const std::string& message,
+                               const std::string& file,
+                               const std::string& pass,
+                               const std::string& stage) {
+    diagnostics.AddRaw(severity,
+                       phase,
+                       TrimDiagnosticMessage(message),
+                       DiagnosticSpan{},
+                       file,
+                       pass,
+                       stage,
+                       messageId);
+}
+
+static void PrintDiagnosticsJson(const CompilerConfig& config,
+                                 const DiagnosticStream& diagnostics,
+                                 bool success,
+                                 const TokenStream* stream = nullptr,
+                                 const std::vector<std::string>* sourceLines = nullptr) {
+    u32 errorCount = 0;
+    u32 warningCount = 0;
+    for (u32 i = 0; i < diagnostics.Count(); i++) {
+        switch (diagnostics.GetSeverity(i)) {
+            case DiagnosticSeverity::Error:
+                errorCount++;
+                break;
+            case DiagnosticSeverity::Warning:
+                warningCount++;
+                break;
+            default:
+                break;
+        }
+    }
+
+    std::string json;
+    json += "{\n";
+    json += "  \"schemaVersion\": 2,\n";
+    json += "  \"tool\": \"bwslc\",\n";
+    json += "  \"version\": \"" VERSION "\",\n";
+    json += "  \"success\": ";
+    json += success ? "true" : "false";
+    json += ",\n";
+    json += "  \"file\": \"" + EscapeJsonString(config.inputFile) + "\",\n";
+    json += "  \"errorCount\": " + std::to_string(errorCount) + ",\n";
+    json += "  \"warningCount\": " + std::to_string(warningCount) + ",\n";
+    json += "  \"diagnostics\": [";
+
+    for (u32 i = 0; i < diagnostics.Count(); i++) {
+        if (i > 0) json += ",";
+        json += "\n    {\n";
+
+        bool first = true;
+        DiagnosticSeverity severity = diagnostics.GetSeverity(i);
+        DiagnosticPhase phase = diagnostics.GetPhase(i);
+        DiagnosticMessageId messageId = diagnostics.GetMessageId(i);
+        std::string file = diagnostics.GetFile(i);
+        if (file.empty()) file = config.inputFile;
+
+        AppendJsonStringField(json, "severity", DiagnosticStream::SeverityName(severity), first, false);
+        AppendJsonStringField(json, "phase", DiagnosticStream::PhaseName(phase), first);
+        AppendJsonStringField(json, "code", diagnostics.GetCode(i), first, false);
+        AppendJsonStringField(json, "name", DiagnosticStream::MessageName(messageId), first);
+        AppendJsonStringField(json, "message", TrimDiagnosticMessage(diagnostics.FormatMessage(i)), first, false);
+        AppendJsonStringField(json, "file", file, first);
+        AppendJsonStringField(json, "pass", diagnostics.GetPass(i), first);
+        AppendJsonStringField(json, "stage", diagnostics.GetStage(i), first);
+        const u32 spanFlags = diagnostics.spanFlags[i];
+        if (DiagnosticSpan::HasAll(spanFlags, DiagnosticSpan::HasLocationFlag)) {
+            AppendJsonUintField(json, "line", diagnostics.lines[i], first);
+            AppendJsonUintField(json, "column", diagnostics.columns[i], first);
+        }
+        if (DiagnosticSpan::HasAll(spanFlags, DiagnosticSpan::HasEndLocationFlag)) {
+            AppendJsonUintField(json, "endLine", diagnostics.endLines[i], first);
+            AppendJsonUintField(json, "endColumn", diagnostics.endColumns[i], first);
+        }
+        if (DiagnosticSpan::HasAll(spanFlags, DiagnosticSpan::HasOffsetFlag)) {
+            AppendJsonUintField(json, "offset", diagnostics.offsets[i], first);
+            AppendJsonUintField(json, "length", diagnostics.lengths[i], first);
+        }
+        if (stream && diagnostics.tokens[i] != INVALID_DIAGNOSTIC_TOKEN) {
+            u32 token = diagnostics.tokens[i];
+            if (!stream->IsEOF(token)) {
+                std::string_view tokenValue = stream->GetValue(token);
+                AppendJsonStringField(json, "token", std::string(tokenValue), first);
+                AppendJsonStringField(json, "tokenType", TokenTypeName(stream->GetType(token)), first);
+            }
+        }
+
+        if (sourceLines && DiagnosticSpan::HasAll(spanFlags, DiagnosticSpan::HasLocationFlag)) {
+            std::vector<u32> contextLineNumbers;
+            u32 line = diagnostics.lines[i];
+            if (line > 1) contextLineNumbers.push_back(line - 1);
+            contextLineNumbers.push_back(line);
+            contextLineNumbers.push_back(line + 1);
+
+            AppendJsonComma(json, first);
+            json += "      \"context\": [";
+            bool firstContext = true;
+            for (u32 contextLine : contextLineNumbers) {
+                if (contextLine == 0 || contextLine > sourceLines->size()) continue;
+                if (!firstContext) json += ",";
+                firstContext = false;
+                json += "\n        {\"line\": " + std::to_string(contextLine) +
+                        ", \"text\": \"" + EscapeJsonString((*sourceLines)[contextLine - 1]) + "\"}";
+            }
+            json += "\n      ]";
+        }
+
+        json += "\n    }";
+    }
+
+    if (diagnostics.Count() > 0) json += "\n  ";
+    json += "]\n";
+    json += "}\n";
+    printf("%s", json.c_str());
+}
+
 static u8 BuildPassAttributeMask(const AST& ast, NodeRef pipelineRef, NodeRef passRef) {
     if (pipelineRef.IsNull() || passRef.IsNull()) {
         return 0;
@@ -1446,12 +1732,45 @@ struct CompileResult {
     std::string hlslSource;
     std::string directGlesSource;  // Direct GLES output (bypasses SPIRV-Cross)
     std::string error;
+    std::vector<std::string> loweringDiagnostics;
+    bool diagnosticsAlreadyReported = false;
     std::string irDump;       // IR dump for -internals output
     bool hasWaveOps = false;
     IRAnalysis analysis{};
     std::vector<ExplicitSamplerUse> explicitSamplerUses;
     ShaderTiming timing;
 };
+
+static void AddCompileResultDiagnostics(DiagnosticStream& diagnostics,
+                                        const CompileResult& result,
+                                        const std::string& file,
+                                        const std::string& pass,
+                                        const std::string& stage) {
+    if (result.diagnosticsAlreadyReported) {
+        return;
+    }
+
+    if (!result.loweringDiagnostics.empty()) {
+        for (const std::string& message : result.loweringDiagnostics) {
+            AddStageDiagnostic(diagnostics,
+                               DiagnosticSeverity::Error,
+                               DiagnosticPhase::Lowering,
+                               DiagnosticMessageId::LoweringError,
+                               message,
+                               file,
+                               pass,
+                               stage);
+        }
+        return;
+    }
+
+    AddStageDiagnostic(diagnostics,
+                       DiagnosticSeverity::Error,
+                       DiagnosticPhase::Compile,
+                       DiagnosticMessageId::ShaderStageCompileFailed,
+                       result.error.empty() ? "Shader stage compilation failed" : result.error,
+                       file, pass, stage);
+}
 
 static std::string ResolveArenaStringForConfig(const ArenaString& value,
                                                const char* sourceBase,
@@ -1600,7 +1919,10 @@ CompileResult CompileShaderStage(
     bool captureIr = false,  // Capture IR dump for -internals output
     bool useDirectGles = false,  // Generate GLES directly from IR (bypass SPIRV-Cross)
     bool allowDirectGlesFallback = false,  // Precompute direct GLES for known SPIRV-Cross ES gaps
-    const RenderConfig* renderConfig = nullptr  // For GLES backend
+    const RenderConfig* renderConfig = nullptr,  // For GLES backend
+    DiagnosticStream* diagnosticStream = nullptr,
+    const std::string& diagnosticPassName = "",
+    bool suppressDiagnostics = false
 ) {
     using Clock = std::chrono::high_resolution_clock;
     auto shaderStart = Clock::now();
@@ -1647,6 +1969,9 @@ CompileResult CompileShaderStage(
     IRLowering lowering;
     lowering.Initialize(&irPool, const_cast<SymbolTableData*>(&parser.symbolTable),
                         const_cast<AST*>(&context.ast), parser.sourceBase());
+    lowering.suppressErrorOutput = suppressDiagnostics || diagnosticStream != nullptr;
+    lowering.diagnosticStream = diagnosticStream;
+    lowering.diagnosticPassName = diagnosticPassName;
     lowering.currentStage = stage;
     lowering.currentPipeline = pipelineRef;
     lowering.currentPass = passRef;  // For pass-scoped function lookup
@@ -1662,7 +1987,19 @@ CompileResult CompileShaderStage(
         lowering.LowerStatement(block.statements[i]);
     }
 
+    // If IR lowering reported recursion, short-circuit: downstream SSA /
+    // SPIR-V emission would produce spurious validator errors drowning
+    // the diagnostic that already went to stderr.
+    if (lowering.recursionDiagnosed) {
+        result.loweringDiagnostics = lowering.diagnostics;
+        result.diagnosticsAlreadyReported = (diagnosticStream != nullptr);
+        result.error = "Recursion is not supported by SPIR-V.";
+        return result;
+    }
+
     if (lowering.hadError) {
+        result.loweringDiagnostics = lowering.diagnostics;
+        result.diagnosticsAlreadyReported = (diagnosticStream != nullptr);
         result.error = "IR lowering failed. See diagnostic above.";
         return result;
     }
@@ -1671,14 +2008,6 @@ CompileResult CompileShaderStage(
     if (lowering.program.instructionCount == 0 ||
         lowering.program.opcodes[lowering.program.instructionCount - 1] != OP_RET) {
         lowering.builder.EmitInstruction(OP_RET, 0, 0);
-    }
-
-    // If IR lowering reported recursion, short-circuit: downstream SSA /
-    // SPIR-V emission would produce spurious validator errors drowning
-    // the diagnostic that already went to stderr.
-    if (lowering.recursionDiagnosed) {
-        result.error = "Recursion is not supported by SPIR-V. See diagnostic above.";
-        return result;
     }
 
     auto irEnd = Clock::now();
@@ -1849,18 +2178,32 @@ static bool WriteCrossCompileOutput(bool enabled,
                                     double& timingSlot,
                                     const std::string& source,
                                     const std::string& path,
-                                    const char* warningLabel) {
+                                    const char* warningLabel,
+                                    bool quiet,
+                                    DiagnosticStream* diagnostics = nullptr,
+                                    const std::string& file = "",
+                                    const std::string& pass = "",
+                                    const std::string& stage = "") {
     if (!enabled) return true;
 
     timingSlot = ms;
     if (!source.empty() && source.find("error") == std::string::npos) {
         if (WriteTextFile(path, source)) {
-            printf("    -> %s\n", path.c_str());
+            if (!quiet) {
+                printf("    -> %s\n", path.c_str());
+            }
         }
         return true;
     }
 
-    fprintf(stderr, "    Warning: %s cross-compilation failed\n", warningLabel);
+    if (diagnostics) {
+        AddStageDiagnostic(*diagnostics,
+                           DiagnosticSeverity::Warning,
+                           DiagnosticPhase::Compile,
+                           DiagnosticMessageId::CrossCompileFailed,
+                           std::string(warningLabel) + " cross-compilation failed",
+                           file, pass, stage);
+    }
     return false;
 }
 
@@ -1872,7 +2215,8 @@ static void WriteWebGLSidecarIfNeeded(const CompileResult& result,
                                       const CompilationContext& context,
                                       const PipelineData& pipeline,
                                       bool writeWebGLSidecar,
-                                      bool isVertexStage) {
+                                      bool isVertexStage,
+                                      bool quiet) {
     if (!writeWebGLSidecar) return;
 
     std::string json = BuildWebGLSidecarJson(
@@ -1881,7 +2225,9 @@ static void WriteWebGLSidecarIfNeeded(const CompileResult& result,
         &context.ast, &pipeline);
     std::string jsonPath = outBase + ".json";
     if (WriteTextFile(jsonPath, json)) {
-        printf("    -> %s\n", jsonPath.c_str());
+        if (!quiet) {
+            printf("    -> %s\n", jsonPath.c_str());
+        }
     }
 }
 
@@ -1897,17 +2243,28 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
                                            const CompilationContext& context,
                                            const PipelineData& pipeline,
                                            bool writeWebGLSidecar,
-                                           bool isVertexStage) {
+                                           bool isVertexStage,
+                                           DiagnosticStream* diagnostics = nullptr) {
     StageOutputResult output;
+    const bool quiet = config.errorsJson;
 
     std::string spvPath = config.outputSpirv ? (outBase + ".spv") : GetTempSpirvPath();
     if (!WriteBinaryFile(spvPath, result.spirv)) {
-        fprintf(stderr, "    Error: Could not write SPIR-V file\n");
+        if (diagnostics) {
+            AddStageDiagnostic(*diagnostics,
+                               DiagnosticSeverity::Error,
+                               DiagnosticPhase::IO,
+                               DiagnosticMessageId::CouldNotWriteSpirv,
+                               "Could not write SPIR-V file",
+                               config.inputFile, passName, stageName);
+        }
         return output;
     }
 
     if (config.outputSpirv) {
-        printf("    -> %s\n", spvPath.c_str());
+        if (!quiet) {
+            printf("    -> %s\n", spvPath.c_str());
+        }
     }
 
     if (config.validationMode != ValidationMode::Off) {
@@ -1919,21 +2276,39 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
 
         if (validation.status == ValidationStatus::ToolMissing) {
             if (config.validationMode == ValidationMode::Strict) {
-                fprintf(stderr, "    Error: SPIR-V validation requested but %s\n",
-                        validation.message.c_str());
+                if (diagnostics) {
+                    AddStageDiagnostic(*diagnostics,
+                                       DiagnosticSeverity::Error,
+                                       DiagnosticPhase::Validation,
+                                       DiagnosticMessageId::ValidationStrictToolMissing,
+                                       "SPIR-V validation requested but " + validation.message,
+                                       config.inputFile, passName, stageName);
+                }
                 output.skipRemainingPass = true;
                 return output;
             }
 
             static bool warnedMissingValidator = false;
             if (!warnedMissingValidator) {
-                fprintf(stderr, "    Warning: %s; skipping SPIR-V validation (-validation auto)\n",
-                        validation.message.c_str());
+                if (diagnostics) {
+                    AddStageDiagnostic(*diagnostics,
+                                       DiagnosticSeverity::Warning,
+                                       DiagnosticPhase::Validation,
+                                       DiagnosticMessageId::ValidationAutoToolMissing,
+                                       validation.message + "; skipping SPIR-V validation (-validation auto)",
+                                       config.inputFile, passName, stageName);
+                }
                 warnedMissingValidator = true;
             }
         } else if (validation.status == ValidationStatus::Failed) {
-            fprintf(stderr, "    Error: SPIR-V validation failed:\n");
-            fprintf(stderr, "      %s\n", validation.message.c_str());
+            if (diagnostics) {
+                AddStageDiagnostic(*diagnostics,
+                                   DiagnosticSeverity::Error,
+                                   DiagnosticPhase::Validation,
+                                   DiagnosticMessageId::ValidationFailed,
+                                   "SPIR-V validation failed:\n" + validation.message,
+                                   config.inputFile, passName, stageName);
+            }
             output.skipRemainingPass = true;
             return output;
         }
@@ -1950,13 +2325,16 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
 
     WriteCrossCompileOutput(config.outputMetal, crossResult.metalMs,
                             shaderTime.metalCrossMs, crossResult.metal,
-                            outBase + ".metal", "Metal");
+                            outBase + ".metal", "Metal", quiet,
+                            diagnostics, config.inputFile, passName, stageName);
     WriteCrossCompileOutput(config.outputHlsl, crossResult.hlslMs,
                             shaderTime.hlslCrossMs, crossResult.hlsl,
-                            outBase + ".hlsl", "HLSL");
+                            outBase + ".hlsl", "HLSL", quiet,
+                            diagnostics, config.inputFile, passName, stageName);
     WriteCrossCompileOutput(config.outputGlsl, crossResult.glslMs,
                             shaderTime.glslCrossMs, crossResult.glsl,
-                            outBase + ".glsl", "GLSL");
+                            outBase + ".glsl", "GLSL", quiet,
+                            diagnostics, config.inputFile, passName, stageName);
 
     if (config.outputGlslEs) {
         double glesMs = 0.0;
@@ -1968,13 +2346,22 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         if (!glesSource.empty() && glesSource.find("error") == std::string::npos) {
             std::string glslEsPath = outBase + ".gles";
             if (WriteTextFile(glslEsPath, glesSource)) {
-                printf("    -> %s\n", glslEsPath.c_str());
+                if (!quiet) {
+                    printf("    -> %s\n", glslEsPath.c_str());
+                }
             }
             WriteWebGLSidecarIfNeeded(result, outBase, pass, parser,
                                       sourceBase, context, pipeline,
-                                      writeWebGLSidecar, isVertexStage);
+                                      writeWebGLSidecar, isVertexStage, quiet);
         } else {
-            fprintf(stderr, "    Warning: GLSL ES cross-compilation failed\n");
+            if (diagnostics) {
+                AddStageDiagnostic(*diagnostics,
+                                   DiagnosticSeverity::Warning,
+                                   DiagnosticPhase::Compile,
+                                   DiagnosticMessageId::CrossCompileFailed,
+                                   "GLSL ES cross-compilation failed",
+                                   config.inputFile, passName, stageName);
+            }
         }
     }
 #else
@@ -1985,7 +2372,8 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         auto metalEnd = Clock::now();
         double metalMs = std::chrono::duration<double, std::milli>(metalEnd - metalStart).count();
         WriteCrossCompileOutput(true, metalMs, shaderTime.metalCrossMs,
-                                metalSource, outBase + ".metal", "Metal");
+                                metalSource, outBase + ".metal", "Metal", quiet,
+                                diagnostics, config.inputFile, passName, stageName);
     }
     if (config.outputHlsl) {
         using Clock = std::chrono::high_resolution_clock;
@@ -1994,7 +2382,8 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         auto hlslEnd = Clock::now();
         double hlslMs = std::chrono::duration<double, std::milli>(hlslEnd - hlslStart).count();
         WriteCrossCompileOutput(true, hlslMs, shaderTime.hlslCrossMs,
-                                hlslSource, outBase + ".hlsl", "HLSL");
+                                hlslSource, outBase + ".hlsl", "HLSL", quiet,
+                                diagnostics, config.inputFile, passName, stageName);
     }
     if (config.outputGlsl) {
         using Clock = std::chrono::high_resolution_clock;
@@ -2003,7 +2392,8 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         auto glslEnd = Clock::now();
         double glslMs = std::chrono::duration<double, std::milli>(glslEnd - glslStart).count();
         WriteCrossCompileOutput(true, glslMs, shaderTime.glslCrossMs,
-                                glslSource, outBase + ".glsl", "GLSL");
+                                glslSource, outBase + ".glsl", "GLSL", quiet,
+                                diagnostics, config.inputFile, passName, stageName);
     }
     if (config.outputGlslEs) {
         using Clock = std::chrono::high_resolution_clock;
@@ -2014,13 +2404,22 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         if (!glslEsSource.empty() && glslEsSource.find("error") == std::string::npos) {
             std::string glslEsPath = outBase + ".gles";
             if (WriteTextFile(glslEsPath, glslEsSource)) {
-                printf("    -> %s\n", glslEsPath.c_str());
+                if (!quiet) {
+                    printf("    -> %s\n", glslEsPath.c_str());
+                }
             }
             WriteWebGLSidecarIfNeeded(result, outBase, pass, parser,
                                       sourceBase, context, pipeline,
-                                      writeWebGLSidecar, isVertexStage);
+                                      writeWebGLSidecar, isVertexStage, quiet);
         } else {
-            fprintf(stderr, "    Warning: GLSL ES cross-compilation failed\n");
+            if (diagnostics) {
+                AddStageDiagnostic(*diagnostics,
+                                   DiagnosticSeverity::Warning,
+                                   DiagnosticPhase::Compile,
+                                   DiagnosticMessageId::CrossCompileFailed,
+                                   "GLSL ES cross-compilation failed",
+                                   config.inputFile, passName, stageName);
+            }
         }
     }
 #endif
@@ -2036,7 +2435,9 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
 
         std::string internalsPath = outBase + ".internals.json";
         if (WriteTextFile(internalsPath, internalsJson)) {
-            printf("    -> %s\n", internalsPath.c_str());
+            if (!quiet) {
+                printf("    -> %s\n", internalsPath.c_str());
+            }
         }
     }
 
@@ -2054,9 +2455,29 @@ int main(int argc, char* argv[]) {
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
 
-    try {
     CompilerConfig config;
+    config.errorsJson = ArgsRequestErrorsJson(argc, argv);
+    static constexpr size_t DIAGNOSTIC_ARENA_SIZE = 4 * 1024 * 1024;
+    std::unique_ptr<u8[]> diagnosticMemory = std::make_unique<u8[]>(DIAGNOSTIC_ARENA_SIZE);
+    Memory::BWEMemoryArena diagnosticArena;
+    diagnosticArena.Initialize(diagnosticMemory.get(), DIAGNOSTIC_ARENA_SIZE);
+    DiagnosticStream diagnostics;
+    diagnostics.Init(&diagnosticArena);
+    auto emitFailure = [&](const TokenStream* stream = nullptr,
+                           const std::vector<std::string>* sourceLines = nullptr,
+                           bool printUsage = false) -> int {
+        if (config.errorsJson) {
+            PrintDiagnosticsJson(config, diagnostics, false, stream, sourceLines);
+        } else {
+            PrintDiagnosticsText(config, diagnostics, stream, sourceLines);
+            if (printUsage) {
+                PrintUsage(argv[0]);
+            }
+        }
+        return 1;
+    };
 
+    try {
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -2095,8 +2516,10 @@ int main(int argc, char* argv[]) {
             std::string spec = argv[++i];
             size_t eq = spec.find('=');
             if (eq == std::string::npos || eq == 0 || eq == spec.size() - 1) {
-                fprintf(stderr, "Error: -variant expects name=value\n");
-                return 1;
+                diagnostics.AddMessage(DiagnosticSeverity::Error,
+                                       DiagnosticPhase::CLI,
+                                       DiagnosticMessageId::VariantExpectsNameValue);
+                return emitFailure();
             }
             VariantOverride overrideValue;
             overrideValue.name = spec.substr(0, eq);
@@ -2113,12 +2536,16 @@ int main(int argc, char* argv[]) {
             } else if (mode == "off") {
                 config.validationMode = ValidationMode::Off;
             } else {
-                fprintf(stderr, "Error: -validation expects auto, strict, or off\n");
-                return 1;
+                diagnostics.AddMessage(DiagnosticSeverity::Error,
+                                       DiagnosticPhase::CLI,
+                                       DiagnosticMessageId::ValidationModeExpected);
+                return emitFailure();
             }
         } else if (arg == "-validation" || arg == "--validation") {
-            fprintf(stderr, "Error: -validation expects auto, strict, or off\n");
-            return 1;
+            diagnostics.AddMessage(DiagnosticSeverity::Error,
+                                   DiagnosticPhase::CLI,
+                                   DiagnosticMessageId::ValidationModeExpected);
+            return emitFailure();
         } else if (arg.rfind("--validation=", 0) == 0) {
             std::string mode = arg.substr(strlen("--validation="));
             if (mode == "auto") {
@@ -2128,11 +2555,15 @@ int main(int argc, char* argv[]) {
             } else if (mode == "off") {
                 config.validationMode = ValidationMode::Off;
             } else {
-                fprintf(stderr, "Error: --validation expects auto, strict, or off\n");
-                return 1;
+                diagnostics.AddMessage(DiagnosticSeverity::Error,
+                                       DiagnosticPhase::CLI,
+                                       DiagnosticMessageId::ValidationModeExpected);
+                return emitFailure();
             }
         } else if (arg[0] != '-') {
             config.inputFile = arg;
+        } else if (IsErrorsJsonArg(arg)) {
+            config.errorsJson = true;
         } else if (arg == "-dump-ir") {
             config.dumpIr = true;
         } else if (arg == "-debug-names") {
@@ -2146,28 +2577,46 @@ int main(int argc, char* argv[]) {
         } else if (arg == "-bindings") {
             config.outputBindings = true;
         } else {
-            fprintf(stderr, "Unknown option: %s\n", arg.c_str());
-            PrintUsage(argv[0]);
-            return 1;
+            diagnostics.AddMessage(DiagnosticSeverity::Error,
+                                   DiagnosticPhase::CLI,
+                                   DiagnosticMessageId::UnknownOption,
+                                   {DiagnosticArg::String(arg)});
+            return emitFailure(nullptr, nullptr, true);
         }
     }
 
+    if (config.errorsJson) {
+        config.verbose = false;
+        config.dumpIr = false;
+        config.showTiming = false;
+    }
+
     if (config.inputFile.empty()) {
-        fprintf(stderr, "Error: No input file specified\n\n");
-        PrintUsage(argv[0]);
-        return 1;
+        diagnostics.AddMessage(DiagnosticSeverity::Error,
+                               DiagnosticPhase::CLI,
+                               DiagnosticMessageId::NoInputFile);
+        return emitFailure(nullptr, nullptr, true);
     }
 
     // Read input file
     std::string source = ReadFile(config.inputFile);
     if (source.empty()) {
-        fprintf(stderr, "Error: Could not read file '%s'\n", config.inputFile.c_str());
-        return 1;
+        diagnostics.AddMessage(DiagnosticSeverity::Error,
+                               DiagnosticPhase::IO,
+                               DiagnosticMessageId::CouldNotReadFile,
+                               {DiagnosticArg::String(config.inputFile)},
+                               DiagnosticSpan{},
+                               config.inputFile);
+        return emitFailure();
     }
 
     // Get base name for output files
     fs::path inputPath(config.inputFile);
     std::string baseName = inputPath.stem().string();
+    fs::path absoluteInputPath = fs::absolute(inputPath);
+    if (config.errorsJson) {
+        config.inputFile = absoluteInputPath.string();
+    }
 
     // Set up module search paths
     BWSL::ClearModuleSearchPaths();
@@ -2179,7 +2628,6 @@ int main(int argc, char* argv[]) {
     }
 
     // Add input file's directory (allows finding modules relative to the shader)
-    fs::path absoluteInputPath = fs::absolute(inputPath);
     fs::path inputDir = absoluteInputPath.parent_path();
     BWSL::AddModuleSearchPath(inputDir.string());
 
@@ -2217,6 +2665,7 @@ int main(int argc, char* argv[]) {
     // Lexer initialization
     auto lexStart = Clock::now();
     CompilationContext context;
+    context.diagnosticSink = &diagnostics;
     TokenStream stream;
     stream.Init(&context.arena, source.c_str(), source.length());
     Lexer lexer(source, stream);
@@ -2234,18 +2683,7 @@ int main(int argc, char* argv[]) {
     timing.parseMs = std::chrono::duration<double, std::milli>(parseEnd - parseStart).count();
 
     if (parser.hadError) {
-        fprintf(stderr, "\nParse failed with %u error(s):\n", parser.errors.count);
-
-        // Print each error with context (limit to 10 errors)
-        for (u32 i = 0; i < parser.errors.count && i < 10; i++) {
-            PrintErrorWithContext(parser.errors[i], sourceLines, source, stream);
-        }
-
-        if (parser.errors.count > 10) {
-            fprintf(stderr, "\n  ... and %u more errors\n", parser.errors.count - 10);
-        }
-
-        return 1;
+        return emitFailure(&stream, &sourceLines);
     }
 
     bool isModule = (context.ast.pipelines.count == 0 && context.ast.modules.count > 0);
@@ -2253,35 +2691,59 @@ int main(int argc, char* argv[]) {
     if (!isModule && context.root.IsValid()) {
         std::string variantResolveError;
         if (!parser.ResolveVariants(context.root, &variantResolveError)) {
-            fprintf(stderr, "Variant resolution failed: %s\n",
-                    variantResolveError.empty() ? "invalid variant declarations" : variantResolveError.c_str());
-            return 1;
+            std::string message = variantResolveError.empty()
+                ? "invalid variant declarations"
+                : variantResolveError;
+            diagnostics.AddRaw(DiagnosticSeverity::Error,
+                               DiagnosticPhase::Variant,
+                               "Variant resolution failed: " + message,
+                               DiagnosticSpan{},
+                               config.inputFile,
+                               "",
+                               "",
+                               DiagnosticMessageId::VariantResolutionFailed);
+            return emitFailure(&stream, &sourceLines);
         }
     }
 
     std::string comptimeError;
-    if (!BWSL::Comptime::RunComptimeInterpreter(&context, &parser, context.root, &comptimeError)) {
-        fprintf(stderr, "\nComptime failed with %u error(s):\n", parser.errors.count);
-        for (u32 i = 0; i < parser.errors.count && i < 10; i++) {
-            PrintErrorWithContext(parser.errors[i], sourceLines, source, stream);
+    parser.diagnosticPhase = DiagnosticPhase::Comptime;
+    bool comptimeOk = BWSL::Comptime::RunComptimeInterpreter(&context, &parser, context.root, &comptimeError);
+    parser.diagnosticPhase = DiagnosticPhase::Parse;
+    if (!comptimeOk) {
+        if (parser.errors.count == 0) {
+            diagnostics.AddRaw(DiagnosticSeverity::Error,
+                               DiagnosticPhase::Comptime,
+                               comptimeError.empty() ? "Comptime interpretation failed" : comptimeError,
+                               DiagnosticSpan{},
+                               config.inputFile,
+                               "",
+                               "",
+                               DiagnosticMessageId::ComptimeError);
         }
-        if (parser.errors.count == 0 && !comptimeError.empty()) {
-            fprintf(stderr, "Error: %s\n", comptimeError.c_str());
-        }
-        return 1;
+        return emitFailure(&stream, &sourceLines);
     }
 
     // Handle module files differently - they don't have pipelines to compile
     if (isModule) {
-        printf("Module '%s' parsed successfully.\n", baseName.c_str());
-        printf("Note: Modules define reusable functions/structs but have no shaders to compile.\n");
-        printf("To compile shaders, use a pipeline file that imports this module.\n");
+        if (config.errorsJson) {
+            PrintDiagnosticsJson(config, diagnostics, true);
+        } else {
+            printf("Module '%s' parsed successfully.\n", baseName.c_str());
+            printf("Note: Modules define reusable functions/structs but have no shaders to compile.\n");
+            printf("To compile shaders, use a pipeline file that imports this module.\n");
+        }
         return 0;
     }
 
     if (context.ast.pipelines.count == 0) {
-        fprintf(stderr, "Error: No pipeline found in '%s'\n", config.inputFile.c_str());
-        return 1;
+        diagnostics.AddMessage(DiagnosticSeverity::Error,
+                               DiagnosticPhase::Parse,
+                               DiagnosticMessageId::NoPipelineFound,
+                               {DiagnosticArg::String(config.inputFile)},
+                               DiagnosticSpan{},
+                               config.inputFile);
+        return emitFailure(&stream, &sourceLines);
     }
 
     NodeRef originalPipelineRef = context.root;
@@ -2292,15 +2754,29 @@ int main(int argc, char* argv[]) {
     if (!parser.BuildVariantSelection(originalPipelineRef, nullptr, 0, false,
                                       config.variantOverrides, &variantSelection,
                                       &variantError)) {
-        fprintf(stderr, "Error: %s\n", variantError.c_str());
-        return 1;
+        diagnostics.AddRaw(DiagnosticSeverity::Error,
+                           DiagnosticPhase::Variant,
+                           variantError.empty() ? "Variant selection failed" : variantError,
+                           DiagnosticSpan{},
+                           config.inputFile,
+                           "",
+                           "",
+                           DiagnosticMessageId::VariantSelectionFailed);
+        return emitFailure(&stream, &sourceLines);
     }
 
     VariantReflectionData variantReflection;
     if (!parser.BuildVariantReflection(originalPipelineRef, &variantSelection,
                                        &variantReflection, &variantError)) {
-        fprintf(stderr, "Error: %s\n", variantError.c_str());
-        return 1;
+        diagnostics.AddRaw(DiagnosticSeverity::Error,
+                           DiagnosticPhase::Variant,
+                           variantError.empty() ? "Variant reflection failed" : variantError,
+                           DiagnosticSpan{},
+                           config.inputFile,
+                           "",
+                           "",
+                           DiagnosticMessageId::VariantReflectionFailed);
+        return emitFailure(&stream, &sourceLines);
     }
 
     if (config.dumpVariantSpace) {
@@ -2312,8 +2788,15 @@ int main(int argc, char* argv[]) {
                                                                           variantSelection,
                                                                           &variantError);
     if (specializedPipelineRef.IsNull()) {
-        fprintf(stderr, "Error: %s\n", variantError.c_str());
-        return 1;
+        diagnostics.AddRaw(DiagnosticSeverity::Error,
+                           DiagnosticPhase::Variant,
+                           variantError.empty() ? "Variant specialization failed" : variantError,
+                           DiagnosticSpan{},
+                           config.inputFile,
+                           "",
+                           "",
+                           DiagnosticMessageId::VariantSpecializationFailed);
+        return emitFailure(&stream, &sourceLines);
     }
 
     const PipelineData& pipeline = context.ast.GetPipeline(specializedPipelineRef);
@@ -2329,8 +2812,15 @@ int main(int argc, char* argv[]) {
     ComputeGraphCompileResult graphResult = CompileComputeGraph(
         context.ast, context.ast.GetPipeline(originalPipelineRef), config.renderConfig, sourceBase);
     if (!graphResult.success) {
-        fprintf(stderr, "Error: %s\n", graphResult.error.c_str());
-        return 1;
+        diagnostics.AddRaw(DiagnosticSeverity::Error,
+                           DiagnosticPhase::ComputeGraph,
+                           graphResult.error.empty() ? "Compute graph validation failed" : graphResult.error,
+                           DiagnosticSpan{},
+                           config.inputFile,
+                           "",
+                           "",
+                           DiagnosticMessageId::ComputeGraphValidationFailed);
+        return emitFailure(&stream, &sourceLines);
     }
 
     // Helper to get string from ArenaString
@@ -2370,11 +2860,16 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        printf("Compiling pass '%s'...\n", passName.c_str());
+        if (!config.errorsJson) {
+            printf("Compiling pass '%s'...\n", passName.c_str());
+        }
 
         // Create varying context for this pass - shared between vertex and fragment
         // Vertex shader populates it, fragment shader uses it to resolve input.xxx
         PassVaryingContext passVaryings;
+        passVaryings.diagnosticStream = &diagnostics;
+        passVaryings.diagnosticPassName = passName;
+        passVaryings.diagnosticStageName = "vertex";
         IRAnalysis vertexReflectionAnalysis{};
         IRAnalysis fragmentReflectionAnalysis{};
         IRAnalysis computeReflectionAnalysis{};
@@ -2389,15 +2884,20 @@ int main(int argc, char* argv[]) {
         if ((config.stageFilter.empty() || config.stageFilter == "vertex") &&
             !pass.vertexShader.IsNull()) {
 
-            printf("  Vertex shader:\n");
+            if (!config.errorsJson) {
+                printf("  Vertex shader:\n");
+            }
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Vertex, config.verbose, config.dumpIr, config.debugNames,
                                                        true, config.outputGlslEs, specializedPipelineRef,
                                                        pipeline.passes[passIdx], &passVaryings, config.outputInternals,
-                                                       config.useDirectGles, config.outputGlslEs, &config.renderConfig);
+                                                       config.useDirectGles, config.outputGlslEs, &config.renderConfig,
+                                                       &diagnostics,
+                                                       passName,
+                                                       config.errorsJson);
 
             if (!result.success) {
-                fprintf(stderr, "    Error: %s\n", result.error.c_str());
+                AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "vertex");
                 errorCount++;
             } else {
                 vertexReflectionAnalysis = result.analysis;
@@ -2410,7 +2910,7 @@ int main(int argc, char* argv[]) {
 
                 StageOutputResult output = WriteStageOutputs(
                     config, result, shaderTime, outBase, passName, "vertex",
-                    pass, parser, sourceBase, context, pipeline, true, true);
+                    pass, parser, sourceBase, context, pipeline, true, true, &diagnostics);
                 if (output.success) {
                     compiledCount++;
                 } else {
@@ -2424,16 +2924,21 @@ int main(int argc, char* argv[]) {
         if ((config.stageFilter.empty() || config.stageFilter == "fragment") &&
             !pass.fragmentShader.IsNull()) {
 
-            printf("  Fragment shader:\n");
-            fflush(stdout);
+            if (!config.errorsJson) {
+                printf("  Fragment shader:\n");
+                fflush(stdout);
+            }
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Fragment, config.verbose, config.dumpIr, config.debugNames,
                                                        true, false, specializedPipelineRef,
                                                        pipeline.passes[passIdx], &passVaryings, config.outputInternals,
-                                                       config.useDirectGles, config.outputGlslEs, &config.renderConfig);  // Use same varying context populated by vertex shader
+                                                       config.useDirectGles, config.outputGlslEs, &config.renderConfig,
+                                                       &diagnostics,
+                                                       passName,
+                                                       config.errorsJson);  // Use same varying context populated by vertex shader
 
             if (!result.success) {
-                fprintf(stderr, "    Error: %s\n", result.error.c_str());
+                AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "fragment");
                 errorCount++;
             } else {
                 fragmentReflectionAnalysis = result.analysis;
@@ -2446,7 +2951,7 @@ int main(int argc, char* argv[]) {
 
                 StageOutputResult output = WriteStageOutputs(
                     config, result, shaderTime, outBase, passName, "fragment",
-                    pass, parser, sourceBase, context, pipeline, true, false);
+                    pass, parser, sourceBase, context, pipeline, true, false, &diagnostics);
                 if (output.success) {
                     compiledCount++;
                 } else {
@@ -2460,16 +2965,21 @@ int main(int argc, char* argv[]) {
         if ((config.stageFilter.empty() || config.stageFilter == "compute") &&
             !pass.computeShader.IsNull()) {
 
-            printf("  Compute shader:\n");
-            fflush(stdout);
+            if (!config.errorsJson) {
+                printf("  Compute shader:\n");
+                fflush(stdout);
+            }
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Compute, config.verbose, config.dumpIr, config.debugNames,
                                                        true, false, specializedPipelineRef,
                                                        pipeline.passes[passIdx], nullptr, config.outputInternals,
-                                                       config.useDirectGles, config.outputGlslEs, &config.renderConfig);
+                                                       config.useDirectGles, config.outputGlslEs, &config.renderConfig,
+                                                       &diagnostics,
+                                                       passName,
+                                                       config.errorsJson);
 
             if (!result.success) {
-                fprintf(stderr, "    Error: %s\n", result.error.c_str());
+                AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "compute");
                 errorCount++;
             } else {
                 computeReflectionAnalysis = result.analysis;
@@ -2482,7 +2992,7 @@ int main(int argc, char* argv[]) {
 
                 StageOutputResult output = WriteStageOutputs(
                     config, result, shaderTime, outBase, passName, "compute",
-                    pass, parser, sourceBase, context, pipeline, false, false);
+                    pass, parser, sourceBase, context, pipeline, false, false, &diagnostics);
                 if (output.success) {
                     compiledCount++;
                 } else {
@@ -2532,19 +3042,26 @@ int main(int argc, char* argv[]) {
             std::string bindingsPath = BuildOutputBasePath(config.outputDir, baseName + "_" + passName) + ".bindings.json";
             std::string bindingsJson = BuildResourceBindingsJson(passName, bindings);
             if (WriteTextFile(bindingsPath, bindingsJson)) {
-                printf("  -> %s\n", bindingsPath.c_str());
+                if (!config.errorsJson) {
+                    printf("  -> %s\n", bindingsPath.c_str());
+                }
             }
         }
     }
 
-    printf("\nDone: %d shaders compiled", compiledCount);
-    if (errorCount > 0) {
-        printf(", %d errors", errorCount);
+    if (config.errorsJson) {
+        PrintDiagnosticsJson(config, diagnostics, errorCount == 0, &stream, &sourceLines);
+    } else {
+        PrintDiagnosticsText(config, diagnostics, &stream, &sourceLines);
+        printf("\nDone: %d shaders compiled", compiledCount);
+        if (errorCount > 0) {
+            printf(", %d errors", errorCount);
+        }
+        printf("\n");
     }
-    printf("\n");
 
     // Calculate and print timing if requested
-    if (config.showTiming) {
+    if (config.showTiming && !config.errorsJson) {
         auto totalEnd = Clock::now();
         timing.totalMs = std::chrono::duration<double, std::milli>(totalEnd - totalStart).count();
         timing.Print();
@@ -2552,10 +3069,20 @@ int main(int argc, char* argv[]) {
 
     return errorCount > 0 ? 1 : 0;
     } catch (const std::exception& e) {
-        fprintf(stderr, "Unhandled exception: %s\n", e.what());
-        return 1;
+        diagnostics.AddMessage(DiagnosticSeverity::Error,
+                               DiagnosticPhase::Internal,
+                               DiagnosticMessageId::UnhandledException,
+                               {DiagnosticArg::String(e.what())},
+                               DiagnosticSpan{},
+                               config.inputFile);
+        return emitFailure();
     } catch (...) {
-        fprintf(stderr, "Unhandled unknown exception\n");
-        return 1;
+        diagnostics.AddMessage(DiagnosticSeverity::Error,
+                               DiagnosticPhase::Internal,
+                               DiagnosticMessageId::UnhandledUnknownException,
+                               {},
+                               DiagnosticSpan{},
+                               config.inputFile);
+        return emitFailure();
     }
 }

@@ -1,7 +1,42 @@
 // Part of the header-only IRLowering implementation. Include via bwsl_ir_lowering.h only.
 
 inline void IRLowering::ReportError(const char *message) {
-  fprintf(stderr, "%s", message);
+  if (message) {
+    diagnostics.emplace_back(message);
+    if (diagnosticStream) {
+      const char *stageName = "unknown";
+      switch (currentStage) {
+      case ShaderStage::Vertex:
+        stageName = "vertex";
+        break;
+      case ShaderStage::Fragment:
+        stageName = "fragment";
+        break;
+      case ShaderStage::Compute:
+        stageName = "compute";
+        break;
+      default:
+        break;
+      }
+      std::string passName;
+      if (!diagnosticPassName.empty()) {
+        passName = diagnosticPassName;
+      } else if (currentPassData) {
+        passName = currentPassData->name.ToString(sourceBase);
+      }
+      diagnosticStream->AddRaw(DiagnosticSeverity::Error,
+                               DiagnosticPhase::Lowering,
+                               message,
+                               DiagnosticSpan{},
+                               "",
+                               passName,
+                               stageName,
+                               DiagnosticMessageId::LoweringError);
+    }
+    if (!suppressErrorOutput) {
+      fprintf(stderr, "%s", message);
+    }
+  }
   hadError = true;
 }
 
@@ -28,6 +63,10 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   builder.nextRegister = 0;
   recursionDiagnosed = false;
   hadError = false;
+  suppressErrorOutput = false;
+  diagnostics.clear();
+  diagnosticStream = nullptr;
+  diagnosticPassName.clear();
   currentPassData = nullptr;
 
   // Allocate IR arrays. instructionCount must be zeroed explicitly — it's

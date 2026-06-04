@@ -567,6 +567,32 @@ void Parser::ErrorAt(TokenRef token, const char* message) {
     error.column = loc.column;
     error.token = token;
     errors.Push(arena, error);
+
+    if (context) {
+        DiagnosticSpan span;
+        span.line = loc.line;
+        span.column = loc.column;
+        span.token = token;
+        span.SetLocation();
+        if (token != INVALID_TOKEN) {
+            span.offset = stream->GetOffset(token);
+            span.length = stream->GetLength(token);
+            span.SetOffset();
+            if (span.length > 0) {
+                span.endLine = loc.line;
+                span.endColumn = loc.column + span.length;
+                span.SetEndLocation();
+            }
+        }
+        context->Diag().AddRaw(DiagnosticSeverity::Error,
+                               diagnosticPhase,
+                               message,
+                               span,
+                               "",
+                               "",
+                               "",
+                               DiagnosticMessageId::ParseError);
+    }
 }
 
 void Parser::Synchronize() {

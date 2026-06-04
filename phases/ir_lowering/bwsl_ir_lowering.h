@@ -3,12 +3,14 @@
 #include "bwsl_ast_soa.h"
 #include "bwsl_custom_type_registry.h"
 #include "bwsl_defs.h"
+#include "bwsl_diagnostics.h"
 #include "bwsl_ir_analysis.h" // For OutputSlot constants
 #include "bwsl_ir_gen.h"
 #include "bwsl_mem_pool.h"
 #include "bwsl_resource_reflection.h"
 #include "bwsl_symbol_table.h"
 #include <cstring>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -42,6 +44,10 @@ struct VaryingInfo {
 struct PassVaryingContext {
   VaryingInfo varyings[16]; // Max 16 user varyings
   u32 count = 0;
+  DiagnosticStream *diagnosticStream = nullptr;
+  std::string diagnosticPassName;
+  const char *diagnosticStageName = "vertex";
+  bool varyingLimitDiagnosed = false;
 
   // Add a new varying or return existing slot
   u32 AddOrGetSlot(u32 nameHash, CoreType type, const char *nameStr = nullptr,
@@ -65,7 +71,17 @@ struct PassVaryingContext {
     }
     // Add new varying
     if (count >= 16) {
-      fprintf(stderr, "Warning: Maximum 16 user varyings exceeded\n");
+      if (diagnosticStream && !varyingLimitDiagnosed) {
+        diagnosticStream->AddMessage(DiagnosticSeverity::Warning,
+                                     DiagnosticPhase::Lowering,
+                                     DiagnosticMessageId::MaxUserVaryingsExceeded,
+                                     {},
+                                     DiagnosticSpan{},
+                                     "",
+                                     diagnosticPassName,
+                                     diagnosticStageName ? diagnosticStageName : "vertex");
+        varyingLimitDiagnosed = true;
+      }
       return 0;
     }
     u32 slot = count;
@@ -161,6 +177,10 @@ struct IRLowering {
   // Tracks lowering-stage diagnostics that should fail the compile even
   // when external SPIR-V validation tooling is unavailable.
   bool hadError = false;
+  bool suppressErrorOutput = false;
+  std::vector<std::string> diagnostics;
+  DiagnosticStream *diagnosticStream = nullptr;
+  std::string diagnosticPassName;
 
   // Loop nesting depth - used to ensure selection merges don't coincide with
   // continue targets
