@@ -2,6 +2,7 @@
 
 #include "bwsl_ast_common.h"
 #include "bwsl_defs.h"
+#include "bwsl_utils.h"
 #include <cstdio>
 #include <cstring>
 #include <deque>
@@ -600,16 +601,11 @@ private:
     static u32 HashDiagnosticIdentity(DiagnosticMessageId id,
                                       DiagnosticPhase phase,
                                       std::string_view message) {
-        u32 hash = 2166136261u;
-        auto mixByte = [&hash](u8 byte) {
-            hash ^= byte;
-            hash *= 16777619u;
-        };
-
-        mixByte(static_cast<u8>(id));
-        mixByte(static_cast<u8>(phase));
+        u32 hash = Utils::FNV_OFFSET_BASIS;
+        hash = Utils::HashMix(hash, static_cast<u8>(id));
+        hash = Utils::HashMix(hash, static_cast<u8>(phase));
         for (char ch : message) {
-            mixByte(static_cast<u8>(ch));
+            hash = Utils::HashMix(hash, static_cast<u8>(ch));
         }
         return hash == 0 ? 1u : hash;
     }
