@@ -1,6 +1,11 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Resource declarations, image/buffer setup, descriptor bindings, and storage buffers.
 
+
+#ifdef BWSL_CLANGD
+namespace BWSL {
+#endif
+
 static bool IsMatrixType(CoreType type) {
   return type == CoreType::MAT2 || type == CoreType::MAT3 ||
          type == CoreType::MAT4;
@@ -547,3 +552,8 @@ void SPIRVBuilder::DeclareResources() {
 }
 
 // ============= Final Assembly =============
+
+
+#ifdef BWSL_CLANGD
+} // namespace BWSL
+#endif

@@ -1,6 +1,11 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Arrays, enum/sumtype constructs, pattern matching, and structs.
 
+
+#ifdef BWSL_CLANGD
+namespace BWSL {
+#endif
+
     return switchNode;
 }
 
@@ -1332,3 +1337,8 @@ NodeRef Parser::ParseStruct() {
 //==============================================================================
 // Module parsing
 //==============================================================================
+
+
+#ifdef BWSL_CLANGD
+} // namespace BWSL
+#endif

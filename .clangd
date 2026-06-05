@@ -1,0 +1,6 @@
+---
+# Suppress warnings from vendored headers.
+If:
+  PathMatch: "vendor/.*"
+CompileFlags:
+  Add: [-w]

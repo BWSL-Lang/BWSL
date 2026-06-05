@@ -1,6 +1,11 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Module loading validation plus function and compute-body parsing.
 
+
+#ifdef BWSL_CLANGD
+namespace BWSL {
+#endif
+
 bool Parser::ValidateAttributeInUse(const ArenaString& attrName) {
     if (!currentPass.IsValid()) return false;
 
@@ -631,3 +636,8 @@ void Parser::ParseFunctionsBlockBody(NodeRef block) {
 //==============================================================================
 // Eval statement parsing
 //==============================================================================
+
+
+#ifdef BWSL_CLANGD
+} // namespace BWSL
+#endif

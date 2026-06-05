@@ -1,5 +1,10 @@
 // Part of the header-only IRLowering implementation. Include via bwsl_ir_lowering.h only.
 
+
+#ifdef BWSL_CLANGD
+namespace BWSL::IR {
+#endif
+
 namespace {
 
 inline std::string IdentifierNameForDiagnostic(const IdentifierData &ident,
@@ -1178,3 +1183,8 @@ inline u16 IRLowering::LowerBinaryOp(NodeRef ref) {
   SetRegisterType(dest, isComparison ? CoreType::BOOL : resultType);
   return dest;
 }
+
+
+#ifdef BWSL_CLANGD
+} // namespace BWSL::IR
+#endif

@@ -228,7 +228,7 @@ WASM_SPIRV_INCLUDES = $(BWSL_INCLUDE_DIRS) -Itools
 
 .PHONY: all help bwslc bwslc-debug bwslc-sanitize bwslc-msvc bwslc-msvc-debug \
 	bwslc-win-zig bwslc-win-zig-debug clean wasm wasm-debug test test-sanitize \
-	install equiv_runner spirv-tools
+	install equiv_runner spirv-tools vscode-config
 
 all: bwslc
 
@@ -446,6 +446,9 @@ install: wasm
 # ============================================================================
 # Clean
 # ============================================================================
+
+vscode-config:
+	python3 scripts/gen_compile_commands.py
 
 clean:
 	$(CLEAN_BUILD)

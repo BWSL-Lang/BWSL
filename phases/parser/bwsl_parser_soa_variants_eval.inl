@@ -1,6 +1,11 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Compile-time eval bindings, variant resolution, eval expansion, and control-flow statements.
 
+
+#ifdef BWSL_CLANGD
+namespace BWSL {
+#endif
+
 void Parser::PushEvalBindingScope() {
     evalBindingScopeStarts.push_back(static_cast<u32>(evalBindings.size()));
 }
@@ -1740,3 +1745,8 @@ NodeRef Parser::ParseSwitch() {
     }
 
     Consume(TokenType::RIGHT_BRACE, "Expected '}' after switch body");
+
+
+#ifdef BWSL_CLANGD
+} // namespace BWSL
+#endif

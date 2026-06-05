@@ -1,6 +1,11 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Blocks, statements, and local/custom variable declarations.
 
+
+#ifdef BWSL_CLANGD
+namespace BWSL {
+#endif
+
 static bool IsOutputAssignmentTarget(AST* ast, NodeRef target) {
     if (!target.IsValid()) {
         return false;
@@ -21,9 +26,9 @@ static bool IsOutputAssignmentTarget(AST* ast, NodeRef target) {
     }
 
     return IsOutputAssignmentTarget(ast, access.object);
-}
+} 
 
-NodeRef Parser::ParseBlock() {
+NodeRef Parser::ParseBlock() { 
     PARSER_TIME_BLOCK();
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     NodeRef block = ASTFactory::MakeBlock(ast, loc.line, loc.column);
@@ -759,3 +764,8 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
 //==============================================================================
 // Expression parsing
 //==============================================================================
+
+
+#ifdef BWSL_CLANGD
+} // namespace BWSL
+#endif

@@ -1,6 +1,11 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Module declarations, constraints, where clauses, generic functions, and shader stage expression resolution.
 
+
+#ifdef BWSL_CLANGD
+namespace BWSL {
+#endif
+
 NodeRef Parser::ParseModule() {
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     u32 line = loc.line;
@@ -541,3 +546,8 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
 // Shader Stage Expression Resolution
 // Resolves deferred shader expressions (function calls/ternaries) at compile-time
 //==============================================================================
+
+
+#ifdef BWSL_CLANGD
+} // namespace BWSL
+#endif

@@ -1,5 +1,10 @@
 // Part of the header-only IRLowering implementation. Include via bwsl_ir_lowering.h only.
 
+
+#ifdef BWSL_CLANGD
+namespace BWSL::IR {
+#endif
+
 inline void IRLowering::ReportError(const char *message) {
   if (message) {
     diagnostics.emplace_back(message);
@@ -328,3 +333,8 @@ inline void IRLowering::LowerBlock(NodeRef blockRef) {
   variableRegisters = savedVariableRegisters;
   variableStructTypes = savedVariableStructTypes;
 }
+
+
+#ifdef BWSL_CLANGD
+} // namespace BWSL::IR
+#endif

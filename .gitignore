@@ -24,6 +24,10 @@ build/
 # Claude Code runtime files
 .claude/
 
+# Generated IDE/tooling files
+compile_commands.json
+c_cpp_properties.json
+
 # IDE/Editor
 .vscode/
 .vs
@@ -31,6 +35,7 @@ build/
 *.swp
 *.swo
 *~
+.cache
 
 # Temporary files
 *.tmp

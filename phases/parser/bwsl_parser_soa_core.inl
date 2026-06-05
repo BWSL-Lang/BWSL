@@ -1,6 +1,11 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Core helpers, token navigation, diagnostics, and primitive parser utilities.
 
+
+#ifdef BWSL_CLANGD
+namespace BWSL {
+#endif
+
 namespace {
 
 static std::string StripFixedArraySuffixes(const std::string& typeName) {
@@ -766,3 +771,8 @@ BinaryOpType Parser::TokenTypeToBinaryOp(TokenType type) {
 //==============================================================================
 // Main parsing function
 //==============================================================================
+
+
+#ifdef BWSL_CLANGD
+} // namespace BWSL
+#endif

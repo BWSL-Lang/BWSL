@@ -1,6 +1,11 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Pipeline, import, attribute, resource, pass, and shader stage declarations.
 
+
+#ifdef BWSL_CLANGD
+namespace BWSL {
+#endif
+
 NodeRef Parser::ParseDocument() {
     TokenRef documentStart = current;
     TokenRef previousStart = previous;
@@ -1570,3 +1575,8 @@ NodeRef Parser::ParseShaderStageExpression(ASTNodeType stageType) {
 //==============================================================================
 // Block and statement parsing
 //==============================================================================
+
+
+#ifdef BWSL_CLANGD
+} // namespace BWSL
+#endif

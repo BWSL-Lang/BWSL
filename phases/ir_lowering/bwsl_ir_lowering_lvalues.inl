@@ -1,5 +1,10 @@
 // Part of the header-only IRLowering implementation. Include via bwsl_ir_lowering.h only.
 
+
+#ifdef BWSL_CLANGD
+namespace BWSL::IR {
+#endif
+
 namespace {
 
 inline bool DecodeSwizzleByHash(u32 nameHash, u16 lengthHint, u8 outIndices[4],
@@ -2244,3 +2249,8 @@ inline CompressionFormat IRLowering::GetAttributeCompression(u32 attrIndex) {
   }
   return CompressionFormat::NONE;
 }
+
+
+#ifdef BWSL_CLANGD
+} // namespace BWSL::IR
+#endif

@@ -1,6 +1,11 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Builder initialization, preamble, entry-point emission, and core setup.
 
+
+#ifdef BWSL_CLANGD
+namespace BWSL {
+#endif
+
 void SPIRVBuilder::Initialize(BWSL_Arena *arena, IR::IRProgram *ir,
                               ShaderStage stage, const SymbolTableData *symbols,
                               CFG *cfg) {
@@ -334,3 +339,8 @@ void SPIRVBuilder::EmitEntryPoint() {
 }
 
 // ============= Type Management =============
+
+
+#ifdef BWSL_CLANGD
+} // namespace BWSL
+#endif
