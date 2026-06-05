@@ -39,7 +39,11 @@ class BwslExternalAnnotator : ExternalAnnotator<String, List<Diagnostic>>() {
         val tempFile = Files.createTempFile("bwsl_", ".bwsl").toFile()
         try {
             tempFile.writeText(fileContent)
-            val process = ProcessBuilder(compilerPath, tempFile.absolutePath, "-errors-json", "-no-validate")
+            val moduleArgs = BwslSettings.getInstance().modulePaths
+                .flatMap { listOf("-modules", it) }
+            val process = ProcessBuilder(
+                listOf(compilerPath, tempFile.absolutePath, "-errors-json", "-no-validate") + moduleArgs
+            )
                 .redirectErrorStream(true)
                 .start()
             val output = process.inputStream.bufferedReader().readText()

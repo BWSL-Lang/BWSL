@@ -10,7 +10,10 @@ import com.intellij.openapi.components.Storage
 @Service(Service.Level.APP)
 class BwslSettings : PersistentStateComponent<BwslSettings.State> {
 
-    data class State(var compilerPath: String = "")
+    data class State(
+        var compilerPath: String = "",
+        var modulePaths: MutableList<String> = mutableListOf()
+    )
 
     private var state = State()
 
@@ -20,6 +23,10 @@ class BwslSettings : PersistentStateComponent<BwslSettings.State> {
     var compilerPath: String
         get() = state.compilerPath
         set(value) { state.compilerPath = value }
+
+    var modulePaths: MutableList<String>
+        get() = state.modulePaths
+        set(value) { state.modulePaths = value }
 
     companion object {
         fun getInstance(): BwslSettings =
