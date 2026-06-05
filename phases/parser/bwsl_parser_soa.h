@@ -189,6 +189,9 @@ struct Parser {
         inShaderStage = false;
         currentPass = NodeRef::Null();
         currentPipeline = NodeRef::Null();
+        currentModule = NodeRef::Null();
+        passBlockRemapActive = false;
+        remapBareVariants = false;
         typeCache.Init();
         // Start at first token (pre-tokenized stream)
         current = 0;
@@ -225,7 +228,10 @@ struct Parser {
     bool ResolveVariants(NodeRef pipeline, std::string* outError = nullptr) {
         return ResolvePipelineVariants(pipeline, outError);
     }
-    void ResolveShaderStages(NodeRef pipeline) { ResolveShaderStageExpressions(pipeline); }
+    void ResolveShaderStages(NodeRef pipeline) {
+        ResolvePassBlockInstances(pipeline);
+        ResolveShaderStageExpressions(pipeline);
+    }
     NodeRef SpecializePipelineForVariants(NodeRef pipeline,
                                           const VariantSelectionData& selection,
                                           std::string* outError = nullptr);
@@ -259,13 +265,13 @@ private:
     void ParseUsingDeclaration(NodeRef owner, bool ownerIsPipeline);
     void ParseUsingModuleList(NodeRef owner, bool ownerIsPipeline);
     void ParseUsingTypeAliasList();
-    void ParseAttributes(NodeRef pipeline);
-    void ParseResources(NodeRef pipeline);
+    void ParseAttributes(NodeRef owner, bool ownerIsPipeline = true);
+    void ParseResources(NodeRef owner, bool ownerIsPipeline = true);
     void RegisterParsedResource(const std::string& resourceName,
                                 const std::string& typeName,
                                 u32 bindingIndex);
-    void ParseVariants(NodeRef pipeline);
-    void ParseVariantRules(NodeRef pipeline);
+    void ParseVariants(NodeRef owner, bool ownerIsPipeline = true);
+    void ParseVariantRules(NodeRef owner, bool ownerIsPipeline = true);
     void ParsePassBody(NodeRef pass);
     void ParseComputeBody(NodeRef compute);
     void ParseUseAttributes(NodeRef pass);
@@ -279,6 +285,9 @@ private:
     void ParseComputeGraphOutputs(ComputeGraphNode& node);
 
     NodeRef ParsePass();
+    void ParsePassBlockInstantiationBody(NodeRef pass);
+    void ParsePassBlockBindingList(ArenaArray<PassBlockBindingData>& bindings,
+                                   const char* groupName);
     void ParsePassOutputs(NodeRef pass);
     NodeRef ParseAttributeDecl();
     NodeRef ParseResourceDecl();
@@ -352,9 +361,13 @@ private:
     bool ValidateResourceInUse(const ArenaString& resourceName);
     bool PipelineDeclaresResources() const;
     const ResourceDeclData* LookupPipelineResourceDecl(const ArenaString& resourceName) const;
+    const AttributeDeclData* LookupPipelineAttributeDecl(const ArenaString& attrName) const;
+    const AttributeDeclData* LookupModuleAttributeDecl(NodeRef module, const ArenaString& attrName) const;
+    const ResourceDeclData* LookupModuleResourceDecl(NodeRef module, const ArenaString& resourceName) const;
     bool ValidateAssignmentTarget(NodeRef target);
 
     //----------------- Shader stage expression resolution ------------------------//
+    void ResolvePassBlockInstances(NodeRef pipeline);
     void ResolveShaderStageExpressions(NodeRef pipeline);
     NodeRef ResolveShaderStageExpr(NodeRef stageNode, const PassData& pass, ASTNodeType expectedType);
     NodeRef LookupShaderFunction(u32 nameHash, const PassData& pass, CoreType expectedReturnType);
@@ -366,6 +379,11 @@ private:
                            bool* outImplicit = nullptr,
                            u8* outAttributeIndex = nullptr,
                            u8* outResourceIndex = nullptr) const;
+    bool LookupModuleVariantType(NodeRef module, u32 nameHash, TypeInfo* outType,
+                                 u32* outEnumTypeHash = nullptr,
+                                 bool* outImplicit = nullptr,
+                                 u8* outAttributeIndex = nullptr,
+                                 u8* outResourceIndex = nullptr) const;
     bool LookupActiveVariantBinding(u32 nameHash, LiteralValue* outValue = nullptr,
                                     TypeInfo* outType = nullptr,
                                     u32* outEnumTypeHash = nullptr,
@@ -376,6 +394,8 @@ private:
     void ClearActiveVariantSelection();
     std::string FormatVariantExpression(NodeRef expr) const;
     NodeRef ClonePassWithActiveVariants(NodeRef passRef);
+    NodeRef ExpandPassBlockInstance(NodeRef passRef, NodeRef pipeline);
+    NodeRef LookupPassBlockFunction(const FunctionCallData& call, NodeRef pipeline);
 
     // Parameter substitution for shader functions
     struct ParamSubstitution {
@@ -420,6 +440,19 @@ private:
     };
     std::vector<ActiveVariantBinding> activeVariantBindings;
     bool allowBareVariantLookup = false;
+    NodeRef currentModule = NodeRef::Null();
+
+    struct PassBlockNameRemap {
+        u32 localHash;
+        ArenaString targetName;
+        u8 localIndex;
+        u8 targetIndex;
+    };
+    std::vector<PassBlockNameRemap> passBlockAttributeRemaps;
+    std::vector<PassBlockNameRemap> passBlockResourceRemaps;
+    std::vector<PassBlockNameRemap> passBlockVariantRemaps;
+    bool passBlockRemapActive = false;
+    bool remapBareVariants = false;
 
     void PushEvalBindingScope();
     void PopEvalBindingScope();
@@ -438,6 +471,8 @@ private:
     bool ExpandEvalStatementsFromBlock(NodeRef blockNode, BlockData& outBlock);
 
     NodeRef CloneShaderStageWithParams(NodeRef stageNode, const ParamSubstitution* subs, u32 subCount);
+    NodeRef ClonePassWithParamsAndRemap(NodeRef passRef, const ParamSubstitution* subs, u32 subCount,
+                                        const std::string& passName);
     NodeRef CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs, u32 subCount);
     NodeRef ParseEvalBlock();
 

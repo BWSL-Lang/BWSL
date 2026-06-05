@@ -1,0 +1,33 @@
+module VariantMappingPasses {
+    variants {
+        localFlag: bool = false;
+    }
+
+    make :: () -> pass_block {
+        pass {
+            vertex {
+                output.position = float4(0.0, 0.0, 0.0, 1.0);
+            }
+
+            fragment {
+                if (variants.localFlag) {
+                    output.color = float4(1.0);
+                } else {
+                    output.color = float4(0.0);
+                }
+            }
+        }
+    }
+}
+
+pipeline PassBlockInvalidVariantRhs {
+    import VariantMappingPasses
+
+    variants {
+        declaredFlag: bool = true;
+    }
+
+    pass "Bad" = VariantMappingPasses::make() {
+        variants { localFlag = missingFlag }
+    }
+}

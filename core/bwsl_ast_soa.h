@@ -263,6 +263,11 @@ struct VariantRuleData {
     NodeRef rhs;
 };
 
+struct PassBlockBindingData {
+    ArenaString localName;
+    ArenaString targetName;
+};
+
 // Pass - 32 bytes + ArenaArrays
 struct PassData {
     ArenaString name;
@@ -271,13 +276,18 @@ struct PassData {
     ArenaArray<FragmentOutputDeclData> fragmentOutputs;
     ArenaArray<NodeRef> consts;     // Pass-scoped constants
     ArenaArray<NodeRef> functions;  // Pass-scoped functions
+    ArenaArray<PassBlockBindingData> attributeBindings;
+    ArenaArray<PassBlockBindingData> resourceBindings;
+    ArenaArray<PassBlockBindingData> variantBindings;
     NodeRef vertexShader;
     NodeRef fragmentShader;
     NodeRef computeShader;
+    NodeRef passBlockCall;
     u32 optionalAttributesMask;     // Bitmask of optional attributes (from ? syntax)
     u32 optionalResourcesMask;      // Bitmask of optional resources (from ? syntax)
     bool hasFragmentOutputs;
-    u8 _pad[3];
+    bool isPassBlockInstance;
+    u8 _pad[2];
 };
 
 struct GraphResourceRef {
@@ -304,6 +314,10 @@ struct ModuleNodeData {
     ArenaArray<NodeRef> functions;
     ArenaArray<NodeRef> structs;
     ArenaArray<NodeRef> enums;
+    ArenaArray<NodeRef> attributes;
+    ArenaArray<NodeRef> resources;
+    ArenaArray<PipelineVariantDeclData> variantDecls;
+    ArenaArray<VariantRuleData> variantRules;
 };
 
 // Array type info - 16 bytes
@@ -1059,6 +1073,8 @@ namespace ASTFactory {
         AttributeDeclData data;
         data.name = ArenaString::MakeHashOnly(name);
         data.dataType = ArenaString::MakeHashOnly(type);
+        ReverseLookup::Register(data.name.nameHash, name.c_str());
+        ReverseLookup::Register(data.dataType.nameHash, type.c_str());
         data.compression = ArenaString::MakeHashOnly(0u);
         data.attributeIndex = 0xFF;
         data.isInstance = false;
@@ -1101,17 +1117,23 @@ namespace ASTFactory {
         u32 index = ast->passes.count;
         PassData data;
         data.name = ArenaString::MakeHashOnly(name);
+        ReverseLookup::Register(data.name.nameHash, name.c_str());
         data.usedAttributes.Init(ast->arena, 8);
         data.usedResources.Init(ast->arena, 8);
         data.fragmentOutputs.Init(ast->arena, 4);
         data.consts.Init(ast->arena, 4);
         data.functions.Init(ast->arena, 8);  // Pass-scoped functions
+        data.attributeBindings.Init(ast->arena, 4);
+        data.resourceBindings.Init(ast->arena, 4);
+        data.variantBindings.Init(ast->arena, 4);
         data.vertexShader = NodeRef::Null();
         data.fragmentShader = NodeRef::Null();
         data.computeShader = NodeRef::Null();
+        data.passBlockCall = NodeRef::Null();
         data.optionalAttributesMask = 0;
         data.optionalResourcesMask = 0;
         data.hasFragmentOutputs = false;
+        data.isPassBlockInstance = false;
         ast->passes.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {
@@ -1489,6 +1511,10 @@ namespace ASTFactory {
         data.functions.Init(ast->arena, 16);
         data.structs.Init(ast->arena, 8);
         data.enums.Init(ast->arena, 4);
+        data.attributes.Init(ast->arena, 8);
+        data.resources.Init(ast->arena, 8);
+        data.variantDecls.Init(ast->arena, 4);
+        data.variantRules.Init(ast->arena, 4);
         ast->modules.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {

@@ -97,20 +97,20 @@ NodeRef Parser::ParsePipeline() {
         } else if (Match(TokenType::USING)) {
             ParseUsing(pipeline);
         } else if (Match(TokenType::ATTRIBUTES)) {
-            ParseAttributes(pipeline);
+            ParseAttributes(pipeline, true);
         } else if (Match(TokenType::RESOURCES)) {
             if (ast->GetPipeline(pipeline).resources.count > 0) {
                 Error("Only one resources block is allowed per pipeline");
                 continue;
             }
-            ParseResources(pipeline);
+            ParseResources(pipeline, true);
         } else if (Match(TokenType::VARIANTS)) {
             if (ast->GetPipeline(pipeline).variantDecls.count > 0 ||
                 ast->GetPipeline(pipeline).variantRules.count > 0) {
                 Error("Only one variants block is allowed per pipeline");
                 continue;
             }
-            ParseVariants(pipeline);
+            ParseVariants(pipeline, true);
         } else if (Match(TokenType::COMPUTE_GRAPH)) {
             if (!ast->GetPipeline(pipeline).computeGraph.IsNull()) {
                 Error("Only one compute_graph block is allowed per pipeline");
@@ -551,7 +551,7 @@ void Parser::ParseUsingModuleList(NodeRef owner, bool ownerIsPipeline) {
 // Attribute parsing
 //==============================================================================
 
-void Parser::ParseAttributes(NodeRef pipeline) {
+void Parser::ParseAttributes(NodeRef owner, bool ownerIsPipeline) {
     Consume(TokenType::LEFT_BRACE, "Expected '{' after 'attributes'");
     u8 attrIndex = 0;  // Assign indices by declaration order
 
@@ -560,7 +560,11 @@ void Parser::ParseAttributes(NodeRef pipeline) {
         NodeRef attr = ParseAttributeDecl();
         if (attr.IsValid()) {
             ast->GetAttributeDecl(attr).attributeIndex = attrIndex++;
-            ast->GetPipeline(pipeline).attributes.Push(arena, attr);
+            if (ownerIsPipeline) {
+                ast->GetPipeline(owner).attributes.Push(arena, attr);
+            } else {
+                ast->GetModule(owner).attributes.Push(arena, attr);
+            }
         } else {
             if (panicMode) {
                 Synchronize();
@@ -579,17 +583,19 @@ void Parser::ParseAttributes(NodeRef pipeline) {
 
     // Validate first attribute is "position"
     static const u32 POSITION_HASH = Utils::HashStr("position");
-    PipelineData& pipelineData = ast->GetPipeline(pipeline);
-    if (pipelineData.attributes.count > 0) {
-        NodeRef firstAttr = pipelineData.attributes[0];
-        const AttributeDeclData& first = ast->GetAttributeDecl(firstAttr);
-        if (first.name.nameHash != POSITION_HASH) {
-            Error("First attribute must be 'position'");
+    if (ownerIsPipeline) {
+        PipelineData& pipelineData = ast->GetPipeline(owner);
+        if (pipelineData.attributes.count > 0) {
+            NodeRef firstAttr = pipelineData.attributes[0];
+            const AttributeDeclData& first = ast->GetAttributeDecl(firstAttr);
+            if (first.name.nameHash != POSITION_HASH) {
+                Error("First attribute must be 'position'");
+            }
         }
     }
 }
 
-void Parser::ParseResources(NodeRef pipeline) {
+void Parser::ParseResources(NodeRef owner, bool ownerIsPipeline) {
     Consume(TokenType::LEFT_BRACE, "Expected '{' after 'resources'");
     u8 resourceIndex = 0;
 
@@ -598,12 +604,16 @@ void Parser::ParseResources(NodeRef pipeline) {
         NodeRef resource = ParseResourceDecl();
         if (resource.IsValid()) {
             ast->GetResourceDecl(resource).resourceIndex = resourceIndex;
-            ast->GetPipeline(pipeline).resources.Push(arena, resource);
+            if (ownerIsPipeline) {
+                ast->GetPipeline(owner).resources.Push(arena, resource);
 
-            const ResourceDeclData& decl = ast->GetResourceDecl(resource);
-            RegisterParsedResource(decl.name.ToString(sourceBase()),
-                                   decl.typeName.ToString(sourceBase()),
-                                   resourceIndex);
+                const ResourceDeclData& decl = ast->GetResourceDecl(resource);
+                RegisterParsedResource(decl.name.ToString(sourceBase()),
+                                       decl.typeName.ToString(sourceBase()),
+                                       resourceIndex);
+            } else {
+                ast->GetModule(owner).resources.Push(arena, resource);
+            }
             resourceIndex++;
         } else {
             if (panicMode) {
@@ -621,13 +631,13 @@ void Parser::ParseResources(NodeRef pipeline) {
     Consume(TokenType::RIGHT_BRACE, "Expected '}' after resources");
 }
 
-void Parser::ParseVariants(NodeRef pipeline) {
+void Parser::ParseVariants(NodeRef owner, bool ownerIsPipeline) {
     Consume(TokenType::LEFT_BRACE, "Expected '{' after 'variants'");
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
         ProgressGuard _pg_(this);
         if (Match(TokenType::RULES)) {
-            ParseVariantRules(pipeline);
+            ParseVariantRules(owner, ownerIsPipeline);
             continue;
         }
 
@@ -635,14 +645,24 @@ void Parser::ParseVariants(NodeRef pipeline) {
         ArenaString variantName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
 
         bool duplicate = false;
-        for (u32 i = 0; i < ast->GetPipeline(pipeline).variantDecls.count; i++) {
-            if (ast->GetPipeline(pipeline).variantDecls[i].name.nameHash == variantName.nameHash) {
-                duplicate = true;
-                break;
+        if (ownerIsPipeline) {
+            for (u32 i = 0; i < ast->GetPipeline(owner).variantDecls.count; i++) {
+                if (ast->GetPipeline(owner).variantDecls[i].name.nameHash == variantName.nameHash) {
+                    duplicate = true;
+                    break;
+                }
+            }
+        } else {
+            for (u32 i = 0; i < ast->GetModule(owner).variantDecls.count; i++) {
+                if (ast->GetModule(owner).variantDecls[i].name.nameHash == variantName.nameHash) {
+                    duplicate = true;
+                    break;
+                }
             }
         }
         if (duplicate) {
-            Error("Variant already declared in this pipeline");
+            Error(ownerIsPipeline ? "Variant already declared in this pipeline"
+                                  : "Variant already declared in this module");
         }
 
         Consume(TokenType::COLON, "Expected ':' after variant name");
@@ -690,14 +710,18 @@ void Parser::ParseVariants(NodeRef pipeline) {
         decl.defaultExpr = defaultExpr;
         decl.defaultResolved = false;
         if (!duplicate) {
-            ast->GetPipeline(pipeline).variantDecls.Push(arena, decl);
+            if (ownerIsPipeline) {
+                ast->GetPipeline(owner).variantDecls.Push(arena, decl);
+            } else {
+                ast->GetModule(owner).variantDecls.Push(arena, decl);
+            }
         }
     }
 
     Consume(TokenType::RIGHT_BRACE, "Expected '}' after variants block");
 }
 
-void Parser::ParseVariantRules(NodeRef pipeline) {
+void Parser::ParseVariantRules(NodeRef owner, bool ownerIsPipeline) {
     Consume(TokenType::LEFT_BRACE, "Expected '{' after 'rules'");
 
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
@@ -722,7 +746,11 @@ void Parser::ParseVariantRules(NodeRef pipeline) {
             continue;
         }
 
-        ast->GetPipeline(pipeline).variantRules.Push(arena, rule);
+        if (ownerIsPipeline) {
+            ast->GetPipeline(owner).variantRules.Push(arena, rule);
+        } else {
+            ast->GetModule(owner).variantRules.Push(arena, rule);
+        }
     }
 
     Consume(TokenType::RIGHT_BRACE, "Expected '}' after rules block");
@@ -869,6 +897,28 @@ NodeRef Parser::ParsePass() {
 
     NodeRef pass = ASTFactory::MakePass(ast, passName.ToString(sourceBase()), loc.line, loc.column);
 
+    if (Match(TokenType::ASSIGN)) {
+        NodeRef expr = ParseExpression();
+        if (expr.IsNull()) {
+            Error("Expected pass_block function call after '='");
+        } else if (expr.Type() != ASTNodeType::FUNCTION_CALL) {
+            Error("pass_block instantiation must use a direct function call");
+        } else {
+            ast->GetPass(pass).isPassBlockInstance = true;
+            ast->GetPass(pass).passBlockCall = expr;
+        }
+
+        if (Match(TokenType::LEFT_BRACE)) {
+            ParsePassBlockInstantiationBody(pass);
+            Consume(TokenType::RIGHT_BRACE, "Expected '}' after pass_block mappings");
+            Match(TokenType::SEMICOLON);
+        } else {
+            Consume(TokenType::SEMICOLON, "Expected ';' after pass_block instantiation");
+        }
+
+        return pass;
+    }
+
     currentPass = pass;
 
     // Enter a pass scope for pass-local symbols
@@ -882,6 +932,56 @@ NodeRef Parser::ParsePass() {
     currentPass = NodeRef::Null();
 
     return pass;
+}
+
+void Parser::ParsePassBlockInstantiationBody(NodeRef pass) {
+    while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
+        if (Match(TokenType::USE)) {
+            if (Match(TokenType::ATTRIBUTES)) {
+                ParsePassBlockBindingList(ast->GetPass(pass).attributeBindings, "attributes");
+            } else if (Match(TokenType::RESOURCES)) {
+                ParsePassBlockBindingList(ast->GetPass(pass).resourceBindings, "resources");
+            } else {
+                Error("Expected 'attributes' or 'resources' after 'use'");
+                Advance();
+            }
+        } else if (Match(TokenType::VARIANTS)) {
+            ParsePassBlockBindingList(ast->GetPass(pass).variantBindings, "variants");
+        } else {
+            ErrorAtCurrent("Expected 'use attributes', 'use resources', or 'variants' in pass_block mapping");
+            Advance();
+        }
+    }
+}
+
+void Parser::ParsePassBlockBindingList(ArenaArray<PassBlockBindingData>& bindings,
+                                       const char* groupName) {
+    char msg[128];
+    snprintf(msg, sizeof(msg), "Expected '{' after %s mapping", groupName);
+    Consume(TokenType::LEFT_BRACE, msg);
+
+    while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
+        Consume(TokenType::IDENTIFIER, "Expected local interface name");
+        ArenaString localName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
+        ArenaString targetName = localName;
+
+        if (Match(TokenType::ASSIGN)) {
+            Consume(TokenType::IDENTIFIER, "Expected target interface name after '='");
+            targetName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
+        }
+
+        PassBlockBindingData binding{};
+        binding.localName = localName;
+        binding.targetName = targetName;
+        bindings.Push(arena, binding);
+
+        while (Match(TokenType::COMMA) || Match(TokenType::SEMICOLON)) {
+        }
+    }
+
+    Consume(TokenType::RIGHT_BRACE, "Expected '}' after pass_block mapping list");
 }
 
 void Parser::ParsePassBody(NodeRef pass) {
@@ -1162,20 +1262,15 @@ void Parser::ParseUseAttributes(NodeRef pass) {
         ArenaString attrName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
         bool isOptional = Match(TokenType::QUESTION);
 
-        // Look up attribute in current pipeline's attribute list
         u8 idx = 0xFF;
+        const AttributeDeclData* decl = nullptr;
         if (!currentPipeline.IsNull()) {
-            const PipelineData& pipeline = ast->GetPipeline(currentPipeline);
-            for (u32 i = 0; i < pipeline.attributes.count; i++) {
-                NodeRef attrRef = pipeline.attributes[i];
-                if (attrRef.Type() == ASTNodeType::ATTRIBUTE_DECL) {
-                    const AttributeDeclData& attr = ast->GetAttributeDecl(attrRef);
-                    if (attr.name.nameHash == attrName.nameHash) {
-                        idx = attr.attributeIndex;
-                        break;
-                    }
-                }
-            }
+            decl = LookupPipelineAttributeDecl(attrName);
+        } else if (!currentModule.IsNull()) {
+            decl = LookupModuleAttributeDecl(currentModule, attrName);
+        }
+        if (decl) {
+            idx = decl->attributeIndex;
         }
         if (idx == 0xFF) { Error("Unknown attribute in 'use attributes'"); break; }
 
@@ -1202,6 +1297,9 @@ void Parser::ParseUseResources(NodeRef pass) {
         bool isOptional = Match(TokenType::QUESTION);
 
         const ResourceDeclData* pipelineDecl = LookupPipelineResourceDecl(resourceName);
+        const ResourceDeclData* moduleDecl = currentPipeline.IsNull() && currentModule.IsValid()
+            ? LookupModuleResourceDecl(currentModule, resourceName)
+            : nullptr;
         const bool pipelineOwnsResources = PipelineDeclaresResources();
         if (pipelineOwnsResources) {
             if (!pipelineDecl) {
@@ -1212,6 +1310,12 @@ void Parser::ParseUseResources(NodeRef pass) {
                 if (isOptional && pipelineDecl->resourceIndex < 32) {
                     ast->GetPass(pass).optionalResourcesMask |= (1u << pipelineDecl->resourceIndex);
                 }
+            }
+        } else if (moduleDecl) {
+            ast->GetPass(pass).usedResources.Push(arena, resourceName);
+
+            if (isOptional && moduleDecl->resourceIndex < 32) {
+                ast->GetPass(pass).optionalResourcesMask |= (1u << moduleDecl->resourceIndex);
             }
         } else {
             Symbol* sym = SymbolTable::LookupResource(&symbolTable, resourceName);

@@ -1,0 +1,15 @@
+pipeline PassBlockCallerOverride {
+    make :: () -> pass_block {
+        pass {
+            vertex {
+                output.position = float4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+
+    pass "Bad" = make() {
+        vertex {
+            output.position = float4(1.0);
+        }
+    }
+}

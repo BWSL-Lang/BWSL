@@ -163,6 +163,61 @@ bool Parser::LookupVariantType(NodeRef pipeline, u32 nameHash, TypeInfo* outType
     return false;
 }
 
+bool Parser::LookupModuleVariantType(NodeRef module, u32 nameHash, TypeInfo* outType,
+                                     u32* outEnumTypeHash,
+                                     bool* outImplicit,
+                                     u8* outAttributeIndex,
+                                     u8* outResourceIndex) const {
+    if (outType) *outType = TYPE_INFO(CoreType::INVALID, 0, false);
+    if (outEnumTypeHash) *outEnumTypeHash = 0;
+    if (outImplicit) *outImplicit = false;
+    if (outAttributeIndex) *outAttributeIndex = 0xFF;
+    if (outResourceIndex) *outResourceIndex = 0xFF;
+
+    if (module.IsNull() || module.Type() != ASTNodeType::MODULE) return false;
+    const ModuleNodeData& moduleData = ast->GetModule(module);
+
+    for (u32 i = 0; i < moduleData.variantDecls.count; i++) {
+        const PipelineVariantDeclData& decl = moduleData.variantDecls[i];
+        if (decl.name.nameHash != nameHash) continue;
+        TypeInfo typeInfo = decl.typeInfo;
+        if (typeInfo.coreType == CoreType::INVALID && decl.enumTypeHash != 0) {
+            const EnumData* enumData = SymbolTable::ResolveEnumDataByHash(&symbolTable, decl.enumTypeHash);
+            if (enumData) {
+                CoreType baseType = enumData->underlyingType;
+                if (baseType == CoreType::INVALID) baseType = CoreType::INT;
+                typeInfo = TYPE_INFO(baseType, 1, false);
+            }
+        }
+        if (outType) *outType = typeInfo;
+        if (outEnumTypeHash) *outEnumTypeHash = decl.enumTypeHash;
+        return true;
+    }
+
+    for (u32 i = 0; i < moduleData.attributes.count; i++) {
+        const AttributeDeclData& attr = ast->GetAttributeDecl(moduleData.attributes[i]);
+        std::string implicitName = std::string("has_") + attr.name.ToString(sourceBase());
+        if (Utils::HashStr(implicitName.c_str()) != nameHash) continue;
+        if (outType) *outType = TYPE_INFO(CoreType::BOOL, 1, false);
+        if (outImplicit) *outImplicit = true;
+        if (outAttributeIndex) *outAttributeIndex = attr.attributeIndex;
+        return true;
+    }
+
+    for (u32 i = 0; i < moduleData.resources.count; i++) {
+        const ResourceDeclData& resourceDecl = ast->GetResourceDecl(moduleData.resources[i]);
+        std::string implicitName = std::string("has_resource_") +
+            resourceDecl.name.ToString(sourceBase());
+        if (Utils::HashStr(implicitName.c_str()) != nameHash) continue;
+        if (outType) *outType = TYPE_INFO(CoreType::BOOL, 1, false);
+        if (outImplicit) *outImplicit = true;
+        if (outResourceIndex) *outResourceIndex = resourceDecl.resourceIndex;
+        return true;
+    }
+
+    return false;
+}
+
 bool Parser::LookupActiveVariantBinding(u32 nameHash, LiteralValue* outValue,
                                         TypeInfo* outType,
                                         u32* outEnumTypeHash,
@@ -208,6 +263,8 @@ void Parser::ClearActiveVariantSelection() {
 
 bool Parser::ResolvePipelineVariants(NodeRef pipeline, std::string* outError) {
     if (pipeline.IsNull()) return true;
+
+    ResolvePassBlockInstances(pipeline);
 
     auto fail = [&](const std::string& msg) -> bool {
         if (outError) *outError = msg;

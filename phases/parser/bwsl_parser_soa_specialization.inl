@@ -1,6 +1,26 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Shader lookup, AST cloning, variant specialization, and final stage resolution.
 
+static std::string ArenaStringToStdString(const ArenaString& str, const char* sourceBase) {
+    return str.isHashOnly() ? ReverseLookup::GetString(str.nameHash)
+                            : str.ToString(sourceBase);
+}
+
+static ArenaString MakeRegisteredArenaString(const std::string& str) {
+    u32 hash = Utils::HashStr(str.c_str());
+    ReverseLookup::Register(hash, str.c_str());
+    return ArenaString::MakeHashOnly(hash);
+}
+
+static bool SameTypeInfoForVariantBinding(const TypeInfo& lhs, const TypeInfo& rhs,
+                                          u32 lhsEnumHash, u32 rhsEnumHash) {
+    if (lhsEnumHash != rhsEnumHash) return false;
+    return lhs.coreType == rhs.coreType &&
+           lhs.componentCount == rhs.componentCount &&
+           lhs.arrayDimensions == rhs.arrayDimensions &&
+           lhs.customTypeHash == rhs.customTypeHash;
+}
+
 NodeRef Parser::LookupShaderFunction(u32 nameHash, const PassData& pass, CoreType expectedReturnType) {
     // Search in pass-scoped functions first
     for (u32 i = 0; i < pass.functions.count; i++) {
@@ -182,6 +202,15 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
                     return MakeLiteralNodeFromValue(subs[i].value, line, col);
                 }
             }
+            if (passBlockRemapActive && remapBareVariants) {
+                for (const PassBlockNameRemap& remap : passBlockVariantRemaps) {
+                    if (remap.localHash == src.name.nameHash) {
+                        NodeRef cloned = ASTFactory::MakeIdentifier(ast, remap.targetName, line, col);
+                        ast->GetIdentifier(cloned).identifierKind = src.identifierKind;
+                        return cloned;
+                    }
+                }
+            }
             LiteralValue variantValue;
             if (allowBareVariantLookup &&
                 LookupActiveVariantBinding(src.name.nameHash, &variantValue)) {
@@ -226,17 +255,41 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
 
         case ASTNodeType::MEMBER_ACCESS: {
             const MemberAccessData& src = ast->GetMemberAccess(node);
+            ArenaString memberName = src.member;
             if (src.object.Type() == ASTNodeType::IDENTIFIER) {
                 const IdentifierData& objectIdent = ast->GetIdentifier(src.object);
+                if (passBlockRemapActive) {
+                    const std::vector<PassBlockNameRemap>* remaps = nullptr;
+                    if (objectIdent.identifierKind == SpecialIdentifier::ATTRIBUTES) {
+                        remaps = &passBlockAttributeRemaps;
+                    } else if (objectIdent.identifierKind == SpecialIdentifier::RESOURCES) {
+                        remaps = &passBlockResourceRemaps;
+                    } else if (objectIdent.identifierKind == SpecialIdentifier::VARIANTS) {
+                        remaps = &passBlockVariantRemaps;
+                    }
+                    if (remaps) {
+                        bool foundRemap = false;
+                        for (const PassBlockNameRemap& remap : *remaps) {
+                            if (remap.localHash == src.member.nameHash) {
+                                memberName = remap.targetName;
+                                foundRemap = true;
+                                break;
+                            }
+                        }
+                        if (!foundRemap) {
+                            Error("Missing pass_block interface mapping");
+                        }
+                    }
+                }
                 if (objectIdent.identifierKind == SpecialIdentifier::VARIANTS) {
                     LiteralValue variantValue;
-                    if (LookupActiveVariantBinding(src.member.nameHash, &variantValue)) {
+                    if (LookupActiveVariantBinding(memberName.nameHash, &variantValue)) {
                         return MakeLiteralNodeFromValue(variantValue, line, col);
                     }
                 }
             }
             NodeRef object = CloneNodeWithParams(src.object, subs, subCount);
-            NodeRef memberNode = ASTFactory::MakeMemberAccess(ast, object, src.member, line, col);
+            NodeRef memberNode = ASTFactory::MakeMemberAccess(ast, object, memberName, line, col);
             MemberAccessData& memberData = ast->GetMemberAccess(memberNode);
             memberData.isModuleQualified = src.isModuleQualified;
             memberData.qualifiedNameHash = src.qualifiedNameHash;
@@ -459,6 +512,601 @@ NodeRef Parser::CloneShaderStageWithParams(NodeRef stageNode, const ParamSubstit
     return newStage;
 }
 
+NodeRef Parser::ClonePassWithParamsAndRemap(NodeRef passRef, const ParamSubstitution* subs, u32 subCount,
+                                            const std::string& passName) {
+    const PassData& srcPass = ast->GetPass(passRef);
+    NodeRef newPass = ASTFactory::MakePass(ast, passName, ast->GetLine(passRef), ast->GetColumn(passRef));
+    PassData& dstPass = ast->GetPass(newPass);
+
+    auto findRemap = [](const std::vector<PassBlockNameRemap>& remaps,
+                        const ArenaString& localName) -> const PassBlockNameRemap* {
+        for (const PassBlockNameRemap& remap : remaps) {
+            if (remap.localHash == localName.nameHash) {
+                return &remap;
+            }
+        }
+        return nullptr;
+    };
+
+    for (u32 i = 0; i < srcPass.usedAttributes.count; i++) {
+        ArenaString name = srcPass.usedAttributes[i];
+        const PassBlockNameRemap* remap = passBlockRemapActive
+            ? findRemap(passBlockAttributeRemaps, name)
+            : nullptr;
+        if (passBlockRemapActive && !remap) {
+            Error("Missing pass_block attribute mapping");
+            continue;
+        }
+        ArenaString targetName = remap ? remap->targetName : name;
+        dstPass.usedAttributes.Push(arena, targetName);
+        if (remap && remap->localIndex < 32 && remap->targetIndex < 32 &&
+            (srcPass.optionalAttributesMask & (1u << remap->localIndex))) {
+            dstPass.optionalAttributesMask |= (1u << remap->targetIndex);
+        }
+    }
+
+    for (u32 i = 0; i < srcPass.usedResources.count; i++) {
+        ArenaString name = srcPass.usedResources[i];
+        const PassBlockNameRemap* remap = passBlockRemapActive
+            ? findRemap(passBlockResourceRemaps, name)
+            : nullptr;
+        if (passBlockRemapActive && !remap) {
+            Error("Missing pass_block resource mapping");
+            continue;
+        }
+        ArenaString targetName = remap ? remap->targetName : name;
+        dstPass.usedResources.Push(arena, targetName);
+        if (remap && remap->localIndex < 32 && remap->targetIndex < 32 &&
+            (srcPass.optionalResourcesMask & (1u << remap->localIndex))) {
+            dstPass.optionalResourcesMask |= (1u << remap->targetIndex);
+        }
+    }
+
+    dstPass.hasFragmentOutputs = srcPass.hasFragmentOutputs;
+    for (u32 i = 0; i < srcPass.fragmentOutputs.count; i++) {
+        dstPass.fragmentOutputs.Push(arena, srcPass.fragmentOutputs[i]);
+    }
+
+    for (u32 i = 0; i < srcPass.consts.count; i++) {
+        dstPass.consts.Push(arena, CloneNodeWithParams(srcPass.consts[i], subs, subCount));
+    }
+
+    for (u32 i = 0; i < srcPass.functions.count; i++) {
+        NodeRef fnRef = srcPass.functions[i];
+        const FunctionDeclData& srcFn = ast->GetFunction(fnRef);
+        std::string fnName = srcFn.name.isHashOnly()
+            ? ReverseLookup::GetString(srcFn.name.nameHash)
+            : srcFn.name.ToString(sourceBase());
+        NodeRef newFn = ASTFactory::MakeFunction(ast, fnName, srcFn.returnType,
+                                                ast->GetLine(fnRef), ast->GetColumn(fnRef));
+        FunctionDeclData& dstFn = ast->GetFunction(newFn);
+        for (u32 j = 0; j < srcFn.parameters.count; j++) {
+            dstFn.parameters.Push(arena, srcFn.parameters[j]);
+        }
+        dstFn.isEval = srcFn.isEval;
+        if (srcFn.body.IsValid() &&
+            (srcFn.body.Type() == ASTNodeType::VERTEX_STAGE ||
+             srcFn.body.Type() == ASTNodeType::FRAGMENT_STAGE ||
+             srcFn.body.Type() == ASTNodeType::COMPUTE_STAGE)) {
+            dstFn.body = CloneShaderStageWithParams(srcFn.body, subs, subCount);
+        } else {
+            dstFn.body = CloneNodeWithParams(srcFn.body, subs, subCount);
+        }
+        dstPass.functions.Push(arena, newFn);
+    }
+
+    auto cloneStage = [&](NodeRef stageRef) -> NodeRef {
+        if (stageRef.IsNull()) return stageRef;
+        const ShaderStageData& srcStage = ast->GetShaderStage(stageRef);
+        if (srcStage.isDeferred) {
+            NodeRef stage = ASTFactory::MakeShaderStage(ast, stageRef.Type(), NodeRef::Null(),
+                                                        ast->GetLine(stageRef), ast->GetColumn(stageRef));
+            ShaderStageData& dstStage = ast->GetShaderStage(stage);
+            dstStage.isDeferred = true;
+            dstStage.deferredExpr = CloneNodeWithParams(srcStage.deferredExpr, subs, subCount);
+            dstStage.isInherited = srcStage.isInherited;
+            dstStage.inheritsFrom = srcStage.inheritsFrom;
+            dstStage.name = srcStage.name;
+            dstStage.workgroupSizeX = srcStage.workgroupSizeX;
+            dstStage.workgroupSizeY = srcStage.workgroupSizeY;
+            dstStage.workgroupSizeZ = srcStage.workgroupSizeZ;
+            return stage;
+        }
+        NodeRef stage = CloneShaderStageWithParams(stageRef, subs, subCount);
+        ShaderStageData& dstStage = ast->GetShaderStage(stage);
+        dstStage.isInherited = srcStage.isInherited;
+        dstStage.inheritsFrom = srcStage.inheritsFrom;
+        return stage;
+    };
+
+    dstPass.vertexShader = cloneStage(srcPass.vertexShader);
+    dstPass.fragmentShader = cloneStage(srcPass.fragmentShader);
+    dstPass.computeShader = cloneStage(srcPass.computeShader);
+
+    return newPass;
+}
+
+NodeRef Parser::LookupPassBlockFunction(const FunctionCallData& call, NodeRef pipeline) {
+    auto findInFunctions = [&](const ArenaArray<NodeRef>& functions) -> NodeRef {
+        for (u32 i = 0; i < functions.count; i++) {
+            const FunctionDeclData& func = ast->GetFunction(functions[i]);
+            if (func.name.nameHash == call.name.nameHash &&
+                func.returnType == CoreType::PASS_BLOCK &&
+                func.parameters.count == call.arguments.count) {
+                return functions[i];
+            }
+        }
+        return NodeRef::Null();
+    };
+
+    auto moduleNodeForSymbolIndex = [&](u32 moduleIndex) -> NodeRef {
+        if (moduleIndex == INVALID_INDEX || moduleIndex >= symbolTable.modules.count) {
+            return NodeRef::Null();
+        }
+
+        u32 moduleHash = symbolTable.modules[moduleIndex].name.nameHash;
+        for (u32 i = 0; i < ast->modules.count; i++) {
+            if (ast->modules[i].name.nameHash == moduleHash) {
+                return NodeRef(ASTNodeType::MODULE, i);
+            }
+        }
+        return NodeRef::Null();
+    };
+
+    if (call.flags & FunctionCallFlags::IS_MODULE_FUNCTION) {
+        NodeRef module = moduleNodeForSymbolIndex(call.moduleIndex);
+        if (module.IsNull() && call.moduleObject.Type() == ASTNodeType::IDENTIFIER) {
+            const IdentifierData& moduleIdent = ast->GetIdentifier(call.moduleObject);
+            module = moduleNodeForSymbolIndex(ResolveModuleIndexByWrittenName(moduleIdent.name));
+        }
+        if (module.IsValid()) {
+            return findInFunctions(ast->GetModule(module).functions);
+        }
+        return NodeRef::Null();
+    }
+
+    if (pipeline.IsValid()) {
+        const PipelineData& pipelineData = ast->GetPipeline(pipeline);
+        NodeRef local = findInFunctions(pipelineData.functions);
+        if (local.IsValid()) return local;
+
+        for (u32 i = 0; i < pipelineData.usingImports.count; i++) {
+            u32 moduleIndex = ResolveModuleIndexByWrittenName(pipelineData.usingImports[i]);
+            NodeRef module = moduleNodeForSymbolIndex(moduleIndex);
+            if (module.IsNull()) continue;
+            NodeRef imported = findInFunctions(ast->GetModule(module).functions);
+            if (imported.IsValid()) return imported;
+        }
+    }
+
+    for (u32 i = 0; i < ast->functions.count; i++) {
+        NodeRef fnRef(ASTNodeType::FUNCTION, i);
+        const FunctionDeclData& func = ast->GetFunction(fnRef);
+        if (func.name.nameHash == call.name.nameHash &&
+            func.returnType == CoreType::PASS_BLOCK &&
+            func.parameters.count == call.arguments.count) {
+            return fnRef;
+        }
+    }
+
+    return NodeRef::Null();
+}
+
+NodeRef Parser::ExpandPassBlockInstance(NodeRef passRef, NodeRef pipeline) {
+    if (passRef.IsNull() || pipeline.IsNull()) return NodeRef::Null();
+
+    const PassData& instancePass = ast->GetPass(passRef);
+    if (!instancePass.isPassBlockInstance || instancePass.passBlockCall.IsNull()) {
+        return passRef;
+    }
+    if (instancePass.passBlockCall.Type() != ASTNodeType::FUNCTION_CALL) {
+        Error("pass_block instantiation must use a direct function call");
+        return NodeRef::Null();
+    }
+
+    const FunctionCallData& call = ast->GetFunctionCall(instancePass.passBlockCall);
+    NodeRef funcRef = LookupPassBlockFunction(call, pipeline);
+    if (funcRef.IsNull()) {
+        Error("Cannot find pass_block function with matching argument count");
+        return NodeRef::Null();
+    }
+
+    const FunctionDeclData& func = ast->GetFunction(funcRef);
+    if (func.returnType != CoreType::PASS_BLOCK ||
+        func.body.IsNull() ||
+        func.body.Type() != ASTNodeType::PASS) {
+        Error("pass_block function does not return a pass block");
+        return NodeRef::Null();
+    }
+
+    if (func.parameters.count != call.arguments.count) {
+        Error("pass_block function call argument count mismatch");
+        return NodeRef::Null();
+    }
+
+    std::vector<ParamSubstitution> paramSubs;
+    paramSubs.reserve(func.parameters.count);
+    if (func.parameters.count > 0) {
+        EvalStateSoA evalState;
+        CompileTimeEvaluatorSoA::Init(&evalState, this, ast, &context->evalCache, ast->arena);
+        for (u32 i = 0; i < func.parameters.count; i++) {
+            LiteralValue argValue;
+            if (!CompileTimeEvaluatorSoA::CanEvaluateNode(&evalState, call.arguments[i]) ||
+                !CompileTimeEvaluatorSoA::EvaluateNode(&evalState, call.arguments[i], &argValue)) {
+                Error("pass_block function arguments must be compile-time constants");
+                return NodeRef::Null();
+            }
+            paramSubs.push_back({func.parameters[i].first.nameHash, argValue});
+        }
+    }
+
+    NodeRef sourceModule = NodeRef::Null();
+    for (u32 i = 0; i < ast->modules.count && sourceModule.IsNull(); i++) {
+        const ModuleNodeData& moduleData = ast->modules[i];
+        for (u32 j = 0; j < moduleData.functions.count; j++) {
+            if (moduleData.functions[j] == funcRef) {
+                sourceModule = NodeRef(ASTNodeType::MODULE, i);
+                break;
+            }
+        }
+    }
+
+    const PassData& sourcePass = ast->GetPass(func.body);
+    const PipelineData& pipelineData = ast->GetPipeline(pipeline);
+    const ModuleNodeData* sourceModuleData = sourceModule.IsValid()
+        ? &ast->GetModule(sourceModule)
+        : nullptr;
+
+    const ArenaArray<NodeRef>& sourceAttributes = sourceModuleData
+        ? sourceModuleData->attributes
+        : pipelineData.attributes;
+    const ArenaArray<NodeRef>& sourceResources = sourceModuleData
+        ? sourceModuleData->resources
+        : pipelineData.resources;
+    const ArenaArray<PipelineVariantDeclData>& sourceVariants = sourceModuleData
+        ? sourceModuleData->variantDecls
+        : pipelineData.variantDecls;
+
+    auto findAttribute = [&](const ArenaArray<NodeRef>& attrs,
+                             const ArenaString& name) -> const AttributeDeclData* {
+        for (u32 i = 0; i < attrs.count; i++) {
+            const AttributeDeclData& attr = ast->GetAttributeDecl(attrs[i]);
+            if (attr.name.nameHash == name.nameHash) return &attr;
+        }
+        return nullptr;
+    };
+
+    auto findResource = [&](const ArenaArray<NodeRef>& resources,
+                            const ArenaString& name) -> const ResourceDeclData* {
+        for (u32 i = 0; i < resources.count; i++) {
+            const ResourceDeclData& resource = ast->GetResourceDecl(resources[i]);
+            if (resource.name.nameHash == name.nameHash) return &resource;
+        }
+        return nullptr;
+    };
+
+    auto findVariant = [&](const ArenaArray<PipelineVariantDeclData>& variants,
+                           const ArenaString& name) -> const PipelineVariantDeclData* {
+        for (u32 i = 0; i < variants.count; i++) {
+            if (variants[i].name.nameHash == name.nameHash) return &variants[i];
+        }
+        return nullptr;
+    };
+
+    auto resolveVariantType = [&](const PipelineVariantDeclData& decl,
+                                  TypeInfo* outType,
+                                  u32* outEnumHash) {
+        TypeInfo typeInfo = decl.typeInfo;
+        u32 enumHash = decl.enumTypeHash;
+        if (typeInfo.coreType == CoreType::INVALID && enumHash != 0) {
+            const EnumData* enumData = SymbolTable::ResolveEnumDataByHash(&symbolTable, enumHash);
+            if (enumData) {
+                CoreType baseType = enumData->underlyingType;
+                if (baseType == CoreType::INVALID) baseType = CoreType::INT;
+                typeInfo = TYPE_INFO(baseType, 1, false);
+            }
+        }
+        *outType = typeInfo;
+        *outEnumHash = enumHash;
+    };
+
+    struct RemapStateGuard {
+        Parser* parser;
+        std::vector<PassBlockNameRemap> savedAttributes;
+        std::vector<PassBlockNameRemap> savedResources;
+        std::vector<PassBlockNameRemap> savedVariants;
+        bool savedActive;
+        bool savedBare;
+
+        RemapStateGuard(Parser* p)
+            : parser(p),
+              savedAttributes(p->passBlockAttributeRemaps),
+              savedResources(p->passBlockResourceRemaps),
+              savedVariants(p->passBlockVariantRemaps),
+              savedActive(p->passBlockRemapActive),
+              savedBare(p->remapBareVariants) {
+            parser->passBlockAttributeRemaps.clear();
+            parser->passBlockResourceRemaps.clear();
+            parser->passBlockVariantRemaps.clear();
+            parser->passBlockRemapActive = false;
+            parser->remapBareVariants = false;
+        }
+
+        ~RemapStateGuard() {
+            parser->passBlockAttributeRemaps = savedAttributes;
+            parser->passBlockResourceRemaps = savedResources;
+            parser->passBlockVariantRemaps = savedVariants;
+            parser->passBlockRemapActive = savedActive;
+            parser->remapBareVariants = savedBare;
+        }
+    } remapGuard(this);
+
+    auto hasRemap = [](const std::vector<PassBlockNameRemap>& remaps, u32 localHash) -> bool {
+        for (const PassBlockNameRemap& remap : remaps) {
+            if (remap.localHash == localHash) return true;
+        }
+        return false;
+    };
+
+    auto addRemap = [&](std::vector<PassBlockNameRemap>& remaps,
+                        const ArenaString& localName,
+                        const ArenaString& targetName,
+                        u8 localIndex,
+                        u8 targetIndex,
+                        const char* duplicateMessage) -> bool {
+        if (hasRemap(remaps, localName.nameHash)) {
+            Error(duplicateMessage);
+            return false;
+        }
+        PassBlockNameRemap remap{};
+        remap.localHash = localName.nameHash;
+        remap.targetName = targetName;
+        remap.localIndex = localIndex;
+        remap.targetIndex = targetIndex;
+        remaps.push_back(remap);
+        return true;
+    };
+
+    auto addImplicitVariantRemap = [&](const std::string& prefix,
+                                       const ArenaString& localName,
+                                       const ArenaString& targetName,
+                                       u8 localIndex,
+                                       u8 targetIndex) {
+        std::string local = prefix + ArenaStringToStdString(localName, sourceBase());
+        std::string target = prefix + ArenaStringToStdString(targetName, sourceBase());
+        if (hasRemap(passBlockVariantRemaps, Utils::HashStr(local.c_str()))) {
+            return;
+        }
+        PassBlockNameRemap remap{};
+        remap.localHash = Utils::HashStr(local.c_str());
+        remap.targetName = MakeRegisteredArenaString(target);
+        remap.localIndex = localIndex;
+        remap.targetIndex = targetIndex;
+        passBlockVariantRemaps.push_back(remap);
+    };
+
+    bool mappingsOk = true;
+
+    if (sourceModule.IsValid() &&
+        sourcePass.usedAttributes.count > 0 &&
+        instancePass.attributeBindings.count == 0) {
+        Error("pass_block attribute mappings are required for module pass attributes");
+        return NodeRef::Null();
+    }
+
+    for (u32 i = 0; i < instancePass.attributeBindings.count; i++) {
+        const PassBlockBindingData& binding = instancePass.attributeBindings[i];
+        const AttributeDeclData* local = findAttribute(sourceAttributes, binding.localName);
+        const AttributeDeclData* target = findAttribute(pipelineData.attributes, binding.targetName);
+        if (!local) {
+            Error("Unknown pass_block attribute mapping source");
+            mappingsOk = false;
+            continue;
+        }
+        if (!target) {
+            Error("Unknown pass_block attribute mapping target");
+            mappingsOk = false;
+            continue;
+        }
+        if (local->dataType.nameHash != target->dataType.nameHash ||
+            local->compression.nameHash != target->compression.nameHash ||
+            local->isInstance != target->isInstance) {
+            Error("pass_block attribute mapping type mismatch");
+            mappingsOk = false;
+            continue;
+        }
+        if (addRemap(passBlockAttributeRemaps, binding.localName, binding.targetName,
+                     local->attributeIndex, target->attributeIndex,
+                     "Duplicate pass_block attribute mapping")) {
+            addImplicitVariantRemap("has_", binding.localName, binding.targetName,
+                                    local->attributeIndex, target->attributeIndex);
+        } else {
+            mappingsOk = false;
+        }
+    }
+
+    for (u32 i = 0; i < sourcePass.usedAttributes.count; i++) {
+        const ArenaString& localName = sourcePass.usedAttributes[i];
+        if (hasRemap(passBlockAttributeRemaps, localName.nameHash)) continue;
+        if (sourceModule.IsValid()) {
+            Error("Missing pass_block attribute mapping");
+            mappingsOk = false;
+            continue;
+        }
+        const AttributeDeclData* attr = findAttribute(sourceAttributes, localName);
+        if (!attr) {
+            Error("Unknown pass_block attribute");
+            mappingsOk = false;
+            continue;
+        }
+        if (addRemap(passBlockAttributeRemaps, localName, localName,
+                     attr->attributeIndex, attr->attributeIndex,
+                     "Duplicate pass_block attribute mapping")) {
+            addImplicitVariantRemap("has_", localName, localName,
+                                    attr->attributeIndex, attr->attributeIndex);
+        } else {
+            mappingsOk = false;
+        }
+    }
+
+    if (sourceModule.IsValid() &&
+        sourcePass.usedResources.count > 0 &&
+        instancePass.resourceBindings.count == 0) {
+        Error("pass_block resource mappings are required for module pass resources");
+        return NodeRef::Null();
+    }
+
+    for (u32 i = 0; i < instancePass.resourceBindings.count; i++) {
+        const PassBlockBindingData& binding = instancePass.resourceBindings[i];
+        const ResourceDeclData* local = findResource(sourceResources, binding.localName);
+        const ResourceDeclData* target = findResource(pipelineData.resources, binding.targetName);
+        if (!local) {
+            Error("Unknown pass_block resource mapping source");
+            mappingsOk = false;
+            continue;
+        }
+        if (!target) {
+            Error("Unknown pass_block resource mapping target");
+            mappingsOk = false;
+            continue;
+        }
+        if (local->typeName.nameHash != target->typeName.nameHash) {
+            Error("pass_block resource mapping type mismatch");
+            mappingsOk = false;
+            continue;
+        }
+        if (addRemap(passBlockResourceRemaps, binding.localName, binding.targetName,
+                     local->resourceIndex, target->resourceIndex,
+                     "Duplicate pass_block resource mapping")) {
+            addImplicitVariantRemap("has_resource_", binding.localName, binding.targetName,
+                                    local->resourceIndex, target->resourceIndex);
+        } else {
+            mappingsOk = false;
+        }
+    }
+
+    for (u32 i = 0; i < sourcePass.usedResources.count; i++) {
+        const ArenaString& localName = sourcePass.usedResources[i];
+        if (hasRemap(passBlockResourceRemaps, localName.nameHash)) continue;
+        if (sourceModule.IsValid()) {
+            Error("Missing pass_block resource mapping");
+            mappingsOk = false;
+            continue;
+        }
+        const ResourceDeclData* resource = findResource(sourceResources, localName);
+        if (!resource) {
+            Error("Unknown pass_block resource");
+            mappingsOk = false;
+            continue;
+        }
+        if (addRemap(passBlockResourceRemaps, localName, localName,
+                     resource->resourceIndex, resource->resourceIndex,
+                     "Duplicate pass_block resource mapping")) {
+            addImplicitVariantRemap("has_resource_", localName, localName,
+                                    resource->resourceIndex, resource->resourceIndex);
+        } else {
+            mappingsOk = false;
+        }
+    }
+
+    for (u32 i = 0; i < instancePass.variantBindings.count; i++) {
+        const PassBlockBindingData& binding = instancePass.variantBindings[i];
+        const PipelineVariantDeclData* local = findVariant(sourceVariants, binding.localName);
+        const PipelineVariantDeclData* target = findVariant(pipelineData.variantDecls, binding.targetName);
+        if (!local) {
+            Error("Unknown pass_block variant mapping source");
+            mappingsOk = false;
+            continue;
+        }
+        if (!target) {
+            Error("pass_block variant mapping target must be a declared pipeline variant");
+            mappingsOk = false;
+            continue;
+        }
+
+        TypeInfo localType;
+        TypeInfo targetType;
+        u32 localEnumHash = 0;
+        u32 targetEnumHash = 0;
+        resolveVariantType(*local, &localType, &localEnumHash);
+        resolveVariantType(*target, &targetType, &targetEnumHash);
+        if (!SameTypeInfoForVariantBinding(localType, targetType, localEnumHash, targetEnumHash)) {
+            Error("pass_block variant mapping type mismatch");
+            mappingsOk = false;
+            continue;
+        }
+
+        if (!addRemap(passBlockVariantRemaps, binding.localName, binding.targetName,
+                      0xFF, 0xFF, "Duplicate pass_block variant mapping")) {
+            mappingsOk = false;
+        }
+    }
+
+    if (!sourceModule.IsValid()) {
+        for (u32 i = 0; i < sourceVariants.count; i++) {
+            const PipelineVariantDeclData& variant = sourceVariants[i];
+            if (!hasRemap(passBlockVariantRemaps, variant.name.nameHash)) {
+                if (!addRemap(passBlockVariantRemaps, variant.name, variant.name,
+                              0xFF, 0xFF, "Duplicate pass_block variant mapping")) {
+                    mappingsOk = false;
+                }
+            }
+        }
+    }
+
+    if (!mappingsOk) {
+        return NodeRef::Null();
+    }
+
+    std::string passName = ArenaStringToStdString(instancePass.name, sourceBase());
+    passBlockRemapActive = true;
+    remapBareVariants = false;
+    NodeRef clonedPass = ClonePassWithParamsAndRemap(
+        func.body,
+        paramSubs.empty() ? nullptr : paramSubs.data(),
+        static_cast<u32>(paramSubs.size()),
+        passName);
+
+    if (sourceModuleData) {
+        bool savedBare = remapBareVariants;
+        remapBareVariants = true;
+        PipelineData& mutablePipeline = ast->GetPipeline(pipeline);
+        for (u32 i = 0; i < sourceModuleData->variantRules.count; i++) {
+            const VariantRuleData& srcRule = sourceModuleData->variantRules[i];
+            VariantRuleData dstRule{};
+            dstRule.type = srcRule.type;
+            dstRule.lhs = CloneNodeWithParams(srcRule.lhs, nullptr, 0);
+            dstRule.rhs = CloneNodeWithParams(srcRule.rhs, nullptr, 0);
+            mutablePipeline.variantRules.Push(arena, dstRule);
+        }
+        remapBareVariants = savedBare;
+    }
+
+    return clonedPass;
+}
+
+void Parser::ResolvePassBlockInstances(NodeRef pipeline) {
+    if (pipeline.IsNull()) return;
+
+    NodeRef savedPipeline = currentPipeline;
+    currentPipeline = pipeline;
+
+    PipelineData& pipelineData = ast->GetPipeline(pipeline);
+    for (u32 i = 0; i < pipelineData.passes.count; i++) {
+        NodeRef passRef = pipelineData.passes[i];
+        if (passRef.IsNull()) continue;
+        const PassData& pass = ast->GetPass(passRef);
+        if (!pass.isPassBlockInstance) continue;
+
+        NodeRef expanded = ExpandPassBlockInstance(passRef, pipeline);
+        if (expanded.IsValid()) {
+            pipelineData.passes[i] = expanded;
+        }
+    }
+
+    currentPipeline = savedPipeline;
+}
+
 NodeRef Parser::ClonePassWithActiveVariants(NodeRef passRef) {
     const PassData& srcPass = ast->GetPass(passRef);
     std::string passName = srcPass.name.isHashOnly()
@@ -536,6 +1184,8 @@ NodeRef Parser::SpecializePipelineForVariants(NodeRef pipeline,
                                               const VariantSelectionData& selection,
                                               std::string* outError) {
     if (pipeline.IsNull()) return NodeRef::Null();
+
+    ResolvePassBlockInstances(pipeline);
 
     const PipelineData& srcPipeline = ast->GetPipeline(pipeline);
     if (srcPipeline.variantDecls.count == 0 && srcPipeline.variantRules.count == 0) {
@@ -624,6 +1274,11 @@ NodeRef Parser::SpecializePipelineForVariants(NodeRef pipeline,
 void Parser::ResolveShaderStageExpressions(NodeRef pipeline) {
     if (!pipeline.IsValid()) return;
 
+    ResolvePassBlockInstances(pipeline);
+
+    NodeRef savedPipeline = currentPipeline;
+    currentPipeline = pipeline;
+
     const PipelineData& pipelineData = ast->GetPipeline(pipeline);
 
     // Iterate through all passes
@@ -664,4 +1319,6 @@ void Parser::ResolveShaderStageExpressions(NodeRef pipeline) {
             }
         }
     }
+
+    currentPipeline = savedPipeline;
 }

@@ -1,0 +1,15 @@
+pipeline PassBlockTernaryInstantiation {
+    variants {
+        choose: bool = true;
+    }
+
+    make :: () -> pass_block {
+        pass {
+            vertex {
+                output.position = float4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+
+    pass "Bad" = choose ? make() : make();
+}

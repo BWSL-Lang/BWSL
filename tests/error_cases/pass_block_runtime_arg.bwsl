@@ -1,0 +1,16 @@
+pipeline PassBlockRuntimeArg {
+    attributes {
+        position: float3
+    }
+
+    make :: (scale: float) -> pass_block {
+        pass {
+            use attributes { position }
+            vertex {
+                output.position = float4(attributes.position * scale, 1.0);
+            }
+        }
+    }
+
+    pass "Bad" = make(attributes.position.x);
+}
