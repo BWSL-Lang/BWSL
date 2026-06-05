@@ -10,6 +10,7 @@
 //   -pass <name>   Compile specific pass (default: all passes)
 //   -stage <name>  Compile specific stage: vertex, fragment, compute (default: all)
 //   -format <fmt>  Output format: spv, metal, hlsl, all (default: all)
+//   -check         Run diagnostics without writing output files
 //   -errors-json    Print machine-readable diagnostics as JSON
 //   -v             Verbose output
 //   -h, --help     Show help
@@ -21,12 +22,14 @@
 #include <vector>
 #include <fstream>
 #include <sstream>
+#include <iostream>
 #include <filesystem>
 #include <chrono>
 #include <algorithm>
 #include <future>
 #include <thread>
 #include <memory>
+#include <functional>
 #ifndef _WIN32
 #include <sys/wait.h>
 #endif
@@ -118,6 +121,7 @@ struct ValidationResult {
 
 struct CompilerConfig {
     std::string inputFile;
+    std::string sourceFileOverride;
     std::string outputDir = ".";
     std::vector<std::string> modulePaths;  // Additional module search paths
     RenderConfig renderConfig;             // synthetic config derived from source resources
@@ -137,6 +141,8 @@ struct CompilerConfig {
     bool outputInternals = false;          // Output IR dump + SPIR-V disassembly to JSON file
     bool outputBindings = false;           // Output resolved resource bindings JSON
     bool errorsJson = false;               // Print diagnostics as JSON for IDE integrations
+    bool checkOnly = false;                // Run diagnostics without writing outputs
+    bool readStdin = false;                // Read source from stdin instead of inputFile
     bool dumpVariantSpace = false;         // Dump variant schema/reflection JSON
     std::vector<VariantOverride> variantOverrides;
 };
@@ -231,6 +237,10 @@ void PrintUsage(const char* programName) {
     printf("  -modules <dir> Add module search path (can be used multiple times)\n");
     printf("  -variant <k=v> Set a named variant value (repeatable)\n");
     printf("  -dump-variant-space  Print variant reflection JSON and exit\n");
+    printf("  -check         Run diagnostics without writing output files\n");
+    printf("  --stdin        Read source from stdin instead of the input file\n");
+    printf("  --source-file <path>\n");
+    printf("                 Source path used for diagnostics/module resolution with --stdin\n");
     printf("  -pass <name>   Compile specific pass (default: all passes)\n");
     printf("  -stage <name>  Compile specific stage: vertex, fragment, compute (default: all)\n");
     printf("\n");
@@ -271,6 +281,12 @@ std::string ReadFile(const fs::path& path) {
     }
     std::stringstream buffer;
     buffer << file.rdbuf();
+    return buffer.str();
+}
+
+std::string ReadStdin() {
+    std::stringstream buffer;
+    buffer << std::cin.rdbuf();
     return buffer.str();
 }
 
@@ -317,7 +333,10 @@ std::string GetTempSpirvPath() {
     if (ec || tempDir.empty()) {
         tempDir = ".";
     }
-    return (tempDir / "bwslc_temp.spv").string();
+    auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    std::stringstream name;
+    name << "bwslc_temp_" << now << "_" << std::hash<std::thread::id>{}(std::this_thread::get_id()) << ".spv";
+    return (tempDir / name.str()).string();
 }
 
 struct CommandResult {
@@ -1097,6 +1116,18 @@ static bool ArgsRequestErrorsJson(int argc, char* argv[]) {
         if (IsErrorsJsonArg(argv[i])) return true;
     }
     return false;
+}
+
+static bool IsCheckArg(const std::string& arg) {
+    return arg == "-check" || arg == "--check";
+}
+
+static bool IsStdinArg(const std::string& arg) {
+    return arg == "-stdin" || arg == "--stdin";
+}
+
+static bool IsVirtualInputFile(const std::string& inputFile) {
+    return inputFile.empty() || inputFile == "<stdin>";
 }
 
 static std::string TrimDiagnosticMessage(std::string message) {
@@ -2248,7 +2279,32 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
     StageOutputResult output;
     const bool quiet = config.errorsJson;
 
+    if (!config.outputSpirv &&
+        config.validationMode == ValidationMode::Off &&
+        !config.outputMetal &&
+        !config.outputHlsl &&
+        !config.outputGlsl &&
+        !config.outputGlslEs &&
+        !config.outputInternals) {
+        shaderTime.totalMs = shaderTime.irLoweringMs + shaderTime.cfgSsaMs + shaderTime.spirvGenMs +
+                             shaderTime.validationMs + shaderTime.metalCrossMs + shaderTime.hlslCrossMs +
+                             shaderTime.glslCrossMs + shaderTime.glslEsCrossMs;
+        output.success = true;
+        return output;
+    }
+
     std::string spvPath = config.outputSpirv ? (outBase + ".spv") : GetTempSpirvPath();
+    struct ScopedTempFile {
+        bool enabled = false;
+        std::string path;
+
+        ~ScopedTempFile() {
+            if (!enabled || path.empty()) return;
+            std::error_code ec;
+            fs::remove(path, ec);
+        }
+    } tempSpirv{!config.outputSpirv, spvPath};
+
     if (!WriteBinaryFile(spvPath, result.spirv)) {
         if (diagnostics) {
             AddStageDiagnostic(*diagnostics,
@@ -2487,6 +2543,24 @@ int main(int argc, char* argv[]) {
             return 0;
         } else if (arg == "-v") {
             config.verbose = true;
+        } else if (IsCheckArg(arg)) {
+            config.checkOnly = true;
+        } else if (IsStdinArg(arg)) {
+            config.readStdin = true;
+        } else if ((arg == "-source-file" || arg == "--source-file") && i + 1 < argc) {
+            config.sourceFileOverride = argv[++i];
+        } else if (arg == "-source-file" || arg == "--source-file") {
+            diagnostics.AddRaw(DiagnosticSeverity::Error,
+                               DiagnosticPhase::CLI,
+                               "Expected path after " + arg,
+                               DiagnosticSpan{},
+                               config.inputFile,
+                               "",
+                               "",
+                               DiagnosticMessageId::Raw);
+            return emitFailure(nullptr, nullptr, true);
+        } else if (arg.rfind("--source-file=", 0) == 0) {
+            config.sourceFileOverride = arg.substr(strlen("--source-file="));
         } else if (arg == "-o" && i + 1 < argc) {
             config.outputDir = argv[++i];
         } else if (arg == "-pass" && i + 1 < argc) {
@@ -2560,6 +2634,11 @@ int main(int argc, char* argv[]) {
                                        DiagnosticMessageId::ValidationModeExpected);
                 return emitFailure();
             }
+        } else if (arg == "-") {
+            config.readStdin = true;
+            if (config.inputFile.empty()) {
+                config.inputFile = "<stdin>";
+            }
         } else if (arg[0] != '-') {
             config.inputFile = arg;
         } else if (IsErrorsJsonArg(arg)) {
@@ -2585,6 +2664,24 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    if (config.readStdin && !config.sourceFileOverride.empty()) {
+        config.inputFile = config.sourceFileOverride;
+    }
+    if (config.readStdin && config.inputFile.empty()) {
+        config.inputFile = "<stdin>";
+    }
+
+    if (config.checkOnly) {
+        config.outputSpirv = false;
+        config.outputMetal = false;
+        config.outputHlsl = false;
+        config.outputGlsl = false;
+        config.outputGlslEs = false;
+        config.outputInternals = false;
+        config.outputBindings = false;
+        config.dumpIr = false;
+    }
+
     if (config.errorsJson) {
         config.verbose = false;
         config.dumpIr = false;
@@ -2598,8 +2695,8 @@ int main(int argc, char* argv[]) {
         return emitFailure(nullptr, nullptr, true);
     }
 
-    // Read input file
-    std::string source = ReadFile(config.inputFile);
+    // Read input source
+    std::string source = config.readStdin ? ReadStdin() : ReadFile(config.inputFile);
     if (source.empty()) {
         diagnostics.AddMessage(DiagnosticSeverity::Error,
                                DiagnosticPhase::IO,
@@ -2611,10 +2708,25 @@ int main(int argc, char* argv[]) {
     }
 
     // Get base name for output files
-    fs::path inputPath(config.inputFile);
+    const bool virtualInputFile = IsVirtualInputFile(config.inputFile);
+    fs::path inputPath = virtualInputFile ? fs::path("stdin.bwsl") : fs::path(config.inputFile);
     std::string baseName = inputPath.stem().string();
-    fs::path absoluteInputPath = fs::absolute(inputPath);
-    if (config.errorsJson) {
+    if (baseName.empty()) {
+        baseName = "stdin";
+    }
+
+    fs::path absoluteInputPath;
+    if (virtualInputFile) {
+        std::error_code ec;
+        absoluteInputPath = fs::current_path(ec);
+        if (ec || absoluteInputPath.empty()) {
+            absoluteInputPath = ".";
+        }
+        absoluteInputPath /= "stdin.bwsl";
+    } else {
+        absoluteInputPath = fs::absolute(inputPath);
+    }
+    if (config.errorsJson && !virtualInputFile) {
         config.inputFile = absoluteInputPath.string();
     }
 
@@ -2632,14 +2744,18 @@ int main(int argc, char* argv[]) {
     BWSL::AddModuleSearchPath(inputDir.string());
 
     // Create output directory if needed
-    if (!config.outputDir.empty() && config.outputDir != ".") {
+    if (!config.checkOnly && !config.outputDir.empty() && config.outputDir != ".") {
         fs::create_directories(config.outputDir);
     }
 
     if (config.verbose) {
         printf("BWSL Compiler\n");
         printf("Input: %s\n", config.inputFile.c_str());
-        printf("Output: %s\n", config.outputDir.c_str());
+        if (config.checkOnly) {
+            printf("Mode: check\n");
+        } else {
+            printf("Output: %s\n", config.outputDir.c_str());
+        }
         if (!config.modulePaths.empty()) {
             printf("Module paths:\n");
             for (const auto& p : config.modulePaths) {
@@ -2861,7 +2977,7 @@ int main(int argc, char* argv[]) {
         }
 
         if (!config.errorsJson) {
-            printf("Compiling pass '%s'...\n", passName.c_str());
+            printf("%s pass '%s'...\n", config.checkOnly ? "Checking" : "Compiling", passName.c_str());
         }
 
         // Create varying context for this pass - shared between vertex and fragment
@@ -3002,7 +3118,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        if (config.outputInternals || config.outputBindings) {
+        if (!config.checkOnly && (config.outputInternals || config.outputBindings)) {
             ResourceReflectionConfig reflectionConfig;
             reflectionConfig.vertexPullingMode = config.outputGlslEs
                 ? ResourceReflectionConfig::VertexPullingMode::Disabled
@@ -3053,7 +3169,10 @@ int main(int argc, char* argv[]) {
         PrintDiagnosticsJson(config, diagnostics, errorCount == 0, &stream, &sourceLines);
     } else {
         PrintDiagnosticsText(config, diagnostics, &stream, &sourceLines);
-        printf("\nDone: %d shaders compiled", compiledCount);
+        printf("\n%s: %d shaders %s",
+               config.checkOnly ? "Check complete" : "Done",
+               compiledCount,
+               config.checkOnly ? "checked" : "compiled");
         if (errorCount > 0) {
             printf(", %d errors", errorCount);
         }

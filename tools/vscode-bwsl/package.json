@@ -1,7 +1,7 @@
 {
   "name": "bwsl-language-support",
   "displayName": "BWSL Language Support",
-  "description": "Syntax highlighting, language configuration, and snippets for BWSL shader files.",
+  "description": "Syntax highlighting, diagnostics, language configuration, and snippets for BWSL shader files.",
   "version": "0.1.0",
   "publisher": "bwsl",
   "license": "Apache-2.0",
@@ -13,6 +13,13 @@
   "engines": {
     "vscode": "^1.84.0"
   },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:bwsl"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
   "categories": [
     "Programming Languages",
     "Snippets"
@@ -26,6 +33,51 @@
     "glsl"
   ],
   "contributes": {
+    "configuration": {
+      "title": "BWSL",
+      "properties": {
+        "bwsl.compilerPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `bwslc` compiler. Leave empty to auto-detect `build/bwslc` from the workspace or use `bwslc` from `PATH`."
+        },
+        "bwsl.modulePaths": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Additional module search paths passed to `bwslc` with `-modules`. `${workspaceFolder}` is supported."
+        },
+        "bwsl.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable compiler-backed BWSL diagnostics."
+        },
+        "bwsl.diagnostics.debounceMs": {
+          "type": "number",
+          "default": 400,
+          "minimum": 0,
+          "description": "Delay in milliseconds before validating after edits."
+        },
+        "bwsl.diagnostics.validation": {
+          "type": "string",
+          "default": "off",
+          "enum": [
+            "off",
+            "auto",
+            "strict"
+          ],
+          "description": "SPIR-V validation mode used for editor diagnostics."
+        },
+        "bwsl.diagnostics.timeoutMs": {
+          "type": "number",
+          "default": 10000,
+          "minimum": 1000,
+          "description": "Maximum time in milliseconds to wait for one diagnostics run."
+        }
+      }
+    },
     "languages": [
       {
         "id": "bwsl",
