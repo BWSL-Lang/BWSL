@@ -16,6 +16,15 @@
 
     <extensions defaultExtensionNs="com.intellij">
 
+        <applicationService
+            serviceImplementation="com.bwsl.plugin.BwslSettings"/>
+
+        <applicationConfigurable
+            instance="com.bwsl.plugin.BwslSettingsConfigurable"
+            id="com.bwsl.plugin.settings"
+            displayName="BWSL"/>
+
+
         <fileType
             name="BWSL"
             implementationClass="com.bwsl.plugin.BwslFileType"
@@ -23,12 +32,24 @@
             language="BWSL"
             extensions="bwsl"/>
 
+        <lang.parserDefinition
+            language="BWSL"
+            implementationClass="com.bwsl.plugin.BwslParserDefinition"/>
+
         <lang.syntaxHighlighterFactory
             language="BWSL"
             implementationClass="com.bwsl.plugin.BwslSyntaxHighlighterFactory"/>
 
+        <annotator
+            language="BWSL"
+            implementationClass="com.bwsl.plugin.BwslAnnotator"/>
+
         <colorSettingsPage
             implementation="com.bwsl.plugin.BwslColorSettingsPage"/>
+
+        <externalAnnotator
+            language="BWSL"
+            implementationClass="com.bwsl.plugin.BwslExternalAnnotator"/>
 
     </extensions>
 </idea-plugin>
