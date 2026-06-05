@@ -305,6 +305,7 @@ private:
     NodeRef ParseMemberAccess(NodeRef object);
     NodeRef ParseFunction();
     NodeRef ParseStruct();
+    NodeRef ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime);
     NodeRef ResolveEnumMethod(const ArenaString& enumName, const ArenaString& methodName);
     NodeRef ParseModule();
     NodeRef ParseEvalStatement();

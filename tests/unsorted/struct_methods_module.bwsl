@@ -1,0 +1,31 @@
+// Test: Module struct methods
+// Tests: methods declared on structs inside modules
+
+module StructMethodModule {
+    struct Tone {
+        float3 color;
+        float gain;
+
+        tint :: (float scale) const -> float3 {
+            return color * gain * scale;
+        }
+
+        boost :: (float value) -> void {
+            gain = gain + value;
+        }
+    }
+}
+
+pipeline StructMethodsModule {
+    import StructMethodModule
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            StructMethodModule::Tone tone;
+            tone.color = float3(0.25, 0.5, 1.0);
+            tone.gain = 2.0;
+            tone.boost(1.0);
+            float3 result = tone.tint(0.5);
+        }
+    }
+}

@@ -245,19 +245,30 @@ NodeRef Parser::ParseFunction() {
         TypeInfo resolved = ResolveType(customReturnTypeName);
         if (resolved.coreType != CoreType::INVALID) {
             ast->GetFunction(function).returnType = resolved.coreType;
+            ast->GetFunction(function).returnTypeHash = resolved.customTypeHash;
         } else {
             ast->GetFunction(function).returnType = CoreType::CUSTOM;
+            ast->GetFunction(function).returnTypeHash =
+                Utils::HashStr(customReturnTypeName.c_str());
         }
     } else if (MatchMask(TokenMasks::CORE_TYPES)) {
         ast->GetFunction(function).returnType = TokenTypeToReturnType(static_cast<TokenType>(stream->GetType(previous)));
+        ast->GetFunction(function).returnTypeHash = 0;
+    } else if (Match(TokenType::VOID)) {
+        ast->GetFunction(function).returnType = CoreType::VOID;
+        ast->GetFunction(function).returnTypeHash = 0;
     } else if (Match(TokenType::VERTEX_FUNCTION)) {
         ast->GetFunction(function).returnType = CoreType::VERTEX_FUNCTION;
+        ast->GetFunction(function).returnTypeHash = 0;
     } else if (Match(TokenType::FRAGMENT_FUNCTION)) {
         ast->GetFunction(function).returnType = CoreType::FRAGMENT_FUNCTION;
+        ast->GetFunction(function).returnTypeHash = 0;
     } else if (Match(TokenType::COMPUTE_FUNCTION)) {
         ast->GetFunction(function).returnType = CoreType::COMPUTE_FUNCTION;
+        ast->GetFunction(function).returnTypeHash = 0;
     } else if (Match(TokenType::PASS_BLOCK)) {
         ast->GetFunction(function).returnType = CoreType::PASS_BLOCK;
+        ast->GetFunction(function).returnTypeHash = 0;
     } else {
         Error("Expected valid return type after '->'");
         return NodeRef::Null();

@@ -413,11 +413,44 @@ namespace {
         return false;
     }
 
+    bool HasDuplicateMethodInList(AST* ast, const ArenaArray<NodeRef>& functions,
+        const FunctionDeclData& decl, const std::vector<OverloadTypeMask>& paramMasks,
+        u64 signatureKey) {
+        for (u32 i = 0; i < functions.count; i++) {
+            NodeRef fnRef = functions[i];
+            if (fnRef.Type() != ASTNodeType::FUNCTION) continue;
+            const FunctionDeclData& existing = ast->GetFunction(fnRef);
+            if (existing.name.nameHash != decl.name.nameHash) continue;
+            if (existing.isConstMethod != decl.isConstMethod) continue;
+
+            std::vector<OverloadTypeMask> existingMasks;
+            BuildParamMasks(existing.parameters, existingMasks);
+            u64 existingKey = HashOverloadSignature(existingMasks.data(),
+                static_cast<u32>(existingMasks.size()));
+            if (existingKey != signatureKey) continue;
+            if (existingMasks.size() != paramMasks.size()) continue;
+
+            bool matches = true;
+            for (size_t j = 0; j < existingMasks.size(); j++) {
+                if (existingMasks[j] != paramMasks[j]) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void FillFunctionData(SymbolTableData* table, BWSL_Arena* arena, const FunctionDeclData& decl,
         NodeRef functionRef, const std::vector<OverloadTypeMask>& paramMasks, u64 signatureKey,
         u32 symbolIndex) {
         FunctionData& funcData = table->functions[symbolIndex];
+        funcData.name = decl.name;
         funcData.returnType = decl.returnType;
+        funcData.returnTypeHash = decl.returnTypeHash;
         funcData.parameters.Init(arena, decl.parameters.count);
         funcData.paramTypeMasks.Init(arena, static_cast<u32>(paramMasks.size()));
         for (u32 i = 0; i < decl.parameters.count; i++) {
@@ -425,6 +458,10 @@ namespace {
             funcData.paramTypeMasks.Push(arena, paramMasks[i]);
         }
         funcData.signatureKey = signatureKey;
+        funcData.isEval = decl.isEval;
+        funcData.isStructMethod = decl.isStructMethod;
+        funcData.isConstMethod = decl.isConstMethod;
+        funcData.ownerStructTypeHash = decl.ownerStructTypeHash;
         funcData.astNodeIndex = functionRef.packed;
     }
 

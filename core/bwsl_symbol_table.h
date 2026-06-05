@@ -108,11 +108,17 @@ inline u64 HashOverloadSignature(const OverloadTypeMask* masks, u32 count) {
     return hash;
 }
 struct FunctionData {
+    ArenaString name;
     CoreType returnType;
+    u32 returnTypeHash;
     ArenaArray<std::pair<ArenaString, ArenaString>> parameters;
     ArenaArray<OverloadTypeMask> paramTypeMasks;
     u64 signatureKey;
     bool isEval;           
+    bool isStructMethod;
+    bool isConstMethod;
+    u8 _pad;
+    u32 ownerStructTypeHash;
     u32 astNodeIndex;      // For eval functions, store AST location
 };
 
@@ -187,6 +193,7 @@ struct StructData {
         u32 arraySize;  // 0 = not an array, >0 = fixed-size array
     };
     ArenaArray<Field> fields;
+    ArenaArray<u32> methodIndices;
     
     bool isIndexable;
 };
@@ -1172,8 +1179,8 @@ namespace SymbolTable {
             return nullptr;
     }
 
-    inline Symbol* LookupFunctionOverload(SymbolTableData* table, const ArenaString& name,
-        const OverloadTypeMask* argMasks, u32 argCount) {
+	    inline Symbol* LookupFunctionOverload(SymbolTableData* table, const ArenaString& name,
+	        const OverloadTypeMask* argMasks, u32 argCount) {
             NamespaceKind currentNs = table->inModuleScope ?  NamespaceKind::MODULE : NamespaceKind::GLOBAL;
             u32 currentModule   = table->inModuleScope ? table->currentModuleIndex : INVALID_INDEX;
 
@@ -1190,8 +1197,54 @@ namespace SymbolTable {
                 }
             }
 
-            return nullptr;
-    }
+	            return nullptr;
+	    }
+
+	    inline bool FunctionSignatureMatches(const FunctionData& funcData,
+	        const ArenaString& name, const OverloadTypeMask* argMasks, u32 argCount) {
+	        if (funcData.name.nameHash != name.nameHash) return false;
+	        if (funcData.paramTypeMasks.count != argCount) return false;
+	        for (u32 j = 0; j < argCount; j++) {
+	            if (!OverloadMaskMatches(funcData.paramTypeMasks[j], argMasks[j])) {
+	                return false;
+	            }
+	        }
+	        return true;
+	    }
+
+	    inline u32 LookupStructMethodIndex(const SymbolTableData* table,
+	        const StructData* structData, const ArenaString& name,
+	        const OverloadTypeMask* argMasks, u32 argCount, bool receiverIsConst,
+	        bool* outFoundName = nullptr, bool* outFoundNonConstOnly = nullptr) {
+	        if (outFoundName) *outFoundName = false;
+	        if (outFoundNonConstOnly) *outFoundNonConstOnly = false;
+	        if (!table || !structData) return INVALID_INDEX;
+
+	        u32 constCandidate = INVALID_INDEX;
+	        for (u32 i = 0; i < structData->methodIndices.count; i++) {
+	            u32 funcIdx = structData->methodIndices[i];
+	            if (funcIdx >= table->functions.count) continue;
+	            const FunctionData& funcData = table->functions[funcIdx];
+	            if (funcData.name.nameHash != name.nameHash) continue;
+	            if (outFoundName) *outFoundName = true;
+	            if (!FunctionSignatureMatches(funcData, name, argMasks, argCount)) {
+	                continue;
+	            }
+	            if (funcData.isConstMethod) {
+	                if (constCandidate == INVALID_INDEX) {
+	                    constCandidate = funcIdx;
+	                }
+	                continue;
+	            }
+	            if (receiverIsConst) {
+	                if (outFoundNonConstOnly) *outFoundNonConstOnly = true;
+	                continue;
+	            }
+	            return funcIdx;
+	        }
+
+	        return constCandidate;
+	    }
     
     inline bool ValidateResourceAccess(SymbolTableData* table, const ArenaString& resourceName, ShaderStage stage, [[maybe_unused]] const char* sourceBase = nullptr) {
         // Resources are registered with their short name in the RESOURCES namespace

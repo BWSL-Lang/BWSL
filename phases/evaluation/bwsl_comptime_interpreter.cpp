@@ -942,6 +942,14 @@ static bool ProcessEnum(ComptimeState* state, NodeRef enumRef) {
     return true;
 }
 
+static bool ProcessStruct(ComptimeState* state, NodeRef structRef) {
+    const StructDeclData& structDecl = state->ast->GetStructDecl(structRef);
+    for (u32 i = 0; i < structDecl.methods.count; i++) {
+        if (!ProcessFunction(state, structDecl.methods[i])) return false;
+    }
+    return true;
+}
+
 static bool ProcessPipeline(ComptimeState* state, NodeRef pipelineRef) {
     PipelineData& pipeline = state->ast->GetPipeline(pipelineRef);
     for (u32 i = 0; i < pipeline.functions.count; i++) {
@@ -949,6 +957,10 @@ static bool ProcessPipeline(ComptimeState* state, NodeRef pipelineRef) {
     }
     for (u32 i = 0; i < pipeline.enums.count; i++) {
         if (!ProcessEnum(state, pipeline.enums[i])) return false;
+    }
+    for (u32 i = 0; i < state->ast->structDecls.count; i++) {
+        NodeRef structRef(ASTNodeType::STRUCT_DECL, i);
+        if (!ProcessStruct(state, structRef)) return false;
     }
     for (u32 i = 0; i < pipeline.passes.count; i++) {
         if (!ProcessPass(state, pipeline.passes[i])) return false;
@@ -963,6 +975,9 @@ static bool ProcessModule(ComptimeState* state, NodeRef moduleRef) {
     }
     for (u32 i = 0; i < module.enums.count; i++) {
         if (!ProcessEnum(state, module.enums[i])) return false;
+    }
+    for (u32 i = 0; i < module.structs.count; i++) {
+        if (!ProcessStruct(state, module.structs[i])) return false;
     }
     return true;
 }

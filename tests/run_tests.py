@@ -171,6 +171,10 @@ ERROR_CASE_TESTS = {
     "attributes_used_as_value.bwsl": "'attributes' cannot be used as a value",
     "missing_variable.bwsl": "Unknown identifier 'i_position'",
     "module_inside_pipeline.bwsl": "Module declarations must be declared at file scope",
+    "struct_method_unknown.bwsl": "unknown struct method",
+    "struct_method_duplicate_const.bwsl": "Struct method overload already declared",
+    "struct_method_nonconst_on_const.bwsl": "cannot call non-const struct method on const receiver",
+    "struct_method_assign_in_const.bwsl": "cannot assign to receiver field inside const method",
 }
 
 FORBIDDEN_SOURCE_ALIAS_NAMES = (

@@ -57,6 +57,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   ast = astData;
   sourceBase = srcBase;
   initializedVariables.clear();
+  constVariables.clear();
   builder.pool = pool;
   builder.program = &program;
   builder.currentInstruction = 0;
@@ -68,6 +69,9 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   diagnosticStream = nullptr;
   diagnosticPassName.clear();
   currentPassData = nullptr;
+  currentStructMethodTypeHash = 0;
+  currentStructMethodSelfReg = 0xFFFF;
+  currentStructMethodIsConst = false;
 
   // Allocate IR arrays. instructionCount must be zeroed explicitly — it's
   // a plain u32 field with no inline initializer, and the enclosing
@@ -228,6 +232,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   // Clear maps
   nodeRegisters.clear();
   variableRegisters.clear();
+  constVariables.clear();
   arrayBaseRegisters.clear();
   structTypeMap.clear();
   variableStructTypes.clear();
