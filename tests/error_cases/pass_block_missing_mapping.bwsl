@@ -1,0 +1,24 @@
+module MissingMappingPasses {
+    attributes {
+        position: float3
+    }
+
+    make :: () -> pass_block {
+        pass {
+            use attributes { position }
+            vertex {
+                output.position = float4(attributes.position, 1.0);
+            }
+        }
+    }
+}
+
+pipeline PassBlockMissingMapping {
+    import MissingMappingPasses
+
+    attributes {
+        position: float3
+    }
+
+    pass "Bad" = MissingMappingPasses::make();
+}

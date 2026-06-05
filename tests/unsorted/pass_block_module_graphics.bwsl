@@ -1,0 +1,68 @@
+module SpritePasses {
+    attributes {
+        position: float3
+        normal: float3
+        texCoord: float2
+    }
+
+    resources {
+        viewProj: mat4
+        atlas: texture2D
+        atlasSampler: sampler
+    }
+
+    variants {
+        localTint: bool = false;
+
+        rules {
+            require localTint -> has_normal;
+        }
+    }
+
+    sprite :: () -> pass_block {
+        pass {
+            use attributes { position, normal?, texCoord }
+            use resources { viewProj, atlas, atlasSampler }
+
+            vertex {
+                output.position = resources.viewProj * float4(attributes.position, 1.0);
+                output.uv = attributes.texCoord;
+            }
+
+            fragment {
+                float4 texel = sample(resources.atlas, resources.atlasSampler, input.uv);
+                if (variants.localTint) {
+                    output.color = texel;
+                } else {
+                    output.color = float4(input.uv, 0.0, 1.0);
+                }
+            }
+        }
+    }
+}
+
+pipeline PassBlockModuleGraphics {
+    import SpritePasses
+
+    attributes {
+        position: float3
+        meshNormal: float3
+        uv: float2
+    }
+
+    resources {
+        cameraVP: mat4
+        uiAtlas: texture2D
+        uiSampler: sampler
+    }
+
+    variants {
+        tintEnabled: bool = true;
+    }
+
+    pass "Sprites" = SpritePasses::sprite() {
+        use attributes { position, normal = meshNormal, texCoord = uv }
+        use resources { viewProj = cameraVP, atlas = uiAtlas, atlasSampler = uiSampler }
+        variants { localTint = tintEnabled }
+    }
+}

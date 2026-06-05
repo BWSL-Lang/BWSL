@@ -1,0 +1,15 @@
+pipeline PassBlockBareBody {
+    attributes {
+        position: float3
+    }
+
+    bad :: () -> pass_block {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+    }
+
+    pass "Bad" = bad();
+}

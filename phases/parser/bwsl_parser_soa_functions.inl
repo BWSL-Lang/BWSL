@@ -52,6 +52,51 @@ const ResourceDeclData* Parser::LookupPipelineResourceDecl(const ArenaString& re
     return nullptr;
 }
 
+const AttributeDeclData* Parser::LookupPipelineAttributeDecl(const ArenaString& attrName) const {
+    if (currentPipeline.IsNull()) return nullptr;
+
+    const PipelineData& pipeline = ast->GetPipeline(currentPipeline);
+    for (u32 i = 0; i < pipeline.attributes.count; i++) {
+        NodeRef attrRef = pipeline.attributes[i];
+        if (attrRef.Type() != ASTNodeType::ATTRIBUTE_DECL) continue;
+        const AttributeDeclData& attr = ast->GetAttributeDecl(attrRef);
+        if (attr.name.nameHash == attrName.nameHash) {
+            return &attr;
+        }
+    }
+    return nullptr;
+}
+
+const AttributeDeclData* Parser::LookupModuleAttributeDecl(NodeRef module, const ArenaString& attrName) const {
+    if (module.IsNull() || module.Type() != ASTNodeType::MODULE) return nullptr;
+
+    const ModuleNodeData& moduleData = ast->GetModule(module);
+    for (u32 i = 0; i < moduleData.attributes.count; i++) {
+        NodeRef attrRef = moduleData.attributes[i];
+        if (attrRef.Type() != ASTNodeType::ATTRIBUTE_DECL) continue;
+        const AttributeDeclData& attr = ast->GetAttributeDecl(attrRef);
+        if (attr.name.nameHash == attrName.nameHash) {
+            return &attr;
+        }
+    }
+    return nullptr;
+}
+
+const ResourceDeclData* Parser::LookupModuleResourceDecl(NodeRef module, const ArenaString& resourceName) const {
+    if (module.IsNull() || module.Type() != ASTNodeType::MODULE) return nullptr;
+
+    const ModuleNodeData& moduleData = ast->GetModule(module);
+    for (u32 i = 0; i < moduleData.resources.count; i++) {
+        NodeRef resourceRef = moduleData.resources[i];
+        if (resourceRef.Type() != ASTNodeType::RESOURCE_DECL) continue;
+        const ResourceDeclData& resource = ast->GetResourceDecl(resourceRef);
+        if (resource.name.nameHash == resourceName.nameHash) {
+            return &resource;
+        }
+    }
+    return nullptr;
+}
+
 bool Parser::ValidateAssignmentTarget(NodeRef target) {
     switch (target.Type()) {
         case ASTNodeType::IDENTIFIER: {
@@ -355,10 +400,31 @@ NodeRef Parser::ParseFunction() {
             }
             ast->GetFunction(function).body = ParseShaderStage(ASTNodeType::FRAGMENT_STAGE);
         } else if (ast->GetFunction(function).returnType == CoreType::PASS_BLOCK) {
-            // For pass blocks, parse the entire pass body
-            SourceLocation ploc = getLocation(stream->GetOffset(current));
+            if (!Match(TokenType::PASS)) {
+                Error("Expected 'pass' block in pass_block function");
+                u32 depth = 1;
+                while (depth > 0 && !Check(TokenType::EOF_TOKEN)) {
+                    if (Match(TokenType::LEFT_BRACE)) {
+                        depth++;
+                    } else if (Match(TokenType::RIGHT_BRACE)) {
+                        depth--;
+                    } else {
+                        Advance();
+                    }
+                }
+                SymbolTable::ExitScope(&symbolTable);
+                return NodeRef::Null();
+            }
+            SourceLocation ploc = getLocation(stream->GetOffset(previous));
             ast->GetFunction(function).body = ASTFactory::MakePass(ast, "", ploc.line, ploc.column);
+            NodeRef oldPass = currentPass;
+            currentPass = ast->GetFunction(function).body;
+            SymbolTable::EnterScope(&symbolTable);
+            Consume(TokenType::LEFT_BRACE, "Expected '{' after pass in pass_block function");
             ParsePassBody(ast->GetFunction(function).body);
+            Consume(TokenType::RIGHT_BRACE, "Expected '}' after pass block");
+            SymbolTable::ExitScope(&symbolTable);
+            currentPass = oldPass;
         } else if (ast->GetFunction(function).returnType == CoreType::COMPUTE_FUNCTION) {
             // For compute functions, parse the compute body
             SourceLocation cloc = getLocation(stream->GetOffset(current));

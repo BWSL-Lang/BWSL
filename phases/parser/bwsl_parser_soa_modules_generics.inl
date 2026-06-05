@@ -28,6 +28,10 @@ NodeRef Parser::ParseModule() {
 
     // Create module AST node
     NodeRef module = ASTFactory::MakeModule(ast, moduleName, line, col);
+    NodeRef previousModule = currentModule;
+    NodeRef previousPipeline = currentPipeline;
+    currentModule = module;
+    currentPipeline = NodeRef::Null();
 
     Consume(TokenType::LEFT_BRACE, "Expected '{'");
 
@@ -38,6 +42,21 @@ NodeRef Parser::ParseModule() {
             ParseModuleImportList(module, false);
         } else if (Match(TokenType::USING)) {
             ParseUsingDeclaration(module, false);
+        } else if (Match(TokenType::ATTRIBUTES)) {
+            ParseAttributes(module, false);
+        } else if (Match(TokenType::RESOURCES)) {
+            if (ast->GetModule(module).resources.count > 0) {
+                Error("Only one resources block is allowed per module");
+                continue;
+            }
+            ParseResources(module, false);
+        } else if (Match(TokenType::VARIANTS)) {
+            if (ast->GetModule(module).variantDecls.count > 0 ||
+                ast->GetModule(module).variantRules.count > 0) {
+                Error("Only one variants block is allowed per module");
+                continue;
+            }
+            ParseVariants(module, false);
         } else if (IsFunctionDeclStart()) {
             // Module function (may be generic or regular)
             NodeRef func = ParseFunction();
@@ -167,6 +186,8 @@ NodeRef Parser::ParseModule() {
 
     symbolTable.inModuleScope = false;
     symbolTable.currentModuleIndex = INVALID_INDEX;
+    currentModule = previousModule;
+    currentPipeline = previousPipeline;
 
     return module;
 }

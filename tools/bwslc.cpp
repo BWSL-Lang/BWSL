@@ -2820,6 +2820,9 @@ int main(int argc, char* argv[]) {
                                DiagnosticMessageId::VariantResolutionFailed);
             return emitFailure(&stream, &sourceLines);
         }
+        if (parser.hadError) {
+            return emitFailure(&stream, &sourceLines);
+        }
     }
 
     std::string comptimeError;
@@ -2864,6 +2867,9 @@ int main(int argc, char* argv[]) {
 
     NodeRef originalPipelineRef = context.root;
     parser.ResolveShaderStages(originalPipelineRef);
+    if (parser.hadError) {
+        return emitFailure(&stream, &sourceLines);
+    }
 
     VariantSelectionData variantSelection;
     std::string variantError;
@@ -2903,6 +2909,9 @@ int main(int argc, char* argv[]) {
     NodeRef specializedPipelineRef = parser.SpecializePipelineForVariants(originalPipelineRef,
                                                                           variantSelection,
                                                                           &variantError);
+    if (parser.hadError) {
+        return emitFailure(&stream, &sourceLines);
+    }
     if (specializedPipelineRef.IsNull()) {
         diagnostics.AddRaw(DiagnosticSeverity::Error,
                            DiagnosticPhase::Variant,
@@ -2957,6 +2966,12 @@ int main(int argc, char* argv[]) {
         return buf;
     };
 
+    auto getPassOutputName = [](u32 passIndex) -> std::string {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "pass%u", passIndex);
+        return buf;
+    };
+
     if (config.verbose) {
         printf("Found pipeline '%s' with %u passes\n\n",
                getString(pipeline.name).c_str(),
@@ -2970,9 +2985,12 @@ int main(int argc, char* argv[]) {
     for (u32 passIdx = 0; passIdx < pipeline.passes.count; passIdx++) {
         const PassData& pass = context.ast.GetPass(pipeline.passes[passIdx]);
         std::string passName = getString(pass.name, passIdx);
+        std::string passOutputName = getPassOutputName(passIdx);
 
         // Check pass filter
-        if (!config.passFilter.empty() && passName != config.passFilter) {
+        if (!config.passFilter.empty() &&
+            passName != config.passFilter &&
+            passOutputName != config.passFilter) {
             continue;
         }
 
@@ -3020,9 +3038,9 @@ int main(int argc, char* argv[]) {
                 vertexReflectionSamplerUses = result.explicitSamplerUses;
                 haveVertexReflectionAnalysis = true;
                 // Record timing for this shader
-                timing.shaderTimings.push_back({passName + "_vert", result.timing});
+                timing.shaderTimings.push_back({passOutputName + "_vert", result.timing});
                 ShaderTiming& shaderTime = timing.shaderTimings.back().second;
-                std::string outBase = BuildOutputBasePath(config.outputDir, baseName + "_" + passName + "_vert");
+                std::string outBase = BuildOutputBasePath(config.outputDir, baseName + "_" + passOutputName + "_vert");
 
                 StageOutputResult output = WriteStageOutputs(
                     config, result, shaderTime, outBase, passName, "vertex",
@@ -3061,9 +3079,9 @@ int main(int argc, char* argv[]) {
                 fragmentReflectionSamplerUses = result.explicitSamplerUses;
                 haveFragmentReflectionAnalysis = true;
                 // Record timing for this shader
-                timing.shaderTimings.push_back({passName + "_frag", result.timing});
+                timing.shaderTimings.push_back({passOutputName + "_frag", result.timing});
                 ShaderTiming& shaderTime = timing.shaderTimings.back().second;
-                std::string outBase = BuildOutputBasePath(config.outputDir, baseName + "_" + passName + "_frag");
+                std::string outBase = BuildOutputBasePath(config.outputDir, baseName + "_" + passOutputName + "_frag");
 
                 StageOutputResult output = WriteStageOutputs(
                     config, result, shaderTime, outBase, passName, "fragment",
@@ -3102,9 +3120,9 @@ int main(int argc, char* argv[]) {
                 computeReflectionSamplerUses = result.explicitSamplerUses;
                 haveComputeReflectionAnalysis = true;
                 // Record timing for this shader
-                timing.shaderTimings.push_back({passName + "_comp", result.timing});
+                timing.shaderTimings.push_back({passOutputName + "_comp", result.timing});
                 ShaderTiming& shaderTime = timing.shaderTimings.back().second;
-                std::string outBase = BuildOutputBasePath(config.outputDir, baseName + "_" + passName + "_comp");
+                std::string outBase = BuildOutputBasePath(config.outputDir, baseName + "_" + passOutputName + "_comp");
 
                 StageOutputResult output = WriteStageOutputs(
                     config, result, shaderTime, outBase, passName, "compute",
@@ -3155,7 +3173,7 @@ int main(int argc, char* argv[]) {
                                                reflectionConfig,
                                                reflectionSamplerUses.empty() ? nullptr : &reflectionSamplerUses);
 
-            std::string bindingsPath = BuildOutputBasePath(config.outputDir, baseName + "_" + passName) + ".bindings.json";
+            std::string bindingsPath = BuildOutputBasePath(config.outputDir, baseName + "_" + passOutputName) + ".bindings.json";
             std::string bindingsJson = BuildResourceBindingsJson(passName, bindings);
             if (WriteTextFile(bindingsPath, bindingsJson)) {
                 if (!config.errorsJson) {

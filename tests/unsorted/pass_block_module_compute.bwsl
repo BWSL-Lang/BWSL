@@ -1,0 +1,30 @@
+module ComputePasses {
+    resources {
+        values: buffer<float>
+        result: buffer<float>
+    }
+
+    copyValues :: () -> pass_block {
+        pass {
+            use resources { values, result }
+
+            compute "Main" [8, 1, 1] {
+                uint idx = input.global_id.x;
+                resources.result[idx] = resources.values[idx];
+            }
+        }
+    }
+}
+
+pipeline PassBlockModuleCompute {
+    import ComputePasses
+
+    resources {
+        sourceValues: buffer<float>
+        outputValues: buffer<float>
+    }
+
+    pass "Copy" = ComputePasses::copyValues() {
+        use resources { values = sourceValues, result = outputValues }
+    }
+}

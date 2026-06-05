@@ -1,0 +1,27 @@
+module MismatchPasses {
+    attributes {
+        position: float3
+    }
+
+    make :: () -> pass_block {
+        pass {
+            use attributes { position }
+            vertex {
+                output.position = float4(attributes.position, 1.0);
+            }
+        }
+    }
+}
+
+pipeline PassBlockTypeMismatch {
+    import MismatchPasses
+
+    attributes {
+        position: float3
+        uv: float2
+    }
+
+    pass "Bad" = MismatchPasses::make() {
+        use attributes { position = uv }
+    }
+}

@@ -717,6 +717,7 @@ NodeRef Parser::ParseMemberAccess(NodeRef object) {
         switch (ident.identifierKind) {
             case SpecialIdentifier::RESOURCES:
                 if (inShaderStage) {
+                    bool parsingModuleTemplate = currentPipeline.IsNull() && currentModule.IsValid();
                     if (PipelineDeclaresResources() && !LookupPipelineResourceDecl(memberName)) {
                         ErrorAtPrevious("Resource not declared in pipeline resources block");
                         break;
@@ -726,7 +727,8 @@ NodeRef Parser::ParseMemberAccess(NodeRef object) {
                          ast->GetPass(currentPass).usedResources.count > 0);
                     if (requireUseResources && !ValidateResourceInUse(memberName)) {
                         ErrorAtPrevious("Resource not declared in 'use resources' for this pass");
-                    } else if (!SymbolTable::ValidateResourceAccess(&symbolTable, memberName, currentShaderStage, sourceBase())) {
+                    } else if (!parsingModuleTemplate &&
+                               !SymbolTable::ValidateResourceAccess(&symbolTable, memberName, currentShaderStage, sourceBase())) {
                         ErrorAtPrevious("Resource not available in this shader stage");
                     }
                 }
@@ -740,7 +742,10 @@ NodeRef Parser::ParseMemberAccess(NodeRef object) {
 
             case SpecialIdentifier::VARIANTS: {
                 TypeInfo variantType;
-                if (!LookupVariantType(currentPipeline, memberName.nameHash, &variantType)) {
+                bool foundVariant = currentPipeline.IsValid()
+                    ? LookupVariantType(currentPipeline, memberName.nameHash, &variantType)
+                    : LookupModuleVariantType(currentModule, memberName.nameHash, &variantType);
+                if (!foundVariant) {
                     ErrorAtPrevious("Unknown variant or implicit variant feature");
                 }
                 break;
