@@ -199,13 +199,25 @@ NodeRef Parser::ParseStatement() {
     }
 
     if (Match(TokenType::CONST)) {
-        if (!MatchMask(TokenMasks::CORE_TYPES)) {
+        std::string typeStr;
+        TypeInfo constType = TYPE_INFO(CoreType::INVALID, 0, false);
+        if (MatchMask(TokenMasks::CORE_TYPES)) {
+            TokenType varType = static_cast<TokenType>(stream->GetType(previous));
+            typeStr = std::string(stream->GetValue(previous));
+            constType = GetTypeInfoFromToken(varType);
+        } else if (Match(TokenType::IDENTIFIER)) {
+            typeStr = std::string(stream->GetValue(previous));
+            if (Match(TokenType::DOUBLE_COLON)) {
+                std::string moduleName = typeStr;
+                Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
+                typeStr = CanonicalizeModuleQualifiedName(
+                    moduleName, std::string(stream->GetValue(previous)));
+            }
+            constType = ResolveType(typeStr);
+        } else {
             Error("Expected type after 'const'");
             return NodeRef::Null();
         }
-
-        TokenType varType = static_cast<TokenType>(stream->GetType(previous));
-        std::string typeStr(stream->GetValue(previous));
 
         // Check for pointer type: int^ means pointer to int
         while (Match(TokenType::BITWISE_XOR)) {
@@ -234,7 +246,13 @@ NodeRef Parser::ParseStatement() {
 
         if (sym) {
             VariableData& varData = symbolTable.variables[sym->index];
-            varData.typeInfo = GetTypeInfoFromToken(varType);
+            if (constType.coreType != CoreType::INVALID) {
+                varData.typeInfo = constType;
+            } else {
+                varData.typeInfo.coreType = CoreType::CUSTOM;
+                varData.typeInfo.componentCount = 1;
+                varData.typeInfo.customTypeHash = Utils::HashStr(typeStr.c_str());
+            }
             varData.isConst = true;
         } else {
             Error("Variable already declared in this scope");

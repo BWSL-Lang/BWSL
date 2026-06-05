@@ -405,6 +405,27 @@ inline u16 IRLowering::LowerIdentifier(NodeRef ref) {
     return it->second;
   }
 
+  if (currentStructMethodTypeHash != 0 &&
+      currentStructMethodSelfReg != 0xFFFF) {
+    u32 fieldIndex = 0xFFFFFFFF;
+    CoreType fieldType = CoreType::INVALID;
+    u32 fieldTypeHash = 0;
+    if (FindStructField(currentStructMethodTypeHash, ident.name.nameHash,
+                        &fieldIndex, &fieldType, &fieldTypeHash)) {
+      u16 dest = AllocateRegister();
+      builder.EmitInstruction(OP_STRUCT_EXTRACT, dest,
+                              currentStructMethodSelfReg, fieldIndex);
+      program.metadata[builder.currentInstruction - 1] =
+          currentStructMethodTypeHash;
+      SetRegisterType(dest, fieldType);
+      if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
+          fieldTypeHash != 0 && dest < MAX_REGISTERS) {
+        program.registerStructTypes[dest] = fieldTypeHash;
+      }
+      return dest;
+    }
+  }
+
   // Look up in symbol table
   Symbol *sym = SymbolTable::LookupByHash(
       const_cast<SymbolTableData *>(symbols), ident.name.nameHash);

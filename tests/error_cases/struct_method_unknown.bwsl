@@ -1,0 +1,13 @@
+pipeline StructMethodUnknownError {
+    struct Thing {
+        float v;
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Thing t;
+            t.v = 1.0;
+            float x = t.missing();
+        }
+    }
+}

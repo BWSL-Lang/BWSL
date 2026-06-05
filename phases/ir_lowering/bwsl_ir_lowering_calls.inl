@@ -105,6 +105,43 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
     }
   }
 
+  // Check for struct method call (e.g., basis.to_world(v)). Struct methods are
+  // resolved only through the receiver type; globals with the same name are not
+  // candidates for this dispatch.
+  if (call.flags & FunctionCallFlags::IS_METHOD_CALL) {
+    if (!call.moduleObject.IsNull()) {
+      u16 receiverReg = LowerExpression(call.moduleObject);
+      if ((receiverReg & 0xC000) != 0 || receiverReg >= MAX_REGISTERS) {
+        return 0;
+      }
+
+      u32 receiverStructHash = program.registerStructTypes[receiverReg];
+      if (receiverStructHash != 0) {
+        StructData *structData = LookupStructDataByHash(receiverStructHash);
+        if (structData) {
+          bool receiverIsConst = false;
+          if (call.moduleObject.Type() == ASTNodeType::IDENTIFIER) {
+            const IdentifierData &receiverIdent =
+                ast->GetIdentifier(call.moduleObject);
+            receiverIsConst =
+                constVariables.find(receiverIdent.name.nameHash) !=
+                constVariables.end();
+            if (receiverIdent.identifierKind == SpecialIdentifier::SELF &&
+                currentStructMethodIsConst) {
+              receiverIsConst = true;
+            }
+          }
+
+          u16 methodResult = TryLowerStructMethodCall(
+              call, receiverReg, args, argCount, dest, receiverIsConst);
+          if (methodResult != 0xFFFF) {
+            return methodResult;
+          }
+        }
+      }
+    }
+  }
+
   // Check for enum method call (e.g., shape.distance(p))
   if (call.flags & FunctionCallFlags::IS_METHOD_CALL) {
     // Get the receiver object
@@ -1097,6 +1134,248 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
   return dest;
 }
 
+inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
+                                                u16 receiverReg, u16 *args,
+                                                u32 argCount, u16 dest,
+                                                bool receiverIsConst) {
+  if ((receiverReg & 0xC000) != 0 || receiverReg >= MAX_REGISTERS) {
+    return 0xFFFF;
+  }
+
+  u32 receiverStructHash = program.registerStructTypes[receiverReg];
+  if (receiverStructHash == 0) {
+    return 0xFFFF;
+  }
+
+  StructData *structData = LookupStructDataByHash(receiverStructHash);
+  if (!structData) {
+    return 0xFFFF;
+  }
+
+  std::vector<OverloadTypeMask> argMasks;
+  argMasks.reserve(argCount);
+  for (u32 i = 0; i < argCount; i++) {
+    CoreType argType = GetRegisterType(args[i]);
+    u32 customHash = 0;
+    if ((argType == CoreType::CUSTOM || argType == CoreType::ENUM) &&
+        args[i] < MAX_REGISTERS) {
+      customHash = program.registerStructTypes[args[i]];
+    }
+    argMasks.push_back(MakeOverloadMask(argType, customHash));
+  }
+
+  bool foundName = false;
+  bool foundNonConstOnly = false;
+  u32 methodIndex = SymbolTable::LookupStructMethodIndex(
+      symbols, structData, call.name, argMasks.data(), argCount,
+      receiverIsConst, &foundName, &foundNonConstOnly);
+
+  if (methodIndex == INVALID_INDEX || methodIndex >= symbols->functions.count) {
+    if (foundNonConstOnly && receiverIsConst) {
+      ReportError(
+          "Error: cannot call non-const struct method on const receiver\n");
+    } else if (foundName) {
+      std::string methodName = call.name.isHashOnly()
+                                   ? ReverseLookup::GetString(call.name.nameHash)
+                                   : call.name.ToString(sourceBase);
+      char msg[256];
+      snprintf(msg, sizeof(msg),
+               "Error: no matching overload for struct method: %s\n",
+               methodName.c_str());
+      ReportError(msg);
+    } else {
+      std::string methodName = call.name.isHashOnly()
+                                   ? ReverseLookup::GetString(call.name.nameHash)
+                                   : call.name.ToString(sourceBase);
+      char msg[256];
+      snprintf(msg, sizeof(msg), "Error: unknown struct method: %s\n",
+               methodName.c_str());
+      ReportError(msg);
+    }
+    return dest;
+  }
+
+  const FunctionData &funcData = symbols->functions[methodIndex];
+  if (!funcData.isStructMethod) {
+    return 0xFFFF;
+  }
+
+  NodeRef methodRef;
+  methodRef.packed = funcData.astNodeIndex;
+  if (methodRef.Type() != ASTNodeType::FUNCTION) {
+    return 0xFFFF;
+  }
+
+  const FunctionDeclData &method = ast->GetFunction(methodRef);
+  if (method.body.IsNull()) {
+    return 0xFFFF;
+  }
+
+  for (u32 i = 0; i < inlineStackDepth; i++) {
+    if (inlineStackPacked[i] == methodRef.packed) {
+      if (!recursionDiagnosed) {
+        recursionDiagnosed = true;
+        ReportError("Error: recursion is not supported — a function calls "
+                    "itself (directly or through another function). SPIR-V "
+                    "execution is stack-less; rewrite the algorithm "
+                    "iteratively.\n");
+      }
+      return dest;
+    }
+  }
+
+  if (inlineDepth >= MAX_INLINE_DEPTH) {
+    return 0xFFFF;
+  }
+
+  u32 methodModuleIndex = 0xFFFFFFFF;
+  for (u32 m = 0; m < ast->modules.count; m++) {
+    const ModuleNodeData &module = ast->modules[m];
+    for (u32 s = 0; s < module.structs.count; s++) {
+      NodeRef structRef = module.structs[s];
+      if (structRef.Type() != ASTNodeType::STRUCT_DECL) {
+        continue;
+      }
+      const StructDeclData &structDecl = ast->GetStructDecl(structRef);
+      for (u32 i = 0; i < structDecl.methods.count; i++) {
+        if (structDecl.methods[i] == methodRef) {
+          methodModuleIndex = m;
+          break;
+        }
+      }
+      if (methodModuleIndex != 0xFFFFFFFF) {
+        break;
+      }
+    }
+    if (methodModuleIndex != 0xFFFFFFFF) {
+      break;
+    }
+  }
+
+  auto savedVariableRegisters = variableRegisters;
+  auto savedVariableStructTypes = variableStructTypes;
+  auto savedConstVariables = constVariables;
+  auto savedNodeRegisters = nodeRegisters;
+  u32 savedStructMethodTypeHash = currentStructMethodTypeHash;
+  u16 savedStructMethodSelfReg = currentStructMethodSelfReg;
+  bool savedStructMethodIsConst = currentStructMethodIsConst;
+
+  u32 selfHash = Utils::HashStr("self");
+  variableRegisters[selfHash] = receiverReg;
+  variableStructTypes[selfHash] = receiverStructHash;
+  if (receiverReg < MAX_REGISTERS) {
+    program.registerStructTypes[receiverReg] = receiverStructHash;
+  }
+  if (method.isConstMethod) {
+    constVariables.insert(selfHash);
+  } else {
+    constVariables.erase(selfHash);
+  }
+
+  u32 paramCount =
+      method.parameters.count < argCount ? method.parameters.count : argCount;
+  for (u32 i = 0; i < paramCount; i++) {
+    const auto &param = method.parameters[i];
+    u32 paramNameHash = param.first.nameHash;
+    variableRegisters[paramNameHash] = args[i];
+
+    u32 paramTypeHash = 0;
+    CoreType paramType =
+        ResolveCoreTypeFromHash(param.second.nameHash, &paramTypeHash);
+    if (paramType != CoreType::INVALID && paramType != CoreType::VOID) {
+      SetRegisterType(args[i], paramType);
+      if ((paramType == CoreType::CUSTOM || paramType == CoreType::ENUM) &&
+          paramTypeHash != 0 && args[i] < MAX_REGISTERS) {
+        u32 structHash = LookupOrRegisterStructType(paramTypeHash);
+        if (structHash != 0) {
+          program.registerStructTypes[args[i]] = structHash;
+          variableStructTypes[paramNameHash] = structHash;
+        }
+      }
+    }
+  }
+
+  u16 returnReg = AllocateRegister();
+  u16 savedReturnReg = inlineReturnReg;
+  u16 savedReturnFlagReg = inlineReturnFlagReg;
+  u32 savedReturnCounter = inlineReturnCounter;
+  u32 savedModuleIndex = inlineModuleIndex;
+
+  inlineReturnReg = returnReg;
+  inlineReturnFlagReg = AllocateRegister();
+  SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
+  builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg,
+                          builder.EmitConstantBool(false));
+  inlineReturnCounter = 0;
+  inlineModuleIndex = methodModuleIndex;
+  inlineDepth++;
+  if (inlineStackDepth < MAX_INLINE_DEPTH) {
+    inlineStackPacked[inlineStackDepth++] = methodRef.packed;
+  }
+
+  currentStructMethodTypeHash = receiverStructHash;
+  currentStructMethodSelfReg = receiverReg;
+  currentStructMethodIsConst = method.isConstMethod;
+
+  if (method.body.Type() == ASTNodeType::BLOCK) {
+    LowerBlock(method.body);
+  } else {
+    u16 exprResult = LowerExpression(method.body);
+    builder.EmitInstruction(OP_STORE_REG, returnReg, exprResult);
+  }
+
+  if (inlineStackDepth > 0) {
+    inlineStackDepth--;
+  }
+  inlineDepth--;
+  inlineReturnReg = savedReturnReg;
+  inlineReturnFlagReg = savedReturnFlagReg;
+  inlineReturnCounter = savedReturnCounter;
+  inlineModuleIndex = savedModuleIndex;
+  variableRegisters = savedVariableRegisters;
+  variableStructTypes = savedVariableStructTypes;
+  constVariables = savedConstVariables;
+  nodeRegisters = savedNodeRegisters;
+  currentStructMethodTypeHash = savedStructMethodTypeHash;
+  currentStructMethodSelfReg = savedStructMethodSelfReg;
+  currentStructMethodIsConst = savedStructMethodIsConst;
+
+  if (method.returnType != CoreType::INVALID &&
+      method.returnType != CoreType::VOID) {
+    SetRegisterType(returnReg, method.returnType);
+    if ((method.returnType == CoreType::CUSTOM ||
+         method.returnType == CoreType::ENUM) &&
+        method.returnTypeHash != 0 && returnReg < MAX_REGISTERS) {
+      u32 structHash = LookupOrRegisterStructType(method.returnTypeHash);
+      if (structHash != 0) {
+        program.registerStructTypes[returnReg] = structHash;
+      }
+    }
+  } else if (method.returnType == CoreType::VOID) {
+    SetRegisterType(returnReg, CoreType::VOID);
+  }
+
+  if (method.returnType == CoreType::VOID) {
+    SetRegisterType(dest, CoreType::VOID);
+    return dest;
+  }
+
+  builder.EmitInstruction(OP_STORE_REG, dest, returnReg);
+  CoreType resultType = GetRegisterType(returnReg);
+  if (resultType != CoreType::INVALID) {
+    SetRegisterType(dest, resultType);
+  }
+  if ((resultType == CoreType::CUSTOM || resultType == CoreType::ENUM) &&
+      dest < MAX_REGISTERS && returnReg < MAX_REGISTERS) {
+    u32 structHash = program.registerStructTypes[returnReg];
+    if (structHash != 0) {
+      program.registerStructTypes[dest] = structHash;
+    }
+  }
+
+  return dest;
+}
+
 inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args, u32 argCount) {
   // Look up the function in the AST
   // Check if this is a module-qualified call (e.g.,
@@ -1321,7 +1600,14 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   // results from previous inlining)
   auto savedVariableRegisters = variableRegisters;
   auto savedVariableStructTypes = variableStructTypes;
+  auto savedConstVariables = constVariables;
   auto savedNodeRegisters = nodeRegisters;
+  u32 savedStructMethodTypeHash = currentStructMethodTypeHash;
+  u16 savedStructMethodSelfReg = currentStructMethodSelfReg;
+  bool savedStructMethodIsConst = currentStructMethodIsConst;
+  currentStructMethodTypeHash = 0;
+  currentStructMethodSelfReg = 0xFFFF;
+  currentStructMethodIsConst = false;
 
   // Bind parameters to argument registers
   u32 paramCount =
@@ -1395,7 +1681,11 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   inlineModuleIndex = savedModuleIndex;
   variableRegisters = savedVariableRegisters;
   variableStructTypes = savedVariableStructTypes;
+  constVariables = savedConstVariables;
   nodeRegisters = savedNodeRegisters;
+  currentStructMethodTypeHash = savedStructMethodTypeHash;
+  currentStructMethodSelfReg = savedStructMethodSelfReg;
+  currentStructMethodIsConst = savedStructMethodIsConst;
 
   // Set return type
   if (func.returnType != CoreType::INVALID &&

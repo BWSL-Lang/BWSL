@@ -145,6 +145,7 @@ struct IRLowering {
   // Map variable name hash to register
   std::unordered_map<u32, u16> variableRegisters;
   std::unordered_set<u32> initializedVariables;
+  std::unordered_set<u32> constVariables;
 
   // Array base registers (var hash -> base reg)
   std::unordered_map<u32, u32> arrayBaseRegisters;
@@ -154,6 +155,10 @@ struct IRLowering {
 
   // Map variable name hash -> struct type hash (for struct variables)
   std::unordered_map<u32, u32> variableStructTypes;
+
+  u32 currentStructMethodTypeHash = 0;
+  u16 currentStructMethodSelfReg = 0xFFFF;
+  bool currentStructMethodIsConst = false;
 
   // Inlining state
   u16 inlineReturnReg =
@@ -311,6 +316,10 @@ struct IRLowering {
 
   StructData *LookupStructDataByHash(u32 typeHash);
 
+  bool FindStructField(u32 structTypeHash, u32 fieldNameHash,
+                       u32 *outFieldIndex, CoreType *outFieldType = nullptr,
+                       u32 *outFieldTypeHash = nullptr);
+
   u32 ScalarComponentCount(CoreType type);
 
   void AppendEnumPayloadLayout(CoreType type, u32 typeHash,
@@ -352,6 +361,10 @@ struct IRLowering {
   u16 LowerMemberAccess(NodeRef ref);
 
   u16 LowerFunctionCall(NodeRef ref);
+
+  u16 TryLowerStructMethodCall(const FunctionCallData &call, u16 receiverReg,
+                               u16 *args, u32 argCount, u16 dest,
+                               bool receiverIsConst);
 
   // Try to inline a function call, returns the result register or 0xFFFF if
   // inlining failed

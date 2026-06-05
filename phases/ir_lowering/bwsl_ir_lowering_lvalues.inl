@@ -285,6 +285,9 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
 
   // Store mapping from variable name hash to register
   variableRegisters[varDecl.name.nameHash] = varReg;
+  if (varDecl.isConst) {
+    constVariables.insert(varDecl.name.nameHash);
+  }
 
   // Track type from the declaration first to avoid symbol-table collisions
   // for locals.
@@ -523,6 +526,32 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
 
   if (target.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &ident = ast->GetIdentifier(target);
+    if (currentStructMethodTypeHash != 0 &&
+        currentStructMethodSelfReg != 0xFFFF &&
+        variableRegisters.find(ident.name.nameHash) == variableRegisters.end()) {
+      u32 fieldIndex = 0xFFFFFFFF;
+      CoreType fieldType = CoreType::INVALID;
+      if (FindStructField(currentStructMethodTypeHash, ident.name.nameHash,
+                          &fieldIndex, &fieldType, nullptr)) {
+        if (currentStructMethodIsConst) {
+          ReportError("Error: cannot assign to receiver field inside const method\n");
+          return;
+        }
+        valueReg = ConvertRegisterToType(valueReg, fieldType);
+        u16 newStructReg = AllocateRegister();
+        SetRegisterType(newStructReg, CoreType::CUSTOM);
+        program.registerStructTypes[newStructReg] = currentStructMethodTypeHash;
+        builder.EmitInstruction(OP_STRUCT_INSERT, newStructReg,
+                                currentStructMethodSelfReg, fieldIndex,
+                                valueReg);
+        program.metadata[builder.currentInstruction - 1] =
+            currentStructMethodTypeHash;
+        builder.EmitInstruction(OP_STORE_REG, currentStructMethodSelfReg,
+                                newStructReg);
+        return;
+      }
+    }
+
     u16 varReg = GetOrAllocateVariable(ident.name.nameHash);
     valueReg = ConvertRegisterToType(valueReg, GetRegisterType(varReg));
     builder.EmitInstruction(OP_STORE_REG, varReg, valueReg);
@@ -666,8 +695,15 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
         builder.EmitInstruction(OP_STORE_OUTPUT, valueReg, slot);
         program.metadata[builder.currentInstruction - 1] =
             nameHash; // Keep name for debugging
-      } else if (obj.identifierKind == SpecialIdentifier::NONE) {
+      } else if (obj.identifierKind == SpecialIdentifier::NONE ||
+                 obj.identifierKind == SpecialIdentifier::SELF) {
         // Struct member assignment: s.field = value
+        if (currentStructMethodIsConst &&
+            obj.name.nameHash == Utils::HashStr("self")) {
+          ReportError("Error: cannot assign to receiver field inside const method\n");
+          return;
+        }
+
         u16 objReg = GetOrAllocateVariable(obj.name.nameHash);
 
         // Look up the variable's struct type
@@ -1784,6 +1820,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
     return dest;
   }
 
+  case SpecialIdentifier::SELF:
   case SpecialIdentifier::NONE: {
     // Regular struct member access
     u16 objReg = LowerExpression(access.object);

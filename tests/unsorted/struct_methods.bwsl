@@ -1,0 +1,126 @@
+// Test: Struct methods
+// Tests: receiver calls, bare/self field access, mutation, const overloads
+
+pipeline StructMethods {
+    attributes {
+        position: float3
+        normal: float3
+    }
+
+    struct Basis {
+        float3 tangent;
+        float3 bitangent;
+        float3 normal;
+
+        to_world :: (float3 v) -> float3 {
+            return tangent * v.x + bitangent * v.y + normal * v.z;
+        }
+
+        normal_y :: () const -> float {
+            return self.normal.y;
+        }
+    }
+
+    struct Accumulator {
+        float total;
+
+        add :: (float v) -> void {
+            total = total + v;
+        }
+
+        set_self :: (float v) -> void {
+            self.total = v;
+        }
+
+        read :: () const -> float {
+            return self.total;
+        }
+    }
+
+    struct ShadowBox {
+        float value;
+
+        select :: (float value) const -> float {
+            float local = value * 2.0;
+            return local + self.value;
+        }
+    }
+
+    struct Meter {
+        float v;
+
+        value :: () const -> float {
+            return v;
+        }
+    }
+
+    struct Counter {
+        float v;
+
+        value :: () const -> float {
+            return v + 1.0;
+        }
+    }
+
+    struct Preference {
+        float v;
+
+        pick :: () -> float3 {
+            return float3(v + 2.0, 0.0, 0.0);
+        }
+
+        pick :: () const -> float {
+            return v + 1.0;
+        }
+    }
+
+    pass "Main" {
+        use attributes { position, normal }
+
+        vertex {
+            Basis basis;
+            basis.tangent = float3(1.0, 0.0, 0.0);
+            basis.bitangent = float3(0.0, 1.0, 0.0);
+            basis.normal = attributes.normal;
+
+            float3 world = basis.to_world(float3(1.0, 2.0, 3.0));
+            float normalY = basis.normal_y();
+
+            Accumulator acc;
+            acc.total = 1.0;
+            acc.add(2.0);
+            acc.set_self(5.0);
+            float total = acc.read();
+
+            const Accumulator constAcc = acc;
+            float constTotal = constAcc.read();
+
+            ShadowBox box;
+            box.value = 3.0;
+            float shadowed = box.select(4.0);
+
+            Meter meter;
+            meter.v = 7.0;
+            Counter counter;
+            counter.v = 7.0;
+            float sameNameA = meter.value();
+            float sameNameB = counter.value();
+
+            Preference pref;
+            pref.v = 10.0;
+            float3 mutablePick = pref.pick();
+            const Preference constPref = pref;
+            float constPick = constPref.pick();
+
+            float keep =
+                normalY + total + constTotal + shadowed +
+                sameNameA + sameNameB + mutablePick.x + constPick;
+            output.position = float4(world + float3(keep * 0.0), 1.0);
+            output.normal = attributes.normal;
+        }
+
+        fragment {
+            output.color = float4(abs(input.normal), 1.0);
+        }
+    }
+}

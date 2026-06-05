@@ -438,6 +438,53 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
 
         case ASTNodeType::FUNCTION_CALL: {
             const FunctionCallData& funcCall = ast->GetFunctionCall(expr);
+            if ((funcCall.flags & FunctionCallFlags::IS_METHOD_CALL) &&
+                !funcCall.moduleObject.IsNull()) {
+                TypeInfo receiverType = GetExpressionType(funcCall.moduleObject);
+                if (receiverType.coreType == CoreType::CUSTOM &&
+                    receiverType.customTypeHash != 0) {
+                    StructData* structData = g_customTypes.LookupType(receiverType.customTypeHash);
+                    if (!structData) {
+                        Symbol* structSym = SymbolTable::LookupByHash(&symbolTable,
+                            receiverType.customTypeHash);
+                        if (structSym && structSym->kind == SymbolKind::CUSTOM_TYPE) {
+                            structData = &symbolTable.structs[structSym->index];
+                        }
+                    }
+                    if (structData) {
+                        std::vector<OverloadTypeMask> argMasks;
+                        argMasks.reserve(funcCall.arguments.count);
+                        for (u32 i = 0; i < funcCall.arguments.count; i++) {
+                            TypeInfo argType = GetExpressionType(funcCall.arguments[i]);
+                            OverloadTypeMask mask = MakeOverloadMask(argType);
+                            if (mask == 0) {
+                                return TypeInfo{CoreType::INVALID, 0, 0, 0, 0, 0, 0};
+                            }
+                            argMasks.push_back(mask);
+                        }
+                        bool receiverIsConst = false;
+                        if (funcCall.moduleObject.Type() == ASTNodeType::IDENTIFIER) {
+                            const IdentifierData& receiverIdent =
+                                ast->GetIdentifier(funcCall.moduleObject);
+                            Symbol* receiverSym =
+                                SymbolTable::LookupAny(&symbolTable, receiverIdent.name);
+                            if (receiverSym && receiverSym->kind == SymbolKind::VARIABLE) {
+                                receiverIsConst =
+                                    symbolTable.variables[receiverSym->index].isConst;
+                            }
+                        }
+                        u32 methodIdx = SymbolTable::LookupStructMethodIndex(
+                            &symbolTable, structData, funcCall.name, argMasks.data(),
+                            static_cast<u32>(argMasks.size()), receiverIsConst);
+                        if (methodIdx != INVALID_INDEX &&
+                            methodIdx < symbolTable.functions.count) {
+                            const FunctionData& fn = symbolTable.functions[methodIdx];
+                            return TypeInfo{fn.returnType, 1, 0, 0, fn.returnTypeHash, 0, 0};
+                        }
+                    }
+                }
+            }
+
             if (funcCall.flags & FunctionCallFlags::IS_INTRINSIC) {
                 StdLib::Intrinsic intrinsic =
                     static_cast<StdLib::Intrinsic>(StdLib::INTRINSICS[funcCall.intrinsicIndex].enumIndex);
@@ -751,8 +798,29 @@ NodeRef Parser::ParseEnumMethod() {
 
     Consume(TokenType::ARROW, "Expected '->' after parameters");
 
-    if (MatchMask(TokenMasks::ALL)) {
+    if (Check(TokenType::IDENTIFIER)) {
+        Advance();
+        std::string returnTypeName(stream->GetValue(previous));
+        if (Match(TokenType::DOUBLE_COLON)) {
+            std::string moduleName = returnTypeName;
+            Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
+            returnTypeName = CanonicalizeModuleQualifiedName(
+                moduleName, std::string(stream->GetValue(previous)));
+        }
+        TypeInfo resolved = ResolveType(returnTypeName);
+        if (resolved.coreType != CoreType::INVALID) {
+            ast->GetFunction(method).returnType = resolved.coreType;
+            ast->GetFunction(method).returnTypeHash = resolved.customTypeHash;
+        } else {
+            ast->GetFunction(method).returnType = CoreType::CUSTOM;
+            ast->GetFunction(method).returnTypeHash = Utils::HashStr(returnTypeName.c_str());
+        }
+    } else if (MatchMask(TokenMasks::CORE_TYPES)) {
         ast->GetFunction(method).returnType = TokenTypeToReturnType(static_cast<TokenType>(stream->GetType(previous)));
+        ast->GetFunction(method).returnTypeHash = 0;
+    } else if (Match(TokenType::VOID)) {
+        ast->GetFunction(method).returnType = CoreType::VOID;
+        ast->GetFunction(method).returnTypeHash = 0;
     } else {
         Error("Expected valid return type after '->'");
         return NodeRef::Null();
@@ -943,6 +1011,66 @@ NodeRef Parser::ParseTypePatternMatch() {
 // Struct parsing
 //==============================================================================
 
+NodeRef Parser::ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime) {
+    SourceLocation loc = getLocation(stream->GetOffset(current));
+    u32 line = loc.line;
+    u32 col = loc.column;
+
+    Consume(TokenType::IDENTIFIER, "Expected method name");
+    std::string methodName(stream->GetValue(previous));
+
+    Consume(TokenType::DOUBLE_COLON, "Expected '::' after method name");
+
+    NodeRef method = ASTFactory::MakeFunction(ast, methodName, CoreType::FLOAT, line, col);
+    FunctionDeclData& methodDecl = ast->GetFunction(method);
+    methodDecl.isEval = isCompileTime;
+    methodDecl.isStructMethod = true;
+    methodDecl.isConstMethod = false;
+    methodDecl.ownerStructTypeHash = ownerStructTypeHash;
+
+    Consume(TokenType::LEFT_PAREN, "Expected '(' after '::'");
+    ParseFunctionParameters(method);
+    Consume(TokenType::RIGHT_PAREN, "Expected ')' after parameters");
+
+    if (Match(TokenType::CONST)) {
+        ast->GetFunction(method).isConstMethod = true;
+    }
+
+    Consume(TokenType::ARROW, "Expected '->' after parameters");
+
+    if (Check(TokenType::IDENTIFIER)) {
+        Advance();
+        std::string returnTypeName(stream->GetValue(previous));
+        if (Match(TokenType::DOUBLE_COLON)) {
+            std::string moduleName = returnTypeName;
+            Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
+            returnTypeName = CanonicalizeModuleQualifiedName(
+                moduleName, std::string(stream->GetValue(previous)));
+        }
+        TypeInfo resolved = ResolveType(returnTypeName);
+        if (resolved.coreType != CoreType::INVALID) {
+            ast->GetFunction(method).returnType = resolved.coreType;
+            ast->GetFunction(method).returnTypeHash = resolved.customTypeHash;
+        } else {
+            ast->GetFunction(method).returnType = CoreType::CUSTOM;
+            ast->GetFunction(method).returnTypeHash = Utils::HashStr(returnTypeName.c_str());
+        }
+    } else if (MatchMask(TokenMasks::CORE_TYPES)) {
+        ast->GetFunction(method).returnType = TokenTypeToReturnType(PreviousTokenType());
+        ast->GetFunction(method).returnTypeHash = 0;
+    } else if (Match(TokenType::VOID)) {
+        ast->GetFunction(method).returnType = CoreType::VOID;
+        ast->GetFunction(method).returnTypeHash = 0;
+    } else {
+        Error("Expected valid return type after '->'");
+        return NodeRef::Null();
+    }
+
+    Consume(TokenType::LEFT_BRACE, "Expected '{' before method body");
+    ast->GetFunction(method).body = ParseBlock();
+    return method;
+}
+
 NodeRef Parser::ParseStruct() {
     // Note: STRUCT token already consumed by caller
     SourceLocation loc = getLocation(stream->GetOffset(previous));
@@ -959,6 +1087,7 @@ NodeRef Parser::ParseStruct() {
     StructData structData;
     structData.name = ArenaString::MakeHashOnly(structName);
     structData.fields.Init(arena, 8);
+    structData.methodIndices.Init(arena, 4);
     structData.isIndexable = false;
 
     // Progress guard against malformed struct bodies that could otherwise
@@ -968,6 +1097,44 @@ NodeRef Parser::ParseStruct() {
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
         ProgressGuard _pg_(this);
         TokenRef loopStart = current;
+        bool isCompileTime = Match(TokenType::EVAL);
+
+        if (IsFunctionDeclStart()) {
+            NodeRef method = ParseStructMethod(structData.name.nameHash, isCompileTime);
+            if (method.IsValid()) {
+                const FunctionDeclData& decl = ast->GetFunction(method);
+                std::vector<OverloadTypeMask> paramMasks;
+                BuildParamMasks(decl.parameters, paramMasks);
+                u64 signatureKey = HashOverloadSignature(paramMasks.data(),
+                    static_cast<u32>(paramMasks.size()));
+
+                if (HasDuplicateMethodInList(ast, ast->GetStructDecl(structNode).methods,
+                        decl, paramMasks, signatureKey)) {
+                    Error("Struct method overload already declared");
+                } else {
+                    u32 methodIndex = symbolTable.functions.count;
+                    symbolTable.functions.Push(arena, FunctionData{});
+                    FillFunctionData(&symbolTable, arena, decl, method, paramMasks,
+                                     signatureKey, methodIndex);
+                    structData.methodIndices.Push(arena, methodIndex);
+                    ast->GetStructDecl(structNode).methods.Push(arena, method);
+                }
+            }
+            if (current == loopStart) {
+                if (stream->GetType(current) == TokenType::EOF_TOKEN) break;
+                Advance();
+            }
+            continue;
+        }
+
+        if (isCompileTime) {
+            Error("'eval' keyword must precede a method declaration");
+            if (current == loopStart) {
+                if (stream->GetType(current) == TokenType::EOF_TOKEN) break;
+                Advance();
+            }
+            continue;
+        }
 
         // Parse field type (core or custom/module-qualified)
         TypeInfo fieldType = TYPE_INFO(CoreType::INVALID, 0, false);

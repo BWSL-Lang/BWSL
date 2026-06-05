@@ -1,0 +1,17 @@
+pipeline StructMethodAssignInConstError {
+    struct Thing {
+        float v;
+
+        bad :: () const -> void {
+            self.v = 1.0;
+        }
+    }
+
+    pass "Compute" {
+        compute "Main" [1, 1, 1] {
+            Thing t;
+            t.v = 0.0;
+            t.bad();
+        }
+    }
+}

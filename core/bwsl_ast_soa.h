@@ -212,8 +212,12 @@ struct FunctionDeclData {
     ArenaString name;
     ArenaArray<std::pair<ArenaString, ArenaString>> parameters;
     CoreType returnType;
+    u32 returnTypeHash;
+    u32 ownerStructTypeHash;
     NodeRef body;
     bool isEval;
+    bool isStructMethod;
+    bool isConstMethod;
 };
 
 // Struct field with optional array size
@@ -227,6 +231,7 @@ struct StructFieldData {
 struct StructDeclData {
     ArenaString name;
     ArenaArray<StructFieldData> fields;
+    ArenaArray<NodeRef> methods;
 };
 
 // Constraint declaration - 20 bytes
@@ -1173,9 +1178,13 @@ namespace ASTFactory {
         FunctionDeclData data;
         data.name = ArenaString::MakeHashOnly(name);
         data.returnType = returnType;
+        data.returnTypeHash = 0;
+        data.ownerStructTypeHash = 0;
         data.parameters.Init(ast->arena, 4);
         data.body = NodeRef::Null();
         data.isEval = false;
+        data.isStructMethod = false;
+        data.isConstMethod = false;
         ast->functions.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {
@@ -1195,6 +1204,7 @@ namespace ASTFactory {
         StructDeclData data;
         data.name = ArenaString::MakeHashOnly(name);
         data.fields.Init(ast->arena, 8);
+        data.methods.Init(ast->arena, 4);
         ast->structDecls.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {

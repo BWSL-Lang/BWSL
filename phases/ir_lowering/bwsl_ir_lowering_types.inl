@@ -514,6 +514,40 @@ inline StructData *IRLowering::LookupStructDataByHash(u32 typeHash) {
   return g_customTypes.LookupType(typeHash);
 }
 
+inline bool IRLowering::FindStructField(u32 structTypeHash, u32 fieldNameHash,
+                                        u32 *outFieldIndex,
+                                        CoreType *outFieldType,
+                                        u32 *outFieldTypeHash) {
+  if (outFieldIndex) *outFieldIndex = 0xFFFFFFFF;
+  if (outFieldType) *outFieldType = CoreType::INVALID;
+  if (outFieldTypeHash) *outFieldTypeHash = 0;
+  if (structTypeHash == 0) return false;
+
+  u32 canonicalHash = LookupOrRegisterStructType(structTypeHash);
+  u32 lookupHash = canonicalHash != 0 ? canonicalHash : structTypeHash;
+  auto structIt = structTypeMap.find(lookupHash);
+  if (structIt == structTypeMap.end()) {
+    structIt = structTypeMap.find(structTypeHash);
+  }
+  if (structIt == structTypeMap.end()) return false;
+
+  const IRProgram::StructTypeInfo &info = program.structTypes[structIt->second];
+  for (u32 i = 0; i < info.fieldCount; i++) {
+    u32 offset = info.fieldOffset + i;
+    if (program.structFieldNameHashes[offset] != fieldNameHash) continue;
+    if (outFieldIndex) *outFieldIndex = i;
+    if (outFieldType) {
+      *outFieldType = static_cast<CoreType>(program.structFieldTypes[offset]);
+    }
+    if (outFieldTypeHash && program.structFieldTypeHashes) {
+      *outFieldTypeHash = program.structFieldTypeHashes[offset];
+    }
+    return true;
+  }
+
+  return false;
+}
+
 inline u32 IRLowering::ScalarComponentCount(CoreType type) {
   return CoreTypeScalarComponentCount(type);
 }
