@@ -1,5 +1,9 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Interface variables, stage inputs/outputs, builtins, shared variables, and vertex pulling declarations.
+#pragma once
+#include "bwsl_spirv_backend.cpp"
+
+namespace BWSL {
 
 static void EmitInterpolationDecoration(SPIRVBuilder& builder, u32 var_id,
                                         InterpolationMode interpolation) {
@@ -625,3 +629,6 @@ u32 SPIRVBuilder::CreateStorageBufferForAttribute(u32 attrIdx,
 }
 
 // Helper: Check if type is a matrix
+
+
+} // namespace BWSL

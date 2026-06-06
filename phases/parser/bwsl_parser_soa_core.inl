@@ -1,5 +1,9 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Core helpers, token navigation, diagnostics, and primitive parser utilities.
+#pragma once
+#include "bwsl_parser_soa.cpp"
+
+namespace BWSL {
 
 namespace {
 
@@ -183,6 +187,36 @@ static TypeInfo MakeTypeInfoForResource(SymbolTableData* table, const ResourceDa
 
         default:
             return TYPE_INFO(CoreType::INVALID, 0, false);
+    }
+}
+
+// Fuzzer-proof integer parsers: return 0 on empty / malformed / out-of-range
+// input instead of throwing. The lexer's number rules are not strict enough
+// to guarantee std::stoul / std::stoi success (e.g. "0x" with no digits,
+// "0b2", trailing garbage); these helpers keep the parser safe against
+// adversarial input.
+inline u32 SafeParseU32(std::string_view s, int base = 0) {
+    if (s.empty()) return 0;
+    try {
+        return static_cast<u32>(std::stoul(std::string(s), nullptr, base));
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+inline int SafeParseInt(std::string_view s, int base = 0) {
+    if (s.empty()) return 0;
+    try {
+        return std::stoi(std::string(s), nullptr, base);
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+inline float SafeParseFloat(std::string_view s) {
+    if (s.empty()) return 0.0f;
+    try {
+        return std::stof(std::string(s));
+    } catch (const std::exception&) {
+        return 0.0f;
     }
 }
 
@@ -763,6 +797,4 @@ BinaryOpType Parser::TokenTypeToBinaryOp(TokenType type) {
     }
 }
 
-//==============================================================================
-// Main parsing function
-//==============================================================================
+} // namespace BWSL

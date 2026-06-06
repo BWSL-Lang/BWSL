@@ -1,12 +1,13 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Arrays, enum/sumtype constructs, pattern matching, and structs.
-
-    return switchNode;
-}
+#pragma once
+#include "bwsl_parser_soa.cpp"
 
 //==============================================================================
 // Array declaration and construction
 //==============================================================================
+
+namespace BWSL {
 
 NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storageClass) {
     SourceLocation loc = getLocation(stream->GetOffset(previous));
@@ -1329,6 +1330,4 @@ NodeRef Parser::ParseStruct() {
     return structNode;
 }
 
-//==============================================================================
-// Module parsing
-//==============================================================================
+} // namespace BWSL

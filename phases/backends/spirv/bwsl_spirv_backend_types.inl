@@ -1,5 +1,9 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Type IDs, pointer/function/struct/image types, and sampled texture loading.
+#pragma once
+#include "bwsl_spirv_backend.cpp"
+
+namespace BWSL {
 
 u32 SPIRVBuilder::GetVectorTypeId(CoreType base, u32 components) {
   // Check if we can use predefined types
@@ -433,3 +437,5 @@ u32 SPIRVBuilder::GetStorageImageTypeId() {
   return storageImageTypeId;
 }
 
+
+} // namespace BWSL

@@ -1,12 +1,10 @@
+#pragma once
 #include "bwsl_spirv_backend.h"
 #include "bwsl_ir_analysis.h"
 #include "bwsl_utils.h"
 #include "vendor/SPIRV-Headers/include/spirv/unified1/GLSL.std.450.h"
 #include <array>
 #include <cstring>
-
-namespace BWSL {
-
 
 // =============================================================================
 // SPIR-V backend implementation table of contents
@@ -37,5 +35,3 @@ namespace BWSL {
 #include "bwsl_spirv_backend_io.inl"
 #include "bwsl_spirv_backend_resources.inl"
 #include "bwsl_spirv_backend_finalize.inl"
-
-} // namespace BWSL

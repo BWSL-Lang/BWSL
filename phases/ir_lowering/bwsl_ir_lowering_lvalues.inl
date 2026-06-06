@@ -1,4 +1,8 @@
 // Part of the header-only IRLowering implementation. Include via bwsl_ir_lowering.h only.
+#pragma once
+#include "bwsl_ir_lowering.h"
+
+namespace BWSL::IR {
 
 namespace {
 
@@ -2244,3 +2248,6 @@ inline CompressionFormat IRLowering::GetAttributeCompression(u32 attrIndex) {
   }
   return CompressionFormat::NONE;
 }
+
+
+} // namespace BWSL::IR

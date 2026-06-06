@@ -1,5 +1,9 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Constant pools, composite constants, section emission, decorations, and names.
+#pragma once
+#include "bwsl_spirv_backend.cpp"
+
+namespace BWSL {
 
 u32 SPIRVBuilder::GetFloatConstantId(float value) {
   // Check for existing constant
@@ -209,3 +213,6 @@ void SPIRVBuilder::EmitMemberName(u32 structTypeId, u32 memberIndex,
 // ============= IR Translation =============
 
 // Forward declarations for helpers used in TranslateInstruction
+
+
+} // namespace BWSL

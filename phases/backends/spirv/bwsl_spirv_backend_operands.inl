@@ -1,5 +1,9 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Result and operand type helpers shared by instruction emission.
+#pragma once
+#include "bwsl_spirv_backend.cpp"
+
+namespace BWSL {
 
 static CoreType GetFallbackAttributeType(u32 attrIdx);
 static CoreType GetFallbackOutputType(u32 slot);
@@ -126,3 +130,5 @@ spv::Op SPIRVBuilder::IRToSpvOp(IR::OpCode op) {
   return spv::OpNop;
 }
 
+
+} // namespace BWSL

@@ -1,4 +1,7 @@
 // Part of the header-only IRLowering implementation. Include via bwsl_ir_lowering.h only.
+#pragma once
+#include "bwsl_ir_lowering.h"
+namespace BWSL::IR {
 
 inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
   const FunctionCallData &call = ast->GetFunctionCall(ref);
@@ -2099,3 +2102,6 @@ inline OpCode IRLowering::IntrinsicToOpcode(StdLib::Intrinsic intrinsic) {
     return OP_NOP;
   }
 }
+
+
+} // namespace BWSL::IR

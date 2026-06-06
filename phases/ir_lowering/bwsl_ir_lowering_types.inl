@@ -1,4 +1,8 @@
 // Part of the header-only IRLowering implementation. Include via bwsl_ir_lowering.h only.
+#pragma once
+#include "bwsl_ir_lowering.h"
+
+namespace BWSL::IR {
 
 inline u16 IRLowering::EmitZeroStruct(u32 structTypeHash) {
   if (structTypeHash == 0) {
@@ -1239,3 +1243,6 @@ inline OverloadTypeMask IRLowering::MakeOverloadMaskFromResolvedTypeHash(u32 typ
   }
   return MakeOverloadMaskFromTypeHash(typeHash);
 }
+
+
+} // namespace BWSL::IR

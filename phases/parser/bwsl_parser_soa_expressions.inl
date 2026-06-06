@@ -1,5 +1,13 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Expressions, calls, postfix/member/array access, and assignment target validation.
+#pragma once
+#include "bwsl_parser_soa.cpp"
+
+//==============================================================================
+// Expression parsing
+//==============================================================================
+
+namespace BWSL {
 
 NodeRef Parser::ParseExpression() {
     PARSER_TIME_EXPR();
@@ -819,6 +827,4 @@ NodeRef Parser::FlattenMultiDimArrayAccess(NodeRef access) {
     return ASTFactory::MakeArrayAccess(ast, base, flatIndex, 0, 0);
 }
 
-//==============================================================================
-// Helper functions
-//==============================================================================
+} // namespace BWSL

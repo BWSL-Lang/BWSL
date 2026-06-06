@@ -1,5 +1,7 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Static IR-to-SPIR-V and GLSL.std.450 lookup tables.
+#pragma once
+#include "bwsl_spirv_backend.cpp"
 
 // ============= Static lookup tables =============
 // This table maps BWSL IR Opcodes to core SPIR-V opcodes.
@@ -7,6 +9,9 @@
 // belongs to an extended instruction set (like GLSL.std.450).
 // The specific extended instruction must then be looked up in the parallel
 // table.
+
+namespace BWSL {
+
 constexpr std::array<spv::Op, 256> BuildIrToSpvOpTable() {
     std::array<spv::Op, 256> table{};
     for (auto& entry : table) entry = spv::OpNop;
@@ -290,3 +295,6 @@ constexpr std::array<u32, 256> BuildIrToGlslStd450Table() {
 static constexpr auto IR_TO_GLSL_STD_450_TABLE = BuildIrToGlslStd450Table();
 
 // ============= Initialization =============
+
+
+} // namespace BWSL

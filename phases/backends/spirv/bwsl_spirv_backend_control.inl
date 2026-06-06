@@ -1,5 +1,9 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Block labels, branches, structured control flow, phi nodes, and function body emission.
+#pragma once
+#include "bwsl_spirv_backend.cpp"
+
+namespace BWSL {
 
 u32 SPIRVBuilder::GetOrCreateBlockLabel(u32 ir_idx) {
   // Check if we already have a label for this IR index
@@ -656,3 +660,6 @@ void SPIRVBuilder::EmitFunctionBody() {
 // ============= Interface Setup =============
 
 // Helper to create an interface variable with decoration
+
+
+} // namespace BWSL

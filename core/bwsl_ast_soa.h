@@ -2,6 +2,7 @@
 #include <vector>
 #include <string>
 #include <variant>
+#include <cstring>
 #include "bwsl_defs.h"
 #include "bwsl_arena.h"
 #include "bwsl_utils.h"

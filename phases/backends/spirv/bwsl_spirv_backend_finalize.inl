@@ -1,5 +1,9 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Final module assembly, section growth, ID growth, and composite type hashing.
+#pragma once
+#include "bwsl_spirv_backend.cpp"
+
+namespace BWSL {
 
 std::vector<u32> SPIRVBuilder::Finalize() {
   std::vector<u32> spirv;
@@ -119,3 +123,5 @@ u32 SPIRVBuilder::HashCompositeType(u32 *components, u32 count) {
   return Utils::HashWords(components, count);
 }
 
+
+} // namespace BWSL

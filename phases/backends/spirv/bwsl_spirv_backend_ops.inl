@@ -1,5 +1,9 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Main IR instruction translation dispatch and opcode emission.
+#pragma once
+#include "bwsl_spirv_backend.cpp"
+
+namespace BWSL {
 
 void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   IR::OpCode op = static_cast<IR::OpCode>(ir->opcodes[ir_idx]);
@@ -4958,3 +4962,6 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 }
 
 // ============= Control Flow =============
+
+
+} // namespace BWSL

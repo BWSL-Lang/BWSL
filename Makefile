@@ -228,7 +228,7 @@ WASM_SPIRV_INCLUDES = $(BWSL_INCLUDE_DIRS) -Itools
 
 .PHONY: all help bwslc bwslc-debug bwslc-sanitize bwslc-msvc bwslc-msvc-debug \
 	bwslc-win-zig bwslc-win-zig-debug clean wasm wasm-debug test test-sanitize \
-	install equiv_runner spirv-tools
+	install equiv_runner spirv-tools clangd-config
 
 all: bwslc
 
@@ -449,3 +449,10 @@ install: wasm
 
 clean:
 	$(CLEAN_BUILD)
+
+# ============================================================================
+# IDE Configuration
+# ============================================================================
+
+clangd-config:
+	python3 scripts/gen_compile_commands.py
