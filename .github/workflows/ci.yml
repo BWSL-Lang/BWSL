@@ -3,7 +3,29 @@ name: CI
 on:
   push:
     branches: [master]
+    paths:
+      - 'core/**'
+      - 'phases/**'
+      - 'tools/**'
+      - 'modules/**'
+      - 'tests/**'
+      - 'vendor/**'
+      - 'Makefile'
+      - 'build.bat'
+      - 'make.bat'
+      - '.github/workflows/ci.yml'
   pull_request:
+    paths:
+      - 'core/**'
+      - 'phases/**'
+      - 'tools/**'
+      - 'modules/**'
+      - 'tests/**'
+      - 'vendor/**'
+      - 'Makefile'
+      - 'build.bat'
+      - 'make.bat'
+      - '.github/workflows/ci.yml'
   pull_request_review:
     types: [submitted]
   workflow_dispatch:
