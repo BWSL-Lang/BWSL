@@ -2,9 +2,7 @@
 // Pipeline, import, attribute, resource, pass, and shader stage declarations.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 NodeRef Parser::ParseDocument() {
     TokenRef documentStart = current;
@@ -1577,6 +1575,4 @@ NodeRef Parser::ParseShaderStageExpression(ASTNodeType stageType) {
 //==============================================================================
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

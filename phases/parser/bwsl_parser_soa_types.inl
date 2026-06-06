@@ -2,12 +2,8 @@
 // Arrays, enum/sumtype constructs, pattern matching, and structs.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
-    return switchNode;
-}
 
 //==============================================================================
 // Array declaration and construction
@@ -1339,6 +1335,4 @@ NodeRef Parser::ParseStruct() {
 //==============================================================================
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

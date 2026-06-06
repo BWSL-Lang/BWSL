@@ -2,9 +2,7 @@
 // Block labels, branches, structured control flow, phi nodes, and function body emission.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 u32 SPIRVBuilder::GetOrCreateBlockLabel(u32 ir_idx) {
   // Check if we already have a label for this IR index
@@ -663,6 +661,4 @@ void SPIRVBuilder::EmitFunctionBody() {
 // Helper to create an interface variable with decoration
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

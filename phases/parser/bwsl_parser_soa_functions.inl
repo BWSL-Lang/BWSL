@@ -2,9 +2,7 @@
 // Module loading validation plus function and compute-body parsing.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 bool Parser::ValidateAttributeInUse(const ArenaString& attrName) {
     if (!currentPass.IsValid()) return false;
@@ -638,6 +636,4 @@ void Parser::ParseFunctionsBlockBody(NodeRef block) {
 //==============================================================================
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

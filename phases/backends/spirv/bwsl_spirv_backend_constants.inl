@@ -2,9 +2,7 @@
 // Constant pools, composite constants, section emission, decorations, and names.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 u32 SPIRVBuilder::GetFloatConstantId(float value) {
   // Check for existing constant
@@ -216,6 +214,4 @@ void SPIRVBuilder::EmitMemberName(u32 structTypeId, u32 memberIndex,
 // Forward declarations for helpers used in TranslateInstruction
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

@@ -8,9 +8,7 @@
 // The specific extended instruction must then be looked up in the parallel
 // table.
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 constexpr std::array<spv::Op, 256> BuildIrToSpvOpTable() {
     std::array<spv::Op, 256> table{};
@@ -297,6 +295,4 @@ static constexpr auto IR_TO_GLSL_STD_450_TABLE = BuildIrToGlslStd450Table();
 // ============= Initialization =============
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

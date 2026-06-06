@@ -1,9 +1,7 @@
 // Part of the header-only IRLowering implementation. Include via bwsl_ir_lowering.h only.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL::IR {
-#endif
 
 inline void IRLowering::ReportError(const char *message) {
   if (message) {
@@ -335,6 +333,4 @@ inline void IRLowering::LowerBlock(NodeRef blockRef) {
 }
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL::IR
-#endif

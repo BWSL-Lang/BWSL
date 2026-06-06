@@ -2,9 +2,7 @@
 // Main IR instruction translation dispatch and opcode emission.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   IR::OpCode op = static_cast<IR::OpCode>(ir->opcodes[ir_idx]);
@@ -4965,6 +4963,4 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 // ============= Control Flow =============
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

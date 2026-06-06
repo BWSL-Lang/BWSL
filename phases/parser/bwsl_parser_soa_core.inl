@@ -2,9 +2,7 @@
 // Core helpers, token navigation, diagnostics, and primitive parser utilities.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 namespace {
 
@@ -773,6 +771,4 @@ BinaryOpType Parser::TokenTypeToBinaryOp(TokenType type) {
 //==============================================================================
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

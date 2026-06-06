@@ -2,9 +2,7 @@
 // Result and operand type helpers shared by instruction emission.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 static CoreType GetFallbackAttributeType(u32 attrIdx);
 static CoreType GetFallbackOutputType(u32 slot);
@@ -132,6 +130,4 @@ spv::Op SPIRVBuilder::IRToSpvOp(IR::OpCode op) {
 }
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

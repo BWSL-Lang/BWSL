@@ -2,9 +2,7 @@
 // Interface variables, stage inputs/outputs, builtins, shared variables, and vertex pulling declarations.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 static void EmitInterpolationDecoration(SPIRVBuilder& builder, u32 var_id,
                                         InterpolationMode interpolation) {
@@ -632,6 +630,4 @@ u32 SPIRVBuilder::CreateStorageBufferForAttribute(u32 attrIdx,
 // Helper: Check if type is a matrix
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

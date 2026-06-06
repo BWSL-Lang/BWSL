@@ -2,9 +2,7 @@
 // Expressions, calls, postfix/member/array access, and assignment target validation.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 NodeRef Parser::ParseExpression() {
     PARSER_TIME_EXPR();
@@ -829,6 +827,4 @@ NodeRef Parser::FlattenMultiDimArrayAccess(NodeRef access) {
 //==============================================================================
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

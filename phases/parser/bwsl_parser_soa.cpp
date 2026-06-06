@@ -115,8 +115,6 @@ namespace parser_timing {
 
 #endif
 
-namespace BWSL {
-
 // =============================================================================
 // Parser implementation table of contents
 // =============================================================================
@@ -143,5 +141,3 @@ namespace BWSL {
 #include "bwsl_parser_soa_types.inl"
 #include "bwsl_parser_soa_modules_generics.inl"
 #include "bwsl_parser_soa_specialization.inl"
-
-} // namespace BWSL

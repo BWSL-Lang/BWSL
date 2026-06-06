@@ -2,9 +2,7 @@
 // Blocks, statements, and local/custom variable declarations.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 static bool IsOutputAssignmentTarget(AST* ast, NodeRef target) {
     if (!target.IsValid()) {
@@ -766,6 +764,4 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
 //==============================================================================
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

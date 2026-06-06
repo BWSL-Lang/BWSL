@@ -2,9 +2,7 @@
 // Module declarations, constraints, where clauses, generic functions, and shader stage expression resolution.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 NodeRef Parser::ParseModule() {
     SourceLocation loc = getLocation(stream->GetOffset(previous));
@@ -548,6 +546,4 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
 //==============================================================================
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

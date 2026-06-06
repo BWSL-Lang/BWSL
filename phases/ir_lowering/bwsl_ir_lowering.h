@@ -477,12 +477,11 @@ struct IRLowering {
   // storage in this struct rather than introducing separate owner objects.
 };
 
+} // namespace BWSL::IR
+
 #include "bwsl_ir_lowering_core.inl"
 #include "bwsl_ir_lowering_control.inl"
 #include "bwsl_ir_lowering_types.inl"
 #include "bwsl_ir_lowering_expr.inl"
 #include "bwsl_ir_lowering_lvalues.inl"
 #include "bwsl_ir_lowering_calls.inl"
-
-
-} // namespace BWSL::IR

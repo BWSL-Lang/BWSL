@@ -1,9 +1,7 @@
 // Part of the header-only IRLowering implementation. Include via bwsl_ir_lowering.h only.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL::IR {
-#endif
 
 namespace {
 
@@ -1185,6 +1183,4 @@ inline u16 IRLowering::LowerBinaryOp(NodeRef ref) {
 }
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL::IR
-#endif

@@ -3,11 +3,6 @@
 
 Actual TUs get their own entries. .inl shards get entries with:
   - A force-included preamble that provides the types they depend on
-  - -DBWSL_CLANGD, which activates the namespace guards added to each shard
-
-The guards (#ifdef BWSL_CLANGD / namespace X { / #endif) ensure the shard
-compiles in the right namespace when built standalone by clangd, while the
-real unity build (which never defines BWSL_CLANGD) is unaffected.
 
 Preambles are written to build/ide/ (already gitignored via build/).
 Run from the repository root:  python3 scripts/gen_compile_commands.py
@@ -88,9 +83,6 @@ def is_inl_include(line):
 
 def make_cpp_preamble(parent_rel):
     """Return only the #include lines from a .cpp before the first .inl include.
-
-    Deliberately excludes namespace openings so the preamble has no open scopes;
-    the .inl file's own #ifdef BWSL_CLANGD guard handles namespace placement.
     """
     return ''.join(
         line for line in read_lines(parent_rel)
@@ -139,7 +131,7 @@ def main():
         if os.path.exists(os.path.join(ROOT, src)):
             entries.append(make_entry(src))
 
-    # .inl shards: compile standalone with a context preamble + BWSL_CLANGD
+    # .inl shards: compile standalone with a context preamble
     for group in INL_GROUPS:
         if group["type"] == "cpp":
             content = make_cpp_preamble(group["parent"])
@@ -152,7 +144,6 @@ def main():
 
         for inl in find_inl_files(group["dir"]):
             entries.append(make_entry(inl, extra_args=[
-                "-DBWSL_CLANGD",
                 "-include", preamble_abs,
                 "-x", "c++",
             ]))
@@ -162,11 +153,7 @@ def main():
         json.dump(entries, f, indent=2)
         f.write("\n")
 
-    tus = [e for e in entries if "-DBWSL_CLANGD" not in e["arguments"]]
-    inls = [e for e in entries if "-DBWSL_CLANGD" in e["arguments"]]
     print(f"Wrote {len(entries)} entries to {out_path}")
-    print(f"  {len(tus)} standalone TUs")
-    print(f"  {len(inls)} .inl shards (preamble + -DBWSL_CLANGD)")
     for g in INL_GROUPS:
         print(f"    {g['dir']}  ←  {g['preamble']}")
 

@@ -1,9 +1,7 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Shader lookup, AST cloning, variant specialization, and final stage resolution.
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 static std::string ArenaStringToStdString(const ArenaString& str, const char* sourceBase) {
     return str.isHashOnly() ? ReverseLookup::GetString(str.nameHash)
@@ -1328,6 +1326,4 @@ void Parser::ResolveShaderStageExpressions(NodeRef pipeline) {
 }
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

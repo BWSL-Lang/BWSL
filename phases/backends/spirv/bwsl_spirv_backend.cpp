@@ -5,9 +5,6 @@
 #include <array>
 #include <cstring>
 
-namespace BWSL {
-
-
 // =============================================================================
 // SPIR-V backend implementation table of contents
 // =============================================================================
@@ -37,5 +34,3 @@ namespace BWSL {
 #include "bwsl_spirv_backend_io.inl"
 #include "bwsl_spirv_backend_resources.inl"
 #include "bwsl_spirv_backend_finalize.inl"
-
-} // namespace BWSL

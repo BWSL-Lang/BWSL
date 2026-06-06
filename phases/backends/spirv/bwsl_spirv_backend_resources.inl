@@ -2,9 +2,7 @@
 // Resource declarations, image/buffer setup, descriptor bindings, and storage buffers.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 static bool IsMatrixType(CoreType type) {
   return type == CoreType::MAT2 || type == CoreType::MAT3 ||
@@ -554,6 +552,4 @@ void SPIRVBuilder::DeclareResources() {
 // ============= Final Assembly =============
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

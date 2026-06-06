@@ -2,9 +2,7 @@
 // Builder initialization, preamble, entry-point emission, and core setup.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 void SPIRVBuilder::Initialize(BWSL_Arena *arena, IR::IRProgram *ir,
                               ShaderStage stage, const SymbolTableData *symbols,
@@ -341,6 +339,4 @@ void SPIRVBuilder::EmitEntryPoint() {
 // ============= Type Management =============
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif

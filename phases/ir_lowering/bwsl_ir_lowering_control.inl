@@ -1,9 +1,7 @@
 // Part of the header-only IRLowering implementation. Include via bwsl_ir_lowering.h only.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL::IR {
-#endif
 
 inline void IRLowering::LowerStatement(NodeRef ref) {
   switch (ref.Type()) {
@@ -939,6 +937,4 @@ inline u16 IRLowering::CombineLoopCondition(u16 condReg) {
 }
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL::IR
-#endif

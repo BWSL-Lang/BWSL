@@ -2,9 +2,7 @@
 // Final module assembly, section growth, ID growth, and composite type hashing.
 
 
-#ifdef BWSL_CLANGD
 namespace BWSL {
-#endif
 
 std::vector<u32> SPIRVBuilder::Finalize() {
   std::vector<u32> spirv;
@@ -125,6 +123,4 @@ u32 SPIRVBuilder::HashCompositeType(u32 *components, u32 count) {
 }
 
 
-#ifdef BWSL_CLANGD
 } // namespace BWSL
-#endif
