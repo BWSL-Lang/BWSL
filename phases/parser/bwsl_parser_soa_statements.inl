@@ -1,5 +1,8 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Blocks, statements, and local/custom variable declarations.
+#pragma once
+
+#include "bwsl_parser_soa_decls.inl"
 
 
 namespace BWSL {

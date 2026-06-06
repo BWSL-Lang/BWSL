@@ -1,6 +1,8 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Arrays, enum/sumtype constructs, pattern matching, and structs.
+#pragma once
 
+#include "bwsl_parser_soa_variants_eval.inl"
 
 namespace BWSL {
 

@@ -1,5 +1,8 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Expressions, calls, postfix/member/array access, and assignment target validation.
+#pragma once
+
+#include "bwsl_parser_soa_statements.inl"
 
 
 namespace BWSL {

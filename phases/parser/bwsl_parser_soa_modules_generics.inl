@@ -1,5 +1,7 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Module declarations, constraints, where clauses, generic functions, and shader stage expression resolution.
+#pragma once
+#include "bwsl_parser_soa_types.inl"
 
 
 namespace BWSL {
