@@ -4,6 +4,8 @@ on:
   push:
     branches: [master]
   pull_request:
+  pull_request_review:
+    types: [submitted]
   workflow_dispatch:
 
 concurrency:
@@ -38,6 +40,7 @@ jobs:
   macos:
     name: macos-latest
     needs: linux
+    if: github.ref == 'refs/heads/master' || (github.event_name == 'pull_request_review' && github.event.review.state == 'approved')
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -63,6 +66,7 @@ jobs:
   windows:
     name: windows-latest
     needs: linux
+    if: github.ref == 'refs/heads/master' || (github.event_name == 'pull_request_review' && github.event.review.state == 'approved')
     runs-on: windows-latest
     steps:
       - name: Checkout
