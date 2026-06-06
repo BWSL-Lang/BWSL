@@ -2,7 +2,9 @@ package com.bwsl.plugin
 
 import com.intellij.openapi.fileChooser.FileChooserDescriptor
 import com.intellij.openapi.options.Configurable
+import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogPanel
+import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.ToolbarDecorator
 import com.intellij.ui.components.JBList
 import com.intellij.ui.dsl.builder.Align
@@ -15,6 +17,7 @@ class BwslSettingsConfigurable : Configurable {
 
     private var panel: DialogPanel? = null
     private val moduleListModel = DefaultListModel<String>()
+    private var formatCombo: ComboBox<BwslOutputFormat>? = null
 
     override fun getDisplayName(): String = "BWSL"
 
@@ -22,6 +25,12 @@ class BwslSettingsConfigurable : Configurable {
         val settings = BwslSettings.getInstance()
         moduleListModel.clear()
         settings.modulePaths.forEach { moduleListModel.addElement(it) }
+
+        formatCombo = ComboBox(BwslOutputFormat.entries.toTypedArray()).apply {
+            renderer = SimpleListCellRenderer.create("") { it.displayName }
+            selectedItem = BwslOutputFormat.entries.firstOrNull { it.name == settings.outputFormat }
+                ?: BwslOutputFormat.SPIRV_ONLY
+        }
 
         val moduleList = JBList(moduleListModel)
         val decorator = ToolbarDecorator.createDecorator(moduleList)
@@ -52,6 +61,17 @@ class BwslSettingsConfigurable : Configurable {
                     project
                 ).bindText(settings::compilerPath)
             }
+            row("Output format:") {
+                cell(formatCombo!!)
+            }
+            row("Output directory:") {
+                textFieldWithBrowseButton(
+                    FileChooserDescriptor(false, true, false, false, false, false)
+                        .withTitle("Select Output Directory"),
+                    project
+                ).bindText(settings::outputDirectory)
+                    .comment("Defaults to the source file's directory if empty")
+            }
             row("Module paths:") {}
             row {
                 cell(decorator).align(Align.FILL)
@@ -61,14 +81,18 @@ class BwslSettingsConfigurable : Configurable {
 
     override fun isModified(): Boolean {
         if (panel?.isModified() == true) return true
-        val saved = BwslSettings.getInstance().modulePaths
-        val current = moduleListModel.elements().toList()
-        return saved != current
+        val settings = BwslSettings.getInstance()
+        val currentFormat = (formatCombo?.selectedItem as? BwslOutputFormat)?.name ?: BwslOutputFormat.SPIRV_ONLY.name
+        if (currentFormat != settings.outputFormat) return true
+        return settings.modulePaths != moduleListModel.elements().toList()
     }
 
     override fun apply() {
         panel?.apply()
-        BwslSettings.getInstance().modulePaths = moduleListModel.elements().toList().toMutableList()
+        val settings = BwslSettings.getInstance()
+        settings.outputFormat = (formatCombo?.selectedItem as? BwslOutputFormat)?.name
+            ?: BwslOutputFormat.SPIRV_ONLY.name
+        settings.modulePaths = moduleListModel.elements().toList().toMutableList()
         com.intellij.openapi.project.ProjectManager.getInstance().openProjects.forEach { project ->
             com.intellij.codeInsight.daemon.DaemonCodeAnalyzer.getInstance(project).restart("BWSL settings changed")
         }
@@ -76,9 +100,15 @@ class BwslSettingsConfigurable : Configurable {
 
     override fun reset() {
         panel?.reset()
+        val settings = BwslSettings.getInstance()
+        formatCombo?.selectedItem = BwslOutputFormat.entries.firstOrNull { it.name == settings.outputFormat }
+            ?: BwslOutputFormat.SPIRV_ONLY
         moduleListModel.clear()
-        BwslSettings.getInstance().modulePaths.forEach { moduleListModel.addElement(it) }
+        settings.modulePaths.forEach { moduleListModel.addElement(it) }
     }
 
-    override fun disposeUIResources() { panel = null }
+    override fun disposeUIResources() {
+        panel = null
+        formatCombo = null
+    }
 }
