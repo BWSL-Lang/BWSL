@@ -1,0 +1,44 @@
+name: JetBrains Plugin
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'tools/jetbrains-bwsl/**'
+      - 'tests/**'
+      - '.github/workflows/jetbrains.yml'
+  pull_request:
+    paths:
+      - 'tools/jetbrains-bwsl/**'
+      - '.github/workflows/jetbrains.yml'
+  pull_request_review:
+    types: [submitted]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: linux-latest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build plugin
+        working-directory: tools/jetbrains-bwsl
+        run: ./gradlew buildPlugin
+
+      - name: Run tests
+        working-directory: tools/jetbrains-bwsl
+        run: ./gradlew test
