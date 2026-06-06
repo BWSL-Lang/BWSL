@@ -1,8 +1,7 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Compile-time eval bindings, variant resolution, eval expansion, and control-flow statements.
 #pragma once
-
-#include "bwsl_parser_soa_functions.inl"
+#include "bwsl_parser_soa.cpp"
 
 //==============================================================================
 // Eval statement parsing

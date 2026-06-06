@@ -1,6 +1,7 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Resource declarations, image/buffer setup, descriptor bindings, and storage buffers.
-
+#pragma once
+#include "bwsl_spirv_backend.cpp"
 
 namespace BWSL {
 

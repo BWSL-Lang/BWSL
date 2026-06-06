@@ -1,5 +1,6 @@
 // Part of the header-only IRLowering implementation. Include via bwsl_ir_lowering.h only.
-
+#pragma once
+#include "bwsl_ir_lowering.h"
 namespace BWSL::IR {
 
 inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {

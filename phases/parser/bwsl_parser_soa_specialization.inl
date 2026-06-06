@@ -1,7 +1,7 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Shader lookup, AST cloning, variant specialization, and final stage resolution.
 #pragma once
-#include "bwsl_parser_soa_modules_generics.inl"
+#include "bwsl_parser_soa.cpp"
 
 //==============================================================================
 // Shader Stage Expression Resolution

@@ -1,7 +1,7 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Pipeline, import, attribute, resource, pass, and shader stage declarations.
 #pragma once
-#include "bwsl_parser_soa_core.inl"
+#include "bwsl_parser_soa.cpp"
 
 //==============================================================================
 // Main parsing function
@@ -1577,5 +1577,3 @@ NodeRef Parser::ParseShaderStageExpression(ASTNodeType stageType) {
 
 
 } // namespace BWSL
-
-#include "bwsl_parser_soa_statements.inl"

@@ -1,6 +1,7 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Type IDs, pointer/function/struct/image types, and sampled texture loading.
-
+#pragma once
+#include "bwsl_spirv_backend.cpp"
 
 namespace BWSL {
 

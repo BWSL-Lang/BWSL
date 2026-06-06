@@ -1,8 +1,7 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Blocks, statements, and local/custom variable declarations.
 #pragma once
-
-#include "bwsl_parser_soa_decls.inl"
+#include "bwsl_parser_soa.cpp"
 
 //==============================================================================
 // Block and statement parsing
@@ -766,5 +765,3 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
 }
 
 } // namespace BWSL
-
-#include "bwsl_parser_soa_expressions.inl"

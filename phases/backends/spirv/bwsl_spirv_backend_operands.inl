@@ -1,6 +1,7 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Result and operand type helpers shared by instruction emission.
-
+#pragma once
+#include "bwsl_spirv_backend.cpp"
 
 namespace BWSL {
 

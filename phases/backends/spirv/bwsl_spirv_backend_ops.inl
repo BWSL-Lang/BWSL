@@ -1,6 +1,7 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Main IR instruction translation dispatch and opcode emission.
-
+#pragma once
+#include "bwsl_spirv_backend.cpp"
 
 namespace BWSL {
 

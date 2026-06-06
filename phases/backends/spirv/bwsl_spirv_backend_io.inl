@@ -1,6 +1,7 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Interface variables, stage inputs/outputs, builtins, shared variables, and vertex pulling declarations.
-
+#pragma once
+#include "bwsl_spirv_backend.cpp"
 
 namespace BWSL {
 

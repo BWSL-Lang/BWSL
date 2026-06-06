@@ -1,7 +1,7 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Module loading validation plus function and compute-body parsing.
 #pragma once
-#include "bwsl_parser_soa_expressions.inl"
+#include "bwsl_parser_soa.cpp"
 
 //==============================================================================
 // Helper functions
@@ -637,5 +637,3 @@ void Parser::ParseFunctionsBlockBody(NodeRef block) {
 }
 
 } // namespace BWSL
-
-#include "bwsl_parser_soa_variants_eval.inl"

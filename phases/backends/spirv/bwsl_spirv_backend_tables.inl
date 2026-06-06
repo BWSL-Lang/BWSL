@@ -1,5 +1,7 @@
 // Part of bwsl_spirv_backend.cpp. Include from that file only.
 // Static IR-to-SPIR-V and GLSL.std.450 lookup tables.
+#pragma once
+#include "bwsl_spirv_backend.cpp"
 
 // ============= Static lookup tables =============
 // This table maps BWSL IR Opcodes to core SPIR-V opcodes.

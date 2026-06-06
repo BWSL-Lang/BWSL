@@ -1,3 +1,4 @@
+#pragma once
 #include "bwsl_spirv_backend.h"
 #include "bwsl_ir_analysis.h"
 #include "bwsl_utils.h"

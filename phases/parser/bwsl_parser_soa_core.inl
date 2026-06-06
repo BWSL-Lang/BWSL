@@ -1,7 +1,7 @@
 // Part of bwsl_parser_soa.cpp. Include from that file only.
 // Core helpers, token navigation, diagnostics, and primitive parser utilities.
 #pragma once
-#include "bwsl_parser_soa_preamble.inl"
+#include "bwsl_parser_soa.cpp"
 
 namespace BWSL {
 
@@ -798,5 +798,3 @@ BinaryOpType Parser::TokenTypeToBinaryOp(TokenType type) {
 }
 
 } // namespace BWSL
-
-#include "bwsl_parser_soa_decls.inl"
