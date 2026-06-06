@@ -12,7 +12,9 @@ class BwslSettings : PersistentStateComponent<BwslSettings.State> {
 
     data class State(
         var compilerPath: String = "",
-        var modulePaths: MutableList<String> = mutableListOf()
+        var modulePaths: MutableList<String> = mutableListOf(),
+        var outputFormat: String = BwslOutputFormat.SPIRV_ONLY.name,
+        var outputDirectory: String = ""
     )
 
     private var state = State()
@@ -27,6 +29,14 @@ class BwslSettings : PersistentStateComponent<BwslSettings.State> {
     var modulePaths: MutableList<String>
         get() = state.modulePaths
         set(value) { state.modulePaths = value }
+
+    var outputFormat: String
+        get() = state.outputFormat
+        set(value) { state.outputFormat = value }
+
+    var outputDirectory: String
+        get() = state.outputDirectory
+        set(value) { state.outputDirectory = value }
 
     companion object {
         fun getInstance(): BwslSettings =

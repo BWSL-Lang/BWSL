@@ -8,6 +8,8 @@
         Syntax highlighting for the BWSL shader language (.bwsl files).
         Highlights keywords, type names, numbers, strings, and comments.
         Includes a color-settings page under Settings → Editor → Color Scheme → BWSL.
+        Validates code in real-time using the BWSL compiler.
+        Adds a context button to compile the current file.
     </description>
 
     <idea-version since-build="241"/>
@@ -15,6 +17,8 @@
     <depends>com.intellij.modules.platform</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+
+        <notificationGroup id="BWSL Compiler" displayType="BALLOON" isLogByDefault="true"/>
 
         <applicationService
             serviceImplementation="com.bwsl.plugin.BwslSettings"/>
@@ -52,4 +56,15 @@
             implementationClass="com.bwsl.plugin.BwslExternalAnnotator"/>
 
     </extensions>
+
+    <actions>
+        <action id="Bwsl.CompileFile"
+                class="com.bwsl.plugin.BwslCompileAction"
+                text="Compile BWSL File"
+                description="Compile the current BWSL shader file with bwslc">
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="first"/>
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
 </idea-plugin>
