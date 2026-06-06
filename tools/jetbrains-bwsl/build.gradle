@@ -62,7 +62,7 @@ compileKotlin {
 }
 
 test {
-    systemProperty 'bwsl.test.compiler_test_dir', file('../../tests/unsorted').canonicalPath
+    systemProperty 'bwsl.test.compiler_test_dir', file('../../tests').canonicalPath
     systemProperty 'java.util.logging.config.file', file('src/test/resources/test-log.properties').canonicalPath
 }
 
