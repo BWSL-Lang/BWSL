@@ -2,22 +2,18 @@ name: CI
 
 on:
   push:
+    branches: [master]
   pull_request:
   workflow_dispatch:
 
-env:
-  BWSL_OPEN_BETA_VERSION: "0.7.5"
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  unix:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
+  linux:
+    name: linux-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,7 +23,7 @@ jobs:
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1
         with:
-          key: ${{ matrix.os }}
+          key: ubuntu-latest
 
       - name: Build bwslc
         env:
@@ -39,42 +35,34 @@ jobs:
           CXX: ccache clang++
         run: make test
 
-      - name: Package Unix binary
-        id: package
-        shell: bash
-        run: |
-          version="$BWSL_OPEN_BETA_VERSION"
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            version="${GITHUB_REF_NAME#v}"
-          fi
-
-          case "$RUNNER_OS" in
-            Linux) os="linux" ;;
-            macOS) os="macos" ;;
-            *) os="$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')" ;;
-          esac
-
-          case "$(uname -m)" in
-            x86_64|amd64) arch="x64" ;;
-            arm64|aarch64) arch="arm64" ;;
-            *) arch="$(uname -m)" ;;
-          esac
-
-          artifact_name="bwslc-$os-$arch"
-          mkdir -p dist
-          cp build/bwslc "dist/$artifact_name-$version"
-          chmod +x "dist/$artifact_name-$version"
-          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
-
-      - name: Upload Unix binary
-        uses: actions/upload-artifact@v4
+  macos:
+    name: macos-latest
+    needs: linux
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          name: ${{ steps.package.outputs.artifact_name }}
-          path: dist/bwslc-*
-          if-no-files-found: error
+          submodules: recursive
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: macos-latest
+
+      - name: Build bwslc
+        env:
+          CXX: ccache clang++
+        run: make bwslc
+
+      - name: Run regression tests
+        env:
+          CXX: ccache clang++
+        run: make test
 
   windows:
     name: windows-latest
+    needs: linux
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -104,11 +92,6 @@ jobs:
           "$spirvToolsDir/tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           "$spirvToolsDir/tools/Release" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-
       - name: Build with MSVC
         shell: cmd
         run: build.bat bwslc
@@ -116,54 +99,3 @@ jobs:
       - name: Run regression tests
         shell: cmd
         run: build.bat test
-
-      - name: Package Windows binary
-        shell: pwsh
-        run: |
-          $version = $env:BWSL_OPEN_BETA_VERSION
-          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -match '^v?(.+)$') {
-            $version = $Matches[1]
-          }
-
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item build\bwslc.exe "dist\bwslc-windows-x64-$version.exe"
-
-      - name: Upload Windows binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: bwslc-windows-x64
-          path: dist/*.exe
-          if-no-files-found: error
-
-  release:
-    name: Release
-    needs:
-      - unix
-      - windows
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: write
-    steps:
-      - name: Download CLI binaries
-        uses: actions/download-artifact@v4
-        with:
-          pattern: bwslc-*
-          path: dist
-          merge-multiple: true
-
-      - name: Create or update GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" dist/* \
-              --title "BWSL $version Open Beta" \
-              --generate-notes \
-              --verify-tag
-          fi
