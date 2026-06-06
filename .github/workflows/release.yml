@@ -1,0 +1,144 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  linux:
+    name: linux-latest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ubuntu-latest-release
+
+      - name: Build bwslc
+        env:
+          CXX: ccache clang++
+        run: make bwslc
+
+      - name: Package Linux binary
+        id: package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          arch=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')
+          artifact_name="bwslc-linux-$arch"
+          mkdir -p dist
+          cp build/bwslc "dist/$artifact_name-$version"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Linux binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: dist/bwslc-*
+          if-no-files-found: error
+
+  macos:
+    name: macos-latest
+    needs: linux
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: macos-latest-release
+
+      - name: Build bwslc
+        env:
+          CXX: ccache clang++
+        run: make bwslc
+
+      - name: Package macOS binary
+        id: package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          arch=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')
+          artifact_name="bwslc-macos-$arch"
+          mkdir -p dist
+          cp build/bwslc "dist/$artifact_name-$version"
+          chmod +x "dist/$artifact_name-$version"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload macOS binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: dist/bwslc-*
+          if-no-files-found: error
+
+  windows:
+    name: windows-latest
+    needs: linux
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up sccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: windows-latest-release
+          variant: sccache
+
+      - name: Build with MSVC
+        shell: cmd
+        run: build.bat bwslc
+
+      - name: Package Windows binary
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item build\bwslc.exe "dist\bwslc-windows-x64-$version.exe"
+
+      - name: Upload Windows binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: bwslc-windows-x64
+          path: dist/*.exe
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download release binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bwslc-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --title "BWSL $version Open Beta" \
+              --generate-notes \
+              --verify-tag
+          fi
