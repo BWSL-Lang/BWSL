@@ -3,6 +3,9 @@
 #pragma once
 #include "bwsl_parser_soa_types.inl"
 
+//==============================================================================
+// Module parsing
+//==============================================================================
 
 namespace BWSL {
 
@@ -542,10 +545,6 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
     return TYPE_INFO(CoreType::INVALID, 0, false);
 }
 
-//==============================================================================
-// Shader Stage Expression Resolution
-// Resolves deferred shader expressions (function calls/ternaries) at compile-time
-//==============================================================================
-
-
 } // namespace BWSL
+
+#include "bwsl_parser_soa_specialization.inl"

@@ -797,9 +797,6 @@ BinaryOpType Parser::TokenTypeToBinaryOp(TokenType type) {
     }
 }
 
-//==============================================================================
-// Main parsing function
-//==============================================================================
-
-
 } // namespace BWSL
+
+#include "bwsl_parser_soa_decls.inl"

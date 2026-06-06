@@ -4,6 +4,9 @@
 
 #include "bwsl_parser_soa_statements.inl"
 
+//==============================================================================
+// Expression parsing
+//==============================================================================
 
 namespace BWSL {
 
@@ -825,9 +828,6 @@ NodeRef Parser::FlattenMultiDimArrayAccess(NodeRef access) {
     return ASTFactory::MakeArrayAccess(ast, base, flatIndex, 0, 0);
 }
 
-//==============================================================================
-// Helper functions
-//==============================================================================
-
-
 } // namespace BWSL
+
+#include "bwsl_parser_soa_functions.inl"

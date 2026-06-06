@@ -3,6 +3,11 @@
 #pragma once
 #include "bwsl_parser_soa_modules_generics.inl"
 
+//==============================================================================
+// Shader Stage Expression Resolution
+// Resolves deferred shader expressions (function calls/ternaries) at compile-time
+//==============================================================================
+
 namespace BWSL {
 
 static std::string ArenaStringToStdString(const ArenaString& str, const char* sourceBase) {

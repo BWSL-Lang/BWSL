@@ -3,6 +3,10 @@
 #pragma once
 #include "bwsl_parser_soa_core.inl"
 
+//==============================================================================
+// Main parsing function
+//==============================================================================
+
 namespace BWSL {
 
 NodeRef Parser::ParseDocument() {
@@ -1571,9 +1575,7 @@ NodeRef Parser::ParseShaderStageExpression(ASTNodeType stageType) {
     return stage;
 }
 
-//==============================================================================
-// Block and statement parsing
-//==============================================================================
-
 
 } // namespace BWSL
+
+#include "bwsl_parser_soa_statements.inl"

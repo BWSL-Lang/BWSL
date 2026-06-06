@@ -4,12 +4,11 @@
 
 #include "bwsl_parser_soa_variants_eval.inl"
 
-namespace BWSL {
-
-
 //==============================================================================
 // Array declaration and construction
 //==============================================================================
+
+namespace BWSL {
 
 NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storageClass) {
     SourceLocation loc = getLocation(stream->GetOffset(previous));
@@ -1332,9 +1331,6 @@ NodeRef Parser::ParseStruct() {
     return structNode;
 }
 
-//==============================================================================
-// Module parsing
-//==============================================================================
-
-
 } // namespace BWSL
+
+#include "bwsl_parser_soa_modules_generics.inl"

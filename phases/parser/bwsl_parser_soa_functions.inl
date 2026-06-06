@@ -3,6 +3,9 @@
 #pragma once
 #include "bwsl_parser_soa_expressions.inl"
 
+//==============================================================================
+// Helper functions
+//==============================================================================
 
 namespace BWSL {
 
@@ -633,9 +636,6 @@ void Parser::ParseFunctionsBlockBody(NodeRef block) {
     }
 }
 
-//==============================================================================
-// Eval statement parsing
-//==============================================================================
-
-
 } // namespace BWSL
+
+#include "bwsl_parser_soa_variants_eval.inl"

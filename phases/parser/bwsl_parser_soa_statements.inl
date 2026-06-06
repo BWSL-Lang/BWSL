@@ -4,6 +4,9 @@
 
 #include "bwsl_parser_soa_decls.inl"
 
+//==============================================================================
+// Block and statement parsing
+//==============================================================================
 
 namespace BWSL {
 
@@ -762,9 +765,6 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
     return varDecl;
 }
 
-//==============================================================================
-// Expression parsing
-//==============================================================================
-
-
 } // namespace BWSL
+
+#include "bwsl_parser_soa_expressions.inl"
