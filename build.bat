@@ -15,7 +15,18 @@ if errorlevel 1 exit /b 1
 
 if not exist "build" mkdir "build"
 
-set "COMMON_FLAGS=/nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB /Ivendor\SPIRV-Cross /I. /Icore /Icore\middleware /Iphases\lexing /Iphases\parser /Iphases\evaluation /Iphases\ir_generation /Iphases\ir_lowering /Iphases\control_flow /Iphases\ssa /Iphases\backends\spirv /Iphases\backends\gles"
+if not defined USE_LINKED_SPIRV_TOOLS set "USE_LINKED_SPIRV_TOOLS=1"
+
+set "SPIRV_TOOLS_FLAGS="
+set "SPIRV_TOOLS_LINK_LIB="
+if not "%USE_LINKED_SPIRV_TOOLS%"=="0" (
+    call :ensure_spirv_tools
+    if errorlevel 1 exit /b 1
+    set "SPIRV_TOOLS_FLAGS=/DUSE_SPIRV_TOOLS_LIB /Ivendor\SPIRV-Tools\include /Ivendor\SPIRV-Headers\include"
+    set "SPIRV_TOOLS_LINK_LIB=%SPIRV_TOOLS_LIB%"
+)
+
+set "COMMON_FLAGS=/nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB %SPIRV_TOOLS_FLAGS% /Ivendor\SPIRV-Cross /I. /Icore /Icore\middleware /Iphases\lexing /Iphases\parser /Iphases\evaluation /Iphases\ir_generation /Iphases\ir_lowering /Iphases\control_flow /Iphases\ssa /Iphases\backends\spirv /Iphases\backends\gles"
 set "RELEASE_FLAGS=/O2 /W4"
 set "DEBUG_FLAGS=/Zi /Od /W4"
 set "LINK_FLAGS=/link /STACK:8388608"
@@ -42,7 +53,7 @@ goto :help
 if errorlevel 1 exit /b 1
 %COMPILER% %RELEASE_FLAGS% %COMMON_FLAGS% /c /Fobuild\bwslc.obj %BWSLC_SRC%
 if errorlevel 1 exit /b 1
-cl /nologo /Febuild\bwslc.exe build\spirv_cross_wrapper.obj build\bwslc.obj %LINK_FLAGS%
+cl /nologo /Febuild\bwslc.exe build\spirv_cross_wrapper.obj build\bwslc.obj %SPIRV_TOOLS_LINK_LIB% %LINK_FLAGS%
 if errorlevel 1 exit /b 1
 echo Built: build\bwslc.exe
 exit /b 0
@@ -52,7 +63,7 @@ exit /b 0
 if errorlevel 1 exit /b 1
 %COMPILER% %DEBUG_FLAGS% %COMMON_FLAGS% /c /Fdbuild\bwslc-debug.pdb /Fobuild\bwslc_debug.obj %BWSLC_SRC%
 if errorlevel 1 exit /b 1
-cl /nologo /Fdbuild\bwslc-debug.pdb /Febuild\bwslc-debug.exe build\spirv_cross_wrapper_debug.obj build\bwslc_debug.obj %LINK_FLAGS%
+cl /nologo /Fdbuild\bwslc-debug.pdb /Febuild\bwslc-debug.exe build\spirv_cross_wrapper_debug.obj build\bwslc_debug.obj %SPIRV_TOOLS_LINK_LIB% %LINK_FLAGS%
 if errorlevel 1 exit /b 1
 echo Built: build\bwslc-debug.exe
 exit /b 0
@@ -129,6 +140,43 @@ if errorlevel 1 (
 
 exit /b 0
 
+:ensure_spirv_tools
+where cmake >nul 2>&1
+if errorlevel 1 (
+    echo Linked SPIRV-Tools validation requires CMake on PATH.
+    echo Set USE_LINKED_SPIRV_TOOLS=0 to build with external spirv-val fallback.
+    exit /b 1
+)
+
+if not exist "vendor\SPIRV-Tools\CMakeLists.txt" (
+    echo Missing vendor\SPIRV-Tools. Run: git submodule update --init --recursive
+    exit /b 1
+)
+
+if not exist "vendor\SPIRV-Headers\include" (
+    echo Missing vendor\SPIRV-Headers. Run: git submodule update --init --recursive
+    exit /b 1
+)
+
+set "SPIRV_TOOLS_BUILD=build\spirv-tools-build"
+cmake -S vendor\SPIRV-Tools -B "%SPIRV_TOOLS_BUILD%" -DCMAKE_BUILD_TYPE=Release "-DSPIRV-Headers_SOURCE_DIR=%CD%\vendor\SPIRV-Headers" -DSPIRV_SKIP_TESTS=ON -DSPIRV_WERROR=OFF -DSPIRV_BUILD_FUZZER=OFF
+if errorlevel 1 exit /b 1
+
+cmake --build "%SPIRV_TOOLS_BUILD%" --config Release --target SPIRV-Tools-static spirv-val spirv-dis --parallel
+if errorlevel 1 exit /b 1
+
+set "SPIRV_TOOLS_LIB="
+for %%P in ("%SPIRV_TOOLS_BUILD%\source\Release\SPIRV-Tools.lib" "%SPIRV_TOOLS_BUILD%\source\SPIRV-Tools.lib" "%SPIRV_TOOLS_BUILD%\source\RelWithDebInfo\SPIRV-Tools.lib" "%SPIRV_TOOLS_BUILD%\source\Debug\SPIRV-Tools.lib") do (
+    if exist "%%~fP" set "SPIRV_TOOLS_LIB=%%~fP"
+)
+
+if not defined SPIRV_TOOLS_LIB (
+    echo Could not find SPIRV-Tools.lib under %SPIRV_TOOLS_BUILD%.
+    exit /b 1
+)
+
+exit /b 0
+
 :help
 echo Usage:
 echo   build.bat [target]
@@ -138,7 +186,9 @@ echo   bwslc              Build release CLI compiler ^(default^)
 echo   bwslc-debug        Build debug CLI compiler
 echo   bwslc-msvc         Alias for bwslc
 echo   bwslc-msvc-debug   Alias for bwslc-debug
-echo   test               Run tests via bash if available
+echo   test               Run tests via Python
 echo   clean              Remove build artifacts
 echo   help               Show this message
+echo.
+echo Set USE_LINKED_SPIRV_TOOLS=0 to skip the linked validator and use external tools.
 exit /b 1

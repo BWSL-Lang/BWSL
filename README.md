@@ -22,15 +22,20 @@ language and tooling changes.
 
 **For native CLI compiler:**
 - macOS or Linux: `clang++` or another C++20 compiler, plus CMake for the linked SPIRV-Tools validator
-- Windows: Visual Studio Build Tools / Developer Command Prompt (`cl.exe`)
+- Windows: Visual Studio Build Tools / Developer Command Prompt (`cl.exe`), plus CMake for the linked SPIRV-Tools validator
 
-The default macOS/Linux `make bwslc` build links the vendored SPIRV-Tools
-library so `-validation auto` runs in-process. Use
-`make bwslc USE_LINKED_SPIRV_TOOLS=0` to skip that library and fall back to
-external `spirv-val`/`spirv-dis` tools.
+The default native `make bwslc` and `build.bat` builds link the vendored
+SPIRV-Tools library so `-validation auto` runs in-process. Use
+`make bwslc USE_LINKED_SPIRV_TOOLS=0` or set `USE_LINKED_SPIRV_TOOLS=0` before
+running `build.bat` to skip that library and fall back to external
+`spirv-val`/`spirv-dis` tools.
 
 **For Windows cross-compilation from macOS/Linux:**
 - [Zig](https://ziglang.org/) (`zig` must be in PATH)
+
+The Zig cross-build does not link SPIRV-Tools by default; it keeps the external
+validator/disassembler fallback because the SPIRV-Tools library must be built
+for the Windows target.
 
 **For WebAssembly module:**
 - [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) (`emcc` must be in PATH)
