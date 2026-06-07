@@ -52,11 +52,13 @@ jobs:
       - name: Build bwslc
         env:
           CXX: ccache clang++
+          CXXFLAGS: -O3 -std=c++20 -Wall -Wextra
         run: make bwslc
 
       - name: Run regression tests
         env:
           CXX: ccache clang++
+          CXXFLAGS: -O3 -std=c++20 -Wall -Wextra
         run: make test
 
   macos:
@@ -78,11 +80,13 @@ jobs:
       - name: Build bwslc
         env:
           CXX: ccache clang++
+          CXXFLAGS: -O3 -std=c++20 -Wall -Wextra
         run: make bwslc
 
       - name: Run regression tests
         env:
           CXX: ccache clang++
+          CXXFLAGS: -O3 -std=c++20 -Wall -Wextra
         run: make test
 
   windows:
