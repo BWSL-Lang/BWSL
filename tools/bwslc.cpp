@@ -1,6 +1,6 @@
 // BWSL Compiler - Command Line Tool
 // BWSL (Brawl Shader Language) is made by Alexander Presthus
-// Compiles .bwsl shader files to SPIR-V, Metal, and HLSL
+// Compiles .bwsl shader files to SPIR-V and cross-compiles to Metal, HLSL, GLSL, and GLES
 //
 // Usage: bwslc <input.bwsl> [options]
 //
@@ -9,13 +9,14 @@
 //   -modules <dir> Add module search path (can be specified multiple times)
 //   -pass <name>   Compile specific pass (default: all passes)
 //   -stage <name>  Compile specific stage: vertex, fragment, compute (default: all)
-//   -format <fmt>  Output format: spv, metal, hlsl, all (default: all)
+//   -spv           Write generated SPIR-V files (default when no format is requested)
 //   -check         Run diagnostics without writing output files
 //   -errors-json    Print machine-readable diagnostics as JSON
 //   -v             Verbose output
 //   -h, --help     Show help
 
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -32,6 +33,10 @@
 #include <functional>
 #ifndef _WIN32
 #include <sys/wait.h>
+#endif
+
+#ifdef USE_SPIRV_TOOLS_LIB
+#include "spirv-tools/libspirv.hpp"
 #endif
 
 // SPIRV-Cross for in-process cross-compilation (much faster than CLI)
@@ -127,7 +132,7 @@ struct CompilerConfig {
     RenderConfig renderConfig;             // synthetic config derived from source resources
     std::string passFilter;                // Empty = all passes
     std::string stageFilter;               // Empty = all stages
-    bool outputSpirv = true;               // SPIR-V always generated
+    bool outputSpirv = false;              // Visible SPIR-V output
     bool outputMetal = false;              // Metal output (requires -metal flag)
     bool outputHlsl  = false;              // HLSL output (requires -hlsl flag)
     bool outputGlsl  = false;              // GLSL output (requires -glsl flag)
@@ -244,11 +249,14 @@ void PrintUsage(const char* programName) {
     printf("  -pass <name>   Compile specific pass (default: all passes)\n");
     printf("  -stage <name>  Compile specific stage: vertex, fragment, compute (default: all)\n");
     printf("\n");
-    printf("Output format flags (SPIR-V is always generated):\n");
-    printf("  -metal         Generate Metal Shading Language output\n");
-    printf("  -hlsl          Generate HLSL (High-Level Shader Language) output\n");
-    printf("  -glsl          Generate GLSL output (version 450)\n");
-    printf("  -gles          Generate GLSL ES output for WebGL 2.0 / OpenGL ES 3.0 (version 300 es)\n");
+    printf("Output artifact flags (SPIR-V is generated internally for validation/cross-compile):\n");
+    printf("  -spv           Write generated SPIR-V files alongside requested artifacts\n");
+    printf("                 (default artifact when no format is requested)\n");
+    printf("  -metal         Generate Metal Shading Language output via SPIR-V\n");
+    printf("  -hlsl          Generate HLSL (High-Level Shader Language) output via SPIR-V\n");
+    printf("  -glsl          Generate GLSL output via SPIR-V (version 450)\n");
+    printf("  -gles          Generate GLSL ES output for WebGL 2.0 / OpenGL ES 3.0 via SPIR-V\n");
+    printf("                 (version 300 es)\n");
     printf("  -gles-direct   Generate GLSL ES directly from IR (bypass SPIRV-Cross, faster)\n");
     printf("  -webgl         Alias for -gles\n");
     printf("  -bindings      Output resolved resource bindings JSON\n");
@@ -268,9 +276,9 @@ void PrintUsage(const char* programName) {
     printf("----------------------------------------\n");
     printf("\nExamples:\n");
     printf("  %s shader.bwsl                      # SPIR-V only\n", programName);
-    printf("  %s shader.bwsl -metal               # SPIR-V + Metal\n", programName);
-    printf("  %s shader.bwsl -metal -hlsl -gles   # SPIR-V + Metal + HLSL + WebGL\n", programName);
-    printf("  %s shader.bwsl -format all          # All formats\n", programName);
+    printf("  %s shader.bwsl -metal               # Metal artifact only (SPIR-V generated internally)\n", programName);
+    printf("  %s shader.bwsl -gles -spv           # WebGL artifacts + emitted SPIR-V sidecars\n", programName);
+    printf("  %s shader.bwsl -metal -hlsl -gles   # Metal + HLSL + WebGL\n", programName);
     printf("  %s shader.bwsl -variant lighting=Clustered -variant skinning=true\n", programName);
 }
 
@@ -321,6 +329,64 @@ bool WriteTextFile(const fs::path& path, const std::string& content) {
 
 std::string BuildOutputBasePath(const std::string& outputDir, const std::string& stem) {
     return (fs::path(outputDir) / stem).string();
+}
+
+std::string SanitizeOutputStemPart(const std::string& part, const std::string& fallback) {
+    std::string sanitized;
+    sanitized.reserve(part.size());
+    for (unsigned char ch : part) {
+        if ((ch >= 'a' && ch <= 'z') ||
+            (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9') ||
+            ch == '_' || ch == '-' || ch == '.') {
+            sanitized.push_back(static_cast<char>(ch));
+        } else if (!sanitized.empty() && sanitized.back() != '_') {
+            sanitized.push_back('_');
+        }
+    }
+
+    while (!sanitized.empty() && sanitized.front() == '.') {
+        sanitized.erase(sanitized.begin());
+    }
+    while (!sanitized.empty() && sanitized.back() == '_') {
+        sanitized.pop_back();
+    }
+
+    return sanitized.empty() ? fallback : sanitized;
+}
+
+const char* StageFileExtension(const char* stageName) {
+    if (strcmp(stageName, "vertex") == 0) return "vert";
+    if (strcmp(stageName, "fragment") == 0) return "frag";
+    if (strcmp(stageName, "compute") == 0) return "comp";
+    return "glsl";
+}
+
+std::string BuildPassOutputStem(const std::string& baseName,
+                                const std::string& passName,
+                                const std::string& passFallbackName,
+                                u32 passCount) {
+    if (passCount <= 1) {
+        return SanitizeOutputStemPart(baseName, "shader");
+    }
+
+    std::string passPart = SanitizeOutputStemPart(passName, passFallbackName);
+    return SanitizeOutputStemPart(baseName, "shader") + "_" + passPart;
+}
+
+std::string BuildStageOutputPath(const std::string& outputStemPath,
+                                 const char* stageName) {
+    return outputStemPath + "." + StageFileExtension(stageName);
+}
+
+std::string BuildGlslOutputPath(const std::string& outputStemPath,
+                                const char* stageName,
+                                const char* formatQualifier,
+                                bool includeFormatQualifier) {
+    if (includeFormatQualifier) {
+        return outputStemPath + "." + formatQualifier + "." + StageFileExtension(stageName);
+    }
+    return BuildStageOutputPath(outputStemPath, stageName);
 }
 
 std::string GetTempSpirvPath() {
@@ -1705,6 +1771,61 @@ std::string DumpIRToString(const IRProgram& prog) {
 }
 
 // Get SPIR-V disassembly using spirv-dis
+#ifdef USE_SPIRV_TOOLS_LIB
+std::string FormatSpirvToolsMessageLevel(spv_message_level_t level) {
+    switch (level) {
+        case SPV_MSG_FATAL:
+        case SPV_MSG_INTERNAL_ERROR:
+        case SPV_MSG_ERROR:
+            return "error";
+        case SPV_MSG_WARNING:
+            return "warning";
+        case SPV_MSG_INFO:
+            return "info";
+        case SPV_MSG_DEBUG:
+            return "debug";
+    }
+    return "message";
+}
+
+std::string FormatSpirvToolsMessage(spv_message_level_t level,
+                                    const spv_position_t& position,
+                                    const char* message) {
+    std::ostringstream out;
+    out << FormatSpirvToolsMessageLevel(level) << ": " << position.index << ": ";
+    out << (message ? message : "");
+    return out.str();
+}
+
+std::string GetSpirvDisassembly(const std::vector<u32>& spirv) {
+    if (spirv.empty()) {
+        return "";
+    }
+
+    spvtools::SpirvTools tools(SPV_ENV_UNIVERSAL_1_6);
+    std::string diagnostic;
+    tools.SetMessageConsumer([&diagnostic](spv_message_level_t level,
+                                           const char*,
+                                           const spv_position_t& position,
+                                           const char* message) {
+        if (!diagnostic.empty()) {
+            diagnostic += "\n";
+        }
+        diagnostic += FormatSpirvToolsMessage(level, position, message);
+    });
+
+    std::string text;
+    if (tools.Disassemble(reinterpret_cast<const uint32_t*>(spirv.data()),
+                          spirv.size(), &text)) {
+        return text;
+    }
+
+    return diagnostic.empty()
+        ? "SPIR-V disassembly failed"
+        : diagnostic;
+}
+#endif
+
 std::string GetSpirvDisassembly(const std::string& spirvFile) {
     std::string spirvDis = FindTool("spirv-dis");
     if (spirvDis.empty()) {
@@ -1715,18 +1836,46 @@ std::string GetSpirvDisassembly(const std::string& spirvFile) {
 }
 
 bool HasSpirvValidator() {
-    return !FindTool("spirv-val").empty();
-}
-
-ValidationResult ValidateSpirv(const std::string& spirvFile) {
+#ifdef USE_SPIRV_TOOLS_LIB
+    return true;
+#else
     static bool validatorAvailableCached = false;
     static bool validatorAvailable = false;
     if (!validatorAvailableCached) {
-        validatorAvailable = HasSpirvValidator();
+        validatorAvailable = !FindTool("spirv-val").empty();
         validatorAvailableCached = true;
     }
+    return validatorAvailable;
+#endif
+}
 
-    if (!validatorAvailable) {
+#ifdef USE_SPIRV_TOOLS_LIB
+ValidationResult ValidateSpirv(const std::vector<u32>& spirv) {
+    spvtools::SpirvTools tools(SPV_ENV_UNIVERSAL_1_6);
+    std::string diagnostics;
+    tools.SetMessageConsumer([&diagnostics](spv_message_level_t level,
+                                            const char*,
+                                            const spv_position_t& position,
+                                            const char* message) {
+        if (!diagnostics.empty()) {
+            diagnostics += "\n";
+        }
+        diagnostics += FormatSpirvToolsMessage(level, position, message);
+    });
+
+    if (tools.Validate(reinterpret_cast<const uint32_t*>(spirv.data()), spirv.size())) {
+        return {ValidationStatus::Passed, ""};
+    }
+
+    return {
+        ValidationStatus::Failed,
+        diagnostics.empty() ? "SPIR-V validation failed" : diagnostics
+    };
+}
+#endif
+
+ValidationResult ValidateSpirv(const std::string& spirvFile) {
+    if (!HasSpirvValidator()) {
         return {
             ValidationStatus::ToolMissing,
             "spirv-val was not found in PATH, VULKAN_SDK, or common install locations"
@@ -2239,7 +2388,7 @@ static bool WriteCrossCompileOutput(bool enabled,
 }
 
 static void WriteWebGLSidecarIfNeeded(const CompileResult& result,
-                                      const std::string& outBase,
+                                      const std::string& sidecarSourcePath,
                                       const PassData& pass,
                                       const Parser& parser,
                                       const char* sourceBase,
@@ -2254,7 +2403,7 @@ static void WriteWebGLSidecarIfNeeded(const CompileResult& result,
         pass, parser.symbolTable, result.analysis,
         sourceBase, isVertexStage,
         &context.ast, &pipeline);
-    std::string jsonPath = outBase + ".json";
+    std::string jsonPath = sidecarSourcePath + ".json";
     if (WriteTextFile(jsonPath, json)) {
         if (!quiet) {
             printf("    -> %s\n", jsonPath.c_str());
@@ -2265,7 +2414,7 @@ static void WriteWebGLSidecarIfNeeded(const CompileResult& result,
 static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
                                            const CompileResult& result,
                                            ShaderTiming& shaderTime,
-                                           const std::string& outBase,
+                                           const std::string& outputStemPath,
                                            const std::string& passName,
                                            const char* stageName,
                                            const PassData& pass,
@@ -2278,6 +2427,8 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
                                            DiagnosticStream* diagnostics = nullptr) {
     StageOutputResult output;
     const bool quiet = config.errorsJson;
+    const std::string stageOutputPath = BuildStageOutputPath(outputStemPath, stageName);
+    const bool disambiguateGlslOutputs = config.outputGlsl && config.outputGlslEs;
 
     if (!config.outputSpirv &&
         config.validationMode == ValidationMode::Off &&
@@ -2293,7 +2444,6 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         return output;
     }
 
-    std::string spvPath = config.outputSpirv ? (outBase + ".spv") : GetTempSpirvPath();
     struct ScopedTempFile {
         bool enabled = false;
         std::string path;
@@ -2303,70 +2453,136 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
             std::error_code ec;
             fs::remove(path, ec);
         }
-    } tempSpirv{!config.outputSpirv, spvPath};
+    };
 
-    if (!WriteBinaryFile(spvPath, result.spirv)) {
-        if (diagnostics) {
-            AddStageDiagnostic(*diagnostics,
-                               DiagnosticSeverity::Error,
-                               DiagnosticPhase::IO,
-                               DiagnosticMessageId::CouldNotWriteSpirv,
-                               "Could not write SPIR-V file",
-                               config.inputFile, passName, stageName);
+    const bool validationRequested = config.validationMode != ValidationMode::Off;
+    const bool validatorAvailable = validationRequested && HasSpirvValidator();
+#ifdef USE_SPIRV_TOOLS_LIB
+    const bool validationNeedsSpirvFile = false;
+    const bool internalsNeedSpirvFile = false;
+#else
+    const bool validationNeedsSpirvFile = validationRequested && validatorAvailable;
+    const bool internalsNeedSpirvFile = config.outputInternals;
+#endif
+#ifdef USE_SPIRV_CROSS_LIB
+    const bool crossCompileNeedsSpirvFile = false;
+#else
+    const bool crossCompileNeedsSpirvFile =
+        config.outputMetal || config.outputHlsl || config.outputGlsl || config.outputGlslEs;
+#endif
+    const bool needsSpirvFile =
+        config.outputSpirv ||
+        validationNeedsSpirvFile ||
+        internalsNeedSpirvFile ||
+        crossCompileNeedsSpirvFile;
+
+    std::string spvPath;
+    ScopedTempFile tempSpirv;
+    if (needsSpirvFile) {
+        spvPath = config.outputSpirv ? (stageOutputPath + ".spv") : GetTempSpirvPath();
+        tempSpirv.enabled = !config.outputSpirv;
+        tempSpirv.path = spvPath;
+
+        if (!WriteBinaryFile(spvPath, result.spirv)) {
+            if (diagnostics) {
+                AddStageDiagnostic(*diagnostics,
+                                   DiagnosticSeverity::Error,
+                                   DiagnosticPhase::IO,
+                                   DiagnosticMessageId::CouldNotWriteSpirv,
+                                   "Could not write SPIR-V file",
+                                   config.inputFile, passName, stageName);
+            }
+            return output;
         }
-        return output;
-    }
 
-    if (config.outputSpirv) {
-        if (!quiet) {
+        if (config.outputSpirv && !quiet) {
             printf("    -> %s\n", spvPath.c_str());
         }
     }
 
-    if (config.validationMode != ValidationMode::Off) {
-        using Clock = std::chrono::high_resolution_clock;
-        auto valStart = Clock::now();
-        ValidationResult validation = ValidateSpirv(spvPath);
-        auto valEnd = Clock::now();
-        shaderTime.validationMs = std::chrono::duration<double, std::milli>(valEnd - valStart).count();
+    static bool warnedMissingValidator = false;
+    auto handleMissingValidator = [&]() -> bool {
+        const std::string message = "spirv-val was not found in PATH, VULKAN_SDK, or common install locations";
+        if (config.validationMode == ValidationMode::Strict) {
+            if (diagnostics) {
+                AddStageDiagnostic(*diagnostics,
+                                   DiagnosticSeverity::Error,
+                                   DiagnosticPhase::Validation,
+                                   DiagnosticMessageId::ValidationStrictToolMissing,
+                                   "SPIR-V validation requested but " + message,
+                                   config.inputFile, passName, stageName);
+            }
+            output.skipRemainingPass = true;
+            return true;
+        }
 
-        if (validation.status == ValidationStatus::ToolMissing) {
-            if (config.validationMode == ValidationMode::Strict) {
+        if (!warnedMissingValidator) {
+            if (diagnostics) {
+                AddStageDiagnostic(*diagnostics,
+                                   DiagnosticSeverity::Warning,
+                                   DiagnosticPhase::Validation,
+                                   DiagnosticMessageId::ValidationAutoToolMissing,
+                                   message + "; skipping SPIR-V validation (-validation auto)",
+                                   config.inputFile, passName, stageName);
+            }
+            warnedMissingValidator = true;
+        }
+        return false;
+    };
+
+    if (validationRequested) {
+        if (!validatorAvailable) {
+            if (handleMissingValidator()) {
+                return output;
+            }
+        } else {
+            using Clock = std::chrono::high_resolution_clock;
+            auto valStart = Clock::now();
+#ifdef USE_SPIRV_TOOLS_LIB
+            ValidationResult validation = ValidateSpirv(result.spirv);
+#else
+            ValidationResult validation = ValidateSpirv(spvPath);
+#endif
+            auto valEnd = Clock::now();
+            shaderTime.validationMs = std::chrono::duration<double, std::milli>(valEnd - valStart).count();
+
+            if (validation.status == ValidationStatus::ToolMissing) {
+                if (config.validationMode == ValidationMode::Strict) {
+                    if (diagnostics) {
+                        AddStageDiagnostic(*diagnostics,
+                                           DiagnosticSeverity::Error,
+                                           DiagnosticPhase::Validation,
+                                           DiagnosticMessageId::ValidationStrictToolMissing,
+                                           "SPIR-V validation requested but " + validation.message,
+                                           config.inputFile, passName, stageName);
+                    }
+                    output.skipRemainingPass = true;
+                    return output;
+                }
+
+                if (!warnedMissingValidator) {
+                    if (diagnostics) {
+                        AddStageDiagnostic(*diagnostics,
+                                           DiagnosticSeverity::Warning,
+                                           DiagnosticPhase::Validation,
+                                           DiagnosticMessageId::ValidationAutoToolMissing,
+                                           validation.message + "; skipping SPIR-V validation (-validation auto)",
+                                           config.inputFile, passName, stageName);
+                    }
+                    warnedMissingValidator = true;
+                }
+            } else if (validation.status == ValidationStatus::Failed) {
                 if (diagnostics) {
                     AddStageDiagnostic(*diagnostics,
                                        DiagnosticSeverity::Error,
                                        DiagnosticPhase::Validation,
-                                       DiagnosticMessageId::ValidationStrictToolMissing,
-                                       "SPIR-V validation requested but " + validation.message,
+                                       DiagnosticMessageId::ValidationFailed,
+                                       "SPIR-V validation failed:\n" + validation.message,
                                        config.inputFile, passName, stageName);
                 }
                 output.skipRemainingPass = true;
                 return output;
             }
-
-            static bool warnedMissingValidator = false;
-            if (!warnedMissingValidator) {
-                if (diagnostics) {
-                    AddStageDiagnostic(*diagnostics,
-                                       DiagnosticSeverity::Warning,
-                                       DiagnosticPhase::Validation,
-                                       DiagnosticMessageId::ValidationAutoToolMissing,
-                                       validation.message + "; skipping SPIR-V validation (-validation auto)",
-                                       config.inputFile, passName, stageName);
-                }
-                warnedMissingValidator = true;
-            }
-        } else if (validation.status == ValidationStatus::Failed) {
-            if (diagnostics) {
-                AddStageDiagnostic(*diagnostics,
-                                   DiagnosticSeverity::Error,
-                                   DiagnosticPhase::Validation,
-                                   DiagnosticMessageId::ValidationFailed,
-                                   "SPIR-V validation failed:\n" + validation.message,
-                                   config.inputFile, passName, stageName);
-            }
-            output.skipRemainingPass = true;
-            return output;
         }
     }
 
@@ -2381,15 +2597,16 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
 
     WriteCrossCompileOutput(config.outputMetal, crossResult.metalMs,
                             shaderTime.metalCrossMs, crossResult.metal,
-                            outBase + ".metal", "Metal", quiet,
+                            stageOutputPath + ".metal", "Metal", quiet,
                             diagnostics, config.inputFile, passName, stageName);
     WriteCrossCompileOutput(config.outputHlsl, crossResult.hlslMs,
                             shaderTime.hlslCrossMs, crossResult.hlsl,
-                            outBase + ".hlsl", "HLSL", quiet,
+                            stageOutputPath + ".hlsl", "HLSL", quiet,
                             diagnostics, config.inputFile, passName, stageName);
     WriteCrossCompileOutput(config.outputGlsl, crossResult.glslMs,
                             shaderTime.glslCrossMs, crossResult.glsl,
-                            outBase + ".glsl", "GLSL", quiet,
+                            BuildGlslOutputPath(outputStemPath, stageName, "glsl", disambiguateGlslOutputs),
+                            "GLSL", quiet,
                             diagnostics, config.inputFile, passName, stageName);
 
     if (config.outputGlslEs) {
@@ -2400,13 +2617,13 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
             config.useDirectGles, &glesMs);
         shaderTime.glslEsCrossMs = glesMs;
         if (!glesSource.empty() && glesSource.find("error") == std::string::npos) {
-            std::string glslEsPath = outBase + ".gles";
+            std::string glslEsPath = BuildGlslOutputPath(outputStemPath, stageName, "gles", disambiguateGlslOutputs);
             if (WriteTextFile(glslEsPath, glesSource)) {
                 if (!quiet) {
                     printf("    -> %s\n", glslEsPath.c_str());
                 }
             }
-            WriteWebGLSidecarIfNeeded(result, outBase, pass, parser,
+            WriteWebGLSidecarIfNeeded(result, glslEsPath, pass, parser,
                                       sourceBase, context, pipeline,
                                       writeWebGLSidecar, isVertexStage, quiet);
         } else {
@@ -2428,7 +2645,7 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         auto metalEnd = Clock::now();
         double metalMs = std::chrono::duration<double, std::milli>(metalEnd - metalStart).count();
         WriteCrossCompileOutput(true, metalMs, shaderTime.metalCrossMs,
-                                metalSource, outBase + ".metal", "Metal", quiet,
+                                metalSource, stageOutputPath + ".metal", "Metal", quiet,
                                 diagnostics, config.inputFile, passName, stageName);
     }
     if (config.outputHlsl) {
@@ -2438,7 +2655,7 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         auto hlslEnd = Clock::now();
         double hlslMs = std::chrono::duration<double, std::milli>(hlslEnd - hlslStart).count();
         WriteCrossCompileOutput(true, hlslMs, shaderTime.hlslCrossMs,
-                                hlslSource, outBase + ".hlsl", "HLSL", quiet,
+                                hlslSource, stageOutputPath + ".hlsl", "HLSL", quiet,
                                 diagnostics, config.inputFile, passName, stageName);
     }
     if (config.outputGlsl) {
@@ -2448,7 +2665,9 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         auto glslEnd = Clock::now();
         double glslMs = std::chrono::duration<double, std::milli>(glslEnd - glslStart).count();
         WriteCrossCompileOutput(true, glslMs, shaderTime.glslCrossMs,
-                                glslSource, outBase + ".glsl", "GLSL", quiet,
+                                glslSource,
+                                BuildGlslOutputPath(outputStemPath, stageName, "glsl", disambiguateGlslOutputs),
+                                "GLSL", quiet,
                                 diagnostics, config.inputFile, passName, stageName);
     }
     if (config.outputGlslEs) {
@@ -2458,13 +2677,13 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         auto glslEsEnd = Clock::now();
         shaderTime.glslEsCrossMs = std::chrono::duration<double, std::milli>(glslEsEnd - glslEsStart).count();
         if (!glslEsSource.empty() && glslEsSource.find("error") == std::string::npos) {
-            std::string glslEsPath = outBase + ".gles";
+            std::string glslEsPath = BuildGlslOutputPath(outputStemPath, stageName, "gles", disambiguateGlslOutputs);
             if (WriteTextFile(glslEsPath, glslEsSource)) {
                 if (!quiet) {
                     printf("    -> %s\n", glslEsPath.c_str());
                 }
             }
-            WriteWebGLSidecarIfNeeded(result, outBase, pass, parser,
+            WriteWebGLSidecarIfNeeded(result, glslEsPath, pass, parser,
                                       sourceBase, context, pipeline,
                                       writeWebGLSidecar, isVertexStage, quiet);
         } else {
@@ -2481,7 +2700,11 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
 #endif
 
     if (config.outputInternals && !result.irDump.empty()) {
+#ifdef USE_SPIRV_TOOLS_LIB
+        std::string spirvDis = GetSpirvDisassembly(result.spirv);
+#else
         std::string spirvDis = GetSpirvDisassembly(spvPath);
+#endif
         std::string internalsJson = "{\n";
         internalsJson += "  \"pass\": \"" + EscapeJsonString(passName) + "\",\n";
         internalsJson += "  \"stage\": \"" + std::string(stageName) + "\",\n";
@@ -2489,7 +2712,7 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         internalsJson += "  \"spirv_dis\": \"" + EscapeJsonString(spirvDis) + "\"\n";
         internalsJson += "}\n";
 
-        std::string internalsPath = outBase + ".internals.json";
+        std::string internalsPath = stageOutputPath + ".internals.json";
         if (WriteTextFile(internalsPath, internalsJson)) {
             if (!quiet) {
                 printf("    -> %s\n", internalsPath.c_str());
@@ -2567,7 +2790,9 @@ int main(int argc, char* argv[]) {
             config.passFilter = argv[++i];
         } else if (arg == "-stage" && i + 1 < argc) {
             config.stageFilter = argv[++i];
-        }else if (arg == "-metal") {
+        } else if (arg == "-spv") {
+            config.outputSpirv = true;
+        } else if (arg == "-metal") {
             config.outputMetal = true;
         } else if (arg == "-hlsl") {
             config.outputHlsl = true;
@@ -2579,6 +2804,7 @@ int main(int argc, char* argv[]) {
             config.outputGlslEs = true;
             config.useDirectGles = true;
         } else if (arg == "-all") {
+            config.outputSpirv = true;
             config.outputMetal = true;
             config.outputHlsl = true;
             config.outputGlsl = true;
@@ -2669,6 +2895,14 @@ int main(int argc, char* argv[]) {
     }
     if (config.readStdin && config.inputFile.empty()) {
         config.inputFile = "<stdin>";
+    }
+
+    if (!config.outputSpirv &&
+        !config.outputMetal &&
+        !config.outputHlsl &&
+        !config.outputGlsl &&
+        !config.outputGlslEs) {
+        config.outputSpirv = true;
     }
 
     if (config.checkOnly) {
@@ -2986,6 +3220,8 @@ int main(int argc, char* argv[]) {
         const PassData& pass = context.ast.GetPass(pipeline.passes[passIdx]);
         std::string passName = getString(pass.name, passIdx);
         std::string passOutputName = getPassOutputName(passIdx);
+        std::string outputStem = BuildPassOutputStem(baseName, passName, passOutputName, pipeline.passes.count);
+        std::string outputStemPath = BuildOutputBasePath(config.outputDir, outputStem);
 
         // Check pass filter
         if (!config.passFilter.empty() &&
@@ -3038,12 +3274,11 @@ int main(int argc, char* argv[]) {
                 vertexReflectionSamplerUses = result.explicitSamplerUses;
                 haveVertexReflectionAnalysis = true;
                 // Record timing for this shader
-                timing.shaderTimings.push_back({passOutputName + "_vert", result.timing});
+                timing.shaderTimings.push_back({outputStem + ".vert", result.timing});
                 ShaderTiming& shaderTime = timing.shaderTimings.back().second;
-                std::string outBase = BuildOutputBasePath(config.outputDir, baseName + "_" + passOutputName + "_vert");
 
                 StageOutputResult output = WriteStageOutputs(
-                    config, result, shaderTime, outBase, passName, "vertex",
+                    config, result, shaderTime, outputStemPath, passName, "vertex",
                     pass, parser, sourceBase, context, pipeline, true, true, &diagnostics);
                 if (output.success) {
                     compiledCount++;
@@ -3079,12 +3314,11 @@ int main(int argc, char* argv[]) {
                 fragmentReflectionSamplerUses = result.explicitSamplerUses;
                 haveFragmentReflectionAnalysis = true;
                 // Record timing for this shader
-                timing.shaderTimings.push_back({passOutputName + "_frag", result.timing});
+                timing.shaderTimings.push_back({outputStem + ".frag", result.timing});
                 ShaderTiming& shaderTime = timing.shaderTimings.back().second;
-                std::string outBase = BuildOutputBasePath(config.outputDir, baseName + "_" + passOutputName + "_frag");
 
                 StageOutputResult output = WriteStageOutputs(
-                    config, result, shaderTime, outBase, passName, "fragment",
+                    config, result, shaderTime, outputStemPath, passName, "fragment",
                     pass, parser, sourceBase, context, pipeline, true, false, &diagnostics);
                 if (output.success) {
                     compiledCount++;
@@ -3120,12 +3354,11 @@ int main(int argc, char* argv[]) {
                 computeReflectionSamplerUses = result.explicitSamplerUses;
                 haveComputeReflectionAnalysis = true;
                 // Record timing for this shader
-                timing.shaderTimings.push_back({passOutputName + "_comp", result.timing});
+                timing.shaderTimings.push_back({outputStem + ".comp", result.timing});
                 ShaderTiming& shaderTime = timing.shaderTimings.back().second;
-                std::string outBase = BuildOutputBasePath(config.outputDir, baseName + "_" + passOutputName + "_comp");
 
                 StageOutputResult output = WriteStageOutputs(
-                    config, result, shaderTime, outBase, passName, "compute",
+                    config, result, shaderTime, outputStemPath, passName, "compute",
                     pass, parser, sourceBase, context, pipeline, false, false, &diagnostics);
                 if (output.success) {
                     compiledCount++;
@@ -3173,7 +3406,7 @@ int main(int argc, char* argv[]) {
                                                reflectionConfig,
                                                reflectionSamplerUses.empty() ? nullptr : &reflectionSamplerUses);
 
-            std::string bindingsPath = BuildOutputBasePath(config.outputDir, baseName + "_" + passOutputName) + ".bindings.json";
+            std::string bindingsPath = outputStemPath + ".bindings.json";
             std::string bindingsJson = BuildResourceBindingsJson(passName, bindings);
             if (WriteTextFile(bindingsPath, bindingsJson)) {
                 if (!config.errorsJson) {

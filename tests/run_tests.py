@@ -202,9 +202,10 @@ TOP_LEVEL_EXPECTED_ERROR_TESTS = {
     "resources_undeclared_error": "Resource not declared in pipeline resources block",
 }
 
-TEXT_GOLDEN_SUFFIXES = {".metal", ".hlsl", ".glsl", ".gles"}
+TEXT_GOLDEN_SUFFIXES = {".metal", ".hlsl", ".glsl", ".gles", ".vert", ".frag", ".comp"}
 
 EQUIV_BACKENDS = ("spirv", "hlsl", "glsl")
+STAGE_SUFFIXES = ("vert", "frag", "comp")
 
 TRANSLATION_EXPECTATION_TESTS = {
     "interpolation_decorators": {
@@ -472,11 +473,16 @@ GLSLANG_STAGE = {"vert": "vert", "frag": "frag", "comp": "comp"}
 
 
 def stage_from_filename(path: Path) -> str | None:
+    for suffix in reversed(path.suffixes):
+        stage = suffix.lstrip(".")
+        if stage in STAGE_SUFFIXES:
+            return stage
+
     parts = path.stem.rsplit("_", 1)
     if len(parts) != 2:
         return None
     stage = parts[1]
-    return stage if stage in ("vert", "frag", "comp") else None
+    return stage if stage in STAGE_SUFFIXES else None
 
 
 def is_module_file(path: Path) -> bool:
@@ -533,6 +539,34 @@ def find_metal_outputs(output_dir: Path, test_name: str) -> list[Path]:
     exact = output_dir / f"{test_name}.metal"
     if exact.exists():
         files.add(exact)
+    return sorted(files)
+
+
+def find_stage_outputs(output_dir: Path, test_name: str, stage: str, suffix: str) -> list[Path]:
+    if suffix in ("glsl", "gles"):
+        files = set(output_dir.glob(f"{test_name}*.{suffix}.{stage}"))
+        if files:
+            return sorted(files)
+        files = set(output_dir.glob(f"{test_name}_*_{stage}.{suffix}"))
+        if files:
+            return sorted(files)
+        return sorted(output_dir.glob(f"{test_name}*.{stage}"))
+
+    if suffix == "internals.json":
+        new_pattern = f"{test_name}*.{stage}.internals.json"
+        legacy_pattern = f"{test_name}_*_{stage}.internals.json"
+    else:
+        new_pattern = f"{test_name}*.{stage}.{suffix}"
+        legacy_pattern = f"{test_name}_*_{stage}.{suffix}"
+
+    files = set(output_dir.glob(new_pattern))
+    if files:
+        return sorted(files)
+    return sorted(output_dir.glob(legacy_pattern))
+
+
+def find_spirv_outputs(output_dir: Path, test_name: str) -> list[Path]:
+    files = {path for path in output_dir.glob(f"{test_name}*.spv")}
     return sorted(files)
 
 
@@ -607,7 +641,7 @@ def compile_variant_outputs(bwslc: Path, root: Path, test_file: Path, modules_di
 
 
 def find_variant_stage_file(output_dir: Path, test_name: str, stage: str, suffix: str) -> tuple[Path | None, str]:
-    matches = sorted(output_dir.glob(f"{test_name}_*_{stage}.{suffix}"))
+    matches = find_stage_outputs(output_dir, test_name, stage, suffix)
     if not matches:
         return None, f"missing {stage}.{suffix} output"
     if len(matches) > 1:
@@ -638,7 +672,7 @@ def check_pattern_counts(label: str, text: str,
 
 
 def find_stage_file(output_dir: Path, test_name: str, stage: str, suffix: str) -> tuple[Path | None, str]:
-    matches = sorted(output_dir.glob(f"{test_name}_*_{stage}.{suffix}"))
+    matches = find_stage_outputs(output_dir, test_name, stage, suffix)
     if not matches:
         return None, f"missing {stage}.{suffix} output"
     if len(matches) > 1:
@@ -778,6 +812,21 @@ def run_glslang_compile(glsl_file: Path) -> subprocess.CompletedProcess[str]:
 
 
 def find_backend_outputs(output_dir: Path, test_name: str, ext: str) -> list[Path]:
+    if ext in ("glsl", "gles"):
+        files = {
+            path
+            for stage in STAGE_SUFFIXES
+            for path in output_dir.glob(f"{test_name}*.{ext}.{stage}")
+        }
+        if files:
+            return sorted(files)
+        files = {
+            path
+            for stage in STAGE_SUFFIXES
+            for path in output_dir.glob(f"{test_name}*.{stage}")
+        }
+        return sorted(files)
+
     files = {path for path in output_dir.glob(f"{test_name}*.{ext}")}
     exact = output_dir / f"{test_name}.{ext}"
     if exact.exists():
@@ -786,8 +835,8 @@ def find_backend_outputs(output_dir: Path, test_name: str, ext: str) -> list[Pat
 
 
 def check_wave_operations(output_dir: Path) -> tuple[bool, str]:
-    expectations = {
-        "wave_operations_pass0_comp.internals.json": [
+    expectations = [
+        ("wave_operations_WaveReductions.comp.internals.json", "wave_operations_pass0_comp.internals.json", [
             "OpGroupNonUniformFAdd",
             "OpGroupNonUniformFMul",
             "OpGroupNonUniformFMin",
@@ -795,29 +844,31 @@ def check_wave_operations(output_dir: Path) -> tuple[bool, str]:
             "OpGroupNonUniformAll",
             "OpGroupNonUniformAny",
             "OpGroupNonUniformBroadcast",
-        ],
-        "wave_operations_pass1_comp.internals.json": [
+        ]),
+        ("wave_operations_WaveCommunication.comp.internals.json", "wave_operations_pass1_comp.internals.json", [
             "OpGroupNonUniformFAdd",
             "OpGroupNonUniformFMin",
             "OpGroupNonUniformFMax",
             "OpGroupNonUniformAll",
             "OpGroupNonUniformBroadcast",
-        ],
-        "wave_operations_pass2_comp.internals.json": [
+        ]),
+        ("wave_operations_WaveConditional.comp.internals.json", "wave_operations_pass2_comp.internals.json", [
             "OpGroupNonUniformFAdd",
             "OpGroupNonUniformFMin",
             "OpGroupNonUniformFMax",
             "OpGroupNonUniformAll",
             "OpGroupNonUniformAny",
             "OpGroupNonUniformBroadcast",
-        ],
-    }
+        ]),
+    ]
 
     if not has_spirv_dis_tooling():
         return True, ""
 
-    for file_name, patterns in expectations.items():
+    for file_name, legacy_file_name, patterns in expectations:
         path = output_dir / file_name
+        if not path.exists():
+            path = output_dir / legacy_file_name
         if not path.exists():
             return False, f"missing {file_name}"
 
@@ -1120,11 +1171,10 @@ def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
     """Dispatch a single raster-mode equivalence test across backends.
 
     Expects a single-pass pipeline with a vertex + fragment stage. Looks for
-    *_vert.spv + *_frag.spv (native SPIR-V), *_vert.hlsl + *_frag.hlsl (dxc
-    cross-compile), and *_vert.glsl + *_frag.glsl (glslang cross-compile).
+    native SPIR-V, HLSL, and GLSL outputs using the compiler's stage suffixes.
     """
-    native_vert = list(test_out.glob(f"{test_name}_*_vert.spv"))
-    native_frag = list(test_out.glob(f"{test_name}_*_frag.spv"))
+    native_vert = find_stage_outputs(test_out, test_name, "vert", "spv")
+    native_frag = find_stage_outputs(test_out, test_name, "frag", "spv")
     if len(native_vert) != 1 or len(native_frag) != 1:
         print(f"[{RED}FAIL{NC}] {test_name} (raster: need exactly 1 vert/frag pair, got "
               f"{len(native_vert)}/{len(native_frag)})")
@@ -1145,11 +1195,11 @@ def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
     }
 
     for cross_name, vert_suffix, frag_suffix, converter, stage_vert, stage_frag in (
-        ("hlsl", "vert.hlsl", "frag.hlsl", convert_hlsl_to_spirv, "vert", "frag"),
-        ("glsl", "vert.glsl", "frag.glsl", convert_glsl_to_spirv, "vert", "frag"),
+        ("hlsl", "hlsl", "hlsl", convert_hlsl_to_spirv, "vert", "frag"),
+        ("glsl", "glsl", "glsl", convert_glsl_to_spirv, "vert", "frag"),
     ):
-        vert_src = list(test_out.glob(f"{test_name}_*_{vert_suffix}"))
-        frag_src = list(test_out.glob(f"{test_name}_*_{frag_suffix}"))
+        vert_src = find_stage_outputs(test_out, test_name, "vert", vert_suffix)
+        frag_src = find_stage_outputs(test_out, test_name, "frag", frag_suffix)
         if len(vert_src) != 1 or len(frag_src) != 1:
             if verbose:
                 print(f"       {YELLOW}{cross_name.upper()} raster skipped{NC}: "
@@ -1441,10 +1491,9 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
                 failed += 1
             continue
 
-        # Discover native compute .spv files. Multi-pass tests produce
-        # pass0, pass1, ... suffixes in filename order; sorted() keeps them
-        # in that order since bwslc emits zero-padded suffix-less indices.
-        native_spvs = sorted(test_out.glob(f"{test_name}_*_comp.spv"))
+        # Discover native compute .spv files. Multi-pass tests produce one
+        # output per pass in filename order.
+        native_spvs = find_stage_outputs(test_out, test_name, "comp", "spv")
         if not native_spvs:
             print(f"[{RED}FAIL{NC}] {test_name} (no native .spv produced)")
             failed += 1
@@ -1467,7 +1516,7 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
         backends_spv: dict[str, list[Path]] = {"spirv": list(native_spvs)}
 
         # HLSL / GLSL cross-compile: one per pass, converted individually.
-        hlsl_files = sorted(test_out.glob(f"{test_name}_*_comp.hlsl"))
+        hlsl_files = find_stage_outputs(test_out, test_name, "comp", "hlsl")
         if hlsl_files and len(hlsl_files) == len(native_spvs):
             converted = []
             all_ok = True
@@ -1491,7 +1540,7 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
             if all_ok:
                 backends_spv["hlsl"] = converted
 
-        glsl_files = sorted(test_out.glob(f"{test_name}_*_comp.glsl"))
+        glsl_files = find_stage_outputs(test_out, test_name, "comp", "glsl")
         if glsl_files and len(glsl_files) == len(native_spvs):
             converted = []
             all_ok = True
@@ -1628,6 +1677,7 @@ def main() -> int:
         glsl_validation = False
         gles_validation = False
 
+    shutil.rmtree(output_dir, ignore_errors=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     golden_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1746,7 +1796,7 @@ def main() -> int:
 
         if spirv_val:
             spv_val_failed = False
-            for spv_file in sorted(output_dir.glob(f"{test_name}_pass*.spv")):
+            for spv_file in find_spirv_outputs(output_dir, test_name):
                 ok_sv, msg_sv = validate_spirv(spv_file)
                 if not ok_sv:
                     print(f"[{RED}FAIL{NC}] {test_name}")
@@ -1761,7 +1811,11 @@ def main() -> int:
         passed += 1
 
         if test_name in INLINE_RETURN_JUMP_TESTS:
-            ok, message = check_inline_return_jump(output_dir / f"{test_name}_pass0_vert.internals.json")
+            path, lookup_message = find_stage_file(output_dir, test_name, "vert", "internals.json")
+            if path is None:
+                ok, message = False, lookup_message
+            else:
+                ok, message = check_inline_return_jump(path)
             if not ok:
                 print(f"[{RED}FAIL{NC}] {test_name}")
                 print("       Error: inline return jump check failed")
@@ -1772,7 +1826,11 @@ def main() -> int:
                 continue
 
         if test_name in INLINE_RETURN_LOOP_TESTS:
-            ok, message = check_inline_return_loop(output_dir / f"{test_name}_pass0_vert.internals.json")
+            path, lookup_message = find_stage_file(output_dir, test_name, "vert", "internals.json")
+            if path is None:
+                ok, message = False, lookup_message
+            else:
+                ok, message = check_inline_return_loop(path)
             if not ok:
                 print(f"[{RED}FAIL{NC}] {test_name}")
                 print("       Error: inline return loop guard check failed")
