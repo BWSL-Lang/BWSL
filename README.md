@@ -6,7 +6,7 @@ BWSL (Brawl Shading Language) is a graphics and compute shader language with a c
 
 ```bash
 # Clone with submodules
-git clone --recurse-submodules https://github.com/apresthus/BWSL.git
+git clone --recurse-submodules https://github.com/BWSL-Lang/BWSL.git
 
 # Or if already cloned without submodules:
 git submodule update --init --recursive
@@ -21,8 +21,13 @@ language and tooling changes.
 ### Prerequisites
 
 **For native CLI compiler:**
-- macOS or Linux: `clang++` or another C++20 compiler
+- macOS or Linux: `clang++` or another C++20 compiler, plus CMake for the linked SPIRV-Tools validator
 - Windows: Visual Studio Build Tools / Developer Command Prompt (`cl.exe`)
+
+The default macOS/Linux `make bwslc` build links the vendored SPIRV-Tools
+library so `-validation auto` runs in-process. Use
+`make bwslc USE_LINKED_SPIRV_TOOLS=0` to skip that library and fall back to
+external `spirv-val`/`spirv-dis` tools.
 
 **For Windows cross-compilation from macOS/Linux:**
 - [Zig](https://ziglang.org/) (`zig` must be in PATH)
@@ -87,11 +92,12 @@ On Windows, the repo now also includes `build.bat` and `make.bat`. `build.bat` b
 # Generate all output formats
 ./build/bwslc shader.bwsl -all
 
-# Specific output formats
-./build/bwslc shader.bwsl -metal           # SPIR-V + Metal
-./build/bwslc shader.bwsl -hlsl            # SPIR-V + HLSL
-./build/bwslc shader.bwsl -glsl            # SPIR-V + GLSL 450
-./build/bwslc shader.bwsl -gles            # SPIR-V + GLSL ES 300 (WebGL 2.0)
+# Specific output artifacts. Cross-compiled artifacts still use generated SPIR-V internally.
+./build/bwslc shader.bwsl -metal           # Metal
+./build/bwslc shader.bwsl -hlsl            # HLSL
+./build/bwslc shader.bwsl -glsl            # GLSL 450
+./build/bwslc shader.bwsl -gles            # GLSL ES 300 (WebGL 2.0)
+./build/bwslc shader.bwsl -gles -spv       # GLSL ES + emitted SPIR-V sidecars
 
 # Output to specific directory
 ./build/bwslc shader.bwsl -o output_dir/ -all
@@ -123,10 +129,11 @@ On Windows, the repo now also includes `build.bat` and `make.bat`. `build.bat` b
 | `-modules <dir>` | Add module search path (can be used multiple times) |
 | `-pass <name>` | Compile specific pass (default: all) |
 | `-stage <name>` | Compile specific stage: vertex, fragment, compute (default: all) |
-| `-metal` | Generate Metal Shading Language output |
-| `-hlsl` | Generate HLSL output |
-| `-glsl` | Generate GLSL output (version 450) |
-| `-gles` / `-webgl` | Generate GLSL ES output (version 300 es) |
+| `-spv` | Write generated SPIR-V files alongside requested artifacts; this is the default artifact when no format is requested |
+| `-metal` | Generate Metal Shading Language output via SPIR-V |
+| `-hlsl` | Generate HLSL output via SPIR-V |
+| `-glsl` | Generate GLSL output via SPIR-V (version 450) |
+| `-gles` / `-webgl` | Generate GLSL ES output via SPIR-V (version 300 es) |
 | `-gles-direct` | Generate GLSL ES directly from BWSL IR |
 | `-all` | Generate all output formats |
 | `-check` | Run diagnostics without writing shader outputs |
@@ -136,7 +143,7 @@ On Windows, the repo now also includes `build.bat` and `make.bat`. `build.bat` b
 | `-timing` | Print timing information |
 | `-dump-ir` | Dump BWSL IR |
 | `-debug-names` | Emit debug names in SPIR-V |
-| `-validation auto\|strict\|off` | Control SPIR-V validation (`auto` is default) |
+| `-validation auto\|strict\|off` | Control SPIR-V validation (`auto` is default; linked native builds validate in-process) |
 | `-no-validate` | Alias for `-validation off` |
 | `-internals` | Output SPIR-V disassembly and IR to JSON |
 
@@ -154,12 +161,14 @@ const version = bwsl.ccall('getVersion', 'string', [], []);
 const result = bwsl.ccall('compile', 'string', ['string', 'string', 'string'], [
     shaderSource,               // BWSL source code
     configSource || '',         // Render config source (optional)
-    '-internals -modules ./modules' // Optional flags
+    '-source-file shader.bwsl -internals -modules ./modules' // Optional flags
 ]);
 
 const output = JSON.parse(result);
 if (output.success) {
-    // output.passes contains compiled shader data
+    // output.shaders contains pass-keyed shader data
+    // output.files contains downloadable shader files, e.g. shader.vert / shader.frag
+    // Add -spv to include emitted shader.vert.spv / shader.frag.spv sidecars
 } else {
     // output.errors contains error messages
 }

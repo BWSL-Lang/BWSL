@@ -18,7 +18,8 @@
 //   const bwsl = await import('./bwsl.js');
 //   const module = await bwsl.default();
 //   const compile = module.cwrap('compile', 'string', ['string', 'string', 'string']);
-//   const result = compile(bwslSource, "", flags);  // flags: "-internals", "-modules /path"
+//   const result = compile(bwslSource, "", flags);  // flags: "-source-file shader.bwsl", "-spv", "-internals", "-modules /path"
+//                                                     // -spv emits generated SPIR-V sidecar artifacts.
 //   const json = JSON.parse(result);
 //   const getSymbols = module.cwrap('getSymbols', 'string', ['string', 'string', 'string']);
 //   const symbols = getSymbols(bwslSource, "", flags);  // flags: "-modules /path"
@@ -29,6 +30,7 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <algorithm>
 
 // SPIRV-Cross wrapper (compiled separately to avoid macro conflicts)
 #ifdef USE_SPIRV_CROSS_LIB
@@ -124,6 +126,76 @@ static const char* BarrierTypeToString(BarrierType type) {
 
 static std::string EscapeJsonString(const std::string& str) {
     return ReflectionJson::EscapeJsonString(str);
+}
+
+static std::string SanitizeOutputStemPart(const std::string& part, const std::string& fallback) {
+    std::string sanitized;
+    sanitized.reserve(part.size());
+    for (unsigned char ch : part) {
+        if ((ch >= 'a' && ch <= 'z') ||
+            (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9') ||
+            ch == '_' || ch == '-' || ch == '.') {
+            sanitized.push_back(static_cast<char>(ch));
+        } else if (!sanitized.empty() && sanitized.back() != '_') {
+            sanitized.push_back('_');
+        }
+    }
+
+    while (!sanitized.empty() && sanitized.front() == '.') {
+        sanitized.erase(sanitized.begin());
+    }
+    while (!sanitized.empty() && sanitized.back() == '_') {
+        sanitized.pop_back();
+    }
+
+    return sanitized.empty() ? fallback : sanitized;
+}
+
+static std::string StemFromPath(const std::string& path) {
+    if (path.empty() || path == "<stdin>") {
+        return "shader";
+    }
+
+    size_t start = path.find_last_of("/\\");
+    std::string name = (start == std::string::npos) ? path : path.substr(start + 1);
+    size_t dot = name.find_last_of('.');
+    if (dot != std::string::npos && dot > 0) {
+        name = name.substr(0, dot);
+    }
+
+    return SanitizeOutputStemPart(name, "shader");
+}
+
+static const char* StageFileExtension(ShaderStage stage) {
+    if (stage == ShaderStage::Vertex) return "vert";
+    if (stage == ShaderStage::Fragment) return "frag";
+    if (stage == ShaderStage::Compute) return "comp";
+    return "glsl";
+}
+
+static const char* StageNameForJson(ShaderStage stage) {
+    if (stage == ShaderStage::Vertex) return "vertex";
+    if (stage == ShaderStage::Fragment) return "fragment";
+    if (stage == ShaderStage::Compute) return "compute";
+    return "unknown";
+}
+
+static std::string BuildPassOutputStem(const std::string& baseName,
+                                       const std::string& passName,
+                                       const std::string& passFallbackName,
+                                       u32 passCount) {
+    if (passCount <= 1) {
+        return SanitizeOutputStemPart(baseName, "shader");
+    }
+
+    std::string passPart = SanitizeOutputStemPart(passName, passFallbackName);
+    return SanitizeOutputStemPart(baseName, "shader") + "_" + passPart;
+}
+
+static std::string BuildStageOutputFileName(const std::string& outputStem,
+                                            ShaderStage stage) {
+    return outputStem + "." + StageFileExtension(stage);
 }
 
 // ============= IR Dump Functions =============
@@ -459,6 +531,26 @@ static std::string ResolveArenaString(const ArenaString& value,
     return fallback;
 }
 
+static std::string ResolveOutputName(const ArenaString& value,
+                                     const char* sourceBase,
+                                     const std::string& fallback) {
+    if (!value.isHashOnly() && sourceBase) {
+        return std::string(value.view(sourceBase));
+    }
+
+    std::string lookup = value.ToString(sourceBase);
+    if (lookup.find("<hash:") == std::string::npos) {
+        return lookup;
+    }
+
+    std::string reversed = ReverseLookup::GetString(value.nameHash);
+    if (!reversed.empty()) {
+        return reversed;
+    }
+
+    return fallback;
+}
+
 static RenderConfig CreateSyntheticRenderConfig(const AST& ast,
                                                 const PipelineData& pipeline,
                                                 const SymbolTableData& symbols,
@@ -685,6 +777,61 @@ static void AppendWebGLStageJson(std::ostringstream& json,
     json << "}";
 }
 
+static void AppendFilePrefix(std::ostringstream& json,
+                             bool& firstFile,
+                             const std::string& fileName,
+                             const std::string& passName,
+                             ShaderStage stage,
+                             const char* kind) {
+    if (!firstFile) json << ",";
+    firstFile = false;
+    json << "{\"name\":\"" << EscapeJsonString(fileName) << "\",";
+    json << "\"kind\":\"" << kind << "\",";
+    json << "\"pass\":\"" << EscapeJsonString(passName) << "\",";
+    json << "\"stage\":\"" << StageNameForJson(stage) << "\"";
+}
+
+static void AppendSourceFileJson(std::ostringstream& json,
+                                 bool& firstFile,
+                                 const std::string& fileName,
+                                 const std::string& passName,
+                                 ShaderStage stage,
+                                 const std::string& source) {
+    AppendFilePrefix(json, firstFile, fileName, passName, stage, "gles");
+    json << ",\"source\":\"" << EscapeJsonString(source) << "\"}";
+}
+
+static void AppendWebGLSidecarFileJson(std::ostringstream& json,
+                                       bool& firstFile,
+                                       const std::string& fileName,
+                                       const std::string& passName,
+                                       ShaderStage stage,
+                                       const AST* ast,
+                                       const PipelineData* pipeline,
+                                       const PassData* pass,
+                                       const char* sourceBase,
+                                       const std::vector<ReflectedResourceBinding>& resources) {
+    AppendFilePrefix(json, firstFile, fileName, passName, stage, "webglSidecar");
+    json << ",\"json\":{";
+    AppendWebGLStageJson(json, stage, ast, pipeline, pass, sourceBase, resources);
+    json << "}}";
+}
+
+static void AppendSpirvFileJson(std::ostringstream& json,
+                                bool& firstFile,
+                                const std::string& fileName,
+                                const std::string& passName,
+                                ShaderStage stage,
+                                const std::vector<u32>& spirv) {
+    AppendFilePrefix(json, firstFile, fileName, passName, stage, "spirv");
+    json << ",\"words\":[";
+    for (size_t i = 0; i < spirv.size(); i++) {
+        if (i > 0) json << ",";
+        json << spirv[i];
+    }
+    json << "]}";
+}
+
 // ============= Shader Compilation =============
 
 struct ShaderOutput {
@@ -695,6 +842,7 @@ struct ShaderOutput {
     std::string error;
     IRAnalysis analysis{};
     std::vector<ExplicitSamplerUse> explicitSamplerUses;
+    std::vector<u32> spirv;
 
     // Internals for -internals flag
     std::string irDump;
@@ -826,6 +974,7 @@ static ShaderOutput CompileShaderStage(
         output.error = "SPIR-V generation failed";
         return output;
     }
+    output.spirv = spirv;
 
     // Capture internals if requested (after SSA for final IR form)
     if (captureInternals) {
@@ -906,6 +1055,8 @@ static ShaderOutput CompileShaderStage(
 static std::string CompileToJson(const char* bwslSource,
                                  const char* rcfgSource,
                                  bool emitInternals = false,
+                                 bool emitSpirv = false,
+                                 const std::string& sourceFileName = {},
                                  const std::vector<std::string>& modulePaths = {},
                                  const std::vector<VariantOverride>& variantOverrides = {},
                                  bool dumpVariantSpace = false) {
@@ -1036,19 +1187,19 @@ static std::string CompileToJson(const char* bwslSource,
 
     // Build result JSON
     std::ostringstream json;
+    std::ostringstream filesJson;
+    bool firstFile = true;
+    std::string baseName = StemFromPath(sourceFileName);
+
     json << "{\"success\":true,\"shaders\":{";
 
     bool firstPass = true;
     for (u32 passIdx = 0; passIdx < pipeline.passes.count; passIdx++) {
         const PassData& pass = context.ast.GetPass(pipeline.passes[passIdx]);
 
-        // Get pass name
-        std::string passName;
-        if (!pass.name.isHashOnly() && sourceBase) {
-            passName = std::string(pass.name.view(sourceBase));
-        } else {
-            passName = "pass" + std::to_string(passIdx);
-        }
+        std::string passFallbackName = "pass" + std::to_string(passIdx);
+        std::string passName = ResolveOutputName(pass.name, sourceBase, passFallbackName);
+        std::string outputStem = BuildPassOutputStem(baseName, passName, passFallbackName, pipeline.passes.count);
 
         bool isComputePass = !pass.computeShader.IsNull();
 
@@ -1129,14 +1280,33 @@ static std::string CompileToJson(const char* bwslSource,
         json << "\"" << passName << "\":{";
         if (isComputePass) {
             const ShaderStageData& computeStage = context.ast.GetShaderStage(pass.computeShader);
+            const std::string computeFileName = BuildStageOutputFileName(outputStem, ShaderStage::Compute);
             json << "\"compute\":\"" << EscapeJsonString(compResult.computeGlsl) << "\",";
             json << "\"workgroupSize\":[" << computeStage.workgroupSizeX << ","
                  << computeStage.workgroupSizeY << "," << computeStage.workgroupSizeZ << "],";
             AppendResourceReflectionJson(json, reflectedResources);
             json << ",\"webgl\":{";
             AppendWebGLStageJson(json, ShaderStage::Compute, &context.ast, &pipeline, nullptr, sourceBase, reflectedResources);
+            json << "},";
+            json << "\"files\":{\"compute\":\"" << EscapeJsonString(computeFileName) << "\",";
+            json << "\"computeJson\":\"" << EscapeJsonString(computeFileName + ".json") << "\"";
+            if (emitSpirv) {
+                json << ",\"computeSpv\":\"" << EscapeJsonString(computeFileName + ".spv") << "\"";
+            }
             json << "}";
+
+            AppendSourceFileJson(filesJson, firstFile, computeFileName, passName,
+                                 ShaderStage::Compute, compResult.computeGlsl);
+            AppendWebGLSidecarFileJson(filesJson, firstFile, computeFileName + ".json",
+                                       passName, ShaderStage::Compute, &context.ast,
+                                       &pipeline, nullptr, sourceBase, reflectedResources);
+            if (emitSpirv) {
+                AppendSpirvFileJson(filesJson, firstFile, computeFileName + ".spv",
+                                    passName, ShaderStage::Compute, compResult.spirv);
+            }
         } else {
+            const std::string vertexFileName = BuildStageOutputFileName(outputStem, ShaderStage::Vertex);
+            const std::string fragmentFileName = BuildStageOutputFileName(outputStem, ShaderStage::Fragment);
             json << "\"vertex\":\"" << EscapeJsonString(vertResult.vertexGlsl) << "\",";
             json << "\"fragment\":\"" << EscapeJsonString(fragResult.fragmentGlsl) << "\",";
             AppendResourceReflectionJson(json, reflectedResources);
@@ -1156,13 +1326,44 @@ static std::string CompileToJson(const char* bwslSource,
                 json << "\"" << varying.name << "\":" << varying.slot;
                 firstVarying = false;
             }
+            json << "},";
+            json << "\"files\":{\"vertex\":\"" << EscapeJsonString(vertexFileName) << "\",";
+            json << "\"vertexJson\":\"" << EscapeJsonString(vertexFileName + ".json") << "\",";
+            json << "\"fragment\":\"" << EscapeJsonString(fragmentFileName) << "\",";
+            json << "\"fragmentJson\":\"" << EscapeJsonString(fragmentFileName + ".json") << "\"";
+            if (emitSpirv) {
+                json << ",\"vertexSpv\":\"" << EscapeJsonString(vertexFileName + ".spv") << "\",";
+                json << "\"fragmentSpv\":\"" << EscapeJsonString(fragmentFileName + ".spv") << "\"";
+            }
             json << "}";
+
+            AppendSourceFileJson(filesJson, firstFile, vertexFileName, passName,
+                                 ShaderStage::Vertex, vertResult.vertexGlsl);
+            AppendWebGLSidecarFileJson(filesJson, firstFile, vertexFileName + ".json",
+                                       passName, ShaderStage::Vertex, &context.ast,
+                                       &pipeline, &pass, sourceBase, reflectedResources);
+            if (emitSpirv) {
+                AppendSpirvFileJson(filesJson, firstFile, vertexFileName + ".spv",
+                                    passName, ShaderStage::Vertex, vertResult.spirv);
+            }
+
+            AppendSourceFileJson(filesJson, firstFile, fragmentFileName, passName,
+                                 ShaderStage::Fragment, fragResult.fragmentGlsl);
+            AppendWebGLSidecarFileJson(filesJson, firstFile, fragmentFileName + ".json",
+                                       passName, ShaderStage::Fragment, &context.ast,
+                                       &pipeline, nullptr, sourceBase, reflectedResources);
+            if (emitSpirv) {
+                AppendSpirvFileJson(filesJson, firstFile, fragmentFileName + ".spv",
+                                    passName, ShaderStage::Fragment, fragResult.spirv);
+            }
         }
 
         json << "}";
     }
 
-    json << "},\"variants\":" << SerializeVariantReflectionJson(variantReflection);
+    json << "},\"files\":[";
+    json << filesJson.str();
+    json << "],\"variants\":" << SerializeVariantReflectionJson(variantReflection);
 
     if (graphData) {
         json << ",\"computeGraph\":{";
@@ -1218,12 +1419,8 @@ static std::string CompileToJson(const char* bwslSource,
         bool firstInternal = true;
         for (u32 passIdx = 0; passIdx < pipeline.passes.count; passIdx++) {
             const PassData& pass = context.ast.GetPass(pipeline.passes[passIdx]);
-            std::string passName;
-            if (!pass.name.isHashOnly() && sourceBase) {
-                passName = std::string(pass.name.view(sourceBase));
-            } else {
-                passName = "pass" + std::to_string(passIdx);
-            }
+            std::string passName = ResolveOutputName(
+                pass.name, sourceBase, "pass" + std::to_string(passIdx));
 
             // Recompile with internals capture (we need the IR/SPIR-V dumps)
             PassVaryingContext passVaryings;
@@ -1285,14 +1482,18 @@ extern "C" {
 // Main compile function - takes BWSL source, a reserved/ignored compatibility string,
 // and optional flags.
 // flags: "-internals" to include IR dump and SPIR-V disassembly in output
+//        "-spv" to include generated SPIR-V sidecar files in output.files
+//        "-source-file <path>" to set the output filename stem
 //        "-modules <path>" to add module search path (can be used multiple times)
 //        "-variant name=value" to specialize one named variant (can be used multiple times)
 //        "-dump-variant-space" to return variant reflection JSON without shader output
 // Returns JSON string with compiled shaders and metadata
 const char* compile(const char* bwslSource, const char* rcfgSource, const char* flags) {
     bool emitInternals = flags && strstr(flags, "-internals") != nullptr;
+    bool emitSpirv = flags && strstr(flags, "-spv") != nullptr;
     bool dumpVariantSpace = flags && strstr(flags, "-dump-variant-space") != nullptr;
 
+    std::string sourceFileName;
     std::vector<std::string> modulePaths;
     std::vector<VariantOverride> variantOverrides;
     if (flags) {
@@ -1304,6 +1505,30 @@ const char* compile(const char* bwslSource, const char* rcfgSource, const char* 
             while (*end && *end != ' ' && *end != '\0') end++;
             if (end > p) {
                 modulePaths.push_back(std::string(p, end - p));
+            }
+            p = end;
+        }
+
+        p = flags;
+        while ((p = strstr(p, "-source-file ")) != nullptr) {
+            p += 13;  // Skip "-source-file "
+            while (*p == ' ') p++;
+            const char* end = p;
+            while (*end && *end != ' ' && *end != '\0') end++;
+            if (end > p) {
+                sourceFileName = std::string(p, end - p);
+            }
+            p = end;
+        }
+
+        p = flags;
+        while ((p = strstr(p, "--source-file ")) != nullptr) {
+            p += 14;  // Skip "--source-file "
+            while (*p == ' ') p++;
+            const char* end = p;
+            while (*end && *end != ' ' && *end != '\0') end++;
+            if (end > p) {
+                sourceFileName = std::string(p, end - p);
             }
             p = end;
         }
@@ -1331,6 +1556,8 @@ const char* compile(const char* bwslSource, const char* rcfgSource, const char* 
     g_resultBuffer = CompileToJson(bwslSource,
                                    rcfgSource ? rcfgSource : "",
                                    emitInternals,
+                                   emitSpirv,
+                                   sourceFileName,
                                    modulePaths,
                                    variantOverrides,
                                    dumpVariantSpace);
