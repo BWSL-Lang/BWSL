@@ -136,7 +136,16 @@ ifeq ($(findstring ccache,$(firstword $(CXX))),)
 CXX := $(CCACHE) $(CXX)
 endif
 endif
-CXXFLAGS ?= -O3 -march=native -std=c++20 -Wall -Wextra
+ifeq ($(HOST_OS),macos)
+HOST_ARCH := $(shell uname -m)
+ifeq ($(HOST_ARCH),arm64)
+CXXFLAGS ?= -O3 -mcpu=apple-m1 -std=c++20 -Wall -Wextra
+else
+CXXFLAGS ?= -O3 -march=x86-64-v3 -std=c++20 -Wall -Wextra
+endif
+else
+CXXFLAGS ?= -O3 -march=x86-64-v3 -std=c++20 -Wall -Wextra
+endif
 CXXFLAGS_DEBUG ?= -g -O0 -std=c++20 -Wall -Wextra
 
 # Native Windows MSVC toolchain
@@ -149,8 +158,8 @@ MSVC_LINK_FLAGS ?= /link /STACK:8388608
 # Zig Windows cross-compilation
 ZIG ?= zig
 ZIG_WIN_TARGET ?= x86_64-windows-gnu
-ZIG_RELEASE_FLAGS ?= -OReleaseFast -std=c++20 -Wall -Wextra
-ZIG_DEBUG_FLAGS ?= -ODebug -g -std=c++20 -Wall -Wextra
+ZIG_RELEASE_FLAGS ?= -OReleaseFast -march=x86-64-v3 -std=c++20 -Wall -Wextra
+ZIG_DEBUG_FLAGS ?= -ODebug -g -march=x86-64-v3 -std=c++20 -Wall -Wextra
 
 WIN_BUILD_DIR = $(subst /,\,$(BUILD_DIR))
 WIN_WASM_DIR = $(subst /,\,$(WASM_DIR))
