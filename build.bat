@@ -159,7 +159,9 @@ if not exist "vendor\SPIRV-Headers\include" (
 )
 
 set "SPIRV_TOOLS_BUILD=build\spirv-tools-build"
-cmake -S vendor\SPIRV-Tools -B "%SPIRV_TOOLS_BUILD%" -DCMAKE_BUILD_TYPE=Release "-DSPIRV-Headers_SOURCE_DIR=%CD%\vendor\SPIRV-Headers" -DSPIRV_SKIP_TESTS=ON -DSPIRV_WERROR=OFF -DSPIRV_BUILD_FUZZER=OFF
+set "SPIRV_HEADERS_SOURCE_DIR=%CD%\vendor\SPIRV-Headers"
+set "SPIRV_HEADERS_SOURCE_DIR=%SPIRV_HEADERS_SOURCE_DIR:\=/%"
+cmake -S vendor\SPIRV-Tools -B "%SPIRV_TOOLS_BUILD%" -DCMAKE_BUILD_TYPE=Release "-DSPIRV-Headers_SOURCE_DIR=%SPIRV_HEADERS_SOURCE_DIR%" -DSPIRV_SKIP_TESTS=ON -DSPIRV_WERROR=OFF -DSPIRV_BUILD_FUZZER=OFF
 if errorlevel 1 exit /b 1
 
 cmake --build "%SPIRV_TOOLS_BUILD%" --config Release --target SPIRV-Tools-static spirv-val spirv-dis --parallel
