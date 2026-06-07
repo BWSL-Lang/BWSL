@@ -19,12 +19,13 @@ if not defined USE_LINKED_SPIRV_TOOLS set "USE_LINKED_SPIRV_TOOLS=1"
 
 set "SPIRV_TOOLS_FLAGS="
 set "SPIRV_TOOLS_LINK_LIB="
-if not "%USE_LINKED_SPIRV_TOOLS%"=="0" (
-    call :ensure_spirv_tools
-    if errorlevel 1 exit /b 1
-    set "SPIRV_TOOLS_FLAGS=/DUSE_SPIRV_TOOLS_LIB /Ivendor\SPIRV-Tools\include /Ivendor\SPIRV-Headers\include"
-    set "SPIRV_TOOLS_LINK_LIB=%SPIRV_TOOLS_LIB%"
-)
+if "%USE_LINKED_SPIRV_TOOLS%"=="0" goto :skip_spirv_tools_setup
+call :ensure_spirv_tools
+if errorlevel 1 exit /b 1
+set "SPIRV_TOOLS_FLAGS=/DUSE_SPIRV_TOOLS_LIB /Ivendor\SPIRV-Tools\include /Ivendor\SPIRV-Headers\include"
+set "SPIRV_TOOLS_LINK_LIB=%SPIRV_TOOLS_LIB%"
+echo Using linked SPIRV-Tools: %SPIRV_TOOLS_LINK_LIB%
+:skip_spirv_tools_setup
 
 set "COMMON_FLAGS=/nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB %SPIRV_TOOLS_FLAGS% /Ivendor\SPIRV-Cross /I. /Icore /Icore\middleware /Iphases\lexing /Iphases\parser /Iphases\evaluation /Iphases\ir_generation /Iphases\ir_lowering /Iphases\control_flow /Iphases\ssa /Iphases\backends\spirv /Iphases\backends\gles"
 set "RELEASE_FLAGS=/O2 /W4"
