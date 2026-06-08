@@ -28,7 +28,7 @@ echo Using linked SPIRV-Tools: %SPIRV_TOOLS_LINK_LIB%
 :skip_spirv_tools_setup
 
 set "INCLUDE_FLAGS=/Ivendor\SPIRV-Cross /I. /Icore /Icore\middleware /Iphases\lexing /Iphases\parser /Iphases\evaluation /Iphases\ir_generation /Iphases\ir_lowering /Iphases\control_flow /Iphases\ssa /Iphases\backends\spirv /Iphases\backends\gles"
-set "CPU_FLAGS=/env:x64 /arch:AVX /arch:AVX2"
+set "CPU_FLAGS=/arch:AVX /arch:AVX2"
 set "COMMON_FLAGS=/nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB %SPIRV_TOOLS_FLAGS% %INCLUDE_FLAGS% %CPU_FLAGS%"
 set "RELEASE_FLAGS=/O2 /W4"
 set "DEBUG_FLAGS=/Zi /Od /W4"
