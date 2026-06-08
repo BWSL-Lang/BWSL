@@ -12,6 +12,7 @@
 //   -spv           Write generated SPIR-V files (default when no format is requested)
 //   -check         Run diagnostics without writing output files
 //   -errors-json    Print machine-readable diagnostics as JSON
+//   -ast-json      Print parsed AST JSON and exit
 //   -v             Verbose output
 //   -h, --help     Show help
 
@@ -58,6 +59,7 @@ namespace spirv_cross_wrapper {
 #include "bwsl_cfg.h"
 #include "bwsl_ssa.h"
 #include "bwsl_parser_soa.h"
+#include "bwsl_ast_json.h"
 #include "bwsl_resource_reflection.h"
 #include "bwsl_reflection_json.h"
 #include "bwsl_lexer.h"
@@ -149,6 +151,7 @@ struct CompilerConfig {
     bool outputInternals = false;          // Output IR dump + SPIR-V disassembly to JSON file
     bool outputBindings = false;           // Output resolved resource bindings JSON
     bool errorsJson = false;               // Print diagnostics as JSON for IDE integrations
+    bool astJson = false;                  // Print parsed AST JSON for IDE integrations
     bool checkOnly = false;                // Run diagnostics without writing outputs
     bool readStdin = false;                // Read source from stdin instead of inputFile
     bool dumpVariantSpace = false;         // Dump variant schema/reflection JSON
@@ -264,6 +267,7 @@ void PrintUsage(const char* programName) {
     printf("  -webgl         Alias for -gles\n");
     printf("  -bindings      Output resolved resource bindings JSON\n");
     printf("  -errors-json   Print machine-readable diagnostics JSON for IDE integrations\n");
+    printf("  -ast-json      Print parsed AST JSON for IDE integrations and exit\n");
     printf("  -all           Generate all outputs\n");
     printf("----------------------------------------\n");
     printf("Debug options:\n");
@@ -2683,6 +2687,8 @@ int main(int argc, char* argv[]) {
             config.variantOverrides.push_back(std::move(overrideValue));
         } else if (arg == "-dump-variant-space") {
             config.dumpVariantSpace = true;
+        } else if (arg == "-ast-json" || arg == "--ast-json") {
+            config.astJson = true;
         } else if ((arg == "-validation" || arg == "--validation") && i + 1 < argc) {
             std::string mode = argv[++i];
             if (mode == "auto") {
@@ -2753,7 +2759,8 @@ int main(int argc, char* argv[]) {
         config.inputFile = "<stdin>";
     }
 
-    if (!config.outputSpirv &&
+    if (!config.astJson &&
+        !config.outputSpirv &&
         !config.outputMetal &&
         !config.outputHlsl &&
         !config.outputGlsl &&
@@ -2776,6 +2783,19 @@ int main(int argc, char* argv[]) {
         config.verbose = false;
         config.dumpIr = false;
         config.showTiming = false;
+    }
+
+    if (config.astJson) {
+        config.outputSpirv = false;
+        config.outputMetal = false;
+        config.outputHlsl = false;
+        config.outputGlsl = false;
+        config.outputGlslEs = false;
+        config.outputInternals = false;
+        config.outputBindings = false;
+        config.dumpIr = false;
+        config.showTiming = false;
+        config.verbose = false;
     }
 
     if (config.inputFile.empty()) {
@@ -2890,6 +2910,14 @@ int main(int argc, char* argv[]) {
 
     if (parser.hadError) {
         return emitFailure(&stream, &sourceLines);
+    }
+
+    if (config.astJson) {
+        std::cout << BWSL::AstJson::SerializeASTJson(context.ast,
+                                                     context.root,
+                                                     config.inputFile)
+                  << "\n";
+        return 0;
     }
 
     bool isModule = (context.ast.pipelines.count == 0 && context.ast.modules.count > 0);
