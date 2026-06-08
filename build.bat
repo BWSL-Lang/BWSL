@@ -27,7 +27,9 @@ set "SPIRV_TOOLS_LINK_LIB=%SPIRV_TOOLS_LIB%"
 echo Using linked SPIRV-Tools: %SPIRV_TOOLS_LINK_LIB%
 :skip_spirv_tools_setup
 
-set "COMMON_FLAGS=/nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB %SPIRV_TOOLS_FLAGS% /Ivendor\SPIRV-Cross /I. /Icore /Icore\middleware /Iphases\lexing /Iphases\parser /Iphases\evaluation /Iphases\ir_generation /Iphases\ir_lowering /Iphases\control_flow /Iphases\ssa /Iphases\backends\spirv /Iphases\backends\gles"
+set "INCLUDE_FLAGS=/Ivendor\SPIRV-Cross /I. /Icore /Icore\middleware /Iphases\lexing /Iphases\parser /Iphases\evaluation /Iphases\ir_generation /Iphases\ir_lowering /Iphases\control_flow /Iphases\ssa /Iphases\backends\spirv /Iphases\backends\gles"
+set "CPU_FLAGS=/env:x64 /arch:AVX /arch:AVX2"
+set "COMMON_FLAGS=/nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB %SPIRV_TOOLS_FLAGS% %INCLUDE_FLAGS% %CPU_FLAGS%"
 set "RELEASE_FLAGS=/O2 /W4"
 set "DEBUG_FLAGS=/Zi /Od /W4"
 set "LINK_FLAGS=/link /STACK:8388608"
@@ -88,9 +90,6 @@ echo Cleaned build artifacts.
 exit /b 0
 
 :ensure_msvc
-where cl >nul 2>&1
-if not errorlevel 1 exit /b 0
-
 if defined VSINSTALLDIR (
     if exist "%VSINSTALLDIR%\VC\Auxiliary\Build\vcvars64.bat" (
         call "%VSINSTALLDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul
@@ -162,7 +161,7 @@ if not exist "vendor\SPIRV-Headers\include" (
 set "SPIRV_TOOLS_BUILD=build\spirv-tools-build"
 set "SPIRV_HEADERS_SOURCE_DIR=%CD%\vendor\SPIRV-Headers"
 set "SPIRV_HEADERS_SOURCE_DIR=%SPIRV_HEADERS_SOURCE_DIR:\=/%"
-cmake -S vendor\SPIRV-Tools -B "%SPIRV_TOOLS_BUILD%" -DCMAKE_BUILD_TYPE=Release "-DSPIRV-Headers_SOURCE_DIR=%SPIRV_HEADERS_SOURCE_DIR%" -DSPIRV_SKIP_TESTS=ON -DSPIRV_WERROR=OFF -DSPIRV_BUILD_FUZZER=OFF
+cmake -S vendor\SPIRV-Tools -B "%SPIRV_TOOLS_BUILD%" -A x64 -DCMAKE_BUILD_TYPE=Release "-DSPIRV-Headers_SOURCE_DIR=%SPIRV_HEADERS_SOURCE_DIR%" -DSPIRV_SKIP_TESTS=ON -DSPIRV_WERROR=OFF -DSPIRV_BUILD_FUZZER=OFF
 if errorlevel 1 exit /b 1
 
 cmake --build "%SPIRV_TOOLS_BUILD%" --config Release --target SPIRV-Tools-static spirv-val spirv-dis --parallel
@@ -187,8 +186,6 @@ echo.
 echo Targets:
 echo   bwslc              Build release CLI compiler ^(default^)
 echo   bwslc-debug        Build debug CLI compiler
-echo   bwslc-msvc         Alias for bwslc
-echo   bwslc-msvc-debug   Alias for bwslc-debug
 echo   test               Run tests via Python
 echo   clean              Remove build artifacts
 echo   help               Show this message
