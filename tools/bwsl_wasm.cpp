@@ -89,8 +89,11 @@ static constexpr bool USE_DIRECT_GLES = false;
 #include "../core/bwsl_custom_type_registry.cpp"
 #include "../phases/backends/gles/bwsl_gles_backend.cpp"
 
+#include "bwsl_tool_common.h"
+
 using namespace BWSL;
 using namespace BWSL::IR;
+using namespace BWSL::ToolCommon;
 
 // ============= Helper Functions =============
 
@@ -198,248 +201,6 @@ static std::string BuildStageOutputFileName(const std::string& outputStem,
     return outputStem + "." + StageFileExtension(stage);
 }
 
-// ============= IR Dump Functions =============
-
-static const char* OpCodeToString(IR::OpCode op) {
-    switch (op) {
-        case IR::OP_NOP: return "NOP";
-        case IR::OP_JUMP: return "JUMP";
-        case IR::OP_BRANCH: return "BRANCH";
-        case IR::OP_CALL: return "CALL";
-        case IR::OP_RET: return "RET";
-        case IR::OP_SELECT: return "SELECT";
-        case IR::OP_PHI: return "PHI";
-        case IR::OP_LOAD_CONST: return "LOAD_CONST";
-        case IR::OP_LOAD_REG: return "LOAD_REG";
-        case IR::OP_STORE_REG: return "STORE_REG";
-        case IR::OP_LOAD_ATTR: return "LOAD_ATTR";
-        case IR::OP_STORE_OUTPUT: return "STORE_OUTPUT";
-        case IR::OP_LOAD_OUTPUT: return "LOAD_OUTPUT";
-        case IR::OP_LOAD_UNIFORM: return "LOAD_UNIFORM";
-        case IR::OP_LOAD_INPUT: return "LOAD_INPUT";
-        case IR::OP_FADD: return "FADD";
-        case IR::OP_FSUB: return "FSUB";
-        case IR::OP_FMUL: return "FMUL";
-        case IR::OP_FDIV: return "FDIV";
-        case IR::OP_FREM: return "FREM";
-        case IR::OP_LDEXP: return "LDEXP";
-        case IR::OP_FNEG: return "FNEG";
-        case IR::OP_IADD: return "IADD";
-        case IR::OP_ISUB: return "ISUB";
-        case IR::OP_IMUL: return "IMUL";
-        case IR::OP_IDIV: return "IDIV";
-        case IR::OP_DOT: return "DOT";
-        case IR::OP_CROSS: return "CROSS";
-        case IR::OP_LENGTH: return "LENGTH";
-        case IR::OP_NORMALIZE: return "NORMALIZE";
-        case IR::OP_SQRT: return "SQRT";
-        case IR::OP_RSQRT: return "RSQRT";
-        case IR::OP_FWIDTH_FINE: return "FWIDTH_FINE";
-        case IR::OP_FWIDTH_COARSE: return "FWIDTH_COARSE";
-        case IR::OP_SIN: return "SIN";
-        case IR::OP_COS: return "COS";
-        case IR::OP_TAN: return "TAN";
-        case IR::OP_POW: return "POW";
-        case IR::OP_TANH: return "TANH";
-        case IR::OP_UNPACK_SNORM4X8: return "UNPACK_SNORM4X8";
-        case IR::OP_PACK_HALF2X16: return "PACK_HALF2X16";
-        case IR::OP_UNPACK_HALF2X16: return "UNPACK_HALF2X16";
-        case IR::OP_MODF_STRUCT: return "MODF_STRUCT";
-        case IR::OP_FREXP_STRUCT: return "FREXP_STRUCT";
-        case IR::OP_ISNORMAL: return "ISNORMAL";
-        case IR::OP_EXP: return "EXP";
-        case IR::OP_LOG: return "LOG";
-        case IR::OP_FLOOR: return "FLOOR";
-        case IR::OP_CEIL: return "CEIL";
-        case IR::OP_FRACT: return "FRACT";
-        case IR::OP_LERP: return "LERP";
-        case IR::OP_SMOOTHSTEP: return "SMOOTHSTEP";
-        case IR::OP_STEP: return "STEP";
-        case IR::OP_SATURATE: return "SATURATE";
-        case IR::OP_FMIN: return "FMIN";
-        case IR::OP_FMAX: return "FMAX";
-        case IR::OP_FCLAMP: return "FCLAMP";
-        case IR::OP_FABS: return "FABS";
-        case IR::OP_BITFIELD_EXTRACT: return "BITFIELD_EXTRACT";
-        case IR::OP_BITFIELD_INSERT: return "BITFIELD_INSERT";
-        case IR::OP_PACK_UNORM2X16: return "PACK_UNORM2X16";
-        case IR::OP_UNPACK_UNORM2X16: return "UNPACK_UNORM2X16";
-        case IR::OP_PACK_UNORM4X8: return "PACK_UNORM4X8";
-        case IR::OP_UNPACK_UNORM4X8: return "UNPACK_UNORM4X8";
-        case IR::OP_PACK_SNORM2X16: return "PACK_SNORM2X16";
-        case IR::OP_UNPACK_SNORM2X16: return "UNPACK_SNORM2X16";
-        case IR::OP_PACK_SNORM4X8: return "PACK_SNORM4X8";
-        case IR::OP_ISNAN: return "ISNAN";
-        case IR::OP_ISINF: return "ISINF";
-        case IR::OP_ISFINITE: return "ISFINITE";
-        case IR::OP_TEX_LEVELS: return "TEX_LEVELS";
-        case IR::OP_TEX_SAMPLE_OFFSET: return "TEX_SAMPLE_OFFSET";
-        case IR::OP_TEX_SAMPLE_LOD_OFFSET: return "TEX_SAMPLE_LOD_OFFSET";
-        case IR::OP_TEX_SAMPLE_BIAS_OFFSET: return "TEX_SAMPLE_BIAS_OFFSET";
-        case IR::OP_TEX_GATHER_OFFSET: return "TEX_GATHER_OFFSET";
-        case IR::OP_TEX_FETCH_OFFSET: return "TEX_FETCH_OFFSET";
-        case IR::OP_VEC_CONSTRUCT: return "VEC_CONSTRUCT";
-        case IR::OP_VEC_EXTRACT: return "VEC_EXTRACT";
-        case IR::OP_MAT_MUL: return "MAT_MUL";
-        case IR::OP_TEX_SAMPLE: return "TEX_SAMPLE";
-        case IR::OP_FLT: return "FLT";
-        case IR::OP_FLE: return "FLE";
-        case IR::OP_FGT: return "FGT";
-        case IR::OP_FGE: return "FGE";
-        case IR::OP_FEQ: return "FEQ";
-        case IR::OP_FNE: return "FNE";
-        default: return "OP_UNKNOWN";
-    }
-}
-
-static const char* CoreTypeToString(CoreType type) {
-    switch (type) {
-        case CoreType::INVALID: return "INVALID";
-        case CoreType::BOOL: return "BOOL";
-        case CoreType::INT: return "INT";
-        case CoreType::UINT: return "UINT";
-        case CoreType::FLOAT: return "FLOAT";
-        case CoreType::INT2: return "INT2";
-        case CoreType::INT3: return "INT3";
-        case CoreType::INT4: return "INT4";
-        case CoreType::UINT2: return "UINT2";
-        case CoreType::UINT3: return "UINT3";
-        case CoreType::UINT4: return "UINT4";
-        case CoreType::FLOAT2: return "FLOAT2";
-        case CoreType::FLOAT3: return "FLOAT3";
-        case CoreType::FLOAT4: return "FLOAT4";
-        case CoreType::MAT2: return "MAT2";
-        case CoreType::MAT3: return "MAT3";
-        case CoreType::MAT4: return "MAT4";
-        case CoreType::VOID: return "VOID";
-        default: return "?";
-    }
-}
-
-static std::string FormatOperand(const IRProgram& prog, u16 op) {
-    if (op & 0x8000) {
-        u16 idx = op & 0x7FFF;
-        if (idx < prog.floatCount) {
-            char buf[32];
-            snprintf(buf, sizeof(buf), "%.4g", prog.floatConstants[idx]);
-            return buf;
-        }
-        return "f?";
-    }
-    if (op & 0x4000) {
-        u16 idx = op & 0x3FFF;
-        if (idx < prog.intCount) {
-            char buf[32];
-            snprintf(buf, sizeof(buf), "%d", (int)prog.intConstants[idx]);
-            return buf;
-        }
-        return "i?";
-    }
-    char buf[16];
-    snprintf(buf, sizeof(buf), "r%u", op);
-    return buf;
-}
-
-static std::string DumpIRToString(const IRProgram& prog) {
-    std::string out;
-    char buf[256];
-
-    snprintf(buf, sizeof(buf), "Instructions: %u, Registers: %u\n", prog.instructionCount, prog.registerCount);
-    out += buf;
-    snprintf(buf, sizeof(buf), "Float constants: %u, Int constants: %u\n\n", prog.floatCount, prog.intCount);
-    out += buf;
-
-    if (prog.floatCount > 0) {
-        out += "Float Constants:\n";
-        for (u32 i = 0; i < prog.floatCount; i++) {
-            snprintf(buf, sizeof(buf), "  [%u] = %.6g\n", i, prog.floatConstants[i]);
-            out += buf;
-        }
-        out += "\n";
-    }
-
-    if (prog.intCount > 0) {
-        out += "Int Constants:\n";
-        for (u32 i = 0; i < prog.intCount; i++) {
-            snprintf(buf, sizeof(buf), "  [%u] = %d\n", i, (int)prog.intConstants[i]);
-            out += buf;
-        }
-        out += "\n";
-    }
-
-    out += "Instructions:\n";
-    for (u32 i = 0; i < prog.instructionCount; i++) {
-        IR::OpCode op = static_cast<IR::OpCode>(prog.opcodes[i]);
-        u16 dest = prog.destinations[i];
-        CoreType type = prog.types ? static_cast<CoreType>(prog.types[i]) : CoreType::INVALID;
-
-        snprintf(buf, sizeof(buf), "  [%3u] %-16s", i, OpCodeToString(op));
-        out += buf;
-
-        if (dest != 0 || op == IR::OP_STORE_REG || op == IR::OP_STORE_OUTPUT) {
-            if (type != CoreType::INVALID) {
-                snprintf(buf, sizeof(buf), " r%-3u:%-7s <-", dest, CoreTypeToString(type));
-            } else {
-                snprintf(buf, sizeof(buf), " r%-3u         <-", dest);
-            }
-            out += buf;
-        } else {
-            out += "                ";
-        }
-
-        u16 op0 = prog.GetOperand(i, 0);
-        u16 op1 = prog.GetOperand(i, 1);
-        u16 op2 = prog.GetOperand(i, 2);
-        u16 op3 = prog.GetOperand(i, 3);
-
-        switch (op) {
-            case IR::OP_NOP:
-            case IR::OP_RET:
-                break;
-            case IR::OP_JUMP:
-                snprintf(buf, sizeof(buf), " -> %u", op0);
-                out += buf;
-                break;
-            case IR::OP_BRANCH:
-                snprintf(buf, sizeof(buf), " %s ? -> %u : %u", FormatOperand(prog, op0).c_str(), op1, op2);
-                out += buf;
-                break;
-            case IR::OP_LOAD_CONST:
-                out += " " + FormatOperand(prog, op0);
-                break;
-            case IR::OP_LOAD_ATTR:
-                snprintf(buf, sizeof(buf), " attr[%u]", op0);
-                out += buf;
-                break;
-            case IR::OP_LOAD_OUTPUT:
-                snprintf(buf, sizeof(buf), " output[%u]", op0);
-                out += buf;
-                break;
-            case IR::OP_STORE_OUTPUT:
-                snprintf(buf, sizeof(buf), " output[%u] = %s", op0, FormatOperand(prog, op1).c_str());
-                out += buf;
-                break;
-            case IR::OP_VEC_CONSTRUCT:
-                snprintf(buf, sizeof(buf), " (%s, %s, %s, %s)",
-                    FormatOperand(prog, op0).c_str(),
-                    FormatOperand(prog, op1).c_str(),
-                    FormatOperand(prog, op2).c_str(),
-                    FormatOperand(prog, op3).c_str());
-                out += buf;
-                break;
-            default:
-                out += " " + FormatOperand(prog, op0);
-                if (op1 || op2 || op3) out += ", " + FormatOperand(prog, op1);
-                if (op2 || op3) out += ", " + FormatOperand(prog, op2);
-                if (op3) out += ", " + FormatOperand(prog, op3);
-                break;
-        }
-        out += "\n";
-    }
-
-    return out;
-}
-
 static bool CanUseDirectGLESFallback(const IRProgram& program, ShaderStage stage) {
     for (u32 i = 0; i < program.instructionCount; i++) {
         IR::OpCode op = static_cast<IR::OpCode>(program.opcodes[i]);
@@ -516,21 +277,6 @@ static std::string DumpSpirvToString(const std::vector<u32>& spirv) {
     return out.str();
 }
 
-static std::string ResolveArenaString(const ArenaString& value,
-                                      const char* sourceBase,
-                                      const std::string& fallback = {}) {
-    if (!value.isHashOnly() && sourceBase) {
-        return std::string(value.view(sourceBase));
-    }
-
-    std::string reversed = ReverseLookup::GetString(value.nameHash);
-    if (!reversed.empty()) {
-        return reversed;
-    }
-
-    return fallback;
-}
-
 static std::string ResolveOutputName(const ArenaString& value,
                                      const char* sourceBase,
                                      const std::string& fallback) {
@@ -549,117 +295,6 @@ static std::string ResolveOutputName(const ArenaString& value,
     }
 
     return fallback;
-}
-
-static RenderConfig CreateSyntheticRenderConfig(const AST& ast,
-                                                const PipelineData& pipeline,
-                                                const SymbolTableData& symbols,
-                                                const char* sourceBase) {
-    RenderConfig config;
-    config.name = ResolveArenaString(pipeline.name, sourceBase, "Demo");
-
-    auto appendResource = [&](const std::string& resourceName,
-                              const std::string& typeName,
-                              const ResourceData& resource) {
-        switch (resource.type) {
-            case ResourceBinding::UniformBuffer: {
-                UniformBufferBinding binding;
-                binding.name = resourceName;
-                binding.typeName = typeName;
-                binding.bindingIndex = resource.bindingIndex;
-                binding.stages = resource.stageFlags;
-                config.uniformBuffers.push_back(std::move(binding));
-                break;
-            }
-            case ResourceBinding::Texture: {
-                TextureBinding binding;
-                binding.name = resourceName;
-                binding.bindingIndex = resource.bindingIndex;
-                binding.isArray = resource.isArrayTexture;
-                binding.isCubemap = resource.isCubemapTexture;
-                binding.stages = resource.stageFlags;
-                config.textures.push_back(std::move(binding));
-                break;
-            }
-            case ResourceBinding::Sampler: {
-                SamplerBinding binding;
-                binding.name = resourceName;
-                binding.bindingIndex = resource.bindingIndex;
-                binding.stages = resource.stageFlags;
-                config.samplers.push_back(std::move(binding));
-                break;
-            }
-            case ResourceBinding::StorageBuffer: {
-                StorageBufferBinding binding;
-                binding.name = resourceName;
-                binding.typeName = typeName;
-                binding.bindingIndex = resource.bindingIndex;
-                binding.readOnly = true;
-                binding.stages = resource.stageFlags;
-                config.storageBuffers.push_back(std::move(binding));
-                break;
-            }
-            case ResourceBinding::StorageImage: {
-                StorageImageBinding binding;
-                binding.name = resourceName;
-                binding.bindingIndex = resource.bindingIndex;
-                binding.accessMode = ::ResourceAccessMode::ReadWrite;
-                binding.stages = resource.stageFlags;
-                config.storageImages.push_back(std::move(binding));
-                break;
-            }
-            default:
-                break;
-        }
-    };
-
-    if (pipeline.resources.count > 0) {
-        for (u32 i = 0; i < pipeline.resources.count; i++) {
-            const ResourceDeclData& decl = ast.GetResourceDecl(pipeline.resources[i]);
-            Symbol* sym = SymbolTable::LookupResource(const_cast<SymbolTableData*>(&symbols), decl.name);
-            if (!sym || sym->index >= symbols.resources.count) {
-                continue;
-            }
-
-            const ResourceData& resource = symbols.resources[sym->index];
-            std::string resourceName = ResolveArenaString(
-                decl.name,
-                sourceBase,
-                GetResourceNameByIndex(symbols, sym->index, sourceBase)
-            );
-            if (resourceName.empty()) {
-                continue;
-            }
-
-            appendResource(resourceName,
-                           ResolveArenaString(decl.typeName, sourceBase),
-                           resource);
-        }
-    } else {
-        for (u32 resourceIndex = 0; resourceIndex < symbols.resources.count; resourceIndex++) {
-            const ResourceData& resource = symbols.resources[resourceIndex];
-            std::string resourceName = GetResourceNameByIndex(symbols, resourceIndex, sourceBase);
-            if (resourceName.empty()) {
-                continue;
-            }
-
-            appendResource(resourceName,
-                           ResolveArenaString(resource.typeName, sourceBase),
-                           resource);
-        }
-    }
-
-    for (u32 i = 0; i < pipeline.passes.count; i++) {
-        const PassData& pass = ast.GetPass(pipeline.passes[i]);
-        RenderConfig::PassData passConfig;
-        passConfig.name = ResolveArenaString(pass.name, sourceBase, "pass" + std::to_string(i));
-        passConfig.type = pass.computeShader.IsNull() ? PassType::Standard : PassType::Compute;
-        passConfig.descriptor.name = passConfig.name;
-        passConfig.descriptor.pipelineName = config.name;
-        config.passes.push_back(std::move(passConfig));
-    }
-
-    return config;
 }
 
 using NameBindingEntry = std::pair<std::string, u32>;
@@ -1172,7 +807,8 @@ static std::string CompileToJson(const char* bwslSource,
     RenderConfig renderConfig = CreateSyntheticRenderConfig(context.ast,
                                                             pipeline,
                                                             parser.symbolTable,
-                                                            sourceBase);
+                                                            sourceBase,
+                                                            "Demo");
     const ComputeGraphData* graphData = nullptr;
     ComputeGraphCompileResult graphResult = CompileComputeGraph(context.ast,
                                                                pipeline,
