@@ -1,10 +1,10 @@
-# BWSL Compiler Build System
+# BWSL Compiler Build System for Unix environments
+# See build.bat for Windows building.
 # ============================
 #
 # Targets:
 #   make bwslc              - Build the native CLI compiler for the host
 #   make bwslc-debug        - Build the native CLI compiler with debug symbols
-#   make bwslc-msvc         - Build the native CLI compiler with MSVC on Windows
 #   make bwslc-win-zig      - Cross-compile a Windows CLI compiler with Zig
 #   make wasm               - Build WebAssembly module
 #   make wasm-debug         - Build WebAssembly module with debug info
@@ -14,7 +14,6 @@
 #
 # Native toolchains:
 #   - macOS/Linux: uses CXX (defaults to clang++)
-#   - Windows: uses cl.exe from a Visual Studio Developer Command Prompt
 #
 # Cross-compilation:
 #   - macOS/Linux -> Windows: make bwslc-win-zig
@@ -77,14 +76,8 @@ SPIRV_HEADERS_SRC = vendor/SPIRV-Headers
 SPIRV_TOOLS_BUILD = $(BUILD_DIR)/spirv-tools-build
 SPIRV_TOOLS_STAMP = $(SPIRV_TOOLS_BUILD)/.bwsl-built
 SPIRV_TOOLS_INCLUDES = -I$(SPIRV_TOOLS_SRC)/include -I$(SPIRV_HEADERS_SRC)/include
-ifeq ($(HOST_OS),windows)
-SPIRV_TOOLS_LIB = $(SPIRV_TOOLS_BUILD)/source/Release/SPIRV-Tools.lib
-SPIRV_TOOLS_BUILD_CONFIG = --config Release
-MSVC_SPIRV_TOOLS_INCLUDES = /Ivendor\SPIRV-Tools\include /Ivendor\SPIRV-Headers\include
-else
 SPIRV_TOOLS_LIB = $(SPIRV_TOOLS_BUILD)/source/libSPIRV-Tools.a
 SPIRV_TOOLS_BUILD_CONFIG =
-endif
 
 USE_LINKED_SPIRV_TOOLS ?= 1
 NATIVE_SPIRV_TOOLS_PREREQS =
@@ -93,15 +86,9 @@ NATIVE_SPIRV_TOOLS_INCLUDES =
 NATIVE_SPIRV_TOOLS_LIBS =
 ifneq ($(USE_LINKED_SPIRV_TOOLS),0)
 NATIVE_SPIRV_TOOLS_PREREQS = $(SPIRV_TOOLS_STAMP)
-ifeq ($(HOST_OS),windows)
-NATIVE_SPIRV_TOOLS_FLAGS = /DUSE_SPIRV_TOOLS_LIB
-NATIVE_SPIRV_TOOLS_INCLUDES = $(MSVC_SPIRV_TOOLS_INCLUDES)
-NATIVE_SPIRV_TOOLS_LIBS = $(subst /,\,$(SPIRV_TOOLS_LIB))
-else
 NATIVE_SPIRV_TOOLS_FLAGS = -DUSE_SPIRV_TOOLS_LIB
 NATIVE_SPIRV_TOOLS_INCLUDES = $(SPIRV_TOOLS_INCLUDES)
 NATIVE_SPIRV_TOOLS_LIBS = $(SPIRV_TOOLS_LIB)
-endif
 endif
 
 CCACHE := $(shell command -v ccache 2>/dev/null)
@@ -110,22 +97,16 @@ SPIRV_CMAKE_LAUNCHER = $(if $(CCACHE),\
 	-DCMAKE_CXX_COMPILER_LAUNCHER=ccache,)
 
 SPIRV_TEST_DEPS =
-ifneq ($(HOST_OS),windows)
 HAS_SPIRV_VAL := $(shell command -v spirv-val 2>/dev/null)
 HAS_SPIRV_DIS := $(shell command -v spirv-dis 2>/dev/null)
 ifeq ($(and $(HAS_SPIRV_VAL),$(HAS_SPIRV_DIS)),)
 SPIRV_TEST_DEPS = spirv-tools
-endif
 endif
 
 BWSL_INCLUDE_DIRS = -I. -Icore -Icore/middleware \
 	-Iphases/lexing -Iphases/parser -Iphases/evaluation \
 	-Iphases/ir_generation -Iphases/ir_lowering -Iphases/control_flow \
 	-Iphases/ssa -Iphases/backends/spirv -Iphases/backends/gles
-MSVC_BWSL_INCLUDE_DIRS = /I. /Icore /Icore/middleware \
-	/Iphases/lexing /Iphases/parser /Iphases/evaluation \
-	/Iphases/ir_generation /Iphases/ir_lowering /Iphases/control_flow \
-	/Iphases/ssa /Iphases/backends/spirv /Iphases/backends/gles
 
 # Native Unix toolchain
 ifeq ($(origin CXX), default)
@@ -148,13 +129,6 @@ CXXFLAGS ?= -O3 -march=x86-64-v3 -std=c++20 -Wall -Wextra
 endif
 CXXFLAGS_DEBUG ?= -g -O0 -std=c++20 -Wall -Wextra
 
-# Native Windows MSVC toolchain
-MSVC_CXX ?= cl
-MSVC_COMMON_FLAGS = /nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB /I$(SPIRV_CROSS_DIR) $(MSVC_BWSL_INCLUDE_DIRS)
-MSVC_RELEASE_FLAGS ?= /O2 /W4
-MSVC_DEBUG_FLAGS ?= /Zi /Od /W4
-MSVC_LINK_FLAGS ?= /link /STACK:8388608
-
 # Zig Windows cross-compilation
 ZIG ?= zig
 ZIG_WIN_TARGET ?= x86_64-windows-gnu
@@ -170,35 +144,6 @@ WIN_BWSLC_DEBUG_OUT = $(subst /,\,$(BWSLC_DEBUG_OUT))
 # Platform-specific commands and object file rules
 # ============================================================================
 
-ifeq ($(HOST_OS),windows)
-SPIRV_CROSS_WRAPPER_OBJ = $(BUILD_DIR)/spirv_cross_wrapper.obj
-SPIRV_CROSS_WRAPPER_DEBUG_OBJ = $(BUILD_DIR)/spirv_cross_wrapper_debug.obj
-BWSLC_OBJ = $(BUILD_DIR)/bwslc.obj
-BWSLC_DEBUG_OBJ = $(BUILD_DIR)/bwslc_debug.obj
-BWSLC_PREREQS = $(SPIRV_CROSS_WRAPPER_OBJ) $(NATIVE_SPIRV_TOOLS_PREREQS)
-BWSLC_DEBUG_PREREQS = $(SPIRV_CROSS_WRAPPER_DEBUG_OBJ) $(NATIVE_SPIRV_TOOLS_PREREQS)
-BWSLC_COMPILE_CMD = $(MSVC_CXX) $(MSVC_RELEASE_FLAGS) $(MSVC_COMMON_FLAGS) $(NATIVE_SPIRV_TOOLS_FLAGS) $(NATIVE_SPIRV_TOOLS_INCLUDES) /c /Fo$(BWSLC_OBJ) $(BWSLC_SRC)
-BWSLC_DEBUG_COMPILE_CMD = $(MSVC_CXX) $(MSVC_DEBUG_FLAGS) $(MSVC_COMMON_FLAGS) $(NATIVE_SPIRV_TOOLS_FLAGS) $(NATIVE_SPIRV_TOOLS_INCLUDES) /Fd$(WIN_BUILD_DIR)\bwslc-debug.pdb /c /Fo$(BWSLC_DEBUG_OBJ) $(BWSLC_SRC)
-NATIVE_BWSLC_CMD = $(MSVC_CXX) $(MSVC_RELEASE_FLAGS) $(MSVC_COMMON_FLAGS) \
-	/Fe$(WIN_BWSLC_OUT) $(SPIRV_CROSS_WRAPPER_OBJ) $(BWSLC_OBJ) $(NATIVE_SPIRV_TOOLS_LIBS) $(MSVC_LINK_FLAGS)
-NATIVE_BWSLC_DEBUG_CMD = $(MSVC_CXX) $(MSVC_DEBUG_FLAGS) $(MSVC_COMMON_FLAGS) \
-	/Fe$(WIN_BWSLC_DEBUG_OUT) $(SPIRV_CROSS_WRAPPER_DEBUG_OBJ) $(BWSLC_DEBUG_OBJ) $(NATIVE_SPIRV_TOOLS_LIBS) $(MSVC_LINK_FLAGS)
-MKDIR_BUILD = cmd /C if not exist "$(WIN_BUILD_DIR)" mkdir "$(WIN_BUILD_DIR)"
-MKDIR_WASM = cmd /C if not exist "$(WIN_WASM_DIR)" mkdir "$(WIN_WASM_DIR)"
-CLEAN_BUILD = cmd /C if exist "$(WIN_BUILD_DIR)" rmdir /S /Q "$(WIN_BUILD_DIR)"
-
-$(SPIRV_CROSS_WRAPPER_OBJ): $(SPIRV_CROSS_WRAPPER) | $(BUILD_DIR)
-	$(MSVC_CXX) $(MSVC_RELEASE_FLAGS) $(MSVC_COMMON_FLAGS) /c /Fo$@ $<
-
-$(SPIRV_CROSS_WRAPPER_DEBUG_OBJ): $(SPIRV_CROSS_WRAPPER) | $(BUILD_DIR)
-	$(MSVC_CXX) $(MSVC_DEBUG_FLAGS) $(MSVC_COMMON_FLAGS) /Fd$(WIN_BUILD_DIR)\bwslc-debug.pdb /c /Fo$@ $<
-
-$(BWSLC_OBJ): $(BWSLC_SRC) $(NATIVE_SPIRV_TOOLS_PREREQS) | $(BUILD_DIR)
-	$(MSVC_CXX) $(MSVC_RELEASE_FLAGS) $(MSVC_COMMON_FLAGS) $(NATIVE_SPIRV_TOOLS_FLAGS) $(NATIVE_SPIRV_TOOLS_INCLUDES) /c /Fo$@ $<
-
-$(BWSLC_DEBUG_OBJ): $(BWSLC_SRC) $(NATIVE_SPIRV_TOOLS_PREREQS) | $(BUILD_DIR)
-	$(MSVC_CXX) $(MSVC_DEBUG_FLAGS) $(MSVC_COMMON_FLAGS) $(NATIVE_SPIRV_TOOLS_FLAGS) $(NATIVE_SPIRV_TOOLS_INCLUDES) /Fd$(WIN_BUILD_DIR)\bwslc-debug.pdb /c /Fo$@ $<
-else
 SPIRV_CROSS_WRAPPER_OBJ = $(BUILD_DIR)/spirv_cross_wrapper.o
 SPIRV_CROSS_WRAPPER_DEBUG_OBJ = $(BUILD_DIR)/spirv_cross_wrapper_debug.o
 BWSLC_OBJ = $(BUILD_DIR)/bwslc.o
@@ -234,7 +179,6 @@ $(BWSLC_DEBUG_OBJ): $(BWSLC_SRC) $(NATIVE_SPIRV_TOOLS_PREREQS) | $(BUILD_DIR)
 	$(CXX) -c $(CXXFLAGS_DEBUG) $(SPIRV_CROSS_FLAGS) $(NATIVE_SPIRV_TOOLS_FLAGS) \
 		$(SPIRV_CROSS_INCLUDES) $(NATIVE_SPIRV_TOOLS_INCLUDES) $(BWSL_INCLUDE_DIRS) \
 		-o $@ $<
-endif
 
 # ============================================================================
 # WebAssembly Build
@@ -266,7 +210,7 @@ WASM_SPIRV_INCLUDES = $(BWSL_INCLUDE_DIRS) -Itools
 # Targets
 # ============================================================================
 
-.PHONY: all help bwslc bwslc-debug bwslc-sanitize bwslc-msvc bwslc-msvc-debug \
+.PHONY: all help bwslc bwslc-debug bwslc-sanitize \
 	bwslc-win-zig bwslc-win-zig-debug clean wasm wasm-debug test test-sanitize \
 	install equiv_runner spirv-tools clangd-config benchmark-backend
 
@@ -276,7 +220,6 @@ help:
 	@echo "BWSL build targets:"
 	@echo "  make bwslc              Native CLI compiler"
 	@echo "  make bwslc-debug        Native CLI compiler with debug info"
-	@echo "  make bwslc-msvc         Native Windows build with MSVC"
 	@echo "  make bwslc-win-zig      Windows cross-build with Zig"
 	@echo "  make wasm               WebAssembly module"
 	@echo "  make wasm-debug         WebAssembly module with debug info"
@@ -397,20 +340,6 @@ bwslc-fuzz: $(BUILD_DIR)
 	$(FUZZ_CXX) $(FUZZ_FLAGS) $(FUZZ_LINK_FLAGS) $(BWSL_INCLUDE_DIRS) -o $(FUZZ_OUT) $(FUZZ_SRC)
 	@echo "Built: $(FUZZ_OUT)"
 
-ifeq ($(HOST_OS),windows)
-bwslc-msvc: bwslc
-
-bwslc-msvc-debug: bwslc-debug
-else
-bwslc-msvc:
-	@echo "bwslc-msvc requires Windows with cl.exe available in a Developer Command Prompt." >&2
-	@exit 1
-
-bwslc-msvc-debug:
-	@echo "bwslc-msvc-debug requires Windows with cl.exe available in a Developer Command Prompt." >&2
-	@exit 1
-endif
-
 ZIG_SPIRV_CROSS_WRAPPER_OBJ = $(BUILD_DIR)/spirv_cross_wrapper_win.o
 ZIG_SPIRV_CROSS_WRAPPER_DEBUG_OBJ = $(BUILD_DIR)/spirv_cross_wrapper_win_debug.o
 ZIG_BWSLC_OBJ = $(BUILD_DIR)/bwslc_win.o
@@ -472,18 +401,8 @@ wasm-debug: $(WASM_DIR)
 		$(WASM_COMMON_FLAGS) $(WASM_DEBUG_OPT) -o $(WASM_DIR)/bwsl-debug.js
 	@echo "Built: $(WASM_DIR)/bwsl-debug.js"
 
-ifeq ($(HOST_OS),windows)
-test:
-	@if where python >nul 2>&1; then \
-		python tests/run_tests.py; \
-	else \
-		echo "Regression tests require Python on Windows." >&2; \
-		exit 1; \
-	fi
-else
 test: bwslc $(SPIRV_TEST_DEPS)
 	PATH="$(abspath $(SPIRV_TOOLS_BUILD)/tools):$$PATH" ./tests/run_tests.sh
-endif
 
 # ============================================================================
 # Install WASM to bwsl-docs
