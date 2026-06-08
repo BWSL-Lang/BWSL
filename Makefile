@@ -268,7 +268,7 @@ WASM_SPIRV_INCLUDES = $(BWSL_INCLUDE_DIRS) -Itools
 
 .PHONY: all help bwslc bwslc-debug bwslc-sanitize bwslc-msvc bwslc-msvc-debug \
 	bwslc-win-zig bwslc-win-zig-debug clean wasm wasm-debug test test-sanitize \
-	install equiv_runner spirv-tools clangd-config
+	install equiv_runner spirv-tools clangd-config benchmark-backend
 
 all: bwslc
 
@@ -282,6 +282,7 @@ help:
 	@echo "  make wasm-debug         WebAssembly module with debug info"
 	@echo "  make spirv-tools        Build SPIRV-Tools library and CLI tools"
 	@echo "  make install DOCS_DIR=/path/to/site/public/wasm"
+	@echo "  make benchmark-backend  Benchmark backend cache/validation overlap"
 	@echo "  make clean              Remove build artifacts"
 
 bwslc: $(BWSLC_PREREQS)
@@ -334,6 +335,19 @@ test-sanitize: bwslc-sanitize
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=1 \
 	UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_stacktrace=1 \
 	python3 tests/run_tests.py --compiler $(BWSLC_SANITIZE_OUT) --no-spirv-val
+
+BENCH_RUNS ?= 30
+BENCH_WARMUP ?= 5
+BENCH_BASELINE ?=
+BENCH_CANDIDATE ?= $(BWSLC_OUT)
+BENCH_BASELINE_ARG = $(if $(BENCH_BASELINE),--baseline $(BENCH_BASELINE),)
+
+benchmark-backend: bwslc
+	python3 scripts/benchmark_backend_cache.py \
+		--candidate $(BENCH_CANDIDATE) \
+		$(BENCH_BASELINE_ARG) \
+		--runs $(BENCH_RUNS) \
+		--warmup $(BENCH_WARMUP)
 
 equiv_runner: $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(VULKAN_INCLUDE) -o $(EQUIV_RUNNER_OUT) \
