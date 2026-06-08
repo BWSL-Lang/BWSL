@@ -209,6 +209,83 @@ Rules:
 - Compute passes cannot use `use attributes`.
 - Only one compute block is allowed per pass.
 
+## Pass Blocks
+
+Pass blocks let functions return reusable pass bodies. They are useful when a
+module owns a complete graphics or compute pass shape, while the caller
+pipeline owns the concrete attribute, resource, and variant names.
+
+Declare a pass-block helper with `-> pass_block`. Its body must contain a
+`pass { ... }` wrapper:
+
+```bwsl
+module SpritePasses {
+    attributes {
+        position: float3
+        texCoord: float2
+    }
+
+    resources {
+        viewProj: mat4
+        atlas: texture2D
+        atlasSampler: sampler
+    }
+
+    sprite :: () -> pass_block {
+        pass {
+            use attributes { position, texCoord }
+            use resources { viewProj, atlas, atlasSampler }
+
+            vertex {
+                output.position = resources.viewProj * float4(attributes.position, 1.0);
+                output.uv = attributes.texCoord;
+            }
+
+            fragment {
+                output.color = sample(resources.atlas, resources.atlasSampler, input.uv);
+            }
+        }
+    }
+}
+```
+
+Instantiate a pass block with `pass "Name" = helperCall()`. The right-hand side
+must be a direct function call.
+
+When instantiating a module pass block, map module-local interface names to the
+caller pipeline's names:
+
+```bwsl
+pipeline GameUI {
+    import SpritePasses
+
+    attributes {
+        meshPosition: float3
+        uv: float2
+    }
+
+    resources {
+        cameraVP: mat4
+        uiAtlas: texture2D
+        uiSampler: sampler
+    }
+
+    pass "Sprites" = SpritePasses::sprite() {
+        use attributes { position = meshPosition, texCoord = uv }
+        use resources { viewProj = cameraVP, atlas = uiAtlas, atlasSampler = uiSampler }
+    }
+}
+```
+
+Mappings are type checked. Attribute mappings require matching attribute type
+and decorators. Resource mappings require matching resource type. Variant
+mappings require both sides to be declared variants with matching types.
+Optional attribute facts such as `has_normal` and optional resource facts such
+as `has_resource_albedo` are remapped with their corresponding interface names.
+
+Pass-block helpers may take parameters, but arguments must be compile-time
+constants.
+
 ## Shader Stage Composition
 
 BWSL supports several ways to define stage bodies.

@@ -56,12 +56,57 @@ A pass is either:
 
 - a graphics pass using `vertex` and optional `fragment`
 - a compute pass using `compute`
+- an instantiation of a `pass_block` helper
 
 Current parser rules include:
 
 - compute passes may not include `vertex` or `fragment`
 - compute passes may not use `use attributes`
 - only one compute block is allowed per pass
+
+## Pass Blocks
+
+Pass blocks are pass-returning functions that let modules or pipelines define a
+complete reusable graphics or compute pass shape while callers supply the
+concrete pipeline interfaces.
+
+A pass-block instantiation uses a direct function call:
+
+```bwsl
+pass "Sprites" = SpritePasses::sprite() {
+    use attributes { position = meshPosition, normal = meshNormal, uv }
+    use resources { viewProj = cameraVP, atlas = uiAtlas, atlasSampler = uiSampler }
+    variants { localTint = tintEnabled }
+}
+```
+
+The right-hand side must be a direct function call that resolves to a
+`pass_block` function. Ternaries or arbitrary expressions are rejected.
+
+When the pass block comes from a module and uses module-local attributes or
+resources, the caller must provide mappings to names declared by the caller
+pipeline. Mapping entries use `localName = pipelineName`; a bare entry maps a
+name to itself. Attribute mappings require matching type, compression
+decorator, and `@instance` status. Resource mappings require matching resource
+type. Variant mappings require both sides to be declared variants with matching
+types.
+
+The instantiation body is only for interface mapping:
+
+```bwsl
+use attributes { localAttr = pipelineAttr, sameName }
+use resources { localResource = pipelineResource, sameName }
+variants { localVariant = pipelineVariant }
+```
+
+The caller cannot add or override `vertex`, `fragment`, `compute`, `outputs`,
+pass-local constants, or pass-local helper functions inside the mapping body.
+
+Optional attribute and resource facts are remapped with their interface names.
+For example, if a module pass uses `normal?` and refers to
+`variants.has_normal`, then `normal = meshNormal` maps that fact to the
+caller's `has_meshNormal`. Optional resources follow the same rule using
+`has_resource_<name>`.
 
 ## `use attributes`
 

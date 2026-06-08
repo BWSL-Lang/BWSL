@@ -38,9 +38,7 @@ Function return types currently include:
 - `vertex_function`
 - `fragment_function`
 - `compute_function`
-
-The parser also accepts `pass_block`, which should currently be treated as
-provisional.
+- `pass_block`
 
 ## Function Scope
 
@@ -66,6 +64,48 @@ makeVertex :: () -> vertex_function {
 ```
 
 These helpers can be assigned into pass stages.
+
+## Pass-Block-Returning Functions
+
+Functions returning `pass_block` return a complete reusable pass body. Their
+function body must contain a `pass { ... }` wrapper:
+
+```bwsl
+makeSpritePass :: () -> pass_block {
+    pass {
+        use attributes { position, uv }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.uv;
+        }
+
+        fragment {
+            output.color = float4(input.uv, 0.0, 1.0);
+        }
+    }
+}
+```
+
+The `pass` wrapper is part of the syntax. A bare body beginning with `use`,
+`vertex`, `fragment`, or `compute` is rejected.
+
+Pass-block helpers may take parameters, but instantiation arguments must be
+compile-time constants. During instantiation, argument values are substituted
+into the cloned pass body before normal lowering:
+
+```bwsl
+makeDepthPass :: (float bias) -> pass_block {
+    pass {
+        vertex {
+            output.position = float4(0.0, 0.0, bias, 1.0);
+        }
+        fragment = null
+    }
+}
+
+pass "Depth" = makeDepthPass(0.001);
+```
 
 ## Modules
 

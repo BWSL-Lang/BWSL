@@ -180,6 +180,39 @@
 # Passes and shader stages
 
 <pass-decl> ::= 'pass' <string-literal> '{' <pass-item-list> '}'
+              | 'pass' <string-literal> '=' <pass-block-call> <pass-block-mapping-body-opt> <semicolon-opt>
+
+<pass-block-call> ::= <pass-block-call-target> '(' <argument-list-opt> ')'
+
+<pass-block-call-target> ::= <identifier>
+                           | <identifier> '::' <identifier>
+
+<pass-block-mapping-body-opt> ::= <pass-block-mapping-body>
+                                | <empty>
+
+<pass-block-mapping-body> ::= '{' <pass-block-mapping-list> '}'
+
+<pass-block-mapping-list> ::= <pass-block-mapping> <pass-block-mapping-list>
+                            | <empty>
+
+<pass-block-mapping> ::= 'use' 'attributes' '{' <pass-block-binding-list-opt> '}'
+                       | 'use' 'resources' '{' <pass-block-binding-list-opt> '}'
+                       | 'variants' '{' <pass-block-binding-list-opt> '}'
+
+<pass-block-binding-list-opt> ::= <pass-block-binding-list>
+                                | <empty>
+
+<pass-block-binding-list> ::= <pass-block-binding> <pass-block-binding-tail>
+
+<pass-block-binding-tail> ::= <pass-block-binding-separator> <pass-block-binding-list>
+                            | <pass-block-binding-separator>
+                            | <empty>
+
+<pass-block-binding> ::= <identifier>
+                       | <identifier> '=' <identifier>
+
+<pass-block-binding-separator> ::= ','
+                                 | ';'
 
 <pass-item-list> ::= <pass-item> <pass-item-list>
                    | <empty>
@@ -302,7 +335,7 @@
                   | '{' <type-pattern-arm-list> '}'
                   | '{' 'vertex' <shader-stage-block> '}'
                   | '{' 'fragment' <shader-stage-block> '}'
-                  | '{' <pass-item-list> '}'
+                  | '{' 'pass' '{' <pass-item-list> '}' '}'
 
 <type-pattern-arm-list> ::= <type-pattern-arm> <type-pattern-arm-list>
                           | <type-pattern-arm>

@@ -43,6 +43,8 @@ The following areas are mature enough for a normative draft:
 - Constraint-based generics
 - Enum declarations, payload enums, and pattern-arm syntax
 - Shader-stage composition for `vertex`, `fragment`, and `compute`
+- Pass-block-returning functions, pass-block instantiation, and checked
+  interface mapping
 - Built-in shader namespaces: `attributes`, `input`, `output`, `resources`
 - Variant declarations and rule syntax
 - The intrinsic catalog exposed through `core/bwsl_stdlib.h`
@@ -57,9 +59,6 @@ The following features should be treated as implemented but still provisional:
   `eval` execution now runs as a post-parse comptime pass, but the supported
   value domain is still intentionally narrow: scalar and vector literals,
   existing constants, enum/module constants, and variant constants.
-- `pass_block`
-  The parser accepts `-> pass_block`, but the public docs do not yet treat it
-  as a normal user-facing feature.
 - Stage validation details for some compute-oriented intrinsics
   The overall feature set is clear, but some validation still lives partly in
   lowering rather than in a clean front-end rule system.
