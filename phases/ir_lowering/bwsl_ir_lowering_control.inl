@@ -814,10 +814,6 @@ inline void IRLowering::LowerIfStatement(NodeRef ref) {
 
   bool needMergePad = true;
   if (block.statements.count > 2) {
-    // Check if else block is another if statement (else-if chain)
-    // We need to mark the instruction BEFORE the else for proper nesting
-    u32 elseStartInst = builder.currentInstruction;
-
     LowerStatement(block.statements[2]);
 
     // If the else block was an if statement and ended at the same instruction

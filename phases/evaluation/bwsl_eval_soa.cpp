@@ -488,6 +488,10 @@ bool CompileTimeEvaluatorSoA::EvaluateUnaryOp(EvalStateSoA* state, NodeRef node,
                 return true;
             }
             break;
+
+        case UnaryOpType::ADDRESS_OF:
+        case UnaryOpType::DEREFERENCE:
+            break;
     }
 
     SetError(state, "Invalid unary operation");

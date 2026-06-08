@@ -142,7 +142,6 @@ NodeRef Parser::ParseModule() {
                 continue;
             }
 
-            TokenType varType = static_cast<TokenType>(stream->GetType(previous));
             Consume(TokenType::IDENTIFIER, "Expected constant name");
             std::string constName(stream->GetValue(previous));
 

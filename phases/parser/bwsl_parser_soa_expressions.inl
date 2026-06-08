@@ -653,8 +653,6 @@ NodeRef Parser::ParseFunctionCall(NodeRef function) {
     }
 
     if (!isMethodCall && (ast->GetFunctionCall(call).flags & FunctionCallFlags::IS_INTRINSIC)) {
-        const auto* intrinsic = StdLib::IntrinsicLookup::Find(ast->GetFunctionCall(call).name.nameHash);
-
         // Parse arguments
         if (!Check(TokenType::RIGHT_PAREN)) {
             do {
