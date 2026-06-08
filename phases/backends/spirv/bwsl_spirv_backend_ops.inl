@@ -11,21 +11,19 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
   u32 dest = GetSpirvId(ir->destinations[ir_idx]);
 
-  // Get type ID - special handling for CUSTOM and ENUM types which need struct
-  // lookup
+  // Ensure the instruction result type exists in the type section. Individual
+  // cases still compute the concrete result type they need for emission.
   CoreType instType = static_cast<CoreType>(ir->types[ir_idx]);
-  u32 type_id = 0;
   if (instType == CoreType::CUSTOM || instType == CoreType::ENUM) {
-    // Look up struct type from register's struct type hash
     u16 dest_reg = ir->destinations[ir_idx];
     if (dest_reg < 512 && ir->registerStructTypes) {
       u32 structHash = ir->registerStructTypes[dest_reg];
       if (structHash != 0) {
-        type_id = GetStructTypeId(structHash);
+        (void)GetStructTypeId(structHash);
       }
     }
   } else {
-    type_id = GetTypeId(instType);
+    (void)GetTypeId(instType);
   }
 
   switch (op) {
@@ -52,7 +50,6 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     // implemented
     // TODO: Implement function inlining during IR lowering
     // The destination register needs a valid SPIR-V ID that's actually defined
-    u16 dest_reg = ir->destinations[ir_idx];
     CoreType resultType = static_cast<CoreType>(ir->types[ir_idx]);
     if (resultType == CoreType::INVALID || resultType == CoreType::VOID) {
       resultType =
@@ -457,7 +454,6 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
     // Get input vector type - check both constant flags and register types
     CoreType vecType = CoreType::FLOAT4; // Default assumption
-    bool vecTypeKnown = false;
     if (!(op2_reg & 0xE000)) {
       // Not a constant (0x8000=float, 0x4000=int, 0x2000=uint), check register
       // type
@@ -466,7 +462,6 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         if (regType == CoreType::FLOAT2 || regType == CoreType::FLOAT3 ||
             regType == CoreType::FLOAT4) {
           vecType = regType;
-          vecTypeKnown = true;
         }
       }
     }
@@ -941,7 +936,6 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
     // If one operand is scalar and other is vector, splat the scalar
     if (numComponents > 1) {
-      u32 float_type = GetTypeId(CoreType::FLOAT);
       u32 vec_type = GetTypeId(vectorType);
 
       if (op1_is_scalar && !op2_is_scalar) {
@@ -1027,8 +1021,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       op2_type = CoreType::BOOL;
     }
 
-    // Pick result vector width from whichever operand is a vector.
-    u32 numComponents = 1;
+    // Pick the boolean result type from whichever operand is a vector.
     CoreType bvecType = CoreType::BOOL;
     auto vecWidth = [](CoreType t) -> u32 {
       if (t == CoreType::INT2 || t == CoreType::UINT2 ||
@@ -1039,11 +1032,11 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
           t == CoreType::BOOL4) return 4;
       return 1;
     };
-    u32 w = vecWidth(op1_type);
-    if (w == 1) w = vecWidth(op2_type);
-    if (w == 2) { numComponents = 2; bvecType = CoreType::BOOL2; }
-    else if (w == 3) { numComponents = 3; bvecType = CoreType::BOOL3; }
-    else if (w == 4) { numComponents = 4; bvecType = CoreType::BOOL4; }
+    u32 resultWidth = vecWidth(op1_type);
+    if (resultWidth == 1) resultWidth = vecWidth(op2_type);
+    if (resultWidth == 2) { bvecType = CoreType::BOOL2; }
+    else if (resultWidth == 3) { bvecType = CoreType::BOOL3; }
+    else if (resultWidth == 4) { bvecType = CoreType::BOOL4; }
     u32 bool_type = GetTypeId(bvecType);
 
     spv::Op cmp_op;
@@ -1164,7 +1157,6 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     // BWSL select(a, b, cond) = if cond then b else a
     // IR convention: SELECT(false_val, true_val, condition)
     // SPIR-V OpSelect: OpSelect result_type result condition true_val false_val
-    u16 dest_reg = ir->destinations[ir_idx];
     u16 false_val_reg = ir->GetOperand(ir_idx, 0); // First arg is false value
     u16 true_val_reg = ir->GetOperand(ir_idx, 1);  // Second arg is true value
     u16 cond_reg = ir->GetOperand(ir_idx, 2);
@@ -1326,7 +1318,6 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   // ========== Type Conversion Operations ==========
   case IR::OP_I2F: {
     // Signed int to float: OpConvertSToF
-    u16 dest_reg = ir->destinations[ir_idx];
     u32 operand = GetSpirvId(ir->GetOperand(ir_idx, 0));
     u32 result_type = GetTypeId(CoreType::FLOAT);
     Emit(spv::OpConvertSToF, result_type, dest, operand);
@@ -1335,7 +1326,6 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
   case IR::OP_U2F: {
     // Unsigned int to float: OpConvertUToF
-    u16 dest_reg = ir->destinations[ir_idx];
     u16 src_reg = ir->GetOperand(ir_idx, 0);
     u32 operand = GetSpirvId(src_reg);
     u32 result_type = GetTypeId(CoreType::FLOAT);
@@ -1374,7 +1364,6 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
   case IR::OP_F2I: {
     // Float to signed int: OpConvertFToS
-    u16 dest_reg = ir->destinations[ir_idx];
     u32 operand = GetSpirvId(ir->GetOperand(ir_idx, 0));
     u32 result_type = GetTypeId(CoreType::INT);
     Emit(spv::OpConvertFToS, result_type, dest, operand);
@@ -1383,7 +1372,6 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
   case IR::OP_F2U: {
     // Float to unsigned int: OpConvertFToU
-    u16 dest_reg = ir->destinations[ir_idx];
     u32 operand = GetSpirvId(ir->GetOperand(ir_idx, 0));
     u32 result_type = GetTypeId(CoreType::UINT);
     Emit(spv::OpConvertFToU, result_type, dest, operand);
@@ -1393,7 +1381,6 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_I2U:
   case IR::OP_U2I: {
     // Int/uint conversion is just bitcast (same bit representation)
-    u16 dest_reg = ir->destinations[ir_idx];
     u32 operand = GetSpirvId(ir->GetOperand(ir_idx, 0));
     CoreType resultType = (op == IR::OP_I2U) ? CoreType::UINT : CoreType::INT;
     u32 result_type = GetTypeId(resultType);
@@ -4956,6 +4943,32 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     currentFunction[currentFunctionSize++] = value_id;
     break;
   }
+
+  // These opcodes are handled in other backend phases, share a numeric value
+  // with another case, or are not emitted by the current SPIR-V path.
+  case IR::OP_PHI:
+  case IR::OP_LOAD_BUFFER:
+  case IR::OP_STORE_BUFFER:
+  case IR::OP_LOAD_LOCAL:
+  case IR::OP_STORE_LOCAL:
+  case IR::OP_LOAD_SHARED:
+  case IR::OP_STORE_SHARED:
+  case IR::OP_F2F16:
+  case IR::OP_F162F:
+  case IR::OP_STRUCT_LOAD:
+  case IR::OP_STRUCT_STORE:
+  case IR::OP_STRUCT_GEP:
+  case IR::OP_MAT_IDENTITY:
+  case IR::OP_MAT_ZERO:
+  case IR::OP_TEX_SAMPLE_CMP:
+  case IR::OP_IMG_LOAD:
+  case IR::OP_LOAD_TEX_HANDLE:
+  case IR::OP_ATOMIC_SUB:
+  case IR::OP_WAVE_BALLOT:
+  case IR::OP_ARRAY_ACCESS:
+  case IR::OP_ARRAY_CONSTRUCT:
+  case IR::OP_INVALID:
+    break;
 
     // TODO: Add more opcode translations (OP_DISCARD for OpKill, etc.)
   }

@@ -74,11 +74,9 @@ u32 SPIRVBuilder::GetStructTypeId(u32 structTypeHash) {
   }
 
   const IR::IRProgram::StructTypeInfo *structInfo = nullptr;
-  u32 structIdx = 0;
   for (u32 i = 0; i < ir->structTypeCount; i++) {
     if (ir->structTypes[i].nameHash == structTypeHash) {
       structInfo = &ir->structTypes[i];
-      structIdx = i;
       break;
     }
   }

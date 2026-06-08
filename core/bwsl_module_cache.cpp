@@ -433,6 +433,7 @@ void ModuleCache::SerializeCache(void* buffer, u32* size) const {
 }
 
 void ModuleCache::DeserializeCache(const void* buffer, u32 size) {
+    (void)size;
     const u8* ptr = (const u8*)buffer;
 
     // Read header
@@ -625,6 +626,7 @@ void ModuleCache::RebuildHashTable() {
 }
 
 void ModuleCache::PropagateInvalidation(u32 moduleIndex) {
+    (void)moduleIndex;
     // This is called internally by InvalidateDependents
     // Could be optimized with a work queue to avoid recursion
 }

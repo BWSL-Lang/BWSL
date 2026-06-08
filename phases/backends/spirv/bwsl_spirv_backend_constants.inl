@@ -7,7 +7,6 @@ namespace BWSL {
 
 u32 SPIRVBuilder::GetFloatConstantId(float value) {
   // Check for existing constant
-  u32 hash = Utils::HashFloat(value);
   for (u32 i = 0; i < ir->floatCount; i++) {
     if (ir->floatConstants[i] == value && floatConstantIds[i] != 0) {
       return floatConstantIds[i];

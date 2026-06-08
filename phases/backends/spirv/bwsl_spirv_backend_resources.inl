@@ -131,13 +131,10 @@ void SPIRVBuilder::DeclareResources() {
 
   // ============= Textures (combined image samplers) =============
   // First create shared image and sampled image types if any textures used
-  u32 image_type_id = 0;
   u32 sampled_image_type_id = 0;
   u32 ptr_sampled_image_type = 0;
-  u32 array_image_type_id = 0;
   u32 array_sampled_image_type_id = 0;
   u32 ptr_array_sampled_image_type = 0;
-  u32 cube_image_type_id = 0;
   u32 cube_sampled_image_type_id = 0;
   u32 ptr_cube_sampled_image_type = 0;
 
@@ -178,7 +175,6 @@ void SPIRVBuilder::DeclareResources() {
   if (analysis.usedTextureMask != 0) {
     // Create regular 2D texture types if needed
     if (needsRegularTexture) {
-      image_type_id = GetImageTypeId();
       sampled_image_type_id = GetSampledImageTypeId();
 
       ptr_sampled_image_type = AllocateId();
@@ -191,7 +187,6 @@ void SPIRVBuilder::DeclareResources() {
 
     // Create 2D array texture types if needed
     if (needsArrayTexture) {
-      array_image_type_id = GetArrayImageTypeId();
       array_sampled_image_type_id = GetArraySampledImageTypeId();
 
       ptr_array_sampled_image_type = AllocateId();
@@ -205,7 +200,6 @@ void SPIRVBuilder::DeclareResources() {
 
     // Create cube texture types if needed
     if (needsCubeTexture) {
-      cube_image_type_id = GetCubeImageTypeId();
       cube_sampled_image_type_id = GetCubeSampledImageTypeId();
 
       ptr_cube_sampled_image_type = AllocateId();
