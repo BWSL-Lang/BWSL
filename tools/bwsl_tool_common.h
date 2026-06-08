@@ -239,32 +239,6 @@ inline const char* OpCodeToString(IR::OpCode op) {
     }
 }
 
-inline const char* CoreTypeToString(CoreType type) {
-    switch (type) {
-        case CoreType::INVALID: return "INVALID";
-        case CoreType::BOOL:    return "BOOL";
-        case CoreType::INT:     return "INT";
-        case CoreType::UINT:    return "UINT";
-        case CoreType::FLOAT:   return "FLOAT";
-        case CoreType::INT2:    return "INT2";
-        case CoreType::INT3:    return "INT3";
-        case CoreType::INT4:    return "INT4";
-        case CoreType::UINT2:   return "UINT2";
-        case CoreType::UINT3:   return "UINT3";
-        case CoreType::UINT4:   return "UINT4";
-        case CoreType::FLOAT2:  return "FLOAT2";
-        case CoreType::FLOAT3:  return "FLOAT3";
-        case CoreType::FLOAT4:  return "FLOAT4";
-        case CoreType::MAT2:    return "MAT2";
-        case CoreType::MAT3:    return "MAT3";
-        case CoreType::MAT4:    return "MAT4";
-        case CoreType::VOID:    return "VOID";
-        case CoreType::STRING:  return "STRING";
-        case CoreType::CUSTOM:  return "CUSTOM";
-        default:                return "?";
-    }
-}
-
 inline std::string FormatOperand(const IR::IRProgram& prog, u16 op, bool allowZeroReg = true) {
     if (op & 0x8000) {
         u16 idx = op & 0x7FFF;

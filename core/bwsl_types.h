@@ -24,8 +24,11 @@ struct ArenaString {
 
     // For strings FROM source buffer
     static ArenaString Make(const char* sourceBase, u32 offset, u16 length) {
+        std::string text(sourceBase + offset, length);
+        u32 hash = Utils::HashStr(text.c_str(), length);
+        ReverseLookup::Register(hash, text.c_str());
         return {
-            Utils::HashStr(sourceBase + offset, length),
+            hash,
             offset,
             length,
             {0, 0}
@@ -37,11 +40,16 @@ struct ArenaString {
     
     // For synthetic/built-in strings NOT in source
     static ArenaString MakeHashOnly(const char* literal) {
-        return { Utils::HashStr(literal), 0u, 0u, {0, 0} };
+        const char* text = literal ? literal : "";
+        u32 hash = Utils::HashStr(text);
+        ReverseLookup::Register(hash, text);
+        return { hash, 0u, 0u, {0, 0} };
     }
     
     static ArenaString MakeHashOnly(const std::string& str) {
-        return { Utils::HashStr(str.c_str()), 0u, 0u, {0, 0} };
+        u32 hash = Utils::HashStr(str.c_str());
+        ReverseLookup::Register(hash, str.c_str());
+        return { hash, 0u, 0u, {0, 0} };
     }
     
     static ArenaString MakeHashOnly(u32 precomputedHash) {
@@ -149,6 +157,67 @@ enum class CoreType : u8 {
     DMAT4,
     COUNT // THIS HAS TO BE LAST, OR ELSE SHIT BREAKS!!!!!!!!
 };
+
+inline const char* CoreTypeToString(CoreType type) {
+    switch (type) {
+        case CoreType::INVALID: return "INVALID";
+        case CoreType::BOOL: return "BOOL";
+        case CoreType::INT: return "INT";
+        case CoreType::UINT: return "UINT";
+        case CoreType::FLOAT: return "FLOAT";
+        case CoreType::BOOL2: return "BOOL2";
+        case CoreType::BOOL3: return "BOOL3";
+        case CoreType::BOOL4: return "BOOL4";
+        case CoreType::INT2: return "INT2";
+        case CoreType::INT3: return "INT3";
+        case CoreType::INT4: return "INT4";
+        case CoreType::UINT2: return "UINT2";
+        case CoreType::UINT3: return "UINT3";
+        case CoreType::UINT4: return "UINT4";
+        case CoreType::FLOAT2: return "FLOAT2";
+        case CoreType::FLOAT3: return "FLOAT3";
+        case CoreType::FLOAT4: return "FLOAT4";
+        case CoreType::MAT2: return "MAT2";
+        case CoreType::MAT3: return "MAT3";
+        case CoreType::MAT4: return "MAT4";
+        case CoreType::VOID: return "VOID";
+        case CoreType::STRING: return "STRING";
+        case CoreType::CUSTOM: return "CUSTOM";
+        case CoreType::ENUM: return "ENUM";
+        case CoreType::GENERIC_T: return "GENERIC_T";
+        case CoreType::GENERIC_U: return "GENERIC_U";
+        case CoreType::GENERIC_V: return "GENERIC_V";
+        case CoreType::CONSTRAINT: return "CONSTRAINT";
+        case CoreType::CBUFFER: return "CBUFFER";
+        case CoreType::BUFFER: return "BUFFER";
+        case CoreType::TEXTURE2D: return "TEXTURE2D";
+        case CoreType::TEXTURE3D: return "TEXTURE3D";
+        case CoreType::TEXTURECUBE: return "TEXTURECUBE";
+        case CoreType::TEXTURE2DARRAY: return "TEXTURE2DARRAY";
+        case CoreType::SAMPLER: return "SAMPLER";
+        case CoreType::VERTEX_FUNCTION: return "VERTEX_FUNCTION";
+        case CoreType::FRAGMENT_FUNCTION: return "FRAGMENT_FUNCTION";
+        case CoreType::COMPUTE_FUNCTION: return "COMPUTE_FUNCTION";
+        case CoreType::PASS_BLOCK: return "PASS_BLOCK";
+        case CoreType::INT64: return "INT64";
+        case CoreType::UINT64: return "UINT64";
+        case CoreType::DOUBLE: return "DOUBLE";
+        case CoreType::INT64X2: return "INT64X2";
+        case CoreType::INT64X3: return "INT64X3";
+        case CoreType::INT64X4: return "INT64X4";
+        case CoreType::UINT64X2: return "UINT64X2";
+        case CoreType::UINT64X3: return "UINT64X3";
+        case CoreType::UINT64X4: return "UINT64X4";
+        case CoreType::DOUBLE2: return "DOUBLE2";
+        case CoreType::DOUBLE3: return "DOUBLE3";
+        case CoreType::DOUBLE4: return "DOUBLE4";
+        case CoreType::DMAT2: return "DMAT2";
+        case CoreType::DMAT3: return "DMAT3";
+        case CoreType::DMAT4: return "DMAT4";
+        case CoreType::COUNT: return "COUNT";
+        default: return "UNKNOWN";
+    }
+}
 
 enum class SpecialIdentifier : u8 {
     NONE = 0,

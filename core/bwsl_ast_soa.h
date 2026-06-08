@@ -429,6 +429,10 @@ struct AST {
     alignas(64) u32* positions;  // Packed line/column
     u32 nodeCount;
     u32 nodeCapacity;
+    u32* positionKeys;           // NodeRef::packed -> packed line/column
+    u32* positionValues;
+    u32 positionMapCount;
+    u32 positionMapCapacity;
 
     // Type-specific pools (cold, only touched when you need that node type)
     ArenaArray<IdentifierData> identifiers;
@@ -477,6 +481,11 @@ struct AST {
         nodeCapacity = estimatedNodes;
 
         positions = (u32*)arena->Allocate(sizeof(u32) * nodeCapacity, 64);
+        positionMapCapacity = NextPowerOfTwo(estimatedNodes * 2);
+        positionMapCount = 0;
+        positionKeys = (u32*)arena->Allocate(sizeof(u32) * positionMapCapacity, 64);
+        positionValues = (u32*)arena->Allocate(sizeof(u32) * positionMapCapacity, 64);
+        memset(positionKeys, 0xFF, sizeof(u32) * positionMapCapacity);
 
         // Initialize pools with reasonable defaults based on typical usage
         identifiers.Init(arena, 64);        // Very common
@@ -527,15 +536,103 @@ struct AST {
         column = packed & 0xFFF;
     }
 
+    static u32 NextPowerOfTwo(u32 value) {
+        if (value <= 1) return 1;
+        value--;
+        value |= value >> 1;
+        value |= value >> 2;
+        value |= value >> 4;
+        value |= value >> 8;
+        value |= value >> 16;
+        return value + 1;
+    }
+
+    void RecordPosition(NodeRef ref, u32 line, u32 column) {
+        if (nodeCount >= nodeCapacity) {
+            u32 newCapacity = nodeCapacity * 2;
+            u32* newPositions = (u32*)arena->Allocate(sizeof(u32) * newCapacity, 64);
+            memcpy(newPositions, positions, nodeCount * sizeof(u32));
+            positions = newPositions;
+            nodeCapacity = newCapacity;
+        }
+
+        u32 packedPosition = PackPosition(line, column);
+        positions[nodeCount++] = packedPosition;
+
+        IndexPosition(ref, line, column);
+    }
+
+    void IndexPosition(NodeRef ref, u32 line, u32 column) {
+        if ((positionMapCount + 1) * 2 >= positionMapCapacity) {
+            GrowPositionMap();
+        }
+        InsertPosition(ref.packed, PackPosition(line, column));
+    }
+
+    NodeRef MakeNodeRef(ASTNodeType type, u32 index, u32 line, u32 column) {
+        NodeRef ref(type, index);
+        IndexPosition(ref, line, column);
+        return ref;
+    }
+
+    u32 FindPosition(NodeRef ref) const {
+        if (ref.IsNull() || positionMapCapacity == 0) return 0;
+        u32 slot = ref.packed & (positionMapCapacity - 1);
+        for (u32 probe = 0; probe < positionMapCapacity; probe++) {
+            u32 key = positionKeys[slot];
+            if (key == ref.packed) {
+                return positionValues[slot];
+            }
+            if (key == 0xFFFFFFFFu) {
+                return 0;
+            }
+            slot = (slot + 1) & (positionMapCapacity - 1);
+        }
+        return 0;
+    }
+
     u32 GetLine(NodeRef ref) const {
         if (ref.IsNull()) return 0;
-        return positions[ref.Index()] >> 12;
+        return FindPosition(ref) >> 12;
     }
 
     u32 GetColumn(NodeRef ref) const {
         if (ref.IsNull()) return 0;
-        return positions[ref.Index()] & 0xFFF;
+        return FindPosition(ref) & 0xFFF;
     }
+
+private:
+    void InsertPosition(u32 key, u32 value) {
+        u32 slot = key & (positionMapCapacity - 1);
+        while (positionKeys[slot] != 0xFFFFFFFFu && positionKeys[slot] != key) {
+            slot = (slot + 1) & (positionMapCapacity - 1);
+        }
+        if (positionKeys[slot] == 0xFFFFFFFFu) {
+            positionMapCount++;
+        }
+        positionKeys[slot] = key;
+        positionValues[slot] = value;
+    }
+
+    void GrowPositionMap() {
+        u32 oldCapacity = positionMapCapacity;
+        u32* oldKeys = positionKeys;
+        u32* oldValues = positionValues;
+
+        positionMapCapacity *= 2;
+        positionMapCount = 0;
+        positionKeys = (u32*)arena->Allocate(sizeof(u32) * positionMapCapacity, 64);
+        positionValues = (u32*)arena->Allocate(sizeof(u32) * positionMapCapacity, 64);
+        memset(positionKeys, 0xFF, sizeof(u32) * positionMapCapacity);
+
+        for (u32 i = 0; i < oldCapacity; i++) {
+            if (oldKeys[i] != 0xFFFFFFFFu) {
+                InsertPosition(oldKeys[i], oldValues[i]);
+            }
+        }
+    }
+
+public:
 
     //==========================================================================
     // Type-specific accessors
@@ -664,7 +761,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::IDENTIFIER, index);
+        return ast->MakeNodeRef(ASTNodeType::IDENTIFIER, index, line, col);
     }
 
     inline NodeRef MakeIdentifier(AST* ast, const std::string& name, u32 line = 0, u32 col = 0) {
@@ -687,7 +784,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::LITERAL, index);
+        return ast->MakeNodeRef(ASTNodeType::LITERAL, index, line, col);
     }
 
     inline NodeRef MakeLiteralInt(AST* ast, int32_t value, u32 line = 0, u32 col = 0) {
@@ -706,7 +803,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::LITERAL, index);
+        return ast->MakeNodeRef(ASTNodeType::LITERAL, index, line, col);
     }
 
     inline NodeRef MakeLiteralUint(AST* ast, uint32_t value, u32 line = 0, u32 col = 0) {
@@ -725,7 +822,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::LITERAL, index);
+        return ast->MakeNodeRef(ASTNodeType::LITERAL, index, line, col);
     }
 
     inline NodeRef MakeLiteralBool(AST* ast, bool value, u32 line = 0, u32 col = 0) {
@@ -744,7 +841,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::LITERAL, index);
+        return ast->MakeNodeRef(ASTNodeType::LITERAL, index, line, col);
     }
 
     inline NodeRef MakeBinaryOp(AST* ast, BinaryOpType op, NodeRef left, NodeRef right, u32 line = 0, u32 col = 0) {
@@ -764,7 +861,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::BINARY_OP, index);
+        return ast->MakeNodeRef(ASTNodeType::BINARY_OP, index, line, col);
     }
 
     inline NodeRef MakeUnaryOp(AST* ast, UnaryOpType op, NodeRef operand, u32 line = 0, u32 col = 0) {
@@ -783,7 +880,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::UNARY_OP, index);
+        return ast->MakeNodeRef(ASTNodeType::UNARY_OP, index, line, col);
     }
 
     inline NodeRef MakeTernaryExpr(AST* ast, NodeRef condition, NodeRef trueExpr, NodeRef falseExpr, u32 line = 0, u32 col = 0) {
@@ -803,7 +900,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::TERNARY_EXPRESSION, index);
+        return ast->MakeNodeRef(ASTNodeType::TERNARY_EXPRESSION, index, line, col);
     }
 
     inline NodeRef MakeMemberAccess(AST* ast, NodeRef object, const ArenaString& member, u32 line = 0, u32 col = 0) {
@@ -822,7 +919,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::MEMBER_ACCESS, index);
+        return ast->MakeNodeRef(ASTNodeType::MEMBER_ACCESS, index, line, col);
     }
 
     inline NodeRef MakeArrayAccess(AST* ast, NodeRef array, NodeRef index, u32 line = 0, u32 col = 0) {
@@ -841,7 +938,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::ARRAY_ACCESS, idx);
+        return ast->MakeNodeRef(ASTNodeType::ARRAY_ACCESS, idx, line, col);
     }
 
     inline NodeRef MakeAssignment(AST* ast, NodeRef target, NodeRef value, u32 line = 0, u32 col = 0,
@@ -863,7 +960,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::ASSIGNMENT, index);
+        return ast->MakeNodeRef(ASTNodeType::ASSIGNMENT, index, line, col);
     }
 
     inline NodeRef MakeReturn(AST* ast, NodeRef value, u32 line = 0, u32 col = 0) {
@@ -885,7 +982,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::RETURN, index);
+        return ast->MakeNodeRef(ASTNodeType::RETURN, index, line, col);
     }
 
     inline NodeRef MakeBlock(AST* ast, u32 line = 0, u32 col = 0) {
@@ -903,7 +1000,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::BLOCK, index);
+        return ast->MakeNodeRef(ASTNodeType::BLOCK, index, line, col);
     }
 
     inline NodeRef MakeEvalBlock(AST* ast, u32 line = 0, u32 col = 0) {
@@ -921,7 +1018,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::EVAL_BLOCK, index);
+        return ast->MakeNodeRef(ASTNodeType::EVAL_BLOCK, index, line, col);
     }
 
     // If statement - uses same BlockData storage but with IF_STATEMENT type
@@ -941,7 +1038,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::IF_STATEMENT, index);
+        return ast->MakeNodeRef(ASTNodeType::IF_STATEMENT, index, line, col);
     }
 
     inline NodeRef MakeEvalIfStatement(AST* ast, u32 line = 0, u32 col = 0) {
@@ -959,7 +1056,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::EVAL_IF, index);
+        return ast->MakeNodeRef(ASTNodeType::EVAL_IF, index, line, col);
     }
 
     inline NodeRef MakeFunctionCall(AST* ast, const ArenaString& name, u32 line = 0, u32 col = 0) {
@@ -1005,7 +1102,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::FUNCTION_CALL, index);
+        return ast->MakeNodeRef(ASTNodeType::FUNCTION_CALL, index, line, col);
     }
 
     inline NodeRef MakeFunctionCall(AST* ast, const std::string& name, u32 line = 0, u32 col = 0) {
@@ -1039,7 +1136,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::VARIABLE_DECL, index);
+        return ast->MakeNodeRef(ASTNodeType::VARIABLE_DECL, index, line, col);
     }
 
     inline NodeRef MakeShaderStage(AST* ast, ASTNodeType stageType, NodeRef body, u32 line = 0, u32 col = 0) {
@@ -1065,7 +1162,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(stageType, index);
+        return ast->MakeNodeRef(stageType, index, line, col);
     }
 
     inline NodeRef MakeAttributeDecl(AST* ast, const std::string& name, const std::string& type,
@@ -1090,7 +1187,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::ATTRIBUTE_DECL, index);
+        return ast->MakeNodeRef(ASTNodeType::ATTRIBUTE_DECL, index, line, col);
     }
 
     inline NodeRef MakeResourceDecl(AST* ast, const std::string& name, const std::string& type,
@@ -1111,7 +1208,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::RESOURCE_DECL, index);
+        return ast->MakeNodeRef(ASTNodeType::RESOURCE_DECL, index, line, col);
     }
 
     inline NodeRef MakePass(AST* ast, const std::string& name, u32 line = 0, u32 col = 0) {
@@ -1146,7 +1243,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::PASS, index);
+        return ast->MakeNodeRef(ASTNodeType::PASS, index, line, col);
     }
 
     inline NodeRef MakePipeline(AST* ast, const std::string& name, u32 line = 0, u32 col = 0) {
@@ -1175,7 +1272,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::PIPELINE, index);
+        return ast->MakeNodeRef(ASTNodeType::PIPELINE, index, line, col);
     }
 
     inline NodeRef MakeComputeGraph(AST* ast, u32 line = 0, u32 col = 0) {
@@ -1193,7 +1290,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::COMPUTE_GRAPH, index);
+        return ast->MakeNodeRef(ASTNodeType::COMPUTE_GRAPH, index, line, col);
     }
 
     inline NodeRef MakeFunction(AST* ast, const std::string& name, CoreType returnType, u32 line = 0, u32 col = 0) {
@@ -1219,7 +1316,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::FUNCTION, index);
+        return ast->MakeNodeRef(ASTNodeType::FUNCTION, index, line, col);
     }
 
     inline NodeRef MakeStructDecl(AST* ast, const std::string& name, u32 line = 0, u32 col = 0) {
@@ -1239,7 +1336,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::STRUCT_DECL, index);
+        return ast->MakeNodeRef(ASTNodeType::STRUCT_DECL, index, line, col);
     }
 
     inline NodeRef MakeForCStyle(AST* ast, NodeRef init, NodeRef condition, NodeRef increment,
@@ -1264,7 +1361,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::FOR_CSTYLE, index);
+        return ast->MakeNodeRef(ASTNodeType::FOR_CSTYLE, index, line, col);
     }
 
     inline NodeRef MakeForRange(AST* ast, NodeRef iteratorVar, NodeRef rangeStart, NodeRef rangeEnd,
@@ -1289,7 +1386,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::FOR_RANGE, index);
+        return ast->MakeNodeRef(ASTNodeType::FOR_RANGE, index, line, col);
     }
 
     inline NodeRef MakeForCollection(AST* ast, NodeRef iteratorVar, NodeRef collection,
@@ -1312,7 +1409,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::FOR_COLLECTION, index);
+        return ast->MakeNodeRef(ASTNodeType::FOR_COLLECTION, index, line, col);
     }
 
     inline NodeRef MakeLoop(AST* ast, NodeRef count, NodeRef body, NodeRef untilCondition,
@@ -1334,7 +1431,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::LOOP, index);
+        return ast->MakeNodeRef(ASTNodeType::LOOP, index, line, col);
     }
 
     inline NodeRef MakeConstraint(AST* ast, const ArenaString& name, TypeMask allowedTypes,
@@ -1354,7 +1451,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::CONSTRAINT_DECL, index);
+        return ast->MakeNodeRef(ASTNodeType::CONSTRAINT_DECL, index, line, col);
     }
 
     inline NodeRef MakeEnumDecl(AST* ast, const ArenaString& name, CoreType underlyingType,
@@ -1380,7 +1477,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::ENUM_DECL, index);
+        return ast->MakeNodeRef(ASTNodeType::ENUM_DECL, index, line, col);
     }
 
     inline NodeRef MakeVariantDecl(AST* ast, const ArenaString& name, u32 value, u32 line = 0, u32 col = 0) {
@@ -1407,7 +1504,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::VARIANT_DECL, index);
+        return ast->MakeNodeRef(ASTNodeType::VARIANT_DECL, index, line, col);
     }
 
     inline NodeRef MakePatternMatch(AST* ast, const ArenaString& scrutinee, u32 line = 0, u32 col = 0) {
@@ -1434,7 +1531,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::PATTERN_MATCH, index);
+        return ast->MakeNodeRef(ASTNodeType::PATTERN_MATCH, index, line, col);
     }
 
     inline NodeRef MakePatternMatchArm(AST* ast, const ArenaString& variantName, bool isDefault, u32 line = 0, u32 col = 0) {
@@ -1461,7 +1558,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::PATTERN_MATCH_ARM, index);
+        return ast->MakeNodeRef(ASTNodeType::PATTERN_MATCH_ARM, index, line, col);
     }
 
     inline NodeRef MakeTypePatternMatch(AST* ast, u32 line = 0, u32 col = 0) {
@@ -1480,7 +1577,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::TYPE_PATTERN_MATCH, index);
+        return ast->MakeNodeRef(ASTNodeType::TYPE_PATTERN_MATCH, index, line, col);
     }
 
     inline NodeRef MakeTypePatternArm(AST* ast, CoreType matchType, bool isDefault, NodeRef body, u32 line = 0, u32 col = 0) {
@@ -1500,7 +1597,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::TYPE_PATTERN_ARM, index);
+        return ast->MakeNodeRef(ASTNodeType::TYPE_PATTERN_ARM, index, line, col);
     }
 
     inline NodeRef MakeModule(AST* ast, const std::string& name, u32 line = 0, u32 col = 0) {
@@ -1527,7 +1624,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::MODULE, index);
+        return ast->MakeNodeRef(ASTNodeType::MODULE, index, line, col);
     }
 
     inline NodeRef MakeSwitchCase(AST* ast, NodeRef body, bool isDefault, u32 line = 0, u32 col = 0) {
@@ -1547,7 +1644,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::SWITCH_CASE, index);
+        return ast->MakeNodeRef(ASTNodeType::SWITCH_CASE, index, line, col);
     }
 
     inline NodeRef MakeSwitch(AST* ast, NodeRef expression, u32 line = 0, u32 col = 0) {
@@ -1568,7 +1665,7 @@ namespace ASTFactory {
         }
         ast->positions[ast->nodeCount++] = AST::PackPosition(line, col);
 
-        return NodeRef(ASTNodeType::SWITCH, index);
+        return ast->MakeNodeRef(ASTNodeType::SWITCH, index, line, col);
     }
 
 } // namespace ASTFactory
