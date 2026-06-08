@@ -1,0 +1,27 @@
+module ResourceMismatchPasses {
+    resources {
+        colorTex: texture2D
+    }
+
+    make :: () -> pass_block {
+        pass {
+            use resources { colorTex }
+
+            vertex {
+                output.position = float4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+}
+
+pipeline PassBlockResourceTypeMismatch {
+    import ResourceMismatchPasses
+
+    resources {
+        wrongType: sampler
+    }
+
+    pass "Bad" = ResourceMismatchPasses::make() {
+        use resources { colorTex = wrongType }
+    }
+}

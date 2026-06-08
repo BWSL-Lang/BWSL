@@ -32,6 +32,7 @@ including:
 - enums and payload enums
 - pointers
 - passes, shader stage assignment, and multipass behavior
+- pass-block instantiation, interface mapping, and parameter substitution
 - compute features, shared memory, atomics, and waves
 
 ### Error Cases

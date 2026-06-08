@@ -1,0 +1,56 @@
+module BlitPasses {
+    attributes {
+        position: float3
+        uv: float2
+    }
+
+    resources {
+        viewProj: mat4
+        colorTex: texture2D
+        colorSampler: sampler
+    }
+
+    makeBlit :: (float fallbackScale) -> pass_block {
+        pass {
+            use attributes { position, uv }
+            use resources { viewProj, colorTex?, colorSampler }
+
+            vertex {
+                float3 scaledPosition = attributes.position * fallbackScale;
+                output.position = resources.viewProj * float4(scaledPosition, 1.0);
+                output.uv = attributes.uv;
+            }
+
+            fragment {
+                if (variants.has_resource_colorTex) {
+                    output.color = sample(resources.colorTex, resources.colorSampler, input.uv);
+                } else {
+                    float2 scaledUv = input.uv * fallbackScale;
+                    output.color = float4(scaledUv, 0.0, 1.0);
+                }
+            }
+        }
+    }
+}
+
+pipeline PassBlockParamsOptionalResource {
+    import BlitPasses
+
+    const float fallbackScale = 0.5;
+
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    resources {
+        cameraVP: mat4
+        uiTexture: texture2D
+        uiSampler: sampler
+    }
+
+    pass "Blit" = BlitPasses::makeBlit(fallbackScale + 0.25) {
+        use attributes { position, uv = texcoord }
+        use resources { viewProj = cameraVP, colorTex = uiTexture, colorSampler = uiSampler }
+    }
+}

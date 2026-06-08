@@ -1197,7 +1197,17 @@ NodeRef Parser::SpecializePipelineForVariants(NodeRef pipeline,
     ResolvePassBlockInstances(pipeline);
 
     const PipelineData& srcPipeline = ast->GetPipeline(pipeline);
-    if (srcPipeline.variantDecls.count == 0 && srcPipeline.variantRules.count == 0) {
+    bool hasImplicitVariantSelection = false;
+    for (const VariantSelectionValue& value : selection.values) {
+        if (value.isImplicit) {
+            hasImplicitVariantSelection = true;
+            break;
+        }
+    }
+
+    if (srcPipeline.variantDecls.count == 0 &&
+        srcPipeline.variantRules.count == 0 &&
+        !hasImplicitVariantSelection) {
         (void)selection;
         ResolveShaderStageExpressions(pipeline);
         return pipeline;

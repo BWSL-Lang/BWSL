@@ -45,7 +45,7 @@ The current regression suite contains 545 `.bwsl` files, including 150 equivalen
 | Function overloading | Stable | Overloads keyed by parameter types, including module functions and methods. | Provides library ergonomics without backend preprocessor tricks. |
 | Recursion rejection | Stable error behavior | Recursive calls are rejected by the test suite. | Keeps lowering finite and shader-target friendly. |
 | Stage-returning functions | Stable for vertex/fragment, provisional for compute | Functions returning `vertex_function`, `fragment_function`, and parsed `compute_function` return types. Vertex and fragment stage assignment is exercised heavily; compute functions are parsed but not exposed through the normal `compute "Name" [x,y,z]` pass grammar. | Treats shader stage bodies as composable compile-time values. |
-| Pass-block-returning functions | Provisional | Parser accepts `-> pass_block` and parses pass bodies inside functions. | Points toward higher-level pass composition, but not a normal documented user feature yet. |
+| Pass-block-returning functions | Stable | `-> pass_block` functions with required `pass { ... }` bodies, direct-call instantiation, compile-time parameters, checked attribute/resource/variant mapping, and optional fact remapping. | Turns complete graphics or compute pass shapes into reusable typed units while letting caller pipelines bind their own interfaces. |
 | Stage assignment | Stable | `vertex = func()`, `fragment = func()`, compile-time ternary selection, and parameter substitution. | Makes shader variants compositional without duplicating full pass blocks. |
 | Pass-stage reuse | Stable | `vertex = "OtherPass".vertex` and `fragment = "OtherPass".fragment`. | Lets one pass reuse stage code from another pass by name. |
 | Depth-only passes | Stable | `fragment = null`. | Explicitly models graphics passes that only need vertex/depth output. |
@@ -115,7 +115,6 @@ The current regression suite contains 545 `.bwsl` files, including 150 equivalen
 - Recursion is intentionally rejected.
 - `eval` is useful but provisional; the README explicitly calls out planned movement toward a dedicated comptime model.
 - `compute_graph` is implemented but lacks settled public documentation.
-- `pass_block` is accepted by the parser but should not be treated as a normal public feature yet.
 - 64-bit scalar/vector/matrix tokens exist but are not part of the stable documented source surface.
 - Custom cast extension syntax is scaffolded but not currently a stable parser feature.
 - Some overload resolution, constant substitution, flag-enum auto-value details, and pattern/eval interactions remain implementation-defined.

@@ -1,0 +1,38 @@
+module VariantTypeMismatchPasses {
+    variants {
+        localFlag: bool = false;
+    }
+
+    make :: () -> pass_block {
+        pass {
+            vertex {
+                output.position = float4(0.0, 0.0, 0.0, 1.0);
+            }
+
+            fragment {
+                if (variants.localFlag) {
+                    output.color = float4(1.0);
+                } else {
+                    output.color = float4(0.0);
+                }
+            }
+        }
+    }
+}
+
+pipeline PassBlockVariantTypeMismatch {
+    import VariantTypeMismatchPasses
+
+    enum Mode {
+        Off,
+        On
+    }
+
+    variants {
+        mode: Mode = Mode::Off;
+    }
+
+    pass "Bad" = VariantTypeMismatchPasses::make() {
+        variants { localFlag = mode }
+    }
+}
