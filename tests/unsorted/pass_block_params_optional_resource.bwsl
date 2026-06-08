@@ -13,7 +13,7 @@ module BlitPasses {
     makeBlit :: (float fallbackScale) -> pass_block {
         pass {
             use attributes { position, uv }
-            use resources { viewProj, colorTex?, colorSampler }
+            use resources { viewProj, colorTex?, colorSampler? }
 
             vertex {
                 float3 scaledPosition = attributes.position * fallbackScale;
@@ -22,7 +22,7 @@ module BlitPasses {
             }
 
             fragment {
-                if (variants.has_resource_colorTex) {
+                if (variants.has_resource_colorTex && variants.has_resource_colorSampler) {
                     output.color = sample(resources.colorTex, resources.colorSampler, input.uv);
                 } else {
                     float2 scaledUv = input.uv * fallbackScale;
