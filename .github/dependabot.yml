@@ -1,14 +1,5 @@
 version: 2
 updates:
-  - package-ecosystem: "gradle"
-    directory: "/tools/jetbrains-bwsl"
-    schedule:
-      interval: "weekly"
-    groups:
-      gradle-dependencies:
-        patterns:
-          - "*"
-
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
