@@ -35,10 +35,15 @@ set "DEBUG_FLAGS=/Zi /Od /W4 /MDd"
 set "LINK_FLAGS=/link /STACK:8388608"
 set "WRAPPER_SRC=tools\spirv_cross_wrapper.cpp"
 set "BWSLC_SRC=tools\bwslc.cpp"
+set "SCCACHE_FLAGS="
 
 set "COMPILER=cl"
 where sccache >nul 2>&1
-if not errorlevel 1 set "COMPILER=sccache cl"
+if errorlevel 1 where sccache >nul 2>&1
+if not errorlevel 1 (
+    set "COMPILER=sccache cl"
+    set "SCCACHE_FLAGS=-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
+)
 
 if /I "%TARGET%"=="bwslc" goto :build_release
 if /I "%TARGET%"=="release" goto :build_release
@@ -161,7 +166,7 @@ if not exist "vendor\SPIRV-Headers\include" (
 set "SPIRV_TOOLS_BUILD=build\spirv-tools-build"
 set "SPIRV_HEADERS_SOURCE_DIR=%CD%\vendor\SPIRV-Headers"
 set "SPIRV_HEADERS_SOURCE_DIR=%SPIRV_HEADERS_SOURCE_DIR:\=/%"
-cmake -S vendor\SPIRV-Tools -B "%SPIRV_TOOLS_BUILD%" -A x64 -DCMAKE_BUILD_TYPE=Release "-DSPIRV-Headers_SOURCE_DIR=%SPIRV_HEADERS_SOURCE_DIR%" -DSPIRV_SKIP_TESTS=ON -DSPIRV_WERROR=OFF -DSPIRV_BUILD_FUZZER=OFF
+cmake -S vendor\SPIRV-Tools -B "%SPIRV_TOOLS_BUILD%" -A x64 -DCMAKE_BUILD_TYPE=Release "-DSPIRV-Headers_SOURCE_DIR=%SPIRV_HEADERS_SOURCE_DIR%" %SCCACHE_FLAGS% -DSPIRV_SKIP_TESTS=ON -DSPIRV_WERROR=OFF -DSPIRV_BUILD_FUZZER=OFF
 if errorlevel 1 exit /b 1
 
 cmake --build "%SPIRV_TOOLS_BUILD%" --config Release --target SPIRV-Tools-static spirv-val spirv-dis --parallel
