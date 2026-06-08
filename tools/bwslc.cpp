@@ -738,6 +738,322 @@ static std::string SelectGLESSource(const CrossCompileResult& crossResult,
 }
 #endif
 
+static uint64_t HashSpirvWords(const std::vector<u32>& spirv) {
+    uint64_t hash = 1469598103934665603ull;
+    for (u32 word : spirv) {
+        hash ^= static_cast<uint64_t>(word);
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+static constexpr u8 BackendCacheOptionWaveOps = 1u << 0;
+
+#ifdef USE_SPIRV_CROSS_LIB
+static constexpr u8 CrossCacheMetal = 1u << 0;
+static constexpr u8 CrossCacheHlsl = 1u << 1;
+static constexpr u8 CrossCacheGlsl = 1u << 2;
+static constexpr u8 CrossCacheGlslEs = 1u << 3;
+#endif
+
+struct BackendCacheText {
+    u32 offset = 0;
+    u32 length = 0;
+};
+
+struct BackendCache {
+    BWSL_Arena* arena = nullptr;
+
+    ArenaArray<uint64_t> spirvHashes;
+    ArenaArray<u32> spirvWordCounts;
+    ArenaArray<u32> spirvWordOffsets;
+    ArenaArray<u8> optionFlags;
+
+    ArenaArray<u8> validationDone;
+    ArenaArray<u8> validationStatuses;
+    ArenaArray<BackendCacheText> validationMessages;
+
+#ifdef USE_SPIRV_CROSS_LIB
+    ArenaArray<u8> crossDoneMask;
+    ArenaArray<BackendCacheText> metalSources;
+    ArenaArray<BackendCacheText> hlslSources;
+    ArenaArray<BackendCacheText> glslSources;
+    ArenaArray<BackendCacheText> glslEsSources;
+#endif
+
+    u32* spirvWordData = nullptr;
+    u32 spirvWordCount = 0;
+    u32 spirvWordCapacity = 0;
+
+    char* textData = nullptr;
+    u32 textByteCount = 0;
+    u32 textByteCapacity = 0;
+
+    void Init(BWSL_Arena* cacheArena, u32 expectedEntries) {
+        arena = cacheArena;
+        const u32 entryCapacity = expectedEntries > 0 ? expectedEntries : 1;
+
+        spirvHashes.Init(arena, entryCapacity);
+        spirvWordCounts.Init(arena, entryCapacity);
+        spirvWordOffsets.Init(arena, entryCapacity);
+        optionFlags.Init(arena, entryCapacity);
+
+        validationDone.Init(arena, entryCapacity);
+        validationStatuses.Init(arena, entryCapacity);
+        validationMessages.Init(arena, entryCapacity);
+#ifdef USE_SPIRV_CROSS_LIB
+        crossDoneMask.Init(arena, entryCapacity);
+        metalSources.Init(arena, entryCapacity);
+        hlslSources.Init(arena, entryCapacity);
+        glslSources.Init(arena, entryCapacity);
+        glslEsSources.Init(arena, entryCapacity);
+#endif
+
+        spirvWordCapacity = std::max<u32>(1024, entryCapacity * 1024);
+        spirvWordData = static_cast<u32*>(
+            arena->Allocate(static_cast<size_t>(spirvWordCapacity) * sizeof(u32), alignof(u32)));
+
+        textByteCapacity = std::max<u32>(32 * 1024, entryCapacity * 16 * 1024);
+        textData = static_cast<char*>(
+            arena->Allocate(textByteCapacity, alignof(char)));
+
+        if (!spirvWordData || !textData) {
+            std::fprintf(stderr, "Backend cache arena initialization failed\n");
+            std::abort();
+        }
+    }
+
+    static u32 GrowCapacity(u32 current, u32 required) {
+        u32 capacity = current > 0 ? current : 1;
+        while (capacity < required) {
+            const u32 next = capacity * 2;
+            if (next <= capacity) {
+                return required;
+            }
+            capacity = next;
+        }
+        return capacity;
+    }
+
+    bool EnsureSpirvWordCapacity(u32 additionalWords) {
+        if (additionalWords <= spirvWordCapacity - spirvWordCount) {
+            return true;
+        }
+
+        const u32 required = spirvWordCount + additionalWords;
+        const u32 newCapacity = GrowCapacity(spirvWordCapacity, required);
+        u32* newData = static_cast<u32*>(
+            arena->Allocate(static_cast<size_t>(newCapacity) * sizeof(u32), alignof(u32)));
+        if (!newData) {
+            return false;
+        }
+        if (spirvWordCount > 0) {
+            std::memcpy(newData, spirvWordData,
+                        static_cast<size_t>(spirvWordCount) * sizeof(u32));
+        }
+        spirvWordData = newData;
+        spirvWordCapacity = newCapacity;
+        return true;
+    }
+
+    bool EnsureTextCapacity(u32 additionalBytes) {
+        if (additionalBytes <= textByteCapacity - textByteCount) {
+            return true;
+        }
+
+        const u32 required = textByteCount + additionalBytes;
+        const u32 newCapacity = GrowCapacity(textByteCapacity, required);
+        char* newData = static_cast<char*>(
+            arena->Allocate(newCapacity, alignof(char)));
+        if (!newData) {
+            return false;
+        }
+        if (textByteCount > 0) {
+            std::memcpy(newData, textData, textByteCount);
+        }
+        textData = newData;
+        textByteCapacity = newCapacity;
+        return true;
+    }
+
+    bool StoreText(const std::string& text, BackendCacheText& cached) {
+        cached = {};
+        if (text.empty()) {
+            return true;
+        }
+
+        const u32 length = static_cast<u32>(text.size());
+        if (!EnsureTextCapacity(length)) {
+            return false;
+        }
+
+        cached.offset = textByteCount;
+        cached.length = length;
+        std::memcpy(textData + cached.offset, text.data(), length);
+        textByteCount += length;
+        return true;
+    }
+
+    std::string LoadText(BackendCacheText cached) const {
+        if (cached.length == 0) {
+            return {};
+        }
+        return std::string(textData + cached.offset, cached.length);
+    }
+
+    bool StoreValidation(u32 index, const ValidationResult& result) {
+        BackendCacheText message;
+        if (!StoreText(result.message, message)) {
+            return false;
+        }
+        validationStatuses[index] = static_cast<u8>(result.status);
+        validationMessages[index] = message;
+        validationDone[index] = 1;
+        return true;
+    }
+
+    ValidationResult LoadValidation(u32 index) const {
+        ValidationResult result;
+        result.status = static_cast<ValidationStatus>(validationStatuses[index]);
+        result.message = LoadText(validationMessages[index]);
+        return result;
+    }
+
+    u32 FindOrAdd(const std::vector<u32>& spirv, u8 options) {
+        const uint64_t hash = HashSpirvWords(spirv);
+        const u32 wordCount = static_cast<u32>(spirv.size());
+        for (u32 i = 0; i < spirvHashes.count; i++) {
+            if (spirvHashes[i] != hash ||
+                spirvWordCounts[i] != wordCount ||
+                optionFlags[i] != options) {
+                continue;
+            }
+
+            const u32 wordOffset = spirvWordOffsets[i];
+            if (wordCount == 0 ||
+                std::memcmp(spirvWordData + wordOffset, spirv.data(),
+                            static_cast<size_t>(wordCount) * sizeof(u32)) == 0) {
+                return i;
+            }
+        }
+
+        const u32 wordOffset = spirvWordCount;
+        if (!EnsureSpirvWordCapacity(wordCount)) {
+            std::fprintf(stderr, "Backend cache arena exhausted while storing SPIR-V words\n");
+            std::abort();
+        }
+        if (wordCount > 0) {
+            std::memcpy(spirvWordData + wordOffset, spirv.data(),
+                        static_cast<size_t>(wordCount) * sizeof(u32));
+            spirvWordCount += wordCount;
+        }
+
+        const u32 index = spirvHashes.count;
+        spirvHashes.Push(arena, hash);
+        spirvWordCounts.Push(arena, wordCount);
+        spirvWordOffsets.Push(arena, wordOffset);
+        optionFlags.Push(arena, options);
+        validationDone.Push(arena, 0);
+        validationStatuses.Push(arena, static_cast<u8>(ValidationStatus::Passed));
+        validationMessages.Push(arena, BackendCacheText{});
+#ifdef USE_SPIRV_CROSS_LIB
+        crossDoneMask.Push(arena, 0);
+        metalSources.Push(arena, BackendCacheText{});
+        hlslSources.Push(arena, BackendCacheText{});
+        glslSources.Push(arena, BackendCacheText{});
+        glslEsSources.Push(arena, BackendCacheText{});
+#endif
+        return index;
+    }
+};
+
+static u8 BuildBackendCacheOptions(bool hasWaveOps) {
+    return hasWaveOps ? BackendCacheOptionWaveOps : 0;
+}
+
+#ifdef USE_SPIRV_CROSS_LIB
+static u8 BuildCrossRequestMask(const CompilerConfig& config) {
+    u8 mask = 0;
+    if (config.outputMetal) mask |= CrossCacheMetal;
+    if (config.outputHlsl) mask |= CrossCacheHlsl;
+    if (config.outputGlsl) mask |= CrossCacheGlsl;
+    if (config.outputGlslEs && !config.useDirectGles) mask |= CrossCacheGlslEs;
+    return mask;
+}
+
+static CrossCompileResult ParallelCrossCompileMasked(const std::vector<u32>& spirv,
+                                                     u8 mask,
+                                                     bool hasWaveOps) {
+    return ParallelCrossCompile(
+        spirv,
+        (mask & CrossCacheMetal) != 0,
+        (mask & CrossCacheHlsl) != 0,
+        (mask & CrossCacheGlsl) != 0,
+        (mask & CrossCacheGlslEs) != 0,
+        hasWaveOps);
+}
+
+static void StoreCrossCompileCache(BackendCache& cache,
+                                   u32 index,
+                                   u8 mask,
+                                   const CrossCompileResult& result) {
+    u8 storedMask = 0;
+    if ((mask & CrossCacheMetal) != 0 &&
+        cache.StoreText(result.metal, cache.metalSources[index])) {
+        storedMask |= CrossCacheMetal;
+    }
+    if ((mask & CrossCacheHlsl) != 0 &&
+        cache.StoreText(result.hlsl, cache.hlslSources[index])) {
+        storedMask |= CrossCacheHlsl;
+    }
+    if ((mask & CrossCacheGlsl) != 0 &&
+        cache.StoreText(result.glsl, cache.glslSources[index])) {
+        storedMask |= CrossCacheGlsl;
+    }
+    if ((mask & CrossCacheGlslEs) != 0 &&
+        cache.StoreText(result.glslEs, cache.glslEsSources[index])) {
+        storedMask |= CrossCacheGlslEs;
+    }
+    cache.crossDoneMask[index] |= storedMask;
+}
+
+static CrossCompileResult BuildCrossCompileResultFromCache(
+    const BackendCache& cache,
+    u32 index,
+    u8 requestMask,
+    u8 computedMask,
+    const CrossCompileResult& computed) {
+    CrossCompileResult result;
+
+    if ((requestMask & CrossCacheMetal) != 0) {
+        result.metal = (computedMask & CrossCacheMetal) != 0
+            ? computed.metal
+            : cache.LoadText(cache.metalSources[index]);
+        result.metalMs = (computedMask & CrossCacheMetal) ? computed.metalMs : 0.0;
+    }
+    if ((requestMask & CrossCacheHlsl) != 0) {
+        result.hlsl = (computedMask & CrossCacheHlsl) != 0
+            ? computed.hlsl
+            : cache.LoadText(cache.hlslSources[index]);
+        result.hlslMs = (computedMask & CrossCacheHlsl) ? computed.hlslMs : 0.0;
+    }
+    if ((requestMask & CrossCacheGlsl) != 0) {
+        result.glsl = (computedMask & CrossCacheGlsl) != 0
+            ? computed.glsl
+            : cache.LoadText(cache.glslSources[index]);
+        result.glslMs = (computedMask & CrossCacheGlsl) ? computed.glslMs : 0.0;
+    }
+    if ((requestMask & CrossCacheGlslEs) != 0) {
+        result.glslEs = (computedMask & CrossCacheGlslEs) != 0
+            ? computed.glslEs
+            : cache.LoadText(cache.glslEsSources[index]);
+        result.glslEsMs = (computedMask & CrossCacheGlslEs) ? computed.glslEsMs : 0.0;
+    }
+
+    return result;
+}
+#endif
+
 static bool ProgramNeedsDirectGLESFallback(const IRProgram& program) {
     for (u32 i = 0; i < program.instructionCount; i++) {
         switch (static_cast<IR::OpCode>(program.opcodes[i])) {
@@ -1902,6 +2218,30 @@ ValidationResult ValidateSpirv(const std::string& spirvFile) {
     return {ValidationStatus::Failed, message};
 }
 
+struct TimedValidationResult {
+    ValidationResult result;
+    double ms = 0.0;
+};
+
+static TimedValidationResult ValidateSpirvTimed(const std::vector<u32>& spirv,
+                                                const std::string& spvPath) {
+    using Clock = std::chrono::high_resolution_clock;
+    auto start = Clock::now();
+#ifdef USE_SPIRV_TOOLS_LIB
+    (void)spvPath;
+    ValidationResult validation = ValidateSpirv(spirv);
+#else
+    (void)spirv;
+    ValidationResult validation = ValidateSpirv(spvPath);
+#endif
+    auto end = Clock::now();
+
+    TimedValidationResult timed;
+    timed.result = std::move(validation);
+    timed.ms = std::chrono::duration<double, std::milli>(end - start).count();
+    return timed;
+}
+
 
 // ============= Compilation =============
 
@@ -2424,6 +2764,7 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
                                            const PipelineData& pipeline,
                                            bool writeWebGLSidecar,
                                            bool isVertexStage,
+                                           BackendCache& backendCache,
                                            DiagnosticStream* diagnostics = nullptr) {
     StageOutputResult output;
     const bool quiet = config.errorsJson;
@@ -2530,70 +2871,135 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         return false;
     };
 
-    if (validationRequested) {
-        if (!validatorAvailable) {
-            if (handleMissingValidator()) {
-                return output;
-            }
-        } else {
-            using Clock = std::chrono::high_resolution_clock;
-            auto valStart = Clock::now();
-#ifdef USE_SPIRV_TOOLS_LIB
-            ValidationResult validation = ValidateSpirv(result.spirv);
-#else
-            ValidationResult validation = ValidateSpirv(spvPath);
+    if (validationRequested && !validatorAvailable) {
+        if (handleMissingValidator()) {
+            return output;
+        }
+    }
+
+    const u32 backendCacheIndex =
+        backendCache.FindOrAdd(result.spirv, BuildBackendCacheOptions(result.hasWaveOps));
+
+#ifdef USE_SPIRV_CROSS_LIB
+    const u8 crossRequestMask = BuildCrossRequestMask(config);
+    const u8 crossMissingMask =
+        static_cast<u8>(crossRequestMask & ~backendCache.crossDoneMask[backendCacheIndex]);
 #endif
-            auto valEnd = Clock::now();
-            shaderTime.validationMs = std::chrono::duration<double, std::milli>(valEnd - valStart).count();
 
-            if (validation.status == ValidationStatus::ToolMissing) {
-                if (config.validationMode == ValidationMode::Strict) {
-                    if (diagnostics) {
-                        AddStageDiagnostic(*diagnostics,
-                                           DiagnosticSeverity::Error,
-                                           DiagnosticPhase::Validation,
-                                           DiagnosticMessageId::ValidationStrictToolMissing,
-                                           "SPIR-V validation requested but " + validation.message,
-                                           config.inputFile, passName, stageName);
-                    }
-                    output.skipRemainingPass = true;
-                    return output;
-                }
-
-                if (!warnedMissingValidator) {
-                    if (diagnostics) {
-                        AddStageDiagnostic(*diagnostics,
-                                           DiagnosticSeverity::Warning,
-                                           DiagnosticPhase::Validation,
-                                           DiagnosticMessageId::ValidationAutoToolMissing,
-                                           validation.message + "; skipping SPIR-V validation (-validation auto)",
-                                           config.inputFile, passName, stageName);
-                    }
-                    warnedMissingValidator = true;
-                }
-            } else if (validation.status == ValidationStatus::Failed) {
-                if (diagnostics) {
-                    AddStageDiagnostic(*diagnostics,
-                                       DiagnosticSeverity::Error,
-                                       DiagnosticPhase::Validation,
-                                       DiagnosticMessageId::ValidationFailed,
-                                       "SPIR-V validation failed:\n" + validation.message,
-                                       config.inputFile, passName, stageName);
-                }
-                output.skipRemainingPass = true;
-                return output;
+    const bool validationNeeded = validationRequested && validatorAvailable;
+    TimedValidationResult validationTimed;
+    bool hasValidationResult = false;
+    std::future<TimedValidationResult> validationFuture;
+    if (validationNeeded) {
+        if (backendCache.validationDone[backendCacheIndex]) {
+            validationTimed.result = backendCache.LoadValidation(backendCacheIndex);
+            shaderTime.validationMs = 0.0;
+            hasValidationResult = true;
+        } else {
+#ifdef USE_SPIRV_CROSS_LIB
+            if (crossMissingMask != 0) {
+                validationFuture = std::async(std::launch::async, [&result, &spvPath]() {
+                    return ValidateSpirvTimed(result.spirv, spvPath);
+                });
+            } else {
+                validationTimed = ValidateSpirvTimed(result.spirv, spvPath);
+                shaderTime.validationMs = validationTimed.ms;
+                backendCache.StoreValidation(backendCacheIndex, validationTimed.result);
+                hasValidationResult = true;
             }
+#else
+            validationTimed = ValidateSpirvTimed(result.spirv, spvPath);
+            shaderTime.validationMs = validationTimed.ms;
+            backendCache.StoreValidation(backendCacheIndex, validationTimed.result);
+            hasValidationResult = true;
+#endif
         }
     }
 
 #ifdef USE_SPIRV_CROSS_LIB
-    CrossCompileResult crossResult = ParallelCrossCompile(
-        result.spirv,
-        config.outputMetal,
-        config.outputHlsl,
-        config.outputGlsl,
-        config.outputGlslEs,
-        result.hasWaveOps);
+    std::future<CrossCompileResult> crossFuture;
+    if (crossMissingMask != 0) {
+        crossFuture = std::async(std::launch::async,
+                                 [&result, crossMissingMask]() {
+                                     return ParallelCrossCompileMasked(result.spirv,
+                                                                       crossMissingMask,
+                                                                       result.hasWaveOps);
+                                 });
+    }
+#endif
+
+    if (validationFuture.valid()) {
+        validationTimed = validationFuture.get();
+        shaderTime.validationMs = validationTimed.ms;
+        backendCache.StoreValidation(backendCacheIndex, validationTimed.result);
+        hasValidationResult = true;
+    }
+
+    if (validationNeeded && hasValidationResult) {
+        const ValidationResult& validation = validationTimed.result;
+        if (validation.status == ValidationStatus::ToolMissing) {
+            if (config.validationMode == ValidationMode::Strict) {
+                if (diagnostics) {
+                    AddStageDiagnostic(*diagnostics,
+                                       DiagnosticSeverity::Error,
+                                       DiagnosticPhase::Validation,
+                                       DiagnosticMessageId::ValidationStrictToolMissing,
+                                       "SPIR-V validation requested but " + validation.message,
+                                       config.inputFile, passName, stageName);
+                }
+#ifdef USE_SPIRV_CROSS_LIB
+                if (crossFuture.valid()) {
+                    (void)crossFuture.get();
+                }
+#endif
+                output.skipRemainingPass = true;
+                return output;
+            }
+
+            if (!warnedMissingValidator) {
+                if (diagnostics) {
+                    AddStageDiagnostic(*diagnostics,
+                                       DiagnosticSeverity::Warning,
+                                       DiagnosticPhase::Validation,
+                                       DiagnosticMessageId::ValidationAutoToolMissing,
+                                       validation.message + "; skipping SPIR-V validation (-validation auto)",
+                                       config.inputFile, passName, stageName);
+                }
+                warnedMissingValidator = true;
+            }
+        } else if (validation.status == ValidationStatus::Failed) {
+            if (diagnostics) {
+                AddStageDiagnostic(*diagnostics,
+                                   DiagnosticSeverity::Error,
+                                   DiagnosticPhase::Validation,
+                                   DiagnosticMessageId::ValidationFailed,
+                                   "SPIR-V validation failed:\n" + validation.message,
+                                   config.inputFile, passName, stageName);
+            }
+#ifdef USE_SPIRV_CROSS_LIB
+            if (crossFuture.valid()) {
+                (void)crossFuture.get();
+            }
+#endif
+            output.skipRemainingPass = true;
+            return output;
+        }
+    }
+
+#ifdef USE_SPIRV_CROSS_LIB
+    CrossCompileResult computedCrossResult;
+    u8 computedCrossMask = 0;
+    if (crossFuture.valid()) {
+        computedCrossResult = crossFuture.get();
+        computedCrossMask = crossMissingMask;
+        StoreCrossCompileCache(backendCache, backendCacheIndex,
+                               computedCrossMask, computedCrossResult);
+    }
+
+    CrossCompileResult crossResult =
+        BuildCrossCompileResultFromCache(backendCache, backendCacheIndex,
+                                         crossRequestMask, computedCrossMask,
+                                         computedCrossResult);
 
     WriteCrossCompileOutput(config.outputMetal, crossResult.metalMs,
                             shaderTime.metalCrossMs, crossResult.metal,
@@ -3214,6 +3620,16 @@ int main(int argc, char* argv[]) {
 
     int compiledCount = 0;
     int errorCount = 0;
+    const u32 backendCacheEntryCapacity =
+        std::max<u32>(1, pipeline.passes.count * 3);
+    const size_t backendCacheArenaSize =
+        std::max<size_t>(8ull * 1024ull * 1024ull,
+                         static_cast<size_t>(backendCacheEntryCapacity) * 512ull * 1024ull);
+    std::unique_ptr<u8[]> backendCacheMemory(new u8[backendCacheArenaSize]);
+    BWSL_Arena backendCacheArena;
+    backendCacheArena.Initialize(backendCacheMemory.get(), backendCacheArenaSize);
+    BackendCache backendCache;
+    backendCache.Init(&backendCacheArena, backendCacheEntryCapacity);
 
     // Compile each pass
     for (u32 passIdx = 0; passIdx < pipeline.passes.count; passIdx++) {
@@ -3279,7 +3695,8 @@ int main(int argc, char* argv[]) {
 
                 StageOutputResult output = WriteStageOutputs(
                     config, result, shaderTime, outputStemPath, passName, "vertex",
-                    pass, parser, sourceBase, context, pipeline, true, true, &diagnostics);
+                    pass, parser, sourceBase, context, pipeline, true, true,
+                    backendCache, &diagnostics);
                 if (output.success) {
                     compiledCount++;
                 } else {
@@ -3319,7 +3736,8 @@ int main(int argc, char* argv[]) {
 
                 StageOutputResult output = WriteStageOutputs(
                     config, result, shaderTime, outputStemPath, passName, "fragment",
-                    pass, parser, sourceBase, context, pipeline, true, false, &diagnostics);
+                    pass, parser, sourceBase, context, pipeline, true, false,
+                    backendCache, &diagnostics);
                 if (output.success) {
                     compiledCount++;
                 } else {
@@ -3359,7 +3777,8 @@ int main(int argc, char* argv[]) {
 
                 StageOutputResult output = WriteStageOutputs(
                     config, result, shaderTime, outputStemPath, passName, "compute",
-                    pass, parser, sourceBase, context, pipeline, false, false, &diagnostics);
+                    pass, parser, sourceBase, context, pipeline, false, false,
+                    backendCache, &diagnostics);
                 if (output.success) {
                     compiledCount++;
                 } else {
