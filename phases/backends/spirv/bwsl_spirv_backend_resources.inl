@@ -10,10 +10,10 @@ static bool IsMatrixType(CoreType type) {
          type == CoreType::MAT4;
 }
 
-static u32 GetVertexPullingBindingCount(const SPIRVBuilder::VertexPullingConfig& config) {
+static u8 GetVertexPullingBindingCount(const SPIRVBuilder::VertexPullingConfig& config) {
   switch (config.mode) {
   case SPIRVBuilder::VertexInputMode::SeparateBuffers:
-    return static_cast<u32>(std::popcount(config.attributeMask));
+    return static_cast<u8>(std::popcount(config.attributeMask));
   case SPIRVBuilder::VertexInputMode::UnifiedWithOffsets:
     return 2;
   case SPIRVBuilder::VertexInputMode::Interleaved:
@@ -22,14 +22,14 @@ static u32 GetVertexPullingBindingCount(const SPIRVBuilder::VertexPullingConfig&
   }
 }
 
-static u32 ResolveVertexPullingCollisionBinding(
+static u8 ResolveVertexPullingCollisionBinding(
     const SPIRVBuilder::VertexPullingConfig& config, u32 resourceSet,
-    u32 binding) {
+    u8 binding) {
   if (resourceSet != config.descriptorSet) {
     return binding;
   }
 
-  const u32 occupiedCount = GetVertexPullingBindingCount(config);
+  const u8 occupiedCount = GetVertexPullingBindingCount(config);
   if (occupiedCount == 0) {
     return binding;
   }
@@ -48,7 +48,7 @@ void SPIRVBuilder::DeclareResources() {
   // satisfy SPIR-V UBO requirements
 
   // ============= Uniform Buffers =============
-  for (u32 binding = 0; binding < 32; binding++) {
+  for (u8 binding = 0; binding < 32; binding++) {
     if (!(analysis.usedUniformMask & (1 << binding)))
       continue;
 
@@ -116,7 +116,7 @@ void SPIRVBuilder::DeclareResources() {
     }
 
     u32 set_val[] = {0};
-    u32 actualBinding =
+    u8 actualBinding =
         ResolveVertexPullingCollisionBinding(vertexPullingConfig, set_val[0],
                                             binding);
     u32 bind_val[] = {actualBinding};
@@ -213,7 +213,7 @@ void SPIRVBuilder::DeclareResources() {
   }
 
   // Create texture variables for each used binding
-  for (u32 binding = 0; binding < 32; binding++) {
+  for (u8 binding = 0; binding < 32; binding++) {
     if (!(analysis.usedTextureMask & (1 << binding)))
       continue;
 
@@ -234,7 +234,7 @@ void SPIRVBuilder::DeclareResources() {
     }
 
     u32 set_val[] = {0};
-    u32 textureBinding =
+    u8 textureBinding =
         ResolveVertexPullingCollisionBinding(vertexPullingConfig, set_val[0],
                                             binding);
     u32 bind_val[] = {textureBinding};
@@ -287,7 +287,7 @@ void SPIRVBuilder::DeclareResources() {
     }
 
     // Create variables for each used binding
-    for (u32 binding = 0; binding < 32; binding++) {
+    for (u8 binding = 0; binding < 32; binding++) {
       if (!(analysis.usedStorageBufferMask & (1 << binding)))
         continue;
 
@@ -465,7 +465,7 @@ void SPIRVBuilder::DeclareResources() {
       }
 
       u32 set_val[] = {1};
-      u32 actualBinding =
+      u8 actualBinding =
           ResolveVertexPullingCollisionBinding(vertexPullingConfig, set_val[0],
                                               binding);
       u32 bind_val[] = {actualBinding};
@@ -514,7 +514,7 @@ void SPIRVBuilder::DeclareResources() {
     }
 
     // Create variables for each used storage image binding
-    for (u32 binding = 0; binding < 32; binding++) {
+    for (u8 binding = 0; binding < 32; binding++) {
       if (!(analysis.usedStorageImageMask & (1 << binding)))
         continue;
 
@@ -526,7 +526,7 @@ void SPIRVBuilder::DeclareResources() {
       }
 
       u32 set_val[] = {0};
-      u32 actualBinding =
+      u8 actualBinding =
           ResolveVertexPullingCollisionBinding(vertexPullingConfig, set_val[0],
                                               binding);
       u32 bind_val[] = {actualBinding};
