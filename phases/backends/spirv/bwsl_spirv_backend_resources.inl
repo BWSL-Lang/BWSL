@@ -125,7 +125,7 @@ void SPIRVBuilder::DeclareResources() {
 
     uniformBufferIds[binding] = var_id;
     bindingSets[resourceCount] = 0;
-    bindingIndices[resourceCount] = actualBinding;
+    bindingIndices[resourceCount] = (u8)actualBinding;
     resourceCount++;
   }
 
@@ -243,7 +243,7 @@ void SPIRVBuilder::DeclareResources() {
 
     textureIds[binding] = tex_var_id;
     bindingSets[resourceCount] = 0;
-    bindingIndices[resourceCount] = textureBinding;
+    bindingIndices[resourceCount] = (u8)textureBinding;
     resourceCount++;
   }
 
@@ -498,7 +498,7 @@ void SPIRVBuilder::DeclareResources() {
 
       storageBufferIds[binding] = ssbo_var_id;
       bindingSets[resourceCount] = 1;
-      bindingIndices[resourceCount] = actualBinding;
+      bindingIndices[resourceCount] = (u8)actualBinding;
       resourceCount++;
     }
   }
@@ -541,7 +541,7 @@ void SPIRVBuilder::DeclareResources() {
 
       storageImageIds[binding] = img_var_id;
       bindingSets[resourceCount] = 0;
-      bindingIndices[resourceCount] = actualBinding;
+      bindingIndices[resourceCount] = (u8)actualBinding;
       resourceCount++;
     }
   }

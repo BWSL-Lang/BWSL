@@ -641,7 +641,7 @@ struct IRBuilder {
     u16 EmitConstant(float value) {
         // Check for existing constant
         u32 hash = Utils::HashFloat(value);
-        for (u32 i = 0; i < program->floatCount; i++) {
+        for (u16 i = 0; i < program->floatCount; i++) {
             if (floatConstantHashes[i] == hash &&
                 program->floatConstants[i] == value) {
                 return 0x8000 | i;  // High bit indicates constant
@@ -652,13 +652,13 @@ struct IRBuilder {
         u32 slot = program->floatCount++;
         program->floatConstants[slot] = value;
         floatConstantHashes[slot] = hash;
-        return 0x8000 | slot;
+        return 0x8000 | (u16)slot;
     }
 
     u16 EmitConstantBool(bool value) {
         // Check for existing constant
         u8 boolVal = value ? 1 : 0;
-        for (u32 i = 0; i < program->boolCount; i++) {
+        for (u16 i = 0; i < program->boolCount; i++) {
             if (program->boolConstants[i] == boolVal) {
                 return 0xC000 | i;  // 0xC000 prefix for bool constants
             }
@@ -667,7 +667,7 @@ struct IRBuilder {
         // Add new constant
         u32 slot = program->boolCount++;
         program->boolConstants[slot] = boolVal;
-        return 0xC000 | slot;
+        return 0xC000 | (u16)slot;
     }
 
     void GrowInstructionArrays() {
@@ -1216,7 +1216,7 @@ void EliminateDeadCode(IRProgram* prog) {
         // First pass: find first use of each register
         memset(prog->registerLifetimes, 0xFF, prog->registerCount * sizeof(u32));
         
-        for (u32 i = 0; i < prog->instructionCount; i++) {
+        for (u16 i = 0; i < prog->instructionCount; i++) {
             u16 dest = prog->destinations[i];
             if (dest < prog->registerCount) {
                 u32 lifetime = prog->registerLifetimes[dest];

@@ -587,7 +587,7 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
             nameBuf[len] = '\0';
             nameStr = nameBuf;
           }
-          u32 slot = ResolveOutputSlotForStore(outputNameHash, outputType,
+          u16 slot = (u16)ResolveOutputSlotForStore(outputNameHash, outputType,
                                                nameStr, assign.interpolation);
 
           u16 outputReg = AllocateRegister();
@@ -596,7 +596,7 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
           program.metadata[builder.currentInstruction - 1] = outputNameHash;
 
           u32 memberHash = access.member.nameHash;
-          u32 componentIndex = 0xFFFFFFFF;
+          u16 componentIndex = 0xFFFF;
           if (memberHash == Utils::HashStr("x") ||
               memberHash == Utils::HashStr("r"))
             componentIndex = 0;
@@ -610,7 +610,7 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
                    memberHash == Utils::HashStr("a"))
             componentIndex = 3;
 
-          if (componentIndex != 0xFFFFFFFF) {
+          if (componentIndex != 0xFFFF) {
             u32 numComponents = GetVectorDimension(outputType);
             if (numComponents < 2) {
               builder.EmitInstruction(OP_STORE_OUTPUT, valueReg, slot);
@@ -686,7 +686,7 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
           nameBuf[len] = '\0';
           nameStr = nameBuf;
         }
-        u32 slot = ResolveOutputSlotForStore(nameHash, valueType, nameStr,
+        u16 slot = (u16)ResolveOutputSlotForStore(nameHash, valueType, nameStr,
                                              assign.interpolation);
         CoreType declaredOutputType = GetFragmentOutputType(nameHash);
         if (currentStage == ShaderStage::Fragment &&
@@ -728,13 +728,13 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
           }
 
           // Find the field index
-          u32 fieldIndex = 0xFFFFFFFF;
+          u16 fieldIndex = 0xFFFF;
           auto structIt = structTypeMap.find(structTypeHash);
           if (structIt != structTypeMap.end()) {
             u32 structIdx = structIt->second;
             const IRProgram::StructTypeInfo &info =
                 program.structTypes[structIdx];
-            for (u32 i = 0; i < info.fieldCount; i++) {
+            for (u16 i = 0; i < info.fieldCount; i++) {
               if (program.structFieldNameHashes[info.fieldOffset + i] ==
                   access.member.nameHash) {
                 fieldIndex = i;
@@ -743,7 +743,7 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
             }
           }
 
-          if (fieldIndex != 0xFFFFFFFF) {
+          if (fieldIndex != 0xFFFF) {
             // Emit struct insert: dest = struct with field=value
             // We modify the struct in place by creating a new struct value
             u16 newStructReg = AllocateRegister();
@@ -765,7 +765,7 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
         }
 
         // Check for vector component assignment (pos.x = value, etc.)
-        u32 componentIndex = 0xFFFFFFFF;
+        u16 componentIndex = 0xFFFF;
         u32 memberHash = access.member.nameHash;
         if (memberHash == Utils::HashStr("x") ||
             memberHash == Utils::HashStr("r"))
@@ -780,7 +780,7 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
                  memberHash == Utils::HashStr("a"))
           componentIndex = 3;
 
-        if (componentIndex != 0xFFFFFFFF) {
+        if (componentIndex != 0xFFFF) {
           // Vector component assignment: vec.x = value
           // We need to insert the component into the vector and store back
           CoreType varType = GetRegisterType(objReg);
@@ -878,13 +878,13 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
 
       if (structTypeHash != 0) {
         // Find the field index
-        u32 fieldIndex = 0xFFFFFFFF;
+        u16 fieldIndex = 0xFFFF;
         auto structIt = structTypeMap.find(structTypeHash);
         if (structIt != structTypeMap.end()) {
           u32 structIdx = structIt->second;
           const IRProgram::StructTypeInfo &info =
               program.structTypes[structIdx];
-          for (u32 i = 0; i < info.fieldCount; i++) {
+          for (u16 i = 0; i < info.fieldCount; i++) {
             if (program.structFieldNameHashes[info.fieldOffset + i] ==
                 access.member.nameHash) {
               fieldIndex = i;
@@ -893,7 +893,7 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
           }
         }
 
-        if (fieldIndex != 0xFFFFFFFF) {
+        if (fieldIndex != 0xFFFF) {
           // 1. Load the struct element from the array
           u16 elemReg = AllocateRegister();
           SetRegisterType(elemReg, CoreType::CUSTOM);
@@ -1311,7 +1311,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
 
     if (structTypeHash != 0) {
       // This is a struct field access (e.g., lights.positions)
-      u32 fieldIndex = 0xFFFFFFFF;
+      u16 fieldIndex = 0xFFFF;
       CoreType fieldType = CoreType::FLOAT;
       u32 fieldOffset = 0;
 
@@ -1322,7 +1322,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
         const IRProgram::StructTypeInfo &info =
             program.structTypes[structIdx];
         fieldOffset = info.fieldOffset;
-        for (u32 i = 0; i < info.fieldCount; i++) {
+        for (u16 i = 0; i < info.fieldCount; i++) {
           if (program.structFieldNameHashes[info.fieldOffset + i] ==
               access.member.nameHash) {
             fieldIndex = i;
@@ -1333,7 +1333,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
         }
       }
 
-      if (fieldIndex != 0xFFFFFFFF) {
+      if (fieldIndex != 0xFFFF) {
         u16 dest = AllocateRegister();
 
         // Check if the object register is a storage buffer pointer
@@ -1382,7 +1382,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
     // Then extract the component based on the member name (x/y/z/w or
     // r/g/b/a)
     u32 memberHash = access.member.nameHash;
-    u32 componentIndex = 0xFFFFFFFF;
+    u16 componentIndex = 0xFFFF;
 
     // Check for xyzw swizzle
     if (memberHash == Utils::HashStr("x") ||
@@ -1398,7 +1398,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
              memberHash == Utils::HashStr("a"))
       componentIndex = 3;
 
-    if (componentIndex != 0xFFFFFFFF) {
+    if (componentIndex != 0xFFFF) {
       // If objectReg is a storage pointer, load it first before swizzle
       u16 srcReg = objectReg;
       if (objectReg < MAX_REGISTERS &&
@@ -1489,7 +1489,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
           u32 structIdx = structIt->second;
           const IRProgram::StructTypeInfo &info =
               program.structTypes[structIdx];
-          for (u32 i = 0; i < info.fieldCount; i++) {
+          for (u16 i = 0; i < info.fieldCount; i++) {
             if (program.structFieldNameHashes[info.fieldOffset + i] ==
                 access.member.nameHash) {
               u16 dest = AllocateRegister();
@@ -1518,7 +1518,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
 
     // Then apply swizzle/member access
     u32 memberHash = access.member.nameHash;
-    u32 componentIndex = 0xFFFFFFFF;
+    u16 componentIndex = 0xFFFF;
 
     // Check for single component swizzle (x/y/z/w or r/g/b/a)
     if (memberHash == Utils::HashStr("x") ||
@@ -1534,7 +1534,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
              memberHash == Utils::HashStr("a"))
       componentIndex = 3;
 
-    if (componentIndex != 0xFFFFFFFF) {
+    if (componentIndex != 0xFFFF) {
       CoreType objType = GetRegisterType(objectReg);
       if ((mask(objType) & TypeMasks::SCALAR_TYPES) && componentIndex == 0) {
         return objectReg;
@@ -1593,7 +1593,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
   case SpecialIdentifier::ATTRIBUTES: {
     u16 dest = AllocateRegister();
     u32 attrIndex = GetAttributeIndex(access.member.nameHash);
-    builder.EmitInstruction(OP_LOAD_ATTR, dest, attrIndex);
+    builder.EmitInstruction(OP_LOAD_ATTR, dest, (u16)attrIndex);
 
     // Check if attribute is compressed - if so, return raw uint type
     CompressionFormat compression = GetAttributeCompression(attrIndex);
@@ -1615,7 +1615,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
     u32 nameHash = access.member.nameHash;
     u32 slot = ResolveOutputSlotForLoad(nameHash);
     CoreType outputType = ResolveOutputTypeForLoad(nameHash);
-    builder.EmitInstruction(OP_LOAD_OUTPUT, dest, slot);
+    builder.EmitInstruction(OP_LOAD_OUTPUT, dest, (u16)slot);
     program.metadata[builder.currentInstruction - 1] = nameHash;
     SetRegisterType(dest, outputType);
     return dest;
@@ -1636,13 +1636,13 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
     case ResourceBinding::UniformBuffer:
       // Uniform buffers (declared with "uniform" keyword) contain a single
       // value They emit OP_LOAD_UNIFORM to load the value directly
-      builder.EmitInstruction(OP_LOAD_UNIFORM, dest, resData.bindingIndex);
+      builder.EmitInstruction(OP_LOAD_UNIFORM, dest, (u16)resData.bindingIndex);
       break;
 
     case ResourceBinding::StorageBuffer:
       // Storage buffers (declared with "buffer" keyword) are arrays
       // They emit OP_STORAGE_PTR to enable dynamic indexing via OpAccessChain
-      builder.EmitInstruction(OP_STORAGE_PTR, dest, resData.bindingIndex);
+      builder.EmitInstruction(OP_STORAGE_PTR, dest, (u16)resData.bindingIndex);
       program.metadata[builder.currentInstruction - 1] =
           resData.structTypeHash;
 
@@ -1670,16 +1670,16 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
 
     case ResourceBinding::Texture:
       // Traditional bound texture - encode slot in register
-      dest = 0x2000 | resData.bindingIndex;
+      dest = 0x2000 | (u16)resData.bindingIndex;
       break;
 
     case ResourceBinding::StorageImage:
       // Storage image (read/write texture) - encode slot same as texture
-      dest = 0x2000 | resData.bindingIndex;
+      dest = 0x2000 | (u16)resData.bindingIndex;
       break;
 
     case ResourceBinding::Sampler:
-      dest = 0x3000 | resData.bindingIndex;
+      dest = 0x3000 | (u16)resData.bindingIndex;
       break;
 
     default:
@@ -1803,7 +1803,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
     // input.xxx -> OP_LOAD_INPUT with slot index
 
     // Map varying name to slot index using pass context if available
-    u32 inputSlot = GetInputSlotIndex(memberHash);
+    u16 inputSlot = (u16)GetInputSlotIndex(memberHash);
     builder.EmitInstruction(OP_LOAD_INPUT, dest, inputSlot);
     if (inputSlot < 32 && currentPassVaryings) {
       u32 varyingIndex = inputSlot - OutputSlot::VARYING0;
@@ -1841,7 +1841,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
 
     if (structTypeHash != 0) {
       // Find the field index and type
-      u32 fieldIndex = 0xFFFFFFFF;
+      u16 fieldIndex = 0xFFFF;
       CoreType fieldType = CoreType::FLOAT;
       u32 fieldOffset = 0;
       auto structIt = structTypeMap.find(structTypeHash);
@@ -1850,7 +1850,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
         const IRProgram::StructTypeInfo &info =
             program.structTypes[structIdx];
         fieldOffset = info.fieldOffset;
-        for (u32 i = 0; i < info.fieldCount; i++) {
+        for (u16 i = 0; i < info.fieldCount; i++) {
           if (program.structFieldNameHashes[info.fieldOffset + i] ==
               access.member.nameHash) {
             fieldIndex = i;
@@ -1861,7 +1861,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
         }
       }
 
-      if (fieldIndex != 0xFFFFFFFF) {
+      if (fieldIndex != 0xFFFF) {
         u16 dest = AllocateRegister();
         // Emit struct extract: dest = struct.field[fieldIndex]
         builder.EmitInstruction(OP_STRUCT_EXTRACT, dest, objReg, fieldIndex);
@@ -1882,7 +1882,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
     }
 
     // Fallback: try vector component access (e.g., pos.x, pos.y, pos.z)
-    u32 componentIndex = 0xFFFFFFFF;
+    u16 componentIndex = 0xFFFF;
     if (access.member.nameHash == Utils::HashStr("x") ||
         access.member.nameHash == Utils::HashStr("r"))
       componentIndex = 0;
@@ -1896,7 +1896,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
              access.member.nameHash == Utils::HashStr("a"))
       componentIndex = 3;
 
-    if (componentIndex != 0xFFFFFFFF) {
+    if (componentIndex != 0xFFFF) {
       CoreType objType = GetRegisterType(objReg);
       if ((mask(objType) & TypeMasks::SCALAR_TYPES) && componentIndex == 0) {
         return objReg;

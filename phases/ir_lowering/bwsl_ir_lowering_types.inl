@@ -38,7 +38,7 @@ inline u16 IRLowering::EmitZeroStruct(u32 structTypeHash) {
   AddUndefRegister(baseReg, CoreType::CUSTOM);
 
   u16 currentReg = baseReg;
-  for (u32 f = 0; f < structInfo->fieldCount; f++) {
+  for (u16 f = 0; f < structInfo->fieldCount; f++) {
     CoreType fieldType = static_cast<CoreType>(
         program.structFieldTypes[structInfo->fieldOffset + f]);
     u32 fieldTypeHash = 0;
@@ -823,25 +823,25 @@ inline u16 IRLowering::AllocateRegister() {
 }
 
 inline u16 IRLowering::EmitConstantInt(u32 value) {
-  for (u32 i = 0; i < program.intCount; i++) {
+  for (u16 i = 0; i < program.intCount; i++) {
     if (program.intConstants[i] == value) {
       return 0x4000 | i;
     }
   }
   u32 slot = program.intCount++;
   program.intConstants[slot] = value;
-  return 0x4000 | slot;
+  return 0x4000 | (u16)slot;
 }
 
 inline u16 IRLowering::EmitConstantUint(u32 value) {
-  for (u32 i = 0; i < program.uintCount; i++) {
+  for (u16 i = 0; i < program.uintCount; i++) {
     if (program.uintConstants[i] == value) {
       return 0x2000 | i;
     }
   }
   u32 slot = program.uintCount++;
   program.uintConstants[slot] = value;
-  return 0x2000 | slot;
+  return 0x2000 | (u16)slot;
 }
 
 inline u16 IRLowering::ConvertRegisterToType(u16 reg, CoreType targetType) {
