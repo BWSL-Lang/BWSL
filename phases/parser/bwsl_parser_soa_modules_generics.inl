@@ -20,6 +20,18 @@ NodeRef Parser::ParseModule() {
     std::string moduleName(stream->GetValue(previous));
     ArenaString moduleNameArena = ArenaString::MakeHashOnly(moduleName);
 
+    if (!parsingEmbeddedModule && IsEmbeddedModuleName(moduleName)) {
+        char msg[512];
+        snprintf(msg, sizeof(msg),
+                 "Module name '%s' is reserved by the embedded standard library. "
+                 "Rename this module to a non-standard-library name, for example 'My%s', and update imports to use the new name. "
+                 "Use 'import %s' when you want the embedded standard-library module.",
+                 moduleName.c_str(), moduleName.c_str(), moduleName.c_str());
+        ErrorAtPrevious(msg);
+        SkipBracedDeclaration(true);
+        return NodeRef::Null();
+    }
+
     // Register module name in reverse lookup for qualified type name resolution
     ReverseLookup::Register(moduleNameArena.nameHash, moduleName.c_str());
 

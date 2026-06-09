@@ -171,6 +171,8 @@ ERROR_CASE_TESTS = {
     "attributes_used_as_value.bwsl": "'attributes' cannot be used as a value",
     "missing_variable.bwsl": "Unknown identifier 'i_position'",
     "module_inside_pipeline.bwsl": "Module declarations must be declared at file scope",
+    "reserved_stdlib_module_name.bwsl": "Module name 'Math' is reserved by the embedded standard library",
+    "reserved_stdlib_module_import_conflict.bwsl": "cannot be overridden or imported with an alias",
     "pass_block_bare_body.bwsl": "Expected 'pass' block in pass_block function",
     "pass_block_caller_override.bwsl": "Expected 'use attributes', 'use resources', or 'variants' in pass_block mapping",
     "pass_block_invalid_variant_rhs.bwsl": "pass_block variant mapping target must be a declared pipeline variant",
@@ -184,6 +186,10 @@ ERROR_CASE_TESTS = {
     "struct_method_duplicate_const.bwsl": "Struct method overload already declared",
     "struct_method_nonconst_on_const.bwsl": "cannot call non-const struct method on const receiver",
     "struct_method_assign_in_const.bwsl": "cannot assign to receiver field inside const method",
+}
+
+ERROR_CASE_MODULE_DIRS = {
+    "reserved_stdlib_module_import_conflict.bwsl": Path("tests/error_cases/stdlib_conflict_modules"),
 }
 
 FORBIDDEN_SOURCE_ALIAS_NAMES = (
@@ -2149,12 +2155,14 @@ def main() -> int:
                 skipped += 1
                 continue
 
+            module_search_dir = root / ERROR_CASE_MODULE_DIRS.get(test_file.name, Path("modules"))
+
             result = run_command(
                 [
                     str(bwslc),
                     str(test_file),
                     "-modules",
-                    str(modules_dir),
+                    str(module_search_dir),
                     "-o",
                     str(output_dir),
                 ],

@@ -1,0 +1,13 @@
+// Error: embedded standard-library module names are reserved.
+module Math {
+    answer :: () -> float {
+        return 1.0;
+    }
+}
+
+pipeline ReservedStdlibModuleName {
+    pass "Main" {
+        compute "Main" [1, 1, 1] {
+        }
+    }
+}

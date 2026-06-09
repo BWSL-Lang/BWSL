@@ -15,6 +15,9 @@ if errorlevel 1 exit /b 1
 
 if not exist "build" mkdir "build"
 
+call :generate_embedded_modules
+if errorlevel 1 exit /b 1
+
 if not defined USE_LINKED_SPIRV_TOOLS set "USE_LINKED_SPIRV_TOOLS=1"
 
 set "SPIRV_TOOLS_FLAGS="
@@ -93,6 +96,27 @@ exit /b %errorlevel%
 if exist "build" rmdir /S /Q "build"
 echo Cleaned build artifacts.
 exit /b 0
+
+:generate_embedded_modules
+where python >nul 2>&1
+if not errorlevel 1 (
+    python scripts\gen_embedded_modules.py --out core\bwsl_embedded_modules.generated.h
+    exit /b %errorlevel%
+)
+
+where py >nul 2>&1
+if not errorlevel 1 (
+    py -3 scripts\gen_embedded_modules.py --out core\bwsl_embedded_modules.generated.h
+    exit /b %errorlevel%
+)
+
+if exist "core\bwsl_embedded_modules.generated.h" (
+    echo Python was not found; using existing core\bwsl_embedded_modules.generated.h.
+    exit /b 0
+)
+
+echo Python is required to generate core\bwsl_embedded_modules.generated.h.
+exit /b 1
 
 :ensure_msvc
 if defined VSINSTALLDIR (

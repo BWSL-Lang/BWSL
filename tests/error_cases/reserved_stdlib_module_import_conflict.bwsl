@@ -1,0 +1,9 @@
+// Error: conflicting disk modules cannot override embedded standard-library names.
+pipeline ReservedStdlibModuleImportConflict {
+    import Math as UserMath
+
+    pass "Main" {
+        compute "Main" [1, 1, 1] {
+        }
+    }
+}
