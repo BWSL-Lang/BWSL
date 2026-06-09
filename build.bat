@@ -34,6 +34,8 @@ set "DISABLED_WARNINGS=/wd4324 /wd4701 /wd4996"
 set "INCLUDE_FLAGS=/Ivendor\SPIRV-Cross /I. /Icore /Icore\middleware /Iphases\lexing /Iphases\parser /Iphases\evaluation /Iphases\ir_generation /Iphases\ir_lowering /Iphases\control_flow /Iphases\ssa /Iphases\backends\spirv /Iphases\backends\gles"
 set "CPU_FLAGS=/arch:AVX /arch:AVX2"
 set "COMMON_FLAGS=/nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB %SPIRV_TOOLS_FLAGS% %INCLUDE_FLAGS% %CPU_FLAGS% %DISABLED_WARNINGS%"
+:: hide the warnings coming from vendor/SPIRV-Cross
+set "SPIRV_CROSS_FLAGS=/wd4389 /wd4245 /wd4245"
 set "RELEASE_FLAGS=/O2 /W4 /MD"
 set "DEBUG_FLAGS=/Zi /Od /W4 /MDd"
 set "LINK_FLAGS=/link /STACK:8388608"
@@ -61,7 +63,7 @@ echo Unknown target: %TARGET%
 goto :help
 
 :build_release
-%COMPILER% %RELEASE_FLAGS% %COMMON_FLAGS% /c /Fobuild\spirv_cross_wrapper.obj %WRAPPER_SRC%
+%COMPILER% %RELEASE_FLAGS% %COMMON_FLAGS% %SPIRV_CROSS_FLAGS% /c /Fobuild\spirv_cross_wrapper.obj %WRAPPER_SRC%
 if errorlevel 1 exit /b 1
 %COMPILER% %RELEASE_FLAGS% %COMMON_FLAGS% /c /Fobuild\bwslc.obj %BWSLC_SRC%
 if errorlevel 1 exit /b 1
@@ -71,7 +73,7 @@ echo Built: build\bwslc.exe
 exit /b 0
 
 :build_debug
-%COMPILER% %DEBUG_FLAGS% %COMMON_FLAGS% /c /Fobuild\spirv_cross_wrapper_debug.obj %WRAPPER_SRC%
+%COMPILER% %DEBUG_FLAGS% %COMMON_FLAGS% %SPIRV_CROSS_FLAGS% /c /Fobuild\spirv_cross_wrapper_debug.obj %WRAPPER_SRC%
 if errorlevel 1 exit /b 1
 %COMPILER% %DEBUG_FLAGS% %COMMON_FLAGS% /c /Fdbuild\bwslc-debug.pdb /Fobuild\bwslc_debug.obj %BWSLC_SRC%
 if errorlevel 1 exit /b 1
