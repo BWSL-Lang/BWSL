@@ -29,7 +29,8 @@ echo Using linked SPIRV-Tools: %SPIRV_TOOLS_LINK_LIB%
 
 :: C4324: structure was padded due to alignment specifier (these are intentional in bwslc)
 :: C4701: potentially uninitialized local variable (the compiler is too dumb for this to be useful)
-set "DISABLED_WARNINGS=/wd4324 /wd4701"
+:: C4996: strncpy is "unsafe"
+set "DISABLED_WARNINGS=/wd4324 /wd4701 /wd4996"
 set "INCLUDE_FLAGS=/Ivendor\SPIRV-Cross /I. /Icore /Icore\middleware /Iphases\lexing /Iphases\parser /Iphases\evaluation /Iphases\ir_generation /Iphases\ir_lowering /Iphases\control_flow /Iphases\ssa /Iphases\backends\spirv /Iphases\backends\gles"
 set "CPU_FLAGS=/arch:AVX /arch:AVX2"
 set "COMMON_FLAGS=/nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB %SPIRV_TOOLS_FLAGS% %INCLUDE_FLAGS% %CPU_FLAGS% %DISABLED_WARNINGS%"
