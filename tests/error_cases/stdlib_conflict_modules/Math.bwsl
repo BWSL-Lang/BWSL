@@ -1,0 +1,5 @@
+module Math {
+    answer :: () -> float {
+        return 1.0;
+    }
+}

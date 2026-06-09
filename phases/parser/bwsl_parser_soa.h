@@ -190,6 +190,7 @@ struct Parser {
         currentPass = NodeRef::Null();
         currentPipeline = NodeRef::Null();
         currentModule = NodeRef::Null();
+        parsingEmbeddedModule = false;
         passBlockRemapActive = false;
         remapBareVariants = false;
         typeCache.Init();
@@ -347,7 +348,15 @@ private:
     TypeInfo ParseArrayType();
 
     //----------------- Helper functions ------------------------//
+    bool TryRegisterModule(const std::string& moduleName);
     bool TryRegisterModuleFromDisk(const std::string& moduleName);
+    bool RegisterModuleFromSource(const std::string& moduleName,
+                                  const char* source,
+                                  size_t sourceLength,
+                                  const char* sourceName);
+    bool FindConflictingDiskModule(const std::string& moduleName,
+                                   std::string* outModulePath = nullptr);
+    bool IsEmbeddedModuleName(const std::string& moduleName) const;
     std::string CanonicalizeModuleQualifiedName(const std::string& moduleName,
                                                 const std::string& memberName);
     std::string CanonicalizeTypeName(const std::string& typeName);
@@ -441,6 +450,7 @@ private:
     std::vector<ActiveVariantBinding> activeVariantBindings;
     bool allowBareVariantLookup = false;
     NodeRef currentModule = NodeRef::Null();
+    bool parsingEmbeddedModule = false;
 
     struct PassBlockNameRemap {
         u32 localHash;

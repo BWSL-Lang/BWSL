@@ -307,6 +307,7 @@ void Parser::ParseModuleImportList(NodeRef owner, bool ownerIsPipeline) {
     u32 importCount = 0;
 
     while (Check(TokenType::IDENTIFIER)) {
+        TokenRef moduleToken = current;
         std::string moduleNameStr(stream->GetValue(current));
         Advance();
 
@@ -343,9 +344,29 @@ void Parser::ParseModuleImportList(NodeRef owner, bool ownerIsPipeline) {
         }
 
         u32 moduleIdx = SymbolTable::FindModuleByHash(&symbolTable, moduleHash);
+        bool reportedConflict = false;
 
         if (moduleIdx == INVALID_INDEX) {
-            if (TryRegisterModuleFromDisk(moduleNameStr)) {
+            std::string conflictingPath;
+            bool hasEmbeddedDiskConflict =
+                FindConflictingDiskModule(moduleNameStr, &conflictingPath);
+            bool registered = false;
+            if (hasEmbeddedDiskConflict) {
+                char msg[512];
+                snprintf(msg, sizeof(msg),
+                         "Module name '%s' is reserved by the embedded standard library. "
+                         "A different module file was found at '%s', but reserved standard-library names cannot be overridden or imported with an alias. "
+                         "Rename your module and file to a non-standard-library name, for example 'My%s', then import that name. "
+                         "Use 'import %s' for the embedded standard-library module.",
+                         moduleNameStr.c_str(), conflictingPath.c_str(),
+                         moduleNameStr.c_str(), moduleNameStr.c_str());
+                ErrorAt(moduleToken, msg);
+                reportedConflict = true;
+            } else {
+                registered = TryRegisterModule(moduleNameStr);
+            }
+
+            if (registered) {
                 moduleIdx = SymbolTable::FindModuleByHash(&symbolTable, moduleHash);
             }
         }
@@ -375,7 +396,7 @@ void Parser::ParseModuleImportList(NodeRef owner, bool ownerIsPipeline) {
                     ErrorAtPrevious(msg);
                 }
             }
-        } else {
+        } else if (!reportedConflict) {
             char msg[256];
             snprintf(msg, sizeof(msg),
                      "Unknown module '%s'. Verify that your module exists and has been compiled",

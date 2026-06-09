@@ -2,6 +2,7 @@
 // Module loading validation plus function and compute-body parsing.
 #pragma once
 #include "bwsl_parser_soa.cpp"
+#include "bwsl_embedded_modules.generated.h"
 
 //==============================================================================
 // Helper functions
@@ -134,17 +135,42 @@ bool Parser::ValidateAssignmentTarget(NodeRef target) {
     }
 }
 
+bool Parser::TryRegisterModule(const std::string& moduleName) {
+    if (moduleName.empty()) {
+        return false;
+    }
+
+    u32 moduleHash = Utils::HashStr(moduleName.c_str());
+    u32 existingIdx = SymbolTable::FindModuleByHash(&symbolTable, moduleHash);
+    if (existingIdx != INVALID_INDEX) {
+        return true;
+    }
+
+    if (const EmbeddedModules::ModuleSource* embedded =
+            EmbeddedModules::FindByHash(moduleHash)) {
+        return RegisterModuleFromSource(moduleName, embedded->source,
+                                        embedded->sourceLength,
+                                        embedded->virtualPath);
+    }
+
+    return TryRegisterModuleFromDisk(moduleName);
+}
+
+bool Parser::IsEmbeddedModuleName(const std::string& moduleName) const {
+    if (moduleName.empty()) {
+        return false;
+    }
+    return EmbeddedModules::FindByHash(Utils::HashStr(moduleName.c_str())) != nullptr;
+}
+
 bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
     if (moduleName.empty()) {
         return false;
     }
 
-    // Check if module already registered in symbol table
     u32 moduleHash = Utils::HashStr(moduleName.c_str());
     u32 existingIdx = SymbolTable::FindModuleByHash(&symbolTable, moduleHash);
-    
     if (existingIdx != INVALID_INDEX) {
-        // Module already parsed and registered
         return true;
     }
 
@@ -163,15 +189,68 @@ bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
                               std::istreambuf_iterator<char>());
     moduleFile.close();
 
+    return RegisterModuleFromSource(moduleName, moduleSource.data(),
+                                    moduleSource.size(), modulePath.c_str());
+}
+
+bool Parser::FindConflictingDiskModule(const std::string& moduleName,
+                                       std::string* outModulePath) {
+    if (moduleName.empty()) {
+        return false;
+    }
+
+    const EmbeddedModules::ModuleSource* embedded =
+        EmbeddedModules::FindByHash(Utils::HashStr(moduleName.c_str()));
+    if (!embedded) {
+        return false;
+    }
+
+    std::string modulePath = ResolveModulePath(moduleName);
+    if (modulePath.empty()) {
+        return false;
+    }
+
+    std::ifstream moduleFile(modulePath, std::ios::binary);
+    if (!moduleFile.is_open()) {
+        return false;
+    }
+
+    std::string moduleSource((std::istreambuf_iterator<char>(moduleFile)),
+                              std::istreambuf_iterator<char>());
+    moduleFile.close();
+
+    bool differs = moduleSource.size() != embedded->sourceLength ||
+                   memcmp(moduleSource.data(), embedded->source,
+                          embedded->sourceLength) != 0;
+    if (differs && outModulePath) {
+        *outModulePath = modulePath;
+    }
+    return differs;
+}
+
+bool Parser::RegisterModuleFromSource(const std::string& moduleName,
+                                      const char* source,
+                                      size_t sourceLength,
+                                      const char* sourceName) {
+    if (moduleName.empty() || source == nullptr) {
+        return false;
+    }
+
+    u32 moduleHash = Utils::HashStr(moduleName.c_str());
+    u32 existingIdx = SymbolTable::FindModuleByHash(&symbolTable, moduleHash);
+    if (existingIdx != INVALID_INDEX) {
+        return true;
+    }
+
     // Copy source into arena so it lives as long as AST
     // ArenaStrings store sourceOffset values into the lexer's source buffer,
     // so we need the source to persist after this function returns
-    char* persistentSource = (char*)arena->Allocate(moduleSource.size() + 1, 1);
+    char* persistentSource = (char*)arena->Allocate(sourceLength + 1, 1);
     if (!persistentSource) {
         return false;
     }
-    memcpy(persistentSource, moduleSource.data(), moduleSource.size());
-    persistentSource[moduleSource.size()] = '\0';
+    memcpy(persistentSource, source, sourceLength);
+    persistentSource[sourceLength] = '\0';
 
     // Save current parser state
     TokenRef savedCurrent = current;
@@ -189,11 +268,12 @@ bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
     NodeRef savedCurrentPass = currentPass;
     bool savedInShaderStage = inShaderStage;
     ShaderStage savedCurrentShaderStage = currentShaderStage;
+    bool savedParsingEmbeddedModule = parsingEmbeddedModule;
 
     // Create new TokenStream and lexer for arena-persistent module source
     TokenStream moduleStream;
-    moduleStream.Init(arena, persistentSource, moduleSource.size());
-    Lexer moduleLexer(std::string(persistentSource, moduleSource.size()), moduleStream);
+    moduleStream.Init(arena, persistentSource, sourceLength);
+    Lexer moduleLexer(std::string(persistentSource, sourceLength), moduleStream);
     moduleLexer.Tokenize();  // Must tokenize before parsing!
     lexer = &moduleLexer;
     stream = &moduleStream;
@@ -201,6 +281,8 @@ bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
     has3TokenLookahead = false;
     lookahead = INVALID_TOKEN;
     lookahead3 = INVALID_TOKEN;
+    parsingEmbeddedModule =
+        sourceName && strncmp(sourceName, "stdlib://", 9) == 0;
 
     bool success = false;
     current = 0;
@@ -216,7 +298,7 @@ bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
                     moduleData.name.nameHash);
                 if (parsedModuleIdx != INVALID_INDEX && parsedModuleIdx < symbolTable.modules.count) {
                     symbolTable.modules[parsedModuleIdx].sourcePtr = persistentSource;
-                    symbolTable.modules[parsedModuleIdx].sourceLength = static_cast<u32>(moduleSource.size());
+                    symbolTable.modules[parsedModuleIdx].sourceLength = static_cast<u32>(sourceLength);
                 }
                 if (moduleData.name.nameHash == moduleHash) {
                     success = true;
@@ -246,6 +328,7 @@ bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
     currentPass = savedCurrentPass;
     inShaderStage = savedInShaderStage;
     currentShaderStage = savedCurrentShaderStage;
+    parsingEmbeddedModule = savedParsingEmbeddedModule;
 
     return success;
 }
