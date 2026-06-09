@@ -492,6 +492,12 @@ static void AddPathCandidate(std::vector<fs::path>& dirs, const fs::path& dir) {
     }
 }
 
+
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996) // Disable deprecation warnings for std::getenv on MSVC
+#endif
+
 std::string FindTool(const char* toolName) {
     std::vector<fs::path> dirs;
 
@@ -558,6 +564,11 @@ std::string FindTool(const char* toolName) {
 
     return "";
 }
+
+#if defined(_MSC_VER)
+// we are done using std::getenv (safely), so re-enable the warning
+#pragma warning(pop)
+#endif
 
 // Cross-compilation using CLI tools (fallback)
 std::string CrossCompileToMetalCLI(const std::string& spirvFile) {

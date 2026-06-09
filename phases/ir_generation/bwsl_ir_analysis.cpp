@@ -94,7 +94,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
         // Capture type from destination register
         u16 destReg = ir->destinations[i];
         if (destReg < ir->registerCount && ir->registerTypes) {
-          analysis->attributeTypes[attrIdx] = ir->registerTypes[destReg];
+          analysis->attributeTypes[attrIdx] = (u8)ir->registerTypes[destReg];
         }
       }
       break;
@@ -128,7 +128,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
         // Capture type from destination register
         u16 destReg = ir->destinations[i];
         if (destReg < ir->registerCount && ir->registerTypes) {
-          analysis->inputTypes[inputSlot] = ir->registerTypes[destReg];
+          analysis->inputTypes[inputSlot] = (u8)ir->registerTypes[destReg];
         }
       }
       break;
@@ -147,13 +147,13 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
         // puts value in destinations
         u16 srcReg = ir->destinations[i];
         if (srcReg < ir->registerCount && ir->registerTypes) {
-          analysis->outputTypes[slot] = ir->registerTypes[srcReg];
+          analysis->outputTypes[slot] = (u8)ir->registerTypes[srcReg];
         } else if (ir->phiCount > 0 && ir->phiResultRegs) {
           // Check if this is a PHI result register (SSA renaming assigns high
           // IDs)
           for (u32 p = 0; p < ir->phiCount; p++) {
             if (ir->phiResultRegs[p] == srcReg) {
-              analysis->outputTypes[slot] = ir->phiTypes[p];
+              analysis->outputTypes[slot] = (u8)ir->phiTypes[p];
               break;
             }
           }
@@ -167,7 +167,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
         analysis->usedOutputMask |= (1 << slot);
         u16 destReg = ir->destinations[i];
         if (destReg < ir->registerCount && ir->registerTypes) {
-          analysis->outputTypes[slot] = ir->registerTypes[destReg];
+          analysis->outputTypes[slot] = (u8)ir->registerTypes[destReg];
         }
       }
       break;
@@ -182,7 +182,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
         // Capture type from destination register
         u16 destReg = ir->destinations[i];
         if (destReg < ir->registerCount && ir->registerTypes) {
-          analysis->uniformTypes[binding] = ir->registerTypes[destReg];
+          analysis->uniformTypes[binding] = (u8)ir->registerTypes[destReg];
           // Capture struct type hash for CUSTOM types
           CoreType regType = static_cast<CoreType>(ir->registerTypes[destReg]);
           if ((regType == CoreType::CUSTOM || regType == CoreType::ENUM) &&

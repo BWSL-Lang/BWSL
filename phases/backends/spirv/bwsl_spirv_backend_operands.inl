@@ -5,7 +5,7 @@
 
 namespace BWSL {
 
-static CoreType GetFallbackAttributeType(u32 attrIdx);
+static CoreType GetFallbackAttributeType(u8 attrIdx);
 static CoreType GetFallbackOutputType(u32 slot);
 
 // Helper to get result type for arithmetic operations

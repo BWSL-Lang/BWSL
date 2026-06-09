@@ -48,7 +48,7 @@ void SPIRVBuilder::DeclareResources() {
   // satisfy SPIR-V UBO requirements
 
   // ============= Uniform Buffers =============
-  for (u32 binding = 0; binding < 32; binding++) {
+  for (u8 binding = 0; binding < 32; binding++) {
     if (!(analysis.usedUniformMask & (1 << binding)))
       continue;
 
@@ -213,7 +213,7 @@ void SPIRVBuilder::DeclareResources() {
   }
 
   // Create texture variables for each used binding
-  for (u32 binding = 0; binding < 32; binding++) {
+  for (u8 binding = 0; binding < 32; binding++) {
     if (!(analysis.usedTextureMask & (1 << binding)))
       continue;
 
@@ -257,11 +257,12 @@ void SPIRVBuilder::DeclareResources() {
       u32 ops[] = {default_runtime_array_type, default_float4_type};
       EmitToSection(&typesConstants, spv::OpTypeRuntimeArray, ops, 2);
     }
-
-    // Array stride decoration for default type
-    u32 stride_ops[] = {default_runtime_array_type, spv::DecorationArrayStride,
-                        16};
-    EmitToSection(&decorations, spv::OpDecorate, stride_ops, 3);
+    {
+      // Array stride decoration for default type
+      u32 stride_ops[] = {default_runtime_array_type, spv::DecorationArrayStride,
+                          16};
+      EmitToSection(&decorations, spv::OpDecorate, stride_ops, 3);
+    }
 
     // Create default struct containing runtime array
     u32 default_ssbo_struct_type = AllocateId();
@@ -273,10 +274,12 @@ void SPIRVBuilder::DeclareResources() {
     // Block decoration for default type
     EmitDecoration(default_ssbo_struct_type, spv::DecorationBlock, nullptr, 0);
 
-    // Member offset for default type
-    u32 member_offset[] = {default_ssbo_struct_type, 0, spv::DecorationOffset,
-                           0};
-    EmitToSection(&decorations, spv::OpMemberDecorate, member_offset, 4);
+    {
+      // Member offset for default type
+      u32 member_offset[] = {default_ssbo_struct_type, 0, spv::DecorationOffset,
+                            0};
+      EmitToSection(&decorations, spv::OpMemberDecorate, member_offset, 4);
+    }
 
     // Default pointer type
     u32 default_ptr_ssbo_type = AllocateId();
@@ -287,7 +290,7 @@ void SPIRVBuilder::DeclareResources() {
     }
 
     // Create variables for each used binding
-    for (u32 binding = 0; binding < 32; binding++) {
+    for (u8 binding = 0; binding < 32; binding++) {
       if (!(analysis.usedStorageBufferMask & (1 << binding)))
         continue;
 
@@ -514,7 +517,7 @@ void SPIRVBuilder::DeclareResources() {
     }
 
     // Create variables for each used storage image binding
-    for (u32 binding = 0; binding < 32; binding++) {
+    for (u8 binding = 0; binding < 32; binding++) {
       if (!(analysis.usedStorageImageMask & (1 << binding)))
         continue;
 

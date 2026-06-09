@@ -204,7 +204,7 @@ struct StringBuilder {
         f32 frac = v - intPart;
         for (int i = 0; i < 6; i++) {
             frac *= 10.0f;
-            s32 d = static_cast<s32>(frac);
+            char d = static_cast<char>(frac);
             Chr('0' + d);
             frac -= d;
         }

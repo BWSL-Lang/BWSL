@@ -718,8 +718,8 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u16 op_reg = ir->GetOperand(ir_idx, 0);
     u32 operand = GetSpirvId(op_reg);
     u32 result_type = GetResultType(dest_reg, op_reg);
-    spv::Op spv_op = IR_TO_SPV_OP_TABLE[static_cast<u32>(op)];
-    Emit(spv_op, result_type, dest, operand);
+    spv::Op spv_op2 = IR_TO_SPV_OP_TABLE[static_cast<u32>(op)];
+    Emit(spv_op2, result_type, dest, operand);
     break;
   }
 
@@ -729,8 +729,8 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u16 op_reg = ir->GetOperand(ir_idx, 0);
     u32 operand = GetSpirvId(op_reg);
     u32 result_type = GetTypeId(CoreType::BOOL);
-    spv::Op spv_op = IR_TO_SPV_OP_TABLE[static_cast<u32>(op)];
-    Emit(spv_op, result_type, dest, operand);
+    spv::Op spv_op2 = IR_TO_SPV_OP_TABLE[static_cast<u32>(op)];
+    Emit(spv_op2, result_type, dest, operand);
     break;
   }
 
@@ -743,8 +743,8 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u16 op_reg = ir->GetOperand(ir_idx, 0);
     u32 operand = GetSpirvId(op_reg);
     u32 result_type = GetResultType(dest_reg, op_reg);
-    spv::Op spv_op = IR_TO_SPV_OP_TABLE[static_cast<u32>(op)];
-    Emit(spv_op, result_type, dest, operand);
+    spv::Op spv_op2 = IR_TO_SPV_OP_TABLE[static_cast<u32>(op)];
+    Emit(spv_op2, result_type, dest, operand);
     break;
   }
 
@@ -1937,7 +1937,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   }
 
   case IR::OP_LOAD_ATTR: {
-    u32 attr_idx = ir->GetOperand(ir_idx, 0);
+    u8 attr_idx = (u8)ir->GetOperand(ir_idx, 0);
 
     // Get the attribute type
     CoreType attrType =
@@ -2147,7 +2147,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_LOAD_OUTPUT: {
     u32 slot = ir->GetOperand(ir_idx, 0);
     u16 dest_reg = ir->destinations[ir_idx];
-    u32 dest = GetSpirvId(dest_reg);
+    u32 dest2 = GetSpirvId(dest_reg);
 
     CoreType outputType = CoreType::FLOAT4;
     if (ir->registerTypes && dest_reg < ir->registerCount) {
@@ -2170,7 +2170,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       }
     }
     if (ptr_id != 0 && load_type_id != 0) {
-      Emit(spv::OpLoad, load_type_id, dest, ptr_id);
+      Emit(spv::OpLoad, load_type_id, dest2, ptr_id);
     }
     break;
   }
@@ -3462,7 +3462,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         // Array element extraction from struct field array
         // Check if base is a storage buffer pointer (from OP_STRUCT_EXTRACT on
         // storage buffer)
-        bool isStoragePtr =
+        bool isStoragePtr2 =
             base_reg < idCapacity && storagePtrStorageClass[base_reg] != 0;
 
         // Use tracked element type from OP_STRUCT_EXTRACT if available,
@@ -3472,7 +3472,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
           array_elem_type_id = storagePtrElemTypes[base_reg];
         }
 
-        if (isStoragePtr) {
+        if (isStoragePtr2) {
           // Storage buffer pointer - use OpAccessChain + OpLoad
           spv::StorageClass storageClass =
               static_cast<spv::StorageClass>(storagePtrStorageClass[base_reg]);

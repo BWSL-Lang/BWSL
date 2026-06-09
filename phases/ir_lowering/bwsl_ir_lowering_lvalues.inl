@@ -533,7 +533,7 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
     if (currentStructMethodTypeHash != 0 &&
         currentStructMethodSelfReg != 0xFFFF &&
         variableRegisters.find(ident.name.nameHash) == variableRegisters.end()) {
-      u32 fieldIndex = 0xFFFFFFFF;
+      u32 fieldIndex = 0xFFFF;
       CoreType fieldType = CoreType::INVALID;
       if (FindStructField(currentStructMethodTypeHash, ident.name.nameHash,
                           &fieldIndex, &fieldType, nullptr)) {
@@ -546,7 +546,7 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
         SetRegisterType(newStructReg, CoreType::CUSTOM);
         program.registerStructTypes[newStructReg] = currentStructMethodTypeHash;
         builder.EmitInstruction(OP_STRUCT_INSERT, newStructReg,
-                                currentStructMethodSelfReg, fieldIndex,
+                                currentStructMethodSelfReg, (u16)fieldIndex,
                                 valueReg);
         program.metadata[builder.currentInstruction - 1] =
             currentStructMethodTypeHash;
@@ -1056,10 +1056,11 @@ inline u16 IRLowering::LowerArrayAccess(NodeRef ref) {
         (binding << IR::IRProgram::STORAGE_BINDING_SHIFT) |
         (depth << IR::IRProgram::STORAGE_DEPTH_SHIFT) |
         IR::IRProgram::STORAGE_IS_PTR | sharedFlag;
-
-    CoreType baseType = GetRegisterType(baseReg);
-    if (baseType != CoreType::INVALID && baseType != CoreType::VOID) {
-      SetRegisterType(ptrReg, baseType);
+    {
+      CoreType baseType = GetRegisterType(baseReg);
+      if (baseType != CoreType::INVALID && baseType != CoreType::VOID) {
+        SetRegisterType(ptrReg, baseType);
+      }
     }
 
     // Now load the value from the element pointer

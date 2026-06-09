@@ -22,8 +22,9 @@ u32 SPIRVBuilder::GetVectorTypeId(CoreType base, u32 components) {
 }
 
 u32 SPIRVBuilder::GetPointerTypeId(u32 type_id, spv::StorageClass storage) {
+  u32 storageVal = static_cast<u32>(storage);
   // Hash the pointer type for deduplication
-  u32 hash = type_id ^ (static_cast<u32>(storage) << 16);
+  u32 hash = type_id ^ (storageVal << 16);
 
   // Check composite types for existing pointer
   for (u32 i = 0; i < compositeTypeCount; i++) {
@@ -34,7 +35,7 @@ u32 SPIRVBuilder::GetPointerTypeId(u32 type_id, spv::StorageClass storage) {
 
   // Create new pointer type
   u32 ptr_id = AllocateId();
-  u32 ops[] = {ptr_id, storage, type_id};
+  u32 ops[] = {ptr_id, storageVal, type_id};
   EmitToSection(&typesConstants, spv::OpTypePointer, ops, 3);
 
   // Cache it

@@ -47,7 +47,7 @@ u32 SPIRVBuilder::CreateInterfaceVariable(CoreType type,
 
 // Helper: Get fallback attribute type by index
 // With user-defined attributes, only position (index 0) is known to be float3
-static CoreType GetFallbackAttributeType(u32 attrIdx) {
+static CoreType GetFallbackAttributeType(u8 attrIdx) {
   // Index 0 is always position (float3), everything else defaults to float4
   return (attrIdx == 0) ? CoreType::FLOAT3 : CoreType::FLOAT4;
 }
@@ -92,7 +92,7 @@ void SPIRVBuilder::DeclareInputOutput() {
       // Traditional interleaved mode - attributes via Input variables with
       // Location
       // --- Inputs: Only declare attributes that are actually used ---
-      for (u32 attrIdx = 0; attrIdx < 16; attrIdx++) {
+      for (u8 attrIdx = 0; attrIdx < 16; attrIdx++) {
         if (!(analysis.usedAttributeMask & (1 << attrIdx)))
           continue;
 
@@ -102,7 +102,7 @@ void SPIRVBuilder::DeclareInputOutput() {
         if (type == CoreType::VOID || type == CoreType::INVALID) {
           // Try symbol table
           if (symbols) {
-            for (u32 i = 0; i < symbols->attributes.count; i++) {
+            for (u8 i = 0; i < symbols->attributes.count; i++) {
               if (symbols->attributes[i].attributeIndex == attrIdx) {
                 type = symbols->attributes[i].typeInfo.coreType;
                 break;
@@ -136,7 +136,7 @@ void SPIRVBuilder::DeclareInputOutput() {
     // Support up to 16 varyings (VARYING0 through VARYING0+15) to match
     // fragment shader
     u32 locationCounter = 0;
-    for (u32 slot = OutputSlot::VARYING0; slot <= OutputSlot::VARYING0 + 15;
+    for (u8 slot = OutputSlot::VARYING0; slot <= OutputSlot::VARYING0 + 15;
          slot++) {
       if (!(analysis.usedOutputMask & (1 << slot)))
         continue;
@@ -179,7 +179,7 @@ void SPIRVBuilder::DeclareInputOutput() {
     // Slots are VARYING0+index, so location = slot - VARYING0 to match vertex
     // output IMPORTANT: Location must match vertex shader even if some varyings
     // are unused
-    for (u32 slot = OutputSlot::VARYING0; slot <= OutputSlot::VARYING0 + 15;
+    for (u8 slot = OutputSlot::VARYING0; slot <= OutputSlot::VARYING0 + 15;
          slot++) {
       if (!(analysis.usedInputMask & (1 << slot)))
         continue;
@@ -212,9 +212,9 @@ void SPIRVBuilder::DeclareInputOutput() {
     }
 
     // --- Outputs: Fragment color attachments (if used) ---
-    for (u32 location = 0; location < FragmentOutput::MAX_COLOR_ATTACHMENTS;
+    for (u8 location = 0; location < FragmentOutput::MAX_COLOR_ATTACHMENTS;
          location++) {
-      u32 slot = OutputSlot::FragmentColor(location);
+      u8 slot = OutputSlot::FragmentColor(location);
       if (!(analysis.usedOutputMask & (1 << slot)))
         continue;
 
@@ -414,7 +414,7 @@ void SPIRVBuilder::DeclareVertexPullingBuffers() {
     // Declare one storage buffer per attribute
     u32 binding = vertexPullingConfig.baseBufferBinding;
 
-    for (u32 attrIdx = 0; attrIdx < 8; attrIdx++) {
+    for (u8 attrIdx = 0; attrIdx < 8; attrIdx++) {
       if (!(analysis.usedAttributeMask & (1 << attrIdx)))
         continue;
 
@@ -497,7 +497,7 @@ void SPIRVBuilder::DeclareVertexPullingBuffers() {
     }
 
     EmitDecoration(offset_buffer_id, spv::DecorationDescriptorSet, set, 1);
-    u32 offset_binding[] = {vertexPullingConfig.baseBufferBinding + 1};
+    u32 offset_binding[] = {vertexPullingConfig.baseBufferBinding + (u32)1};
     EmitDecoration(offset_buffer_id, spv::DecorationBinding, offset_binding, 1);
 
     // Store offset table ID

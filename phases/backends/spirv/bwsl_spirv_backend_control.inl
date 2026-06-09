@@ -177,25 +177,27 @@ void SPIRVBuilder::EmitPhiNodes(u32 blockIndex) {
 
     u16 phiResultReg = ir->phiResultRegs[phi_idx];
 
-    // Check if all PHI operands have the same value (trivial PHI)
-    // This can happen after variant specialization eliminates one branch
-    bool isTrivial = true;
-    u16 firstValueReg = ir->GetPhiOperandValue(phi_idx, 0);
-    for (u32 op = 1; op < operandCount; op++) {
-      if (ir->GetPhiOperandValue(phi_idx, op) != firstValueReg) {
-        isTrivial = false;
-        break;
+    {
+      // Check if all PHI operands have the same value (trivial PHI)
+      // This can happen after variant specialization eliminates one branch
+      bool isTrivial = true;
+      u16 firstValueReg = ir->GetPhiOperandValue(phi_idx, 0);
+      for (u32 op = 1; op < operandCount; op++) {
+        if (ir->GetPhiOperandValue(phi_idx, op) != firstValueReg) {
+          isTrivial = false;
+          break;
+        }
       }
-    }
 
-    if (isTrivial) {
-      // All operands are the same - just alias the result to the source value
-      // Don't emit an OpPhi, just map the result register to the source's ID
-      u32 source_id = GetSpirvId(firstValueReg);
-      if (phiResultReg < idCapacity) {
-        spirvIds[phiResultReg] = source_id;
+      if (isTrivial) {
+        // All operands are the same - just alias the result to the source value
+        // Don't emit an OpPhi, just map the result register to the source's ID
+        u32 source_id = GetSpirvId(firstValueReg);
+        if (phiResultReg < idCapacity) {
+          spirvIds[phiResultReg] = source_id;
+        }
+        continue;
       }
-      continue;
     }
 
     // Check if any operand is address-taken (has a localVarId)
