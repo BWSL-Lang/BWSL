@@ -232,7 +232,7 @@ void SPIRVBuilder::EmitPreamble() {
   // 2. Import GLSL.std.450 extended instruction set
   // OpExtInstImport format: word_count | op, result_id, "GLSL.std.450\0"
   const char *extName = "GLSL.std.450";
-  u32 nameLen = strlen(extName) + 1; // Include null terminator
+  u32 nameLen = (u32)(strlen(extName) + 1); // Include null terminator
   u32 nameWords = (nameLen + 3) / 4; // Round up to word boundary
 
   u32 wordCount = 2 + nameWords; // op + result + name words
@@ -279,7 +279,7 @@ void SPIRVBuilder::EmitEntryPoint() {
   }
 
   // OpEntryPoint format: exec_model, entry_point_id, "name", interface_vars...
-  u32 nameLen = strlen(entryName) + 1;
+  u32 nameLen = (u32)(strlen(entryName) + 1);
   u32 nameWords = (nameLen + 3) / 4;
 
   // Count interface variables (inputs + outputs)

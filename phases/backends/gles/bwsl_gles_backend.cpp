@@ -430,8 +430,8 @@ void GLESBuilder::EmitOutputs() {
         // Fragment color attachments.
         bool emittedColor = false;
         if (analysis) {
-            for (u32 location = 0; location < FragmentOutput::MAX_COLOR_ATTACHMENTS; location++) {
-                u32 slot = OutputSlot::FragmentColor(location);
+            for (u8 location = 0; location < FragmentOutput::MAX_COLOR_ATTACHMENTS; location++) {
+                u8 slot = OutputSlot::FragmentColor(location);
                 if (!(analysis->usedOutputMask & (1 << slot))) continue;
 
                 CoreType type = static_cast<CoreType>(analysis->outputTypes[slot]);
@@ -1119,7 +1119,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
                     out.Lit("gl_FragDepth = ");
                 } else {
                     out.Lit("fragColor");
-                    out.Uint(OutputSlot::FragmentColorLocation(outputIdx));
+                    out.Uint(OutputSlot::FragmentColorLocation((u8)outputIdx));
                     out.Lit(" = ");
                 }
             } else if (stage == ShaderStage::Vertex) {
@@ -1179,7 +1179,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
                     out.Lit("gl_FragDepth");
                 } else {
                     out.Lit("fragColor");
-                    out.Uint(OutputSlot::FragmentColorLocation(outputIdx));
+                    out.Uint(OutputSlot::FragmentColorLocation((u8)outputIdx));
                 }
             } else if (stage == ShaderStage::Vertex && outputIdx == 0) {
                 out.Lit("gl_Position");

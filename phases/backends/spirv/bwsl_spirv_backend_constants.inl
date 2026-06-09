@@ -114,13 +114,13 @@ void SPIRVBuilder::EmitToSection(Section *section, spv::Op op, u32 *operands,
 }
 
 void SPIRVBuilder::EmitCapability(spv::Capability cap) {
-  u32 ops[] = {cap};
+  u32 ops[] = {(u32)cap};
   EmitToSection(&capabilities, spv::OpCapability, ops, 1);
 }
 
 void SPIRVBuilder::EmitExtension(const char *extName) {
   // OpExtension format: word_count | op, "extension_name\0"
-  u32 nameLen = strlen(extName) + 1; // Include null terminator
+  u32 nameLen = (u32)(strlen(extName) + 1); // Include null terminator
   u32 nameWords = (nameLen + 3) / 4; // Round up to word boundary
   u32 wordCount = 1 + nameWords;     // op + name words
 
@@ -170,8 +170,8 @@ void SPIRVBuilder::EmitName(u32 id, const char *name) {
   if (!name || !name[0])
     return;
 
-  u32 nameLen = strlen(name);
-  u32 nameWords = (nameLen + 4) / 4; // Round up including null terminator
+  u32 nameLen = (u32)strlen(name);
+  u32 nameWords = (u32)((nameLen + 4) / 4); // Round up including null terminator
   u32 wordCount = 2 + nameWords;     // OpName + target + string words
 
   if (debugNames.count + wordCount > debugNames.capacity) {
@@ -191,7 +191,7 @@ void SPIRVBuilder::EmitMemberName(u32 structTypeId, u32 memberIndex,
   if (!name || !name[0])
     return;
 
-  u32 nameLen = strlen(name);
+  u32 nameLen = (u32)strlen(name);
   u32 nameWords = (nameLen + 4) / 4; // Round up including null terminator
   u32 wordCount =
       3 + nameWords; // OpMemberName + struct + member + string words

@@ -207,9 +207,9 @@ struct SPIRVBuilder {
     struct VertexPullingConfig {
         VertexInputMode mode = VertexInputMode::SeparateBuffers;
         u8 attributeMask = 0;          // Which attributes are active
-        u32 baseBufferBinding = 0;     // Starting binding index for attribute buffers
+        u8 baseBufferBinding = 0;     // Starting binding index for attribute buffers
         u32 descriptorSet = 0;         // Descriptor set for vertex buffers
-        u32 vertexIdBinding = 0;       // Binding for vertex ID (when using pulling)
+        u8 vertexIdBinding = 0;       // Binding for vertex ID (when using pulling)
     };
     
     VertexPullingConfig vertexPullingConfig;

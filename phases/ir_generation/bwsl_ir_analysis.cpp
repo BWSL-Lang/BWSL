@@ -88,13 +88,13 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
     // ========== Attribute/Input Loading ==========
     case IR::OP_LOAD_ATTR: {
       // operand[0] is the attribute index
-      u32 attrIdx = ir->GetOperand(i, 0);
+      u8 attrIdx = (u8)ir->GetOperand(i, 0);
       if (attrIdx < 16) {
         analysis->usedAttributeMask |= (1 << attrIdx);
         // Capture type from destination register
         u16 destReg = ir->destinations[i];
         if (destReg < ir->registerCount && ir->registerTypes) {
-          analysis->attributeTypes[attrIdx] = ir->registerTypes[destReg];
+          analysis->attributeTypes[attrIdx] = (u8)ir->registerTypes[destReg];
         }
       }
       break;
@@ -102,7 +102,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
 
     case IR::OP_LOAD_INPUT: {
       // operand[0] is the input slot index
-      u32 inputSlot = ir->GetOperand(i, 0);
+      u8 inputSlot = (u8)ir->GetOperand(i, 0);
 
       // Check for built-in inputs (high slot indices 0x80+)
       if (inputSlot == BuiltinInputSlot::VERTEX_ID) {
@@ -128,7 +128,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
         // Capture type from destination register
         u16 destReg = ir->destinations[i];
         if (destReg < ir->registerCount && ir->registerTypes) {
-          analysis->inputTypes[inputSlot] = ir->registerTypes[destReg];
+          analysis->inputTypes[inputSlot] = (u8)ir->registerTypes[destReg];
         }
       }
       break;
@@ -138,7 +138,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
     case IR::OP_STORE_OUTPUT: {
       // Slot is now stored in operand[0] (set during IR lowering)
       // This enables dynamic vertex-to-fragment varying resolution
-      u32 slot = ir->GetOperand(i, 0);
+      u8 slot = (u8)ir->GetOperand(i, 0);
       if (slot < 32) {
         analysis->usedOutputMask |= (1 << slot);
         analysis->outputInterpolations[slot] = ir->outputInterpolations[slot];
@@ -147,13 +147,13 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
         // puts value in destinations
         u16 srcReg = ir->destinations[i];
         if (srcReg < ir->registerCount && ir->registerTypes) {
-          analysis->outputTypes[slot] = ir->registerTypes[srcReg];
+          analysis->outputTypes[slot] = (u8)ir->registerTypes[srcReg];
         } else if (ir->phiCount > 0 && ir->phiResultRegs) {
           // Check if this is a PHI result register (SSA renaming assigns high
           // IDs)
           for (u32 p = 0; p < ir->phiCount; p++) {
             if (ir->phiResultRegs[p] == srcReg) {
-              analysis->outputTypes[slot] = ir->phiTypes[p];
+              analysis->outputTypes[slot] = (u8)ir->phiTypes[p];
               break;
             }
           }
@@ -162,12 +162,12 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
       break;
     }
     case IR::OP_LOAD_OUTPUT: {
-      u32 slot = ir->GetOperand(i, 0);
+      u8 slot = (u8)ir->GetOperand(i, 0);
       if (slot < 32) {
         analysis->usedOutputMask |= (1 << slot);
         u16 destReg = ir->destinations[i];
         if (destReg < ir->registerCount && ir->registerTypes) {
-          analysis->outputTypes[slot] = ir->registerTypes[destReg];
+          analysis->outputTypes[slot] = (u8)ir->registerTypes[destReg];
         }
       }
       break;
@@ -182,7 +182,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
         // Capture type from destination register
         u16 destReg = ir->destinations[i];
         if (destReg < ir->registerCount && ir->registerTypes) {
-          analysis->uniformTypes[binding] = ir->registerTypes[destReg];
+          analysis->uniformTypes[binding] = (u8)ir->registerTypes[destReg];
           // Capture struct type hash for CUSTOM types
           CoreType regType = static_cast<CoreType>(ir->registerTypes[destReg]);
           if ((regType == CoreType::CUSTOM || regType == CoreType::ENUM) &&
