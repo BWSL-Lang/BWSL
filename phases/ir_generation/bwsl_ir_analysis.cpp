@@ -88,7 +88,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
     // ========== Attribute/Input Loading ==========
     case IR::OP_LOAD_ATTR: {
       // operand[0] is the attribute index
-      u8 attrIdx = (u8)ir->GetOperand(i, 0);
+      u32 attrIdx = ir->GetOperand(i, 0);
       if (attrIdx < 16) {
         analysis->usedAttributeMask |= (1 << attrIdx);
         // Capture type from destination register
@@ -102,7 +102,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
 
     case IR::OP_LOAD_INPUT: {
       // operand[0] is the input slot index
-      u8 inputSlot = (u8)ir->GetOperand(i, 0);
+      u32 inputSlot = ir->GetOperand(i, 0);
 
       // Check for built-in inputs (high slot indices 0x80+)
       if (inputSlot == BuiltinInputSlot::VERTEX_ID) {
@@ -138,7 +138,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
     case IR::OP_STORE_OUTPUT: {
       // Slot is now stored in operand[0] (set during IR lowering)
       // This enables dynamic vertex-to-fragment varying resolution
-      u8 slot = (u8)ir->GetOperand(i, 0);
+      u32 slot = ir->GetOperand(i, 0);
       if (slot < 32) {
         analysis->usedOutputMask |= (1 << slot);
         analysis->outputInterpolations[slot] = ir->outputInterpolations[slot];
@@ -162,7 +162,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
       break;
     }
     case IR::OP_LOAD_OUTPUT: {
-      u8 slot = (u8)ir->GetOperand(i, 0);
+      u32 slot = ir->GetOperand(i, 0);
       if (slot < 32) {
         analysis->usedOutputMask |= (1 << slot);
         u16 destReg = ir->destinations[i];

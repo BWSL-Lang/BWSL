@@ -10,10 +10,10 @@ static bool IsMatrixType(CoreType type) {
          type == CoreType::MAT4;
 }
 
-static u8 GetVertexPullingBindingCount(const SPIRVBuilder::VertexPullingConfig& config) {
+static u32 GetVertexPullingBindingCount(const SPIRVBuilder::VertexPullingConfig& config) {
   switch (config.mode) {
   case SPIRVBuilder::VertexInputMode::SeparateBuffers:
-    return static_cast<u8>(std::popcount(config.attributeMask));
+    return static_cast<u32>(std::popcount(config.attributeMask));
   case SPIRVBuilder::VertexInputMode::UnifiedWithOffsets:
     return 2;
   case SPIRVBuilder::VertexInputMode::Interleaved:
@@ -22,14 +22,14 @@ static u8 GetVertexPullingBindingCount(const SPIRVBuilder::VertexPullingConfig& 
   }
 }
 
-static u8 ResolveVertexPullingCollisionBinding(
+static u32 ResolveVertexPullingCollisionBinding(
     const SPIRVBuilder::VertexPullingConfig& config, u32 resourceSet,
-    u8 binding) {
+    u32 binding) {
   if (resourceSet != config.descriptorSet) {
     return binding;
   }
 
-  const u8 occupiedCount = GetVertexPullingBindingCount(config);
+  const u32 occupiedCount = GetVertexPullingBindingCount(config);
   if (occupiedCount == 0) {
     return binding;
   }
@@ -116,7 +116,7 @@ void SPIRVBuilder::DeclareResources() {
     }
 
     u32 set_val[] = {0};
-    u8 actualBinding =
+    u32 actualBinding =
         ResolveVertexPullingCollisionBinding(vertexPullingConfig, set_val[0],
                                             binding);
     u32 bind_val[] = {actualBinding};
@@ -234,7 +234,7 @@ void SPIRVBuilder::DeclareResources() {
     }
 
     u32 set_val[] = {0};
-    u8 textureBinding =
+    u32 textureBinding =
         ResolveVertexPullingCollisionBinding(vertexPullingConfig, set_val[0],
                                             binding);
     u32 bind_val[] = {textureBinding};
@@ -468,7 +468,7 @@ void SPIRVBuilder::DeclareResources() {
       }
 
       u32 set_val[] = {1};
-      u8 actualBinding =
+      u32 actualBinding =
           ResolveVertexPullingCollisionBinding(vertexPullingConfig, set_val[0],
                                               binding);
       u32 bind_val[] = {actualBinding};
@@ -529,7 +529,7 @@ void SPIRVBuilder::DeclareResources() {
       }
 
       u32 set_val[] = {0};
-      u8 actualBinding =
+      u32 actualBinding =
           ResolveVertexPullingCollisionBinding(vertexPullingConfig, set_val[0],
                                               binding);
       u32 bind_val[] = {actualBinding};

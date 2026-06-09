@@ -412,7 +412,7 @@ void SPIRVBuilder::DeclareFragCoordBuiltin() {
 void SPIRVBuilder::DeclareVertexPullingBuffers() {
   if (vertexPullingConfig.mode == VertexInputMode::SeparateBuffers) {
     // Declare one storage buffer per attribute
-    u8 binding = vertexPullingConfig.baseBufferBinding;
+    u32 binding = vertexPullingConfig.baseBufferBinding;
 
     for (u8 attrIdx = 0; attrIdx < 8; attrIdx++) {
       if (!(analysis.usedAttributeMask & (1 << attrIdx)))

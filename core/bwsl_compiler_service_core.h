@@ -47,7 +47,7 @@ struct VertexPullingConfig {
     // Base binding index for attribute buffers
     // For SeparateBuffers: position at baseBinding, normal at baseBinding+1, etc.
     // For UnifiedWithOffsets: unified buffer at baseBinding, offset table at baseBinding+1
-    u8 baseBufferBinding = 0;
+    u32 baseBufferBinding = 0;
     
     // Descriptor set for vertex buffers (Vulkan-style, maps to buffer index on Metal)
     u32 descriptorSet = 0;
