@@ -43,7 +43,7 @@ struct EvalCache {
         u32 slot = hash & (CACHE_SIZE - 1);
         hashes[slot] = hash;
         values[slot] = value;
-        valueTypes[slot] = value.type;
+        valueTypes[slot] = (u8)value.type;
         valid[slot] = 1;
     }
 };

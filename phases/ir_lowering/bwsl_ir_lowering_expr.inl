@@ -32,14 +32,16 @@ inline u16 IRLowering::LowerExpression(NodeRef ref) {
   }
   LowerDepthGuard _guard(lowerDepth);
 
-  // Check if we already computed this (keyed by packed NodeRef)
-  auto it = nodeRegisters.find(ref.packed);
-  if (it != nodeRegisters.end()) {
-    if (it->second != 0xFFFF) {
-      return it->second;
+  {
+    // Check if we already computed this (keyed by packed NodeRef)
+    auto it = nodeRegisters.find(ref.packed);
+    if (it != nodeRegisters.end()) {
+      if (it->second != 0xFFFF) {
+        return it->second;
+      }
+      nodeRegisters.erase(it);
     }
-    nodeRegisters.erase(it);
-  }
+}
 
   u16 result = 0;
 
@@ -110,7 +112,7 @@ inline u16 IRLowering::LowerExpression(NodeRef ref) {
           const IRProgram::StructTypeInfo &info = program.structTypes[it->second];
           // Start from one of the operands and insert selected fields in place.
           u16 current = trueReg;
-          for (u32 i = 0; i < info.fieldCount; i++) {
+          for (u16 i = 0; i < info.fieldCount; i++) {
             u16 tf = AllocateRegister();
             builder.EmitInstruction(OP_STRUCT_EXTRACT, tf, trueReg, i);
             program.metadata[builder.currentInstruction - 1] = structHash;
@@ -411,14 +413,14 @@ inline u16 IRLowering::LowerIdentifier(NodeRef ref) {
 
   if (currentStructMethodTypeHash != 0 &&
       currentStructMethodSelfReg != 0xFFFF) {
-    u32 fieldIndex = 0xFFFFFFFF;
+    u32 fieldIndex = 0xFFFFFFF;
     CoreType fieldType = CoreType::INVALID;
     u32 fieldTypeHash = 0;
     if (FindStructField(currentStructMethodTypeHash, ident.name.nameHash,
                         &fieldIndex, &fieldType, &fieldTypeHash)) {
       u16 dest = AllocateRegister();
       builder.EmitInstruction(OP_STRUCT_EXTRACT, dest,
-                              currentStructMethodSelfReg, fieldIndex);
+                              currentStructMethodSelfReg, (u16)fieldIndex);
       program.metadata[builder.currentInstruction - 1] =
           currentStructMethodTypeHash;
       SetRegisterType(dest, fieldType);
@@ -459,7 +461,7 @@ inline u16 IRLowering::LowerIdentifier(NodeRef ref) {
 
     if (isUsedAttribute) {
       u16 reg = AllocateRegister();
-      u32 attrIndex = GetAttributeIndex(ident.name.nameHash);
+      u16 attrIndex = (u16)GetAttributeIndex(ident.name.nameHash);
       builder.EmitInstruction(OP_LOAD_ATTR, reg, attrIndex);
 
       CompressionFormat compression = GetAttributeCompression(attrIndex);

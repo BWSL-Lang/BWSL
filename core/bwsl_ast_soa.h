@@ -1074,7 +1074,7 @@ namespace ASTFactory {
         // Check if it's an intrinsic at creation
         if (const auto* intrinsic = StdLib::IntrinsicLookup::Find(name.nameHash)) {
             data.flags |= FunctionCallFlags::IS_INTRINSIC;
-            data.intrinsicIndex = intrinsic - StdLib::INTRINSICS;
+            data.intrinsicIndex = (u16)(intrinsic - StdLib::INTRINSICS);
 
             if ((intrinsic->flags & StdLib::IntrinsicFlags::CUSTOM_METAL) ||
                 (intrinsic->flags & StdLib::IntrinsicFlags::CUSTOM_HLSL) ||
