@@ -248,6 +248,7 @@ private:
     TokenRef PeekNext();
     TokenRef Peek3();  // Look 3 tokens ahead (for distinguishing IDENTIFIER :: ( from IDENTIFIER :: IDENTIFIER)
     bool IsFunctionDeclStart();  // Check if current position starts a function declaration
+    void AttachDocComment(NodeRef node, TokenRef firstToken);  // Attach lexer doc block preceding firstToken
 
     //----------------- Error handling -----------------------------//
     void Error(const char* message);

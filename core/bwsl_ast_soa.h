@@ -413,6 +413,7 @@ struct PipelineData {
     ArenaArray<NodeRef> passes;
     ArenaArray<NodeRef> functions;
     ArenaArray<NodeRef> enums;
+    ArenaArray<NodeRef> structs;
     ArenaArray<NodeRef> constraints;
     NodeRef computeGraph;
 };
@@ -468,6 +469,15 @@ struct AST {
     ArenaArray<PipelineData> pipelines;
     ArenaArray<ComputeGraphData> computeGraphs;
 
+    // Doc comment blocks (`///` or `/** */`) attached to declaration nodes.
+    // Parallel arrays indexed together: docsNodeRefs[i] is the packed NodeRef
+    // of the documented node; docsTexts[i]/docsTextLengths[i] hold the
+    // arena-copied comment text with comment markers already stripped.
+    // Few entries per file, so lookup is a linear scan over docsNodeRefs.
+    ArenaArray<u32> docsNodeRefs;
+    ArenaArray<const char*> docsTexts;
+    ArenaArray<u32> docsTextLengths;
+
     // Return statements reuse AssignmentData (target unused, value is the return expr)
     // If statements reuse BlockData (first statement is condition, rest is body)
 
@@ -520,6 +530,10 @@ struct AST {
         switches.Init(arena, 4);            // Less common
         pipelines.Init(arena, 1);           // Usually just one
         computeGraphs.Init(arena, 1);       // Optional
+
+        docsNodeRefs.Init(arena, 4);        // Doc comment blocks (parallel arrays)
+        docsTexts.Init(arena, 4);
+        docsTextLengths.Init(arena, 4);
     }
 
     //==========================================================================
@@ -599,6 +613,40 @@ struct AST {
     u32 GetColumn(NodeRef ref) const {
         if (ref.IsNull()) return 0;
         return FindPosition(ref) & 0xFFF;
+    }
+
+    //==========================================================================
+    // Doc comment blocks
+    //==========================================================================
+
+    // Records `text` as the docs block for `ref`. The text is not copied:
+    // it must be NUL-terminated and arena-backed (or otherwise outlive the
+    // AST). A node keeps its first docs block; later calls are ignored.
+    void AttachDocs(NodeRef ref, const char* text, u32 length) {
+        if (ref.IsNull() || text == nullptr || length == 0) return;
+        if (FindDocs(ref) >= 0) return;
+        docsNodeRefs.Push(arena, ref.packed);
+        docsTexts.Push(arena, text);
+        docsTextLengths.Push(arena, length);
+    }
+
+    // Returns the index into the docs parallel arrays, or -1 if `ref` has
+    // no docs block.
+    s32 FindDocs(NodeRef ref) const {
+        for (u32 i = 0; i < docsNodeRefs.count; i++) {
+            if (docsNodeRefs[i] == ref.packed) return (s32)i;
+        }
+        return -1;
+    }
+
+    const char* GetDocsText(NodeRef ref, u32* outLength = nullptr) const {
+        s32 index = FindDocs(ref);
+        if (index < 0) {
+            if (outLength) *outLength = 0;
+            return nullptr;
+        }
+        if (outLength) *outLength = docsTextLengths[(u32)index];
+        return docsTexts[(u32)index];
     }
 
 private:
@@ -1259,6 +1307,7 @@ namespace ASTFactory {
         data.passes.Init(ast->arena, 8);
         data.functions.Init(ast->arena, 16);
         data.enums.Init(ast->arena, 8);
+        data.structs.Init(ast->arena, 4);
         data.constraints.Init(ast->arena, 8);
         data.computeGraph = NodeRef::Null();
         ast->pipelines.Push(ast->arena, data);

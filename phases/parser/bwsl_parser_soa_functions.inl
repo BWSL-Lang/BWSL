@@ -338,6 +338,8 @@ bool Parser::RegisterModuleFromSource(const std::string& moduleName,
 //==============================================================================
 
 NodeRef Parser::ParseFunction() {
+    TokenRef declToken = current;  // Function name token; a doc block precedes it
+
     // Get function name
     if (Check(TokenType::IDENTIFIER) || CheckMask(TokenMasks::CORE_TYPES)) {
         Advance();
@@ -354,6 +356,7 @@ NodeRef Parser::ParseFunction() {
 
     // Create function node with temporary return type
     NodeRef function = ASTFactory::MakeFunction(ast, functionName, CoreType::FLOAT, line, col);
+    AttachDocComment(function, declToken);
 
     // Parse parameters
     Consume(TokenType::LEFT_PAREN, "Expected '(' after '::'");

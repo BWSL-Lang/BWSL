@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace BWSL::AstJson {
 
@@ -484,6 +486,122 @@ inline void AppendComputeGraphNodes(std::ostringstream& json,
     json << "]";
 }
 
+//==============================================================================
+// Doc comment blocks
+//==============================================================================
+
+// One section of a docs block: the summary text (empty tag) or a
+// `@tag rest-of-line` entry, with continuation lines folded in.
+struct DocsSection {
+    std::string tag;
+    std::string text;
+};
+
+inline void ParseDocsSections(const std::string& text,
+                              std::vector<DocsSection>& sections) {
+    sections.push_back({"", ""});
+    size_t pos = 0;
+    while (pos <= text.size()) {
+        size_t eol = text.find('\n', pos);
+        if (eol == std::string::npos) eol = text.size();
+        std::string_view line(text.data() + pos, eol - pos);
+        while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) {
+            line.remove_prefix(1);
+        }
+
+        if (!line.empty() && line.front() == '@') {
+            line.remove_prefix(1);
+            size_t tagEnd = 0;
+            while (tagEnd < line.size() && line[tagEnd] != ' ' && line[tagEnd] != '\t') {
+                tagEnd++;
+            }
+            size_t textStart = tagEnd;
+            while (textStart < line.size() &&
+                   (line[textStart] == ' ' || line[textStart] == '\t')) {
+                textStart++;
+            }
+            sections.push_back({std::string(line.substr(0, tagEnd)),
+                                std::string(line.substr(textStart))});
+        } else if (!line.empty()) {
+            std::string& target = sections.back().text;
+            if (!target.empty()) target.push_back(' ');
+            target.append(line);
+        }
+
+        if (eol >= text.size()) break;
+        pos = eol + 1;
+    }
+}
+
+// Emits a "docs" object for documented nodes. Nodes without a docs block
+// get no "docs" field at all.
+inline void AppendDocsField(std::ostringstream& json, bool& first,
+                            const AST& ast, NodeRef ref) {
+    u32 textLength = 0;
+    const char* textPtr = ast.GetDocsText(ref, &textLength);
+    if (textPtr == nullptr) return;
+
+    std::string text(textPtr, textLength);
+    std::vector<DocsSection> sections;
+    ParseDocsSections(text, sections);
+
+    AppendFieldName(json, first, "docs");
+    json << "{";
+    bool docsFirst = true;
+    AppendStringField(json, docsFirst, "text", text);
+    AppendStringField(json, docsFirst, "summary", sections[0].text);
+
+    AppendFieldName(json, docsFirst, "params");
+    json << "[";
+    bool paramFirst = true;
+    for (const DocsSection& section : sections) {
+        if (section.tag != "param") continue;
+        size_t nameEnd = 0;
+        while (nameEnd < section.text.size() &&
+               section.text[nameEnd] != ' ' && section.text[nameEnd] != '\t') {
+            nameEnd++;
+        }
+        size_t descStart = nameEnd;
+        while (descStart < section.text.size() &&
+               (section.text[descStart] == ' ' || section.text[descStart] == '\t')) {
+            descStart++;
+        }
+        AppendComma(json, paramFirst);
+        bool paramFieldFirst = true;
+        json << "{";
+        AppendStringField(json, paramFieldFirst, "name", section.text.substr(0, nameEnd));
+        AppendStringField(json, paramFieldFirst, "description", section.text.substr(descStart));
+        json << "}";
+    }
+    json << "]";
+
+    for (const DocsSection& section : sections) {
+        if (section.tag == "return" || section.tag == "returns") {
+            AppendStringField(json, docsFirst, "returns", section.text);
+            break;
+        }
+    }
+
+    AppendFieldName(json, docsFirst, "tags");
+    json << "[";
+    bool tagFirst = true;
+    for (const DocsSection& section : sections) {
+        if (section.tag.empty() || section.tag == "param" ||
+            section.tag == "return" || section.tag == "returns") {
+            continue;
+        }
+        AppendComma(json, tagFirst);
+        bool tagFieldFirst = true;
+        json << "{";
+        AppendStringField(json, tagFieldFirst, "tag", section.tag);
+        AppendStringField(json, tagFieldFirst, "text", section.text);
+        json << "}";
+    }
+    json << "]";
+
+    json << "}";
+}
+
 inline void AppendCommonNodeFields(std::ostringstream& json, bool& first,
                                    const AST& ast, NodeRef ref) {
     AppendStringField(json, first, "id", NodeRefId(ref));
@@ -492,6 +610,7 @@ inline void AppendCommonNodeFields(std::ostringstream& json, bool& first,
     AppendUIntField(json, first, "packed", ref.packed);
     AppendUIntField(json, first, "line", ast.GetLine(ref));
     AppendUIntField(json, first, "column", ast.GetColumn(ref));
+    AppendDocsField(json, first, ast, ref);
 }
 
 inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u32 depth) {
@@ -751,6 +870,7 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             AppendNodeArrayField(json, first, "passes", ast, node.passes, depth);
             AppendNodeArrayField(json, first, "functions", ast, node.functions, depth);
             AppendNodeArrayField(json, first, "enums", ast, node.enums, depth);
+            AppendNodeArrayField(json, first, "structs", ast, node.structs, depth);
             AppendNodeArrayField(json, first, "constraints", ast, node.constraints, depth);
             AppendNodeField(json, first, "computeGraph", ast, node.computeGraph, depth);
             break;

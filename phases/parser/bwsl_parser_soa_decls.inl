@@ -86,6 +86,7 @@ void Parser::SkipBracedDeclaration(bool keywordAlreadyConsumed) {
 }
 
 NodeRef Parser::ParsePipeline() {
+    TokenRef declToken = current;  // The PIPELINE keyword; a doc block precedes it
     SourceLocation loc = getLocation(stream->GetOffset(current));
     u32 line = loc.line;
     u32 col = loc.column;
@@ -94,6 +95,7 @@ NodeRef Parser::ParsePipeline() {
     Consume(TokenType::IDENTIFIER, "Expected pipeline name");
 
     NodeRef pipeline = ASTFactory::MakePipeline(ast, std::string(stream->GetValue(previous)), line, col);
+    AttachDocComment(pipeline, declToken);
     currentPipeline = pipeline;
 
     Consume(TokenType::LEFT_BRACE, "Expected '{' after pipeline name");
@@ -211,9 +213,13 @@ NodeRef Parser::ParsePipeline() {
             ErrorAtPrevious("Module declarations must be declared at file scope, outside pipeline blocks");
             SkipBracedDeclaration(true);
         } else if (Match(TokenType::STRUCT)) {
-            // Top-level struct
+            // Top-level struct. Registered in the symbol table for type
+            // resolution; also kept on the pipeline node so AST consumers
+            // (e.g. -ast-json for IDE integration) can reach it.
             NodeRef structNode = ParseStruct();
-            (void)structNode; // Struct is registered in symbol table
+            if (structNode.IsValid()) {
+                ast->GetPipeline(pipeline).structs.Push(arena, structNode);
+            }
             Match(TokenType::SEMICOLON); // Optional trailing semicolon
         } else if (Check(TokenType::CONSTRAINT)) {
             // Type constraint definition
@@ -786,6 +792,7 @@ void Parser::ParseVariantRules(NodeRef owner, bool ownerIsPipeline) {
 }
 
 NodeRef Parser::ParseAttributeDecl() {
+    TokenRef declToken = current;  // Attribute name token; a doc block precedes it
     if (!Consume(TokenType::IDENTIFIER, "Expected attribute name")) {
         if (stream->GetType(current) != TokenType::RIGHT_BRACE && stream->GetType(current) != TokenType::EOF_TOKEN) {
             Advance();
@@ -811,6 +818,7 @@ NodeRef Parser::ParseAttributeDecl() {
 
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     NodeRef attr = ASTFactory::MakeAttributeDecl(ast, name, std::string(stream->GetValue(previous)), loc.line, loc.column);
+    AttachDocComment(attr, declToken);
 
     // Parse decorators
     while (Match(TokenType::AT)) {
@@ -854,6 +862,7 @@ NodeRef Parser::ParseAttributeDecl() {
 }
 
 NodeRef Parser::ParseResourceDecl() {
+    TokenRef declToken = current;  // Resource name token; a doc block precedes it
     if (!Consume(TokenType::IDENTIFIER, "Expected resource name")) {
         if (stream->GetType(current) != TokenType::RIGHT_BRACE && stream->GetType(current) != TokenType::EOF_TOKEN) {
             Advance();
@@ -892,7 +901,9 @@ NodeRef Parser::ParseResourceDecl() {
 
     ReverseLookup::Register(Utils::HashStr(name.c_str()), name.c_str());
     ReverseLookup::Register(Utils::HashStr(typeName.c_str()), typeName.c_str());
-    return ASTFactory::MakeResourceDecl(ast, name, typeName, loc.line, loc.column);
+    NodeRef resource = ASTFactory::MakeResourceDecl(ast, name, typeName, loc.line, loc.column);
+    AttachDocComment(resource, declToken);
+    return resource;
 }
 
 //==============================================================================
@@ -920,11 +931,13 @@ static bool IsValidFragmentOutputCoreType(CoreType type) {
 }
 
 NodeRef Parser::ParsePass() {
+    TokenRef declToken = previous;  // The PASS keyword; a doc block precedes it
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     Consume(TokenType::STRING, "Expected pass name in quotes");
     ArenaString passName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
 
     NodeRef pass = ASTFactory::MakePass(ast, passName.ToString(sourceBase()), loc.line, loc.column);
+    AttachDocComment(pass, declToken);
 
     if (Match(TokenType::ASSIGN)) {
         NodeRef expr = ParseExpression();
