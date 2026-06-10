@@ -10,6 +10,7 @@
 namespace BWSL {
 
 NodeRef Parser::ParseModule() {
+    TokenRef declToken = previous;  // The MODULE keyword; a doc block precedes it
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     u32 line = loc.line;
     u32 col = loc.column;
@@ -48,6 +49,7 @@ NodeRef Parser::ParseModule() {
 
     // Create module AST node
     NodeRef module = ASTFactory::MakeModule(ast, moduleName, line, col);
+    AttachDocComment(module, declToken);
     NodeRef previousModule = currentModule;
     NodeRef previousPipeline = currentPipeline;
     currentModule = module;

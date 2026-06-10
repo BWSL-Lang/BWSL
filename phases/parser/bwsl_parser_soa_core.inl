@@ -616,6 +616,52 @@ bool Parser::Consume(TokenType type, const char* message) {
     return false;
 }
 
+// Attach the doc comment block (`///` lines or `/** ... */`) the lexer
+// recorded for `firstToken` to `node`. Walks back over `eval` and decorator
+// tokens so a doc block above a modifier still reaches the declaration.
+// This is the only place doc text is materialized: the raw source spans
+// are cleaned once, directly into the AST arena, so module lexers
+// (stack-local in RegisterModuleFromSource) can die afterwards.
+void Parser::AttachDocComment(NodeRef node, TokenRef firstToken) {
+    if (node.IsNull() || lexer == nullptr) return;
+
+    while (firstToken > 0) {
+        TokenType prevType = stream->GetType(firstToken - 1);
+        if (prevType != TokenType::EVAL && prevType != TokenType::AT) break;
+        firstToken--;
+    }
+
+    const DocCommentStream& docs = lexer->GetDocComments();
+    s32 firstDoc = docs.FindFirst(firstToken);
+    if (firstDoc < 0) return;
+
+    // Cleaned text never exceeds the raw span; size the buffer from the
+    // raw lengths plus one joining '\n' per extra block.
+    u32 endDoc = (u32)firstDoc;
+    u32 rawTotal = 0;
+    while (endDoc < docs.Count() && docs.tokenIndices[endDoc] == firstToken) {
+        rawTotal += docs.rawEnds[endDoc] - docs.rawStarts[endDoc] + 1;
+        endDoc++;
+    }
+
+    char* buf = (char*)arena->Allocate(rawTotal + 1, 1);
+    if (!buf) return;
+
+    const char* src = sourceBase();
+    u32 length = 0;
+    for (u32 i = (u32)firstDoc; i < endDoc; i++) {
+        u32 cleaned = CleanDocCommentText(src + docs.rawStarts[i],
+                                          src + docs.rawEnds[i],
+                                          buf + length + (length ? 1 : 0));
+        if (cleaned == 0) continue;
+        if (length) buf[length++] = '\n';
+        length += cleaned;
+    }
+    buf[length] = '\0';
+
+    if (length) ast->AttachDocs(node, buf, length);
+}
+
 void Parser::Error(const char* message) {
     ErrorAt(previous, message);
 }

@@ -543,6 +543,7 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
 
 NodeRef Parser::ParseEnum() {
     // Note: ENUM token already consumed by ParsePipeline via Match(TokenType::ENUM)
+    TokenRef declToken = previous;  // The ENUM keyword; a doc block precedes it
     Consume(TokenType::IDENTIFIER, "Expected enum name");
 
     std::string enumName(stream->GetValue(previous));
@@ -564,6 +565,7 @@ NodeRef Parser::ParseEnum() {
 
     ArenaString enumNameStr = ArenaString::Make(sourceBase(), enumNameOffset, enumNameLength);
     NodeRef enumNode = ASTFactory::MakeEnumDecl(ast, enumNameStr, underlyingType, line, col);
+    AttachDocComment(enumNode, declToken);
 
     Consume(TokenType::LEFT_BRACE, "Expected '{'");
 
@@ -1013,6 +1015,7 @@ NodeRef Parser::ParseTypePatternMatch() {
 //==============================================================================
 
 NodeRef Parser::ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime) {
+    TokenRef declToken = current;  // Method name token; AttachDocComment walks back over `eval`
     SourceLocation loc = getLocation(stream->GetOffset(current));
     u32 line = loc.line;
     u32 col = loc.column;
@@ -1023,6 +1026,7 @@ NodeRef Parser::ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime) {
     Consume(TokenType::DOUBLE_COLON, "Expected '::' after method name");
 
     NodeRef method = ASTFactory::MakeFunction(ast, methodName, CoreType::FLOAT, line, col);
+    AttachDocComment(method, declToken);
     FunctionDeclData& methodDecl = ast->GetFunction(method);
     methodDecl.isEval = isCompileTime;
     methodDecl.isStructMethod = true;
@@ -1074,6 +1078,7 @@ NodeRef Parser::ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime) {
 
 NodeRef Parser::ParseStruct() {
     // Note: STRUCT token already consumed by caller
+    TokenRef declToken = previous;  // The STRUCT keyword; a doc block precedes it
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     u32 line = loc.line;
     u32 col = loc.column;
@@ -1082,6 +1087,7 @@ NodeRef Parser::ParseStruct() {
     std::string structName(stream->GetValue(previous));
 
     NodeRef structNode = ASTFactory::MakeStructDecl(ast, structName, line, col);
+    AttachDocComment(structNode, declToken);
 
     Consume(TokenType::LEFT_BRACE, "Expected '{'");
 

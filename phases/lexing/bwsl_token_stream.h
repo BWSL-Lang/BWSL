@@ -628,6 +628,7 @@ public:
     const char* GetSourceBase() const { return hot.source_base; }
     u32 Count() const { return hot.count; }
     const Stats& GetStats() const { return stats; }
+    BWSL_Arena* GetArena() const { return arena; }
 
 private:
     static size_t AlignUp(size_t size, size_t alignment) {

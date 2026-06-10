@@ -162,22 +162,109 @@ void Lexer::SkipWhitespace() {
     }
 }
 
+u32 CleanDocCommentText(const char* begin, const char* end, char* out) {
+    u32 len = 0;
+    u32 lastNonBlank = 0;  // Cleaned length up to the last non-blank line
+    bool anyLine = false;
+    const char* lineStart = begin;
+    while (lineStart < end) {
+        const char* lineEnd = lineStart;
+        while (lineEnd < end && *lineEnd != '\n') lineEnd++;
+
+        const char* p = lineStart;
+        while (p < lineEnd && (*p == ' ' || *p == '\t' || *p == '\r')) p++;
+        if (lineEnd - p >= 3 && p[0] == '/' && p[1] == '/' && p[2] == '/') {
+            p += 3;  // `///` marker
+        } else if (p < lineEnd && *p == '*') {
+            p++;     // `*` gutter inside a `/** */` block
+        }
+        if (p < lineEnd && *p == ' ') p++;
+        const char* q = lineEnd;
+        while (q > p && (q[-1] == ' ' || q[-1] == '\t' || q[-1] == '\r')) q--;
+
+        if (anyLine) out[len++] = '\n';
+        anyLine = true;
+        memcpy(out + len, p, (size_t)(q - p));
+        len += (u32)(q - p);
+        if (q > p) lastNonBlank = len;
+        lineStart = lineEnd + 1;
+    }
+
+    // Drop blank lines at either end (e.g. the line holding only `/**`)
+    len = lastNonBlank;
+    u32 lead = 0;
+    while (lead < len && out[lead] == '\n') lead++;
+    if (lead) {
+        memmove(out, out + lead, len - lead);
+        len -= lead;
+    }
+    return len;
+}
+
+void Lexer::RecordDocSpan(u32 rawStart, u32 rawEnd, u32 startLine, bool lineComment) {
+    if (rawEnd <= rawStart) return;
+    u32 tokenIndex = stream.Count();  // Index the next pushed token will get
+
+    // Consecutive `///` lines extend the previous span; anything else
+    // becomes a new entry (lookups walk all entries with equal tokenIndex).
+    u32 count = docComments.Count();
+    if (lineComment && count > 0 &&
+        docComments.tokenIndices[count - 1] == tokenIndex &&
+        docComments.isLineComment[count - 1]) {
+        docComments.rawEnds[count - 1] = rawEnd;
+        return;
+    }
+
+    BWSL_Arena* arena = stream.GetArena();
+    docComments.rawStarts.Push(arena, rawStart);
+    docComments.rawEnds.Push(arena, rawEnd);
+    docComments.tokenIndices.Push(arena, tokenIndex);
+    docComments.lines.Push(arena, startLine);
+    docComments.isLineComment.Push(arena, lineComment ? 1 : 0);
+}
+
 void Lexer::SkipComment() {
+    // `//` already consumed. A third slash marks a doc comment line;
+    // four or more slashes is a banner, not documentation. The recorded
+    // span starts at the first slash so CleanDocCommentText sees `///`.
+    bool isDoc = Peek() == '/' && PeekNext() != '/';
+    u32 rawStart = current - 2;
+
     while (Peek() != '\n' && !IsAtEnd()) {
         Advance();
+    }
+
+    if (isDoc) {
+        RecordDocSpan(rawStart, current, line, true);
     }
 }
 
 void Lexer::SkipMultiLineComment() {
+    // `/*` already consumed. A second `*` marks a doc block (`/**`),
+    // except for the empty comment `/**/`. The recorded span is the
+    // interior between `/**` and the closing `*/`.
+    bool isDoc = Peek() == '*' && PeekNext() != '/';
+    if (isDoc) Advance();
+
+    u32 textStart = current;
+    u32 textEnd = current;
+    u32 startLine = line;
+
     unsigned depth = 1;
     while (!IsAtEnd() && depth) {
         char c = Peek();
         if (c == '\n') { line++; column = 0; Advance(); }
         else if (c == '/' && PeekNext() == '*') { Advance(); Advance(); ++depth; }
-        else if (c == '*' && PeekNext() == '/') { Advance(); Advance(); --depth; }
+        else if (c == '*' && PeekNext() == '/') {
+            if (depth == 1) textEnd = current;
+            Advance(); Advance(); --depth;
+        }
         else { Advance(); }
-    }    
+    }
 
+    if (isDoc) {
+        RecordDocSpan(textStart, textEnd, startLine, false);
+    }
 }
 
 TokenRef Lexer::ScanString() {
