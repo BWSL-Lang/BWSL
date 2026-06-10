@@ -449,7 +449,10 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             if (memcmp(str, "if", 2) == 0) return TokenType::IF;
             if (memcmp(str, "is", 2) == 0) return TokenType::IS;
             if (memcmp(str, "as", 2) == 0) return TokenType::AS;
-            if (memcmp(str, "it", 2) == 0) return TokenType::IT;
+            // "it" deliberately lexes as IDENTIFIER: the implicit iterator of
+            // `for (collection) { ... }` is an ordinary identifier the parser
+            // binds by name (TokenType::IT is retired but kept in the enum to
+            // preserve token numbering).
             if (memcmp(str, "in", 2) == 0) return TokenType::IN;
             if (memcmp(str, "by", 2) == 0) return TokenType::BY;
             break;

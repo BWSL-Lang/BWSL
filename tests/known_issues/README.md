@@ -19,18 +19,15 @@ float4) for `OP_TEX_SAMPLE_CMP` in
 `tests/unsorted/texture_sample_grad_cmp_gather.bwsl` (both implicit- and
 explicit-sampler forms).
 
-## 2. Implicit `it` iterator unusable (`implicit_it_unparsed.bwsl`)
+## 2. ~~Implicit `it` iterator unusable~~ (FIXED)
 
-`docs/spec/05-statements-and-control-flow.md` documents
-`for (values) { ... }` with an implicit `it` variable. The lexer reserves
-`it` as `TokenType::IT` (`phases/lexing/bwsl_lexer.cpp:452`), and the parser
-builds the collection loop with an `it` identifier
-(`bwsl_parser_soa_variants_eval.inl`, "Collection iteration with implicit
-'it' variable") — but no parser rule ever accepts `TokenType::IT` as an
-expression, so any body that references `it` fails with "Expected
-expression". Either the lexer should stop tokenizing `it` specially or the
-expression parser must accept it.
-Once fixed: extend `tests/unsorted/loops_foreach_multirange.bwsl` (see note).
+Fixed by retiring the `it` keyword: the lexer now emits a plain IDENTIFIER
+(`phases/lexing/bwsl_lexer.cpp`), so body references bind to the implicit
+iterator by name exactly like the named `for (x in collection)` form. Also
+removed a bogus `AddSymbol` in the implicit branch that registered the
+collection's own name and broke its array-length lookup. Coverage lives in
+`tests/unsorted/loops_foreach_multirange.bwsl` (implicit `it`, nested
+shadowing, and `it` as an ordinary variable name).
 
 ## 3. Struct fields that are arrays of vectors/matrices miscompile (`struct_vector_array_invalid_spirv.bwsl`)
 
