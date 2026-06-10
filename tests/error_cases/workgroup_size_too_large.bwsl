@@ -1,0 +1,15 @@
+// Error case: total workgroup invocations may not exceed 1024.
+pipeline WorkgroupSizeTooLarge {
+    resources {
+        data: buffer<float>
+    }
+
+    pass "Kernel" {
+        use resources { data }
+
+        compute "Main" [32, 32, 2] {
+            uint3 gid = input.global_id;
+            resources.data[gid.x] = 1.0;
+        }
+    }
+}

@@ -1,0 +1,26 @@
+// Error case: only one outputs block is allowed per pass.
+pipeline DuplicateOutputsBlock {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        outputs {
+            color: float4
+        }
+
+        outputs {
+            bloom: float4
+        }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 0.0, 0.0, 1.0);
+        }
+    }
+}

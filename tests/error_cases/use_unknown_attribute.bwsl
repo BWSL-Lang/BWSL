@@ -1,0 +1,14 @@
+// Error case: 'use attributes' may only reference declared pipeline attributes.
+pipeline UseUnknownAttribute {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position, tangent }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+    }
+}

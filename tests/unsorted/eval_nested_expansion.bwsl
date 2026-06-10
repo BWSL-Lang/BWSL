@@ -1,0 +1,55 @@
+// Test: Nested compile-time evaluation forms
+// Tests: nested eval for, eval if inside eval for, eval loop with count,
+// eval bindings feeding runtime code
+
+pipeline EvalNestedExpansion {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Nested eval for: fully unrolled 3x3 accumulation
+            float acc = 0.0;
+            eval for (i in 0..3) {
+                eval for (j in 0..3) {
+                    eval if (i != j) {
+                        acc = acc + float(i * 3 + j);
+                    }
+                }
+            }
+
+            // eval loop with a compile-time count and a compile-time counter
+            eval int taps = 0;
+            float blur = 0.0;
+            eval loop (4) {
+                taps = taps + 1;
+                blur = blur + float(taps) * 0.25;
+            }
+
+            // eval declarations participating in compile-time arithmetic
+            eval int radius = 2;
+            eval int diameter = radius * 2 + 1;
+            float kernel = 0.0;
+            eval for (k in 0..diameter) {
+                kernel = kernel + float(k - radius);
+            }
+
+            // eval block emitting runtime statements with substituted bindings
+            float emitted = 0.0;
+            eval {
+                eval float scale = 0.5;
+                emitted = emitted + scale * 4.0;
+            }
+
+            float total = acc + blur + kernel + emitted;
+            output.position = float4(attributes.position * total, 1.0);
+        }
+
+        fragment {
+            output.color = float4(0.0, 1.0, 0.0, 1.0);
+        }
+    }
+}

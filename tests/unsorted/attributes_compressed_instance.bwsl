@@ -1,0 +1,37 @@
+// Test: Compressed vertex attributes and per-instance attributes
+// Tests: @compressed(10_10_10 / octahedral16 / unorm16_16 / unorm8888 / uint8888), @instance
+
+pipeline AttributesCompressedInstance {
+    import Compression
+
+    attributes {
+        position: float3 @compressed(10_10_10)
+        normal: float3 @compressed(octahedral16)
+        texcoord: float2 @compressed(unorm16_16)
+        color: float4 @compressed(unorm8888)
+        boneIndices: int4 @compressed(uint8888)
+        instanceTint: float4 @instance
+        instanceOffset: float3 @instance
+    }
+
+    pass "Main" {
+        use attributes { position, normal, texcoord, color, boneIndices, instanceTint, instanceOffset }
+
+        vertex {
+            // Compressed attributes arrive as raw packed uints; decompress manually.
+            float3 pos = Compression::decompressPosition_10_10_10(attributes.position);
+            float3 nrm = Compression::decompressOctahedral16(attributes.normal);
+            float2 uv = Compression::decompressUV16_16(attributes.texcoord);
+            float4 col = Compression::decompressColor8888(attributes.color);
+
+            float3 world = pos + attributes.instanceOffset + nrm * 0.001;
+            output.position = float4(world, 1.0);
+            output.uv = uv;
+            output.tint = col * attributes.instanceTint;
+        }
+
+        fragment {
+            output.color = input.tint * float4(input.uv, 0.0, 1.0);
+        }
+    }
+}

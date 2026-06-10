@@ -1,0 +1,18 @@
+// Error case: eval for step must not be zero.
+pipeline EvalForStepZero {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float sum = 0.0;
+            eval for (i in 0..8 by 0) {
+                sum = sum + float(i);
+            }
+            output.position = float4(attributes.position * sum, 1.0);
+        }
+    }
+}

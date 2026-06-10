@@ -1,0 +1,15 @@
+// Error case: input.num_workgroups is only available in compute shaders.
+pipeline NumWorkgroupsWrongStage {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            uint3 nwg = input.num_workgroups;
+            output.position = float4(attributes.position * float(nwg.x), 1.0);
+        }
+    }
+}

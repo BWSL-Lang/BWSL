@@ -1,0 +1,37 @@
+// Test: All compute built-in inputs in one kernel
+// Tests: input.global_id, input.local_id, input.workgroup_id,
+// input.num_workgroups, input.local_index, shared memory, barrier
+
+pipeline ComputeBuiltinsAll {
+    resources {
+        results: buffer<float>
+    }
+
+    pass "Reduce" {
+        use resources { results }
+
+        compute "Main" [8, 4, 2] {
+            shared float scratch[64];
+
+            uint3 gid = input.global_id;
+            uint3 lid = input.local_id;
+            uint3 wid = input.workgroup_id;
+            uint3 nwg = input.num_workgroups;
+            uint flat = input.local_index;
+
+            // Derive a deterministic value from every builtin
+            float v = float(gid.x + gid.y * 8u + gid.z * 64u)
+                    + float(lid.x + lid.y + lid.z) * 0.5
+                    + float(wid.x * nwg.x + wid.y * nwg.y + wid.z * nwg.z) * 0.25;
+
+            scratch[flat] = v;
+            barrier();
+
+            // Neighbor read after the barrier
+            uint neighbor = (flat + 1u) % 64u;
+            float combined = scratch[flat] + scratch[neighbor];
+
+            resources.results[gid.x + gid.y * 8u + gid.z * 64u] = combined;
+        }
+    }
+}

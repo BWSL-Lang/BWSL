@@ -1,0 +1,18 @@
+// Error case: a vertex_function helper must contain a vertex block.
+pipeline VertexFunctionWrongBlock {
+    attributes {
+        position: float3
+    }
+
+    makeVertex :: () -> vertex_function {
+        fragment {
+            output.color = float4(1.0, 0.0, 0.0, 1.0);
+        }
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex = makeVertex()
+    }
+}

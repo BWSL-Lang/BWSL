@@ -1,0 +1,15 @@
+// Error case: array sizes must be positive.
+pipeline ArraySizeNotPositive {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float values[0];
+            output.position = float4(attributes.position, 1.0);
+        }
+    }
+}

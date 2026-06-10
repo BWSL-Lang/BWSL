@@ -1,0 +1,16 @@
+// Error case: shared variables must be declared as arrays.
+pipeline SharedNonArray {
+    resources {
+        data: buffer<float>
+    }
+
+    pass "Kernel" {
+        use resources { data }
+
+        compute "Main" [64, 1, 1] {
+            shared float total;
+            uint3 gid = input.global_id;
+            resources.data[gid.x] = total;
+        }
+    }
+}

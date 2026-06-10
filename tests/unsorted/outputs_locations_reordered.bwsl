@@ -1,0 +1,32 @@
+// Test: Explicit, non-sequential fragment output locations plus depth
+// Tests: outputs block with @location(n) out of declaration order, builtin output.depth
+
+pipeline OutputsLocationsReordered {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "GBuffer" {
+        use attributes { position, texcoord }
+
+        outputs {
+            emissive: float4 @location(2)
+            albedo: float4 @location(0)
+            normalRough: float4 @location(1)
+        }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            output.albedo = float4(uv, 0.0, 1.0);
+            output.normalRough = float4(0.0, 0.0, 1.0, 0.5);
+            output.emissive = float4(uv.x * 2.0, 0.0, 0.0, 1.0);
+            output.depth = 0.25 + uv.y * 0.5;
+        }
+    }
+}

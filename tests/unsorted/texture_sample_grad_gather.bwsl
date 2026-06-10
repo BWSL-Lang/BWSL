@@ -1,0 +1,47 @@
+// Test: Explicit-gradient sampling and gather
+// Tests: sample_grad, gather (implicit and explicit sampler forms)
+// NOTE: sample_cmp is intentionally absent: the SPIR-V backend has no
+// OP_TEX_SAMPLE_CMP emission yet (bwsl_spirv_backend_ops.inl), so it
+// produces invalid SPIR-V. Add it here once the backend implements it.
+
+pipeline TextureSampleGradGather {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    resources {
+        colorTex: texture2D
+        colorSampler: sampler
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+        use resources { colorTex, colorSampler }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.texcoord = attributes.texcoord;
+        }
+
+        fragment {
+            float2 uv = input.texcoord;
+
+            // Explicit gradient sampling (implicit sampler)
+            float2 gradX = ddx(uv);
+            float2 gradY = ddy(uv);
+            float4 graded = sample_grad(resources.colorTex, uv, gradX, gradY);
+
+            // Explicit gradient sampling with explicit sampler
+            float4 gradedExplicit = sample_grad(resources.colorTex, resources.colorSampler, uv, gradX, gradY);
+
+            // Gather a single component from the 2x2 footprint
+            float4 reds = gather(resources.colorTex, uv, 0);
+            float4 greens = gather(resources.colorTex, uv, 1);
+
+            float3 rgb = graded.rgb + gradedExplicit.rgb * 0.25;
+            float occlusion = (reds.x + greens.y) * 0.5;
+            output.color = float4(rgb * occlusion, 1.0);
+        }
+    }
+}

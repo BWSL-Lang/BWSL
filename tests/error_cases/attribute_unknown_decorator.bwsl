@@ -1,0 +1,14 @@
+// Error case: only @compressed and @instance are valid attribute decorators.
+pipeline AttributeUnknownDecorator {
+    attributes {
+        position: float3 @normalized
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+    }
+}

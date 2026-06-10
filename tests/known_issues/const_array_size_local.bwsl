@@ -1,0 +1,18 @@
+// Known issue: const-name array sizes are rejected for local declarations.
+// docs/language.md says sizes can be "constant names that resolve at compile
+// time", but only struct fields accept them. Expected to compile; currently
+// fails with "Expected array size".
+pipeline ConstArraySizeLocal {
+    const int KERNEL_SIZE = 5;
+    attributes { position: float3 }
+    pass "Main" {
+        use attributes { position }
+        vertex {
+            float taps[KERNEL_SIZE];
+            for (int i = 0; i < KERNEL_SIZE; i++) {
+                taps[i] = float(i);
+            }
+            output.position = float4(attributes.position * taps[1], 1.0);
+        }
+    }
+}

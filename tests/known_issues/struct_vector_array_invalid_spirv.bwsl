@@ -1,0 +1,16 @@
+// Known issue: struct fields that are arrays of vectors (or matrices)
+// produce mistyped registers; reading an element back emits invalid SPIR-V
+// even with constant indices.
+pipeline StructVectorArrayInvalidSpirv {
+    struct S { float4 v[4]; }
+    attributes { position: float3 }
+    pass "Main" {
+        use attributes { position }
+        vertex {
+            S s;
+            s.v[1] = float4(1.0, 1.0, 0.0, 1.0);
+            float4 p = s.v[1] + float4(attributes.position, 0.0);
+            output.position = p;
+        }
+    }
+}

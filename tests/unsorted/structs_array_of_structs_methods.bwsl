@@ -1,0 +1,60 @@
+// Test: Arrays of structs combined with struct methods
+// Tests: struct arrays as locals, methods called on array elements,
+// methods mutating receiver fields, const methods, nested struct fields
+
+pipeline StructsArrayOfStructsMethods {
+    attributes {
+        position: float3
+    }
+
+    struct Bounds {
+        float3 center;
+        float radius;
+
+        contains :: (float3 p) const -> bool {
+            return length(p - self.center) <= self.radius;
+        }
+
+        grow :: (float amount) -> void {
+            self.radius = self.radius + amount;
+        }
+    }
+
+    struct Cluster {
+        Bounds bounds;
+        float weight;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            Cluster clusters[3];
+            clusters[0] = Cluster(Bounds(float3(0.0, 0.0, 0.0), 1.0), 0.5);
+            clusters[1] = Cluster(Bounds(float3(2.0, 0.0, 0.0), 0.5), 1.0);
+            clusters[2] = Cluster(Bounds(float3(0.0, 2.0, 0.0), 2.0), 0.25);
+
+            // Mutating method on a struct stored in an array element field
+            Bounds b = clusters[1].bounds;
+            b.grow(0.75);
+            clusters[1].bounds = b;
+
+            // Const method calls on array elements inside a loop
+            float total = 0.0;
+            for (int i = 0; i < 3; i++) {
+                if (clusters[i].bounds.contains(attributes.position)) {
+                    total = total + clusters[i].weight;
+                }
+            }
+
+            // Nested field chains through the array
+            float reach = clusters[0].bounds.radius + clusters[1].bounds.radius + clusters[2].bounds.center.y;
+
+            output.position = float4(attributes.position * (total + reach), 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 0.0, 1.0);
+        }
+    }
+}

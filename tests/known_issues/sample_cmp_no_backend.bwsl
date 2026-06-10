@@ -1,0 +1,20 @@
+// Known issue: sample_cmp lowers to OP_TEX_SAMPLE_CMP but the SPIR-V backend
+// never emits it, so the result ID is undefined and validation fails.
+pipeline SampleCmpNoBackend {
+    attributes { position: float3 }
+    resources {
+        shadowTex: texture2D
+    }
+    pass "Main" {
+        use attributes { position }
+        use resources { shadowTex }
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.texcoord = float2(0.5, 0.5);
+        }
+        fragment {
+            float4 c = sample_cmp(resources.shadowTex, input.texcoord, 0.5);
+            output.color = c;
+        }
+    }
+}

@@ -1,0 +1,20 @@
+// Error case: compute passes cannot declare 'use attributes'.
+pipeline ComputePassUseAttributes {
+    attributes {
+        position: float3
+    }
+
+    resources {
+        data: buffer<float>
+    }
+
+    pass "Kernel" {
+        use attributes { position }
+        use resources { data }
+
+        compute "Main" [64, 1, 1] {
+            uint3 gid = input.global_id;
+            resources.data[gid.x] = float(gid.x);
+        }
+    }
+}

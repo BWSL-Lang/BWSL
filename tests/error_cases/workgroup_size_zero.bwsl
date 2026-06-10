@@ -1,0 +1,15 @@
+// Error case: workgroup size components must be greater than zero.
+pipeline WorkgroupSizeZero {
+    resources {
+        data: buffer<float>
+    }
+
+    pass "Kernel" {
+        use resources { data }
+
+        compute "Main" [0, 1, 1] {
+            uint3 gid = input.global_id;
+            resources.data[gid.x] = 1.0;
+        }
+    }
+}

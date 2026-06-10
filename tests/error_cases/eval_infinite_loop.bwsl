@@ -1,0 +1,18 @@
+// Error case: infinite eval loops require an until condition.
+pipeline EvalInfiniteLoop {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float sum = 0.0;
+            eval loop {
+                sum = sum + 1.0;
+            }
+            output.position = float4(attributes.position * sum, 1.0);
+        }
+    }
+}

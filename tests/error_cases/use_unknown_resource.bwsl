@@ -1,0 +1,19 @@
+// Error case: 'use resources' may only reference declared pipeline resources.
+pipeline UseUnknownResource {
+    attributes {
+        position: float3
+    }
+
+    resources {
+        viewProj: mat4
+    }
+
+    pass "Main" {
+        use attributes { position }
+        use resources { viewProj, shadowMap }
+
+        vertex {
+            output.position = resources.viewProj * float4(attributes.position, 1.0);
+        }
+    }
+}

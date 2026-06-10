@@ -1,0 +1,24 @@
+// Error case: output.depth is a builtin and must not be declared in outputs.
+pipeline OutputsDeclaresDepth {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        outputs {
+            color: float4
+            depth: float
+        }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 0.0, 0.0, 1.0);
+            output.depth = 0.5;
+        }
+    }
+}

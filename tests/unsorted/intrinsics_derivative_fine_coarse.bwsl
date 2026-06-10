@@ -1,0 +1,48 @@
+// Test: Fine and coarse derivative intrinsic variants
+// Tests: ddx_fine, ddy_fine, ddx_coarse, ddy_coarse, fwidth_fine, fwidth_coarse
+
+pipeline IntrinsicsDerivativeFineCoarse {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.texcoord = attributes.texcoord;
+        }
+
+        fragment {
+            float2 uv = input.texcoord;
+
+            // Scalar fine derivatives
+            float dxFine = ddx_fine(uv.x);
+            float dyFine = ddy_fine(uv.y);
+
+            // Scalar coarse derivatives
+            float dxCoarse = ddx_coarse(uv.x);
+            float dyCoarse = ddy_coarse(uv.y);
+
+            // Vector fine/coarse derivatives
+            float2 duvFineX = ddx_fine(uv);
+            float2 duvFineY = ddy_fine(uv);
+            float2 duvCoarseX = ddx_coarse(uv);
+            float2 duvCoarseY = ddy_coarse(uv);
+
+            // fwidth fine/coarse on scalar and vector
+            float fwFine = fwidth_fine(uv.x);
+            float fwCoarse = fwidth_coarse(uv.x);
+            float2 fwFineV = fwidth_fine(uv);
+            float2 fwCoarseV = fwidth_coarse(uv);
+
+            // Mix all results so nothing is dead-code eliminated
+            float fineSum = dxFine + dyFine + duvFineX.x + duvFineY.y + fwFine + fwFineV.x;
+            float coarseSum = dxCoarse + dyCoarse + duvCoarseX.x + duvCoarseY.y + fwCoarse + fwCoarseV.y;
+
+            output.color = float4(fineSum, coarseSum, fineSum - coarseSum, 1.0);
+        }
+    }
+}

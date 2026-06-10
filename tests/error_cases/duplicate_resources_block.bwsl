@@ -1,0 +1,23 @@
+// Error case: only one resources block is allowed per pipeline.
+pipeline DuplicateResourcesBlock {
+    attributes {
+        position: float3
+    }
+
+    resources {
+        viewProj: mat4
+    }
+
+    resources {
+        model: mat4
+    }
+
+    pass "Main" {
+        use attributes { position }
+        use resources { viewProj }
+
+        vertex {
+            output.position = resources.viewProj * float4(attributes.position, 1.0);
+        }
+    }
+}

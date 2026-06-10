@@ -1,0 +1,59 @@
+// Test: Integer and unsigned vector arithmetic
+// Tests: int2/int3/int4/uint vectors, component arithmetic, shifts, bitwise ops,
+// comparisons producing bool vectors, select on integer vectors
+
+pipeline VectorsIntegerOps {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int4 a = int4(1, -2, 3, -4);
+            int4 b = int4(5, 6, -7, 8);
+
+            // Arithmetic
+            int4 sum = a + b;
+            int4 diff = a - b;
+            int4 prod = a * b;
+            int4 quot = b / a;
+            int4 rem = b % a;
+
+            // Unary negate
+            int4 neg = -a;
+
+            // Bitwise on uint vectors
+            uint3 ua = uint3(0xF0u, 0x0Fu, 0xFFu);
+            uint3 ub = uint3(0x3Cu, 0xC3u, 0x18u);
+            uint3 andv = ua & ub;
+            uint3 orv = ua | ub;
+            uint3 xorv = ua ^ ub;
+            uint3 shl = ua << uint3(1u, 2u, 3u);
+            uint3 shr = ua >> uint3(1u, 2u, 3u);
+
+            // Comparisons and select
+            int2 small = int2(1, 9);
+            int2 big = int2(8, 2);
+            int2 chosen = select(small, big, small.x < big.x);
+
+            // Scalar-vector mixed arithmetic
+            int4 scaled = a * 3;
+            uint3 offset = ua + 7u;
+
+            // Reductions through casts back to float
+            float intSum = float(sum.x + diff.y + prod.z + quot.w + rem.x + neg.y);
+            float uintSum = float(andv.x + orv.y + xorv.z + shl.x + shr.y + offset.z);
+            float selSum = float(chosen.x + chosen.y + scaled.w);
+
+            output.position = float4(attributes.position, 1.0);
+            output.sums = float3(intSum, uintSum, selSum);
+        }
+
+        fragment {
+            float3 s = input.sums;
+            output.color = float4(s * 0.001, 1.0);
+        }
+    }
+}

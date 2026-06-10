@@ -1,0 +1,20 @@
+// Error case: module constants must have literal initializers.
+module BadConsts {
+    const float HALF_PI = 3.14159265 * 0.5;
+}
+
+pipeline ModuleConstNonliteral {
+    import BadConsts
+
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position * BadConsts::HALF_PI, 1.0);
+        }
+    }
+}

@@ -1,0 +1,66 @@
+// Test: Conditional jump statement forms
+// Tests: return if (cond), return expr if (cond), break if (cond), skip if (cond)
+
+pipeline ControlConditionalJumps {
+    attributes {
+        position: float3
+    }
+
+    // `return expr if (cond);` with a fallthrough return
+    classify :: (float x) -> float {
+        return 1.0 if (x > 0.5);
+        return -1.0 if (x < -0.5);
+        return 0.0;
+    }
+
+    // `return if (cond);` early-out in a void-style accumulation helper
+    accumulate :: (float limit) -> float {
+        float sum = 0.0;
+        for (int i = 0; i < 16; i++) {
+            float fi = float(i);
+            sum = sum + fi * 0.125;
+            break if (sum > limit);
+        }
+        return sum;
+    }
+
+    // skip if: only accumulate odd indices below the cutoff
+    oddSum :: (int cutoff) -> float {
+        float sum = 0.0;
+        for (int i = 0; i < 12; i++) {
+            skip if (i % 2 == 0);
+            break if (i > cutoff);
+            sum = sum + float(i);
+        }
+        return sum;
+    }
+
+    // Conditional returns nested inside counted loops
+    findFirstAbove :: (float threshold) -> float {
+        int i = 0;
+        loop (8) {
+            float v = float(i) * 0.2;
+            return v if (v > threshold);
+            i = i + 1;
+        }
+        return -1.0;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float a = classify(attributes.position.x);
+            float b = accumulate(2.5);
+            float c = oddSum(7);
+            float d = findFirstAbove(0.9);
+            output.position = float4(attributes.position, 1.0);
+            output.values = float4(a, b, c, d);
+        }
+
+        fragment {
+            float4 v = input.values;
+            output.color = float4(v.x + v.y, v.z, v.w, 1.0);
+        }
+    }
+}

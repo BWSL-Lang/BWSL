@@ -1,0 +1,52 @@
+// Test: Pass-stage reuse plus depth-only (fragment = null) shadow pass
+// Tests: pass "X".vertex reuse, fragment = null, multiple passes sharing one vertex stage
+
+pipeline PassReuseDepthOnly {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    resources {
+        viewProj: mat4
+        lightViewProj: mat4
+    }
+
+    pass "Base" {
+        use attributes { position, texcoord }
+        use resources { viewProj }
+
+        vertex {
+            output.position = resources.viewProj * float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            output.color = float4(input.uv, 0.0, 1.0);
+        }
+    }
+
+    // Reuse the Base vertex stage with a different fragment stage
+    pass "Tinted" {
+        use attributes { position, texcoord }
+        use resources { viewProj }
+
+        vertex = "Base".vertex
+
+        fragment {
+            output.color = float4(input.uv * 0.5, 0.5, 1.0);
+        }
+    }
+
+    // Depth-only shadow pass: no fragment stage at all
+    pass "Shadow" {
+        use attributes { position }
+        use resources { lightViewProj }
+
+        vertex {
+            output.position = resources.lightViewProj * float4(attributes.position, 1.0);
+        }
+
+        fragment = null
+    }
+}

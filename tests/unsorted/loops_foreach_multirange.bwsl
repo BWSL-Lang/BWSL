@@ -1,0 +1,58 @@
+// Test: Multi-range foreach, inclusive ranges, stepped ranges, implicit `it`
+// Tests: foreach (x in a..b, y in c..d), 0..=n, 0..n by k, for (collection) implicit it
+
+pipeline LoopsForeachMultirange {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Multi-range foreach over a 4x3 grid
+            float gridSum = 0.0;
+            foreach (x in 0..4, y in 0..3) {
+                gridSum = gridSum + float(x) * 10.0 + float(y);
+            }
+
+            // Inclusive range: 0..=5 runs six iterations
+            float inclusiveSum = 0.0;
+            for (i in 0..=5) {
+                inclusiveSum = inclusiveSum + float(i);
+            }
+
+            // Stepped range: every fourth index
+            float stepped = 0.0;
+            for (i in 0..16 by 4) {
+                stepped = stepped + float(i);
+            }
+
+            // Collection loop with explicit iterator name
+            // NOTE: the implicit-`it` form `for (weights) { ... it ... }` is
+            // documented in docs/spec/05 but the parser has no handling for
+            // TokenType::IT, so `it` cannot be referenced. Re-add coverage
+            // here once the parser supports it.
+            float weights[5] = { 0.1, 0.2, 0.3, 0.2, 0.1 };
+            float weightSum = 0.0;
+            for (w in weights) {
+                weightSum = weightSum + w;
+            }
+            float implicitSum = weightSum * 2.0;
+
+            // Nested multi-range with control flow inside
+            float filtered = 0.0;
+            foreach (x in 0..3, y in 0..3) {
+                skip if (x == y);
+                filtered = filtered + float(x * 3 + y);
+            }
+
+            float total = gridSum + inclusiveSum + stepped + weightSum + implicitSum + filtered;
+            output.position = float4(attributes.position * total, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 0.0, 0.0, 1.0);
+        }
+    }
+}

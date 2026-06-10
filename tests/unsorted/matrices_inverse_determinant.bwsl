@@ -1,0 +1,57 @@
+// Test: Matrix inverse, determinant, and transpose across all matrix sizes
+// Tests: inverse/determinant/transpose on mat2, mat3, mat4; chained matrix expressions
+
+pipeline MatricesInverseDeterminant {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            mat2 m2 = mat2(2.0, 0.0,
+                           1.0, 2.0);
+            mat3 m3 = mat3(2.0, 0.0, 0.0,
+                           0.0, 3.0, 0.0,
+                           1.0, 0.0, 4.0);
+            mat4 m4 = mat4(1.0, 0.0, 0.0, 0.0,
+                           0.0, 2.0, 0.0, 0.0,
+                           0.0, 0.0, 3.0, 0.0,
+                           2.0, 1.0, 0.0, 4.0);
+
+            // Determinants
+            float d2 = determinant(m2);
+            float d3 = determinant(m3);
+            float d4 = determinant(m4);
+
+            // Inverses, verified by multiplying back
+            mat2 i2 = inverse(m2);
+            mat3 i3 = inverse(m3);
+            mat4 i4 = inverse(m4);
+            mat2 id2 = m2 * i2;
+            mat3 id3 = m3 * i3;
+            mat4 id4 = m4 * i4;
+
+            // Transpose chains: transpose(transpose(m)) == m
+            mat3 t3 = transpose(m3);
+            mat3 tt3 = transpose(t3);
+            mat4 t4 = transpose(m4);
+
+            // Combined expression: inverse of a transpose
+            mat3 normalMatrix = transpose(inverse(m3));
+
+            float2 v2 = id2 * float2(1.0, 1.0);
+            float3 v3 = (id3 * float3(1.0, 1.0, 1.0)) + (tt3 * float3(0.5, 0.5, 0.5));
+            float4 v4 = (id4 * float4(1.0, 1.0, 1.0, 1.0)) + (t4 * float4(0.25, 0.25, 0.25, 0.25));
+            float3 n = normalMatrix * attributes.position;
+
+            float dets = d2 + d3 + d4;
+            output.position = float4(n + v3 + v4.xyz * v2.x * dets, 1.0);
+        }
+
+        fragment {
+            output.color = float4(0.0, 0.0, 1.0, 1.0);
+        }
+    }
+}

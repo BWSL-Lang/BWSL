@@ -1,0 +1,52 @@
+// Test: Cube, 3D, and array textures declared as pipeline resources
+// Tests: textureCube / texture3D / texture2DArray resource declarations,
+// sampling them with direction / volume / layered coordinates and explicit LOD
+
+pipeline TextureResourcesCube3DArray {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    resources {
+        envMap: textureCube
+        volumeTex: texture3D
+        layerTex: texture2DArray
+        linearSampler: sampler
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+        use resources { envMap, volumeTex, layerTex, linearSampler }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+            output.dir = normalize(attributes.position);
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float3 dir = normalize(input.dir);
+
+            // Cubemap: direction-based sampling, implicit and explicit LOD
+            float4 env = sample(resources.envMap, dir);
+            float4 envBlurred = sample_lod(resources.envMap, dir, 3.0);
+
+            // 3D volume: x/y from UV, z animated by direction
+            float3 uvw = float3(uv, dir.z * 0.5 + 0.5);
+            float4 vol = sample(resources.volumeTex, uvw);
+            float4 volLod = sample_lod(resources.volumeTex, uvw, 1.0);
+
+            // 2D array: layer selected in the z coordinate
+            float layer = 2.0;
+            float4 layered = sample(resources.layerTex, float3(uv, layer));
+            float4 layeredExplicit = sample(resources.layerTex, resources.linearSampler, float3(uv, layer));
+
+            float3 rgb = env.rgb * 0.4 + envBlurred.rgb * 0.1
+                       + vol.rgb * 0.2 + volLod.rgb * 0.1
+                       + layered.rgb * 0.1 + layeredExplicit.rgb * 0.1;
+            output.color = float4(rgb, 1.0);
+        }
+    }
+}

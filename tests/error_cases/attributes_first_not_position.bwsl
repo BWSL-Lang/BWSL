@@ -1,0 +1,15 @@
+// Error case: the first declared attribute must be 'position'.
+pipeline AttributesFirstNotPosition {
+    attributes {
+        texcoord: float2
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+    }
+}

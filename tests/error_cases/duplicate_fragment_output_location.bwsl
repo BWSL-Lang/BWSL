@@ -1,0 +1,24 @@
+// Error case: two fragment outputs cannot share an explicit location.
+pipeline DuplicateFragmentOutputLocation {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        outputs {
+            color: float4 @location(0)
+            bloom: float4 @location(0)
+        }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 0.0, 0.0, 1.0);
+            output.bloom = float4(0.0, 1.0, 0.0, 1.0);
+        }
+    }
+}

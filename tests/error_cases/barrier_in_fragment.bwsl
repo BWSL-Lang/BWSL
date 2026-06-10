@@ -1,0 +1,19 @@
+// Error case: barrier intrinsics are compute-only.
+pipeline BarrierInFragment {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            barrier();
+            output.color = float4(1.0, 0.0, 0.0, 1.0);
+        }
+    }
+}
