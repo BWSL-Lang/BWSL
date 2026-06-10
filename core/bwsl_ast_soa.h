@@ -434,6 +434,10 @@ struct AST {
     u32* positionValues;
     u32 positionMapCount;
     u32 positionMapCapacity;
+    u32* endPositionKeys;        // NodeRef::packed -> packed end line/column
+    u32* endPositionValues;
+    u32 endPositionMapCount;
+    u32 endPositionMapCapacity;
 
     // Type-specific pools (cold, only touched when you need that node type)
     ArenaArray<IdentifierData> identifiers;
@@ -496,6 +500,11 @@ struct AST {
         positionKeys = (u32*)arena->Allocate(sizeof(u32) * positionMapCapacity, 64);
         positionValues = (u32*)arena->Allocate(sizeof(u32) * positionMapCapacity, 64);
         memset(positionKeys, 0xFF, sizeof(u32) * positionMapCapacity);
+        endPositionMapCapacity = positionMapCapacity;
+        endPositionMapCount = 0;
+        endPositionKeys = (u32*)arena->Allocate(sizeof(u32) * endPositionMapCapacity, 64);
+        endPositionValues = (u32*)arena->Allocate(sizeof(u32) * endPositionMapCapacity, 64);
+        memset(endPositionKeys, 0xFF, sizeof(u32) * endPositionMapCapacity);
 
         // Initialize pools with reasonable defaults based on typical usage
         identifiers.Init(arena, 64);        // Very common
@@ -583,6 +592,14 @@ struct AST {
         InsertPosition(ref.packed, PackPosition(line, column));
     }
 
+    void SetEndPosition(NodeRef ref, u32 line, u32 column) {
+        if (ref.IsNull()) return;
+        if ((endPositionMapCount + 1) * 2 >= endPositionMapCapacity) {
+            GrowEndPositionMap();
+        }
+        InsertEndPosition(ref.packed, PackPosition(line, column));
+    }
+
     NodeRef MakeNodeRef(ASTNodeType type, u32 index, u32 line, u32 column) {
         NodeRef ref(type, index);
         IndexPosition(ref, line, column);
@@ -605,6 +622,22 @@ struct AST {
         return 0;
     }
 
+    u32 FindEndPosition(NodeRef ref) const {
+        if (ref.IsNull() || endPositionMapCapacity == 0) return 0;
+        u32 slot = ref.packed & (endPositionMapCapacity - 1);
+        for (u32 probe = 0; probe < endPositionMapCapacity; probe++) {
+            u32 key = endPositionKeys[slot];
+            if (key == ref.packed) {
+                return endPositionValues[slot];
+            }
+            if (key == 0xFFFFFFFFu) {
+                return 0;
+            }
+            slot = (slot + 1) & (endPositionMapCapacity - 1);
+        }
+        return 0;
+    }
+
     u32 GetLine(NodeRef ref) const {
         if (ref.IsNull()) return 0;
         return FindPosition(ref) >> 12;
@@ -613,6 +646,16 @@ struct AST {
     u32 GetColumn(NodeRef ref) const {
         if (ref.IsNull()) return 0;
         return FindPosition(ref) & 0xFFF;
+    }
+
+    u32 GetEndLine(NodeRef ref) const {
+        if (ref.IsNull()) return 0;
+        return FindEndPosition(ref) >> 12;
+    }
+
+    u32 GetEndColumn(NodeRef ref) const {
+        if (ref.IsNull()) return 0;
+        return FindEndPosition(ref) & 0xFFF;
     }
 
     //==========================================================================
@@ -662,6 +705,18 @@ private:
         positionValues[slot] = value;
     }
 
+    void InsertEndPosition(u32 key, u32 value) {
+        u32 slot = key & (endPositionMapCapacity - 1);
+        while (endPositionKeys[slot] != 0xFFFFFFFFu && endPositionKeys[slot] != key) {
+            slot = (slot + 1) & (endPositionMapCapacity - 1);
+        }
+        if (endPositionKeys[slot] == 0xFFFFFFFFu) {
+            endPositionMapCount++;
+        }
+        endPositionKeys[slot] = key;
+        endPositionValues[slot] = value;
+    }
+
     void GrowPositionMap() {
         u32 oldCapacity = positionMapCapacity;
         u32* oldKeys = positionKeys;
@@ -676,6 +731,24 @@ private:
         for (u32 i = 0; i < oldCapacity; i++) {
             if (oldKeys[i] != 0xFFFFFFFFu) {
                 InsertPosition(oldKeys[i], oldValues[i]);
+            }
+        }
+    }
+
+    void GrowEndPositionMap() {
+        u32 oldCapacity = endPositionMapCapacity;
+        u32* oldKeys = endPositionKeys;
+        u32* oldValues = endPositionValues;
+
+        endPositionMapCapacity *= 2;
+        endPositionMapCount = 0;
+        endPositionKeys = (u32*)arena->Allocate(sizeof(u32) * endPositionMapCapacity, 64);
+        endPositionValues = (u32*)arena->Allocate(sizeof(u32) * endPositionMapCapacity, 64);
+        memset(endPositionKeys, 0xFF, sizeof(u32) * endPositionMapCapacity);
+
+        for (u32 i = 0; i < oldCapacity; i++) {
+            if (oldKeys[i] != 0xFFFFFFFFu) {
+                InsertEndPosition(oldKeys[i], oldValues[i]);
             }
         }
     }

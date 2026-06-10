@@ -516,7 +516,9 @@ NodeRef Parser::ParseFunction() {
             SymbolTable::EnterScope(&symbolTable);
             Consume(TokenType::LEFT_BRACE, "Expected '{' after pass in pass_block function");
             ParsePassBody(ast->GetFunction(function).body);
-            Consume(TokenType::RIGHT_BRACE, "Expected '}' after pass block");
+            if (Consume(TokenType::RIGHT_BRACE, "Expected '}' after pass block")) {
+                MarkNodeEndAtPreviousToken(ast->GetFunction(function).body);
+            }
             SymbolTable::ExitScope(&symbolTable);
             currentPass = oldPass;
         } else if (ast->GetFunction(function).returnType == CoreType::COMPUTE_FUNCTION) {
@@ -526,7 +528,18 @@ NodeRef Parser::ParseFunction() {
             ParseComputeBody(ast->GetFunction(function).body);
         }
 
-        Consume(TokenType::RIGHT_BRACE, "Expected '}' after function body");
+        if (Consume(TokenType::RIGHT_BRACE, "Expected '}' after function body")) {
+            NodeRef body = ast->GetFunction(function).body;
+            if (body.IsValid() && body.Type() == ASTNodeType::COMPUTE_STAGE &&
+                ast->GetEndLine(body) == 0) {
+                MarkNodeEndAtPreviousToken(body);
+                NodeRef computeBody = ast->GetShaderStage(body).body;
+                if (computeBody.IsValid() && ast->GetEndLine(computeBody) == 0) {
+                    MarkNodeEndAtPreviousToken(computeBody);
+                }
+            }
+            MarkNodeEndAtPreviousToken(function);
+        }
     } else {
         // Check if this is a type pattern match body (for generic functions)
         // Syntax: type: expression  (e.g., float2: v * 2.0)
@@ -547,11 +560,19 @@ NodeRef Parser::ParseFunction() {
         }
 
         if (isTypePatternBody) {
-            ast->GetFunction(function).body = ParseTypePatternMatch();
-            Consume(TokenType::RIGHT_BRACE, "Expected '}' after type pattern match");
+            NodeRef body = ParseTypePatternMatch();
+            ast->GetFunction(function).body = body;
+            if (Consume(TokenType::RIGHT_BRACE, "Expected '}' after type pattern match")) {
+                MarkNodeEndAtPreviousToken(body);
+                MarkNodeEndAtPreviousToken(function);
+            }
         } else {
             // Regular function with statements
-            ast->GetFunction(function).body = ParseBlock();
+            NodeRef body = ParseBlock();
+            ast->GetFunction(function).body = body;
+            if (body.IsValid() && ast->GetEndLine(body) != 0) {
+                MarkNodeEndAtPreviousToken(function);
+            }
         }
     }
 

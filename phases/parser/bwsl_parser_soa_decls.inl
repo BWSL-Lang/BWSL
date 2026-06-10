@@ -241,7 +241,9 @@ NodeRef Parser::ParsePipeline() {
         panicMode = false;
     }
 
-    Consume(TokenType::RIGHT_BRACE, "Expected '}' after pipeline body");
+    if (Consume(TokenType::RIGHT_BRACE, "Expected '}' after pipeline body")) {
+        MarkNodeEndAtPreviousToken(pipeline);
+    }
 
     context->root = pipeline;
     PARSER_TIMING_PRINT();
@@ -952,7 +954,9 @@ NodeRef Parser::ParsePass() {
 
         if (Match(TokenType::LEFT_BRACE)) {
             ParsePassBlockInstantiationBody(pass);
-            Consume(TokenType::RIGHT_BRACE, "Expected '}' after pass_block mappings");
+            if (Consume(TokenType::RIGHT_BRACE, "Expected '}' after pass_block mappings")) {
+                MarkNodeEndAtPreviousToken(pass);
+            }
             Match(TokenType::SEMICOLON);
         } else {
             Consume(TokenType::SEMICOLON, "Expected ';' after pass_block instantiation");
@@ -968,7 +972,9 @@ NodeRef Parser::ParsePass() {
 
     Consume(TokenType::LEFT_BRACE, "Expected '{' after pass name");
     ParsePassBody(pass);
-    Consume(TokenType::RIGHT_BRACE, "Expected '}' after pass body");
+    if (Consume(TokenType::RIGHT_BRACE, "Expected '}' after pass body")) {
+        MarkNodeEndAtPreviousToken(pass);
+    }
 
     SymbolTable::ExitScope(&symbolTable);
     currentPass = NodeRef::Null();
@@ -1395,7 +1401,9 @@ NodeRef Parser::ParseComputeGraph() {
         }
     }
 
-    Consume(TokenType::RIGHT_BRACE, "Expected '}' after compute_graph");
+    if (Consume(TokenType::RIGHT_BRACE, "Expected '}' after compute_graph")) {
+        MarkNodeEndAtPreviousToken(graph);
+    }
     return graph;
 }
 
@@ -1541,9 +1549,15 @@ NodeRef Parser::ParseShaderStage(ASTNodeType stageType) {
         }
     }
 
-    Consume(TokenType::RIGHT_BRACE, "Expected '}' after shader stage body");
+    bool hasEnd = Consume(TokenType::RIGHT_BRACE, "Expected '}' after shader stage body");
+    if (hasEnd) {
+        MarkNodeEndAtPreviousToken(body);
+    }
 
     NodeRef stage = ASTFactory::MakeShaderStage(ast, stageType, body, loc.line, loc.column);
+    if (hasEnd) {
+        MarkNodeEndAtPreviousToken(stage);
+    }
 
     currentShaderStage = oldStage;
     inShaderStage = wasInShader;

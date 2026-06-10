@@ -604,7 +604,9 @@ NodeRef Parser::ParseEnum() {
         }
     }
 
-    Consume(TokenType::RIGHT_BRACE, "Expected '}'");
+    if (Consume(TokenType::RIGHT_BRACE, "Expected '}'")) {
+        MarkNodeEndAtPreviousToken(enumNode);
+    }
 
     // Add to symbol table
     Symbol* sym = SymbolTable::AddSymbol(&symbolTable,
@@ -865,10 +867,18 @@ NodeRef Parser::ParseEnumMethod() {
     if (isPatternMatchBody) {
         // Parse as implicit pattern match on self
         NodeRef selfRef = ASTFactory::MakeIdentifier(ast, "self", line, col);
-        ast->GetFunction(method).body = ParsePatternMatch(selfRef);
+        NodeRef body = ParsePatternMatch(selfRef);
+        ast->GetFunction(method).body = body;
+        if (body.IsValid() && ast->GetEndLine(body) != 0) {
+            MarkNodeEndAtPreviousToken(method);
+        }
     } else {
         // Regular function body
-        ast->GetFunction(method).body = ParseBlock();
+        NodeRef body = ParseBlock();
+        ast->GetFunction(method).body = body;
+        if (body.IsValid() && ast->GetEndLine(body) != 0) {
+            MarkNodeEndAtPreviousToken(method);
+        }
     }
 
     return method;
@@ -952,7 +962,9 @@ NodeRef Parser::ParsePatternMatch(NodeRef scrutinee) {
         }
     }
 
-    Consume(TokenType::RIGHT_BRACE, "Expected '}' after pattern match");
+    if (Consume(TokenType::RIGHT_BRACE, "Expected '}' after pattern match")) {
+        MarkNodeEndAtPreviousToken(matchNode);
+    }
 
     return matchNode;
 }
@@ -1072,7 +1084,11 @@ NodeRef Parser::ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime) {
     }
 
     Consume(TokenType::LEFT_BRACE, "Expected '{' before method body");
-    ast->GetFunction(method).body = ParseBlock();
+    NodeRef body = ParseBlock();
+    ast->GetFunction(method).body = body;
+    if (body.IsValid() && ast->GetEndLine(body) != 0) {
+        MarkNodeEndAtPreviousToken(method);
+    }
     return method;
 }
 
@@ -1281,7 +1297,9 @@ NodeRef Parser::ParseStruct() {
         }
     }
 
-    Consume(TokenType::RIGHT_BRACE, "Expected '}'");
+    if (Consume(TokenType::RIGHT_BRACE, "Expected '}'")) {
+        MarkNodeEndAtPreviousToken(structNode);
+    }
 
     // NOTE: Do NOT register with g_customTypes here - we need to use the pointer
     // to the stored copy in symbolTable.structs, not a local variable pointer.

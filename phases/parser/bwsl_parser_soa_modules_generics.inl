@@ -203,7 +203,9 @@ NodeRef Parser::ParseModule() {
         }
     }
 
-    Consume(TokenType::RIGHT_BRACE, "Expected '}'");
+    if (Consume(TokenType::RIGHT_BRACE, "Expected '}'")) {
+        MarkNodeEndAtPreviousToken(module);
+    }
 
     symbolTable.inModuleScope = false;
     symbolTable.currentModuleIndex = INVALID_INDEX;

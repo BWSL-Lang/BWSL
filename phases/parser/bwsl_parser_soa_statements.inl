@@ -44,7 +44,9 @@ NodeRef Parser::ParseBlock() {
         }
     }
 
-    Consume(TokenType::RIGHT_BRACE, "Expected '}' after block");
+    if (Consume(TokenType::RIGHT_BRACE, "Expected '}' after block")) {
+        MarkNodeEndAtPreviousToken(block);
+    }
 
     return block;
 }

@@ -243,6 +243,8 @@ private:
     bool Check(TokenType type) const { return stream->GetType(current) == type; }
     bool Match(TokenType type);
     bool Consume(TokenType type, const char* message);
+    void MarkNodeEndAtToken(NodeRef node, TokenRef token);
+    void MarkNodeEndAtPreviousToken(NodeRef node);
     void Synchronize();
     void SkipBracedDeclaration(bool keywordAlreadyConsumed);
     TokenRef PeekNext();
