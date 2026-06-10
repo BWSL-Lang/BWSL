@@ -11,22 +11,13 @@ Each repro compiles with:
 ./build/bwslc tests/known_issues/<file>.bwsl -modules modules -o /tmp/out
 ```
 
-## 1. `sample_cmp` emits no SPIR-V (`sample_cmp_no_backend.bwsl`)
+## 1. ~~`sample_cmp` emits no SPIR-V~~ (FIXED)
 
-`sample_cmp` is declared in `core/bwsl_stdlib.h` and lowered to
-`OP_TEX_SAMPLE_CMP`, but the SPIR-V backend lists that opcode in the
-"not emitted" fallthrough bucket (`phases/backends/spirv/bwsl_spirv_backend_ops.inl`,
-`case IR::OP_TEX_SAMPLE_CMP:` near the end of the opcode switch). The dest
-register never gets an ID, so the module fails validation:
-
-```
-error: ID '32[%32]' has not been defined
-```
-
-Fix needs `OpImageSampleDrefImplicitLod` emission (note: Dref sampling
-returns scalar float while lowering types the result as FLOAT4).
-Once fixed: re-add `sample_cmp` coverage to
-`tests/unsorted/texture_sample_grad_gather.bwsl` (see note there).
+Fixed by emitting `OpImageSampleDrefImplicitLod` (scalar result, splatted to
+float4) for `OP_TEX_SAMPLE_CMP` in
+`phases/backends/spirv/bwsl_spirv_backend_ops.inl`. Coverage lives in
+`tests/unsorted/texture_sample_grad_cmp_gather.bwsl` (both implicit- and
+explicit-sampler forms).
 
 ## 2. Implicit `it` iterator unusable (`implicit_it_unparsed.bwsl`)
 

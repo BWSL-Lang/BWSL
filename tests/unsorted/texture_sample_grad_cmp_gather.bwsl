@@ -1,10 +1,10 @@
-// Test: Explicit-gradient sampling and gather
-// Tests: sample_grad, gather (implicit and explicit sampler forms)
-// NOTE: sample_cmp is intentionally absent: the SPIR-V backend has no
-// OP_TEX_SAMPLE_CMP emission yet (bwsl_spirv_backend_ops.inl), so it
-// produces invalid SPIR-V. Add it here once the backend implements it.
+// Test: Explicit-gradient sampling, comparison sampling, and gather
+// Tests: sample_grad, sample_cmp, gather (implicit and explicit sampler forms)
+// sample_cmp uses a dedicated shadow texture: comparison usage marks the
+// texture as a depth texture during cross-compilation, so it must not be
+// mixed with regular color sampling on the same resource.
 
-pipeline TextureSampleGradGather {
+pipeline TextureSampleGradCmpGather {
     attributes {
         position: float3
         texcoord: float2
@@ -12,12 +12,15 @@ pipeline TextureSampleGradGather {
 
     resources {
         colorTex: texture2D
+        shadowTex: texture2D
+        shadowTexExplicit: texture2D
         colorSampler: sampler
+        cmpSampler: sampler
     }
 
     pass "Main" {
         use attributes { position, texcoord }
-        use resources { colorTex, colorSampler }
+        use resources { colorTex, shadowTex, shadowTexExplicit, colorSampler, cmpSampler }
 
         vertex {
             output.position = float4(attributes.position, 1.0);
@@ -35,12 +38,18 @@ pipeline TextureSampleGradGather {
             // Explicit gradient sampling with explicit sampler
             float4 gradedExplicit = sample_grad(resources.colorTex, resources.colorSampler, uv, gradX, gradY);
 
+            // Comparison (shadow) sampling against a reference depth,
+            // implicit and explicit sampler forms
+            float refDepth = 0.5;
+            float4 shadow = sample_cmp(resources.shadowTex, uv, refDepth);
+            float4 shadowExplicit = sample_cmp(resources.shadowTexExplicit, resources.cmpSampler, uv, refDepth + 0.1);
+
             // Gather a single component from the 2x2 footprint
             float4 reds = gather(resources.colorTex, uv, 0);
             float4 greens = gather(resources.colorTex, uv, 1);
 
             float3 rgb = graded.rgb + gradedExplicit.rgb * 0.25;
-            float occlusion = (reds.x + greens.y) * 0.5;
+            float occlusion = shadow.x * shadowExplicit.x * (reds.x + greens.y) * 0.5;
             output.color = float4(rgb * occlusion, 1.0);
         }
     }

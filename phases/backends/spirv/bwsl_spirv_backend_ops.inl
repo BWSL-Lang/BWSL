@@ -4703,6 +4703,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_TEX_SAMPLE_LOD:
   case IR::OP_TEX_SAMPLE_BIAS:
   case IR::OP_TEX_SAMPLE_GRAD:
+  case IR::OP_TEX_SAMPLE_CMP:
   case IR::OP_TEX_SAMPLE_OFFSET:
   case IR::OP_TEX_SAMPLE_LOD_OFFSET:
   case IR::OP_TEX_SAMPLE_BIAS_OFFSET: {
@@ -4790,6 +4791,19 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       u32 extras[2] = {ddx_id, ddy_id};
       emitImageInst(spv::OpImageSampleExplicitLod, result_type,
                     spv::ImageOperandsGradMask, extras, 2);
+      break;
+    }
+    case IR::OP_TEX_SAMPLE_CMP: {
+      // Depth-comparison sample - operand 2 is the reference value.
+      // OpImageSampleDrefImplicitLod produces a scalar float, while the IR
+      // contract types every texture sample as FLOAT4, so splat the
+      // comparison result into the destination register.
+      u32 dref_id = GetSpirvId(ir->GetOperand(ir_idx, 2));
+      u32 cmp_id = AllocateId();
+      Emit(spv::OpImageSampleDrefImplicitLod, GetTypeId(CoreType::FLOAT),
+           cmp_id, texture.sampledImageId, coord_id, dref_id);
+      Emit(spv::OpCompositeConstruct, result_type, dest, cmp_id, cmp_id,
+           cmp_id, cmp_id);
       break;
     }
     default:
@@ -4960,7 +4974,6 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_STRUCT_GEP:
   case IR::OP_MAT_IDENTITY:
   case IR::OP_MAT_ZERO:
-  case IR::OP_TEX_SAMPLE_CMP:
   case IR::OP_IMG_LOAD:
   case IR::OP_LOAD_TEX_HANDLE:
   case IR::OP_ATOMIC_SUB:
