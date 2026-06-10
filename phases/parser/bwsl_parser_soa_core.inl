@@ -616,6 +616,16 @@ bool Parser::Consume(TokenType type, const char* message) {
     return false;
 }
 
+void Parser::MarkNodeEndAtToken(NodeRef node, TokenRef token) {
+    if (!node.IsValid() || token == INVALID_TOKEN) return;
+    SourceLocation loc = getLocation(stream->GetOffset(token));
+    ast->SetEndPosition(node, loc.line, loc.column + stream->GetLength(token));
+}
+
+void Parser::MarkNodeEndAtPreviousToken(NodeRef node) {
+    MarkNodeEndAtToken(node, previous);
+}
+
 // Attach the doc comment block (`///` lines or `/** ... */`) the lexer
 // recorded for `firstToken` to `node`. Walks back over `eval` and decorator
 // tokens so a doc block above a modifier still reaches the declaration.

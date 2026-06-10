@@ -2,6 +2,7 @@
 
 #include "bwsl_ast_soa.h"
 #include "bwsl_reflection_json.h"
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <sstream>
@@ -171,6 +172,24 @@ inline const char* SpecialIdentifierToString(SpecialIdentifier kind) {
     }
 }
 
+inline std::string CoreTypeToSourceString(CoreType type) {
+    std::string value = CoreTypeToString(type);
+    for (char& c : value) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return value;
+}
+
+inline std::string FunctionReturnTypeToString(const FunctionDeclData& function) {
+    if (function.returnTypeHash != 0) {
+        std::string resolved = ReverseLookup::GetString(function.returnTypeHash);
+        if (resolved.find("<hash:") == std::string::npos) {
+            return resolved;
+        }
+    }
+    return CoreTypeToSourceString(function.returnType);
+}
+
 inline std::string ResolveArenaString(const ArenaString& value) {
     std::string resolved = ReverseLookup::GetString(value.nameHash);
     if (resolved.find("<hash:") == std::string::npos) {
@@ -190,8 +209,6 @@ inline void AppendArenaStringFields(std::ostringstream& json, bool& first,
                                     const char* nameField,
                                     const ArenaString& value) {
     AppendStringField(json, first, nameField, ResolveArenaString(value));
-    std::string hashField = std::string(nameField) + "Hash";
-    AppendUIntField(json, first, hashField.c_str(), value.nameHash);
 }
 
 inline void AppendFloatValue(std::ostringstream& json, float value) {
@@ -214,7 +231,6 @@ inline void AppendTypeInfo(std::ostringstream& json, const TypeInfo& typeInfo) {
     AppendStringField(json, first, "coreType", CoreTypeToString(typeInfo.coreType));
     AppendUIntField(json, first, "componentCount", typeInfo.componentCount);
     AppendUIntField(json, first, "arrayDimensions", typeInfo.arrayDimensions);
-    AppendUIntField(json, first, "customTypeHash", typeInfo.customTypeHash);
     if (typeInfo.customTypeHash != 0) {
         AppendStringField(json, first, "customTypeName",
                           ReverseLookup::GetString(typeInfo.customTypeHash));
@@ -424,8 +440,10 @@ inline void AppendVariantDecls(std::ostringstream& json,
         AppendArenaStringFields(json, first, "typeName", decl.typeName);
         AppendFieldName(json, first, "typeInfo");
         AppendTypeInfo(json, decl.typeInfo);
-        AppendUIntField(json, first, "enumTypeHash", decl.enumTypeHash);
-        AppendStringField(json, first, "enumTypeName", ReverseLookup::GetString(decl.enumTypeHash));
+        if (decl.enumTypeHash != 0) {
+            AppendStringField(json, first, "enumTypeName",
+                              ReverseLookup::GetString(decl.enumTypeHash));
+        }
         AppendNodeField(json, first, "defaultExpr", ast, decl.defaultExpr, depth + 1);
         AppendBoolField(json, first, "defaultResolved", decl.defaultResolved);
         if (decl.defaultResolved) {
@@ -607,9 +625,14 @@ inline void AppendCommonNodeFields(std::ostringstream& json, bool& first,
     AppendStringField(json, first, "id", NodeRefId(ref));
     AppendStringField(json, first, "type", ASTNodeTypeToString(ref.Type()));
     AppendUIntField(json, first, "index", ref.Index());
-    AppendUIntField(json, first, "packed", ref.packed);
     AppendUIntField(json, first, "line", ast.GetLine(ref));
     AppendUIntField(json, first, "column", ast.GetColumn(ref));
+    u32 endLine = ast.GetEndLine(ref);
+    u32 endColumn = ast.GetEndColumn(ref);
+    if (endLine != 0 || endColumn != 0) {
+        AppendUIntField(json, first, "endLine", endLine);
+        AppendUIntField(json, first, "endColumn", endColumn);
+    }
     AppendDocsField(json, first, ast, ref);
 }
 
@@ -666,7 +689,6 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             AppendNodeField(json, first, "object", ast, node.object, depth);
             AppendArenaStringFields(json, first, "member", node.member);
             AppendBoolField(json, first, "isModuleQualified", node.isModuleQualified);
-            AppendUIntField(json, first, "qualifiedNameHash", node.qualifiedNameHash);
             break;
         }
         case ASTNodeType::ARRAY_ACCESS: {
@@ -712,11 +734,14 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             const FunctionCallData& node = ast.GetFunctionCall(ref);
             AppendArenaStringFields(json, first, "name", node.name);
             AppendNodeArrayField(json, first, "arguments", ast, node.arguments, depth);
-            AppendUIntField(json, first, "intrinsicIndex", node.intrinsicIndex);
-            AppendUIntField(json, first, "flags", node.flags);
-            AppendUIntField(json, first, "moduleIndex", node.moduleIndex);
-            AppendUIntField(json, first, "moduleQualifiedHash", node.moduleQualifiedHash);
-            AppendNodeField(json, first, "moduleObject", ast, node.moduleObject, depth);
+            if ((node.flags & FunctionCallFlags::IS_MODULE_FUNCTION) != 0 &&
+                node.moduleObject.Type() == ASTNodeType::IDENTIFIER) {
+                AppendStringField(json, first, "moduleName",
+                                  ResolveArenaString(ast.GetIdentifier(node.moduleObject).name));
+            } else if ((node.flags & FunctionCallFlags::IS_METHOD_CALL) != 0 &&
+                       node.moduleObject.IsValid()) {
+                AppendNodeField(json, first, "receiver", ast, node.moduleObject, depth);
+            }
             break;
         }
         case ASTNodeType::VARIABLE_DECL: {
@@ -729,7 +754,6 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
                               StorageClassToString(node.storageClass));
             AppendUIntField(json, first, "arrayDimensions", node.arrayDimensions);
             AppendUIntField(json, first, "arrayLength", node.arrayLength);
-            AppendUIntField(json, first, "arrayElementTypeHash", node.arrayElementTypeHash);
             AppendNodeField(json, first, "initializer", ast, node.initializer, depth);
             break;
         }
@@ -808,9 +832,7 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             AppendArenaStringFields(json, first, "name", node.name);
             AppendFieldName(json, first, "parameters");
             AppendFunctionParameters(json, node.parameters);
-            AppendStringField(json, first, "returnType", CoreTypeToString(node.returnType));
-            AppendUIntField(json, first, "returnTypeHash", node.returnTypeHash);
-            AppendUIntField(json, first, "ownerStructTypeHash", node.ownerStructTypeHash);
+            AppendStringField(json, first, "returnType", FunctionReturnTypeToString(node));
             AppendNodeField(json, first, "body", ast, node.body, depth);
             AppendBoolField(json, first, "isEval", node.isEval);
             AppendBoolField(json, first, "isStructMethod", node.isStructMethod);
@@ -900,8 +922,6 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             AppendNodeArrayField(json, first, "methods", ast, node.methods, depth);
             AppendFieldName(json, first, "associatedTypes");
             AppendCoreTypeArray(json, node.associatedTypes);
-            AppendFieldName(json, first, "associatedTypeHashes");
-            AppendU32Array(json, node.associatedTypeHashes);
             break;
         }
         case ASTNodeType::VARIANT_DECL: {
@@ -910,8 +930,6 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             AppendUIntField(json, first, "value", node.currentVariant.value);
             AppendFieldName(json, first, "associatedTypes");
             AppendCoreTypeArray(json, node.currentVariant.associatedTypes);
-            AppendFieldName(json, first, "associatedTypeHashes");
-            AppendU32Array(json, node.currentVariant.associatedTypeHashes);
             break;
         }
         case ASTNodeType::PATTERN_MATCH:
@@ -925,7 +943,6 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             AppendFunctionParameters(json, node.bindings);
             AppendNodeArrayField(json, first, "statements", ast, node.statements, depth);
             AppendArenaStringFields(json, first, "variantName", node.variantName);
-            AppendUIntField(json, first, "variantHash", node.variantHash);
             AppendBoolField(json, first, "isEval", node.isEval);
             AppendBoolField(json, first, "isDefault", node.isDefault);
             break;
@@ -1019,7 +1036,7 @@ inline std::string SerializeASTJson(const AST& ast, NodeRef root,
     std::ostringstream json;
     bool first = true;
     json << "{";
-    AppendStringField(json, first, "schema", "bwsl.ast.v1");
+    AppendStringField(json, first, "schema", "bwsl.ast.v2");
     AppendStringField(json, first, "sourceFile", sourceFile);
     AppendFieldName(json, first, "root");
     AppendNode(json, ast, root, 0);

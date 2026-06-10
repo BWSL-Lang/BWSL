@@ -1249,7 +1249,9 @@ NodeRef Parser::ParseEvalBlock() {
         }
     }
 
-    Consume(TokenType::RIGHT_BRACE, "Expected '}' after eval block");
+    if (Consume(TokenType::RIGHT_BRACE, "Expected '}' after eval block")) {
+        MarkNodeEndAtPreviousToken(block);
+    }
 
     SymbolTable::ExitScope(&symbolTable);
     return block;
@@ -1747,7 +1749,9 @@ NodeRef Parser::ParseSwitch() {
         }
     }
 
-    Consume(TokenType::RIGHT_BRACE, "Expected '}' after switch body");
+    if (Consume(TokenType::RIGHT_BRACE, "Expected '}' after switch body")) {
+        MarkNodeEndAtPreviousToken(switchNode);
+    }
 
     return switchNode;
 }
