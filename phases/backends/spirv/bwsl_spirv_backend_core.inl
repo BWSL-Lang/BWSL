@@ -77,6 +77,11 @@ void SPIRVBuilder::Initialize(BWSL_Arena *arena, IR::IRProgram *ir,
   spirvTypeOverrides = (u32 *)arena->Allocate(idCapacity * sizeof(u32), 64);
   memset(spirvTypeOverrides, 0, idCapacity * sizeof(u32));
 
+  // Reset struct-array scratch variable tracking
+  structArrayScratchCount = 0;
+  memset(structArrayScratchTypeIds, 0, sizeof(structArrayScratchTypeIds));
+  memset(structArrayScratchVarIds, 0, sizeof(structArrayScratchVarIds));
+
   // Initialize constant pools
   constantCount = 0;
   floatConstantIds = (u32 *)arena->Allocate(ir->floatCount * sizeof(u32), 64);

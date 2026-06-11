@@ -57,6 +57,25 @@ struct SPIRVBuilder {
     // 0 = no override (use normal type lookup), non-zero = use this SPIR-V type ID
     alignas(64) u32* spirvTypeOverrides;
 
+    // Scratch Function-storage variables used to implement dynamic indexing
+    // of struct-field array *values* (which live in SSA registers, not
+    // memory). One variable per distinct array type, pre-declared in the
+    // entry block (OpVariable must appear there) by scanning the IR for
+    // OP_STRUCT_EXTRACT of array fields.
+    static constexpr u32 MAX_STRUCT_ARRAY_SCRATCH = 16;
+    u32 structArrayScratchTypeIds[MAX_STRUCT_ARRAY_SCRATCH] = {0};
+    u32 structArrayScratchVarIds[MAX_STRUCT_ARRAY_SCRATCH] = {0};
+    u32 structArrayScratchCount = 0;
+
+    u32 GetStructArrayScratchVar(u32 arrayTypeId) {
+        for (u32 i = 0; i < structArrayScratchCount; i++) {
+            if (structArrayScratchTypeIds[i] == arrayTypeId) {
+                return structArrayScratchVarIds[i];
+            }
+        }
+        return 0;
+    }
+
     // Texture type IDs (cached for reuse)
     u32 imageTypeId = 0;              // OpTypeImage for 2D sampled texture
     u32 arrayImageTypeId = 0;         // OpTypeImage for 2D array sampled texture

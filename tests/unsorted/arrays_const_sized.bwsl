@@ -1,5 +1,6 @@
 // Test: Array sizes resolved from compile-time constant names
-// Tests: const-sized struct member arrays, loops bounded by the same constants
+// Tests: const-sized struct member arrays (matrix and scalar elements),
+// loops bounded by the same constants
 // NOTE: docs/language.md says array sizes can be "constant names that resolve
 // at compile time", but the parser only accepts that for struct fields
 // (bwsl_parser_soa_types.inl). Local and shared array declarations require a
@@ -11,12 +12,8 @@ pipeline ArraysConstSized {
     const int BONE_COUNT = 4;
     const int TILE = 16;
 
-    // NOTE: deliberately a scalar array: struct fields that are arrays of
-    // vectors or matrices (float4 bones[N], mat4 bones[N]) currently emit
-    // invalid SPIR-V when the element is read back (mistyped registers in
-    // struct-array lowering). Upgrade this to mat4 bones[BONE_COUNT] once
-    // that bug is fixed.
     struct Skin {
+        mat4 bones[BONE_COUNT];
         float boneWeights[BONE_COUNT];
     }
 
@@ -32,12 +29,17 @@ pipeline ArraysConstSized {
         use attributes { position }
 
         vertex {
-            // Struct member array sized by a pipeline constant
+            // Struct member arrays sized by a pipeline constant, with
+            // matrix and scalar elements written through dynamic indices
             Skin skin;
             for (int b = 0; b < BONE_COUNT; b++) {
+                skin.bones[b] = mat4(1.0, 0.0, 0.0, 0.0,
+                                     0.0, 1.0, 0.0, 0.0,
+                                     0.0, 0.0, 1.0, 0.0,
+                                     0.0, 0.0, 0.0, 1.0);
                 skin.boneWeights[b] = float(b) * 0.25;
             }
-            float4 p = float4(attributes.position * skin.boneWeights[1], 1.0);
+            float4 p = skin.bones[1] * float4(attributes.position * skin.boneWeights[1], 1.0);
 
             // Local array: literal size, loop bounded by the constant
             float taps[5];

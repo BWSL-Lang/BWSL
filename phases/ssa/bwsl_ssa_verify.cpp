@@ -104,7 +104,8 @@ bool VerifySSA(const IR::IRProgram* ir) {
             // Skip non-register operands based on opcode
             // (VEC_INSERT/EXTRACT operand 1 is an immediate index)
             if ((opCode == IR::OP_VEC_INSERT || opCode == IR::OP_VEC_EXTRACT || opCode == IR::OP_ENUM_FIELD ||
-                 opCode == IR::OP_STRUCT_INSERT || opCode == IR::OP_STRUCT_EXTRACT) && opIdx == 1) continue;
+                 opCode == IR::OP_STRUCT_INSERT || opCode == IR::OP_STRUCT_EXTRACT ||
+                 opCode == IR::OP_STRUCT_ARRAY_EXTRACT || opCode == IR::OP_STRUCT_ARRAY_INSERT) && opIdx == 1) continue;
 
             u16 reg = ir->GetOperand(i, opIdx);
 

@@ -29,23 +29,30 @@ collection's own name and broke its array-length lookup. Coverage lives in
 `tests/unsorted/loops_foreach_multirange.bwsl` (implicit `it`, nested
 shadowing, and `it` as an ordinary variable name).
 
-## 3. Struct fields that are arrays of vectors/matrices miscompile (`struct_vector_array_invalid_spirv.bwsl`)
+## 3. ~~Struct fields that are arrays of vectors/matrices miscompile~~ (FIXED)
 
-A struct field like `float4 v[4]` or `mat4 bones[4]` parses and lowers, but
-reading an element back produces mistyped registers and invalid SPIR-V, e.g.:
+Fixed with fused two-level access opcodes (`OP_STRUCT_ARRAY_EXTRACT` /
+`OP_STRUCT_ARRAY_INSERT`): `s.field[i]` reads and writes now address
+`struct.field[elem]` in a single instruction (multi-index
+OpCompositeExtract/Insert for constant indices, a pre-declared
+Function-storage scratch variable + OpAccessChain for dynamic indices),
+and writes reconstitute the struct via store-back. This also avoids
+materializing array-typed temporaries, which SPIRV-Cross MSL cannot
+assign. Investigation showed scalar arrays were silently broken too —
+stores into `float w[4]` fields were dropped (the old path stored into
+an extracted copy); these are fixed by the same change.
 
-```
-error: Expected arithmetic operands to be of Result Type: FMul operand index 2
-error: Expected total number of given components to be equal to the size of Result Type vector
-```
+Coverage: `tests/unsorted/structs_vector_matrix_array_fields.bwsl`
+(mat4/float4/float element arrays, constant and dynamic indices) and
+`tests/unsorted/arrays_const_sized.bwsl`.
 
-Scalar arrays (`float w[4]`) and arrays of structs (`Pose[2] poses`) work.
-The bug is in struct-array element lowering (`phases/ir_lowering/`,
-struct GEP/load path). The repro fails even with constant indices and no
-control flow.
-Once fixed: upgrade `tests/unsorted/arrays_const_sized.bwsl` and
-`tests/unsorted/structs_array_of_structs_methods.bwsl` to use vector/matrix
-element arrays.
+Remaining gaps (pre-existing, narrower):
+- Nested chains that write *through* an element of a struct-array field
+  (`s.frames[i].time = x` where `frames` is an array field) still go
+  through the old extract/ARRAY_STORE path and may drop the write.
+- Whole-array reads of struct fields (e.g. passing `s.bones` to a
+  function) still materialize the array value, which SPIRV-Cross MSL
+  cannot always assign.
 
 ## 4. Const-name array sizes only work for struct fields (`const_array_size_local.bwsl`)
 
