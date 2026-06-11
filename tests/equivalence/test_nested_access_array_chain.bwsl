@@ -19,6 +19,18 @@ pipeline EquivNestedAccessArrayChain {
         float  bias;
     };
 
+    summarize :: (Cell[4] cells) -> float {
+        float total = 0.0;
+        for (int i = 0; i < 4; i = i + 1) {
+            total = total +
+                cells[i].pos.x * 0.5 +
+                cells[i].pos.y * 0.25 +
+                cells[i].pos.z * 0.125 +
+                cells[i].weight;
+        }
+        return total;
+    }
+
     pass "Compute" {
         use resources { output }
         compute "Main" [4, 1, 1] {
@@ -52,6 +64,7 @@ pipeline EquivNestedAccessArrayChain {
             // Write-through chain: update a specific element's field and
             // re-read through a different index path.
             g.items[pick].weight = g.items[pick].weight + g.bias;
+            float whole = summarize(g.items);
             float reread = g.items[(pick + 1) & 3].pos.x + g.items[pick].weight;
 
             float score =
@@ -59,6 +72,7 @@ pipeline EquivNestedAccessArrayChain {
                 chosenW * 0.001 +
                 sumPos.x * 0.0001 + sumPos.y * 0.00001 + sumPos.z * 0.000001 +
                 sumW * 0.0000001 +
+                whole * 0.000001 +
                 reread * 0.00000001;
 
             resources.output[idx] = score;
