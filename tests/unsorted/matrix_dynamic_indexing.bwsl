@@ -1,0 +1,42 @@
+// Test: Matrix column and element indexing
+// Tests: constant and dynamic column index, two-level m[i][j] element access,
+//        indexing the result of transpose(), matrix arithmetic combinations
+
+pipeline MatrixDynamicIndexing {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            mat4 m = mat4(1.0);
+            mat3 m3 = mat3(
+                float3(1.0, 0.0, 0.0),
+                float3(0.0, 1.0, 0.0),
+                float3(0.0, 0.0, 1.0)
+            );
+
+            // Constant column and element access
+            float4 col = m[2];
+            float elem = m[1][3];
+
+            // Dynamic column and element access
+            int i = int(attributes.position.x);
+            float4 dynCol = m[i];
+            float dynElem = m[i][i];
+
+            // Indexing an intermediate matrix expression result
+            mat3 mm = m3 * m3;
+            float3 t0 = transpose(mm)[0];
+
+            // Matrix scalar math and addition
+            mat4 scaled = m * 2.0;
+            mat4 summed = m + scaled;
+
+            float3 r = (mm * attributes.position) + t0;
+            output.position = summed * float4(r, 1.0) + col + dynCol * (elem + dynElem);
+        }
+    }
+}

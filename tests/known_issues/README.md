@@ -72,3 +72,82 @@ Coverage lives in the existing packing tests: `attributes_compressed_instance`,
 the pack/unpack fuzz regressions. `python3 tests/run_tests.py --compiler
 ./build/bwslc --gles --no-spirv-val` validates all GLES outputs with
 `glslangValidator`.
+
+## 6. Scalar float varyings emit a type-mismatched OpStore
+
+`output.brightness = 0.75;` in a vertex stage declares the varying interface
+variable with a type that does not match the stored scalar, so spirv-val
+rejects the stage (`OpStore Pointer ... type does not match Object`).
+Vector varyings (`float2`/`float3`/`float4`) work. Repro:
+`scalar_varying_store.bwsl`.
+
+## 7. Loop `break` after a `switch` in the same loop body
+
+A conditional `break` that follows a `switch` statement inside a loop emits an
+`OpBranchConditional` whose condition ID is never defined. Either construct
+alone is fine; the combination is broken. Repro: `loop_break_after_switch.bwsl`.
+
+## 8. Vector comparison assigned to scalar `bool`
+
+`bool eq = a == b;` with vector operands is accepted by the front end, then
+produces a scalar `OpSelect` over a `bool3` condition, which spirv-val rejects.
+`all(a == b)` / `any(a == b)` work correctly (covered by
+`tests/unsorted/bool_vectors_select.bwsl`); the scalar assignment needs a
+front-end diagnostic. Repro: `vec_compare_scalar_bool.bwsl`.
+
+## 9. `sample()` in vertex stages emits ImplicitLod
+
+`sample(...)` in a vertex stage emits `OpImageSampleImplicitLod`, which SPIR-V
+forbids outside fragment-like execution models. Needs either a diagnostic
+pointing at `sample_lod` or automatic lowering to explicit LOD 0.
+`sample_lod(...)` works in vertex today (covered by
+`tests/unsorted/vertex_texture_fetch_lod.bwsl`). Repro:
+`sample_implicit_lod_vertex.bwsl`.
+
+## 10. `mat3(mat4)` truncation constructor miscompiles
+
+The conversion constructor treats the source matrix as a scalar constituent
+and emits `OpCompositeConstruct %v3float %m %m %m`, which is invalid. Needs
+real column truncation or a rejection diagnostic. Repro: `mat3_from_mat4.bwsl`.
+
+## 11. Missing front-end semantic validation (wrong-accepts)
+
+These invalid programs compile without any diagnostic and produce valid (but
+semantically wrong or meaningless) SPIR-V. Each has a `wrong_accept_*.bwsl`
+repro that currently **compiles successfully**:
+
+- `wrong_accept_break_outside_loop.bwsl` — `break`/`continue` outside any loop
+- `wrong_accept_const_reassign.bwsl` — assignment to a pipeline-scope `const`
+- `wrong_accept_duplicate_params.bwsl` — two function parameters with one name
+- `wrong_accept_missing_return.bwsl` — non-void function with a fall-through
+  path that returns no value
+- `wrong_accept_swizzle_dup_write.bwsl` — write mask with repeated component
+  (`v.xx = ...`)
+- `wrong_accept_vec_ctor_arity.bwsl` — `float4(a, b, c)` silently zero-pads
+  the missing component
+- `wrong_accept_attribute_write.bwsl` — assignment to `attributes.*` inputs
+- `wrong_accept_array_oob_const.bwsl` — statically out-of-bounds and negative
+  constant array indices
+
+Also in this family but caught late by the embedded spirv-val (so they do fail,
+just with a poor diagnostic): unknown struct fields, out-of-range swizzles on
+narrow vectors, mismatched ternary arm types, and bool-to-float assignment.
+Those are locked in as `tests/error_cases/*` with the expectation
+`"SPIR-V validation failed"`; when proper front-end diagnostics are added,
+update the expected messages in `tests/run_tests.py`.
+
+## Notable limitations (rejected, possibly by design)
+
+Recorded here so future test writers don't re-discover them:
+
+- Array-typed function parameters (`f :: (float vals[4]) -> ...`) fail to
+  parse ("Expected ')' after parameters"). Workaround: wrap in a struct.
+- `texture2D`/`sampler` function parameters fail to parse.
+- Negative `case` labels are rejected ("switch case values must be
+  compile-time literals") even though `-1` is a constant expression.
+- Comma lists in `for` init/increment clauses are rejected.
+- Leading-dot float literals (`.5`) and digit separators (`1_000`) are
+  rejected; trailing-dot (`1.`) is accepted.
+- Pipeline-scope `eval` consts: `const int BAD = 1 / 0;` is accepted and
+  folds silently; integer literal overflow (`2147483648`) is accepted and
+  wraps.

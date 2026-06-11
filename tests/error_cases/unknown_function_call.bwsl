@@ -1,0 +1,15 @@
+// Error case: calling a function that was never declared.
+pipeline UnknownFunctionCall {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float r = notAFunction(1.0);
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

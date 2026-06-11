@@ -1,0 +1,19 @@
+// Wrong-accept: a function with two parameters of the same name compiles
+// without diagnostics; the second silently shadows the first.
+pipeline WrongAcceptDuplicateParams {
+    attributes {
+        position: float3
+    }
+
+    f :: (float a, float a) -> float {
+        return a;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, f(1.0, 2.0));
+        }
+    }
+}

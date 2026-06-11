@@ -1,0 +1,31 @@
+// Test: Edge-case literal spellings and comment forms
+// Tests: trailing-dot float literals, exponent spellings (e/E, +/-),
+//        binary and hex literals in expressions, nested block comments
+
+pipeline LiteralsEdgeFormats {
+    attributes {
+        position: float3
+    }
+
+    /* outer /* nested block comment */ still inside the outer comment */
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Trailing-dot float literal
+            float a = 1.;
+
+            // Exponent spellings
+            float b = 1e3;
+            float c = 1E-3;
+            float d = 1.5e+2;
+
+            // Binary and hex literals used directly in arithmetic
+            uint bits = 0b1010u | 0x30u;
+            uint shifted = 0b1u << 4u;
+
+            output.position = float4(attributes.position, a + b + c + d + float(bits + shifted));
+        }
+    }
+}

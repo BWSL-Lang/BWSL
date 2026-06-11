@@ -1,0 +1,17 @@
+// Error case: assigning a bool to a float local must not compile to a valid
+// shader. Currently caught by SPIR-V validation rather than a front-end
+// diagnostic (see tests/known_issues/README.md).
+pipeline BoolAssignedToFloat {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float x = true;
+            output.position = float4(attributes.position, x);
+        }
+    }
+}

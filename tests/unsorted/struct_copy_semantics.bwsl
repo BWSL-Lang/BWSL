@@ -1,0 +1,57 @@
+// Test: Struct value semantics
+// Tests: nested struct copy on assignment, struct returned from a helper,
+//        mutation after copy not aliasing the source, ternary struct select,
+//        empty struct declaration
+
+pipeline StructCopySemantics {
+    attributes {
+        position: float3
+    }
+
+    struct Inner {
+        float2 uv;
+        float w;
+    }
+
+    struct Outer {
+        Inner inner;
+        float3 pos;
+    }
+
+    struct Empty {}
+
+    makeOuter :: (float w) -> Outer {
+        Outer o;
+        o.inner.uv = float2(w, w * 2.0);
+        o.inner.w = w;
+        o.pos = float3(0.0, 1.0, 2.0);
+        return o;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            Outer a = makeOuter(3.0);
+
+            // Copy, then mutate the copy: a.inner.w must stay 3.0.
+            Outer b = a;
+            b.inner.w = 9.0;
+            float noAlias = a.inner.w + b.inner.w; // 3 + 9 == 12
+
+            // Ternary selecting between whole structs
+            Inner i1;
+            i1.uv = float2(1.0, 2.0);
+            i1.w = 1.0;
+            Inner i2;
+            i2.uv = float2(3.0, 4.0);
+            i2.w = 2.0;
+            bool c = attributes.position.x > 0.0;
+            Inner sel = c ? i1 : i2;
+
+            Empty e;
+
+            output.position = float4(attributes.position + b.pos, noAlias + sel.w + sel.uv.x);
+        }
+    }
+}
