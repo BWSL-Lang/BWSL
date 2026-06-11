@@ -1,0 +1,41 @@
+// Scalar varyings: the vertex-to-fragment interface variable must be
+// declared with the scalar's own type, not a vector fallback.
+//
+// Regression test for known issue 6: `output.brightness = 0.75;` stored a
+// scalar float constant into a varying declared float4 (constant
+// pseudo-registers carry their type in high bits, which IR analysis did
+// not decode), failing SPIR-V validation with "OpStore Pointer's type
+// does not match Object's type".
+pipeline ScalarVaryings {
+
+attributes {
+    position: float3
+}
+
+pass "Main" {
+    use attributes { position }
+
+    vertex {
+        // Scalar varying fed directly from a float constant (the original bug:
+        // constant pseudo-register, no entry in registerTypes)
+        output.brightness = 0.75;
+
+        // Scalar varying fed from a computed expression (real register path)
+        float fade = attributes.position.x * 0.5 + 0.5;
+        output.fade = fade;
+
+        // Vector varying alongside the scalars, to check location assignment
+        output.tint = float3(0.2, 0.4, 0.8);
+
+        output.position = float4(attributes.position, 1.0);
+    }
+
+    fragment {
+        float b = input.brightness;
+        float f = input.fade;
+        float3 t = input.tint;
+        output.color = float4(t * b, f);
+    }
+}
+
+}

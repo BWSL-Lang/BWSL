@@ -72,3 +72,19 @@ Coverage lives in the existing packing tests: `attributes_compressed_instance`,
 the pack/unpack fuzz regressions. `python3 tests/run_tests.py --compiler
 ./build/bwslc --gles --no-spirv-val` validates all GLES outputs with
 `glslangValidator`.
+
+## 6. ~~Scalar float varyings fail SPIR-V validation~~ (FIXED)
+
+`output.brightness = 0.75;` in a vertex stage declared the varying interface
+variable as float4 (the fallback) while storing a scalar float, so spirv-val
+rejected it with "OpStore Pointer's type does not match Object's type".
+Constant operands are encoded as pseudo-registers with the type in the high
+bits (`0x8000` float, `0x4000` int, `0x2000` uint, `0xC000` bool — see
+`IRLowering::GetRegisterType`), so the `OP_STORE_OUTPUT` case in
+`phases/ir_generation/bwsl_ir_analysis.cpp` never found them in
+`registerTypes` and left `outputTypes[slot]` unset. Fixed by decoding the
+constant prefix there. Varyings fed from real registers (vectors, computed
+scalars) already carried the right type.
+
+Coverage lives in `tests/unsorted/varyings_scalar.bwsl` (constant-fed scalar,
+expression-fed scalar, and a vector varying for location assignment).
