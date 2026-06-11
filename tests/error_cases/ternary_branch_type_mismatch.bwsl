@@ -1,0 +1,18 @@
+// Error case: ternary arms of different vector widths must not compile to a
+// valid shader. Currently caught by SPIR-V validation rather than a
+// front-end diagnostic (see tests/known_issues/README.md).
+pipeline TernaryBranchTypeMismatch {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            bool c = true;
+            float3 r = c ? float3(1.0, 0.0, 0.0) : float2(0.0, 1.0);
+            output.position = float4(attributes.position + r, 1.0);
+        }
+    }
+}

@@ -1,0 +1,17 @@
+// Wrong-accept: float4 constructed from only three components compiles
+// without diagnostics and silently zero-pads the missing lane:
+//   %13 = OpCompositeConstruct %v4float %float_1 %float_2 %float_3 %float_0
+pipeline WrongAcceptVecCtorArity {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float4 v = float4(1.0, 2.0, 3.0);
+            output.position = v;
+        }
+    }
+}

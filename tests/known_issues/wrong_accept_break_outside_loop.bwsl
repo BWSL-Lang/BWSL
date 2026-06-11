@@ -1,0 +1,17 @@
+// Wrong-accept: `break` and `continue` outside any loop or switch compile
+// without diagnostics and produce valid (but meaningless) SPIR-V.
+pipeline WrongAcceptBreakOutsideLoop {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            break;
+            continue;
+            output.position = float4(attributes.position, 1.0);
+        }
+    }
+}

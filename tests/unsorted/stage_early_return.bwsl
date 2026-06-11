@@ -1,0 +1,31 @@
+// Test: Early return from stage bodies
+// Tests: bare return inside a vertex stage conditional, statements after
+//        the early-return branch, early return in fragment before output
+
+pipeline StageEarlyReturn {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+            if (attributes.position.x > 100.0) {
+                return;
+            }
+            output.position = float4(attributes.position * 2.0, 1.0);
+        }
+
+        fragment {
+            output.color = float4(0.0, 0.0, 0.0, 1.0);
+            if (input.uv.x < 0.0) {
+                return;
+            }
+            output.color = float4(input.uv, 0.0, 1.0);
+        }
+    }
+}

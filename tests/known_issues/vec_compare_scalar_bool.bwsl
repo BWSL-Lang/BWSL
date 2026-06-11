@@ -1,0 +1,22 @@
+// Known issue: assigning a vector comparison result to a scalar bool is
+// accepted by the front end, then produces an invalid scalar OpSelect over a
+// bool3 condition:
+//   Expected vector sizes of Result Type and the condition to be equal: Select
+// The valid spelling `all(a == b)` / `any(a == b)` works correctly; the bad
+// scalar assignment should be rejected with a front-end diagnostic.
+pipeline VecCompareScalarBool {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float3 a = attributes.position;
+            float3 b = float3(1.0, 2.0, 3.0);
+            bool eq = a == b;
+            output.position = float4(attributes.position, eq ? 1.0 : 0.0);
+        }
+    }
+}

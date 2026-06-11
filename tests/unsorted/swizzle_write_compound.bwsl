@@ -1,0 +1,39 @@
+// Test: Compound assignment through swizzles and chained swizzle reads
+// Tests: +=, -=, *= on swizzle lvalues, multi-component write masks,
+//        swizzles of swizzles, rgba aliases on swizzle results
+
+pipeline SwizzleWriteCompound {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float4 v = float4(1.0, 2.0, 3.0, 4.0);
+
+            // Compound assignment through multi-component swizzles
+            v.xy += float2(0.5, 0.5);
+            v.zw -= float2(1.0, 1.0);
+            v.xz *= 2.0;
+
+            // Single-component compound assignment
+            v.x -= 1.0;
+            v.w += 0.25;
+
+            // Reversed-order write mask
+            v.wy = float2(10.0, 20.0);
+
+            // Swizzle reads of swizzle results
+            float2 a = v.xyz.yx;
+            float b = v.wzyx.x;
+            float3 c = v.xxyy.rgb;
+
+            // Color-channel aliases mixed with positional ones
+            float2 d = v.rg + v.xy;
+
+            output.position = float4(attributes.position, a.x + b + c.z + d.y);
+        }
+    }
+}

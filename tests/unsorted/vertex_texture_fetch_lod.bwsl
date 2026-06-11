@@ -1,0 +1,31 @@
+// Test: Explicit-LOD texture sampling in the vertex stage
+// Tests: sample_lod from a vertex shader (implicit-LOD sample() is not
+//        legal outside fragment), displacement of the output position
+
+pipeline VertexTextureFetchLod {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    resources {
+        heightMap: texture2D
+        heightSampler: sampler
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+        use resources { heightMap, heightSampler }
+
+        vertex {
+            float4 h = sample_lod(resources.heightMap, resources.heightSampler, attributes.texcoord, 0.0);
+            float3 displaced = attributes.position + float3(0.0, h.r, 0.0);
+            output.position = float4(displaced, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            output.color = float4(input.uv, 0.0, 1.0);
+        }
+    }
+}

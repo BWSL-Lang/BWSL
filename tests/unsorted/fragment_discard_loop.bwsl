@@ -1,0 +1,39 @@
+// Test: discard under nested control flow
+// Tests: discard inside a loop body, discard guarded by nested ifs,
+//        code after potentially-discarding control flow still executes
+
+pipeline FragmentDiscardLoop {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float a = input.uv.x;
+
+            // discard from inside a loop
+            for (int i = 0; i < 3; i = i + 1) {
+                if (a < float(i) * 0.25) {
+                    discard;
+                }
+            }
+
+            // discard behind a nested condition after the loop
+            if (a > 0.5) {
+                if (a > 0.9) {
+                    discard;
+                }
+            }
+
+            output.color = float4(a, a, a, 1.0);
+        }
+    }
+}

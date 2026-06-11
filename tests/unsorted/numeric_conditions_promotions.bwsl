@@ -1,0 +1,38 @@
+// Test: Numeric conditions and implicit int-to-float promotion
+// Tests: integer used as an if condition, int literals in float contexts
+//        (declarations, constructors, mixed arithmetic), float modulo,
+//        locals shadowing intrinsic names
+
+pipeline NumericConditionsPromotions {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Integer condition: nonzero is true
+            int n = 3;
+            float r = 0.0;
+            if (n) {
+                r = 1.0;
+            }
+
+            // Int literals promoted in float contexts
+            float x = 1;
+            float4 v = float4(1, 2, 3, 4);
+            float y = 2 * 0.5;
+            float z = 1 / 2.0;
+
+            // Float modulo
+            float fm = 5.5 % 2.0;
+
+            // Locals named after intrinsics still parse and resolve as locals
+            float dot = 1.0;
+            float cross = dot * 2.0;
+
+            output.position = float4(attributes.position, r + x + v.w + y + z + fm + dot + cross);
+        }
+    }
+}

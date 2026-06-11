@@ -1,0 +1,51 @@
+// Test: Integer arithmetic edge cases
+// Tests: signed division/modulo with negative operands, unsigned wraparound,
+//        constant and variable shift amounts, arithmetic vs logical shift,
+//        integer vector negation/modulo/shift, mixed signed/unsigned compare
+
+pipeline IntegerOpsEdge {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int a = 7;
+            int b = -3;
+
+            // Signed division and modulo with a negative divisor
+            int q = a / b;
+            int m = a % b;
+
+            // Unsigned wraparound
+            uint ua = 0xFFFFFFFFu;
+            uint wrap = ua + 2u;
+
+            // Shifts: constant, arithmetic right on a negative value,
+            // logical right on unsigned, and a variable shift amount
+            int sh = a << 2;
+            int shr = (-8) >> 1;
+            uint ushr = ua >> 4u;
+            int v = int(attributes.position.x);
+            int dynsh = a << v;
+
+            // Integer vector operations
+            int3 iv = int3(1, -2, 3);
+            int3 ivneg = -iv;
+            int3 ivmod = iv % int3(2, 2, 2);
+            uint2 uv = uint2(8u, 16u) >> uint2(1u, 2u);
+
+            // Mixed signed/unsigned comparison
+            uint threshold = 2u;
+            bool below = a < threshold;
+
+            float r = float(q + m + sh + shr + dynsh)
+                + float(wrap + ushr + uv.x + uv.y)
+                + float(ivneg.y + ivmod.z)
+                + (below ? 1.0 : 0.0);
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

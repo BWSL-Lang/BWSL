@@ -1,0 +1,17 @@
+// Error case: pipeline scope only allows const declarations, not mutable
+// variables.
+pipeline PipelineScopeMutableVar {
+    attributes {
+        position: float3
+    }
+
+    float counter = 0.0;
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, counter);
+        }
+    }
+}

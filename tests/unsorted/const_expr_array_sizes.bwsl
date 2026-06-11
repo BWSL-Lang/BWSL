@@ -1,0 +1,32 @@
+// Test: Pipeline constants computed from other constants
+// Tests: const initializers using arithmetic and ternaries over earlier
+//        consts, derived consts used as array sizes and loop bounds
+
+pipeline ConstExprArraySizes {
+    attributes {
+        position: float3
+    }
+
+    const float A = 2.0;
+    const float B = A * 3.0 + 1.0;
+    const bool FLAG = true;
+    const float C = FLAG ? B : A;
+
+    const int N = 4;
+    const int M = N * 2;
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Array sized by a const derived from another const
+            float vals[M];
+            for (int i = 0; i < M; i = i + 1) {
+                vals[i] = float(i) * A;
+            }
+            vals[N] = B + C;
+
+            output.position = float4(attributes.position, vals[N] + vals[M - 1] + float(M));
+        }
+    }
+}

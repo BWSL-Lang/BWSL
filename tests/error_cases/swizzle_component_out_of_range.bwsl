@@ -1,0 +1,18 @@
+// Error case: reading .z from a float2 must not compile to a valid shader.
+// Currently caught by SPIR-V validation rather than a front-end diagnostic
+// (see tests/known_issues/README.md).
+pipeline SwizzleComponentOutOfRange {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float2 v = float2(1.0, 2.0);
+            float bad = v.z;
+            output.position = float4(attributes.position, bad);
+        }
+    }
+}
