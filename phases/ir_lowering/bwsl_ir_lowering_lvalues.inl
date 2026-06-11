@@ -917,8 +917,76 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
     }
   } else if (target.Type() == ASTNodeType::ARRAY_ACCESS) {
     const ArrayAccessData &arrAccess = ast->GetArrayAccess(target);
+
+    // `s.field[i] = value` where `field` is an array held by value in a
+    // struct register. Extracting the array and storing into the copy
+    // loses the write, and materializing array-typed temporaries breaks
+    // SPIRV-Cross MSL output. Instead emit a fused two-level insert that
+    // produces the updated struct value, then store it back — the same
+    // insert-and-store-back pattern plain field assignments use.
+    if (arrAccess.array.Type() == ASTNodeType::MEMBER_ACCESS) {
+      const MemberAccessData &fieldAccess =
+          ast->GetMemberAccess(arrAccess.array);
+      if (fieldAccess.object.Type() == ASTNodeType::IDENTIFIER) {
+        const IdentifierData &obj = ast->GetIdentifier(fieldAccess.object);
+        if (obj.identifierKind == SpecialIdentifier::NONE ||
+            obj.identifierKind == SpecialIdentifier::SELF) {
+          u32 structTypeHash = 0;
+          auto varIt = variableStructTypes.find(obj.name.nameHash);
+          if (varIt != variableStructTypes.end()) {
+            structTypeHash = varIt->second;
+          }
+
+          auto structIt = structTypeHash != 0
+                              ? structTypeMap.find(structTypeHash)
+                              : structTypeMap.end();
+          if (structIt != structTypeMap.end()) {
+            const IRProgram::StructTypeInfo &info =
+                program.structTypes[structIt->second];
+            for (u16 fi = 0; fi < info.fieldCount; fi++) {
+              if (program.structFieldNameHashes[info.fieldOffset + fi] !=
+                  fieldAccess.member.nameHash) {
+                continue;
+              }
+              if (!program.structFieldArraySizes ||
+                  program.structFieldArraySizes[info.fieldOffset + fi] == 0) {
+                break; // Not an array field - use the regular paths below
+              }
+
+              if (currentStructMethodIsConst &&
+                  obj.name.nameHash == Utils::HashStr("self")) {
+                ReportError("Error: cannot assign to receiver field inside "
+                            "const method\n");
+                return;
+              }
+
+              u16 objReg = GetOrAllocateVariable(obj.name.nameHash);
+              if (initializedVariables.find(obj.name.nameHash) ==
+                  initializedVariables.end()) {
+                u16 zeroStruct = EmitZeroStruct(structTypeHash);
+                builder.EmitInstruction(OP_STORE_REG, objReg, zeroStruct);
+                initializedVariables.insert(obj.name.nameHash);
+              }
+
+              u16 indexReg = LowerExpression(arrAccess.index);
+              u16 newStructReg = AllocateRegister();
+              SetRegisterType(newStructReg, CoreType::CUSTOM);
+              program.registerStructTypes[newStructReg] = structTypeHash;
+              builder.EmitInstruction(OP_STRUCT_ARRAY_INSERT, newStructReg,
+                                      objReg, fi, indexReg, valueReg);
+              program.metadata[builder.currentInstruction - 1] =
+                  structTypeHash;
+              builder.EmitInstruction(OP_STORE_REG, objReg, newStructReg);
+              return;
+            }
+          }
+        }
+      }
+    }
+
     u16 baseReg = LowerExpression(arrAccess.array);
     u16 indexReg = LowerExpression(arrAccess.index);
+
     // `v[i] = x` where `v` is a scalar vector local (not `v` declared as
     // `float3[N]`) must go through OpVectorInsertDynamic —
     // OpCompositeInsert can't take a runtime literal index. Distinguish
@@ -1025,6 +1093,66 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
 inline u16 IRLowering::LowerArrayAccess(NodeRef ref) {
   const ArrayAccessData &access = ast->GetArrayAccess(ref);
 
+  // `s.field[i]` where `field` is an array held by value in a struct
+  // register: emit a fused two-level extract instead of materializing the
+  // array as a temporary (the array copy mistypes element reads and the
+  // array-typed temporary breaks SPIRV-Cross MSL output).
+  if (access.array.Type() == ASTNodeType::MEMBER_ACCESS) {
+    const MemberAccessData &fieldAccess = ast->GetMemberAccess(access.array);
+    if (fieldAccess.object.Type() == ASTNodeType::IDENTIFIER) {
+      const IdentifierData &obj = ast->GetIdentifier(fieldAccess.object);
+      if (obj.identifierKind == SpecialIdentifier::NONE ||
+          obj.identifierKind == SpecialIdentifier::SELF) {
+        u32 structTypeHash = 0;
+        auto varIt = variableStructTypes.find(obj.name.nameHash);
+        if (varIt != variableStructTypes.end()) {
+          structTypeHash = varIt->second;
+        }
+
+        auto structIt = structTypeHash != 0
+                            ? structTypeMap.find(structTypeHash)
+                            : structTypeMap.end();
+        if (structIt != structTypeMap.end()) {
+          const IRProgram::StructTypeInfo &info =
+              program.structTypes[structIt->second];
+          for (u16 fi = 0; fi < info.fieldCount; fi++) {
+            if (program.structFieldNameHashes[info.fieldOffset + fi] !=
+                fieldAccess.member.nameHash) {
+              continue;
+            }
+            if (!program.structFieldArraySizes ||
+                program.structFieldArraySizes[info.fieldOffset + fi] == 0) {
+              break; // Not an array field - use the regular paths below
+            }
+
+            u16 objReg = GetOrAllocateVariable(obj.name.nameHash);
+            u16 idxReg = LowerExpression(access.index);
+            u16 elemReg = AllocateRegister();
+            builder.EmitInstruction(OP_STRUCT_ARRAY_EXTRACT, elemReg, objReg,
+                                    fi, idxReg);
+            program.metadata[builder.currentInstruction - 1] = structTypeHash;
+
+            CoreType fieldType = static_cast<CoreType>(
+                program.structFieldTypes[info.fieldOffset + fi]);
+            SetRegisterType(elemReg, fieldType);
+            if ((fieldType == CoreType::CUSTOM ||
+                 fieldType == CoreType::ENUM) &&
+                program.structFieldTypeHashes) {
+              u32 elemStructHash =
+                  program.structFieldTypeHashes[info.fieldOffset + fi];
+              if (elemStructHash != 0 && elemReg < MAX_REGISTERS) {
+                u32 canonicalHash = LookupOrRegisterStructType(elemStructHash);
+                program.registerStructTypes[elemReg] =
+                    canonicalHash != 0 ? canonicalHash : elemStructHash;
+              }
+            }
+            return elemReg;
+          }
+        }
+      }
+    }
+  }
+
   u16 baseReg = LowerExpression(access.array);
   u16 indexReg = LowerExpression(access.index);
   u16 dest = AllocateRegister();
@@ -1103,6 +1231,13 @@ inline u16 IRLowering::LowerArrayAccess(NodeRef ref) {
       // scalar)
       bool isLocalArray = (program.registerStorageInfo[baseReg] &
                            IR::IRProgram::STORAGE_IS_LOCAL_ARRAY);
+
+      // Struct-field array values behave like local arrays: the register's
+      // CoreType is already the element type, so subscripting must not
+      // demote it (float4 element -> float, mat4 element -> column).
+      if (structArrayValueRegs.count(baseReg)) {
+        isLocalArray = true;
+      }
 
       if (!isLocalArray) {
         // Matrix subscript returns a column vector
@@ -1364,6 +1499,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
           builder.EmitInstruction(OP_STRUCT_EXTRACT, dest, objectReg,
                                   fieldIndex);
           program.metadata[builder.currentInstruction - 1] = structTypeHash;
+          MarkIfStructArrayField(dest, fieldOffset, fieldIndex, fieldType);
         }
 
         SetRegisterType(dest, fieldType);
@@ -1498,6 +1634,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
                   structTypeHash;
               CoreType fieldType = static_cast<CoreType>(
                   program.structFieldTypes[info.fieldOffset + i]);
+              MarkIfStructArrayField(dest, info.fieldOffset, i, fieldType);
               SetRegisterType(dest, fieldType);
               // Propagate nested-struct type info for further chaining.
               if ((fieldType == CoreType::CUSTOM ||
@@ -1868,6 +2005,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
         // Store full struct type hash in metadata (field index is in operand
         // 1)
         program.metadata[builder.currentInstruction - 1] = structTypeHash;
+        MarkIfStructArrayField(dest, fieldOffset, fieldIndex, fieldType);
         SetRegisterType(dest, fieldType);
         if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
             program.structFieldTypeHashes) {

@@ -345,6 +345,11 @@ private:
     NodeRef ParseArrayInitializer();
     NodeRef ParseInlineArrayConstruction();
     NodeRef ParseArrayDeclaration(CoreType elementType, StorageClass storageClass = StorageClass::Default);
+    // Parse one array-size token: an integer literal or a compile-time
+    // integer constant name (optionally module-qualified). Validates the
+    // value against MAX_ARRAY_SIZE, reports an error and returns false on
+    // failure. Does not consume the surrounding brackets.
+    bool ParseArraySizeValue(u32* outSize);
     NodeRef FlattenMultiDimArrayAccess(NodeRef access);
     TypeInfo ResolveType(const std::string& typeName);
     TypeInfo GetTypeInfoFromSymbol(Symbol* sym);

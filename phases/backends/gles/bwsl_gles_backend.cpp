@@ -1993,6 +1993,55 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
         }
 
+        case IR::OP_STRUCT_ARRAY_EXTRACT: {
+            // Element read from an array field: dest = struct.field[index]
+            u16 structReg = Op(instIdx, 0);
+            u16 fieldIdx = Op(instIdx, 1);
+            u16 indexReg = Op(instIdx, 2);
+            u32 structHash = ir->metadata[instIdx];
+            if (structHash == 0 && ir->registerStructTypes &&
+                structReg < ir->registerCount) {
+                structHash = ir->registerStructTypes[structReg];
+            }
+            EmitRegWithDecl(dest);
+            out.Lit(" = ");
+            EmitExpr(structReg);
+            out.Chr('.');
+            EmitStructFieldNameByIndex(structHash, fieldIdx);
+            out.Chr('[');
+            EmitExpr(indexReg);
+            out.Lit("];");
+            return;
+        }
+
+        case IR::OP_STRUCT_ARRAY_INSERT: {
+            // Element write into an array field:
+            // dest = struct with field[index] = value
+            u16 structReg = Op(instIdx, 0);
+            u16 fieldIdx = Op(instIdx, 1);
+            u16 indexReg = Op(instIdx, 2);
+            u16 valueReg = Op(instIdx, 3);
+            u32 structHash = ir->metadata[instIdx];
+            if (structHash == 0 && ir->registerStructTypes &&
+                structReg < ir->registerCount) {
+                structHash = ir->registerStructTypes[structReg];
+            }
+            EmitRegWithDecl(dest);
+            out.Lit(" = ");
+            EmitExpr(structReg);
+            out.Lit(";\n");
+            out.NL(indent);
+            EmitRegWithDecl(dest);
+            out.Chr('.');
+            EmitStructFieldNameByIndex(structHash, fieldIdx);
+            out.Chr('[');
+            EmitExpr(indexReg);
+            out.Lit("] = ");
+            EmitExpr(valueReg);
+            out.Lit(";");
+            return;
+        }
+
         // ===== Array Operations =====
         // Note: OP_ALLOC_ARRAY (0x1C) shares value with OP_LOAD_INPUT (0x1C)
         // OP_LOAD_INPUT is handled above with the other load operations
@@ -2771,6 +2820,25 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
             EmitExpr(structReg);
             out.Chr('.');
             EmitStructFieldNameByIndex(structHash, fieldIdx);
+            return;
+        }
+
+        case IR::OP_STRUCT_ARRAY_EXTRACT: {
+            // Inline element read from an array field: struct.field[index]
+            u16 structReg = Op(instIdx, 0);
+            u16 fieldIdx = Op(instIdx, 1);
+            u16 indexReg = Op(instIdx, 2);
+            u32 structHash = ir->metadata[instIdx];
+            if (structHash == 0 && ir->registerStructTypes &&
+                structReg < ir->registerCount) {
+                structHash = ir->registerStructTypes[structReg];
+            }
+            EmitExpr(structReg);
+            out.Chr('.');
+            EmitStructFieldNameByIndex(structHash, fieldIdx);
+            out.Chr('[');
+            EmitExpr(indexReg);
+            out.Chr(']');
             return;
         }
 

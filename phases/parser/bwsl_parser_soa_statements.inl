@@ -264,6 +264,16 @@ NodeRef Parser::ParseStatement() {
                 varData.typeInfo.customTypeHash = Utils::HashStr(typeStr.c_str());
             }
             varData.isConst = true;
+            varData.constExpr = value;
+
+            LiteralValue constValue;
+            if (constType.coreType != CoreType::INVALID &&
+                EvaluateNodeWithEvalBindings(value, &constValue) &&
+                CoerceLiteralToType(varData.typeInfo, &constValue)) {
+                varData.isEval = true;
+                varData.hasEvalValue = true;
+                varData.evalValue = constValue;
+            }
         } else {
             Error("Variable already declared in this scope");
             return NodeRef::Null();
@@ -437,28 +447,12 @@ NodeRef Parser::ParseStatement() {
         u32 arraySize = 0;
         std::vector<u32> arrayDims;
         while (Match(TokenType::LEFT_BRACKET)) {
-            Consume(TokenType::NUMBER, "Expected array size");
-            std::string_view sizeStr = PreviousValue();
-            int size = 0;
-
-#ifdef BWSL_WASM
-            char* endPtr = nullptr;
-            long parsed = std::strtol(sizeStr.data(), &endPtr, 10);
-            if (endPtr == sizeStr.data() || parsed <= 0 || parsed > INT_MAX) {
-                Error("Invalid or out-of-range array size");
-                return NodeRef::Null();
-            }
-            size = static_cast<int>(parsed);
-#else
-            size = SafeParseInt(sizeStr);
-#endif
-
-            if (size <= 0 || static_cast<u32>(size) > MAX_ARRAY_SIZE) {
-                Error("Invalid array size. Max 256k elements");
+            u32 size = 0;
+            if (!ParseArraySizeValue(&size)) {
                 return NodeRef::Null();
             }
             Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
-            arrayDims.push_back(static_cast<u32>(size));
+            arrayDims.push_back(size);
         }
 
         if (!arrayDims.empty()) {
@@ -592,15 +586,12 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
 
     auto ParseArrayDims = [&](std::vector<u32>& dims) -> bool {
         do {
-            Consume(TokenType::NUMBER, "Expected array size");
-            std::string_view sizeStr = PreviousValue();
-            int size = SafeParseInt(sizeStr);
-            if (size <= 0 || static_cast<u32>(size) > MAX_ARRAY_SIZE) {
-                Error("Invalid array size. Max 256k elements");
+            u32 size = 0;
+            if (!ParseArraySizeValue(&size)) {
                 return false;
             }
             Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
-            dims.push_back(static_cast<u32>(size));
+            dims.push_back(size);
         } while (Match(TokenType::LEFT_BRACKET));
         return true;
     };

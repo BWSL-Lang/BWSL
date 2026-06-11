@@ -156,6 +156,30 @@ struct IRLowering {
   // Map variable name hash -> struct type hash (for struct variables)
   std::unordered_map<u32, u32> variableStructTypes;
 
+  // Registers holding a struct-field array *value* (the dest of an
+  // OP_STRUCT_EXTRACT of an array field, or a value derived from one via
+  // element insertion). The registerTypes entry for such a register holds
+  // the element CoreType, so subscripting it must not demote the type the
+  // way plain vector/matrix subscripts do (vector -> scalar, matrix ->
+  // column vector).
+  struct StructArrayValueInfo {
+    CoreType elemType;
+    u32 length;
+  };
+  std::unordered_map<u16, StructArrayValueInfo> structArrayValueRegs;
+
+  // Record `dest` as a struct-field array value when the extracted field is
+  // an array. Call after emitting OP_STRUCT_EXTRACT for a struct field.
+  void MarkIfStructArrayField(u16 dest, u32 fieldOffset, u16 fieldIndex,
+                              CoreType fieldType) {
+    if (program.structFieldArraySizes) {
+      u32 len = program.structFieldArraySizes[fieldOffset + fieldIndex];
+      if (len > 0) {
+        structArrayValueRegs[dest] = StructArrayValueInfo{fieldType, len};
+      }
+    }
+  }
+
   u32 currentStructMethodTypeHash = 0;
   u16 currentStructMethodSelfReg = 0xFFFF;
   bool currentStructMethodIsConst = false;

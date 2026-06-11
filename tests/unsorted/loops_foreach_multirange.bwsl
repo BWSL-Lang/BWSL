@@ -28,17 +28,30 @@ pipeline LoopsForeachMultirange {
                 stepped = stepped + float(i);
             }
 
-            // Collection loop with explicit iterator name
-            // NOTE: the implicit-`it` form `for (weights) { ... it ... }` is
-            // documented in docs/spec/05 but the parser has no handling for
-            // TokenType::IT, so `it` cannot be referenced. Re-add coverage
-            // here once the parser supports it.
+            // Collection loop with explicit iterator name and implicit `it`
             float weights[5] = { 0.1, 0.2, 0.3, 0.2, 0.1 };
             float weightSum = 0.0;
             for (w in weights) {
                 weightSum = weightSum + w;
             }
-            float implicitSum = weightSum * 2.0;
+            float implicitSum = 0.0;
+            for (weights) {
+                implicitSum = implicitSum + it * 2.0;
+            }
+
+            // Nested implicit collection loops: inner `it` shadows outer
+            float pair[2] = { 1.0, 2.0 };
+            float shadowed = 0.0;
+            for (weights) {
+                float outerIt = it;
+                for (pair) {
+                    shadowed = shadowed + outerIt * it;
+                }
+            }
+
+            // `it` is not a reserved word outside collection loops
+            float it = 0.5;
+            float itScaled = it * 4.0;
 
             // Nested multi-range with control flow inside
             float filtered = 0.0;
@@ -47,7 +60,7 @@ pipeline LoopsForeachMultirange {
                 filtered = filtered + float(x * 3 + y);
             }
 
-            float total = gridSum + inclusiveSum + stepped + weightSum + implicitSum + filtered;
+            float total = gridSum + inclusiveSum + stepped + weightSum + implicitSum + filtered + shadowed + itScaled;
             output.position = float4(attributes.position * total, 1.0);
         }
 

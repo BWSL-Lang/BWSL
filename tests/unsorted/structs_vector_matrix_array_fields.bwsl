@@ -1,0 +1,42 @@
+pipeline SvaSemantic {
+    struct Skin {
+        mat4 bones[4];
+        float4 tint[2];
+        float weights[3];
+    }
+    attributes { position: float3 }
+    pass "Main" {
+        use attributes { position }
+        vertex {
+            Skin skin;
+            // Dynamic-index stores in a loop
+            for (int b = 0; b < 4; b++) {
+                skin.bones[b] = mat4(float(b + 1), 0.0, 0.0, 0.0,
+                                     0.0, float(b + 1), 0.0, 0.0,
+                                     0.0, 0.0, float(b + 1), 0.0,
+                                     0.0, 0.0, 0.0, 1.0);
+            }
+            skin.tint[0] = float4(0.5, 0.0, 0.0, 1.0);
+            skin.tint[1] = float4(0.0, 0.5, 0.0, 1.0);
+            skin.weights[0] = 0.25;
+            skin.weights[1] = 0.5;
+            skin.weights[2] = 0.25;
+
+            // Constant-index matrix read + matrix * vector
+            float4 p = skin.bones[2] * float4(attributes.position, 1.0);
+
+            // Dynamic-index reads
+            int sel = int(attributes.position.x) % 2;
+            float4 tintSel = skin.tint[sel];
+            float wSum = 0.0;
+            for (int i = 0; i < 3; i++) {
+                wSum = wSum + skin.weights[i];
+            }
+            // Dynamic matrix read
+            mat4 mSel = skin.bones[sel];
+            float4 q = mSel * float4(1.0, 1.0, 1.0, 1.0);
+
+            output.position = p * wSum + tintSel + q * 0.1;
+        }
+    }
+}

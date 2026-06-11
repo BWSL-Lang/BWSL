@@ -579,6 +579,42 @@ void SPIRVBuilder::EmitFunctionBody() {
         localArrayVarIds[i] = varId;
       }
     }
+
+    // Pre-declare scratch variables for dynamically-indexed struct array
+    // fields. OP_STRUCT_ARRAY_EXTRACT/INSERT with a runtime element index
+    // spill the struct value into one of these Function-storage variables
+    // and address the element with OpAccessChain. OpVariable must appear in
+    // the entry block, so scan the IR up front and declare one scratch
+    // variable per distinct struct type.
+    if (ir) {
+      for (u32 i = 0; i < ir->instructionCount; i++) {
+        IR::OpCode scanOp = static_cast<IR::OpCode>(ir->opcodes[i]);
+        if (scanOp != IR::OP_STRUCT_ARRAY_EXTRACT &&
+            scanOp != IR::OP_STRUCT_ARRAY_INSERT) {
+          continue;
+        }
+        u16 indexReg = ir->GetOperand(i, 2);
+        if ((indexReg & 0xC000) == 0x4000) {
+          continue; // Constant index uses OpCompositeExtract/Insert directly
+        }
+        u32 structHash = ir->metadata[i];
+        if (structHash == 0) {
+          continue;
+        }
+        u32 structTypeId = GetStructTypeId(structHash);
+        if (structTypeId != 0 &&
+            GetStructArrayScratchVar(structTypeId) == 0 &&
+            structArrayScratchCount < MAX_STRUCT_ARRAY_SCRATCH) {
+          u32 ptrTypeId =
+              GetPointerTypeId(structTypeId, spv::StorageClassFunction);
+          u32 varId = AllocateId();
+          Emit(spv::OpVariable, ptrTypeId, varId, spv::StorageClassFunction);
+          structArrayScratchTypeIds[structArrayScratchCount] = structTypeId;
+          structArrayScratchVarIds[structArrayScratchCount] = varId;
+          structArrayScratchCount++;
+        }
+      }
+    }
   };
 
   if (!cfg || cfg->blockCount == 0) {

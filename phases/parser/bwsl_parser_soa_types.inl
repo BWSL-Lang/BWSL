@@ -9,6 +9,91 @@
 
 namespace BWSL {
 
+bool Parser::ParseArraySizeValue(u32* outSize) {
+    if (Match(TokenType::NUMBER)) {
+        std::string_view sizeStr = PreviousValue();
+        int size = SafeParseInt(sizeStr);
+        if (size <= 0 || static_cast<u32>(size) > MAX_ARRAY_SIZE) {
+            Error("Invalid array size. Max 256k elements");
+            return false;
+        }
+        *outSize = static_cast<u32>(size);
+        return true;
+    }
+
+    if (Match(TokenType::IDENTIFIER)) {
+        // Compile-time constant name (e.g. MAX_LIGHTS), optionally
+        // module-qualified (e.g. Config::MAX_LIGHTS)
+        std::string constName(stream->GetValue(previous));
+        if (Match(TokenType::DOUBLE_COLON)) {
+            if (!Consume(TokenType::IDENTIFIER,
+                         "Expected constant name after '::'")) {
+                return false;
+            }
+            std::string localName(stream->GetValue(previous));
+            constName = CanonicalizeModuleQualifiedName(constName, localName);
+        }
+
+        bool found = false;
+        int value = 0;
+        ArenaString constArena = ArenaString::MakeHashOnly(constName);
+        Symbol* sym = SymbolTable::LookupAny(&symbolTable, constArena);
+        if (sym) {
+            if (sym->kind == SymbolKind::VARIABLE) {
+                const VariableData& varData = symbolTable.variables[sym->index];
+                if (varData.hasEvalValue &&
+                    varData.evalValue.type == LiteralValue::INT) {
+                    value = varData.evalValue.intValue;
+                    found = true;
+                }
+            } else if (sym->kind == SymbolKind::EVAL_CONSTANT) {
+                const LiteralValue& constVal =
+                    symbolTable.evalConstants[sym->index];
+                if (constVal.type == LiteralValue::INT) {
+                    value = constVal.intValue;
+                    found = true;
+                }
+            }
+        }
+
+        // Unqualified name inside a module: try the module's own constants
+        if (!found && symbolTable.inModuleScope &&
+            symbolTable.currentModuleIndex != INVALID_INDEX) {
+            const ModuleData& mod =
+                symbolTable.modules[symbolTable.currentModuleIndex];
+            std::string qualifiedName =
+                mod.name.ToString(sourceBase()) + "::" + constName;
+            ArenaString qualifiedArena = ArenaString::MakeHashOnly(qualifiedName);
+            sym = SymbolTable::LookupAny(&symbolTable, qualifiedArena);
+            if (sym && sym->kind == SymbolKind::EVAL_CONSTANT) {
+                const LiteralValue& constVal =
+                    symbolTable.evalConstants[sym->index];
+                if (constVal.type == LiteralValue::INT) {
+                    value = constVal.intValue;
+                    found = true;
+                }
+            }
+        }
+
+        if (!found) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Unknown constant '%s' for array size",
+                     constName.c_str());
+            Error(msg);
+            return false;
+        }
+        if (value <= 0 || static_cast<u32>(value) > MAX_ARRAY_SIZE) {
+            Error("Invalid array size. Max 256k elements");
+            return false;
+        }
+        *outSize = static_cast<u32>(value);
+        return true;
+    }
+
+    Error("Expected array size");
+    return false;
+}
+
 NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storageClass) {
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     u32 line = loc.line;
@@ -16,29 +101,21 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
 
     // Already consumed '[', now get size
     std::vector<u32> arrayDims;
-    Consume(TokenType::NUMBER, "Expected array size");
-
-    std::string_view sizeStr = PreviousValue();
-    int size = SafeParseInt(sizeStr);
-
-    if (size <= 0 || static_cast<u32>(size) > MAX_ARRAY_SIZE) {
-        Error("Invalid array size. Max 256k elements");
+    u32 size = 0;
+    if (!ParseArraySizeValue(&size)) {
         return NodeRef::Null();
     }
 
     Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
-    arrayDims.push_back(static_cast<u32>(size));
+    arrayDims.push_back(size);
 
     while (Match(TokenType::LEFT_BRACKET)) {
-        Consume(TokenType::NUMBER, "Expected array size");
-        std::string_view dimStr = PreviousValue();
-        int dimSize = SafeParseInt(dimStr);
-        if (dimSize <= 0 || static_cast<u32>(dimSize) > MAX_ARRAY_SIZE) {
-            Error("Invalid array size. Max 256k elements");
+        u32 dimSize = 0;
+        if (!ParseArraySizeValue(&dimSize)) {
             return NodeRef::Null();
         }
         Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
-        arrayDims.push_back(static_cast<u32>(dimSize));
+        arrayDims.push_back(dimSize);
     }
     Consume(TokenType::IDENTIFIER, "Expected array variable name");
 
@@ -150,41 +227,12 @@ NodeRef Parser::ParseInlineArrayConstruction() {
     (void)elementType;
 
     Consume(TokenType::LEFT_BRACKET, "Expected '[' for array");
-    Consume(TokenType::NUMBER, "Expected array size");
 
-    std::string_view sizeStr = PreviousValue();
-    int size = 0;
-
-#ifdef BWSL_WASM
-    // WASM builds don't have exception support, use simpler parsing
-    char* endPtr = nullptr;
-    long parsed = std::strtol(sizeStr.data(), &endPtr, 10);
-    if (endPtr == sizeStr.data() || parsed <= 0 || parsed > INT_MAX) {
-        Error("Invalid or out-of-range array size");
+    u32 parsedSize = 0;
+    if (!ParseArraySizeValue(&parsedSize)) {
         return NodeRef::Null();
     }
-    size = static_cast<int>(parsed);
-#else
-    try {
-        size = std::stoi(std::string(sizeStr));
-    } catch (const std::out_of_range&) {
-        Error("Array size is too large");
-        return NodeRef::Null();
-    } catch (const std::invalid_argument&) {
-        Error("Invalid array size");
-        return NodeRef::Null();
-    }
-#endif
-
-    if (size <= 0) {
-        Error("Array size must be positive");
-        return NodeRef::Null();
-    }
-
-    if (static_cast<u32>(size) > MAX_ARRAY_SIZE) {
-        Error("Array size too large (max 256K / 1mb floats)");
-        return NodeRef::Null();
-    }
+    int size = static_cast<int>(parsedSize);
 
     Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
     Consume(TokenType::LEFT_BRACKET, "Expected '[' for inline array construction");
@@ -1196,61 +1244,13 @@ NodeRef Parser::ParseStruct() {
 
         auto ParseFieldArraySize = [&]() -> u32 {
             u32 sizeValue = 0;
-            if (Match(TokenType::NUMBER)) {
-                // Literal number size
-                std::string_view numStr = stream->GetValue(previous);
-                sizeValue = SafeParseU32(numStr, 0);
-            } else if (Match(TokenType::IDENTIFIER)) {
-                // Constant name (e.g., MAX_LIGHTS)
-                std::string constName(stream->GetValue(previous));
-                ArenaString constArena = ArenaString::MakeHashOnly(constName);
-
-                bool found = false;
-
-                // Look up in symbol table for eval constants
-                Symbol* sym = SymbolTable::LookupAny(&symbolTable, constArena);
-                if (sym) {
-                    if (sym->kind == SymbolKind::VARIABLE) {
-                        const VariableData& varData = symbolTable.variables[sym->index];
-                        if (varData.isEval && varData.evalValue.type == LiteralValue::INT) {
-                            sizeValue = static_cast<u32>(varData.evalValue.intValue);
-                            found = true;
-                        }
-                    } else if (sym->kind == SymbolKind::EVAL_CONSTANT) {
-                        const LiteralValue& constVal = symbolTable.evalConstants[sym->index];
-                        if (constVal.type == LiteralValue::INT) {
-                            sizeValue = static_cast<u32>(constVal.intValue);
-                            found = true;
-                        }
-                    }
-                }
-
-                // Try module-qualified lookup if in module scope
-                if (!found && symbolTable.inModuleScope && symbolTable.currentModuleIndex != INVALID_INDEX) {
-                    const ModuleData& mod = symbolTable.modules[symbolTable.currentModuleIndex];
-                    std::string qualifiedName = mod.name.ToString(sourceBase()) + "::" + constName;
-                    ArenaString qualifiedArena = ArenaString::MakeHashOnly(qualifiedName);
-                    sym = SymbolTable::LookupAny(&symbolTable, qualifiedArena);
-                    if (sym && sym->kind == SymbolKind::EVAL_CONSTANT) {
-                        const LiteralValue& constVal = symbolTable.evalConstants[sym->index];
-                        if (constVal.type == LiteralValue::INT) {
-                            sizeValue = static_cast<u32>(constVal.intValue);
-                            found = true;
-                        }
-                    }
-                }
-
-                if (!found) {
-                    char msg[256];
-                    snprintf(msg, sizeof(msg), "Unknown constant '%s' for array size", constName.c_str());
-                    Error(msg);
-                }
-            } else {
-                Error("Expected array size (number or constant)");
-            }
+            bool ok = ParseArraySizeValue(&sizeValue);
             Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
-            structData.isIndexable = true;
-            return sizeValue;
+            if (ok) {
+                structData.isIndexable = true;
+                return sizeValue;
+            }
+            return 0;
         };
 
         u32 arraySize = 0;

@@ -2615,6 +2615,8 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     // operand 0: source vector register
     // operand 1: component index (0-3 for x/y/z/w)
     // operand 2: value to insert (scalar)
+    // Also used for element insertion into struct-field array values, where
+    // the composite is an array and the index is the element index.
     u16 src_vec_reg = ir->GetOperand(ir_idx, 0);
     u32 src_vec_id = GetSpirvId(src_vec_reg);
     u32 component_idx = ir->GetOperand(ir_idx, 1);
@@ -2623,6 +2625,23 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
     // Get result type from the source vector
     u32 result_type = GetResultType(ir->destinations[ir_idx], src_vec_reg);
+
+    // Struct-field array value: the composite's real SPIR-V type is the
+    // array type carried in the override, not the IR element CoreType.
+    // Propagate the array marks so chained inserts/loads keep working.
+    if (src_vec_reg < idCapacity && regIsStructArrayField[src_vec_reg]) {
+      if (spirvTypeOverrides[src_vec_reg] != 0) {
+        result_type = spirvTypeOverrides[src_vec_reg];
+      }
+      u16 dr = ir->destinations[ir_idx];
+      if (dr < idCapacity) {
+        regIsStructArrayField[dr] = true;
+        spirvTypeOverrides[dr] = result_type;
+        if (storagePtrElemTypes[src_vec_reg] != 0) {
+          storagePtrElemTypes[dr] = storagePtrElemTypes[src_vec_reg];
+        }
+      }
+    }
 
     // OpCompositeInsert: result_type result_id object composite index...
     // object = the value being inserted
@@ -2895,6 +2914,13 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     if (isArrayField && dest_reg < idCapacity) {
       regIsStructArrayField[dest_reg] = true;
 
+      // For value extracts (OpCompositeExtract), the register's actual
+      // SPIR-V type is the array type, not the IR's element CoreType.
+      // Record the override so element inserts and copies type correctly.
+      if (storagePtrStorageClass[dest_reg] == 0) {
+        spirvTypeOverrides[dest_reg] = result_type;
+      }
+
       // Track element type for ALL array fields (not just storage buffers)
       // This is needed for OP_ARRAY_LOAD to get the correct element type
       if (storagePtrElemTypes[dest_reg] == 0) { // Only if not already set
@@ -2970,6 +2996,101 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     currentFunction[currentFunctionSize++] = value_id;  // Object to insert
     currentFunction[currentFunctionSize++] = struct_id; // Composite
     currentFunction[currentFunctionSize++] = field_idx; // Index
+    break;
+  }
+
+  case IR::OP_STRUCT_ARRAY_EXTRACT:
+  case IR::OP_STRUCT_ARRAY_INSERT: {
+    // Fused two-level access to an array field held by value in a struct:
+    //   EXTRACT: dest = struct.field[index]        (element value)
+    //   INSERT:  dest = struct with field[index]=value (new struct value)
+    // operand 0: struct register, operand 1: field index (literal),
+    // operand 2: element index (register or encoded constant),
+    // operand 3 (INSERT): value register. metadata: struct type hash.
+    // Constant indices use multi-index OpCompositeExtract/Insert; dynamic
+    // indices spill the struct into a pre-declared Function-storage scratch
+    // variable and go through OpAccessChain.
+    u16 struct_reg = ir->GetOperand(ir_idx, 0);
+    u32 struct_id = GetSpirvId(struct_reg);
+    u32 field_idx = ir->GetOperand(ir_idx, 1);
+    u16 index_reg = ir->GetOperand(ir_idx, 2);
+    bool isInsert = (op == IR::OP_STRUCT_ARRAY_INSERT);
+
+    u32 struct_type_hash = ir->metadata[ir_idx];
+    if (struct_type_hash == 0 && struct_reg < 512 && ir->registerStructTypes) {
+      struct_type_hash = ir->registerStructTypes[struct_reg];
+    }
+    u32 struct_type_id =
+        struct_type_hash != 0 ? GetStructTypeId(struct_type_hash) : 0;
+
+    // Element type from the IR struct field metadata
+    u32 elem_type_id = 0;
+    for (u32 si = 0; si < ir->structTypeCount; si++) {
+      if (ir->structTypes[si].nameHash != struct_type_hash) {
+        continue;
+      }
+      u32 fieldOffset = ir->structTypes[si].fieldOffset;
+      if (field_idx < ir->structTypes[si].fieldCount) {
+        CoreType elemType = static_cast<CoreType>(
+            ir->structFieldTypes[fieldOffset + field_idx]);
+        if (elemType == CoreType::CUSTOM || elemType == CoreType::ENUM) {
+          if (ir->structFieldTypeHashes) {
+            u32 elemStructHash =
+                ir->structFieldTypeHashes[fieldOffset + field_idx];
+            if (elemStructHash != 0) {
+              elem_type_id = GetStructTypeId(elemStructHash);
+            }
+          }
+        } else {
+          elem_type_id = GetTypeId(elemType);
+        }
+      }
+      break;
+    }
+    if (elem_type_id == 0) {
+      elem_type_id = GetTypeId(CoreType::FLOAT);
+    }
+    if (struct_type_id == 0) {
+      Emit(spv::OpUndef, isInsert ? GetTypeId(CoreType::FLOAT) : elem_type_id,
+           dest);
+      break;
+    }
+
+    u32 value_id = isInsert ? GetSpirvId(ir->GetOperand(ir_idx, 3)) : 0;
+
+    bool isConstIndex = (index_reg & 0xC000) == 0x4000;
+    if (isConstIndex) {
+      u32 slot = index_reg & 0x3FFF;
+      u32 index_val = ir->intConstants[slot];
+      if (isInsert) {
+        Emit(spv::OpCompositeInsert, struct_type_id, dest, value_id,
+             struct_id, field_idx, index_val);
+      } else {
+        Emit(spv::OpCompositeExtract, elem_type_id, dest, struct_id,
+             field_idx, index_val);
+      }
+    } else {
+      u32 scratch_var = GetStructArrayScratchVar(struct_type_id);
+      if (scratch_var == 0) {
+        // No scratch variable pre-declared - keep the module well-formed
+        Emit(spv::OpUndef, isInsert ? struct_type_id : elem_type_id, dest);
+        break;
+      }
+      u32 index_id = GetSpirvId(index_reg);
+      u32 field_const = GetIntConstantId(field_idx, true);
+      u32 elem_ptr_type =
+          GetPointerTypeId(elem_type_id, spv::StorageClassFunction);
+      Emit(spv::OpStore, scratch_var, struct_id);
+      u32 elem_ptr = AllocateId();
+      Emit(spv::OpAccessChain, elem_ptr_type, elem_ptr, scratch_var,
+           field_const, index_id);
+      if (isInsert) {
+        Emit(spv::OpStore, elem_ptr, value_id);
+        Emit(spv::OpLoad, struct_type_id, dest, scratch_var);
+      } else {
+        Emit(spv::OpLoad, elem_type_id, dest, elem_ptr);
+      }
+    }
     break;
   }
 
@@ -3482,7 +3603,10 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
           Emit(spv::OpAccessChain, elem_ptr_type, ptr_id, base_id, index_id);
           Emit(spv::OpLoad, array_elem_type_id, dest, ptr_id);
         } else {
-          // Regular array value - use OpCompositeExtract or OpUndef
+          // Regular array value - use OpCompositeExtract or OpUndef.
+          // (Dynamic indexing of struct array fields is handled by the
+          // fused OP_STRUCT_ARRAY_EXTRACT path; this fallback only sees
+          // array values from non-fused shapes.)
           bool isConstIndex = (index_reg & 0xC000) == 0x4000;
           if (isConstIndex) {
             u32 idx = index_reg & 0x3FFF;
@@ -4703,6 +4827,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_TEX_SAMPLE_LOD:
   case IR::OP_TEX_SAMPLE_BIAS:
   case IR::OP_TEX_SAMPLE_GRAD:
+  case IR::OP_TEX_SAMPLE_CMP:
   case IR::OP_TEX_SAMPLE_OFFSET:
   case IR::OP_TEX_SAMPLE_LOD_OFFSET:
   case IR::OP_TEX_SAMPLE_BIAS_OFFSET: {
@@ -4790,6 +4915,19 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       u32 extras[2] = {ddx_id, ddy_id};
       emitImageInst(spv::OpImageSampleExplicitLod, result_type,
                     spv::ImageOperandsGradMask, extras, 2);
+      break;
+    }
+    case IR::OP_TEX_SAMPLE_CMP: {
+      // Depth-comparison sample - operand 2 is the reference value.
+      // OpImageSampleDrefImplicitLod produces a scalar float, while the IR
+      // contract types every texture sample as FLOAT4, so splat the
+      // comparison result into the destination register.
+      u32 dref_id = GetSpirvId(ir->GetOperand(ir_idx, 2));
+      u32 cmp_id = AllocateId();
+      Emit(spv::OpImageSampleDrefImplicitLod, GetTypeId(CoreType::FLOAT),
+           cmp_id, texture.sampledImageId, coord_id, dref_id);
+      Emit(spv::OpCompositeConstruct, result_type, dest, cmp_id, cmp_id,
+           cmp_id, cmp_id);
       break;
     }
     default:
@@ -4960,7 +5098,6 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_STRUCT_GEP:
   case IR::OP_MAT_IDENTITY:
   case IR::OP_MAT_ZERO:
-  case IR::OP_TEX_SAMPLE_CMP:
   case IR::OP_IMG_LOAD:
   case IR::OP_LOAD_TEX_HANDLE:
   case IR::OP_ATOMIC_SUB:

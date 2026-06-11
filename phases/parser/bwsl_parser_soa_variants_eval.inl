@@ -1594,12 +1594,15 @@ return ASTFactory::MakeForCollection(ast, firstPart, rangeStart, body, isEval, l
         return ASTFactory::MakeForCStyle(ast, firstPart, condition, increment, body, isEval, loc.line, loc.column);
 
     } else if (Check(TokenType::RIGHT_PAREN)) {
-        // Collection iteration with implicit 'it' variable
+        // Collection iteration with implicit 'it' variable. Like the named
+        // `for (x in collection)` form, the iterator is not registered in the
+        // parser symbol table; body references bind by name during lowering.
+        // (The previous AddSymbol call here registered the collection's own
+        // name, shadowing it with an untyped symbol and breaking the array
+        // length lookup below.)
         SourceLocation loc = getLocation(stream->GetOffset(previous));
         std::string varName = "it";
         NodeRef iteratorVar = ASTFactory::MakeIdentifier(ast, varName, loc.line, loc.column);
-        Symbol* sym = SymbolTable::AddSymbol(&symbolTable, ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous)), SymbolKind::VARIABLE);
-        (void)sym;
 
         Consume(TokenType::RIGHT_PAREN, "Expected ')'");
         Consume(TokenType::LEFT_BRACE, "Expected '{' after for");

@@ -162,7 +162,8 @@ void SSAConstructor::IdentifyVariables() {
         // Check operands for uses
         for (u32 opIdx = firstRegOperand; opIdx < 4; opIdx++) {
             if ((op == IR::OP_VEC_INSERT || op == IR::OP_VEC_EXTRACT || op == IR::OP_ENUM_FIELD ||
-                 op == IR::OP_STRUCT_INSERT || op == IR::OP_STRUCT_EXTRACT) && opIdx == 1) {
+                 op == IR::OP_STRUCT_INSERT || op == IR::OP_STRUCT_EXTRACT ||
+                 op == IR::OP_STRUCT_ARRAY_EXTRACT || op == IR::OP_STRUCT_ARRAY_INSERT) && opIdx == 1) {
                 continue;
             }
             u16 operand = ir->GetOperand(i, opIdx);
@@ -705,6 +706,8 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             op == IR::OP_VEC_SHUFFLE ||                     // Vector shuffle/swizzle
             op == IR::OP_STRUCT_EXTRACT ||                  // Struct extract
             op == IR::OP_STRUCT_INSERT ||                   // Struct insert
+            op == IR::OP_STRUCT_ARRAY_EXTRACT ||            // Struct array-field element extract
+            op == IR::OP_STRUCT_ARRAY_INSERT ||             // Struct array-field element insert
             op == IR::OP_SELECT ||                          // Ternary select
             op == IR::OP_BRANCH ||                          // Branch condition
             op == IR::OP_SWITCH ||                          // Switch selector
@@ -728,6 +731,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                 // ENUM_FIELD also uses operand 1 as a literal field index.
                 if ((op == IR::OP_VEC_INSERT || op == IR::OP_VEC_EXTRACT || op == IR::OP_ENUM_FIELD ||
                      op == IR::OP_STRUCT_INSERT || op == IR::OP_STRUCT_EXTRACT ||
+                     op == IR::OP_STRUCT_ARRAY_EXTRACT || op == IR::OP_STRUCT_ARRAY_INSERT ||
                      op == IR::OP_LOCAL_FIELD_PTR) && opIdx == 1) {
                     continue;
                 }

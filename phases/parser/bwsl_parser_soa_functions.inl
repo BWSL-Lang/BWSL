@@ -603,8 +603,9 @@ void Parser::ParseFunctionParameters(NodeRef function) {
 
             // Check for array type suffix: type[size]
             if (Match(TokenType::LEFT_BRACKET)) {
-                if (!Match(TokenType::NUMBER)) {
-                    Error("Expected array size");
+                u32 paramArraySize = 0;
+                if (!ParseArraySizeValue(&paramArraySize)) {
+                    return;
                 }
                 Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
             }
@@ -676,8 +677,9 @@ void Parser::ParseFunctionParameters(NodeRef function) {
                 // CustomType[size] name - array of custom type
                 paramType = identifierStr;
                 Match(TokenType::LEFT_BRACKET);
-                if (!Match(TokenType::NUMBER)) {
-                    Error("Expected array size");
+                u32 paramArraySize = 0;
+                if (!ParseArraySizeValue(&paramArraySize)) {
+                    return;
                 }
                 Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
 

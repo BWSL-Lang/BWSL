@@ -136,6 +136,8 @@ inline const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_STRUCT_LOAD:      return "STRUCT_LOAD";
         case IR::OP_STRUCT_STORE:     return "STRUCT_STORE";
         case IR::OP_STRUCT_GEP:       return "STRUCT_GEP";
+        case IR::OP_STRUCT_ARRAY_EXTRACT: return "STRUCT_ARRAY_EXTRACT";
+        case IR::OP_STRUCT_ARRAY_INSERT:  return "STRUCT_ARRAY_INSERT";
 
         case IR::OP_SQRT:          return "SQRT";
         case IR::OP_RSQRT:         return "RSQRT";

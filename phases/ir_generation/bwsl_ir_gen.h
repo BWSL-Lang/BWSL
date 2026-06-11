@@ -363,6 +363,16 @@ enum OpCode : u16 {
     OP_STRUCT_STORE     = 0x79,  // Store entire struct to pointer
     OP_STRUCT_GEP       = 0x7A,  // Get element pointer (for access chains): dest = &struct.field
 
+    // Fused two-level access for array fields held by value in structs.
+    // Avoids materializing array-typed temporaries (which SPIRV-Cross MSL
+    // cannot assign between struct members and locals) by addressing
+    // struct.field[elem] in a single instruction.
+    // operand0=struct, operand1=fieldIndex (literal), operand2=index
+    // (register or encoded constant); INSERT adds operand3=value and
+    // produces the new struct value. metadata=struct type hash.
+    OP_STRUCT_ARRAY_EXTRACT = 0x98,  // dest = struct.field[index]
+    OP_STRUCT_ARRAY_INSERT  = 0x99,  // dest = struct with field[index]=value
+
     // ========== Storage Buffer Access (pointer semantics) ==========
     // These ops maintain pointer semantics for proper SPIR-V access chain generation
     OP_STORAGE_PTR      = 0x7B,  // Get storage buffer base pointer: dest = &buffer (operand0=binding)
