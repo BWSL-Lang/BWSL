@@ -61,16 +61,14 @@ integer literals or compile-time integer constant names. Coverage lives in
 `tests/unsorted/arrays_const_sized.bwsl` for struct fields, local arrays,
 block-local const-sized arrays, and shared arrays.
 
-## 5. GLES backend emits ES 3.1 builtins in `#version 300 es` shaders
+## 5. ~~GLES backend emits ES 3.1 builtins in `#version 300 es` shaders~~ (FIXED)
 
-`unpackUnorm4x8` / `packUnorm4x8` etc. require ES 3.10, but the GLES output
-declares `#version 300 es`, so `glslangValidator` rejects it. Reproduce with
-existing tests — no dedicated repro file needed:
+Fixed by replacing ES 3.10-only 4x8 pack/unpack builtins with `bwsl_` polyfill
+calls for `#version 300 es` output. The SPIRV-Cross wrapper patches generated
+GLES source before validation.
 
-```bash
-python3 tests/run_tests.py --gles
-# GLES FAIL: module_compression_intrinsics, attributes_compressed_instance, ...
-```
-
-Fix is either a `#version 310 es` bump when packing builtins are used, or a
-polyfill in the GLES backend (`phases/backends/gles/`).
+Coverage lives in the existing packing tests: `attributes_compressed_instance`,
+`module_compression_intrinsics`, `modules_debug_spaces_sampling_packing`, and
+the pack/unpack fuzz regressions. `python3 tests/run_tests.py --compiler
+./build/bwslc --gles --no-spirv-val` validates all GLES outputs with
+`glslangValidator`.

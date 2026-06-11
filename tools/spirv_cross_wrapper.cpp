@@ -3,6 +3,7 @@
 // (defs.h defines u32, f32, f64 as macros which conflict with SPIRV-Cross)
 
 #include <string>
+#include <string_view>
 #include <vector>
 #include <cstdint>
 #include <unordered_map>
@@ -272,6 +273,89 @@ static std::string CheckGLSLESEmittedCompat(const std::string& source,
     return {};
 }
 
+static bool IsGLSLIdentChar(char c) {
+    return (c >= 'a' && c <= 'z') ||
+           (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') ||
+           c == '_';
+}
+
+static bool ReplaceFunctionCalls(std::string& source, const char* from, const char* to) {
+    bool replaced = false;
+    size_t pos = 0;
+    const size_t fromLen = std::char_traits<char>::length(from);
+    const size_t toLen = std::char_traits<char>::length(to);
+    while ((pos = source.find(from, pos)) != std::string::npos) {
+        if (pos > 0 && IsGLSLIdentChar(source[pos - 1])) {
+            pos += fromLen;
+            continue;
+        }
+        source.replace(pos, fromLen, to);
+        pos += toLen;
+        replaced = true;
+    }
+    return replaced;
+}
+
+static size_t GLSLESPolyfillInsertionPoint(const std::string& source) {
+    size_t pos = 0;
+    if (source.rfind("#version", 0) == 0) {
+        size_t end = source.find('\n', pos);
+        pos = (end == std::string::npos) ? source.size() : end + 1;
+    }
+
+    while (pos < source.size()) {
+        size_t end = source.find('\n', pos);
+        size_t lineEnd = (end == std::string::npos) ? source.size() : end;
+        std::string_view line(source.data() + pos, lineEnd - pos);
+        if (line.empty() ||
+            line.rfind("#", 0) == 0 ||
+            line.rfind("precision ", 0) == 0) {
+            pos = (end == std::string::npos) ? source.size() : end + 1;
+            continue;
+        }
+        break;
+    }
+    return pos;
+}
+
+static void PatchGLSLES300Packing4x8Builtins(std::string& source,
+                                             int glslVersion,
+                                             bool es) {
+    if (!es || glslVersion >= 310) return;
+
+    bool needsPolyfill = false;
+    needsPolyfill |= ReplaceFunctionCalls(source, "unpackUnorm4x8(", "bwsl_unpackUnorm4x8(");
+    needsPolyfill |= ReplaceFunctionCalls(source, "unpackSnorm4x8(", "bwsl_unpackSnorm4x8(");
+    needsPolyfill |= ReplaceFunctionCalls(source, "packUnorm4x8(", "bwsl_packUnorm4x8(");
+    needsPolyfill |= ReplaceFunctionCalls(source, "packSnorm4x8(", "bwsl_packSnorm4x8(");
+    if (!needsPolyfill) return;
+
+    static const char* polyfill =
+        "uint bwsl_packUnorm4x8(vec4 v) {\n"
+        "    uvec4 u = uvec4(round(clamp(v, vec4(0.0), vec4(1.0)) * 255.0));\n"
+        "    return (u.x & 255u) | ((u.y & 255u) << 8) | ((u.z & 255u) << 16) | ((u.w & 255u) << 24);\n"
+        "}\n\n"
+        "vec4 bwsl_unpackUnorm4x8(uint p) {\n"
+        "    uvec4 u = uvec4(p & 255u, (p >> 8) & 255u, (p >> 16) & 255u, (p >> 24) & 255u);\n"
+        "    return vec4(u) / 255.0;\n"
+        "}\n\n"
+        "uint bwsl_packSnorm4x8(vec4 v) {\n"
+        "    ivec4 i = ivec4(round(clamp(v, vec4(-1.0), vec4(1.0)) * 127.0));\n"
+        "    uvec4 u = uvec4((i + ivec4(256)) & ivec4(255));\n"
+        "    return (u.x & 255u) | ((u.y & 255u) << 8) | ((u.z & 255u) << 16) | ((u.w & 255u) << 24);\n"
+        "}\n\n"
+        "int bwsl_unpackSnorm8(uint v) {\n"
+        "    int i = int(v & 255u);\n"
+        "    return (i > 127) ? (i - 256) : i;\n"
+        "}\n\n"
+        "vec4 bwsl_unpackSnorm4x8(uint p) {\n"
+        "    ivec4 i = ivec4(bwsl_unpackSnorm8(p), bwsl_unpackSnorm8(p >> 8), bwsl_unpackSnorm8(p >> 16), bwsl_unpackSnorm8(p >> 24));\n"
+        "    return max(vec4(i) / 127.0, vec4(-1.0));\n"
+        "}\n\n";
+    source.insert(GLSLESPolyfillInsertionPoint(source), polyfill);
+}
+
 std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, bool es) {
 #ifdef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
     if (auto err = CheckGLSLESSPIRVCompatRaw(spirv, glslVersion, es); !err.empty()) {
@@ -288,6 +372,7 @@ std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, b
     glslOpts.separate_shader_objects = true;
     compiler.set_common_options(glslOpts);
     std::string result = compiler.compile();
+    PatchGLSLES300Packing4x8Builtins(result, glslVersion, es);
     if (auto err = CheckGLSLESEmittedCompat(result, glslVersion, es); !err.empty()) {
         return err;
     }
@@ -308,6 +393,7 @@ std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, b
         glslOpts.separate_shader_objects = true;
         compiler.set_common_options(glslOpts);
         std::string result = compiler.compile();
+        PatchGLSLES300Packing4x8Builtins(result, glslVersion, es);
         if (auto err = CheckGLSLESEmittedCompat(result, glslVersion, es); !err.empty()) {
             return err;
         }
