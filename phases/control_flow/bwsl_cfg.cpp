@@ -141,9 +141,15 @@ void CFGBuilder::FindLeaders() {
                 }
             }
             
-            // Instruction after any terminator (except RET/DISCARD) could be a target
-            // Mark as leader to be safe - blocks will merge if not actually targeted
-            if (i + 1 < ir->instructionCount && op != IR::OP_RET && op != IR::OP_DISCARD) {
+            // Instruction after any terminator starts a new block. For
+            // JUMP/BRANCH it could be a target; for RET/DISCARD the lowering
+            // can still emit dead code after it (e.g. a switch case body that
+            // returns is followed by the case's jump to the switch merge).
+            // Without a leader here that dead jump shares a block with the
+            // return and the SPIR-V backend emits OpBranch right after
+            // OpReturn with no OpLabel between them. As a separate block it
+            // is unreachable, which the SSA cleanup already handles.
+            if (i + 1 < ir->instructionCount) {
                 isLeader[i + 1] = true;
             }
         }

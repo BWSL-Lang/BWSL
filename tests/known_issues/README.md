@@ -96,3 +96,26 @@ Coverage lives in `tests/unsorted/loop_break_after_switch.bwsl`
 (all-arms-terminating switch + `if (...) break;`, a second switch inside the
 unreachable region + `break if`, the `skip if` form, and a reachable-merge
 control case).
+
+## 7. ~~`return` in a loop-body switch case breaks SPIR-V block structure~~ (FIXED)
+
+A `return` (or `discard`) inside a switch case in a loop body, with any
+statement after the switch, failed SPIR-V validation with
+`Branch must appear in a block`. `LowerSwitch`
+(`phases/ir_lowering/bwsl_ir_lowering_control.inl`) unconditionally emits each
+case's `OP_JUMP` to the switch merge, so a case body ending in `OP_RET` is
+followed by a dead jump. `CFGBuilder::FindLeaders`
+(`phases/control_flow/bwsl_cfg.cpp`) started a new block after every
+terminator *except* `OP_RET`/`OP_DISCARD`, so the dead jump shared a block
+with the return and the backend emitted `OpBranch` directly after `OpReturn`
+with no `OpLabel` between them. Every loop form (for/while/range/`loop`) was
+affected; the same case body ending in `break`/`skip` was fine because those
+terminators already started a new block.
+
+Fixed by marking the instruction after `OP_RET`/`OP_DISCARD` as a leader too.
+The dead jump becomes its own unreachable block, which the existing SSA
+unreachable-block cleanup (issue 6) already handles.
+
+Coverage lives in `tests/unsorted/loop_switch_case_return.bwsl` (return in a
+middle case and in the default arm across all four loop forms, `discard` in a
+fragment-stage case, and a no-loop control case).
