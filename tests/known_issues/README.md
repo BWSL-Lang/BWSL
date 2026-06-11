@@ -39,7 +39,7 @@ Function-storage scratch variable + OpAccessChain for dynamic indices),
 and writes reconstitute the struct via store-back. This also avoids
 materializing array-typed temporaries, which SPIRV-Cross MSL cannot
 assign. Investigation showed scalar arrays were silently broken too —
-stores into `float w[4]` fields were dropped (the old path stored into
+stores into `float[4] w` fields were dropped (the old path stored into
 an extracted copy); these are fixed by the same change.
 
 Coverage: `tests/unsorted/structs_vector_matrix_array_fields.bwsl`

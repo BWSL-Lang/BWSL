@@ -80,7 +80,7 @@ struct CameraUniforms {
 
 struct MeshDescriptor {
     VertexAttribute attributeFlags;
-    uint _padding[3];
+    uint[3] _padding;
     uint numVertices;
     uint numIndices;
     uint indexOffset;
@@ -102,7 +102,7 @@ struct AttributeOffsetInfo {
 };
 
 struct DrawMetadata {
-    uint _pipelineState[2];
+    uint[2] _pipelineState;
     uint sectionId;
     uint transformIndex;
     uint materialIndex;
@@ -126,25 +126,25 @@ struct BWEMaterial {
     float subsurfaceScattering;
     float2 albedoTextureTiling;
     float2 albedoTextureOffset;
-    float padding[2];
+    float[2] padding;
 };
 
 // ============================================
 // Light Data (Structure of Arrays)
 // ============================================
 struct LightSourcesSoA {
-    float3 positions[MAX_LIGHTS];
-    float3 directions[MAX_LIGHTS];
-    float3 colors[MAX_LIGHTS];
-    float intensities[MAX_LIGHTS];
-    float constantAttenuations[MAX_LIGHTS];
-    float linearAttenuations[MAX_LIGHTS];
-    float quadraticAttenuations[MAX_LIGHTS];
-    float innerCutoffs[MAX_LIGHTS];
-    float outerCutoffs[MAX_LIGHTS];
-    float lengths[MAX_LIGHTS];
-    float radii[MAX_LIGHTS];
-    int types[MAX_LIGHTS];
+    float3[MAX_LIGHTS] positions;
+    float3[MAX_LIGHTS] directions;
+    float3[MAX_LIGHTS] colors;
+    float[MAX_LIGHTS] intensities;
+    float[MAX_LIGHTS] constantAttenuations;
+    float[MAX_LIGHTS] linearAttenuations;
+    float[MAX_LIGHTS] quadraticAttenuations;
+    float[MAX_LIGHTS] innerCutoffs;
+    float[MAX_LIGHTS] outerCutoffs;
+    float[MAX_LIGHTS] lengths;
+    float[MAX_LIGHTS] radii;
+    int[MAX_LIGHTS] types;
     int version;
 };
 
@@ -154,11 +154,11 @@ struct LightSourcesSoA {
 struct CascadeData {
     mat4 viewProjMatrix;
     float splitDistance;
-    float padding[3];
+    float[3] padding;
 };
 
 struct ShadowData {
-    CascadeData cascades[MAX_CASCADES];
+    CascadeData[MAX_CASCADES] cascades;
     float4 lightDirection;
     uint numCascades;
     uint shadowMapSize;
@@ -166,7 +166,7 @@ struct ShadowData {
     float shadowBias;
     float shadowSlopeBias;
     float shadowFilterRadius;
-    float padding[2];
+    float[2] padding;
 };
 
 // ============================================

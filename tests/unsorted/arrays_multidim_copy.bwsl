@@ -12,7 +12,7 @@ pipeline ArraysMultidimCopy {
 
         vertex {
             // 2D array with constant indices
-            float grid[3][3];
+            float[3][3] grid;
             grid[0][0] = 1.0;
             grid[2][1] = 2.0;
             grid[1][2] = grid[0][0] + grid[2][1];
@@ -25,13 +25,13 @@ pipeline ArraysMultidimCopy {
 
             // Whole-array copy must have value semantics: writing b after
             // the copy must not affect a.
-            float a[4];
+            float[4] a;
             a[0] = 1.0;
             a[1] = 2.0;
             a[2] = 3.0;
             a[3] = 4.0;
 
-            float b[4];
+            float[4] b;
             b = a;
             b[1] = 20.0;
 

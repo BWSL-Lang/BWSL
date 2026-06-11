@@ -10,7 +10,7 @@ pipeline StorageIndexChain {
 
     pass "Compute" {
         compute "Main" [1, 1, 1] {
-            Cell cells[4];
+            Cell[4] cells;
             for (int k = 0; k < 4; k = k + 1) {
                 cells[k].v = float(k) * 1.5;
                 cells[k].i = k * 10;

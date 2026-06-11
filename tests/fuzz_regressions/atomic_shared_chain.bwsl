@@ -3,7 +3,7 @@
 pipeline AtomicSharedChain {
     pass "Compute" {
         compute "Main" [16, 1, 1] {
-            shared int tally[1];
+            shared int[1] tally;
 
             uint idx = input.local_id.x;
             if (idx == 0u) {

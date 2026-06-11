@@ -5,7 +5,7 @@
 // must coordinate register typing.
 pipeline ChainFnReturnArray {
     struct Packet {
-        float3 pos[3];
+        float3[3] pos;
         float  w;
     };
 

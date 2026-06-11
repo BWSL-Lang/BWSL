@@ -4,10 +4,10 @@
 pipeline AtomicMinMaxOps {
     pass "Compute" {
         compute "Main" [8, 1, 1] {
-            shared int minVal[1];
-            shared int maxVal[1];
-            shared int andMask[1];
-            shared int orMask[1];
+            shared int[1] minVal;
+            shared int[1] maxVal;
+            shared int[1] andMask;
+            shared int[1] orMask;
 
             uint idx = input.local_id.x;
             if (idx == 0u) {

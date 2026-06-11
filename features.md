@@ -71,7 +71,7 @@ The current regression suite contains 545 `.bwsl` files, including 150 equivalen
 | Fragment built-ins | Stable | `input.position` for fragment coordinates, `output.color`, `output.depth`, `discard`. | Fragment coordinates and depth writes are backend-normalized. |
 | Compute built-ins | Stable | `input.global_id`, `input.local_id`, `input.workgroup_id`, `input.num_workgroups`, `input.local_index`. | Mirrors common compute concepts across Metal, HLSL, GLSL, and SPIR-V. |
 | User varyings | Stable | Any non-builtin `output.name` from vertex can be read as `input.name` in fragment. | Varying declarations are inferred from use instead of requiring duplicate interface blocks. |
-| Shared memory | Stable | `shared Type name[...]` in compute stages. | First-class group-shared storage with tests for reductions, tiling, and atomics. |
+| Shared memory | Stable | `shared Type[...] name` in compute stages. | First-class group-shared storage with tests for reductions, tiling, and atomics. |
 | Barriers | Stable with stage validation in lowering | `barrier()`, `memoryBarrier()`, `storageBarrier()` for compute-oriented synchronization. | Abstracts target-specific barrier spellings and SPIR-V opcodes. |
 | Atomics | Stable | `atomic_add`, `atomic_min`, `atomic_max`, `atomic_and`, `atomic_or`, `atomic_xor`, `atomic_exchange`, `atomic_cmp_exchange`. | Exposes a compact atomic catalog that lowers to backend-specific intrinsics. |
 | Wave/subgroup operations | Stable with some policy implementation-defined | `wave_sum`, `wave_product`, `wave_min`, `wave_max`, `wave_all`, `wave_any`, `wave_broadcast`, `wave_read_first`. | Gives cross-backend subgroup operations under one naming scheme. |

@@ -6,7 +6,7 @@ pipeline EquivSharedMemory {
     pass "Compute" {
         use resources { output }
         compute "Main" [8, 1, 1] {
-            shared float tile[8];
+            shared float[8] tile;
 
             uint idx = input.global_id.x;
             uint lid = input.local_index;

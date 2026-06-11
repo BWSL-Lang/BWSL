@@ -6,10 +6,10 @@ pipeline ComputeSharedMemory {
     pass "SharedBasic" {
         compute "BasicShared" [256, 1, 1] {
             // Shared memory declarations - various types
-            shared float sharedFloats[256];
-            shared int sharedInts[256];
-            shared uint sharedUints[256];
-            shared float4 sharedVec4s[64];
+            shared float[256] sharedFloats;
+            shared int[256] sharedInts;
+            shared uint[256] sharedUints;
+            shared float4[64] sharedVec4s;
 
             uint idx = input.global_id.x;
             uint localIdx = input.local_index;
@@ -78,8 +78,8 @@ pipeline ComputeSharedMemory {
 
     pass "PrefixSum" {
         compute "ParallelPrefixSum" [256, 1, 1] {
-            shared float prefixData[256];
-            shared float tempData[256];
+            shared float[256] prefixData;
+            shared float[256] tempData;
 
             uint localIdx = input.local_index;
 
@@ -140,7 +140,7 @@ pipeline ComputeSharedMemory {
     pass "TileProcessing" {
         compute "TileProcess" [16, 16, 1] {
             // 2D shared memory for tile-based processing
-            shared float tile[18][18];  // 16x16 tile + 1 pixel border
+            shared float[18][18] tile;  // 16x16 tile + 1 pixel border
 
             uint2 localCoord = input.local_id.xy;
             uint2 globalCoord = input.global_id.xy;
@@ -181,7 +181,7 @@ pipeline ComputeSharedMemory {
             barrier();
 
             // Apply 3x3 convolution (edge detection kernel)
-            float kernel[9];
+            float[9] kernel;
             kernel[0] = -1.0; kernel[1] = -1.0; kernel[2] = -1.0;
             kernel[3] = -1.0; kernel[4] =  8.0; kernel[5] = -1.0;
             kernel[6] = -1.0; kernel[7] = -1.0; kernel[8] = -1.0;
@@ -212,8 +212,8 @@ pipeline ComputeSharedMemory {
 
     pass "BarrierTypes" {
         compute "BarrierDemo" [64, 1, 1] {
-            shared float data[64];
-            shared uint flags[64];
+            shared float[64] data;
+            shared uint[64] flags;
 
             uint localIdx = input.local_index;
 
@@ -258,7 +258,7 @@ pipeline ComputeSharedMemory {
     pass "Histogram" {
         compute "HistogramCompute" [256, 1, 1] {
             // Shared histogram bins
-            shared uint histogram[256];
+            shared uint[256] histogram;
 
             uint localIdx = input.local_index;
             uint globalIdx = input.global_id.x;

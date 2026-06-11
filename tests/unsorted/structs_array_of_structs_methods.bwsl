@@ -29,7 +29,7 @@ pipeline StructsArrayOfStructsMethods {
         use attributes { position }
 
         vertex {
-            Cluster clusters[3];
+            Cluster[3] clusters;
             clusters[0] = Cluster(Bounds(float3(0.0, 0.0, 0.0), 1.0), 0.5);
             clusters[1] = Cluster(Bounds(float3(2.0, 0.0, 0.0), 0.5), 1.0);
             clusters[2] = Cluster(Bounds(float3(0.0, 2.0, 0.0), 2.0), 0.25);

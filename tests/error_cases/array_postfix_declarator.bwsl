@@ -1,0 +1,8 @@
+// Error case: fixed-size array bounds must attach to the type.
+pipeline ArrayPostfixDeclarator {
+    pass "Kernel" {
+        compute "Main" [1, 1, 1] {
+            float values[4];
+        }
+    }
+}

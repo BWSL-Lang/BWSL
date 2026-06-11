@@ -21,7 +21,7 @@ pipeline EquivChainArrayOfStructs {
             float t = float(idx);
 
             // Local array of struct, initialized manually.
-            Vertex verts[4];
+            Vertex[4] verts;
             verts[0].pos = float3(0.0, 0.0, 0.0);
             verts[0].uv  = float2(0.0, 0.0);
             verts[0].w   = 1.0;

@@ -29,7 +29,7 @@ pipeline LoopsForeachMultirange {
             }
 
             // Collection loop with explicit iterator name and implicit `it`
-            float weights[5] = { 0.1, 0.2, 0.3, 0.2, 0.1 };
+            float[5] weights = { 0.1, 0.2, 0.3, 0.2, 0.1 };
             float weightSum = 0.0;
             for (w in weights) {
                 weightSum = weightSum + w;
@@ -40,7 +40,7 @@ pipeline LoopsForeachMultirange {
             }
 
             // Nested implicit collection loops: inner `it` shadows outer
-            float pair[2] = { 1.0, 2.0 };
+            float[2] pair = { 1.0, 2.0 };
             float shadowed = 0.0;
             for (weights) {
                 float outerIt = it;

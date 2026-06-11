@@ -4,7 +4,7 @@
 pipeline ForLoopVarInBody {
     pass "Compute" {
         compute "Main" [1, 1, 1] {
-            float arr[8];
+            float[8] arr;
             for (int i = 0; i < 8; i = i + 1) {
                 arr[i] = float(i) * 0.5;
             }

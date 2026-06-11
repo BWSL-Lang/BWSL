@@ -5,7 +5,7 @@
 pipeline PointerToArrayElement {
     pass "Compute" {
         compute "Main" [1, 1, 1] {
-            int nums[4];
+            int[4] nums;
             nums[0] = 10;
             nums[1] = 20;
             nums[2] = 30;

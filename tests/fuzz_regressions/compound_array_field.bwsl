@@ -5,7 +5,7 @@ pipeline CompoundArrayField {
 
     pass "Compute" {
         compute "Main" [1, 1, 1] {
-            int arr[4];
+            int[4] arr;
             arr[0] = 10;
             arr[1] = 20;
             arr[2] = 30;

@@ -203,6 +203,7 @@ ERROR_CASE_TESTS = {
     "eval_for_step_zero.bwsl": "Eval for step must not be zero",
     "eval_infinite_loop.bwsl": "Infinite eval loops require an until condition",
     "array_size_zero.bwsl": "Invalid array size. Max 256k elements",
+    "array_postfix_declarator.bwsl": "Array size must follow the type",
     "attribute_unknown_decorator.bwsl": "Unknown decorator",
     "duplicate_outputs_block.bwsl": "Only one outputs block is allowed per pass",
     "duplicate_resources_block.bwsl": "Only one resources block is allowed per pipeline",

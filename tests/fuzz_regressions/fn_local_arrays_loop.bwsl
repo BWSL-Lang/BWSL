@@ -4,7 +4,7 @@
 // calls.
 pipeline FnLocalArraysLoop {
     sumSeries :: (int n) -> float {
-        float tmp[8];
+        float[8] tmp;
         for (int i = 0; i < 8; i = i + 1) {
             tmp[i] = float(i) * 0.5 + float(n);
         }

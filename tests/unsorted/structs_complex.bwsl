@@ -6,7 +6,7 @@ pipeline structs_complex {
 
     struct Outer {
         Inner inner1;
-        Inner inner_array[2];
+        Inner[2] inner_array;
         float4 color;
     };
 

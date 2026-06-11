@@ -65,8 +65,8 @@ Fixed-size arrays are part of the current language surface.
 Examples:
 
 ```bwsl
-float weights[4];
-mat4 bones[64];
+float[4] weights;
+mat4[64] bones;
 ```
 
 Current array-size rules:
@@ -87,12 +87,12 @@ Current field forms include:
 struct Light {
     float3 position;
     float intensity;
-    mat4 bones[64];
+    mat4[64] bones;
 }
 ```
 
-The parser also accepts a legacy array-field form `Type[N] name`; the canonical
-form for the spec should be `Type name[N]`.
+Array sizes are attached to the type. The legacy postfix declarator form
+`Type name[N]` is not part of the source grammar.
 
 ## Pointers
 

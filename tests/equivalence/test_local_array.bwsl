@@ -8,7 +8,7 @@ pipeline EquivLocalArray {
         compute "Main" [4, 1, 1] {
             uint idx = input.global_id.x;
 
-            float table[6];
+            float[6] table;
             table[0] = 1.0;
             table[1] = 2.0;
             table[2] = 4.0;

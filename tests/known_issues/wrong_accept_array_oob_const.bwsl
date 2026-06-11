@@ -9,7 +9,7 @@ pipeline WrongAcceptArrayOobConst {
         use attributes { position }
 
         vertex {
-            float a[4];
+            float[4] a;
             a[0] = 1.0;
             float past = a[7];
             float neg = a[-1];

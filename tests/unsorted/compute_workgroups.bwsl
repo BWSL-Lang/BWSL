@@ -42,7 +42,7 @@ pipeline ComputeWorkgroups {
     pass "ComputeShared" {
         compute "WithShared" [256, 1, 1] {
             // Shared memory declaration
-            shared float cache[256];
+            shared float[256] cache;
 
             uint idx = input.global_id.x;
             uint localIdx = input.local_index;

@@ -7,8 +7,8 @@ pipeline ArraysConstSized {
     const int TILE = 16;
 
     struct Skin {
-        mat4 bones[BONE_COUNT];
-        float boneWeights[BONE_COUNT];
+        mat4[BONE_COUNT] bones;
+        float[BONE_COUNT] boneWeights;
     }
 
     attributes {
@@ -36,12 +36,12 @@ pipeline ArraysConstSized {
             float4 p = skin.bones[1] * float4(attributes.position * skin.boneWeights[1], 1.0);
 
             // Local arrays sized by pipeline and local constants
-            float taps[KERNEL_SIZE];
+            float[KERNEL_SIZE] taps;
             for (int i = 0; i < KERNEL_SIZE; i++) {
                 taps[i] = float(i) * 0.25;
             }
             const int LOCAL_SIZE = 3;
-            float localTaps[LOCAL_SIZE];
+            float[LOCAL_SIZE] localTaps;
             for (int i = 0; i < LOCAL_SIZE; i++) {
                 localTaps[i] = float(i + 1);
             }
@@ -64,7 +64,7 @@ pipeline ArraysConstSized {
 
         compute "Blur" [16, 1, 1] {
             // Shared array sized by a pipeline constant
-            shared float tile[TILE];
+            shared float[TILE] tile;
 
             uint3 gid = input.global_id;
             uint lane = input.local_index;
