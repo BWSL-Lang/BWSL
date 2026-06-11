@@ -146,7 +146,21 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
         // STORE_OUTPUT) Note: EmitInstruction(OP_STORE_OUTPUT, valueReg, slot)
         // puts value in destinations
         u16 srcReg = ir->destinations[i];
-        if (srcReg < ir->registerCount && ir->registerTypes) {
+        if (srcReg & 0xE000) {
+          // Constant pseudo-register: type lives in the high-bit encoding
+          // (see IRLowering::GetRegisterType), not in registerTypes. Without
+          // this, a scalar store like `output.brightness = 0.75;` leaves the
+          // varying typed by the FLOAT4 fallback while the store is scalar.
+          if ((srcReg & 0xC000) == 0xC000) {
+            analysis->outputTypes[slot] = (u8)CoreType::BOOL;
+          } else if (srcReg & 0x8000) {
+            analysis->outputTypes[slot] = (u8)CoreType::FLOAT;
+          } else if (srcReg & 0x4000) {
+            analysis->outputTypes[slot] = (u8)CoreType::INT;
+          } else {
+            analysis->outputTypes[slot] = (u8)CoreType::UINT;
+          }
+        } else if (srcReg < ir->registerCount && ir->registerTypes) {
           analysis->outputTypes[slot] = (u8)ir->registerTypes[srcReg];
         } else if (ir->phiCount > 0 && ir->phiResultRegs) {
           // Check if this is a PHI result register (SSA renaming assigns high
