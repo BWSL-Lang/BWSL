@@ -54,15 +54,12 @@ Remaining gaps (pre-existing, narrower):
   function) still materialize the array value, which SPIRV-Cross MSL
   cannot always assign.
 
-## 4. Const-name array sizes only work for struct fields (`const_array_size_local.bwsl`)
+## 4. ~~Const-name array sizes only work for struct fields~~ (FIXED)
 
-`docs/language.md` ("Structs and Arrays") says array sizes can be "integer
-literals or constant names that resolve at compile time". That is only true
-for struct fields (`bwsl_parser_soa_types.inl`, "Expected array size (number
-or constant)"). Local and `shared` declarations require a literal:
-`Consume(TokenType::NUMBER, "Expected array size")` in
-`bwsl_parser_soa_statements.inl`.
-Once fixed: extend `tests/unsorted/arrays_const_sized.bwsl` (see note).
+Fixed by routing array-size parsing through a shared parser helper that accepts
+integer literals or compile-time integer constant names. Coverage lives in
+`tests/unsorted/arrays_const_sized.bwsl` for struct fields, local arrays,
+block-local const-sized arrays, and shared arrays.
 
 ## 5. GLES backend emits ES 3.1 builtins in `#version 300 es` shaders
 
