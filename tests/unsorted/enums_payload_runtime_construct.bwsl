@@ -1,0 +1,33 @@
+// Test: Payload enums constructed from runtime values
+// Tests: payload constructors taking non-constant arguments, two payload
+//        cases of different shapes, eval method dispatch on both values
+
+pipeline EnumsPayloadRuntimeConstruct {
+    attributes {
+        position: float3
+    }
+
+    enum Shape {
+        Circle(float radius),
+        Rect(float2 size),
+
+        eval area :: () -> float {
+            Circle(r): 3.14159 * r * r
+            Rect(s): s.x * s.y
+        }
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Payloads built from runtime attribute data
+            float x = attributes.position.x;
+            Shape s1 = Shape::Circle(x);
+            Shape s2 = Shape::Rect(float2(x, 2.0));
+
+            float r = s1.area() + s2.area();
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

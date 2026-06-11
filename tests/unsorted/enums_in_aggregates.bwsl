@@ -1,0 +1,49 @@
+// Test: Plain enums stored inside structs and arrays
+// Tests: enum struct field, enum local array, enum equality against members,
+//        casting an enum value to its underlying integer type
+
+pipeline EnumsInAggregates {
+    attributes {
+        position: float3
+    }
+
+    enum Mode : uint {
+        Off = 0,
+        Low = 1,
+        High = 2
+    }
+
+    struct Config {
+        Mode mode;
+        float gain;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            Config c;
+            c.mode = Mode::High;
+            c.gain = 2.0;
+
+            float r = 0.0;
+            if (c.mode == Mode::High) {
+                r = c.gain;
+            }
+
+            // Cast to the underlying integer type
+            uint raw = uint(c.mode);
+
+            // Enum values stored in and read back from an array
+            Mode arr[3];
+            arr[0] = Mode::Off;
+            arr[1] = Mode::Low;
+            arr[2] = c.mode;
+            if (arr[2] == Mode::High && arr[0] != arr[1]) {
+                r = r + float(raw);
+            }
+
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

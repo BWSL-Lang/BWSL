@@ -1,0 +1,17 @@
+// Error case: a local read before its declaration must not resolve to the
+// later declaration in the same scope.
+pipeline UseBeforeDeclaration {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float y = lateVar + 1.0;
+            float lateVar = 2.0;
+            output.position = float4(attributes.position, y);
+        }
+    }
+}

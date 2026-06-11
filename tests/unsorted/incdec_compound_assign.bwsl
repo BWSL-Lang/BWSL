@@ -1,0 +1,33 @@
+// Test: Increment/decrement and compound assignment operators
+// Tests: prefix and postfix ++/--, postfix result used as a value,
+//        ++ as a for-loop increment, +=/*=//= on float locals
+
+pipeline IncdecCompoundAssign {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int i = 0;
+            i++;
+            ++i;
+            i--;
+
+            // Postfix value semantics: j gets the pre-increment value (1)
+            int j = i++;
+
+            float acc = 0.0;
+            for (int k = 0; k < 5; k++) {
+                acc += float(k);
+            }
+            acc *= 2.0;
+            acc /= 4.0;
+            acc -= 1.0;
+
+            output.position = float4(attributes.position, acc + float(i + j));
+        }
+    }
+}

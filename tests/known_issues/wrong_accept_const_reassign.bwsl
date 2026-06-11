@@ -1,0 +1,18 @@
+// Wrong-accept: assigning to a pipeline-scope const compiles without
+// diagnostics.
+pipeline WrongAcceptConstReassign {
+    attributes {
+        position: float3
+    }
+
+    const float K = 1.0;
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            K = 2.0;
+            output.position = float4(attributes.position, K);
+        }
+    }
+}

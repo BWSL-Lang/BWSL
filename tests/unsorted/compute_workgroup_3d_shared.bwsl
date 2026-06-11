@@ -1,0 +1,35 @@
+// Test: 3D workgroups combining every compute builtin with shared memory
+// Tests: non-uniform [8, 4, 2] workgroup size, global/local/workgroup ids,
+//        num_workgroups, local_index, shared tile reduction with barrier
+
+pipeline ComputeWorkgroup3DShared {
+    resources {
+        data: buffer<float>
+        result: buffer<float>
+    }
+
+    pass "Reduce" {
+        use resources { data, result }
+
+        compute "Main" [8, 4, 2] {
+            uint3 gid = input.global_id;
+            uint3 lid = input.local_id;
+            uint3 wid = input.workgroup_id;
+            uint3 nwg = input.num_workgroups;
+            uint lin = input.local_index;
+
+            shared float tile[64];
+            tile[lin] = resources.data[gid.x];
+            barrier();
+
+            float acc = 0.0;
+            for (uint i = 0u; i < 64u; i = i + 1u) {
+                acc = acc + tile[i];
+            }
+
+            if (lin == 0u) {
+                resources.result[wid.x + wid.y * nwg.x] = acc + float(lid.z);
+            }
+        }
+    }
+}

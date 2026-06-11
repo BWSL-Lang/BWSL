@@ -1,0 +1,30 @@
+// Error case: indirect recursion (A calls B calls A) must be rejected just
+// like direct recursion.
+pipeline MutualRecursion {
+    attributes {
+        position: float3
+    }
+
+    isEven :: (int n) -> bool {
+        if (n == 0) {
+            return true;
+        }
+        return isOdd(n - 1);
+    }
+
+    isOdd :: (int n) -> bool {
+        if (n == 0) {
+            return false;
+        }
+        return isEven(n - 1);
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float r = isEven(4) ? 1.0 : 0.0;
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

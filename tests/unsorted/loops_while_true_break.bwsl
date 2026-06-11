@@ -1,0 +1,37 @@
+// Test: Unbounded loop headers terminated by breaks
+// Tests: while (true) with a conditional break, continue that skips
+//        an iteration by jumping over the accumulator update
+
+pipeline LoopsWhileTrueBreak {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int i = 0;
+            while (true) {
+                i = i + 1;
+                if (i >= 5) {
+                    break;
+                }
+            }
+
+            // continue with a manual induction step before it
+            int n = 0;
+            float acc = 0.0;
+            while (n < 10) {
+                if (n == 3) {
+                    n = n + 2;
+                    continue;
+                }
+                acc = acc + float(n);
+                n = n + 1;
+            }
+
+            output.position = float4(attributes.position, float(i) + acc);
+        }
+    }
+}

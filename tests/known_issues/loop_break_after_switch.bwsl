@@ -1,0 +1,28 @@
+// Known issue: a conditional loop `break` placed after a `switch` inside the
+// same loop body references an undefined SPIR-V ID:
+//   ID '[%62]' has not been defined: OpBranchConditional %62 %63 %61
+// A switch inside a loop without a following break compiles fine, as does a
+// loop break without the preceding switch.
+pipeline LoopBreakAfterSwitch {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float r = 0.0;
+            for (int i = 0; i < 4; i = i + 1) {
+                switch (i) {
+                    case 0: r = r + 1.0; break;
+                    default: break;
+                }
+                if (r > 2.0) {
+                    break;
+                }
+            }
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

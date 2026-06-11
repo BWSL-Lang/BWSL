@@ -1,0 +1,19 @@
+// Wrong-accept: constant out-of-bounds and negative array indices compile
+// without diagnostics even though both are statically provable.
+pipeline WrongAcceptArrayOobConst {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float a[4];
+            a[0] = 1.0;
+            float past = a[7];
+            float neg = a[-1];
+            output.position = float4(attributes.position, past + neg);
+        }
+    }
+}

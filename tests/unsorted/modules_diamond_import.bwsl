@@ -1,0 +1,47 @@
+// Test: Diamond-shaped module imports in a single file
+// Tests: two modules importing the same base module, a pipeline importing
+//        all three, the shared base being reachable along every path
+
+module DiamondBase {
+    const float ROOT = 2.0;
+
+    rootScale :: (float x) -> float {
+        return x * ROOT;
+    }
+}
+
+module DiamondLeft {
+    import DiamondBase
+
+    leftVal :: () -> float {
+        return DiamondBase::rootScale(3.0);
+    }
+}
+
+module DiamondRight {
+    import DiamondBase
+
+    rightVal :: () -> float {
+        return DiamondBase::rootScale(5.0);
+    }
+}
+
+pipeline ModulesDiamondImport {
+    import DiamondLeft
+    import DiamondRight
+    import DiamondBase
+
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // 6 + 10 + 2 == 18
+            float r = DiamondLeft::leftVal() + DiamondRight::rightVal() + DiamondBase::ROOT;
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

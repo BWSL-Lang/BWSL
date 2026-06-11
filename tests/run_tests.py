@@ -208,6 +208,17 @@ ERROR_CASE_TESTS = {
     "duplicate_resources_block.bwsl": "Only one resources block is allowed per pipeline",
     "num_workgroups_wrong_stage.bwsl": "input.num_workgroups is only available in compute shaders",
     "vertex_function_wrong_block.bwsl": "Expected 'vertex' block in vertex_function",
+    "use_before_declaration.bwsl": "Unknown identifier 'lateVar'",
+    "unknown_function_call.bwsl": "Function not found: notAFunction",
+    "mutual_recursion.bwsl": "recursion is not supported",
+    "derivative_in_vertex_stage.bwsl": "Intrinsic not available in this shader stage",
+    "pipeline_scope_mutable_var.bwsl": "Expected 'import', 'using', 'attributes', 'resources'",
+    "keyword_as_variable_name.bwsl": "Expected variable name",
+    "overload_no_viable_match.bwsl": "Function not found: pickone",
+    "swizzle_component_out_of_range.bwsl": "SPIR-V validation failed",
+    "ternary_branch_type_mismatch.bwsl": "SPIR-V validation failed",
+    "bool_assigned_to_float.bwsl": "SPIR-V validation failed",
+    "unknown_struct_field.bwsl": "SPIR-V validation failed",
 }
 
 ERROR_CASE_MODULE_DIRS = {
