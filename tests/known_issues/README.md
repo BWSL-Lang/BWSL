@@ -72,3 +72,27 @@ Coverage lives in the existing packing tests: `attributes_compressed_instance`,
 the pack/unpack fuzz regressions. `python3 tests/run_tests.py --compiler
 ./build/bwslc --gles --no-spirv-val` validates all GLES outputs with
 `glslangValidator`.
+
+## 6. ~~Conditional loop break after a switch emits an undefined condition ID~~ (FIXED)
+
+When every arm of a loop-body switch ended in a terminator (`break`/`skip`),
+the switch merge block became unreachable, and a conditional loop `break`
+following the switch failed SPIR-V validation with
+`ID '[%N]' has not been defined`. The SSA unreachable-block cleanup in
+`phases/ssa/bwsl_ssa.cpp` NOPed out the instruction computing the break
+condition but kept the `OP_BRANCH` terminator, which still referenced the
+now-undefined raw register. A switch in a loop without a following break was
+fine, and a loop break without such a switch was fine — only the combination
+broke.
+
+Fixed in the same cleanup pass by pointing the condition/selector operand of
+kept `OP_BRANCH`/`OP_SWITCH` terminators at a typed undef register (the
+backend emits a properly defined `OpUndef` for it). The same investigation
+found that phis placed in those unreachable blocks kept an *uninitialized*
+result register, which could collide with a renamed register and produce
+`Id N is defined more than once`; they now get a fresh result register.
+
+Coverage lives in `tests/unsorted/loop_break_after_switch.bwsl`
+(all-arms-terminating switch + `if (...) break;`, a second switch inside the
+unreachable region + `break if`, the `skip if` form, and a reachable-merge
+control case).

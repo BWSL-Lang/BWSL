@@ -546,6 +546,30 @@ void SSAConstructor::Rename() {
     renameVisited = nullptr;
     renameVisitedCapacity = 0;
 
+    // Phis placed in blocks the rename traversal never reached still have
+    // an uninitialized result register (RenameBlock assigns it). Left as-is
+    // it can collide with a renamed register and produce "Id defined more
+    // than once" SPIR-V. Give each one a fresh register; the operand
+    // fix-up below fills its 0xFFFF operands with undefs, so the phi is
+    // emitted as a harmless dead definition in the unreachable block.
+    for (u32 p = 0; p < phiCount; p++) {
+        u32 phiBlock = phiBlocks[p];
+        if (phiBlock < cfg->blockCount && blockVisited[phiBlock]) continue;
+
+        u32 varIdx = phiVariables[p];
+        u16 newReg = state.AllocateNewRegister();
+        ir->phiResultRegs[p] = newReg;
+        if (ir->registerTypes && newReg < ir->registerCount) {
+            ir->registerTypes[newReg] = variables[varIdx].type;
+        }
+        if (ir->registerStructTypes && newReg < ir->registerCount) {
+            u16 origReg = variables[varIdx].originalReg;
+            if (origReg < ir->registerCount) {
+                ir->registerStructTypes[newReg] = ir->registerStructTypes[origReg];
+            }
+        }
+    }
+
     for (u32 p = 0; p < phiCount; p++) {
         u32 varIdx = phiVariables[p];
         u16 varType = variables[varIdx].type;
@@ -573,6 +597,25 @@ void SSAConstructor::Rename() {
         }
     }
 
+    // Undef registers for terminator operands in unreachable blocks,
+    // allocated lazily and shared across all such blocks.
+    u16 unreachableBoolUndef = 0xFFFF;
+    u16 unreachableIntUndef = 0xFFFF;
+    auto getUnreachableUndef = [&](u16 coreType, u16* cache) -> u16 {
+        if (*cache != 0xFFFF) return *cache;
+        u16 undefReg = state.AllocateNewRegister();
+        if (ir->registerTypes && undefReg < ir->registerCount) {
+            ir->registerTypes[undefReg] = coreType;
+        }
+        if (ir->undefRegCount < ir->undefRegCapacity) {
+            ir->undefRegs[ir->undefRegCount] = undefReg;
+            ir->undefRegTypes[ir->undefRegCount] = coreType;
+            ir->undefRegCount++;
+        }
+        *cache = undefReg;
+        return undefReg;
+    };
+
     for (u32 b = 0; b < cfg->blockCount; b++) {
         if (blockVisited[b]) continue;
         u32 firstInst = cfg->firstInst[b];
@@ -583,6 +626,31 @@ void SSAConstructor::Rename() {
             // branch to wire up the unreachable-block label.
             if (op == IR::OP_JUMP || op == IR::OP_BRANCH ||
                 op == IR::OP_RET || op == IR::OP_SWITCH) {
+                // OP_BRANCH/OP_SWITCH still carry a raw pre-SSA condition /
+                // selector register. Its defining instruction is NOPed out
+                // below (or was renamed away in reachable code), so the
+                // backend would emit a reference to an ID that is never
+                // defined. Point the operand at an undef register instead —
+                // the block is unreachable, so the value is irrelevant, and
+                // GetSpirvId emits a properly defined OpUndef for it.
+                // Repro: a loop-body switch whose arms all end in
+                // break/skip, followed by a conditional `break` — the
+                // switch merge block holding the break branch is
+                // unreachable.
+                if (op == IR::OP_BRANCH || op == IR::OP_SWITCH) {
+                    u16 condReg = ir->GetOperand(i, 0);
+                    if (condReg != 0xFFFF && (condReg & 0xE000) == 0) {
+                        u16 undefReg =
+                            (op == IR::OP_BRANCH)
+                                ? getUnreachableUndef(
+                                      static_cast<u16>(CoreType::BOOL),
+                                      &unreachableBoolUndef)
+                                : getUnreachableUndef(
+                                      static_cast<u16>(CoreType::INT),
+                                      &unreachableIntUndef);
+                        ir->SetOperand(i, 0, undefReg);
+                    }
+                }
                 continue;
             }
             ir->opcodes[i] = IR::OP_NOP;

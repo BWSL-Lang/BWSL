@@ -1,0 +1,79 @@
+// Test: conditional loop break after a switch in the same loop body
+// Regression for known issue 6: when every arm of a loop-body switch ends in
+// a terminator (break/skip), the switch merge block becomes unreachable. The
+// SSA unreachable-block cleanup NOPed out the instruction computing a
+// following conditional break's condition but kept the OP_BRANCH terminator,
+// emitting an OpBranchConditional whose condition ID was never defined.
+// Phis placed in such unreachable blocks also kept an uninitialized result
+// register, colliding with reachable definitions ("Id defined more than
+// once").
+
+pipeline LoopBreakAfterSwitch {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Scenario 1: all switch arms terminate (break/skip), then a
+            // conditional break — the break's condition block is unreachable.
+            float acc = 0.0;
+            for (int i = 0; i < 8; i = i + 1) {
+                switch (i) {
+                    case 0: { acc = acc + 1.0; break; }
+                    case 1: { acc = acc + 2.0; skip; }
+                    default: { acc = acc + 0.5; break; }
+                }
+                if (acc > 4.0) { break; }
+            }
+
+            // Scenario 2: a second switch inside the unreachable region —
+            // its selector operand and merge-block phi need the same
+            // treatment as the branch condition.
+            float acc2 = 0.0;
+            for (int j = 0; j < 8; j = j + 1) {
+                switch (j) {
+                    case 0: { acc2 = acc2 + 1.0; break; }
+                    default: { acc2 = acc2 + 0.5; skip; }
+                }
+                switch (j) {
+                    case 1: { acc2 = acc2 + 2.0; }
+                    default: { acc2 = acc2 + 0.25; }
+                }
+                break if (acc2 > 4.0);
+            }
+
+            output.position = float4(attributes.position * (acc + acc2), 1.0);
+        }
+
+        fragment {
+            // Scenario 3: same shape with `skip if` and trailing code in the
+            // unreachable region.
+            float acc = 0.0;
+            for (int i = 0; i < 8; i = i + 1) {
+                switch (i) {
+                    case 0: { acc = acc + 1.0; break; }
+                    case 1: { acc = acc + 2.0; skip; }
+                    default: { acc = acc + 0.5; break; }
+                }
+                skip if (acc > 4.0);
+                acc = acc + 0.125;
+            }
+
+            // Control: reachable switch merge + conditional break still works.
+            float acc2 = 0.0;
+            for (int j = 0; j < 8; j = j + 1) {
+                switch (j) {
+                    case 0: { acc2 = acc2 + 1.0; }
+                    case 1: { acc2 = acc2 + 2.0; }
+                    default: { acc2 = acc2 + 0.5; }
+                }
+                break if (acc2 > 4.0);
+            }
+
+            output.color = float4(acc, acc2, 1.0, 1.0);
+        }
+    }
+}
