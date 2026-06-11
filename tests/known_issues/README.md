@@ -73,18 +73,26 @@ the pack/unpack fuzz regressions. `python3 tests/run_tests.py --compiler
 ./build/bwslc --gles --no-spirv-val` validates all GLES outputs with
 `glslangValidator`.
 
-## 6. ~~Scalar float varyings fail SPIR-V validation~~ (FIXED)
+## 6. ~~Conditional loop break after a switch emits an undefined condition ID~~ (FIXED)
 
-`output.brightness = 0.75;` in a vertex stage declared the varying interface
-variable as float4 (the fallback) while storing a scalar float, so spirv-val
-rejected it with "OpStore Pointer's type does not match Object's type".
-Constant operands are encoded as pseudo-registers with the type in the high
-bits (`0x8000` float, `0x4000` int, `0x2000` uint, `0xC000` bool — see
-`IRLowering::GetRegisterType`), so the `OP_STORE_OUTPUT` case in
-`phases/ir_generation/bwsl_ir_analysis.cpp` never found them in
-`registerTypes` and left `outputTypes[slot]` unset. Fixed by decoding the
-constant prefix there. Varyings fed from real registers (vectors, computed
-scalars) already carried the right type.
+When every arm of a loop-body switch ended in a terminator (`break`/`skip`),
+the switch merge block became unreachable, and a conditional loop `break`
+following the switch failed SPIR-V validation with
+`ID '[%N]' has not been defined`. The SSA unreachable-block cleanup in
+`phases/ssa/bwsl_ssa.cpp` NOPed out the instruction computing the break
+condition but kept the `OP_BRANCH` terminator, which still referenced the
+now-undefined raw register. A switch in a loop without a following break was
+fine, and a loop break without such a switch was fine — only the combination
+broke.
 
-Coverage lives in `tests/unsorted/varyings_scalar.bwsl` (constant-fed scalar,
-expression-fed scalar, and a vector varying for location assignment).
+Fixed in the same cleanup pass by pointing the condition/selector operand of
+kept `OP_BRANCH`/`OP_SWITCH` terminators at a typed undef register (the
+backend emits a properly defined `OpUndef` for it). The same investigation
+found that phis placed in those unreachable blocks kept an *uninitialized*
+result register, which could collide with a renamed register and produce
+`Id N is defined more than once`; they now get a fresh result register.
+
+Coverage lives in `tests/unsorted/loop_break_after_switch.bwsl`
+(all-arms-terminating switch + `if (...) break;`, a second switch inside the
+unreachable region + `break if`, the `skip if` form, and a reachable-merge
+control case).
