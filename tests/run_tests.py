@@ -1063,24 +1063,24 @@ def convert_glsl_to_spirv(glsl_file: Path, out_spv: Path,
 
 
 def pack_input_values(spec: dict, out_path: Path) -> None:
-    import struct
     values = spec["input_values"]
     itype = spec.get("input_type", "float")
+    out_path.write_bytes(values_to_bytes(itype, values))
+
+
+def values_to_bytes(itype: str, values: list) -> bytes:
+    import struct
+    if itype == "bytes":
+        return bytes(int(v) & 0xFF for v in values)
     fmt_char = {"float": "f", "int": "i", "uint": "I"}.get(itype)
     if fmt_char is None:
-        raise ValueError(f"unsupported input_type: {itype}")
-    packed = struct.pack(f"{len(values)}{fmt_char}", *values)
-    out_path.write_bytes(packed)
+        raise ValueError(f"unsupported value type: {itype}")
+    return struct.pack(f"{len(values)}{fmt_char}", *values)
 
 
 def pack_values(itype: str, values: list, out_path: Path) -> None:
     """Generic typed-value packer (float/int/uint) for raster resources."""
-    import struct
-    fmt_char = {"float": "f", "int": "i", "uint": "I"}.get(itype)
-    if fmt_char is None:
-        raise ValueError(f"unsupported resource type: {itype}")
-    packed = struct.pack(f"{len(values)}{fmt_char}", *values)
-    out_path.write_bytes(packed)
+    out_path.write_bytes(values_to_bytes(itype, values))
 
 
 def dispatch_raster(runner: Path, vert_spv: Path, frag_spv: Path,
@@ -1434,6 +1434,14 @@ def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
         if not ok:
             test_failed = True
             details.append(f"{backend}: {msg}")
+    if "expected_values" in spec:
+        expected = values_to_bytes(spec.get("output_type", "float"),
+                                   spec["expected_values"])
+        for backend, data in outputs.items():
+            ok, msg = compare_bytes(expected, data, spec)
+            if not ok:
+                test_failed = True
+                details.append(f"{backend} expected: {msg}")
     # Depth readback is always float32; compare with the same tolerance as
     # the color output (or 0 by default). We synthesize a depth-only spec so
     # compare_bytes picks the float path.
@@ -1639,6 +1647,14 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
             if not ok:
                 test_failed = True
                 details.append(f"{backend}: {msg}")
+        if "expected_values" in spec:
+            expected = values_to_bytes(spec.get("output_type", "float"),
+                                       spec["expected_values"])
+            for backend, data in outputs.items():
+                ok, msg = compare_bytes(expected, data, spec)
+                if not ok:
+                    test_failed = True
+                    details.append(f"{backend} expected: {msg}")
 
         for e in dispatch_errors:
             test_failed = True

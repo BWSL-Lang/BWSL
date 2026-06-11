@@ -165,17 +165,29 @@ struct IRLowering {
   struct StructArrayValueInfo {
     CoreType elemType;
     u32 length;
+    u16 parentStructReg;
+    u16 fieldIndex;
+    u32 parentStructHash;
+    u32 elemStructHash;
   };
   std::unordered_map<u16, StructArrayValueInfo> structArrayValueRegs;
 
   // Record `dest` as a struct-field array value when the extracted field is
   // an array. Call after emitting OP_STRUCT_EXTRACT for a struct field.
-  void MarkIfStructArrayField(u16 dest, u32 fieldOffset, u16 fieldIndex,
-                              CoreType fieldType) {
+  void MarkIfStructArrayField(u16 dest, u16 parentStructReg,
+                              u32 parentStructHash, u32 fieldOffset,
+                              u16 fieldIndex, CoreType fieldType) {
     if (program.structFieldArraySizes) {
       u32 len = program.structFieldArraySizes[fieldOffset + fieldIndex];
       if (len > 0) {
-        structArrayValueRegs[dest] = StructArrayValueInfo{fieldType, len};
+        u32 elemStructHash = 0;
+        if (program.structFieldTypeHashes) {
+          elemStructHash =
+              program.structFieldTypeHashes[fieldOffset + fieldIndex];
+        }
+        structArrayValueRegs[dest] =
+            StructArrayValueInfo{fieldType, len, parentStructReg, fieldIndex,
+                                 parentStructHash, elemStructHash};
       }
     }
   }

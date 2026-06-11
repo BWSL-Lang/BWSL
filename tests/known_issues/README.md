@@ -46,13 +46,17 @@ Coverage: `tests/unsorted/structs_vector_matrix_array_fields.bwsl`
 (mat4/float4/float element arrays, constant and dynamic indices) and
 `tests/unsorted/arrays_const_sized.bwsl`.
 
-Remaining gaps (pre-existing, narrower):
-- Nested chains that write *through* an element of a struct-array field
-  (`s.frames[i].time = x` where `frames` is an array field) still go
-  through the old extract/ARRAY_STORE path and may drop the write.
-- Whole-array reads of struct fields (e.g. passing `s.bones` to a
-  function) still materialize the array value, which SPIRV-Cross MSL
-  cannot always assign.
+Follow-up gaps are also fixed: writes through an element of a struct-array
+field now extract the element, insert the changed member, insert the element
+back into the parent struct, and store the parent. Whole-array reads of struct
+fields preserve the source struct/field metadata, so inlined functions that
+receive `s.field` index through `OP_STRUCT_ARRAY_EXTRACT` instead of
+materializing a standalone array value.
+
+Regression coverage: `tests/equivalence/test_nested_access_array_chain.bwsl`
+now checks both `s.items[i].weight = x` write-through and passing `s.items`
+to a function as `Cell[4]`, with expected numeric output in
+`tests/equivalence/test_nested_access_array_chain.json`.
 
 ## 4. ~~Const-name array sizes only work for struct fields~~ (FIXED)
 
