@@ -1,0 +1,23 @@
+// Error case: reading a field that the struct does not declare must not
+// compile to a valid shader. Currently caught by SPIR-V validation rather
+// than a front-end diagnostic (see tests/known_issues/README.md).
+pipeline UnknownStructField {
+    attributes {
+        position: float3
+    }
+
+    struct S {
+        float a;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            S s;
+            s.a = 1.0;
+            float b = s.missing;
+            output.position = float4(attributes.position, b);
+        }
+    }
+}

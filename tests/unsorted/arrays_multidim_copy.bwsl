@@ -1,0 +1,44 @@
+// Test: Multi-dimensional local arrays and whole-array assignment
+// Tests: 2D array declaration, constant and dynamic two-level indexing,
+//        whole-array copy with value semantics
+
+pipeline ArraysMultidimCopy {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // 2D array with constant indices
+            float grid[3][3];
+            grid[0][0] = 1.0;
+            grid[2][1] = 2.0;
+            grid[1][2] = grid[0][0] + grid[2][1];
+
+            // Dynamic indices on both levels
+            int i = int(attributes.position.x);
+            int j = int(attributes.position.y);
+            grid[i][j] = 5.0;
+            float dyn = grid[j][i];
+
+            // Whole-array copy must have value semantics: writing b after
+            // the copy must not affect a.
+            float a[4];
+            a[0] = 1.0;
+            a[1] = 2.0;
+            a[2] = 3.0;
+            a[3] = 4.0;
+
+            float b[4];
+            b = a;
+            b[1] = 20.0;
+
+            // a[1] + b[1] + b[3] == 2 + 20 + 4 == 26
+            float copies = a[1] + b[1] + b[3];
+
+            output.position = float4(attributes.position, grid[1][2] + dyn + copies);
+        }
+    }
+}

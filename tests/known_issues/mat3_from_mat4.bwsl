@@ -1,0 +1,22 @@
+// Known issue: the mat3(mat4) truncation constructor treats the mat4 operand
+// as a scalar constituent and emits an invalid composite:
+//   %29 = OpCompositeConstruct %v3float %26 %26 %26
+//   Expected Constituents to be scalars or vectors of the same type as Result Type
+// Either implement column/row truncation or reject the construction with a
+// diagnostic. Building the mat3 from explicit float3 columns works fine.
+pipeline Mat3FromMat4 {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            mat4 m4 = mat4(1.0);
+            mat3 m3 = mat3(m4);
+            float3 r = m3 * attributes.position;
+            output.position = float4(r, 1.0);
+        }
+    }
+}

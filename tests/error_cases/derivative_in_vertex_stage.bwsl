@@ -1,0 +1,15 @@
+// Error case: screen-space derivative intrinsics are fragment-only.
+pipeline DerivativeInVertexStage {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float d = ddx(attributes.position.x);
+            output.position = float4(attributes.position, d);
+        }
+    }
+}

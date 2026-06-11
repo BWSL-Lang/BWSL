@@ -1,0 +1,18 @@
+// Wrong-accept: writing through a swizzle with a repeated component
+// (`v.xx = ...`) compiles without diagnostics; one of the two writes wins
+// silently.
+pipeline WrongAcceptSwizzleDupWrite {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float4 v = float4(1.0);
+            v.xx = float2(2.0, 3.0);
+            output.position = v + float4(attributes.position, 0.0);
+        }
+    }
+}

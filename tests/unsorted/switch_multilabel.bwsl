@@ -1,0 +1,41 @@
+// Test: Switch statements with shared case labels
+// Tests: fall-through case labels sharing one body, default arm,
+//        switch with only a default arm, switch nested inside a loop
+
+pipeline SwitchMultilabel {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int sel = int(attributes.position.x);
+            float r = 0.0;
+
+            // Shared labels: 1 and 2 run the same body
+            switch (sel) {
+                case 0: r = 1.0; break;
+                case 1:
+                case 2: r = 2.0; break;
+                default: r = -1.0; break;
+            }
+
+            // Only a default arm
+            switch (sel) {
+                default: r = r + 0.5; break;
+            }
+
+            // Switch nested in a loop
+            for (int i = 0; i < 4; i = i + 1) {
+                switch (i) {
+                    case 3: r = r + 10.0; break;
+                    default: r = r + 1.0; break;
+                }
+            }
+
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

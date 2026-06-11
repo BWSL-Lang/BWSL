@@ -1,0 +1,47 @@
+// Test: Boolean vectors and componentwise selection
+// Tests: bool3 from vector comparison, any()/all() reductions,
+//        select() with a bool-vector mask, all() over vector equality,
+//        bool locals in arrays and struct fields
+
+pipeline BoolVectorsSelect {
+    attributes {
+        position: float3
+    }
+
+    struct Flags {
+        bool on;
+        float v;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float3 a = attributes.position;
+            float3 b = float3(0.5, 0.5, 0.5);
+
+            // Componentwise comparison produces a bool vector
+            bool3 lt = a < b;
+            bool anyLt = any(lt);
+            bool allLt = all(lt);
+
+            // Componentwise select with the mask
+            float3 sel = select(a, b, lt);
+
+            // Vector equality reduced with all()
+            bool eq = all(a == b);
+
+            // bools in arrays and struct fields
+            bool flags[3];
+            flags[0] = anyLt;
+            flags[1] = allLt;
+            flags[2] = flags[0] && !flags[1];
+
+            Flags f;
+            f.on = flags[2] || eq;
+            f.v = f.on ? 4.0 : 2.0;
+
+            output.position = float4(sel, f.v);
+        }
+    }
+}

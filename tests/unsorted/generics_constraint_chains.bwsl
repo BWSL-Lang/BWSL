@@ -1,0 +1,39 @@
+// Test: Constraint-generic functions calling other generic functions
+// Tests: a generic forwarding to another generic with the same constraint,
+//        type-pattern dispatch reached through the generic call chain,
+//        one constraint specialized at three widths in a single stage
+
+pipeline GenericsConstraintChains {
+    attributes {
+        position: float3
+    }
+
+    constraint Vecs = float2 | float3 | float4;
+
+    scale :: (Vecs v, float s) -> Vecs {
+        return v * s;
+    }
+
+    twice :: (Vecs v) -> Vecs {
+        return scale(v, 2.0);
+    }
+
+    pick :: (Vecs v) -> float {
+        float2: v.x + v.y
+        float3: v.x * v.y * v.z
+        float4: dot(v, v)
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float2 a = twice(float2(1.0, 2.0));
+            float3 b = twice(attributes.position);
+            float4 c = twice(float4(b, 1.0));
+
+            float r = pick(a) + pick(b) + pick(c);
+            output.position = float4(b, r);
+        }
+    }
+}

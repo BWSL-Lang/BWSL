@@ -1,0 +1,22 @@
+// Wrong-accept: a non-void function with a return on only one control path
+// compiles without diagnostics; the fall-through path yields an undefined
+// value.
+pipeline WrongAcceptMissingReturn {
+    attributes {
+        position: float3
+    }
+
+    f :: (float x) -> float {
+        if (x > 0.0) {
+            return x;
+        }
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, f(1.0));
+        }
+    }
+}
