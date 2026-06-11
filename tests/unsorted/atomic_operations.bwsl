@@ -6,10 +6,10 @@ pipeline AtomicOperations {
     pass "AtomicCompute" {
         compute "AtomicOps" [64, 1, 1] {
             // Shared memory for atomic operations
-            shared int sharedCounter[1];
-            shared uint sharedMask[1];
-            shared int sharedMin[1];
-            shared int sharedMax[1];
+            shared int[1] sharedCounter;
+            shared uint[1] sharedMask;
+            shared int[1] sharedMin;
+            shared int[1] sharedMax;
 
             uint idx = input.global_id.x;
             uint localIdx = input.local_index;
@@ -80,8 +80,8 @@ pipeline AtomicOperations {
 
     pass "AtomicArithmetic" {
         compute "ArithmeticOps" [32, 1, 1] {
-            shared int accumulator[4];
-            shared uint uaccumulator[4];
+            shared int[4] accumulator;
+            shared uint[4] uaccumulator;
 
             uint idx = input.global_id.x;
             uint localIdx = input.local_index;
@@ -126,8 +126,8 @@ pipeline AtomicOperations {
 
     pass "AtomicBitwise" {
         compute "BitwiseOps" [16, 1, 1] {
-            shared uint flags[1];
-            shared uint toggles[1];
+            shared uint[1] flags;
+            shared uint[1] toggles;
 
             uint localIdx = input.local_index;
 

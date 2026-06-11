@@ -8,7 +8,7 @@ pipeline ArraySizeNotPositive {
         use attributes { position }
 
         vertex {
-            float values[0];
+            float[0] values;
             output.position = float4(attributes.position, 1.0);
         }
     }

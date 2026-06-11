@@ -371,13 +371,28 @@ NodeRef Parser::ParseStatement() {
             return ParseCustomTypeVarDecl();
         } else if (stream->GetType(next) == TokenType::LEFT_BRACKET) {
             // Could be custom type array declaration: TypeName[size] varName;
-            TokenRef sizeTok = current + 2;
-            TokenRef rightTok = current + 3;
-            TokenRef nameTok = current + 4;
-            if (nameTok < stream->Count() &&
-                stream->GetType(sizeTok) == TokenType::NUMBER &&
-                stream->GetType(rightTok) == TokenType::RIGHT_BRACKET &&
-                stream->GetType(nameTok) == TokenType::IDENTIFIER) {
+            // Array sizes may be literals or constants, so scan bracket groups
+            // instead of peeking only for NUMBER RIGHT_BRACKET.
+            TokenRef probe = next;
+            while (probe < stream->Count() &&
+                   stream->GetType(probe) == TokenType::LEFT_BRACKET) {
+                u32 depth = 1;
+                probe++;
+                while (probe < stream->Count() && depth > 0) {
+                    TokenType probeType = static_cast<TokenType>(stream->GetType(probe));
+                    if (probeType == TokenType::LEFT_BRACKET) {
+                        depth++;
+                    } else if (probeType == TokenType::RIGHT_BRACKET) {
+                        depth--;
+                    }
+                    probe++;
+                }
+                if (depth != 0) {
+                    break;
+                }
+            }
+            if (probe < stream->Count() &&
+                stream->GetType(probe) == TokenType::IDENTIFIER) {
                 return ParseCustomTypeVarDecl();
             }
         } else if (stream->GetType(next) == TokenType::DOUBLE_COLON) {
@@ -443,82 +458,29 @@ NodeRef Parser::ParseStatement() {
         Consume(TokenType::IDENTIFIER, "Expected variable name");
         std::string varName(stream->GetValue(previous));
 
-        bool isArray = false;
-        u32 arraySize = 0;
-        std::vector<u32> arrayDims;
-        while (Match(TokenType::LEFT_BRACKET)) {
-            u32 size = 0;
-            if (!ParseArraySizeValue(&size)) {
-                return NodeRef::Null();
-            }
-            Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
-            arrayDims.push_back(size);
-        }
-
-        if (!arrayDims.empty()) {
-            u64 total = 1;
-            for (u32 dim : arrayDims) {
-                if (dim == 0 || total > (MAX_ARRAY_SIZE / dim)) {
-                    Error("Invalid array size. Max 256k elements");
-                    return NodeRef::Null();
-                }
-                total *= dim;
-            }
-            isArray = true;
-            arraySize = static_cast<u32>(total);
+        if (Check(TokenType::LEFT_BRACKET)) {
+            ErrorAtCurrent("Array size must follow the type; use 'Type[N] name'");
+            Synchronize();
+            return NodeRef::Null();
         }
 
         NodeRef initializer = NodeRef::Null();
         if (Match(TokenType::ASSIGN)) {
-            // Brace-list initializer is legal for arrays in this decl
-            // form (`int arr[4] = { 10, 20, 30, 40 }`). Route to the
-            // dedicated array-init parser when we see `{`; otherwise
-            // parse a scalar/expression initializer as before.
-            if (isArray && Check(TokenType::LEFT_BRACE)) {
-                initializer = ParseArrayInitializer();
-            } else {
-                initializer = ParseExpression();
-            }
-        }
-
-        if (storageClass == StorageClass::Shared && isArray && initializer.IsValid()) {
-            Error("Shared arrays cannot have initializers");
-            return NodeRef::Null();
+            initializer = ParseExpression();
         }
 
         Consume(TokenType::SEMICOLON, "Expected ';'");
 
-        ArenaString typeName = isArray ? ArenaString::MakeHashOnly("array")
-                                       : ArenaString::MakeHashOnly(typeStr);
-        u8 arrayDimCount = isArray ? static_cast<u8>(arrayDims.size()) : 0;
-        u32 arrayLen = isArray ? arraySize : 0;
-        u32 elementTypeHash = isArray ? ArenaString::MakeHashOnly(typeStr).nameHash : 0;
         NodeRef varDecl = ASTFactory::MakeVariableDecl(ast,
             ArenaString::MakeHashOnly(varName),
-            typeName,
-            initializer, false, line, col, storageClass, arrayDimCount, arrayLen,
-            elementTypeHash);
+            ArenaString::MakeHashOnly(typeStr),
+            initializer, false, line, col, storageClass);
 
         Symbol* sym = SymbolTable::AddSymbol(&symbolTable, ArenaString::MakeHashOnly(varName), SymbolKind::VARIABLE);
         if (sym) {
             VariableData& varData = symbolTable.variables[sym->index];
-            if (isArray) {
-                TypeInfo arrayInfo{};
-                arrayInfo.coreType = TokenTypeToReturnType(varType);
-                arrayInfo.componentCount = GetTypeInfoFromToken(varType).componentCount;
-                arrayInfo.arrayDimensions = static_cast<u8>(arrayDims.size());
-                arrayInfo.customTypeHash = 0;
-                arrayInfo.arrayLength = arraySize;
-                arrayInfo.arrayStride = static_cast<u32>(arrayInfo.componentCount) * 4u;
-                varData.typeInfo = arrayInfo;
-            } else {
-                varData.typeInfo = GetTypeInfoFromToken(varType);
-            }
+            varData.typeInfo = GetTypeInfoFromToken(varType);
             varData.storageClass = storageClass;
-        }
-
-        if (arrayDims.size() > 1) {
-            multiDimArrayDims[ArenaString::MakeHashOnly(varName).nameHash] = arrayDims;
         }
 
         return varDecl;
@@ -607,17 +569,17 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
     Consume(TokenType::IDENTIFIER, "Expected variable name");
     std::string varName(stream->GetValue(previous));
 
-    if (arrayDims.empty() && Match(TokenType::LEFT_BRACKET)) {
-        if (!ParseArrayDims(arrayDims)) {
-            return NodeRef::Null();
-        }
+    if (Match(TokenType::LEFT_BRACKET)) {
+        ErrorAtPrevious("Array size must follow the type; use 'Type[N] name'");
+        Synchronize();
+        return NodeRef::Null();
     }
 
     // Optional initializer
     NodeRef initializer = NodeRef::Null();
     if (Match(TokenType::ASSIGN)) {
-        // Brace-list initializer is legal for arrays in this same
-        // decl form (`int arr[4] = { 10, 20, 30, 40 }`). Route to the
+        // Brace-list initializer is legal for arrays in this decl
+        // form (`int[4] arr = { 10, 20, 30, 40 }`). Route to the
         // dedicated array-init parser when we see `{`; otherwise parse
         // a scalar/expression initializer as before.
         if (!arrayDims.empty() && Check(TokenType::LEFT_BRACE)) {

@@ -1,8 +1,8 @@
 pipeline SvaSemantic {
     struct Skin {
-        mat4 bones[4];
-        float4 tint[2];
-        float weights[3];
+        mat4[4] bones;
+        float4[2] tint;
+        float[3] weights;
     }
     attributes { position: float3 }
     pass "Main" {

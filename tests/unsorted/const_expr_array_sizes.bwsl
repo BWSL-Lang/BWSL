@@ -20,7 +20,7 @@ pipeline ConstExprArraySizes {
 
         vertex {
             // Array sized by a const derived from another const
-            float vals[M];
+            float[M] vals;
             for (int i = 0; i < M; i = i + 1) {
                 vals[i] = float(i) * A;
             }

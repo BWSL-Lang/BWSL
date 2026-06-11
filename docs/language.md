@@ -575,7 +575,7 @@ Fixed-size arrays are supported, including arrays in structs:
 
 ```bwsl
 struct SkinningData {
-    mat4 boneMatrices[64];
+    mat4[64] boneMatrices;
 }
 ```
 

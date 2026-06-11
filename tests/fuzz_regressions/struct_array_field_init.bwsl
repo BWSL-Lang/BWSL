@@ -5,7 +5,7 @@
 // specific element after multiple writes.
 pipeline StructArrayFieldInit {
     struct Buffer {
-        float data[8];
+        float[8] data;
         int count;
     };
 

@@ -1,6 +1,6 @@
 module MyModule {
   struct UboBlock {
-      float4 transformations[9];
+      float4[9] transformations;
   };
 }
 

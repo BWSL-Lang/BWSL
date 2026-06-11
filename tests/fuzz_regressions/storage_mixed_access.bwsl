@@ -9,7 +9,7 @@ pipeline StorageMixedAccess {
 
     pass "Compute" {
         compute "Main" [1, 1, 1] {
-            Item items[4];
+            Item[4] items;
 
             // Initialise via index-then-member
             for (int i = 0; i < 4; i = i + 1) {

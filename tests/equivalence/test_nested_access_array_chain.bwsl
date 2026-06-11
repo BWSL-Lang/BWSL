@@ -15,7 +15,7 @@ pipeline EquivNestedAccessArrayChain {
     };
 
     struct Grid {
-        Cell   items[4];
+        Cell[4] items;
         float  bias;
     };
 

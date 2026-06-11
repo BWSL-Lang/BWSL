@@ -18,7 +18,7 @@ pipeline ComputeWorkgroup3DShared {
             uint3 nwg = input.num_workgroups;
             uint lin = input.local_index;
 
-            shared float tile[64];
+            shared float[64] tile;
             tile[lin] = resources.data[gid.x];
             barrier();
 

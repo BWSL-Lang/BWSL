@@ -4,7 +4,7 @@
 pipeline SharedMemPatterns {
     pass "Compute" {
         compute "Main" [8, 1, 1] {
-            shared float tile[8];
+            shared float[8] tile;
 
             uint idx = input.local_id.x;
             tile[idx] = float(idx) * 2.5;

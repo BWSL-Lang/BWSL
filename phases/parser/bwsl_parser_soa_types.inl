@@ -155,6 +155,11 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
         }
     }
 
+    if (storageClass == StorageClass::Shared && initializer.IsValid()) {
+        Error("Shared arrays cannot have initializers");
+        return NodeRef::Null();
+    }
+
     Consume(TokenType::SEMICOLON, "Expected ';' after array declaration");
 
     NodeRef varDecl = ASTFactory::MakeVariableDecl(ast,
@@ -1254,14 +1259,22 @@ NodeRef Parser::ParseStruct() {
         };
 
         u32 arraySize = 0;
-        bool arrayBeforeName = false;
         if (Match(TokenType::LEFT_BRACKET)) {
             arraySize = ParseFieldArraySize();
-            arrayBeforeName = true;
         }
 
         Consume(TokenType::IDENTIFIER, "Expected field name");
         std::string fieldNameStr(stream->GetValue(previous));
+
+        if (Match(TokenType::LEFT_BRACKET)) {
+            ErrorAtPrevious("Array size must follow the field type; use 'Type[N] name'");
+            Synchronize();
+            if (current == loopStart) {
+                if (stream->GetType(current) == TokenType::EOF_TOKEN) break;
+                Advance();
+            }
+            continue;
+        }
 
         // Create field with pre-computed hash
         StructData::Field field;
@@ -1270,14 +1283,6 @@ NodeRef Parser::ParseStruct() {
         ReverseLookup::Register(field.name.nameHash, fieldNameStr.c_str());
         field.type = fieldType;
         field.arraySize = arraySize;
-
-        // Check for fixed-size array [size] after name
-        if (Match(TokenType::LEFT_BRACKET)) {
-            if (arrayBeforeName) {
-                Error("Multiple array size declarations for struct field");
-            }
-            field.arraySize = ParseFieldArraySize();
-        }
 
         // Add to AST node (for code generation)
         StructFieldData astField;

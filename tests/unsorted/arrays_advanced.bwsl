@@ -25,7 +25,7 @@ pipeline ArraysAdvanced {
         float weight;
     }
 
-    // Array manipulation functions - note: float[8] not float arr[8]
+    // Array manipulation functions use the type-attached form: float[8] arr
     sumArray :: (float[8] arr) -> float {
         float sum = 0.0;
         for (int i = 0; i < 8; i++) {

@@ -3,10 +3,10 @@
 // ARRAY_LOAD at multiple levels.
 pipeline ArrayOfArraysAccess {
     struct Row {
-        float cells[4];
+        float[4] cells;
     };
     struct Grid {
-        Row rows[3];
+        Row[3] rows;
     };
 
     pass "Compute" {

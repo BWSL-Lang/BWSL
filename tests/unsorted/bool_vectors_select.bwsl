@@ -32,7 +32,7 @@ pipeline BoolVectorsSelect {
             bool eq = all(a == b);
 
             // bools in arrays and struct fields
-            bool flags[3];
+            bool[3] flags;
             flags[0] = anyLt;
             flags[1] = allLt;
             flags[2] = flags[0] && !flags[1];

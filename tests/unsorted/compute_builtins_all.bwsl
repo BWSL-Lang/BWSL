@@ -11,7 +11,7 @@ pipeline ComputeBuiltinsAll {
         use resources { results }
 
         compute "Main" [8, 4, 2] {
-            shared float scratch[64];
+            shared float[64] scratch;
 
             uint3 gid = input.global_id;
             uint3 lid = input.local_id;

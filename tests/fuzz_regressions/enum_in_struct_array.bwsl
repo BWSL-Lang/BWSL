@@ -8,8 +8,8 @@ pipeline EnumInStructArray {
     }
 
     struct Meta {
-        Kind kinds[4];
-        float weights[4];
+        Kind[4] kinds;
+        float[4] weights;
     };
 
     pass "Compute" {

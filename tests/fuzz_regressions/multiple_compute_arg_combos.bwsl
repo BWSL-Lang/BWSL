@@ -4,7 +4,7 @@
 pipeline MultipleComputeArgCombos {
     pass "Compute" {
         compute "Main" [4, 4, 2] {
-            shared float tile[32];
+            shared float[32] tile;
 
             uint3 gid = input.global_id;
             uint3 lid = input.local_id;

@@ -54,7 +54,7 @@ pipeline PointersControlFlow {
             int arr2 = 0;
 
             // Simulate array-like access with pointers
-            int^ targets[3];  // Array of pointers - may not be supported
+            int^[3] targets;  // Array of pointers - may not be supported
             // Fallback: individual pointer assignments
             int^ p0 = ^arr0;
             int^ p1 = ^arr1;

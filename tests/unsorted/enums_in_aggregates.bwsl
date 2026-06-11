@@ -35,7 +35,7 @@ pipeline EnumsInAggregates {
             uint raw = uint(c.mode);
 
             // Enum values stored in and read back from an array
-            Mode arr[3];
+            Mode[3] arr;
             arr[0] = Mode::Off;
             arr[1] = Mode::Low;
             arr[2] = c.mode;

@@ -5,7 +5,7 @@ pipeline EquivStructArrayField {
     }
 
 struct Poly {
-    float4 vertices[4];
+    float4[4] vertices;
     float weight;
 };
 

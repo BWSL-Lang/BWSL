@@ -20,7 +20,7 @@ pipeline PointersStructArrayFields {
             s.a = 1.0;
             s.b = 2.0;
 
-            float arr[4];
+            float[4] arr;
             arr[0] = 5.0;
             arr[1] = 6.0;
 

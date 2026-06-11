@@ -348,7 +348,7 @@
 <struct-field-list> ::= <struct-field> <struct-field-list>
                       | <empty>
 
-<struct-field> ::= <field-type> <fixed-array-suffix-opt> <identifier> <fixed-array-suffix-opt> <semicolon-opt>
+<struct-field> ::= <field-type> <fixed-array-suffix-list> <identifier> <semicolon-opt>
 
 <field-type> ::= <core-type>
                | <qualified-type-name>
@@ -545,8 +545,8 @@
 <switch-case> ::= 'case' <expression-list> ':' <statement-list>
                 | 'default' ':' <statement-list>
 
-<var-decl> ::= <type-ref> <fixed-array-suffix-list> <identifier> <fixed-array-suffix-list> <initializer-opt> ';'
-             | 'shared' <type-ref> <fixed-array-suffix-list> <identifier> <fixed-array-suffix-list> <initializer-opt> ';'
+<var-decl> ::= <type-ref> <fixed-array-suffix-list> <identifier> <initializer-opt> ';'
+             | 'shared' <type-ref> <fixed-array-suffix-list> <identifier> <initializer-opt> ';'
 
 <initializer-opt> ::= '=' <initializer>
                     | <empty>

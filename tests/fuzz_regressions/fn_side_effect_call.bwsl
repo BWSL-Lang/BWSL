@@ -4,7 +4,7 @@ pipeline FnSideEffectCall {
     pass "Compute" {
         compute "Main" [1, 1, 1] {
             // Local array acts as a write-observable "scratch"
-            int scratch[8];
+            int[8] scratch;
             for (int i = 0; i < 8; i = i + 1) {
                 scratch[i] = 0;
             }

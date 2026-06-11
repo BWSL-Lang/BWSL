@@ -4,7 +4,7 @@
 pipeline ArraySizeOverflow {
     pass "Compute" {
         compute "Main" [1, 1, 1] {
-            float arr[999999999];
+            float[999999999] arr;
             arr[0] = 1.0;
         }
     }

@@ -6,6 +6,6 @@
 // Expected: compiler exits cleanly with a parse error, not a crash.
 pipeline P {
     struct S {
-        float values[0xFFFFFFFFFFFF];
+        float[0xFFFFFFFFFFFF] values;
     };
 }

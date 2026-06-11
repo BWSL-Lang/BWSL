@@ -8,7 +8,7 @@ pipeline SharedArrayInitializer {
         use resources { data }
 
         compute "Main" [64, 1, 1] {
-            shared float scratch[64] = { 0.0 };
+            shared float[64] scratch = { 0.0 };
             uint3 gid = input.global_id;
             resources.data[gid.x] = scratch[gid.x % 64u];
         }

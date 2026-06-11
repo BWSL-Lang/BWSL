@@ -6,7 +6,7 @@ pipeline EquivAtomic {
     pass "Compute" {
         use resources { output }
         compute "Main" [16, 1, 1] {
-            shared uint counter[1];
+            shared uint[1] counter;
 
             uint idx = input.global_id.x;
             uint lid = input.local_index;

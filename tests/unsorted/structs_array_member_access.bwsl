@@ -18,7 +18,7 @@ pipeline StructsArrayMemberAccess {
     }
 
     struct Clip {
-        Frame frames[2];
+        Frame[2] frames;
         float duration;
     }
 
