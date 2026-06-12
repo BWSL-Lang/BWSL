@@ -141,7 +141,7 @@ def generate(repo_root: Path, output: Path) -> None:
     )
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text("\n".join(lines), encoding="utf-8")
+    output.write_text("\n".join(lines), encoding="utf-8", newline="\n")
 
 
 def main() -> int:
