@@ -1,6 +1,4 @@
-// Wrong-accept: writing through a swizzle with a repeated component
-// (`v.xx = ...`) compiles without diagnostics; one of the two writes wins
-// silently.
+// Error case: swizzle stores cannot repeat a component.
 pipeline WrongAcceptSwizzleDupWrite {
     attributes {
         position: float3

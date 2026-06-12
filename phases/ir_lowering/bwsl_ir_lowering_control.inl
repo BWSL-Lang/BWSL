@@ -79,7 +79,11 @@ inline void IRLowering::LowerStatementWithReturnGuard(NodeRef ref) {
 inline void IRLowering::LowerBreak() {
   // Emit jump to break target (will be patched when loop ends)
   if (loopStackDepth == 0) {
-    // Error: break outside of loop - shouldn't happen if parser validates
+    // Inside a switch (outside any loop), `break` is a no-op: case bodies
+    // already jump to the switch merge. Anywhere else it is invalid.
+    if (switchDepth == 0) {
+      ReportError("Error: 'break' outside of a loop or switch\n");
+    }
     return;
   }
   u32 jumpIdx = builder.currentInstruction;
@@ -95,7 +99,7 @@ inline void IRLowering::LowerSkip() {
   // Emit jump to continue target (will be patched when continue target is
   // known)
   if (loopStackDepth == 0) {
-    // Error: skip outside of loop - shouldn't happen if parser validates
+    ReportError("Error: 'skip' outside of a loop\n");
     return;
   }
   u32 jumpIdx = builder.currentInstruction;
@@ -272,20 +276,45 @@ inline void IRLowering::LowerForRange(NodeRef ref) {
     variableRegisters[iterVar.name.nameHash] = iterReg;
   }
 
+  // A compile-time negative step makes this a descending range, which must
+  // compare with > / >= instead of < / <=. Only literal and negated-literal
+  // steps are recognized; runtime-valued steps keep the ascending compare.
+  bool stepIsNegative = false;
+  if (!forLoop.step.IsNull()) {
+    NodeRef stepRef = forLoop.step;
+    if (stepRef.Type() == ASTNodeType::UNARY_OP) {
+      const UnaryOpData &stepOp = ast->GetUnaryOp(stepRef);
+      if (stepOp.op == UnaryOpType::NEGATE &&
+          stepOp.operand.Type() == ASTNodeType::LITERAL) {
+        const LiteralData &lit = ast->GetLiteral(stepOp.operand);
+        if (lit.value.type == LiteralValue::INT) {
+          stepIsNegative = lit.value.intValue > 0;
+        } else if (lit.value.type == LiteralValue::UINT) {
+          stepIsNegative = lit.value.uintValue > 0;
+        }
+      }
+    } else if (stepRef.Type() == ASTNodeType::LITERAL) {
+      const LiteralData &lit = ast->GetLiteral(stepRef);
+      stepIsNegative = lit.value.type == LiteralValue::INT && lit.value.intValue < 0;
+    }
+  }
+
   u32 loopHeader = builder.currentInstruction;
 
   // Now lower rangeEnd inside the loop header where it belongs
   u16 endReg = LowerExpression(forLoop.rangeEnd);
 
-  // Condition: iter < rangeEnd (or <= if inclusive)
+  // Condition: iter < rangeEnd (or <= if inclusive); flipped for descending
   // Use unsigned comparison for uint, signed for int
   u16 condReg = AllocateRegister();
   SetRegisterType(condReg, CoreType::BOOL); // Comparison result is BOOL
   OpCode cmpOp;
   if (isUnsigned) {
-    cmpOp = forLoop.inclusive ? OP_ULE : OP_ULT;
+    cmpOp = stepIsNegative ? (forLoop.inclusive ? OP_UGE : OP_UGT)
+                           : (forLoop.inclusive ? OP_ULE : OP_ULT);
   } else {
-    cmpOp = forLoop.inclusive ? OP_ILE : OP_ILT;
+    cmpOp = stepIsNegative ? (forLoop.inclusive ? OP_IGE : OP_IGT)
+                           : (forLoop.inclusive ? OP_ILE : OP_ILT);
   }
   builder.EmitInstruction(cmpOp, condReg, iterReg, endReg);
   if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
@@ -566,6 +595,24 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
   const SwitchData &sw = ast->GetSwitch(ref);
 
   auto GetCaseLiteralValue = [&](NodeRef valueRef, s32 *outVal) -> bool {
+    // Negative case labels arrive as unary negation over a literal.
+    if (valueRef.Type() == ASTNodeType::UNARY_OP) {
+      const UnaryOpData &unary = ast->GetUnaryOp(valueRef);
+      if (unary.op == UnaryOpType::NEGATE &&
+          unary.operand.Type() == ASTNodeType::LITERAL) {
+        const LiteralData &lit = ast->GetLiteral(unary.operand);
+        if (lit.value.type == LiteralValue::INT) {
+          *outVal = -static_cast<s32>(lit.value.intValue);
+          return true;
+        }
+        if (lit.value.type == LiteralValue::UINT) {
+          *outVal = -static_cast<s32>(lit.value.uintValue);
+          return true;
+        }
+      }
+      return false;
+    }
+
     if (valueRef.Type() == ASTNodeType::LITERAL) {
       const LiteralData &lit = ast->GetLiteral(valueRef);
       switch (lit.value.type) {
@@ -707,10 +754,13 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
   u32 caseOffset = program.switchCaseOffsets[switchId];
   program.switchCaseOffsets[switchId + 1] = caseOffset + totalCaseValues;
 
-  // Emit case bodies and collect targets
+  // Emit case bodies and collect targets. Track switch nesting so that a
+  // `break` in a case body (a no-op here; cases already jump to the merge)
+  // is not reported as "break outside of a loop".
   u32 *caseTargets = (u32 *)alloca(caseArmCount * sizeof(u32));
   u32 *caseJumps = (u32 *)alloca(caseArmCount * sizeof(u32));
 
+  switchDepth++;
   for (u32 i = 0; i < caseArmCount; i++) {
     NodeRef caseRef = sw.cases[i];
     const SwitchCaseData &caseData = ast->GetSwitchCase(caseRef);
@@ -739,6 +789,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
     defaultJumpIdx = builder.currentInstruction;
     builder.EmitInstruction(OP_JUMP, 0, 0);
   }
+  switchDepth--;
 
   u32 mergePoint = builder.currentInstruction;
   if (loopDepth > 0) {

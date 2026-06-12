@@ -1,0 +1,33 @@
+// Test: Explicit negative enum values
+// Tests: int-typed enum with negative explicit values, auto-numbering after
+//        a negative value, comparisons over the full value order
+// Regression test for: `= -1` rejected with "Expected constant value"
+
+pipeline EnumNegativeValues {
+    attributes {
+        position: float3
+    }
+
+    enum Bias : int {
+        StrongNegative = -100,
+        Negative = -1,
+        Zero = 0,
+        Positive = 1
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int a = Bias::StrongNegative;
+            int b = Bias::Negative;
+            int c = Bias::Zero;
+            int d = Bias::Positive;
+
+            bool ordered = a < b && b < c && c < d;
+
+            output.position = float4(attributes.position,
+                float(a + b + c + d) * 0.001 + (ordered ? 1.0 : 0.0));
+        }
+    }
+}

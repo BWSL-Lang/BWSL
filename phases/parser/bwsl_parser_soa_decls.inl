@@ -200,6 +200,16 @@ NodeRef Parser::ParsePipeline() {
         } else if (Match(TokenType::PASS)) {
             NodeRef pass = ParsePass();
             if (pass.IsValid()) {
+                // Duplicate pass names would emit to the same output file
+                // names, silently clobbering each other on disk.
+                const ArenaString &passName = ast->GetPass(pass).name;
+                for (u32 i = 0; i < ast->GetPipeline(pipeline).passes.count; i++) {
+                    NodeRef existing = ast->GetPipeline(pipeline).passes[i];
+                    if (ast->GetPass(existing).name.nameHash == passName.nameHash) {
+                        Error("Duplicate pass name in pipeline");
+                        break;
+                    }
+                }
                 ast->GetPipeline(pipeline).passes.Push(arena, pass);
             }
         } else if (Match(TokenType::EVAL)) {
@@ -1321,6 +1331,14 @@ void Parser::ParseUseAttributes(NodeRef pass) {
             idx = decl->attributeIndex;
         }
         if (idx == 0xFF) { Error("Unknown attribute in 'use attributes'"); break; }
+
+        for (u32 i = 0; i < ast->GetPass(pass).usedAttributes.count; i++) {
+            if (ast->GetPass(pass).usedAttributes[i].nameHash ==
+                attrName.nameHash) {
+                Error("Duplicate attribute in 'use attributes'");
+                break;
+            }
+        }
 
         ast->GetPass(pass).usedAttributes.Push(arena, attrName);
 

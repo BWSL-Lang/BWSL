@@ -1,5 +1,4 @@
-// Wrong-accept: a function with two parameters of the same name compiles
-// without diagnostics; the second silently shadows the first.
+// Error case: function parameter names must be unique.
 pipeline WrongAcceptDuplicateParams {
     attributes {
         position: float3

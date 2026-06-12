@@ -481,6 +481,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       // Truncate: extract first N components using VectorShuffle
       u32 truncated = AllocateId();
       u32 wordCount = 5 + expectedSize; // OpVectorShuffle base + indices
+      if (currentFunctionSize + wordCount > currentFunctionCapacity) {
+        GrowCurrentFunction();
+      }
       currentFunction[currentFunctionSize++] =
           (wordCount << 16) | spv::OpVectorShuffle;
       currentFunction[currentFunctionSize++] = target_vec_type_id;
@@ -941,6 +944,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       if (op1_is_scalar && !op2_is_scalar) {
         // Splat op1 to vector
         u32 splatted = AllocateId();
+        if (currentFunctionSize + 3 + numComponents > currentFunctionCapacity) {
+          GrowCurrentFunction();
+        }
         currentFunction[currentFunctionSize++] =
             ((3 + numComponents) << 16) | spv::OpCompositeConstruct;
         currentFunction[currentFunctionSize++] = vec_type;
@@ -952,6 +958,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       } else if (op2_is_scalar && !op1_is_scalar) {
         // Splat op2 to vector
         u32 splatted = AllocateId();
+        if (currentFunctionSize + 3 + numComponents > currentFunctionCapacity) {
+          GrowCurrentFunction();
+        }
         currentFunction[currentFunctionSize++] =
             ((3 + numComponents) << 16) | spv::OpCompositeConstruct;
         currentFunction[currentFunctionSize++] = vec_type;
@@ -1670,6 +1679,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       result_type = vec_type;
       if (op1_is_scalar && !op2_is_scalar) {
         u32 splatted = AllocateId();
+        if (currentFunctionSize + 3 + numComponents > currentFunctionCapacity) {
+          GrowCurrentFunction();
+        }
         currentFunction[currentFunctionSize++] =
             ((3 + numComponents) << 16) | spv::OpCompositeConstruct;
         currentFunction[currentFunctionSize++] = vec_type;
@@ -1680,6 +1692,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         op1 = splatted;
       } else if (op2_is_scalar && !op1_is_scalar) {
         u32 splatted = AllocateId();
+        if (currentFunctionSize + 3 + numComponents > currentFunctionCapacity) {
+          GrowCurrentFunction();
+        }
         currentFunction[currentFunctionSize++] =
             ((3 + numComponents) << 16) | spv::OpCompositeConstruct;
         currentFunction[currentFunctionSize++] = vec_type;
@@ -2096,6 +2111,27 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     // Load from uniform buffer
     u32 binding = ir->GetOperand(ir_idx, 0);
     u16 dest_reg = ir->destinations[ir_idx];
+
+    // Array-typed uniforms are not loaded as a whole. The destination
+    // register becomes an alias for the UBO variable so that subsequent
+    // OP_STORAGE_INDEX/OP_STORAGE_LOAD access-chain into it (member 0 is the
+    // array; the leading zero index is added by OP_STORAGE_INDEX).
+    if (ir->registerStorageInfo && dest_reg < ir->registerCount &&
+        (ir->registerStorageInfo[dest_reg] &
+         IR::IRProgram::STORAGE_IS_UNIFORM_ARRAY)) {
+      u32 ubo_var_id = uniformBufferIds[binding];
+      if (ubo_var_id != 0) {
+        spirvIds[dest_reg] = ubo_var_id;
+        if (dest_reg < idCapacity) {
+          storagePtrStorageClass[dest_reg] =
+              static_cast<u32>(spv::StorageClassUniform);
+        }
+      } else {
+        u32 type_id = GetTypeId(CoreType::UINT);
+        Emit(spv::OpUndef, type_id, dest);
+      }
+      break;
+    }
 
     // Get the uniform type from register type info
     CoreType uniformType = CoreType::FLOAT4; // Default
@@ -4163,21 +4199,21 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     // Get pointer type for the element
     u32 elem_ptr_type = GetPointerTypeId(elem_type_id, storageClass);
 
-    // Check if base is a storage buffer variable (needs extra 0 index for
-    // wrapper struct) Skip this check for shared memory - shared arrays don't
-    // have wrapper structs
-    bool isStorageBufferVar = false;
+    // Check if base is a storage buffer or uniform buffer variable (needs
+    // extra 0 index for the wrapper struct). Skip this check for shared
+    // memory - shared arrays don't have wrapper structs
+    bool isBufferVar = false;
     if (!isShared) {
       for (u32 b = 0; b < 32; b++) {
-        if (storageBufferIds[b] == base_id) {
-          isStorageBufferVar = true;
+        if (storageBufferIds[b] == base_id || uniformBufferIds[b] == base_id) {
+          isBufferVar = true;
           break;
         }
       }
     }
 
-    if (isStorageBufferVar) {
-      // Storage buffer variable - need to access member 0 (runtime array) first
+    if (isBufferVar) {
+      // Buffer variable - need to access member 0 (the array) first
       u32 zero_id = GetIntConstantId(0, true);
       Emit(spv::OpAccessChain, elem_ptr_type, dest, base_id, zero_id, index_id);
     } else {

@@ -502,7 +502,10 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             if (memcmp(str, "where", 5) == 0) return TokenType::WHERE;
             if (memcmp(str, "while", 5) == 0) return TokenType::WHILE;
             if (memcmp(str, "until", 5) == 0) return TokenType::UNTIL;
-            if (memcmp(str, "range", 5) == 0) return TokenType::RANGE;
+            // "range" deliberately lexes as IDENTIFIER: TokenType::RANGE was
+            // never consumed by the parser, and reserving the word only broke
+            // ordinary identifiers (payload field names, locals). The enum
+            // value is retired but kept to preserve token numbering.
             if (memcmp(str, "break", 5) == 0) return TokenType::BREAK;
             if (memcmp(str, "rules", 5) == 0) return TokenType::RULES;
             break;

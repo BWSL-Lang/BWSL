@@ -127,6 +127,7 @@ struct IRProgram {
     static constexpr u32 STORAGE_IS_ADDRESS_TAKEN = 0x4;  // Variable has its address taken (&var)
     static constexpr u32 STORAGE_IS_LOCAL_ARRAY = 0x8;    // Function-local array with initializer
     static constexpr u32 STORAGE_IS_FIELD_PTR = 0x10;     // Pointer targets a field of a local struct via access chain
+    static constexpr u32 STORAGE_IS_UNIFORM_ARRAY = 0x8000; // Pointer to an array-typed uniform (Uniform storage class)
     static constexpr u32 STORAGE_BINDING_SHIFT = 16;
     static constexpr u32 STORAGE_DEPTH_SHIFT = 1;
     static constexpr u32 STORAGE_DEPTH_MASK = 0x7F << 1;
@@ -152,6 +153,10 @@ struct IRProgram {
     // Index by binding slot (0-31)
     alignas(64) u32 bufferElementStructTypes[32];  // Struct type hash, or 0 if primitive/unknown
     alignas(64) u8 bufferElementCoreTypes[32];     // CoreType enum value for primitive element types
+
+    // Fixed element counts for array-typed uniform resources, by binding slot.
+    // 0 = the uniform at that binding is a single value, not an array.
+    alignas(64) u32 uniformArrayLengths[32];
 
     enum StructureType : u32 {
     STRUCT_NONE          = 0,

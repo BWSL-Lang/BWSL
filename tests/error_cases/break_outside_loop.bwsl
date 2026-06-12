@@ -1,5 +1,4 @@
-// Wrong-accept: `break` and `continue` outside any loop or switch compile
-// without diagnostics and produce valid (but meaningless) SPIR-V.
+// Error case: break/skip outside any loop or switch.
 pipeline WrongAcceptBreakOutsideLoop {
     attributes {
         position: float3

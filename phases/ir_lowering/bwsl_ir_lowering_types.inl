@@ -833,6 +833,43 @@ inline u16 IRLowering::EmitConstantInt(u32 value) {
   return 0x4000 | (u16)slot;
 }
 
+// Reports an error when a constant index into a local array of known length
+// is statically out of bounds (negative or >= length). Returns true when the
+// access is fine or cannot be checked statically.
+inline bool IRLowering::CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg) {
+  if (baseReg >= MAX_REGISTERS) return true;
+  u32 info = program.registerStorageInfo[baseReg];
+  if (!(info & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY)) return true;
+  u32 arrayIdx = info >> IR::IRProgram::STORAGE_BINDING_SHIFT;
+  if (arrayIdx >= program.localArrayCount) return true;
+  u32 length = program.localArraySizes[arrayIdx];
+  if (length == 0) return true;
+
+  s64 indexValue;
+  if ((indexReg & 0xC000) == 0x4000) {
+    u16 slot = indexReg & 0x3FFF;
+    if (slot >= program.intCount) return true;
+    indexValue = static_cast<s32>(program.intConstants[slot]);
+  } else if ((indexReg & 0xE000) == 0x2000) {
+    u16 slot = indexReg & 0x1FFF;
+    if (slot >= program.uintCount) return true;
+    indexValue = program.uintConstants[slot];
+  } else {
+    return true; // Runtime index - not statically checkable
+  }
+
+  if (indexValue < 0 || indexValue >= static_cast<s64>(length)) {
+    char msg[160];
+    snprintf(msg, sizeof(msg),
+             "Error: array index %lld is out of bounds for array of length "
+             "%u\n",
+             static_cast<long long>(indexValue), length);
+    ReportError(msg);
+    return false;
+  }
+  return true;
+}
+
 inline u16 IRLowering::EmitConstantUint(u32 value) {
   for (u16 i = 0; i < program.uintCount; i++) {
     if (program.uintConstants[i] == value) {

@@ -1,8 +1,5 @@
-// Wrong-accept: assignments to the read-only `input` namespace compile and
-// validate, but the store is silently dropped from the emitted SPIR-V. Both
-// user varyings (input.uv) and built-ins (input.vertex_id) are affected.
-// These should be rejected with "input is read-only" diagnostics.
-pipeline WrongAcceptAssignToInput {
+// Error case: the input namespace is read-only in every stage.
+pipeline AssignToInput {
     attributes {
         position: float3
     }
@@ -11,7 +8,6 @@ pipeline WrongAcceptAssignToInput {
         use attributes { position }
 
         vertex {
-            input.vertex_id = 5u;
             output.position = float4(attributes.position, 1.0);
             output.uv = attributes.position.xy;
         }

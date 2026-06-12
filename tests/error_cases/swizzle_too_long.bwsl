@@ -1,6 +1,4 @@
-// Wrong-accept: a five-component swizzle (`v.xyzxy`) compiles without
-// diagnostics even though swizzles are defined for 1-4 components
-// (docs/spec/04-expressions.md); the extra components are silently dropped.
+// Error case: swizzles are limited to 4 components.
 pipeline WrongAcceptSwizzleTooLong {
     attributes {
         position: float3

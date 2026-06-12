@@ -226,6 +226,7 @@ struct IRLowering {
   // Loop nesting depth - used to ensure selection merges don't coincide with
   // continue targets
   u32 loopDepth = 0;
+  u32 switchDepth = 0;
 
   // Loop break/continue target stack (for break/skip statements)
   // These are instruction indices that will be patched when the loop ends
@@ -427,6 +428,7 @@ struct IRLowering {
   u16 AllocateRegister();
 
   u16 EmitConstantInt(u32 value);
+  bool CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg);
 
   u16 EmitConstantUint(u32 value);
 

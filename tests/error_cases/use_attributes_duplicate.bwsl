@@ -1,6 +1,4 @@
-// Wrong-accept: listing the same attribute twice in `use attributes`
-// compiles without diagnostics. A duplicate-name check (like the ones for
-// outputs and resources blocks) should reject this.
+// Error case: 'use attributes' entries must be unique.
 pipeline WrongAcceptUseAttributesDuplicate {
     attributes {
         position: float3

@@ -1,5 +1,4 @@
-// Wrong-accept: assigning to a pipeline-scope const compiles without
-// diagnostics.
+// Error case: const declarations cannot be reassigned.
 pipeline WrongAcceptConstReassign {
     attributes {
         position: float3

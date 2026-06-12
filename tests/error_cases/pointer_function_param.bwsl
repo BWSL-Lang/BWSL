@@ -1,0 +1,20 @@
+// Error case: pointer-typed function parameters are not supported.
+pipeline PointerFunctionParam {
+    attributes {
+        position: float3
+    }
+
+    bump :: (float^ target) -> void {
+        target^ = target^ + 1.0;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float acc = 1.0;
+            bump(^acc);
+            output.position = float4(attributes.position, acc);
+        }
+    }
+}

@@ -339,6 +339,9 @@ struct EnumDeclData {
         ArenaArray<CoreType> associatedTypes;
         ArenaArray<u32> associatedTypeHashes;
         u32 value;
+        // True when `= value` was written in source. The 0xFFFFFFFF sentinel
+        // alone cannot distinguish auto-numbering from an explicit -1.
+        bool hasExplicitValue = false;
     };
     VariantInfo currentVariant; // Temporary storage during parsing
 
@@ -1609,6 +1612,7 @@ namespace ASTFactory {
         data.underlyingType = CoreType::INVALID;
         data.currentVariant.name = name;
         data.currentVariant.value = value;
+        data.currentVariant.hasExplicitValue = (value != VariantDecl::AUTO_VALUE);
         data.currentVariant.associatedTypes.Init(ast->arena, 4);
         data.currentVariant.associatedTypeHashes.Init(ast->arena, 4);
         data.variants.Init(ast->arena, 0);

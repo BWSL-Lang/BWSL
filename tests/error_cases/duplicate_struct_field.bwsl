@@ -1,6 +1,4 @@
-// Wrong-accept: a struct declaring the same field name twice compiles
-// without diagnostics; field access resolves silently to one of the
-// declarations.
+// Error case: struct field names must be unique.
 pipeline WrongAcceptDuplicateStructField {
     attributes {
         position: float3

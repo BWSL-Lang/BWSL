@@ -25,6 +25,20 @@ static std::string StripFixedArraySuffixes(const std::string& typeName) {
     return base;
 }
 
+// Returns the trailing fixed-array element count of a type spelling such as
+// "float4[8]", or 0 when the type has no (single-dimension) array suffix.
+static u32 ExtractFixedArraySize(const std::string& typeName) {
+    if (typeName.empty() || typeName.back() != ']') return 0;
+    size_t left = typeName.rfind('[');
+    if (left == std::string::npos || left + 2 > typeName.size()) return 0;
+    u32 size = 0;
+    for (size_t i = left + 1; i + 1 < typeName.size(); i++) {
+        if (!std::isdigit(static_cast<unsigned char>(typeName[i]))) return 0;
+        size = size * 10 + static_cast<u32>(typeName[i] - '0');
+    }
+    return size;
+}
+
 static bool StartsWith(std::string_view value, std::string_view prefix) {
     return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
 }
@@ -307,6 +321,7 @@ void Parser::RegisterParsedResource(const std::string& resourceName,
     TypeInfo resolvedType = ResolveType(baseType);
     CoreType coreType = ResolveResourceCoreType(resolvedType, baseType);
     data.coreType = static_cast<u8>(coreType);
+    data.arraySize = ExtractFixedArraySize(typeName);
     data.structTypeHash = ResolveResourceStructHash(resolvedType, coreType, baseType);
 }
 

@@ -180,6 +180,7 @@ struct ResourceData {
     u8 coreType = static_cast<u8>(CoreType::FLOAT4);
     bool isArrayTexture = false;   // For texture arrays (sampler2DArray)
     bool isCubemapTexture = false; // For cubemap textures (samplerCube)
+    u32 arraySize = 0;       // Fixed element count for array-typed uniforms (0 = not an array)
     u32 structTypeHash = 0;  // For struct types (storage buffers), hash of the fully qualified type name
     ArenaString renderTargetName;
     ArenaString typeName;

@@ -1,0 +1,22 @@
+// Test: `range` is an ordinary identifier
+// Tests: `range` as a local variable name and as an enum payload field name
+// Regression test for: the dead reserved RANGE token breaking identifiers
+
+pipeline IdentifierRangeKeyword {
+    attributes {
+        position: float3
+    }
+
+    enum Falloff {
+        Linear(float range)
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float range = attributes.position.x;
+            output.position = float4(attributes.position, range);
+        }
+    }
+}

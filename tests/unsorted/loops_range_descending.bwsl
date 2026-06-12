@@ -1,0 +1,40 @@
+// Test: Descending range loops with negative `by` steps
+// Tests: exclusive and inclusive descending ranges (comparison must flip to
+//        > / >= for negative steps), mixed with an ascending control loop
+// Regression test for: descending ranges silently compiling to 0 iterations
+
+pipeline LoopsRangeDescending {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float sum = 0.0;
+
+            // Exclusive descending: 8+6+4+2 = 20
+            for (i in 8..0 by -2) {
+                sum += float(i);
+            }
+
+            // Inclusive descending: 4+3+2+1 = 10
+            for (j in 4..=1 by -1) {
+                sum += float(j);
+            }
+
+            // Inclusive descending reaching zero: 10+5+0 = 15
+            for (k in 10..=0 by -5) {
+                sum += float(k);
+            }
+
+            // Ascending control: 0+1+2 = 3
+            for (m in 0..3) {
+                sum += float(m);
+            }
+
+            output.position = float4(attributes.position, sum);
+        }
+    }
+}

@@ -646,6 +646,18 @@ NodeRef Parser::ParseEnum() {
             // Variant declaration
             NodeRef variant = ParseEnumVariant();
             if (variant.IsValid()) {
+                // A repeated member name would resolve silently to one of
+                // the declarations.
+                u32 newVariantHash =
+                    ast->GetEnumDecl(variant).currentVariant.name.nameHash;
+                for (u32 i = 0; i < ast->GetEnumDecl(enumNode).variants.count; i++) {
+                    NodeRef existing = ast->GetEnumDecl(enumNode).variants[i];
+                    if (ast->GetEnumDecl(existing).currentVariant.name.nameHash ==
+                        newVariantHash) {
+                        Error("Duplicate enum member name");
+                        break;
+                    }
+                }
                 ast->GetEnumDecl(enumNode).variants.Push(arena, variant);
             }
             Match(TokenType::COMMA);
@@ -681,7 +693,7 @@ NodeRef Parser::ParseEnum() {
             NodeRef variantRef = ast->GetEnumDecl(enumNode).variants[i];
             const EnumDeclData& variantData = ast->GetEnumDecl(variantRef);
             if (variantData.currentVariant.associatedTypes.count > 0) hasData = true;
-            if (variantData.currentVariant.value != 0xFFFFFFFF) hasExplicitValues = true;
+            if (variantData.currentVariant.hasExplicitValue) hasExplicitValues = true;
         }
 
         if (hasData) {
@@ -711,7 +723,7 @@ NodeRef Parser::ParseEnum() {
             }
 
             // Assign values
-            if (astVariant.currentVariant.value != 0xFFFFFFFF) {
+            if (astVariant.currentVariant.hasExplicitValue) {
                 variant.value = astVariant.currentVariant.value;
             } else {
                 // Auto-assign: for flag enums use powers of 2, otherwise sequential.
@@ -810,8 +822,9 @@ NodeRef Parser::ParseEnumVariant() {
     }
 
     // Check for explicit value (for flag enums)
-    // e.g., `Red = 0b0001`
+    // e.g., `Red = 0b0001`, `Negative = -1`
     if (Match(TokenType::ASSIGN)) {
+        bool negative = Match(TokenType::MINUS);
         if (Match(TokenType::NUMBER)) {
             std::string_view numStr = stream->GetValue(previous);
 
@@ -828,8 +841,12 @@ NodeRef Parser::ParseEnumVariant() {
             } else {
                 value = SafeParseU32(numStr, 0);
             }
+            if (negative) {
+                value = static_cast<u32>(-static_cast<s32>(value));
+            }
 
             ast->GetEnumDecl(variant).currentVariant.value = value;
+            ast->GetEnumDecl(variant).currentVariant.hasExplicitValue = true;
         } else {
             Error("Expected constant value after '='");
         }
@@ -1283,6 +1300,14 @@ NodeRef Parser::ParseStruct() {
         ReverseLookup::Register(field.name.nameHash, fieldNameStr.c_str());
         field.type = fieldType;
         field.arraySize = arraySize;
+
+        // A repeated field name would resolve silently to one declaration.
+        for (u32 i = 0; i < structData.fields.count; i++) {
+            if (structData.fields[i].name.nameHash == field.name.nameHash) {
+                Error("Duplicate struct field name");
+                break;
+            }
+        }
 
         // Add to AST node (for code generation)
         StructFieldData astField;

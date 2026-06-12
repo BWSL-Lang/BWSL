@@ -10,51 +10,13 @@ moment it is fixed.
 
 Each repro file carries a comment header with the full details. Summary:
 
-Miscompiles and wrong rejections:
-
-- `range_descending_never_runs.bwsl` — descending range loops
-  (`for (i in 8..0 by -2)`) keep the ascending `<` comparison, so the body
-  silently never executes.
-- `resources_array_type_invalid_spirv.bwsl` — a directly array-typed resource
-  (`weights: float4[8]`) produces invalid SPIR-V when indexed; struct-wrapped
-  arrays work.
-- `range_keyword_identifier.bwsl` — `range` lexes as a dead RANGE token the
-  parser never consumes, so it cannot be used as an identifier (same class as
-  the fixed `it` keyword, issue 2).
 - `free_function_pattern_arms.bwsl` — spec says ordinary functions support
   enum pattern-match arm bodies; the parser rejects them (enum methods only).
-- `pointer_function_param.bwsl` — a function with a pointer parameter parses
-  but is never registered; calls fail with "Function not found".
 - `eval_pipeline_scope_function.bwsl` — pipeline-scope `eval fn :: ...`
   declarations parse but are callable neither at comptime nor at runtime.
-- `enum_negative_explicit_value.bwsl` — `= -1` enum values are rejected
-  ("Expected constant value after '='").
-- `switch_negative_case_label.bwsl` — `case -3:` is rejected ("switch case
-  values must be compile-time literals").
-- `mat3_from_mat4.bwsl`, `sample_implicit_lod_vertex.bwsl`,
-  `scalar_varying_store.bwsl`, `vec_compare_scalar_bool.bwsl` — earlier
-  repros, see file headers.
-
-Wrong-accepts (invalid programs that compile without diagnostics):
-
-- `wrong_accept_assign_to_input.bwsl` — stores to `input.*` (varyings and
-  built-ins) are silently dropped from the emitted SPIR-V.
-- `wrong_accept_duplicate_enum_member.bwsl` — duplicate enum member names.
-- `wrong_accept_duplicate_struct_field.bwsl` — duplicate struct field names.
-- `wrong_accept_duplicate_pass_name.bwsl` — duplicate pass names; outputs
-  clobber each other on disk.
-- `wrong_accept_enum_payload_arity.bwsl` — payload variant constructed with
-  too many arguments; extras silently ignored.
-- `wrong_accept_swizzle_mixed_sets.bwsl` — mixed xyzw/rgba swizzle (`v.xg`),
-  which the spec calls invalid.
-- `wrong_accept_swizzle_too_long.bwsl` — five-component swizzle (`v.xyzxy`).
-- `wrong_accept_use_attributes_duplicate.bwsl` — duplicate names in
-  `use attributes`.
-- `wrong_accept_array_oob_const.bwsl`, `wrong_accept_attribute_write.bwsl`,
-  `wrong_accept_break_outside_loop.bwsl`, `wrong_accept_const_reassign.bwsl`,
-  `wrong_accept_duplicate_params.bwsl`, `wrong_accept_missing_return.bwsl`,
-  `wrong_accept_swizzle_dup_write.bwsl`, `wrong_accept_vec_ctor_arity.bwsl` —
-  earlier repros, see file headers.
+- `wrong_accept_missing_return.bwsl` — a non-void function with a return on
+  only one control path compiles without diagnostics; the fall-through path
+  yields an undefined value (needs control-flow analysis to reject).
 
 Each repro compiles with:
 
@@ -174,3 +136,107 @@ unreachable-block cleanup (issue 6) already handles.
 Coverage lives in `tests/unsorted/loop_switch_case_return.bwsl` (return in a
 middle case and in the default arm across all four loop forms, `discard` in a
 fragment-stage case, and a no-loop control case).
+
+## 8. ~~Descending range loops silently never execute~~ (FIXED)
+
+`for (i in 8..0 by -2)` lowered with the ascending `<` comparison, so the
+body ran zero times with no diagnostic. Fixed in `LowerForRange`
+(`phases/ir_lowering/bwsl_ir_lowering_control.inl`): when the `by` step is a
+compile-time negative constant (a negative literal or unary minus over a
+literal), the loop condition flips to `>` (exclusive) / `>=` (inclusive),
+using the unsigned variants for uint iterators. Runtime-valued steps keep the
+ascending compare.
+
+Coverage: `tests/unsorted/loops_range_descending.bwsl` (exclusive, inclusive,
+inclusive-to-zero, and an ascending control) and
+`tests/equivalence/test_range_descending.bwsl` with hardcoded expected sums.
+
+## 9. ~~Array-typed resources emit invalid SPIR-V~~ (FIXED)
+
+`weights: float4[8]` in a `resources {}` block dropped the `[8]` during
+resource registration, declaring the UBO as a single `float4`; indexing then
+failed validation with "Reached non-composite type while indexes still remain
+to be traversed". Fixed end to end: the parser records the element count
+(`ResourceData::arraySize`), lowering marks the resource register as a
+uniform-array pointer (`STORAGE_IS_UNIFORM_ARRAY`) so indexing goes through
+the existing `OP_STORAGE_INDEX`/`OP_STORAGE_LOAD` access-chain path with
+Uniform storage class, and the SPIR-V backend declares member 0 as
+`OpTypeArray` with a std140 `ArrayStride` (16 for scalars/vectors, 16 per
+matrix column).
+
+Coverage: `tests/unsorted/resources_uniform_array.bwsl` (float4[8] and
+mat4[4] resources, constant and dynamic indices, all backends).
+
+## 10. ~~Stores to `input.*` / `attributes.*` silently dropped~~ (FIXED)
+
+Assignments targeting the read-only `input` and `attributes` namespaces fell
+through every branch of the member-access assignment lowering and vanished
+from the emitted SPIR-V without diagnostics (covering both plain stores like
+`input.uv = ...` and swizzled stores like `input.uv.x = ...`). Fixed in
+`phases/ir_lowering/bwsl_ir_lowering_lvalues.inl` with dedicated diagnostics:
+"cannot assign to input.* - stage inputs are read-only" and
+"cannot assign to attributes.* - vertex attributes are read-only".
+
+Coverage: `tests/error_cases/assign_to_input.bwsl` and
+`tests/error_cases/assign_to_attribute.bwsl`.
+
+## 11. ~~Batch of front-end validation gaps and wrong rejections~~ (FIXED)
+
+One sweep closed the remaining 2026-06-11/12 findings:
+
+Miscompiles fixed:
+
+- `mat3(mat4)` and every other matrix-from-matrix conversion now truncates to
+  the upper-left block / extends with identity, and `mat4(1.0)` builds a
+  proper diagonal identity matrix (it previously splatted the scalar into the
+  first column). Coverage: `tests/unsorted/matrix_conversion_constructors.bwsl`
+  and `tests/equivalence/test_matrix_conversion.bwsl`.
+- Pass-stage reuse (`vertex = "Base".vertex`) compiled an **empty** stage
+  body and lost the pass's varying interface; `CompileShaderStage` now
+  resolves the inherited stage to the source pass before lowering. Coverage:
+  `tests/unsorted/pass_reuse_depth_only.bwsl` (now exercises the real body).
+- Scalar float varyings (`scalar_varying_store.bwsl`) were fixed by an
+  earlier interface-types change; coverage already lives in
+  `tests/unsorted/varyings_scalar.bwsl`.
+
+Wrong rejections fixed (now valid syntax):
+
+- `range` is an ordinary identifier again (the reserved token was never used
+  by the grammar) — `tests/unsorted/identifier_range_keyword.bwsl`.
+- Negative explicit enum values (`Negative = -1`), tracked with an explicit
+  has-value flag so `-1` cannot collide with the auto-number sentinel —
+  `tests/unsorted/enum_negative_values.bwsl`.
+- Negative switch case labels (`case -3:`) —
+  `tests/unsorted/switch_negative_labels.bwsl`.
+
+New front-end diagnostics (all promoted to `tests/error_cases/`):
+
+- implicit-LOD `sample()`/`sample_cmp()` in vertex stages (suggests
+  `sample_lod`), vector-comparison-to-scalar-bool assignment (suggests
+  `all()`/`any()`; comparisons now carry boolN register types), and
+  pointer-typed function parameters (previously a misleading
+  "Function not found" at the call site).
+- invalid swizzles: more than 4 components, mixed xyzw/rgba sets, and
+  duplicate components in swizzle stores.
+- duplicate names: enum members, struct fields, pass names, `use attributes`
+  entries, and function parameters.
+- arity: vector constructors must cover the target component count exactly
+  (single scalar splats, single wider vector truncates), and enum payload
+  constructors take exactly the declared argument count.
+- const reassignment (both symbol-table consts and comptime-substituted
+  literal targets), `break`/`skip` outside any loop or switch (`break`
+  directly inside a switch case stays a no-op), and statically out-of-bounds
+  or negative constant indices into fixed-size local arrays.
+
+## 12. ~~SPIR-V function buffer overflow corrupts large shaders~~ (FIXED)
+
+Four manual word-emission sites in
+`phases/backends/spirv/bwsl_spirv_backend_ops.inl` (the matrix-times-vector
+truncation shuffle and the scalar-splat paths of vector comparisons) wrote to
+`currentFunction` without the `GrowCurrentFunction()` capacity check used
+everywhere else. When the buffer boundary landed mid-instruction in a large
+shader, the tail words were silently dropped and the module failed validation
+with `Id is 0` (or worse, could mis-encode). Found because
+`tests/unsorted/matrix_conversion_constructors.bwsl` happened to cross the
+boundary inside a truncation shuffle. All four sites now check capacity
+before writing.
