@@ -116,7 +116,8 @@ PARSE_BINARY_OP(ParseFactor, ParseUnary, mask(TokenType::MULTIPLY) | mask(TokenT
 #undef PARSE_BINARY_OP
 
 NodeRef Parser::ParseUnary() {
-    SourceLocation loc = getLocation(stream->GetOffset(previous));
+    // `current` is the operator token (or the start of the operand).
+    SourceLocation loc = getLocation(stream->GetOffset(current));
 
     if (Match(TokenType::NOT)) {
         NodeRef operand = ParseUnary();
@@ -406,7 +407,8 @@ NodeRef Parser::ParsePostfix() {
 }
 
 NodeRef Parser::ParsePrimary() {
-    SourceLocation loc = getLocation(stream->GetOffset(previous));
+    // `current` is the first token of the primary expression itself.
+    SourceLocation loc = getLocation(stream->GetOffset(current));
     u32 line = loc.line;
     u32 col = loc.column;
 
@@ -603,7 +605,12 @@ NodeRef Parser::ParseFunctionCall(NodeRef function) {
         return NodeRef::Null();
     }
 
+    // Anchor the call node at the callee expression (start of the function
+    // name) rather than the '(' that `previous` points at here.
     SourceLocation loc = getLocation(stream->GetOffset(previous));
+    if (u32 calleePos = ast->FindPosition(function)) {
+        AST::UnpackPosition(calleePos, loc.line, loc.column);
+    }
     NodeRef call;
     ArenaString funcName;
     u32 qualifiedNameHash = 0;

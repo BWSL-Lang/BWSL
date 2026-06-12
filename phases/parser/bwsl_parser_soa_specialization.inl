@@ -340,12 +340,17 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
         }
 
         case ASTNodeType::VARIABLE_DECL: {
-            const VariableDeclData& src = ast->GetVariableDecl(node);
+            // Copy, not reference: cloning the initializer can push more
+            // variable decls and reallocate the array under a reference.
+            const VariableDeclData src = ast->GetVariableDecl(node);
             NodeRef initializer = CloneNodeWithParams(src.initializer, subs, subCount);
             NodeRef cloned = ASTFactory::MakeVariableDecl(ast, src.name, src.type, initializer, src.isConst,
                                                           line, col, src.storageClass, src.arrayDimensions,
                                                           src.arrayLength, src.arrayElementTypeHash);
-            ast->GetVariableDecl(cloned).isEval = src.isEval;
+            VariableDeclData& clonedData = ast->GetVariableDecl(cloned);
+            clonedData.isEval = src.isEval;
+            clonedData.typePosition = src.typePosition;
+            clonedData.namePosition = src.namePosition;
             return cloned;
         }
 

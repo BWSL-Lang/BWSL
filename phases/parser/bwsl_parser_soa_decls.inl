@@ -1072,7 +1072,9 @@ void Parser::ParsePassBody(NodeRef pass) {
 
             TokenType varType = static_cast<TokenType>(stream->GetType(previous));
             std::string typeStr(stream->GetValue(previous));
+            SourceLocation typeLoc = getLocation(stream->GetOffset(previous));
             Consume(TokenType::IDENTIFIER, "Expected constant name");
+            SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
             std::string constName(stream->GetValue(previous));
 
             Consume(TokenType::ASSIGN, "const variables must be initialized");
@@ -1090,6 +1092,8 @@ void Parser::ParsePassBody(NodeRef pass) {
             NodeRef varDecl = ASTFactory::MakeVariableDecl(ast, constNameStr,
                 ArenaString::MakeHashOnly(typeStr),
                 value, true, loc.line, loc.column);
+            ast->GetVariableDecl(varDecl).typePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
+            ast->GetVariableDecl(varDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
             ast->GetPass(pass).consts.Push(arena, varDecl);
             Symbol* sym = SymbolTable::AddSymbol(&symbolTable, constNameStr, SymbolKind::VARIABLE);
             if (!sym) {

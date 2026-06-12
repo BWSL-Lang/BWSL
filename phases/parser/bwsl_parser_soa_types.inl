@@ -119,6 +119,7 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
     }
     Consume(TokenType::IDENTIFIER, "Expected array variable name");
 
+    SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
     std::string varName(stream->GetValue(previous));
 
     // Compute array type info for symbol table
@@ -167,6 +168,7 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
         ArenaString::MakeHashOnly("array"),
         initializer, false, line, col, storageClass, static_cast<u8>(arrayDims.size()),
         static_cast<u32>(totalSize), SymbolTable::GetCoreTypeNameHash(elementType));
+    ast->GetVariableDecl(varDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
 
     // Add to symbol table
     Symbol* sym = SymbolTable::AddSymbol(&symbolTable, ArenaString::MakeHashOnly(varName), SymbolKind::VARIABLE);

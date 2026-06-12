@@ -748,6 +748,18 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             const VariableDeclData& node = ast.GetVariableDecl(ref);
             AppendArenaStringFields(json, first, "name", node.name);
             AppendArenaStringFields(json, first, "declaredType", node.type);
+            if (node.typePosition != 0) {
+                u32 typeLine = 0, typeColumn = 0;
+                AST::UnpackPosition(node.typePosition, typeLine, typeColumn);
+                AppendUIntField(json, first, "typeLine", typeLine);
+                AppendUIntField(json, first, "typeColumn", typeColumn);
+            }
+            if (node.namePosition != 0) {
+                u32 nameLine = 0, nameColumn = 0;
+                AST::UnpackPosition(node.namePosition, nameLine, nameColumn);
+                AppendUIntField(json, first, "nameLine", nameLine);
+                AppendUIntField(json, first, "nameColumn", nameColumn);
+            }
             AppendBoolField(json, first, "isConst", node.isConst);
             AppendBoolField(json, first, "isEval", node.isEval);
             AppendStringField(json, first, "storageClass",

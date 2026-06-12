@@ -53,7 +53,9 @@ NodeRef Parser::ParseBlock() {
 
 NodeRef Parser::ParseStatement() {
     PARSER_TIME_STMT();
-    SourceLocation loc = getLocation(stream->GetOffset(previous));
+    // `current` is the first token of the statement; `previous` is still the
+    // last token of the preceding statement (e.g. `;` or `{`).
+    SourceLocation loc = getLocation(stream->GetOffset(current));
     u32 line = loc.line;
     u32 col = loc.column;
 
@@ -211,6 +213,7 @@ NodeRef Parser::ParseStatement() {
     if (Match(TokenType::CONST)) {
         std::string typeStr;
         TypeInfo constType = TYPE_INFO(CoreType::INVALID, 0, false);
+        SourceLocation typeLoc = getLocation(stream->GetOffset(current));
         if (MatchMask(TokenMasks::CORE_TYPES)) {
             TokenType varType = static_cast<TokenType>(stream->GetType(previous));
             typeStr = std::string(stream->GetValue(previous));
@@ -235,6 +238,7 @@ NodeRef Parser::ParseStatement() {
         }
 
         Consume(TokenType::IDENTIFIER, "Expected variable name");
+        SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
         std::string varName = std::string(stream->GetValue(previous));
 
         Consume(TokenType::ASSIGN, "const variables must be initialized");
@@ -251,6 +255,8 @@ NodeRef Parser::ParseStatement() {
         NodeRef varDecl = ASTFactory::MakeVariableDecl(ast, varNameStr,
             ArenaString::MakeHashOnly(typeStr),
             value, true, line, col);
+        ast->GetVariableDecl(varDecl).typePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
+        ast->GetVariableDecl(varDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
 
         Symbol* sym = SymbolTable::AddSymbol(&symbolTable, varNameStr, SymbolKind::VARIABLE);
 
@@ -444,6 +450,7 @@ NodeRef Parser::ParseStatement() {
 
         TokenType varType = static_cast<TokenType>(stream->GetType(previous));
         std::string typeStr(stream->GetValue(previous));
+        SourceLocation typeLoc = getLocation(stream->GetOffset(previous));
 
         // Check for pointer type: int^ means pointer to int
         while (Match(TokenType::BITWISE_XOR)) {
@@ -452,10 +459,19 @@ NodeRef Parser::ParseStatement() {
 
         if (Check(TokenType::LEFT_BRACKET)) {
             Advance();
-            return ParseArrayDeclaration(TokenTypeToReturnType(varType), storageClass);
+            NodeRef arrayDecl = ParseArrayDeclaration(TokenTypeToReturnType(varType), storageClass);
+            if (arrayDecl.IsValid() && arrayDecl.Type() == ASTNodeType::VARIABLE_DECL) {
+                // Re-anchor at the statement start; ParseArrayDeclaration only
+                // sees the tokens from '[' onwards.
+                ast->IndexPosition(arrayDecl, line, col);
+                ast->GetVariableDecl(arrayDecl).typePosition =
+                    AST::PackPosition(typeLoc.line, typeLoc.column);
+            }
+            return arrayDecl;
         }
 
         Consume(TokenType::IDENTIFIER, "Expected variable name");
+        SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
         std::string varName(stream->GetValue(previous));
 
         if (Check(TokenType::LEFT_BRACKET)) {
@@ -475,6 +491,8 @@ NodeRef Parser::ParseStatement() {
             ArenaString::MakeHashOnly(varName),
             ArenaString::MakeHashOnly(typeStr),
             initializer, false, line, col, storageClass);
+        ast->GetVariableDecl(varDecl).typePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
+        ast->GetVariableDecl(varDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
 
         Symbol* sym = SymbolTable::AddSymbol(&symbolTable, ArenaString::MakeHashOnly(varName), SymbolKind::VARIABLE);
         if (sym) {
@@ -567,6 +585,7 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
 
     // Now expect variable name
     Consume(TokenType::IDENTIFIER, "Expected variable name");
+    SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
     std::string varName(stream->GetValue(previous));
 
     if (Match(TokenType::LEFT_BRACKET)) {
@@ -668,6 +687,8 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
             ArenaString::MakeHashOnly(typeName),
             initializer, false, line, col);
     }
+    ast->GetVariableDecl(varDecl).typePosition = AST::PackPosition(line, col);
+    ast->GetVariableDecl(varDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
 
     // Register variable in symbol table
     Symbol* varSym = SymbolTable::AddSymbol(&symbolTable,
