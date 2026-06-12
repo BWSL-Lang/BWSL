@@ -2,6 +2,8 @@
 
 BWSL (Brawl Shading Language) is a graphics and compute shader language with a compiler that generates SPIR-V and cross-compiles to Metal, HLSL, GLSL, and GLSL ES (WebGL).
 
+[Public Docs Here] (https://www.bwsl.dev) 
+
 ## Getting Started
 
 ```bash
