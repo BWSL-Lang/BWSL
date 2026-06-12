@@ -1,0 +1,29 @@
+// Fixture for -ast-json position checks. Expected node positions live in
+// AST_JSON_POSITION_TESTS in tests/run_tests.py and reference exact
+// line/column pairs below — keep edits in sync with those expectations.
+pipeline AstJsonPositions {
+    attributes {
+        position: float3
+    }
+
+    rotate :: (float2 pos, float2 center, float angle) -> float2 {
+        float2 normalized = pos - center;
+        float2 basis = float2(cos(angle), sin(angle));
+        float s = -basis.y;
+        return float2(normalized.x * basis.x + normalized.y * s,
+                      normalized.x * basis.y + normalized.y * basis.x) + center;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float2 rotated = rotate(attributes.position.xy, float2(0.5, 0.5), 1.0);
+            output.position = float4(rotated, 0.0, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 0.0, 0.0, 1.0);
+        }
+    }
+}

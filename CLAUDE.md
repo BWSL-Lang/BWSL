@@ -139,6 +139,7 @@ Test categories under `tests/`:
 - top-level `*.bwsl` — regression / smoke tests
 - `equivalence/` — multi-backend GPU equivalence tests
 - `error_cases/` — inputs that must fail with a specific diagnostic
+- `ast_json/` — fixtures whose `-ast-json` node positions are asserted
 - `fuzz_regressions/` — minimized inputs from past fuzzer crashes
 - `golden/` — frozen Metal output for diffing
 - `from_engine/`, `prod_shaders/` — engine-derived shaders

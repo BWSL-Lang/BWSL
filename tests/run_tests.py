@@ -252,6 +252,88 @@ ERROR_CASE_MODULE_DIRS = {
     "reserved_stdlib_module_import_conflict.bwsl": Path("tests/error_cases/stdlib_conflict_modules"),
 }
 
+# Position checks against `bwslc -ast-json` output, keyed by fixture stem in
+# tests/ast_json/. Each entry's "match" keys must select exactly one node in
+# the AST (matched against the node's own JSON fields, so "line" can be used
+# to disambiguate repeated names); "expect" keys are then compared verbatim.
+# Guards the node-position fixes: VARIABLE_DECL, IDENTIFIER, FUNCTION_CALL,
+# and UNARY_OP used to report the position of the token *before* the
+# construct, and VARIABLE_DECL lacked typeLine/typeColumn/nameLine/nameColumn.
+AST_JSON_POSITION_TESTS = {
+    "positions": [
+        # float2 normalized = pos - center;
+        {
+            "match": {"type": "VARIABLE_DECL", "name": "normalized"},
+            "expect": {"line": 10, "column": 9, "typeLine": 10, "typeColumn": 9,
+                       "nameLine": 10, "nameColumn": 16},
+        },
+        {
+            "match": {"type": "IDENTIFIER", "name": "pos"},
+            "expect": {"line": 10, "column": 29},
+        },
+        # float2 basis = float2(cos(angle), sin(angle));
+        {
+            "match": {"type": "VARIABLE_DECL", "name": "basis"},
+            "expect": {"line": 11, "column": 9, "typeLine": 11, "typeColumn": 9,
+                       "nameLine": 11, "nameColumn": 16},
+        },
+        {
+            "match": {"type": "FUNCTION_CALL", "name": "float2", "line": 11},
+            "expect": {"column": 24},
+        },
+        {
+            "match": {"type": "FUNCTION_CALL", "name": "cos"},
+            "expect": {"line": 11, "column": 31},
+        },
+        {
+            "match": {"type": "FUNCTION_CALL", "name": "sin"},
+            "expect": {"line": 11, "column": 43},
+        },
+        # float s = -basis.y;
+        {
+            "match": {"type": "VARIABLE_DECL", "name": "s"},
+            "expect": {"line": 12, "column": 9, "typeLine": 12, "typeColumn": 9,
+                       "nameLine": 12, "nameColumn": 15},
+        },
+        {
+            "match": {"type": "UNARY_OP", "op": "NEGATE"},
+            "expect": {"line": 12, "column": 19},
+        },
+        {
+            "match": {"type": "IDENTIFIER", "name": "basis", "line": 12},
+            "expect": {"column": 20},
+        },
+        {
+            "match": {"type": "FUNCTION", "name": "rotate"},
+            "expect": {"line": 9, "column": 5},
+        },
+        # float2 rotated = rotate(attributes.position.xy, float2(0.5, 0.5), 1.0);
+        {
+            "match": {"type": "VARIABLE_DECL", "name": "rotated"},
+            "expect": {"line": 21, "column": 13, "typeLine": 21, "typeColumn": 13,
+                       "nameLine": 21, "nameColumn": 20},
+        },
+        {
+            "match": {"type": "FUNCTION_CALL", "name": "rotate"},
+            "expect": {"line": 21, "column": 30},
+        },
+        {
+            "match": {"type": "IDENTIFIER", "name": "attributes"},
+            "expect": {"line": 21, "column": 37},
+        },
+        # Nested call in an argument list.
+        {
+            "match": {"type": "FUNCTION_CALL", "name": "float2", "line": 21},
+            "expect": {"column": 61},
+        },
+        # output.position = float4(rotated, 0.0, 1.0);
+        {
+            "match": {"type": "IDENTIFIER", "name": "rotated"},
+            "expect": {"line": 22, "column": 38},
+        },
+    ],
+}
+
 FORBIDDEN_SOURCE_ALIAS_NAMES = (
     "mix",
     "frac",
@@ -600,6 +682,38 @@ def check_inline_return_loop(path: Path) -> tuple[bool, str]:
         return True, ""
 
     return False, "Missing return guard AND->BRANCH pattern in IR fallback"
+
+
+def collect_ast_nodes(node, out: list[dict]) -> None:
+    if isinstance(node, dict):
+        if "type" in node:
+            out.append(node)
+        for value in node.values():
+            collect_ast_nodes(value, out)
+    elif isinstance(node, list):
+        for value in node:
+            collect_ast_nodes(value, out)
+
+
+def check_ast_json_positions(data: dict, expectations: list[dict]) -> tuple[bool, str]:
+    nodes: list[dict] = []
+    collect_ast_nodes(data.get("root", {}), nodes)
+    if not nodes:
+        return False, "AST JSON has no nodes under 'root'"
+
+    for case in expectations:
+        match = case["match"]
+        desc = ", ".join(f"{k}={v}" for k, v in match.items())
+        found = [n for n in nodes if all(n.get(k) == v for k, v in match.items())]
+        if len(found) != 1:
+            return False, f"expected exactly one node matching ({desc}), found {len(found)}"
+        node = found[0]
+        for key, expected in case["expect"].items():
+            actual = node.get(key)
+            if actual != expected:
+                return False, f"node ({desc}): {key} is {actual}, expected {expected}"
+
+    return True, ""
 
 
 def find_metal_outputs(output_dir: Path, test_name: str) -> list[Path]:
@@ -2258,6 +2372,50 @@ def main() -> int:
                 continue
 
             print(f"[{GREEN}PASS{NC}] error_cases/{test_file.stem}")
+            passed += 1
+
+    ast_json_dir = script_dir / "ast_json"
+    if ast_json_dir.exists():
+        for test_file in sorted(ast_json_dir.glob("*.bwsl")):
+            expectations = AST_JSON_POSITION_TESTS.get(test_file.stem)
+            if expectations is None:
+                print(f"[{YELLOW}SKIP{NC}] ast_json/{test_file.stem} (position expectations not defined)")
+                skipped += 1
+                continue
+
+            result = run_command(
+                [
+                    str(bwslc),
+                    str(test_file),
+                    "-modules",
+                    str(modules_dir),
+                    "-ast-json",
+                ],
+                cwd=root,
+            )
+
+            if result.returncode != 0:
+                print(f"[{RED}FAIL{NC}] ast_json/{test_file.stem}")
+                print(f"       Error: -ast-json exited with code {result.returncode}: {result.stdout.strip()}")
+                failed += 1
+                continue
+
+            try:
+                data = json.loads(result.stdout)
+            except json.JSONDecodeError as exc:
+                print(f"[{RED}FAIL{NC}] ast_json/{test_file.stem}")
+                print(f"       Error: invalid AST JSON: {exc}")
+                failed += 1
+                continue
+
+            ok, message = check_ast_json_positions(data, expectations)
+            if not ok:
+                print(f"[{RED}FAIL{NC}] ast_json/{test_file.stem}")
+                print(f"       Error: AST position mismatch: {message}")
+                failed += 1
+                continue
+
+            print(f"[{GREEN}PASS{NC}] ast_json/{test_file.stem}")
             passed += 1
 
     stdlib_source = (root / "core" / "bwsl_stdlib.h").read_text(encoding="utf-8")
