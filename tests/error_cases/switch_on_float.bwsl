@@ -1,0 +1,22 @@
+// Error case: switching on a float selector. Currently rejected only when
+// the emitted SPIR-V fails validation (OpSwitch requires an integer
+// selector); a front-end diagnostic would be better.
+pipeline SwitchOnFloat {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float x = attributes.position.x;
+            float r = 0.0;
+            switch (x) {
+                case 1: r = 1.0;
+                default: r = 2.0;
+            }
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

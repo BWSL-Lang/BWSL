@@ -1,0 +1,17 @@
+// Error case: referencing an enum variant that was never declared.
+pipeline UnknownEnumVariant {
+    attributes {
+        position: float3
+    }
+
+    enum Mode { A, B }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int m = Mode::Missing;
+            output.position = float4(attributes.position, float(m));
+        }
+    }
+}

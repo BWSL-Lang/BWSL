@@ -1,0 +1,16 @@
+// Wrong-accept: listing the same attribute twice in `use attributes`
+// compiles without diagnostics. A duplicate-name check (like the ones for
+// outputs and resources blocks) should reject this.
+pipeline WrongAcceptUseAttributesDuplicate {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position, position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+    }
+}

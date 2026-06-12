@@ -1,0 +1,41 @@
+// Test: Ternary nesting and associativity
+// Tests: right-associative chained ternaries, nested ternaries in both arms,
+//        vector-valued ternaries, ternary inside call arguments and indices
+
+pipeline TernaryNestedChain {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float x = attributes.position.x;
+
+            // Chained (right-associative) ternary
+            float band = x < 0.25 ? 0.0 : x < 0.5 ? 1.0 : x < 0.75 ? 2.0 : 3.0;
+
+            // Nested ternaries in both arms
+            float nested = x > 0.0
+                ? (x > 1.0 ? x * 2.0 : x * 3.0)
+                : (x < -1.0 ? -x : 0.5);
+
+            // Vector-valued ternary
+            float3 dir = x > 0.5 ? float3(1.0, 0.0, 0.0) : float3(0.0, 0.0, 1.0);
+
+            // Ternary inside a call argument
+            float m = max(x > 0.0 ? x : -x, 0.125);
+
+            // Ternary as an array index
+            float[3] lut;
+            lut[0] = 1.0;
+            lut[1] = 2.0;
+            lut[2] = 4.0;
+            float picked = lut[x > 0.0 ? 2 : 0];
+
+            output.position = float4(attributes.position,
+                band + nested + dir.x + dir.z + m + picked);
+        }
+    }
+}

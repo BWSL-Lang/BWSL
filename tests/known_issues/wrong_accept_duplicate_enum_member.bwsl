@@ -1,0 +1,19 @@
+// Wrong-accept: an enum declaring the same member name twice compiles
+// without diagnostics; references to the duplicated name resolve silently
+// to one of the declarations.
+pipeline WrongAcceptDuplicateEnumMember {
+    attributes {
+        position: float3
+    }
+
+    enum Mode { A, B, A }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int m = Mode::A;
+            output.position = float4(attributes.position, float(m));
+        }
+    }
+}

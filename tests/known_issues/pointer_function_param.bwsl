@@ -1,0 +1,24 @@
+// Known issue: a function with a pointer-typed parameter (`float^`) parses
+// without diagnostics but is never registered for lookup, so every call site
+// fails with "Function not found: bump". Either pointer parameters should
+// work (making void out-parameter helpers possible) or the declaration
+// should be rejected with a real diagnostic instead of failing at the call.
+pipeline PointerFunctionParam {
+    attributes {
+        position: float3
+    }
+
+    bump :: (float^ target) -> void {
+        target^ = target^ + 1.0;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float acc = 1.0;
+            bump(^acc);
+            output.position = float4(attributes.position, acc);
+        }
+    }
+}

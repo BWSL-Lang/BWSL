@@ -1,0 +1,40 @@
+// Test: Swizzle edge forms
+// Tests: chained swizzles, rgba component names, swizzle of a call result,
+//        swizzle of a swizzle write target, broadcast swizzles (v.xxx)
+
+pipeline SwizzleChainedRgba {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float4 c = float4(attributes.position, 1.0);
+
+            // rgba naming
+            float red = c.r;
+            float2 ga = c.ga;
+            float3 bgr = c.bgr;
+
+            // Chained swizzles
+            float chained = c.wzyx.yx.x;
+            float2 pair = c.rgba.abg.xy;
+
+            // Swizzle of a call result
+            float2 n = normalize(attributes.position).xy;
+
+            // Broadcast swizzle
+            float3 splat = c.xxx;
+
+            // Write through a swizzle, then read a different swizzle of it
+            float4 v = c;
+            v.zw = float2(0.5, 0.25);
+            v.xy = v.wz;
+
+            output.position = float4(attributes.position,
+                red + ga.x + bgr.z + chained + pair.y + n.x + splat.y + v.x + v.w);
+        }
+    }
+}

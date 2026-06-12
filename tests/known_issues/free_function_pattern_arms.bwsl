@@ -1,0 +1,25 @@
+// Known issue: docs/spec/07-enums-and-pattern-matching.md ("Pattern Matching
+// in Functions") says ordinary functions that dispatch on enum arguments
+// support the same arm syntax as enum methods, but the parser rejects the
+// first arm with "Expected ';' after expression". Only enum methods accept
+// arm bodies today. Either the parser or the spec needs to change.
+pipeline FreeFunctionPatternArms {
+    attributes {
+        position: float3
+    }
+
+    enum Mode { A, B }
+
+    score :: (Mode m) -> float {
+        A: 1.0
+        B: 2.0
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, score(Mode::A));
+        }
+    }
+}

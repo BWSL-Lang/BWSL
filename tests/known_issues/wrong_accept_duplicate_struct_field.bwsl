@@ -1,0 +1,23 @@
+// Wrong-accept: a struct declaring the same field name twice compiles
+// without diagnostics; field access resolves silently to one of the
+// declarations.
+pipeline WrongAcceptDuplicateStructField {
+    attributes {
+        position: float3
+    }
+
+    struct Data {
+        float a;
+        float a;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            Data d;
+            d.a = 1.0;
+            output.position = float4(attributes.position, d.a);
+        }
+    }
+}

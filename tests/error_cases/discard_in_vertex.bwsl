@@ -1,0 +1,17 @@
+// Error case: `discard` in a vertex stage. Currently rejected only when the
+// emitted SPIR-V fails validation; a dedicated front-end diagnostic would be
+// better, but this locks in rejection either way.
+pipeline DiscardInVertex {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            discard;
+            output.position = float4(attributes.position, 1.0);
+        }
+    }
+}

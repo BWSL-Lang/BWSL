@@ -1,0 +1,21 @@
+// Error case: calling a user function with too many arguments. Currently
+// rejected only when the emitted SPIR-V fails validation ("Type Id is 0");
+// a front-end arity diagnostic would be better.
+pipeline UserFunctionWrongArgCount {
+    attributes {
+        position: float3
+    }
+
+    double :: (float x) -> float {
+        return x * 2.0;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float r = double(1.0, 2.0);
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

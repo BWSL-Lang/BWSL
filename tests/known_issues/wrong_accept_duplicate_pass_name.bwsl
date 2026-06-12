@@ -1,0 +1,22 @@
+// Wrong-accept: two passes with the same name compile without diagnostics
+// and both emit to the same output file names (<pipeline>_Main.vert.spv),
+// so one pass silently clobbers the other on disk.
+pipeline WrongAcceptDuplicatePassName {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+    }
+
+    pass "Main" {
+        use attributes { position }
+        vertex {
+            output.position = float4(attributes.position, 2.0);
+        }
+    }
+}

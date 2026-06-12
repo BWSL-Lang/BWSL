@@ -1,0 +1,24 @@
+// Known issue: `range` is lexed as a dedicated RANGE token
+// (phases/lexing/bwsl_lexer.cpp) but TokenType::RANGE is never consumed by
+// the parser, so using `range` as any identifier fails with a confusing
+// parse error (here: "Expected ')' after variant types"). Same class as the
+// retired `it` keyword (fixed issue 2): the lexer should emit a plain
+// IDENTIFIER.
+pipeline RangeKeywordIdentifier {
+    attributes {
+        position: float3
+    }
+
+    enum Falloff {
+        Linear(float range)
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float range = attributes.position.x;
+            output.position = float4(attributes.position, range);
+        }
+    }
+}
