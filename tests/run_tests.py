@@ -1817,6 +1817,114 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
     return passed, failed
 
 
+def run_batch_mode_tests(bwslc: Path, root: Path, script_dir: Path,
+                         output_dir: Path, modules_dir: Path) -> tuple[int, int]:
+    """Smoke tests for bwslc batch mode: multiple inputs, directory scanning,
+    manifests, and the aggregated -errors-json document."""
+    passed = failed = 0
+
+    good_a = script_dir / "unsorted" / "arrays_basic.bwsl"
+    good_b = script_dir / "unsorted" / "array_indexing.bwsl"
+    bad = script_dir / "error_cases" / "missing_variable.bwsl"
+
+    def run(args: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(bwslc), *args, "-modules", str(modules_dir)],
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+
+    def report(name: str, ok: bool, message: str = "") -> None:
+        nonlocal passed, failed
+        if ok:
+            print(f"[{GREEN}PASS{NC}] batch/{name}")
+            passed += 1
+        else:
+            print(f"[{RED}FAIL{NC}] batch/{name}")
+            if message:
+                print(f"       Error: {message}")
+            failed += 1
+
+    # 1. File-list batch: every unit compiles, the bad one fails, exit code 1,
+    #    and the summary reports the aggregate instead of bailing early.
+    result = run([str(good_a), str(good_b), str(bad), "-check"])
+    summary_ok = (
+        result.returncode == 1
+        and "==== Batch summary ====" in result.stdout
+        and "succeeded: 2, failed: 1" in result.stdout
+        and str(bad) in result.stdout
+    )
+    report("file_list_compile_everything", summary_ok,
+           f"exit={result.returncode} stdout={result.stdout[-400:]!r}")
+
+    # 2. Aggregated -errors-json document for the whole batch.
+    result = run([str(good_a), str(bad), "-check", "-errors-json"])
+    try:
+        doc = json.loads(result.stdout)
+        json_ok = (
+            doc.get("batch") is True
+            and doc.get("success") is False
+            and doc.get("fileCount") == 2
+            and doc.get("failedCount") == 1
+            and len(doc.get("files", [])) == 2
+            and doc["files"][0].get("success") is True
+            and doc["files"][1].get("success") is False
+            and doc["files"][1].get("errorCount", 0) >= 1
+        )
+        report("errors_json_aggregate", json_ok, f"document={doc!r}"[:400])
+    except json.JSONDecodeError as exc:
+        report("errors_json_aggregate", False,
+               f"invalid JSON: {exc}: {result.stdout[:400]!r}")
+
+    # 3. Single-file -errors-json keeps the original (non-batch) shape.
+    result = run([str(bad), "-check", "-errors-json"])
+    try:
+        doc = json.loads(result.stdout)
+        report("errors_json_single_file_shape",
+               "batch" not in doc and doc.get("tool") == "bwslc"
+               and doc.get("success") is False,
+               f"document keys={sorted(doc.keys())!r}")
+    except json.JSONDecodeError as exc:
+        report("errors_json_single_file_shape", False, f"invalid JSON: {exc}")
+
+    # 4. Directory input: recursive scan with output mirroring the subtree.
+    batch_dir = output_dir / "batch_dir_input"
+    sub_dir = batch_dir / "sub"
+    sub_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy(good_a, batch_dir / good_a.name)
+    shutil.copy(good_b, sub_dir / good_b.name)
+    batch_out = output_dir / "batch_dir_output"
+    result = run([str(batch_dir), "-o", str(batch_out), "-no-validate"])
+    spv_root = list(batch_out.glob("*.vert.spv"))
+    spv_sub = list((batch_out / "sub").glob("*.vert.spv"))
+    report("directory_recursive_scan",
+           result.returncode == 0 and "Files: 2, succeeded: 2" in result.stdout
+           and len(spv_root) >= 1 and len(spv_sub) >= 1,
+           f"exit={result.returncode} root={spv_root} sub={spv_sub}")
+
+    # 5. Manifest input: entries relative to the manifest, '#' comments,
+    #    directories allowed, duplicates collapsed.
+    manifest = output_dir / "batch_manifest.txt"
+    manifest.write_text(
+        "# batch manifest\n"
+        f"{good_a}\n"
+        "batch_dir_input/sub\n"
+        f"{good_a}\n",
+        encoding="utf-8",
+    )
+    result = run(["-manifest", str(manifest), "-check"])
+    report("manifest_input",
+           result.returncode == 0 and "Files: 2, succeeded: 2" in result.stdout,
+           f"exit={result.returncode} stdout={result.stdout[-300:]!r}")
+
+    return passed, failed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="BWSL Regression Test Runner")
     parser.add_argument("--metal", "-m", action="store_true", help="Enable Metal shader validation (macOS only)")
@@ -2475,6 +2583,11 @@ def main() -> int:
 
             print(f"[{GREEN}PASS{NC}] fuzz_regressions/{test_file.stem}")
             passed += 1
+
+    batch_passed, batch_failed = run_batch_mode_tests(
+        bwslc, root, script_dir, output_dir, modules_dir)
+    passed += batch_passed
+    failed += batch_failed
 
     equiv_passed = equiv_failed = 0
     if args.equivalence:

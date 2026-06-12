@@ -32,6 +32,7 @@
 #include <thread>
 #include <memory>
 #include <functional>
+#include <unordered_set>
 #ifndef _WIN32
 #include <sys/wait.h>
 #endif
@@ -130,7 +131,9 @@ struct ValidationResult {
 };
 
 struct CompilerConfig {
-    std::string inputFile;
+    std::string inputFile;                 // Current compilation unit (one per job)
+    std::vector<std::string> inputPaths;   // Positional inputs: files and/or directories
+    std::string manifestPath;              // Optional manifest listing inputs (one per line)
     std::string sourceFileOverride;
     std::string outputDir = ".";
     std::vector<std::string> modulePaths;  // Additional module search paths
@@ -242,9 +245,17 @@ void print_splash() {
 
 void PrintUsage(const char* programName) {
     print_splash();
-    printf("Usage: %s <input.bwsl> [options]\n\n", programName);
+    printf("Usage: %s <input.bwsl | directory> [more inputs...] [options]\n\n", programName);
+    printf("Batch mode: passing multiple files, a directory (compiles every .bwsl found\n");
+    printf("recursively), or -manifest activates batch compilation. All units are\n");
+    printf("compiled and reported together instead of bailing on the first failure;\n");
+    printf("-errors-json then emits one aggregated document for the whole batch.\n\n");
     printf("Options:\n");
-    printf("  -o <dir>       Output directory (default: current directory)\n");
+    printf("  -o <dir>       Output directory (default: current directory).\n");
+    printf("                 Directory inputs mirror their subdirectories below it.\n");
+    printf("  -manifest <file>\n");
+    printf("                 Read inputs (files or directories) from a manifest,\n");
+    printf("                 one path per line, '#' comments, relative to the manifest\n");
     printf("  -modules <dir> Add module search path (can be used multiple times)\n");
     printf("  -variant <k=v> Set a named variant value (repeatable)\n");
     printf("  -dump-variant-space  Print variant reflection JSON and exit\n");
@@ -1464,11 +1475,12 @@ static void AddStageDiagnostic(DiagnosticStream& diagnostics,
                        messageId);
 }
 
-static void PrintDiagnosticsJson(const CompilerConfig& config,
-                                 const DiagnosticStream& diagnostics,
-                                 bool success,
-                                 const TokenStream* stream = nullptr,
-                                 const std::vector<std::string>* sourceLines = nullptr) {
+static std::string BuildDiagnosticsJson(const CompilerConfig& config,
+                                        const DiagnosticStream& diagnostics,
+                                        bool success,
+                                        const TokenStream* stream = nullptr,
+                                        const std::vector<std::string>* sourceLines = nullptr,
+                                        bool includeHeader = true) {
     u32 errorCount = 0;
     u32 warningCount = 0;
     for (u32 i = 0; i < diagnostics.Count(); i++) {
@@ -1486,9 +1498,11 @@ static void PrintDiagnosticsJson(const CompilerConfig& config,
 
     std::string json;
     json += "{\n";
-    json += "  \"schemaVersion\": 2,\n";
-    json += "  \"tool\": \"bwslc\",\n";
-    json += "  \"version\": \"" VERSION "\",\n";
+    if (includeHeader) {
+        json += "  \"schemaVersion\": 2,\n";
+        json += "  \"tool\": \"bwslc\",\n";
+        json += "  \"version\": \"" VERSION "\",\n";
+    }
     json += "  \"success\": ";
     json += success ? "true" : "false";
     json += ",\n";
@@ -1564,7 +1578,16 @@ static void PrintDiagnosticsJson(const CompilerConfig& config,
     if (diagnostics.Count() > 0) json += "\n  ";
     json += "]\n";
     json += "}\n";
-    printf("%s", json.c_str());
+    return json;
+}
+
+static void PrintDiagnosticsJson(const CompilerConfig& config,
+                                 const DiagnosticStream& diagnostics,
+                                 bool success,
+                                 const TokenStream* stream = nullptr,
+                                 const std::vector<std::string>* sourceLines = nullptr) {
+    printf("%s", BuildDiagnosticsJson(config, diagnostics, success,
+                                      stream, sourceLines).c_str());
 }
 
 static u8 BuildPassAttributeMask(const AST& ast, NodeRef pipelineRef, NodeRef passRef) {
@@ -2628,6 +2651,158 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
     return output;
 }
 
+// ============= Batch Compilation =============
+// Batch mode treats every compilation unit as a job, like a job system in an
+// engine: positional files, recursively scanned directories, and manifest
+// entries all normalize into one flat job list that is processed with
+// compile-everything-and-report semantics (no fail-and-bail). Processing is
+// sequential for now; the job list is the seam where a thread pool slots in.
+
+struct CompileJob {
+    std::string inputFile;   // absolute path to the .bwsl compilation unit
+    std::string outputDir;   // per-job output directory
+};
+
+struct JobOutcome {
+    int exitCode = 1;
+    bool success = false;
+    int compiledCount = 0;      // shader stages compiled/checked
+    int errorCount = 0;         // stage-level errors
+    u32 diagErrorCount = 0;     // diagnostics with Error severity
+    u32 diagWarningCount = 0;   // diagnostics with Warning severity
+    std::string json;           // rendered diagnostics JSON (when -errors-json)
+};
+
+static bool HasBwslExtension(const fs::path& path) {
+    std::string ext = path.extension().string();
+    for (char& ch : ext) {
+        if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+    }
+    return ext == ".bwsl";
+}
+
+// Recursively collect every .bwsl file under root. Output directories mirror
+// the directory structure relative to root so equal stems in different
+// subdirectories cannot clobber each other.
+static bool CollectDirectoryJobs(const fs::path& root,
+                                 const std::string& baseOutputDir,
+                                 std::vector<CompileJob>& jobs,
+                                 std::string& error) {
+    std::error_code ec;
+    std::vector<fs::path> files;
+    fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec);
+    if (ec) {
+        error = "Could not scan directory '" + root.string() + "': " + ec.message();
+        return false;
+    }
+    for (const auto& entry : it) {
+        if (entry.is_regular_file(ec) && HasBwslExtension(entry.path())) {
+            files.push_back(entry.path());
+        }
+    }
+    std::sort(files.begin(), files.end());
+
+    for (const fs::path& file : files) {
+        CompileJob job;
+        job.inputFile = fs::absolute(file).string();
+        fs::path relativeDir = fs::relative(file.parent_path(), root, ec);
+        fs::path outDir = baseOutputDir;
+        if (!ec && !relativeDir.empty() && relativeDir != ".") {
+            outDir /= relativeDir;
+        }
+        job.outputDir = outDir.string();
+        jobs.push_back(std::move(job));
+    }
+    return true;
+}
+
+// A path argument is either a single compilation unit or a directory to scan.
+static bool AppendInputPathJobs(const std::string& input,
+                                const std::string& baseOutputDir,
+                                std::vector<CompileJob>& jobs,
+                                std::string& error) {
+    std::error_code ec;
+    fs::path path(input);
+    if (fs::is_directory(path, ec)) {
+        return CollectDirectoryJobs(path, baseOutputDir, jobs, error);
+    }
+    CompileJob job;
+    job.inputFile = input;
+    job.outputDir = baseOutputDir;
+    jobs.push_back(std::move(job));
+    return true;
+}
+
+// Manifest format: one file or directory per line, relative paths resolved
+// against the manifest's own directory. Blank lines and '#' comments ignored.
+static bool AppendManifestJobs(const std::string& manifestPath,
+                               const std::string& baseOutputDir,
+                               std::vector<CompileJob>& jobs,
+                               std::string& error) {
+    std::ifstream manifest(manifestPath);
+    if (!manifest.is_open()) {
+        error = "Could not read manifest '" + manifestPath + "'";
+        return false;
+    }
+
+    fs::path manifestDir = fs::absolute(fs::path(manifestPath)).parent_path();
+    std::string line;
+    while (std::getline(manifest, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
+            line.pop_back();
+        }
+        size_t start = line.find_first_not_of(" \t");
+        if (start == std::string::npos) continue;
+        line.erase(0, start);
+        if (line.empty() || line[0] == '#') continue;
+
+        fs::path entry(line);
+        if (entry.is_relative()) {
+            entry = manifestDir / entry;
+        }
+        if (!AppendInputPathJobs(entry.string(), baseOutputDir, jobs, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Drop duplicate jobs (same file listed twice, or via overlapping inputs).
+static void DeduplicateJobs(std::vector<CompileJob>& jobs) {
+    std::vector<CompileJob> unique;
+    std::unordered_set<std::string> seen;
+    for (CompileJob& job : jobs) {
+        std::error_code ec;
+        fs::path canonical = fs::weakly_canonical(fs::path(job.inputFile), ec);
+        std::string key = ec ? job.inputFile : canonical.string();
+        if (!seen.insert(std::move(key)).second) {
+            continue;
+        }
+        unique.push_back(std::move(job));
+    }
+    jobs.swap(unique);
+}
+
+// Re-indent a rendered JSON document so it can nest inside the batch report.
+static std::string IndentJsonBlock(const std::string& text, const char* indent) {
+    std::string out;
+    out.reserve(text.size() + 64);
+    bool atLineStart = true;
+    for (char ch : text) {
+        if (atLineStart && ch != '\n') {
+            out += indent;
+        }
+        atLineStart = (ch == '\n');
+        out += ch;
+    }
+    while (!out.empty() && out.back() == '\n') {
+        out.pop_back();
+    }
+    return out;
+}
+
+static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader);
+
 // ============= Main Entry Point =============
 
 int main(int argc, char* argv[]) {
@@ -2712,6 +2887,18 @@ int main(int argc, char* argv[]) {
             config.outputBindings = true;
         } else if (arg == "-modules" && i + 1 < argc) {
             config.modulePaths.push_back(argv[++i]);
+        } else if ((arg == "-manifest" || arg == "--manifest") && i + 1 < argc) {
+            config.manifestPath = argv[++i];
+        } else if (arg == "-manifest" || arg == "--manifest") {
+            diagnostics.AddRaw(DiagnosticSeverity::Error,
+                               DiagnosticPhase::CLI,
+                               "Expected path after " + arg,
+                               DiagnosticSpan{},
+                               config.inputFile,
+                               "",
+                               "",
+                               DiagnosticMessageId::Raw);
+            return emitFailure(nullptr, nullptr, true);
         } else if (arg == "-variant" && i + 1 < argc) {
             std::string spec = argv[++i];
             size_t eq = spec.find('=');
@@ -2764,11 +2951,8 @@ int main(int argc, char* argv[]) {
             }
         } else if (arg == "-") {
             config.readStdin = true;
-            if (config.inputFile.empty()) {
-                config.inputFile = "<stdin>";
-            }
         } else if (arg[0] != '-') {
-            config.inputFile = arg;
+            config.inputPaths.push_back(arg);
         } else if (IsErrorsJsonArg(arg)) {
             config.errorsJson = true;
         } else if (arg == "-dump-ir") {
@@ -2790,13 +2974,6 @@ int main(int argc, char* argv[]) {
                                    {DiagnosticArg::String(arg)});
             return emitFailure(nullptr, nullptr, true);
         }
-    }
-
-    if (config.readStdin && !config.sourceFileOverride.empty()) {
-        config.inputFile = config.sourceFileOverride;
-    }
-    if (config.readStdin && config.inputFile.empty()) {
-        config.inputFile = "<stdin>";
     }
 
     if (!config.astJson &&
@@ -2838,12 +3015,197 @@ int main(int argc, char* argv[]) {
         config.verbose = false;
     }
 
-    if (config.inputFile.empty()) {
+    // Build the job list: explicit files, directories (recursive scan), and
+    // manifest entries all become jobs.
+    std::vector<CompileJob> jobs;
+    std::string jobListError;
+    auto failJobList = [&]() -> int {
+        diagnostics.AddRaw(DiagnosticSeverity::Error,
+                           DiagnosticPhase::CLI,
+                           jobListError,
+                           DiagnosticSpan{},
+                           "",
+                           "",
+                           "",
+                           DiagnosticMessageId::Raw);
+        return emitFailure(nullptr, nullptr, false);
+    };
+    for (const std::string& input : config.inputPaths) {
+        if (!AppendInputPathJobs(input, config.outputDir, jobs, jobListError)) {
+            return failJobList();
+        }
+    }
+    if (!config.manifestPath.empty() &&
+        !AppendManifestJobs(config.manifestPath, config.outputDir, jobs, jobListError)) {
+        return failJobList();
+    }
+    DeduplicateJobs(jobs);
+
+    if (config.readStdin) {
+        if (!jobs.empty()) {
+            jobListError = "--stdin cannot be combined with file, directory, or manifest inputs";
+            return failJobList();
+        }
+        CompileJob job;
+        job.inputFile = !config.sourceFileOverride.empty() ? config.sourceFileOverride
+                                                           : "<stdin>";
+        job.outputDir = config.outputDir;
+        jobs.push_back(std::move(job));
+    }
+
+    if (jobs.empty()) {
         diagnostics.AddMessage(DiagnosticSeverity::Error,
                                DiagnosticPhase::CLI,
                                DiagnosticMessageId::NoInputFile);
         return emitFailure(nullptr, nullptr, true);
     }
+
+    const bool batchMode = jobs.size() > 1;
+    if (batchMode && (config.astJson || config.dumpVariantSpace)) {
+        jobListError = config.astJson
+            ? "-ast-json is only supported for a single input file"
+            : "-dump-variant-space is only supported for a single input file";
+        return failJobList();
+    }
+
+    // Share resolved module sources across every job in the batch: each
+    // module file is located on disk and read at most once even when many
+    // compilation units import it.
+    BWSL::ModuleSourceCache moduleSourceCache;
+    BWSL::SetModuleSourceCache(&moduleSourceCache);
+
+    if (!batchMode) {
+        CompilerConfig jobConfig = config;
+        jobConfig.inputFile = jobs[0].inputFile;
+        jobConfig.outputDir = jobs[0].outputDir;
+        JobOutcome outcome = CompileInputFile(std::move(jobConfig), true);
+        if (config.errorsJson && !outcome.json.empty()) {
+            printf("%s", outcome.json.c_str());
+        }
+        return outcome.exitCode;
+    }
+
+    // Batch run: compile every job and aggregate; never bail on the first
+    // failing unit. Sequential for now — this loop is where a thread pool
+    // would dispatch jobs.
+    std::vector<std::string> fileJsons;
+    std::vector<size_t> failedJobIndices;
+    int totalCompiled = 0;
+    u32 totalErrors = 0;
+    u32 totalWarnings = 0;
+    for (size_t jobIdx = 0; jobIdx < jobs.size(); jobIdx++) {
+        const CompileJob& job = jobs[jobIdx];
+        if (!config.errorsJson) {
+            printf("\n[%zu/%zu] %s\n", jobIdx + 1, jobs.size(), job.inputFile.c_str());
+        }
+        CompilerConfig jobConfig = config;
+        jobConfig.inputFile = job.inputFile;
+        jobConfig.outputDir = job.outputDir;
+        JobOutcome outcome = CompileInputFile(std::move(jobConfig), false);
+        totalCompiled += outcome.compiledCount;
+        totalErrors += outcome.diagErrorCount;
+        totalWarnings += outcome.diagWarningCount;
+        if (outcome.exitCode != 0) {
+            failedJobIndices.push_back(jobIdx);
+        }
+        if (config.errorsJson) {
+            fileJsons.push_back(std::move(outcome.json));
+        }
+    }
+
+    const bool batchSuccess = failedJobIndices.empty();
+    if (config.errorsJson) {
+        std::string json;
+        json += "{\n";
+        json += "  \"schemaVersion\": 2,\n";
+        json += "  \"tool\": \"bwslc\",\n";
+        json += "  \"version\": \"" VERSION "\",\n";
+        json += "  \"batch\": true,\n";
+        json += std::string("  \"success\": ") + (batchSuccess ? "true" : "false") + ",\n";
+        json += "  \"fileCount\": " + std::to_string(jobs.size()) + ",\n";
+        json += "  \"succeededCount\": " + std::to_string(jobs.size() - failedJobIndices.size()) + ",\n";
+        json += "  \"failedCount\": " + std::to_string(failedJobIndices.size()) + ",\n";
+        json += "  \"errorCount\": " + std::to_string(totalErrors) + ",\n";
+        json += "  \"warningCount\": " + std::to_string(totalWarnings) + ",\n";
+        json += "  \"files\": [\n";
+        for (size_t i = 0; i < fileJsons.size(); i++) {
+            json += IndentJsonBlock(fileJsons[i], "    ");
+            json += (i + 1 < fileJsons.size()) ? ",\n" : "\n";
+        }
+        json += "  ]\n";
+        json += "}\n";
+        printf("%s", json.c_str());
+    } else {
+        printf("\n==== Batch summary ====\n");
+        printf("Files: %zu, succeeded: %zu, failed: %zu\n",
+               jobs.size(), jobs.size() - failedJobIndices.size(), failedJobIndices.size());
+        printf("Diagnostics: %u error(s), %u warning(s)\n", totalErrors, totalWarnings);
+        printf("Shader stages %s: %d\n", config.checkOnly ? "checked" : "compiled", totalCompiled);
+        if (!batchSuccess) {
+            printf("Failed files:\n");
+            for (size_t jobIdx : failedJobIndices) {
+                printf("  %s\n", jobs[jobIdx].inputFile.c_str());
+            }
+        }
+    }
+
+    return batchSuccess ? 0 : 1;
+    } catch (const std::exception& e) {
+        diagnostics.AddMessage(DiagnosticSeverity::Error,
+                               DiagnosticPhase::Internal,
+                               DiagnosticMessageId::UnhandledException,
+                               {DiagnosticArg::String(e.what())},
+                               DiagnosticSpan{},
+                               config.inputFile);
+        return emitFailure(nullptr, nullptr, false);
+    } catch (...) {
+        diagnostics.AddMessage(DiagnosticSeverity::Error,
+                               DiagnosticPhase::Internal,
+                               DiagnosticMessageId::UnhandledUnknownException,
+                               {},
+                               DiagnosticSpan{},
+                               config.inputFile);
+        return emitFailure(nullptr, nullptr, false);
+    }
+}
+
+// ============= Per-File Compilation =============
+// Compiles one unit end to end. When -errors-json is active the diagnostics
+// document is rendered into the returned outcome instead of printed, so
+// batch mode can aggregate per-file documents into one report.
+
+static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader) {
+    JobOutcome outcome;
+
+    static constexpr size_t DIAGNOSTIC_ARENA_SIZE = 4 * 1024 * 1024;
+    std::unique_ptr<u8[]> diagnosticMemory = std::make_unique<u8[]>(DIAGNOSTIC_ARENA_SIZE);
+    Memory::BWEMemoryArena diagnosticArena;
+    diagnosticArena.Initialize(diagnosticMemory.get(), DIAGNOSTIC_ARENA_SIZE);
+    DiagnosticStream diagnostics;
+    diagnostics.Init(&diagnosticArena);
+
+    auto finishOutcome = [&]() {
+        u32 noteCount = 0;
+        u32 hintCount = 0;
+        CountDiagnostics(diagnostics, outcome.diagErrorCount, outcome.diagWarningCount,
+                         noteCount, hintCount);
+    };
+
+    auto fail = [&](const TokenStream* stream = nullptr,
+                    const std::vector<std::string>* sourceLines = nullptr) -> JobOutcome {
+        if (config.errorsJson) {
+            outcome.json = BuildDiagnosticsJson(config, diagnostics, false,
+                                                stream, sourceLines, includeJsonHeader);
+        } else {
+            PrintDiagnosticsText(config, diagnostics, stream, sourceLines);
+        }
+        finishOutcome();
+        outcome.exitCode = 1;
+        outcome.success = false;
+        return outcome;
+    };
+
+    try {
 
     // Read input source
     std::string source = config.readStdin ? ReadStdin() : ReadFile(config.inputFile);
@@ -2854,7 +3216,7 @@ int main(int argc, char* argv[]) {
                                {DiagnosticArg::String(config.inputFile)},
                                DiagnosticSpan{},
                                config.inputFile);
-        return emitFailure();
+        return fail();
     }
 
     // Get base name for output files
@@ -2949,7 +3311,7 @@ int main(int argc, char* argv[]) {
     timing.parseMs = std::chrono::duration<double, std::milli>(parseEnd - parseStart).count();
 
     if (parser.hadError) {
-        return emitFailure(&stream, &sourceLines);
+        return fail(&stream, &sourceLines);
     }
 
     if (config.astJson) {
@@ -2957,7 +3319,10 @@ int main(int argc, char* argv[]) {
                                                      context.root,
                                                      config.inputFile)
                   << "\n";
-        return 0;
+        finishOutcome();
+        outcome.exitCode = 0;
+        outcome.success = true;
+        return outcome;
     }
 
     bool isModule = (context.ast.pipelines.count == 0 && context.ast.modules.count > 0);
@@ -2976,10 +3341,10 @@ int main(int argc, char* argv[]) {
                                "",
                                "",
                                DiagnosticMessageId::VariantResolutionFailed);
-            return emitFailure(&stream, &sourceLines);
+            return fail(&stream, &sourceLines);
         }
         if (parser.hadError) {
-            return emitFailure(&stream, &sourceLines);
+            return fail(&stream, &sourceLines);
         }
     }
 
@@ -2998,19 +3363,23 @@ int main(int argc, char* argv[]) {
                                "",
                                DiagnosticMessageId::ComptimeError);
         }
-        return emitFailure(&stream, &sourceLines);
+        return fail(&stream, &sourceLines);
     }
 
     // Handle module files differently - they don't have pipelines to compile
     if (isModule) {
         if (config.errorsJson) {
-            PrintDiagnosticsJson(config, diagnostics, true);
+            outcome.json = BuildDiagnosticsJson(config, diagnostics, true,
+                                                nullptr, nullptr, includeJsonHeader);
         } else {
             printf("Module '%s' parsed successfully.\n", baseName.c_str());
             printf("Note: Modules define reusable functions/structs but have no shaders to compile.\n");
             printf("To compile shaders, use a pipeline file that imports this module.\n");
         }
-        return 0;
+        finishOutcome();
+        outcome.exitCode = 0;
+        outcome.success = true;
+        return outcome;
     }
 
     if (context.ast.pipelines.count == 0) {
@@ -3020,13 +3389,13 @@ int main(int argc, char* argv[]) {
                                {DiagnosticArg::String(config.inputFile)},
                                DiagnosticSpan{},
                                config.inputFile);
-        return emitFailure(&stream, &sourceLines);
+        return fail(&stream, &sourceLines);
     }
 
     NodeRef originalPipelineRef = context.root;
     parser.ResolveShaderStages(originalPipelineRef);
     if (parser.hadError) {
-        return emitFailure(&stream, &sourceLines);
+        return fail(&stream, &sourceLines);
     }
 
     VariantSelectionData variantSelection;
@@ -3042,7 +3411,7 @@ int main(int argc, char* argv[]) {
                            "",
                            "",
                            DiagnosticMessageId::VariantSelectionFailed);
-        return emitFailure(&stream, &sourceLines);
+        return fail(&stream, &sourceLines);
     }
 
     VariantReflectionData variantReflection;
@@ -3056,19 +3425,22 @@ int main(int argc, char* argv[]) {
                            "",
                            "",
                            DiagnosticMessageId::VariantReflectionFailed);
-        return emitFailure(&stream, &sourceLines);
+        return fail(&stream, &sourceLines);
     }
 
     if (config.dumpVariantSpace) {
         printf("%s\n", SerializeVariantReflectionJson(variantReflection).c_str());
-        return 0;
+        finishOutcome();
+        outcome.exitCode = 0;
+        outcome.success = true;
+        return outcome;
     }
 
     NodeRef specializedPipelineRef = parser.SpecializePipelineForVariants(originalPipelineRef,
                                                                           variantSelection,
                                                                           &variantError);
     if (parser.hadError) {
-        return emitFailure(&stream, &sourceLines);
+        return fail(&stream, &sourceLines);
     }
     if (specializedPipelineRef.IsNull()) {
         diagnostics.AddRaw(DiagnosticSeverity::Error,
@@ -3079,7 +3451,7 @@ int main(int argc, char* argv[]) {
                            "",
                            "",
                            DiagnosticMessageId::VariantSpecializationFailed);
-        return emitFailure(&stream, &sourceLines);
+        return fail(&stream, &sourceLines);
     }
 
     const PipelineData& pipeline = context.ast.GetPipeline(specializedPipelineRef);
@@ -3104,7 +3476,7 @@ int main(int argc, char* argv[]) {
                            "",
                            "",
                            DiagnosticMessageId::ComputeGraphValidationFailed);
-        return emitFailure(&stream, &sourceLines);
+        return fail(&stream, &sourceLines);
     }
 
     // Helper to get string from ArenaString
@@ -3355,7 +3727,8 @@ int main(int argc, char* argv[]) {
     }
 
     if (config.errorsJson) {
-        PrintDiagnosticsJson(config, diagnostics, errorCount == 0, &stream, &sourceLines);
+        outcome.json = BuildDiagnosticsJson(config, diagnostics, errorCount == 0,
+                                            &stream, &sourceLines, includeJsonHeader);
     } else {
         PrintDiagnosticsText(config, diagnostics, &stream, &sourceLines);
         printf("\n%s: %d shaders %s",
@@ -3375,7 +3748,12 @@ int main(int argc, char* argv[]) {
         timing.Print();
     }
 
-    return errorCount > 0 ? 1 : 0;
+    finishOutcome();
+    outcome.compiledCount = compiledCount;
+    outcome.errorCount = errorCount;
+    outcome.exitCode = errorCount > 0 ? 1 : 0;
+    outcome.success = errorCount == 0;
+    return outcome;
     } catch (const std::exception& e) {
         diagnostics.AddMessage(DiagnosticSeverity::Error,
                                DiagnosticPhase::Internal,
@@ -3383,7 +3761,7 @@ int main(int argc, char* argv[]) {
                                {DiagnosticArg::String(e.what())},
                                DiagnosticSpan{},
                                config.inputFile);
-        return emitFailure();
+        return fail();
     } catch (...) {
         diagnostics.AddMessage(DiagnosticSeverity::Error,
                                DiagnosticPhase::Internal,
@@ -3391,6 +3769,6 @@ int main(int argc, char* argv[]) {
                                {},
                                DiagnosticSpan{},
                                config.inputFile);
-        return emitFailure();
+        return fail();
     }
 }

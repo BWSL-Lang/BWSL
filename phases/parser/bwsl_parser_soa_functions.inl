@@ -163,15 +163,39 @@ bool Parser::IsEmbeddedModuleName(const std::string& moduleName) const {
     return EmbeddedModules::FindByHash(Utils::HashStr(moduleName.c_str())) != nullptr;
 }
 
-bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
-    if (moduleName.empty()) {
-        return false;
-    }
+namespace {
 
-    u32 moduleHash = Utils::HashStr(moduleName.c_str());
-    u32 existingIdx = SymbolTable::FindModuleByHash(&symbolTable, moduleHash);
-    if (existingIdx != INVALID_INDEX) {
-        return true;
+// Cache key for the batch module source cache. Search paths differ between
+// compilation units (each unit's directory is a search root), so the same
+// module name can legitimately resolve to different files in one batch.
+std::string BuildModuleCacheKey(const std::string& moduleName) {
+    std::string key = moduleName;
+    for (const std::string& path : g_additionalModuleSearchPaths) {
+        key += '\n';
+        key += path;
+    }
+    return key;
+}
+
+// Resolve and read a module file, consulting the batch source cache when one
+// is installed. Returns false when the module cannot be resolved or read;
+// failed resolutions are cached too so the search-root scan runs only once.
+bool LoadModuleSourceFromDisk(const std::string& moduleName,
+                              std::string* outPath,
+                              std::string* outSource) {
+    ModuleSourceCache::Entry* cached = nullptr;
+    if (g_moduleSourceCache) {
+        std::string key = BuildModuleCacheKey(moduleName);
+        auto it = g_moduleSourceCache->entries.find(key);
+        if (it != g_moduleSourceCache->entries.end()) {
+            if (!it->second.found) {
+                return false;
+            }
+            *outPath = it->second.path;
+            *outSource = it->second.source;
+            return true;
+        }
+        cached = &g_moduleSourceCache->entries[key];
     }
 
     std::string modulePath = ResolveModulePath(moduleName);
@@ -184,10 +208,39 @@ bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
         return false;
     }
 
-    // Read module file contents
     std::string moduleSource((std::istreambuf_iterator<char>(moduleFile)),
                               std::istreambuf_iterator<char>());
     moduleFile.close();
+
+    if (cached) {
+        cached->found = true;
+        cached->path = modulePath;
+        cached->source = moduleSource;
+    }
+
+    *outPath = std::move(modulePath);
+    *outSource = std::move(moduleSource);
+    return true;
+}
+
+} // namespace
+
+bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
+    if (moduleName.empty()) {
+        return false;
+    }
+
+    u32 moduleHash = Utils::HashStr(moduleName.c_str());
+    u32 existingIdx = SymbolTable::FindModuleByHash(&symbolTable, moduleHash);
+    if (existingIdx != INVALID_INDEX) {
+        return true;
+    }
+
+    std::string modulePath;
+    std::string moduleSource;
+    if (!LoadModuleSourceFromDisk(moduleName, &modulePath, &moduleSource)) {
+        return false;
+    }
 
     return RegisterModuleFromSource(moduleName, moduleSource.data(),
                                     moduleSource.size(), modulePath.c_str());

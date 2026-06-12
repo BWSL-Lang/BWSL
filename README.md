@@ -126,6 +126,15 @@ On Windows, the repo now also includes `build.bat` and `make.bat`. `build.bat` b
 
 # Check unsaved editor text from stdin while reporting against a real source path
 ./build/bwslc -check --stdin --source-file shader.bwsl -errors-json < shader.bwsl
+
+# Batch mode: pass multiple files, a directory (compiles every .bwsl found
+# recursively, mirroring subdirectories under -o), or a manifest. Every unit
+# is compiled and reported together instead of bailing on the first failure,
+# module files are read once and shared across the whole batch, and
+# -errors-json emits one aggregated document with a per-file breakdown.
+./build/bwslc a.bwsl b.bwsl c.bwsl -check
+./build/bwslc shaders/ -o build/shaders -metal
+./build/bwslc -manifest shaders.txt -check -errors-json   # one path per line, # comments
 ```
 
 ### CLI Options
