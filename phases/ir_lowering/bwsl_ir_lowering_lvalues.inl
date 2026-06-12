@@ -2181,6 +2181,30 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       break;
     }
 
+    // Non-builtin input.* names a varying interpolated from the previous
+    // stage; a vertex shader has no upstream stage, so reads must come from
+    // attributes.* instead.
+    if (currentStage == ShaderStage::Vertex) {
+      std::string memberName = ReverseLookup::GetString(memberHash);
+      std::string message =
+          "Error: input." + memberName + " is not available in vertex shaders";
+      if (!currentPipeline.IsNull()) {
+        const PipelineData &pipeline = ast->GetPipeline(currentPipeline);
+        for (u32 i = 0; i < pipeline.attributes.count; i++) {
+          NodeRef attrRef = pipeline.attributes[i];
+          if (attrRef.Type() == ASTNodeType::ATTRIBUTE_DECL &&
+              ast->GetAttributeDecl(attrRef).name.nameHash == memberHash) {
+            message +=
+                " - use attributes." + memberName + " to read the vertex attribute";
+            break;
+          }
+        }
+      }
+      message += "\n";
+      ReportError(message.c_str());
+      return 0;
+    }
+
     // Fragment shader reading interpolated varyings from vertex output
     // input.xxx -> OP_LOAD_INPUT with slot index
 
