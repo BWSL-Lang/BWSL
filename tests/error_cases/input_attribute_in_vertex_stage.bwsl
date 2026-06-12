@@ -1,0 +1,20 @@
+// Error case: input.* in a vertex stage names a varying from the previous
+// stage, which doesn't exist - vertex attributes are read via attributes.*.
+pipeline InputAttributeInVertexStage {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float v = 111.0;
+            output.position = float4(input.position.x, input.position.y, v, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 0.0, 0.0, 1.0);
+        }
+    }
+}
