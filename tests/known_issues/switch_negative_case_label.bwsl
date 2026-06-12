@@ -1,0 +1,23 @@
+// Known issue: negative switch case labels (`case -3:`) are rejected with
+// "switch case values must be compile-time literals" — the case-label parser
+// does not fold a unary minus over an integer literal. `-3` is a
+// compile-time constant and should be a valid label.
+pipeline SwitchNegativeCaseLabel {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int code = int(attributes.position.x);
+            float r = 0.0;
+            switch (code) {
+                case -3: r = 1.0;
+                default: r = 2.0;
+            }
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

@@ -1,0 +1,21 @@
+// Error case: struct fields must use known types.
+pipeline StructUnknownFieldType {
+    attributes {
+        position: float3
+    }
+
+    struct Data {
+        Missing thing;
+        float x;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            Data d;
+            d.x = 1.0;
+            output.position = float4(attributes.position, d.x);
+        }
+    }
+}

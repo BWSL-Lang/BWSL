@@ -1,0 +1,54 @@
+// Test: Deeply nested struct/array write-through chains
+// Tests: three-level struct nesting, writes through s.a[i].b[j].c chains with
+//        constant and dynamic indices, reads back through the same chains
+
+pipeline StructNestedDeepWrite {
+    attributes {
+        position: float3
+    }
+
+    struct Leaf {
+        float value;
+        float2 uv;
+    }
+
+    struct Branch {
+        Leaf[3] leaves;
+        float weight;
+    }
+
+    struct Tree {
+        Branch[2] branches;
+        float3 origin;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            Tree t;
+            t.origin = attributes.position;
+
+            // Constant-index writes through the full chain
+            t.branches[0].weight = 2.0;
+            t.branches[0].leaves[0].value = 1.0;
+            t.branches[0].leaves[1].uv = float2(0.25, 0.75);
+            t.branches[1].leaves[2].value = 5.0;
+
+            // Dynamic-index writes
+            int bi = int(attributes.position.x) & 1;
+            int li = int(attributes.position.y) % 3;
+            t.branches[bi].weight = 3.0;
+            t.branches[bi].leaves[li].value = 7.0;
+            t.branches[bi].leaves[li].uv.x = 0.5;
+
+            // Reads back through constant and dynamic chains
+            float a = t.branches[0].leaves[0].value;
+            float b = t.branches[0].leaves[1].uv.y;
+            float c = t.branches[bi].leaves[li].value;
+            float d = t.branches[1].leaves[2].value + t.branches[bi].weight;
+
+            output.position = float4(t.origin, a + b + c + d);
+        }
+    }
+}

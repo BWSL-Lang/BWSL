@@ -1,0 +1,20 @@
+// Error case: shared memory declarations are compute-only.
+pipeline SharedInFragment {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            shared float[64] cache;
+            cache[0] = 1.0;
+            output.color = float4(cache[0], 0.0, 0.0, 1.0);
+        }
+    }
+}

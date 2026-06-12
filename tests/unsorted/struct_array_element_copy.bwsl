@@ -1,0 +1,53 @@
+// Test: Whole-struct copies through array elements
+// Tests: struct assignment between array slots, swap via a temporary,
+//        passing an indexed struct element to a function, copy independence
+
+pipeline StructArrayElementCopy {
+    attributes {
+        position: float3
+    }
+
+    struct Particle {
+        float3 pos;
+        float life;
+    }
+
+    fade :: (Particle p) -> float {
+        return p.life * 0.5;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            Particle[3] parts;
+            parts[0].pos = attributes.position;
+            parts[0].life = 1.0;
+            parts[1].pos = attributes.position * 2.0;
+            parts[1].life = 2.0;
+            parts[2].pos = float3(0.0, 0.0, 0.0);
+            parts[2].life = 4.0;
+
+            // Whole-struct copy between elements
+            parts[2] = parts[0];
+
+            // Swap two elements through a temporary
+            Particle tmp = parts[0];
+            parts[0] = parts[1];
+            parts[1] = tmp;
+
+            // Copy independence: mutating the source must not affect the copy
+            parts[0].life = 8.0;
+            float copied = parts[1].life;   // still 1.0 from original parts[0]
+
+            // Indexed element as a call argument
+            float faded = fade(parts[2]);
+
+            int di = int(attributes.position.x) % 3;
+            float dyn = parts[di].life;
+
+            output.position = float4(attributes.position,
+                copied + faded + dyn + parts[2].pos.x);
+        }
+    }
+}

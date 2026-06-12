@@ -1,0 +1,17 @@
+// Wrong-accept: a five-component swizzle (`v.xyzxy`) compiles without
+// diagnostics even though swizzles are defined for 1-4 components
+// (docs/spec/04-expressions.md); the extra components are silently dropped.
+pipeline WrongAcceptSwizzleTooLong {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float4 v = float4(attributes.position, 1.0);
+            output.position = float4(v.xyzxy.x, 0.0, 0.0, 1.0);
+        }
+    }
+}

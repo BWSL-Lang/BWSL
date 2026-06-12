@@ -220,6 +220,14 @@ ERROR_CASE_TESTS = {
     "ternary_branch_type_mismatch.bwsl": "SPIR-V validation failed",
     "bool_assigned_to_float.bwsl": "SPIR-V validation failed",
     "unknown_struct_field.bwsl": "SPIR-V validation failed",
+    "shared_in_fragment.bwsl": "shared variables are only allowed in compute shaders",
+    "struct_unknown_field_type.bwsl": "Unknown field type 'Missing'",
+    "unknown_enum_variant.bwsl": "Unknown enum variant 'Missing'",
+    "array_size_negative.bwsl": "Expected array size",
+    "discard_in_vertex.bwsl": "SPIR-V validation failed",
+    "switch_on_float.bwsl": "SPIR-V validation failed",
+    "user_function_wrong_arg_count.bwsl": "SPIR-V validation failed",
+    "struct_as_varying.bwsl": "SPIR-V validation failed",
 }
 
 ERROR_CASE_MODULE_DIRS = {

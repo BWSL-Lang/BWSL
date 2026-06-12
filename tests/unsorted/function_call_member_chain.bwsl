@@ -1,0 +1,53 @@
+// Test: Postfix access on function-call results
+// Tests: struct-returning call followed by .field access, swizzle directly on
+//        call results, deep nested call chains a(b(c(x)))
+
+pipeline FunctionCallMemberChain {
+    attributes {
+        position: float3
+    }
+
+    struct Light {
+        float3 dir;
+        float intensity;
+    }
+
+    makeLight :: (float3 seed) -> Light {
+        Light l;
+        l.dir = normalize(seed);
+        l.intensity = length(seed);
+        return l;
+    }
+
+    halve :: (float x) -> float {
+        return x * 0.5;
+    }
+
+    offset :: (float x) -> float {
+        return x + 1.0;
+    }
+
+    boost :: (float x) -> float {
+        return x * 4.0;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Member access directly on a call result
+            float3 d = makeLight(attributes.position).dir;
+            float i = makeLight(attributes.position * 2.0).intensity;
+
+            // Swizzle on a call result, then further swizzle
+            float2 sw = normalize(attributes.position).xy;
+            float one = float4(attributes.position, 1.0).wzyx.x;
+
+            // Nested call chain
+            float chained = boost(offset(halve(attributes.position.x)));
+
+            output.position = float4(attributes.position,
+                d.x + i + sw.y + one + chained);
+        }
+    }
+}

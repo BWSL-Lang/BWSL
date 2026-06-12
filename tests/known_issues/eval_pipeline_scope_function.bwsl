@@ -1,0 +1,29 @@
+// Known issue: docs/spec/05-statements-and-control-flow.md lists "eval
+// function declarations" as a supported eval form, but an `eval name :: ...`
+// declaration at pipeline scope is not callable anywhere: in an eval
+// initializer the call is "not a compile-time value", and in runtime code it
+// is "Function not found". Only enum-method eval functions work today.
+pipeline EvalPipelineScopeFunction {
+    attributes {
+        position: float3
+    }
+
+    eval taps :: (int quality) -> int {
+        return quality * 2 + 1;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            eval int count = taps(2);
+
+            float sum = 0.0;
+            eval for (i in 0..count) {
+                sum += 0.5;
+            }
+
+            output.position = float4(attributes.position, sum);
+        }
+    }
+}

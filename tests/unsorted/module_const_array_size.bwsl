@@ -1,0 +1,52 @@
+// Test: Module-qualified constants in compile-time size and bound positions
+// Tests: Module::CONST as local array size, struct field array size,
+//        range-loop bound, and plain expression use of the same constant
+
+module SizeDefs {
+    const int KERNEL = 5;
+    const int BONES = 8;
+}
+
+pipeline ModuleConstArraySize {
+    import SizeDefs
+
+    attributes {
+        position: float3
+    }
+
+    struct Skin {
+        mat4[SizeDefs::BONES] bones;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Module constant as a local array size
+            float[SizeDefs::KERNEL] weights;
+            for (i in 0..SizeDefs::KERNEL) {
+                weights[i] = float(i) * 0.5;
+            }
+
+            float sum = 0.0;
+            for (i in 0..SizeDefs::KERNEL) {
+                sum += weights[i];
+            }
+
+            // Struct field sized by a module constant
+            Skin skin;
+            skin.bones[0] = mat4(
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0
+            );
+            float4 p = skin.bones[0] * float4(attributes.position, 1.0);
+
+            // Same constant in a plain expression
+            sum += float(SizeDefs::KERNEL) * 0.125;
+
+            output.position = p + float4(0.0, 0.0, 0.0, sum * 0.0);
+        }
+    }
+}

@@ -1,0 +1,49 @@
+// Test: Texture query intrinsics
+// Tests: texture_size with and without explicit lod, texture_levels,
+//        queries on cube and 3D textures, query results in uv normalization
+
+pipeline TextureQuerySizeLevels {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    resources {
+        colorTex: texture2D
+        envMap: textureCube
+        volume: texture3D
+        colorSampler: sampler
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+        use resources { colorTex, envMap, volume, colorSampler }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            // Base-level size and explicit-lod size
+            int2 size = texture_size(resources.colorTex);
+            int2 mipSize = texture_size(resources.colorTex, 2);
+            int levels = texture_levels(resources.colorTex);
+
+            // Queries on cube and 3D textures (current result type is int2)
+            int2 cubeSize = texture_size(resources.envMap);
+            int2 volumeSize = texture_size(resources.volume);
+            int cubeLevels = texture_levels(resources.envMap);
+
+            // Normalize a pixel coordinate by the queried size
+            float2 texel = float2(1.0, 1.0) / float2(float(size.x), float(size.y));
+            float2 uv = input.uv + texel * 0.5;
+
+            float4 c = sample(resources.colorTex, resources.colorSampler, uv);
+            float lodInfo = float(levels + cubeLevels)
+                + float(mipSize.x + mipSize.y)
+                + float(cubeSize.x + volumeSize.y);
+            output.color = c + float4(0.0, 0.0, 0.0, lodInfo * 0.0001);
+        }
+    }
+}

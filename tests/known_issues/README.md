@@ -1,9 +1,60 @@
 # Known Issues
 
 Minimized reproductions of compiler bugs found while extending the test
-suite (2026-06-11). These files are **not** picked up by `tests/run_tests.py`
-— they are kept here so each bug has a ready-made repro and can be promoted
-into `tests/unsorted/` (or `tests/equivalence/`) the moment it is fixed.
+suite (2026-06-11, extended 2026-06-12). These files are **not** picked up by
+`tests/run_tests.py` — they are kept here so each bug has a ready-made repro
+and can be promoted into `tests/unsorted/` (or `tests/equivalence/`) the
+moment it is fixed.
+
+## Open issues
+
+Each repro file carries a comment header with the full details. Summary:
+
+Miscompiles and wrong rejections:
+
+- `range_descending_never_runs.bwsl` — descending range loops
+  (`for (i in 8..0 by -2)`) keep the ascending `<` comparison, so the body
+  silently never executes.
+- `resources_array_type_invalid_spirv.bwsl` — a directly array-typed resource
+  (`weights: float4[8]`) produces invalid SPIR-V when indexed; struct-wrapped
+  arrays work.
+- `range_keyword_identifier.bwsl` — `range` lexes as a dead RANGE token the
+  parser never consumes, so it cannot be used as an identifier (same class as
+  the fixed `it` keyword, issue 2).
+- `free_function_pattern_arms.bwsl` — spec says ordinary functions support
+  enum pattern-match arm bodies; the parser rejects them (enum methods only).
+- `pointer_function_param.bwsl` — a function with a pointer parameter parses
+  but is never registered; calls fail with "Function not found".
+- `eval_pipeline_scope_function.bwsl` — pipeline-scope `eval fn :: ...`
+  declarations parse but are callable neither at comptime nor at runtime.
+- `enum_negative_explicit_value.bwsl` — `= -1` enum values are rejected
+  ("Expected constant value after '='").
+- `switch_negative_case_label.bwsl` — `case -3:` is rejected ("switch case
+  values must be compile-time literals").
+- `mat3_from_mat4.bwsl`, `sample_implicit_lod_vertex.bwsl`,
+  `scalar_varying_store.bwsl`, `vec_compare_scalar_bool.bwsl` — earlier
+  repros, see file headers.
+
+Wrong-accepts (invalid programs that compile without diagnostics):
+
+- `wrong_accept_assign_to_input.bwsl` — stores to `input.*` (varyings and
+  built-ins) are silently dropped from the emitted SPIR-V.
+- `wrong_accept_duplicate_enum_member.bwsl` — duplicate enum member names.
+- `wrong_accept_duplicate_struct_field.bwsl` — duplicate struct field names.
+- `wrong_accept_duplicate_pass_name.bwsl` — duplicate pass names; outputs
+  clobber each other on disk.
+- `wrong_accept_enum_payload_arity.bwsl` — payload variant constructed with
+  too many arguments; extras silently ignored.
+- `wrong_accept_swizzle_mixed_sets.bwsl` — mixed xyzw/rgba swizzle (`v.xg`),
+  which the spec calls invalid.
+- `wrong_accept_swizzle_too_long.bwsl` — five-component swizzle (`v.xyzxy`).
+- `wrong_accept_use_attributes_duplicate.bwsl` — duplicate names in
+  `use attributes`.
+- `wrong_accept_array_oob_const.bwsl`, `wrong_accept_attribute_write.bwsl`,
+  `wrong_accept_break_outside_loop.bwsl`, `wrong_accept_const_reassign.bwsl`,
+  `wrong_accept_duplicate_params.bwsl`, `wrong_accept_missing_return.bwsl`,
+  `wrong_accept_swizzle_dup_write.bwsl`, `wrong_accept_vec_ctor_arity.bwsl` —
+  earlier repros, see file headers.
 
 Each repro compiles with:
 

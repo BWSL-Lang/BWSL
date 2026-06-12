@@ -1,0 +1,16 @@
+// Error case: negative array sizes are rejected at parse time.
+pipeline ArraySizeNegative {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float[-4] a;
+            a[0] = 1.0;
+            output.position = float4(attributes.position, a[0]);
+        }
+    }
+}

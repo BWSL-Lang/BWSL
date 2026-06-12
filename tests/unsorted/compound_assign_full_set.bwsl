@@ -1,0 +1,64 @@
+// Test: Full compound-assignment operator set
+// Tests: %=, <<=, >>=, &=, |=, ^= on scalars (previously untested),
+//        compound assignment to array elements, struct fields, and swizzles
+
+pipeline CompoundAssignFullSet {
+    attributes {
+        position: float3
+    }
+
+    struct Accum {
+        int bits;
+        float3 vec;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int i = 0x3C;
+            i %= 7;
+            i <<= 2;
+            i >>= 1;
+            i &= 0x0F;
+            i |= 0x30;
+            i ^= 0x05;
+
+            uint u = 0xF0F0u;
+            u >>= 4u;
+            u &= 0xFFu;
+            u ^= 0xAAu;
+            u |= 0x100u;
+            u <<= 1u;
+            u %= 1000u;
+
+            // Compound assignment through array elements
+            int[4] arr;
+            arr[0] = 3;
+            arr[1] = 5;
+            arr[0] <<= 2;
+            arr[1] |= arr[0];
+            arr[2] = 9;
+            arr[2] &= arr[1];
+
+            // Compound assignment through struct fields
+            Accum acc;
+            acc.bits = 0x11;
+            acc.bits ^= 0x10;
+            acc.vec = attributes.position;
+            acc.vec *= 2.0;
+            acc.vec /= 4.0;
+            acc.vec += float3(1.0, 1.0, 1.0);
+            acc.vec -= float3(0.5, 0.5, 0.5);
+
+            // Compound assignment to a swizzle
+            float3 v = attributes.position;
+            v.xy += float2(0.25, 0.5);
+            v.z *= 3.0;
+
+            float r = float(i + arr[0] + arr[1] + arr[2] + acc.bits)
+                + float(u) + acc.vec.x + v.x + v.y + v.z;
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

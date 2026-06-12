@@ -1,0 +1,43 @@
+// Test: Precedence interactions between shifts, comparisons, and bitwise ops
+// Tests: shift vs comparison binding (a << b < c), & vs == binding,
+//        ^ between & and |, logical && / || over bitwise results
+
+pipeline PrecedenceMixedBitwise {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int a = 2;
+            int b = 3;
+            int c = 40;
+
+            // Shifts bind tighter than comparison: (a << b) < c
+            bool cmp = a << b < c;
+
+            // Comparison binds tighter than &: (a == 2) is bool, so keep
+            // the bitwise side fully parenthesized-free on ints instead:
+            // & tighter than ^ tighter than |
+            int mixed = a & b ^ a | c;
+
+            // Equality over a bitwise result needs the precedence chain
+            // == tighter than &: a & (b == 3 ? 1 : 0) spelled directly
+            bool eq = (a & 2) == 2;
+
+            // Logical operators looser than everything bitwise
+            bool logic = cmp && eq || mixed > 40;
+
+            // Unary/postfix interplay: -a * b, ~a & mask, !cmp
+            int neg = -a * b;
+            int inv = ~a & 0xFF;
+            bool notCmp = !cmp;
+
+            float r = (cmp ? 1.0 : 0.0) + float(mixed) + (eq ? 2.0 : 0.0)
+                + (logic ? 4.0 : 0.0) + float(neg + inv) + (notCmp ? 8.0 : 0.0);
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

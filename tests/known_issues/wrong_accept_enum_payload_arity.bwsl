@@ -1,0 +1,25 @@
+// Wrong-accept: constructing a payload enum variant with the wrong number
+// of arguments (Sphere declares one float, the call passes two) compiles
+// without diagnostics; the extra argument is silently ignored.
+pipeline WrongAcceptEnumPayloadArity {
+    attributes {
+        position: float3
+    }
+
+    enum Shape {
+        Sphere(float radius),
+
+        eval size :: () -> float {
+            Sphere(r): r
+        }
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            Shape s = Shape::Sphere(1.0, 2.0);
+            output.position = float4(attributes.position, s.size());
+        }
+    }
+}

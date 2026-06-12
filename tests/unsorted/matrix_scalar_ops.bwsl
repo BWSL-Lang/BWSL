@@ -1,0 +1,47 @@
+// Test: Matrix arithmetic beyond mat*vec and mat*mat
+// Tests: matrix +/- matrix, scalar * matrix, matrix * scalar, matrix / scalar,
+//        unary negation of matrices, column access combined with arithmetic
+
+pipeline MatrixScalarOps {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            mat3 a = mat3(
+                1.0, 0.0, 0.0,
+                0.0, 2.0, 0.0,
+                0.0, 0.0, 3.0
+            );
+            mat3 b = mat3(
+                0.5, 0.0, 0.0,
+                0.0, 0.5, 0.0,
+                0.0, 0.0, 0.5
+            );
+
+            mat3 sum = a + b;
+            mat3 diff = a - b;
+            mat3 scaledL = 2.0 * a;
+            mat3 scaledR = b * 4.0;
+            mat3 halved = a / 2.0;
+            mat3 neg = -a;
+
+            mat2 m2 = mat2(1.0, 2.0, 3.0, 4.0);
+            mat2 m2x = (m2 + m2) * 0.5;
+
+            float3 v = attributes.position;
+            float3 r = sum * v + diff * v + scaledL * v
+                + scaledR * v + halved * v + neg * v;
+            float2 r2 = m2x * v.xy;
+
+            // Column access arithmetic
+            float3 col = a[1] + b[2];
+
+            output.position = float4(attributes.position,
+                r.x + r.y + r.z + r2.x + r2.y + col.y);
+        }
+    }
+}

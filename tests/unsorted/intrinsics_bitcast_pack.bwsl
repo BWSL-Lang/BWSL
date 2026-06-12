@@ -1,0 +1,55 @@
+// Test: Bit-level intrinsics with no prior coverage
+// Tests: asfloat/asint/asuint bitcasts (scalar and vector),
+//        bitfield_extract/bitfield_insert, pack/unpack half and snorm/unorm
+
+pipeline IntrinsicsBitcastPack {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Round-trip bitcasts: float -> uint -> float, float -> int -> float
+            float f = attributes.position.x;
+            uint ubits = asuint(f);
+            int ibits = asint(f);
+            float fu = asfloat(ubits);
+            float fi = asfloat(ibits);
+
+            // Vector bitcasts
+            float3 v = attributes.position;
+            uint3 vbits = asuint(v);
+            float3 vback = asfloat(vbits);
+
+            // Bitfield extract/insert
+            uint packed = 0xDEADBEEFu;
+            uint field = bitfield_extract(packed, 8, 16);
+            uint replaced = bitfield_insert(packed, 0x55u, 4, 8);
+            int sfield = bitfield_extract(-256, 4, 8);
+
+            // Half packing round trip
+            uint h = pack_half2x16(float2(1.5, -0.25));
+            float2 hv = unpack_half2x16(h);
+
+            // Scalar half conversion round trip
+            uint h16 = f32tof16(2.5);
+            float h32 = f16tof32(h16);
+
+            // Snorm and unorm packing round trips
+            uint sn2 = pack_snorm2x16(float2(-1.0, 0.5));
+            float2 sn2v = unpack_snorm2x16(sn2);
+            uint sn4 = pack_snorm4x8(float4(-1.0, -0.5, 0.5, 1.0));
+            float4 sn4v = unpack_snorm4x8(sn4);
+            uint un2 = pack_unorm2x16(float2(0.25, 0.75));
+            float2 un2v = unpack_unorm2x16(un2);
+
+            float r = fu + fi + vback.y
+                + float(field + replaced) + float(sfield)
+                + hv.x + hv.y + h32
+                + sn2v.x + sn4v.w + un2v.x;
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

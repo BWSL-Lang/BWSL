@@ -1,0 +1,36 @@
+// Test: Float classification intrinsics
+// Tests: isnan/isinf/isfinite/isnormal on scalars, vector classification
+//        with any()/all() reductions, classification feeding select()
+
+pipeline IntrinsicsFloatClassify {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float x = attributes.position.x;
+
+            bool nan = isnan(x);
+            bool inf = isinf(x);
+            bool fin = isfinite(x);
+            bool nrm = isnormal(x);
+
+            // Vector classification reduced with any/all
+            float3 v = attributes.position;
+            bool anyNan = any(isnan(v));
+            bool allFinite = all(isfinite(v));
+
+            // Classification driving a select
+            float safe = select(0.0, x, fin);
+
+            float r = (nan ? 1.0 : 0.0) + (inf ? 2.0 : 0.0)
+                + (fin ? 4.0 : 0.0) + (nrm ? 8.0 : 0.0)
+                + (anyNan ? 16.0 : 0.0) + (allFinite ? 32.0 : 0.0)
+                + safe;
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

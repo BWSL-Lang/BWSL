@@ -1,0 +1,44 @@
+// Test: Enum explicit values with gaps and auto-continuation
+// Tests: int-typed enum mixing explicit values and auto-numbered members,
+//        value gaps, ordering comparisons, switch dispatch on enum constants
+
+pipeline EnumExplicitValuesGaps {
+    attributes {
+        position: float3
+    }
+
+    enum Tier : int {
+        Free = 0,
+        Basic,
+        Pro = 10,
+        Team,
+        Enterprise = 100
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int a = Tier::Free;
+            int b = Tier::Basic;
+            int c = Tier::Pro;
+            int d = Tier::Team;
+            int e = Tier::Enterprise;
+
+            // Ordering across explicit values and auto-continued members
+            bool ordered = a < b && b < c && c < d && d < e;
+
+            int code = int(attributes.position.x);
+            float r = 0.0;
+            switch (code) {
+                case 0: r = 1.0;
+                case 10, 11: r = 2.0;
+                case 100: r = 3.0;
+                default: r = 4.0;
+            }
+
+            output.position = float4(attributes.position,
+                r + float(a + b + c + d + e) * 0.001 + (ordered ? 1.0 : 0.0));
+        }
+    }
+}
