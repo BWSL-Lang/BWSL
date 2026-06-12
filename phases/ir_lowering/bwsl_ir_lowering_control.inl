@@ -272,20 +272,45 @@ inline void IRLowering::LowerForRange(NodeRef ref) {
     variableRegisters[iterVar.name.nameHash] = iterReg;
   }
 
+  // A compile-time negative step makes this a descending range, which must
+  // compare with > / >= instead of < / <=. Only literal and negated-literal
+  // steps are recognized; runtime-valued steps keep the ascending compare.
+  bool stepIsNegative = false;
+  if (!forLoop.step.IsNull()) {
+    NodeRef stepRef = forLoop.step;
+    if (stepRef.Type() == ASTNodeType::UNARY_OP) {
+      const UnaryOpData &stepOp = ast->GetUnaryOp(stepRef);
+      if (stepOp.op == UnaryOpType::NEGATE &&
+          stepOp.operand.Type() == ASTNodeType::LITERAL) {
+        const LiteralData &lit = ast->GetLiteral(stepOp.operand);
+        if (lit.value.type == LiteralValue::INT) {
+          stepIsNegative = lit.value.intValue > 0;
+        } else if (lit.value.type == LiteralValue::UINT) {
+          stepIsNegative = lit.value.uintValue > 0;
+        }
+      }
+    } else if (stepRef.Type() == ASTNodeType::LITERAL) {
+      const LiteralData &lit = ast->GetLiteral(stepRef);
+      stepIsNegative = lit.value.type == LiteralValue::INT && lit.value.intValue < 0;
+    }
+  }
+
   u32 loopHeader = builder.currentInstruction;
 
   // Now lower rangeEnd inside the loop header where it belongs
   u16 endReg = LowerExpression(forLoop.rangeEnd);
 
-  // Condition: iter < rangeEnd (or <= if inclusive)
+  // Condition: iter < rangeEnd (or <= if inclusive); flipped for descending
   // Use unsigned comparison for uint, signed for int
   u16 condReg = AllocateRegister();
   SetRegisterType(condReg, CoreType::BOOL); // Comparison result is BOOL
   OpCode cmpOp;
   if (isUnsigned) {
-    cmpOp = forLoop.inclusive ? OP_ULE : OP_ULT;
+    cmpOp = stepIsNegative ? (forLoop.inclusive ? OP_UGE : OP_UGT)
+                           : (forLoop.inclusive ? OP_ULE : OP_ULT);
   } else {
-    cmpOp = forLoop.inclusive ? OP_ILE : OP_ILT;
+    cmpOp = stepIsNegative ? (forLoop.inclusive ? OP_IGE : OP_IGT)
+                           : (forLoop.inclusive ? OP_ILE : OP_ILT);
   }
   builder.EmitInstruction(cmpOp, condReg, iterReg, endReg);
   if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {

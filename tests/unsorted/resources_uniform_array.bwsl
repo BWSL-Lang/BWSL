@@ -1,0 +1,35 @@
+// Test: Array-typed resources declared directly in the resources block
+// Tests: float4[N] and mat4[N] resources, constant and dynamic indexing,
+//        swizzle/multiply on indexed resource elements
+
+pipeline ResourcesUniformArray {
+    attributes {
+        position: float3
+    }
+
+    resources {
+        weights: float4[8]
+        bones: mat4[4]
+    }
+
+    pass "Main" {
+        use attributes { position }
+        use resources { weights, bones }
+
+        vertex {
+            // Constant index
+            float4 w0 = resources.weights[0];
+
+            // Dynamic index from a built-in
+            uint vid = input.vertex_id;
+            float4 wv = resources.weights[vid % 8u];
+
+            // Matrix array element applied to a position
+            float4 skinned = resources.bones[vid % 4u] * float4(attributes.position, 1.0);
+            float4 rest = resources.bones[1] * float4(attributes.position, 1.0);
+
+            output.position = skinned + rest * 0.0
+                + float4(0.0, 0.0, 0.0, w0.w + wv.x);
+        }
+    }
+}

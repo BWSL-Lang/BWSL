@@ -1,0 +1,35 @@
+pipeline EquivRangeDescending {
+
+    resources {
+        output: buffer<float>
+    }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            float sum = 0.0;
+            if (idx == 0u) {
+                // Exclusive descending: 8+6+4+2 = 20
+                for (i in 8..0 by -2) {
+                    sum += float(i);
+                }
+            } else if (idx == 1u) {
+                // Inclusive descending: 4+3+2+1 = 10
+                for (j in 4..=1 by -1) {
+                    sum += float(j);
+                }
+            } else if (idx == 2u) {
+                // Ascending control: 0+1+2+3+4 = 10
+                for (k in 0..5) {
+                    sum += float(k);
+                }
+            } else {
+                // Inclusive descending reaching zero: 10+5+0 = 15
+                for (m in 10..=0 by -5) {
+                    sum += float(m);
+                }
+            }
+            resources.output[idx] = sum;
+        }
+    }
+}

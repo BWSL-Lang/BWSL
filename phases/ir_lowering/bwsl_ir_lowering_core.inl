@@ -214,6 +214,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
          sizeof(program.bufferElementStructTypes));
   memset(program.bufferElementCoreTypes, 0,
          sizeof(program.bufferElementCoreTypes));
+  memset(program.uniformArrayLengths, 0, sizeof(program.uniformArrayLengths));
 
   // PHI fields (will be populated by SSA if needed)
   program.phiBlockIndices = nullptr;

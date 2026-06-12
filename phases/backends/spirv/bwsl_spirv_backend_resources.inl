@@ -77,6 +77,27 @@ void SPIRVBuilder::DeclareResources() {
       member_type_id = GetTypeId(uniformType);
     }
 
+    // Array-typed uniforms (e.g. "weights: float4[8]") declare member 0 as a
+    // fixed-size array of the element type with a std140-conformant stride.
+    u32 arrayLength = (ir != nullptr) ? ir->uniformArrayLengths[binding] : 0;
+    if (arrayLength > 0) {
+      u32 length_const_id = GetIntConstantId(arrayLength, true);
+      u32 array_type_id = AllocateId();
+      {
+        u32 ops[] = {array_type_id, member_type_id, length_const_id};
+        EmitToSection(&typesConstants, spv::OpTypeArray, ops, 3);
+      }
+      // std140 array stride: 16 for scalars and vectors, 16 per matrix column
+      u32 arrayStride = 16;
+      if (uniformType == CoreType::MAT2) arrayStride = 32;
+      else if (uniformType == CoreType::MAT3) arrayStride = 48;
+      else if (uniformType == CoreType::MAT4) arrayStride = 64;
+      u32 stride_ops[] = {array_type_id, spv::DecorationArrayStride,
+                          arrayStride};
+      EmitToSection(&decorations, spv::OpDecorate, stride_ops, 3);
+      member_type_id = array_type_id;
+    }
+
     // Create struct type with single member (SPIR-V requires struct for UBOs)
     u32 struct_type_id = AllocateId();
     {
@@ -91,7 +112,8 @@ void SPIRVBuilder::DeclareResources() {
     u32 offset_ops[] = {struct_type_id, 0, spv::DecorationOffset, 0};
     EmitToSection(&decorations, spv::OpMemberDecorate, offset_ops, 4);
 
-    // Matrix-specific decorations
+    // Matrix-specific decorations (also applies when member 0 is an array
+    // of matrices)
     if (IsMatrixType(uniformType)) {
       u32 col_major[] = {struct_type_id, 0, spv::DecorationColMajor};
       EmitToSection(&decorations, spv::OpMemberDecorate, col_major, 3);

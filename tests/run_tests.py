@@ -228,6 +228,8 @@ ERROR_CASE_TESTS = {
     "switch_on_float.bwsl": "SPIR-V validation failed",
     "user_function_wrong_arg_count.bwsl": "SPIR-V validation failed",
     "struct_as_varying.bwsl": "SPIR-V validation failed",
+    "assign_to_input.bwsl": "cannot assign to input.* - stage inputs are read-only",
+    "assign_to_attribute.bwsl": "cannot assign to attributes.* - vertex attributes are read-only",
 }
 
 ERROR_CASE_MODULE_DIRS = {

@@ -1,6 +1,5 @@
-// Wrong-accept: assigning to a vertex attribute (stage input) compiles
-// without diagnostics. Attributes should be read-only.
-pipeline WrongAcceptAttributeWrite {
+// Error case: vertex attributes are read-only.
+pipeline AssignToAttribute {
     attributes {
         position: float3
     }

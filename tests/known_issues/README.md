@@ -12,12 +12,6 @@ Each repro file carries a comment header with the full details. Summary:
 
 Miscompiles and wrong rejections:
 
-- `range_descending_never_runs.bwsl` — descending range loops
-  (`for (i in 8..0 by -2)`) keep the ascending `<` comparison, so the body
-  silently never executes.
-- `resources_array_type_invalid_spirv.bwsl` — a directly array-typed resource
-  (`weights: float4[8]`) produces invalid SPIR-V when indexed; struct-wrapped
-  arrays work.
 - `range_keyword_identifier.bwsl` — `range` lexes as a dead RANGE token the
   parser never consumes, so it cannot be used as an identifier (same class as
   the fixed `it` keyword, issue 2).
@@ -37,8 +31,6 @@ Miscompiles and wrong rejections:
 
 Wrong-accepts (invalid programs that compile without diagnostics):
 
-- `wrong_accept_assign_to_input.bwsl` — stores to `input.*` (varyings and
-  built-ins) are silently dropped from the emitted SPIR-V.
 - `wrong_accept_duplicate_enum_member.bwsl` — duplicate enum member names.
 - `wrong_accept_duplicate_struct_field.bwsl` — duplicate struct field names.
 - `wrong_accept_duplicate_pass_name.bwsl` — duplicate pass names; outputs
@@ -50,7 +42,7 @@ Wrong-accepts (invalid programs that compile without diagnostics):
 - `wrong_accept_swizzle_too_long.bwsl` — five-component swizzle (`v.xyzxy`).
 - `wrong_accept_use_attributes_duplicate.bwsl` — duplicate names in
   `use attributes`.
-- `wrong_accept_array_oob_const.bwsl`, `wrong_accept_attribute_write.bwsl`,
+- `wrong_accept_array_oob_const.bwsl`,
   `wrong_accept_break_outside_loop.bwsl`, `wrong_accept_const_reassign.bwsl`,
   `wrong_accept_duplicate_params.bwsl`, `wrong_accept_missing_return.bwsl`,
   `wrong_accept_swizzle_dup_write.bwsl`, `wrong_accept_vec_ctor_arity.bwsl` —
@@ -174,3 +166,46 @@ unreachable-block cleanup (issue 6) already handles.
 Coverage lives in `tests/unsorted/loop_switch_case_return.bwsl` (return in a
 middle case and in the default arm across all four loop forms, `discard` in a
 fragment-stage case, and a no-loop control case).
+
+## 8. ~~Descending range loops silently never execute~~ (FIXED)
+
+`for (i in 8..0 by -2)` lowered with the ascending `<` comparison, so the
+body ran zero times with no diagnostic. Fixed in `LowerForRange`
+(`phases/ir_lowering/bwsl_ir_lowering_control.inl`): when the `by` step is a
+compile-time negative constant (a negative literal or unary minus over a
+literal), the loop condition flips to `>` (exclusive) / `>=` (inclusive),
+using the unsigned variants for uint iterators. Runtime-valued steps keep the
+ascending compare.
+
+Coverage: `tests/unsorted/loops_range_descending.bwsl` (exclusive, inclusive,
+inclusive-to-zero, and an ascending control) and
+`tests/equivalence/test_range_descending.bwsl` with hardcoded expected sums.
+
+## 9. ~~Array-typed resources emit invalid SPIR-V~~ (FIXED)
+
+`weights: float4[8]` in a `resources {}` block dropped the `[8]` during
+resource registration, declaring the UBO as a single `float4`; indexing then
+failed validation with "Reached non-composite type while indexes still remain
+to be traversed". Fixed end to end: the parser records the element count
+(`ResourceData::arraySize`), lowering marks the resource register as a
+uniform-array pointer (`STORAGE_IS_UNIFORM_ARRAY`) so indexing goes through
+the existing `OP_STORAGE_INDEX`/`OP_STORAGE_LOAD` access-chain path with
+Uniform storage class, and the SPIR-V backend declares member 0 as
+`OpTypeArray` with a std140 `ArrayStride` (16 for scalars/vectors, 16 per
+matrix column).
+
+Coverage: `tests/unsorted/resources_uniform_array.bwsl` (float4[8] and
+mat4[4] resources, constant and dynamic indices, all backends).
+
+## 10. ~~Stores to `input.*` / `attributes.*` silently dropped~~ (FIXED)
+
+Assignments targeting the read-only `input` and `attributes` namespaces fell
+through every branch of the member-access assignment lowering and vanished
+from the emitted SPIR-V without diagnostics (covering both plain stores like
+`input.uv = ...` and swizzled stores like `input.uv.x = ...`). Fixed in
+`phases/ir_lowering/bwsl_ir_lowering_lvalues.inl` with dedicated diagnostics:
+"cannot assign to input.* - stage inputs are read-only" and
+"cannot assign to attributes.* - vertex attributes are read-only".
+
+Coverage: `tests/error_cases/assign_to_input.bwsl` and
+`tests/error_cases/assign_to_attribute.bwsl`.

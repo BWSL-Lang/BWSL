@@ -647,6 +647,14 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
           ast->GetMemberAccess(access.object);
       if (baseAccess.object.Type() == ASTNodeType::IDENTIFIER) {
         const IdentifierData &baseObj = ast->GetIdentifier(baseAccess.object);
+        if (baseObj.identifierKind == SpecialIdentifier::INPUT) {
+          ReportError("Error: cannot assign to input.* - stage inputs are read-only\n");
+          return;
+        }
+        if (baseObj.identifierKind == SpecialIdentifier::ATTRIBUTES) {
+          ReportError("Error: cannot assign to attributes.* - vertex attributes are read-only\n");
+          return;
+        }
         if (baseObj.identifierKind == SpecialIdentifier::OUTPUT) {
           u32 outputNameHash = baseAccess.member.nameHash;
           CoreType outputType = ResolveOutputTypeForLoad(outputNameHash);
@@ -772,6 +780,12 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
         builder.EmitInstruction(OP_STORE_OUTPUT, valueReg, slot);
         program.metadata[builder.currentInstruction - 1] =
             nameHash; // Keep name for debugging
+      } else if (obj.identifierKind == SpecialIdentifier::INPUT) {
+        ReportError("Error: cannot assign to input.* - stage inputs are read-only\n");
+        return;
+      } else if (obj.identifierKind == SpecialIdentifier::ATTRIBUTES) {
+        ReportError("Error: cannot assign to attributes.* - vertex attributes are read-only\n");
+        return;
       } else if (obj.identifierKind == SpecialIdentifier::NONE ||
                  obj.identifierKind == SpecialIdentifier::SELF) {
         // Struct member assignment: s.field = value
@@ -1907,6 +1921,25 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       // Uniform buffers (declared with "uniform" keyword) contain a single
       // value They emit OP_LOAD_UNIFORM to load the value directly
       builder.EmitInstruction(OP_LOAD_UNIFORM, dest, (u16)resData.bindingIndex);
+
+      // Array-typed uniforms (e.g. "weights: float4[8]") are not loaded as a
+      // whole; the register becomes a pointer to the UBO so that indexing
+      // goes through OP_STORAGE_INDEX/OP_STORAGE_LOAD access chains. The
+      // register's CoreType (set below) is the element type.
+      if (resData.arraySize > 0 && dest < MAX_REGISTERS &&
+          resData.bindingIndex < 32) {
+        program.registerStorageInfo[dest] =
+            (resData.bindingIndex << IR::IRProgram::STORAGE_BINDING_SHIFT) |
+            IR::IRProgram::STORAGE_IS_PTR |
+            IR::IRProgram::STORAGE_IS_UNIFORM_ARRAY;
+        program.uniformArrayLengths[resData.bindingIndex] = resData.arraySize;
+        CoreType elemType = static_cast<CoreType>(resData.coreType);
+        if (elemType != CoreType::VOID && elemType != CoreType::INVALID &&
+            elemType != CoreType::CUSTOM) {
+          program.bufferElementCoreTypes[resData.bindingIndex] =
+              resData.coreType;
+        }
+      }
       break;
 
     case ResourceBinding::StorageBuffer:
