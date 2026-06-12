@@ -125,6 +125,8 @@ struct VariableDeclData {
     u8 arrayDimensions;
     u32 arrayLength;
     u32 arrayElementTypeHash;
+    u32 typePosition;  // Packed line/column (AST::PackPosition) of the declared
+    u32 namePosition;  // type and the variable name; 0 when synthesized.
 };
 
 // Function call data (with ArenaArray overhead)
@@ -1249,6 +1251,8 @@ namespace ASTFactory {
         data.arrayDimensions = arrayDimensions;
         data.arrayLength = arrayLength;
         data.arrayElementTypeHash = arrayElementTypeHash;
+        data.typePosition = 0;
+        data.namePosition = 0;
         ast->variableDecls.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {
@@ -1899,7 +1903,9 @@ namespace ASTClone {
 
     // Clone a variable declaration with type substitution
     inline NodeRef CloneVariableDecl(CloneContext& ctx, NodeRef varRef) {
-        const VariableDeclData& src = ctx.ast->GetVariableDecl(varRef);
+        // Copy, not reference: cloning the initializer can push more variable
+        // decls and reallocate the array under a reference.
+        const VariableDeclData src = ctx.ast->GetVariableDecl(varRef);
         u32 line = ctx.ast->GetLine(varRef);
         u32 col = ctx.ast->GetColumn(varRef);
 
@@ -1912,6 +1918,9 @@ namespace ASTClone {
         NodeRef newVar = ASTFactory::MakeVariableDecl(ctx.ast, src.name, newType, clonedInit, src.isConst,
                                                       line, col, src.storageClass, src.arrayDimensions,
                                                       src.arrayLength, src.arrayElementTypeHash);
+        VariableDeclData& newData = ctx.ast->GetVariableDecl(newVar);
+        newData.typePosition = src.typePosition;
+        newData.namePosition = src.namePosition;
 
         return newVar;
     }
