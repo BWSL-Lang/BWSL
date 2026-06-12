@@ -99,7 +99,7 @@ using namespace BWSL;
 using namespace BWSL::IR;
 using namespace BWSL::ToolCommon;
 
-#define VERSION "0.7.5"
+#define VERSION "0.8.0"
 
 // ============= Configuration =============
 
@@ -231,7 +231,7 @@ void print_splash() {
     │ ░▒▓█ B W S L █▓▒░                   │
     │ ─────────────────────────────       │
     │ » Brawl Shading Language            │
-    │ » Compiler v 0.7.5                  │
+    │ » Compiler v 0.8.0                  │
     │ » Made by Alexander Presthus        │
     │ » https://github.com/apresthus/bwsl │
     │                                     │
