@@ -20,6 +20,23 @@ namespace BWSL {
 void AddModuleSearchPath(const std::string& path);
 void ClearModuleSearchPaths();
 
+// Cross-compilation module source cache.
+// When installed, module name resolution and disk reads consult the cache
+// first, so a module file is resolved and read at most once per batch even
+// when many compilation units import it. The cache outlives any single
+// CompilationContext; the caller owns it and keeps it alive while installed.
+struct ModuleSourceCache {
+    struct Entry {
+        bool found = false;       // false = resolution failed (negative entry)
+        std::string path;         // resolved file path
+        std::string source;       // file contents
+    };
+    // Keyed by module name + the search-path configuration in effect, since
+    // different compilation units may resolve the same name differently.
+    std::unordered_map<std::string, Entry> entries;
+};
+void SetModuleSourceCache(ModuleSourceCache* cache);
+
 struct ParseError {
     const char* message;
     u32 line;

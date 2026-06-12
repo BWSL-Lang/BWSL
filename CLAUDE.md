@@ -43,6 +43,13 @@ make clean
 ./build/bwslc shader.bwsl -glsl        # SPIR-V + GLSL 450
 ./build/bwslc shader.bwsl -gles        # SPIR-V + GLSL ES 300 (WebGL)
 ./build/bwslc shader.bwsl -modules ./modules -v  # Add module path, verbose
+
+# Batch mode: multiple files, a directory (recursive .bwsl scan), or a manifest
+# become one job list; every unit compiles and is reported together (no
+# fail-and-bail), and -errors-json emits one aggregated document.
+./build/bwslc a.bwsl b.bwsl -check
+./build/bwslc shaders/ -o out          # output mirrors subdirectories
+./build/bwslc -manifest shaders.txt    # one path per line, # comments
 ```
 
 ## Repository Layout

@@ -336,6 +336,13 @@ void ClearModuleSearchPaths() {
     g_additionalModuleSearchPaths.clear();
 }
 
+// Optional batch-shared module source cache (see bwsl_parser_soa.h).
+static ModuleSourceCache* g_moduleSourceCache = nullptr;
+
+void SetModuleSourceCache(ModuleSourceCache* cache) {
+    g_moduleSourceCache = cache;
+}
+
 namespace {
     std::string ResolveModulePath(const std::string& moduleName) {
         // Build search roots: additional paths first (highest priority), then built-in paths
