@@ -1,0 +1,17 @@
+// Error case: vector comparison assigned to a scalar bool (use all()/any()).
+pipeline VecCompareScalarBool {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float3 a = attributes.position;
+            float3 b = float3(1.0, 2.0, 3.0);
+            bool eq = a == b;
+            output.position = float4(attributes.position, eq ? 1.0 : 0.0);
+        }
+    }
+}

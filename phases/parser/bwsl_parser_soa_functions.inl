@@ -705,6 +705,26 @@ void Parser::ParseFunctionParameters(NodeRef function) {
             return;
         }
 
+        // Pointer-typed parameters parse but cannot be matched by overload
+        // resolution, so every call site would fail with a misleading
+        // "Function not found". Reject them at the declaration instead.
+        if (!paramType.empty() && paramType.back() == '^') {
+            Error("Pointer-typed function parameters are not supported");
+            return;
+        }
+
+        // A repeated parameter name would silently shadow the earlier one.
+        if (!paramName.empty()) {
+            u32 newParamHash = ArenaString::MakeHashOnly(paramName).nameHash;
+            const auto &existingParams = ast->GetFunction(function).parameters;
+            for (u32 i = 0; i < existingParams.count; i++) {
+                if (existingParams[i].first.nameHash == newParamHash) {
+                    Error("Duplicate parameter name in function declaration");
+                    return;
+                }
+            }
+        }
+
         // Add parameter to function
         ast->GetFunction(function).parameters.Push(arena,
             std::make_pair(ArenaString::MakeHashOnly(paramName),

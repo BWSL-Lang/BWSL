@@ -1,5 +1,4 @@
-// Wrong-accept: constant out-of-bounds and negative array indices compile
-// without diagnostics even though both are statically provable.
+// Error case: statically out-of-bounds constant array indices.
 pipeline WrongAcceptArrayOobConst {
     attributes {
         position: float3

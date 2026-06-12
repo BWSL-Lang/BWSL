@@ -1,0 +1,43 @@
+pipeline EquivMatrixConversion {
+
+    resources {
+        output: buffer<float>
+    }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+            mat4 m4 = mat4(
+                1.0, 2.0, 3.0, 4.0,
+                5.0, 6.0, 7.0, 8.0,
+                9.0, 10.0, 11.0, 12.0,
+                13.0, 14.0, 15.0, 16.0
+            );
+            float r = 0.0;
+            if (idx == 0u) {
+                // mat4(1.0) identity: trace = 4
+                mat4 i = mat4(1.0);
+                r = i[0].x + i[1].y + i[2].z + i[3].w
+                    + i[0].y + i[1].x;          // off-diagonals are 0
+            } else if (idx == 1u) {
+                // mat3(mat4) truncation: sum of upper-left 3x3 block
+                mat3 t = mat3(m4);
+                r = t[0].x + t[0].y + t[0].z    // 1+2+3
+                    + t[1].x + t[1].y + t[1].z  // 5+6+7
+                    + t[2].x + t[2].y + t[2].z; // 9+10+11
+            } else if (idx == 2u) {
+                // mat2(mat4) truncation: 1+2+5+6
+                mat2 t = mat2(m4);
+                r = t[0].x + t[0].y + t[1].x + t[1].y;
+            } else {
+                // mat4(mat3) extension: source block + identity elsewhere
+                mat3 src = mat3(m4);
+                mat4 e = mat4(src);
+                r = e[0].x + e[1].y + e[2].z    // 1+6+11
+                    + e[3].w                    // 1 (identity)
+                    + e[3].x + e[0].w;          // 0 + 0
+            }
+            resources.output[idx] = r;
+        }
+    }
+}

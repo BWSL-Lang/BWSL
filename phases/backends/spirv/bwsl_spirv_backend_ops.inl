@@ -481,6 +481,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       // Truncate: extract first N components using VectorShuffle
       u32 truncated = AllocateId();
       u32 wordCount = 5 + expectedSize; // OpVectorShuffle base + indices
+      if (currentFunctionSize + wordCount > currentFunctionCapacity) {
+        GrowCurrentFunction();
+      }
       currentFunction[currentFunctionSize++] =
           (wordCount << 16) | spv::OpVectorShuffle;
       currentFunction[currentFunctionSize++] = target_vec_type_id;
@@ -941,6 +944,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       if (op1_is_scalar && !op2_is_scalar) {
         // Splat op1 to vector
         u32 splatted = AllocateId();
+        if (currentFunctionSize + 3 + numComponents > currentFunctionCapacity) {
+          GrowCurrentFunction();
+        }
         currentFunction[currentFunctionSize++] =
             ((3 + numComponents) << 16) | spv::OpCompositeConstruct;
         currentFunction[currentFunctionSize++] = vec_type;
@@ -952,6 +958,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       } else if (op2_is_scalar && !op1_is_scalar) {
         // Splat op2 to vector
         u32 splatted = AllocateId();
+        if (currentFunctionSize + 3 + numComponents > currentFunctionCapacity) {
+          GrowCurrentFunction();
+        }
         currentFunction[currentFunctionSize++] =
             ((3 + numComponents) << 16) | spv::OpCompositeConstruct;
         currentFunction[currentFunctionSize++] = vec_type;
@@ -1670,6 +1679,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       result_type = vec_type;
       if (op1_is_scalar && !op2_is_scalar) {
         u32 splatted = AllocateId();
+        if (currentFunctionSize + 3 + numComponents > currentFunctionCapacity) {
+          GrowCurrentFunction();
+        }
         currentFunction[currentFunctionSize++] =
             ((3 + numComponents) << 16) | spv::OpCompositeConstruct;
         currentFunction[currentFunctionSize++] = vec_type;
@@ -1680,6 +1692,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         op1 = splatted;
       } else if (op2_is_scalar && !op1_is_scalar) {
         u32 splatted = AllocateId();
+        if (currentFunctionSize + 3 + numComponents > currentFunctionCapacity) {
+          GrowCurrentFunction();
+        }
         currentFunction[currentFunctionSize++] =
             ((3 + numComponents) << 16) | spv::OpCompositeConstruct;
         currentFunction[currentFunctionSize++] = vec_type;

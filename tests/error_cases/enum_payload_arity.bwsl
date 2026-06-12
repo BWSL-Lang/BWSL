@@ -1,6 +1,4 @@
-// Wrong-accept: constructing a payload enum variant with the wrong number
-// of arguments (Sphere declares one float, the call passes two) compiles
-// without diagnostics; the extra argument is silently ignored.
+// Error case: enum payload constructors take exactly the declared arguments.
 pipeline WrongAcceptEnumPayloadArity {
     attributes {
         position: float3

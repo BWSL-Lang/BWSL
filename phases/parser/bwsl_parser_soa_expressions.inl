@@ -671,6 +671,20 @@ NodeRef Parser::ParseFunctionCall(NodeRef function) {
             return call;
         }
 
+        // Implicit-LOD sampling needs derivatives, which vertex stages don't
+        // have; SPIR-V restricts OpImageSampleImplicitLod accordingly.
+        {
+            StdLib::Intrinsic intrinsicId =
+                static_cast<StdLib::Intrinsic>(intrinsicData.enumIndex);
+            if (currentShaderStage == ShaderStage::Vertex &&
+                (intrinsicId == StdLib::Intrinsic::SAMPLE ||
+                 intrinsicId == StdLib::Intrinsic::SAMPLE_CMP)) {
+                ErrorAtPrevious("sample() uses implicit derivatives and is not available in vertex shaders; use sample_lod() with an explicit LOD");
+                Consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
+                return call;
+            }
+        }
+
         // Validate argument count
         if (ast->GetFunctionCall(call).arguments.count < intrinsicData.minParams) {
             char msg[256];

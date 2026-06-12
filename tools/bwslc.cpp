@@ -1943,6 +1943,35 @@ CompileResult CompileShaderStage(
         return result;
     }
 
+    // Resolve pass-stage reuse (vertex = "Base".vertex): an inherited stage
+    // node only carries an empty placeholder body, so swap in the source
+    // pass's stage before lowering. Without this the reused stage compiles
+    // to an empty main() and the pass's varying interface is lost.
+    for (u32 hop = 0; shaderStageData->isInherited && hop < 8; hop++) {
+        if (pipelineRef.IsNull()) break;
+        const PipelineData& pipelineData = context.ast.GetPipeline(pipelineRef);
+        const ShaderStageData* resolved = nullptr;
+        for (u32 i = 0; i < pipelineData.passes.count; i++) {
+            const PassData& srcPass = context.ast.GetPass(pipelineData.passes[i]);
+            if (srcPass.name.nameHash != shaderStageData->inheritsFrom.nameHash) {
+                continue;
+            }
+            NodeRef srcStage = (stage == ShaderStage::Vertex)   ? srcPass.vertexShader
+                               : (stage == ShaderStage::Fragment) ? srcPass.fragmentShader
+                                                                  : srcPass.computeShader;
+            if (!srcStage.IsNull()) {
+                resolved = &context.ast.GetShaderStage(srcStage);
+            }
+            break;
+        }
+        if (!resolved) {
+            result.error = "Pass-stage reuse target not found in pipeline";
+            return result;
+        }
+        shaderStageData = resolved;
+        shaderBody = shaderStageData->body;
+    }
+
     if (verbose) {
         printf("    Lowering to IR...\n");
     }

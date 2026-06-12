@@ -1,6 +1,4 @@
-// Wrong-accept: a swizzle mixing xyzw and rgba component names (`v.xg`)
-// compiles without diagnostics. docs/spec/04-expressions.md says mixed
-// naming within one swizzle should be treated as invalid.
+// Error case: swizzles cannot mix xyzw and rgba names.
 pipeline WrongAcceptSwizzleMixedSets {
     attributes {
         position: float3

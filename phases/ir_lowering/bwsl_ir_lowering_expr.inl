@@ -1181,7 +1181,19 @@ inline u16 IRLowering::LowerBinaryOp(NodeRef ref) {
     }
   }
 
-  SetRegisterType(dest, isComparison ? CoreType::BOOL : resultType);
+  // Comparisons over vector operands are component-wise and produce a bool
+  // vector of the wider operand's width (a scalar bool otherwise).
+  CoreType comparisonType = CoreType::BOOL;
+  if (isComparison) {
+    u32 leftWidth = GetVectorDimension(leftType);
+    u32 rightWidth = GetVectorDimension(rightType);
+    u32 width = leftWidth > rightWidth ? leftWidth : rightWidth;
+    if (width > 1) {
+      comparisonType = GetVectorType(CoreType::BOOL, (int)width);
+    }
+  }
+
+  SetRegisterType(dest, isComparison ? comparisonType : resultType);
   return dest;
 }
 

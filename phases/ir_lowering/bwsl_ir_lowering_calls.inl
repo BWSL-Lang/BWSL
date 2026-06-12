@@ -85,6 +85,18 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       }
 
       if (variantIndex != 0xFFFFFFFF) {
+        // Extra or missing payload arguments would be silently ignored.
+        u32 expectedArgs = enumData.variants[variantIndex].associatedTypes.count;
+        if (argCount != expectedArgs) {
+          char msg[192];
+          snprintf(msg, sizeof(msg),
+                   "Error: enum variant constructor expects %u argument(s), "
+                   "got %u\n",
+                   expectedArgs, argCount);
+          ReportError(msg);
+          return 0;
+        }
+
         // Register the enum as a struct type if not already done
         u32 enumStructHash =
             LookupOrRegisterStructType(enumData.name.nameHash);
@@ -959,6 +971,125 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
                               : (numColumns == 3) ? CoreType::FLOAT3
                                                   : CoreType::FLOAT4;
 
+        // Matrix-from-matrix conversion (GLSL semantics): a smaller target
+        // truncates to the upper-left block, a larger target keeps the
+        // source block and fills the rest from the identity matrix.
+        if (argCount == 1) {
+          CoreType srcMatType = GetRegisterType(args[0]);
+          if (srcMatType == CoreType::MAT2 || srcMatType == CoreType::MAT3 ||
+              srcMatType == CoreType::MAT4) {
+            u32 srcColumns = (srcMatType == CoreType::MAT2)   ? 2
+                             : (srcMatType == CoreType::MAT3) ? 3
+                                                              : 4;
+            CoreType srcColumnType = (srcColumns == 2)   ? CoreType::FLOAT2
+                                     : (srcColumns == 3) ? CoreType::FLOAT3
+                                                         : CoreType::FLOAT4;
+            u16 columnRegs[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+            for (u32 col = 0; col < numColumns; col++) {
+              if (col < srcColumns) {
+                u16 srcCol = AllocateRegister();
+                SetRegisterType(srcCol, srcColumnType);
+                builder.EmitInstruction(OP_ARRAY_LOAD, srcCol, args[0],
+                                        EmitConstantInt(col));
+                if (numRows == srcColumns) {
+                  columnRegs[col] = srcCol;
+                } else if (numRows < srcColumns) {
+                  // Shrink the column, keeping the first numRows lanes
+                  u16 shrunk = AllocateRegister();
+                  SetRegisterType(shrunk, columnType);
+                  u32 shuffleMask = 0;
+                  for (u32 i = 0; i < numRows; i++) {
+                    shuffleMask |= (i & 0xF) << (i * 4);
+                  }
+                  builder.EmitInstruction(OP_VEC_SHUFFLE, shrunk, srcCol,
+                                          srcCol);
+                  program.metadata[builder.currentInstruction - 1] =
+                      shuffleMask;
+                  columnRegs[col] = shrunk;
+                } else {
+                  // Extend the column: source lanes, then identity padding
+                  u16 lanes[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+                  for (u32 row = 0; row < numRows; row++) {
+                    if (row < srcColumns) {
+                      u16 lane = AllocateRegister();
+                      SetRegisterType(lane, CoreType::FLOAT);
+                      builder.EmitInstruction(OP_VEC_EXTRACT, lane, srcCol,
+                                              (u16)row);
+                      lanes[row] = lane;
+                    } else {
+                      lanes[row] =
+                          builder.EmitConstant(col == row ? 1.0f : 0.0f);
+                    }
+                  }
+                  u16 extended = AllocateRegister();
+                  SetRegisterType(extended, columnType);
+                  builder.EmitInstruction(OP_VEC_CONSTRUCT, extended, lanes[0],
+                                          lanes[1], lanes[2], lanes[3]);
+                  program.metadata[builder.currentInstruction - 1] = numRows;
+                  columnRegs[col] = extended;
+                }
+              } else {
+                // Identity column beyond the source matrix
+                u16 lanes[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+                for (u32 row = 0; row < numRows; row++) {
+                  lanes[row] = builder.EmitConstant(col == row ? 1.0f : 0.0f);
+                }
+                u16 ident = AllocateRegister();
+                SetRegisterType(ident, columnType);
+                builder.EmitInstruction(OP_VEC_CONSTRUCT, ident, lanes[0],
+                                        lanes[1], lanes[2], lanes[3]);
+                program.metadata[builder.currentInstruction - 1] = numRows;
+                columnRegs[col] = ident;
+              }
+            }
+            builder.EmitInstruction(OP_MAT_CONSTRUCT, dest, columnRegs[0],
+                                    columnRegs[1], columnRegs[2],
+                                    columnRegs[3]);
+            program.metadata[builder.currentInstruction - 1] = numColumns;
+            SetRegisterType(dest, constructedType);
+            return dest;
+          }
+        }
+
+        // Single-scalar constructor builds a diagonal matrix, so that
+        // mat4(1.0) is the identity matrix (GLSL semantics).
+        if (argCount == 1) {
+          CoreType srcScalarType = GetRegisterType(args[0]);
+          if (srcScalarType == CoreType::FLOAT ||
+              srcScalarType == CoreType::INT ||
+              srcScalarType == CoreType::UINT) {
+            u16 diag = args[0];
+            if (srcScalarType != CoreType::FLOAT) {
+              u16 conv = AllocateRegister();
+              SetRegisterType(conv, CoreType::FLOAT);
+              builder.EmitInstruction(
+                  srcScalarType == CoreType::UINT ? OP_U2F : OP_I2F, conv,
+                  diag);
+              diag = conv;
+            }
+            u16 zero = builder.EmitConstant(0.0f);
+            u16 columnRegs[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+            for (u32 col = 0; col < numColumns; col++) {
+              u16 lanes[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+              for (u32 row = 0; row < numRows; row++) {
+                lanes[row] = (row == col) ? diag : zero;
+              }
+              u16 colReg = AllocateRegister();
+              SetRegisterType(colReg, columnType);
+              builder.EmitInstruction(OP_VEC_CONSTRUCT, colReg, lanes[0],
+                                      lanes[1], lanes[2], lanes[3]);
+              program.metadata[builder.currentInstruction - 1] = numRows;
+              columnRegs[col] = colReg;
+            }
+            builder.EmitInstruction(OP_MAT_CONSTRUCT, dest, columnRegs[0],
+                                    columnRegs[1], columnRegs[2],
+                                    columnRegs[3]);
+            program.metadata[builder.currentInstruction - 1] = numColumns;
+            SetRegisterType(dest, constructedType);
+            return dest;
+          }
+        }
+
         // Check if arguments are already column vectors (e.g., mat4(vec4,
         // vec4, vec4, vec4))
         bool argsAreColumnVectors = (argCount == numColumns);
@@ -1011,6 +1142,34 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         program.metadata[builder.currentInstruction - 1] = numColumns;
         SetRegisterType(dest, constructedType);
       } else {
+        // Validate component arity: a single scalar splats and a single
+        // wider vector truncates; any other argument list must cover the
+        // target component count exactly. Without this, float4(1.0, 2.0,
+        // 3.0) silently zero-pads the missing lane.
+        {
+          u32 targetWidth = GetVectorDimension(constructedType);
+          u32 providedComponents = 0;
+          for (u32 i = 0; i < argCount; i++) {
+            providedComponents += GetVectorDimension(GetRegisterType(args[i]));
+          }
+          bool validArity;
+          if (argCount == 1) {
+            validArity = providedComponents == 1 ||
+                         providedComponents >= targetWidth;
+          } else {
+            validArity = providedComponents == targetWidth;
+          }
+          if (targetWidth > 1 && !validArity) {
+            char msg[160];
+            snprintf(msg, sizeof(msg),
+                     "Error: vector constructor expects %u components, got "
+                     "%u\n",
+                     targetWidth, providedComponents);
+            ReportError(msg);
+            return 0;
+          }
+        }
+
         // Vector type constructor - emit OP_VEC_CONSTRUCT with up to 4
         // operands Use 0xFFFF as sentinel for unused operands
         u16 op0 = argCount > 0 ? args[0] : 0xFFFF;

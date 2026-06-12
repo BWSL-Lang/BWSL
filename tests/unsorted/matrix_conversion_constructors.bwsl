@@ -1,0 +1,48 @@
+// Test: Matrix-from-matrix and diagonal matrix constructors
+// Tests: mat3(mat4)/mat2(mat4)/mat2(mat3) truncation, mat4(mat3)/mat3(mat2)
+//        identity extension, mat4(1.0)/mat3(s)/mat2(s) diagonal construction
+// Regression test for: mat3(mat4) emitting invalid OpCompositeConstruct and
+// mat4(1.0) silently building a non-identity matrix
+
+pipeline MatrixConversionConstructors {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            // Diagonal constructors: mat4(1.0) must be the identity
+            mat4 identity = mat4(1.0);
+            mat3 scale3 = mat3(2.0);
+            mat2 scale2 = mat2(0.5);
+
+            // Truncation keeps the upper-left block
+            mat4 m4 = mat4(
+                1.0, 2.0, 3.0, 4.0,
+                5.0, 6.0, 7.0, 8.0,
+                9.0, 10.0, 11.0, 12.0,
+                13.0, 14.0, 15.0, 16.0
+            );
+            mat3 t3 = mat3(m4);
+            mat2 t2 = mat2(m4);
+            mat2 t2b = mat2(t3);
+
+            // Extension fills the rest from the identity matrix
+            mat4 e4 = mat4(t3);
+            mat3 e3 = mat3(t2);
+
+            float3 p = attributes.position;
+            float4 hp = float4(p, 1.0);
+
+            float4 a = identity * hp;
+            float3 b = scale3 * p + t3 * p + e3 * p;
+            float2 c = scale2 * p.xy + t2 * p.xy + t2b * p.xy;
+            float4 d = e4 * hp;
+
+            output.position = a + d * 0.0
+                + float4(b, 0.0) * 0.0 + float4(c, 0.0, 0.0) * 0.0;
+        }
+    }
+}

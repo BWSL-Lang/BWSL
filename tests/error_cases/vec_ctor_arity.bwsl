@@ -1,6 +1,4 @@
-// Wrong-accept: float4 constructed from only three components compiles
-// without diagnostics and silently zero-pads the missing lane:
-//   %13 = OpCompositeConstruct %v4float %float_1 %float_2 %float_3 %float_0
+// Error case: vector constructors must cover the component count exactly.
 pipeline WrongAcceptVecCtorArity {
     attributes {
         position: float3

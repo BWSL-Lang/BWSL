@@ -1,8 +1,8 @@
-// Known issue: negative switch case labels (`case -3:`) are rejected with
-// "switch case values must be compile-time literals" — the case-label parser
-// does not fold a unary minus over an integer literal. `-3` is a
-// compile-time constant and should be a valid label.
-pipeline SwitchNegativeCaseLabel {
+// Test: Negative switch case labels
+// Tests: single negative labels, negative values in multi-value case arms
+// Regression test for: `case -3:` rejected as a non-compile-time literal
+
+pipeline SwitchNegativeLabels {
     attributes {
         position: float3
     }
@@ -15,7 +15,9 @@ pipeline SwitchNegativeCaseLabel {
             float r = 0.0;
             switch (code) {
                 case -3: r = 1.0;
-                default: r = 2.0;
+                case 2, -7: r = 2.0;
+                case 0: r = 3.0;
+                default: r = 4.0;
             }
             output.position = float4(attributes.position, r);
         }

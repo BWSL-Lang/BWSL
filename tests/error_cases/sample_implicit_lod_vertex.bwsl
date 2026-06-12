@@ -1,9 +1,4 @@
-// Known issue: `sample()` in a vertex stage emits OpImageSampleImplicitLod,
-// which SPIR-V only allows in fragment/compute-like execution models:
-//   ImplicitLod instructions require Fragment, GLCompute, ... execution model
-// Either a front-end diagnostic ("use sample_lod in vertex shaders") or an
-// automatic lowering to explicit LOD 0 is needed. `sample_lod(...)` in vertex
-// works today (covered by tests/unsorted/vertex_texture_fetch_lod.bwsl).
+// Error case: implicit-LOD sample() in a vertex stage (use sample_lod).
 pipeline SampleImplicitLodVertex {
     attributes {
         position: float3

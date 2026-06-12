@@ -549,6 +549,18 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
         }
       }
 
+      // Vector comparisons produce component-wise bool vectors; collapsing
+      // one into a scalar bool needs an explicit all()/any() reduction.
+      {
+        CoreType initType = GetRegisterType(initReg);
+        if (coreType == CoreType::BOOL &&
+            (initType == CoreType::BOOL2 || initType == CoreType::BOOL3 ||
+             initType == CoreType::BOOL4)) {
+          ReportError("Error: cannot assign a vector comparison result to a scalar bool; reduce it with all(...) or any(...)\n");
+          return;
+        }
+      }
+
       u16 storedInitReg = ConvertRegisterToType(initReg, coreType);
       builder.EmitInstruction(OP_STORE_REG, varReg, storedInitReg);
       // Propagate pointer storage info if the init expression is a pointer
@@ -627,6 +639,27 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
                                 newStructReg);
         return;
       }
+    }
+
+    // Reject writes to const declarations: block-local consts are tracked
+    // in constVariables, pipeline/pass-scope consts carry isConst in the
+    // symbol table.
+    bool targetIsConst =
+        constVariables.find(ident.name.nameHash) != constVariables.end();
+    if (!targetIsConst &&
+        variableRegisters.find(ident.name.nameHash) ==
+            variableRegisters.end()) {
+      Symbol *sym = SymbolTable::LookupByHash(
+          const_cast<SymbolTableData *>(symbols), ident.name.nameHash);
+      if (sym && ((sym->kind == SymbolKind::VARIABLE &&
+                   symbols->variables[sym->index].isConst) ||
+                  sym->kind == SymbolKind::EVAL_CONSTANT)) {
+        targetIsConst = true;
+      }
+    }
+    if (targetIsConst) {
+      ReportError("Error: cannot assign to a const declaration\n");
+      return;
     }
 
     u16 varReg = GetOrAllocateVariable(ident.name.nameHash);
@@ -713,6 +746,17 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
           u32 swizzleLen = 0;
           if (DecodeSwizzleByHash(memberHash, access.member.nameLength,
                                   swizzleIndices, &swizzleLen)) {
+            // A repeated component in a swizzle store would silently drop
+            // one of the writes.
+            for (u32 i = 0; i < swizzleLen; i++) {
+              for (u32 j = i + 1; j < swizzleLen; j++) {
+                if (swizzleIndices[i] == swizzleIndices[j]) {
+                  ReportError("Error: swizzle assignment target has duplicate components\n");
+                  return;
+                }
+              }
+            }
+
             u32 numComponents = GetVectorDimension(outputType);
             if (numComponents < 2) {
               builder.EmitInstruction(OP_STORE_OUTPUT, valueReg, slot);
@@ -897,6 +941,17 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
           if (DecodeSwizzleByHash(access.member.nameHash,
                                   access.member.nameLength, targetIdx,
                                   &swizzleLen)) {
+            // A repeated component in a swizzle store (v.xx = ...) would
+            // silently drop one of the writes.
+            for (u32 i = 0; i < swizzleLen; i++) {
+              for (u32 j = i + 1; j < swizzleLen; j++) {
+                if (targetIdx[i] == targetIdx[j]) {
+                  ReportError("Error: swizzle assignment target has duplicate components\n");
+                  return;
+                }
+              }
+            }
+
             CoreType varType = GetRegisterType(objReg);
             u32 numComponents = GetVectorDimension(varType);
             if (numComponents < 2) {
@@ -1236,6 +1291,9 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
         }
       }
     }
+    if (!CheckConstArrayIndexBounds(baseReg, indexReg)) {
+      return;
+    }
     builder.EmitInstruction(OP_ARRAY_STORE, baseReg, indexReg, valueReg);
   } else if (target.Type() == ASTNodeType::UNARY_OP) {
     // Handle dereference as lvalue: ptr^ = value
@@ -1247,6 +1305,10 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
       // Format: dest=0 (no result), s0=ptr, s1=value
       builder.EmitInstruction(OP_LOCAL_STORE, 0, ptrReg, valueReg);
     }
+  } else if (target.Type() == ASTNodeType::LITERAL) {
+    // Assignments to consts reach lowering as literal targets because
+    // compile-time constants are substituted by value before this pass.
+    ReportError("Error: cannot assign to a compile-time constant\n");
   }
 }
 
@@ -1364,6 +1426,9 @@ inline u16 IRLowering::LowerArrayAccess(NodeRef ref) {
     }
   } else {
     // Regular array load
+    if (!CheckConstArrayIndexBounds(baseReg, indexReg)) {
+      return 0;
+    }
     builder.EmitInstruction(OP_ARRAY_LOAD, dest, baseReg, indexReg);
 
     // Compute correct element type based on base type
@@ -1744,6 +1809,20 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
         CoreType scalarType = GetScalarComponentType(vectorType);
         SetRegisterType(dest, GetVectorType(scalarType, swizzleLen));
         return dest;
+      }
+    }
+
+    // Vector and scalar values only support swizzle member access, so a
+    // member that didn't decode above is invalid: mixed xyzw/rgba sets
+    // (v.xg), swizzles longer than 4 components (v.xyzxy), or unknown names.
+    {
+      CoreType objType = GetRegisterType(objectReg);
+      if (mask(objType) &
+          (TypeMasks::FLOAT_VECTORS | TypeMasks::INT_VECTORS |
+           TypeMasks::UINT_VECTORS | TypeMasks::BOOL_VECTORS |
+           TypeMasks::SCALAR_TYPES)) {
+        ReportError("Error: invalid swizzle - swizzles use 1-4 components from a single naming set (xyzw or rgba)\n");
+        return objectReg;
       }
     }
 
@@ -2236,6 +2315,20 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
         CoreType resultType = GetVectorType(scalarType, swizzleLen);
         SetRegisterType(dest, resultType);
         return dest;
+      }
+    }
+
+    // Vector and scalar values only support swizzle member access, so a
+    // member that didn't decode above is invalid: mixed xyzw/rgba sets
+    // (v.xg), swizzles longer than 4 components (v.xyzxy), or unknown names.
+    {
+      CoreType objType = GetRegisterType(objReg);
+      if (mask(objType) &
+          (TypeMasks::FLOAT_VECTORS | TypeMasks::INT_VECTORS |
+           TypeMasks::UINT_VECTORS | TypeMasks::BOOL_VECTORS |
+           TypeMasks::SCALAR_TYPES)) {
+        ReportError("Error: invalid swizzle - swizzles use 1-4 components from a single naming set (xyzw or rgba)\n");
+        return 0;
       }
     }
 

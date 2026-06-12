@@ -230,6 +230,22 @@ ERROR_CASE_TESTS = {
     "struct_as_varying.bwsl": "SPIR-V validation failed",
     "assign_to_input.bwsl": "cannot assign to input.* - stage inputs are read-only",
     "assign_to_attribute.bwsl": "cannot assign to attributes.* - vertex attributes are read-only",
+    "sample_implicit_lod_vertex.bwsl": "sample() uses implicit derivatives and is not available in vertex shaders",
+    "vec_compare_to_scalar_bool.bwsl": "cannot assign a vector comparison result to a scalar bool",
+    "pointer_function_param.bwsl": "Pointer-typed function parameters are not supported",
+    "swizzle_too_long.bwsl": "invalid swizzle - swizzles use 1-4 components",
+    "swizzle_mixed_sets.bwsl": "invalid swizzle - swizzles use 1-4 components",
+    "swizzle_duplicate_write.bwsl": "swizzle assignment target has duplicate components",
+    "duplicate_enum_member.bwsl": "Duplicate enum member name",
+    "duplicate_struct_field.bwsl": "Duplicate struct field name",
+    "duplicate_pass_name.bwsl": "Duplicate pass name in pipeline",
+    "use_attributes_duplicate.bwsl": "Duplicate attribute in 'use attributes'",
+    "duplicate_function_params.bwsl": "Duplicate parameter name in function declaration",
+    "vec_ctor_arity.bwsl": "vector constructor expects 4 components, got 3",
+    "enum_payload_arity.bwsl": "enum variant constructor expects 1 argument(s), got 2",
+    "const_reassign.bwsl": "cannot assign to a compile-time constant",
+    "break_outside_loop.bwsl": "'break' outside of a loop or switch",
+    "array_index_out_of_bounds.bwsl": "is out of bounds for array of length",
 }
 
 ERROR_CASE_MODULE_DIRS = {

@@ -1,6 +1,4 @@
-// Wrong-accept: an enum declaring the same member name twice compiles
-// without diagnostics; references to the duplicated name resolve silently
-// to one of the declarations.
+// Error case: enum member names must be unique.
 pipeline WrongAcceptDuplicateEnumMember {
     attributes {
         position: float3
