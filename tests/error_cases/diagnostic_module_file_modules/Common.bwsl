@@ -1,0 +1,6 @@
+module Common {
+    struct Render {
+        float4 transformations[9];
+        float4 mask;
+    };
+}
