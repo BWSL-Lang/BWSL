@@ -343,6 +343,13 @@ void SetModuleSourceCache(ModuleSourceCache* cache) {
     g_moduleSourceCache = cache;
 }
 
+// Optional per-job module access recorder (see bwsl_parser_soa.h).
+static ModuleAccessRecorder* g_moduleAccessRecorder = nullptr;
+
+void SetModuleAccessRecorder(ModuleAccessRecorder* recorder) {
+    g_moduleAccessRecorder = recorder;
+}
+
 namespace {
     std::string ResolveModulePath(const std::string& moduleName) {
         // Build search roots: additional paths first (highest priority), then built-in paths

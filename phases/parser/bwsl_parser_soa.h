@@ -10,6 +10,7 @@
 #include "bwsl_diagnostics.h"
 #include <cstddef>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,18 @@ struct ModuleSourceCache {
     std::unordered_map<std::string, Entry> entries;
 };
 void SetModuleSourceCache(ModuleSourceCache* cache);
+
+// Module access recorder.
+// When installed, every disk-module access made while compiling a unit is
+// recorded: resolved file paths (cache hits included) and whether any module
+// name failed to resolve. Watch mode installs one per job to learn which
+// module files a compilation unit depends on, so editing a module triggers
+// recompilation of its dependents. The caller owns the recorder.
+struct ModuleAccessRecorder {
+    std::unordered_set<std::string> modulePaths;  // resolved module file paths
+    bool hadFailedResolution = false;             // some import never resolved
+};
+void SetModuleAccessRecorder(ModuleAccessRecorder* recorder);
 
 struct ParseError {
     const char* message;

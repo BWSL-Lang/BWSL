@@ -189,7 +189,13 @@ bool LoadModuleSourceFromDisk(const std::string& moduleName,
         auto it = g_moduleSourceCache->entries.find(key);
         if (it != g_moduleSourceCache->entries.end()) {
             if (!it->second.found) {
+                if (g_moduleAccessRecorder) {
+                    g_moduleAccessRecorder->hadFailedResolution = true;
+                }
                 return false;
+            }
+            if (g_moduleAccessRecorder) {
+                g_moduleAccessRecorder->modulePaths.insert(it->second.path);
             }
             *outPath = it->second.path;
             *outSource = it->second.source;
@@ -200,11 +206,17 @@ bool LoadModuleSourceFromDisk(const std::string& moduleName,
 
     std::string modulePath = ResolveModulePath(moduleName);
     if (modulePath.empty()) {
+        if (g_moduleAccessRecorder) {
+            g_moduleAccessRecorder->hadFailedResolution = true;
+        }
         return false;
     }
 
     std::ifstream moduleFile(modulePath);
     if (!moduleFile.is_open()) {
+        if (g_moduleAccessRecorder) {
+            g_moduleAccessRecorder->hadFailedResolution = true;
+        }
         return false;
     }
 
@@ -216,6 +228,9 @@ bool LoadModuleSourceFromDisk(const std::string& moduleName,
         cached->found = true;
         cached->path = modulePath;
         cached->source = moduleSource;
+    }
+    if (g_moduleAccessRecorder) {
+        g_moduleAccessRecorder->modulePaths.insert(modulePath);
     }
 
     *outPath = std::move(modulePath);

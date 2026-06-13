@@ -1926,6 +1926,217 @@ def run_batch_mode_tests(bwslc: Path, root: Path, script_dir: Path,
     return passed, failed
 
 
+WATCH_MODULE_SOURCE = """\
+module Util {
+    const float SCALE = 2.0;
+    scaleVal :: (float v) -> float {
+        return v * SCALE;
+    }
+}
+"""
+
+WATCH_SHADER_WITH_IMPORT = """\
+pipeline WatchA {
+    import Util
+
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float s = Util::scaleVal(1.5);
+            output.position = float4(attributes.position * s, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 0.0, 0.0, 1.0);
+        }
+    }
+}
+"""
+
+WATCH_SHADER_PLAIN = """\
+pipeline {name} {{
+    attributes {{
+        position: float3
+    }}
+
+    pass "Main" {{
+        use attributes {{ position }}
+
+        vertex {{
+            output.position = float4(attributes.position, 1.0);
+        }}
+
+        fragment {{
+            output.color = float4(0.0, 1.0, 0.0, 1.0);
+        }}
+    }}
+}}
+"""
+
+
+def run_watch_mode_tests(bwslc: Path, root: Path,
+                         output_dir: Path) -> tuple[int, int]:
+    """Smoke tests for bwslc watch mode: the resident process must emit one
+    -errors-json build document per rebuild, recompile only changed units,
+    track module dependencies, and pick up files added to watched
+    directories."""
+    import signal as signal_module
+    import threading
+    import time
+
+    passed = failed = 0
+
+    def report(name: str, ok: bool, message: str = "") -> None:
+        nonlocal passed, failed
+        if ok:
+            print(f"[{GREEN}PASS{NC}] watch/{name}")
+            passed += 1
+        else:
+            print(f"[{RED}FAIL{NC}] watch/{name}")
+            if message:
+                print(f"       Error: {message}")
+            failed += 1
+
+    # Guard rail: -watch cannot be combined with --stdin.
+    result = subprocess.run(
+        [str(bwslc), "-watch", "--stdin"],
+        cwd=root, input="", stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace", timeout=60)
+    report("stdin_rejected",
+           result.returncode == 1 and "-watch" in result.stderr,
+           f"exit={result.returncode} stderr={result.stderr[:200]!r}")
+
+    # Self-contained fixture: two units, one importing a module from mods/.
+    watch_root = output_dir / "watch_mode"
+    shutil.rmtree(watch_root, ignore_errors=True)
+    shaders_dir = watch_root / "shaders"
+    mods_dir = watch_root / "mods"
+    out_dir = watch_root / "out"
+    shaders_dir.mkdir(parents=True)
+    mods_dir.mkdir()
+    out_dir.mkdir()
+    (mods_dir / "util.bwsl").write_text(WATCH_MODULE_SOURCE, encoding="utf-8")
+    shader_a = shaders_dir / "a.bwsl"
+    shader_b = shaders_dir / "b.bwsl"
+    shader_a.write_text(WATCH_SHADER_WITH_IMPORT, encoding="utf-8")
+    shader_b.write_text(WATCH_SHADER_PLAIN.format(name="WatchB"), encoding="utf-8")
+
+    proc = subprocess.Popen(
+        [str(bwslc), str(shaders_dir), "-modules", str(mods_dir),
+         "-o", str(out_dir), "-no-validate", "-errors-json",
+         "-watch", "-watch-interval", "100"],
+        cwd=root, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        text=True, encoding="utf-8", errors="replace")
+
+    # Each build event is one pretty-printed JSON document whose closing
+    # brace sits at column zero — that is the documented stream framing.
+    docs: list[dict] = []
+    docs_lock = threading.Lock()
+
+    def read_documents() -> None:
+        pending: list[str] = []
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            pending.append(line)
+            if line.rstrip("\n") == "}":
+                try:
+                    doc = json.loads("".join(pending))
+                except json.JSONDecodeError:
+                    doc = {"invalid": "".join(pending)}
+                pending = []
+                with docs_lock:
+                    docs.append(doc)
+
+    reader = threading.Thread(target=read_documents, daemon=True)
+    reader.start()
+
+    def wait_for_docs(count: int, deadline_s: float = 30.0) -> list[dict]:
+        deadline = time.monotonic() + deadline_s
+        while time.monotonic() < deadline:
+            with docs_lock:
+                if len(docs) >= count:
+                    return list(docs)
+            time.sleep(0.05)
+        with docs_lock:
+            return list(docs)
+
+    try:
+        # 1. Initial build covers every unit and resolves the module import.
+        seen = wait_for_docs(1)
+        doc = seen[0] if seen else {}
+        report("initial_build_event",
+               doc.get("event") == "build" and doc.get("buildId") == 1
+               and doc.get("watch") is True and doc.get("success") is True
+               and doc.get("fileCount") == 2,
+               f"document={doc!r}"[:400])
+
+        # 2. Breaking one unit rebuilds only that unit and reports failure.
+        shader_b.write_text(
+            WATCH_SHADER_PLAIN.format(name="WatchB") + "\nbroken {\n",
+            encoding="utf-8")
+        seen = wait_for_docs(2)
+        doc = seen[1] if len(seen) > 1 else {}
+        report("rebuild_only_changed_unit",
+               doc.get("buildId") == 2 and doc.get("success") is False
+               and doc.get("fileCount") == 1
+               and any(str(shader_b) in t for t in doc.get("trigger", []))
+               and doc.get("errorCount", 0) >= 1,
+               f"document={doc!r}"[:400])
+
+        # 3. Fixing it rebuilds and succeeds again.
+        shader_b.write_text(WATCH_SHADER_PLAIN.format(name="WatchB"),
+                            encoding="utf-8")
+        seen = wait_for_docs(3)
+        doc = seen[2] if len(seen) > 2 else {}
+        report("rebuild_after_fix",
+               doc.get("buildId") == 3 and doc.get("success") is True
+               and doc.get("fileCount") == 1,
+               f"document={doc!r}"[:400])
+
+        # 4. Editing the module recompiles its dependent (a.bwsl), not b.
+        (mods_dir / "util.bwsl").write_text(
+            WATCH_MODULE_SOURCE.replace("2.0", "3.0"), encoding="utf-8")
+        seen = wait_for_docs(4)
+        doc = seen[3] if len(seen) > 3 else {}
+        dep_files = [f.get("file", "") for f in doc.get("files", [])]
+        report("module_edit_rebuilds_dependent",
+               doc.get("fileCount") == 1 and doc.get("success") is True
+               and any(str(shader_a) in f for f in dep_files),
+               f"document={doc!r}"[:400])
+
+        # 5. A new file in the watched directory becomes a job live.
+        shader_c = shaders_dir / "c.bwsl"
+        shader_c.write_text(WATCH_SHADER_PLAIN.format(name="WatchC"),
+                            encoding="utf-8")
+        seen = wait_for_docs(5)
+        doc = seen[4] if len(seen) > 4 else {}
+        report("added_file_compiles",
+               doc.get("success") is True
+               and any(str(shader_c) in t for t in doc.get("trigger", []))
+               and (out_dir / "c.vert.spv").exists(),
+               f"document={doc!r}"[:400])
+    finally:
+        if os.name == "nt":
+            proc.terminate()
+        else:
+            proc.send_signal(signal_module.SIGINT)
+        try:
+            exit_code = proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            exit_code = proc.wait()
+
+    if os.name != "nt":
+        report("graceful_shutdown", exit_code == 0, f"exit={exit_code}")
+
+    return passed, failed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="BWSL Regression Test Runner")
     parser.add_argument("--metal", "-m", action="store_true", help="Enable Metal shader validation (macOS only)")
@@ -2589,6 +2800,10 @@ def main() -> int:
         bwslc, root, script_dir, output_dir, modules_dir)
     passed += batch_passed
     failed += batch_failed
+
+    watch_passed, watch_failed = run_watch_mode_tests(bwslc, root, output_dir)
+    passed += watch_passed
+    failed += watch_failed
 
     equiv_passed = equiv_failed = 0
     if args.equivalence:
