@@ -339,6 +339,71 @@ std::vector<std::string> SplitLines(const std::string& source) {
     return lines;
 }
 
+static bool IsVirtualDiagnosticFile(const std::string& file) {
+    return file.find("://") != std::string::npos;
+}
+
+static bool SameDiagnosticFile(const std::string& lhs, const std::string& rhs) {
+    if (lhs.empty() || rhs.empty()) return false;
+    if (lhs == rhs) return true;
+    if (IsVirtualDiagnosticFile(lhs) || IsVirtualDiagnosticFile(rhs)) return false;
+
+    std::error_code ec;
+    if (fs::equivalent(lhs, rhs, ec)) return true;
+
+    std::error_code leftEc;
+    std::error_code rightEc;
+    fs::path leftAbs = fs::absolute(lhs, leftEc);
+    fs::path rightAbs = fs::absolute(rhs, rightEc);
+    if (leftEc || rightEc) return false;
+
+    fs::path left = fs::weakly_canonical(leftAbs, leftEc);
+    fs::path right = fs::weakly_canonical(rightAbs, rightEc);
+    if (leftEc || rightEc) return false;
+    return left == right;
+}
+
+static const std::vector<std::string>* ResolveDiagnosticSourceLines(
+    const CompilerConfig& config,
+    const DiagnosticStream& diagnostics,
+    DiagnosticRef ref,
+    const std::vector<std::string>* primarySourceLines,
+    std::unordered_map<std::string, std::vector<std::string>>& sourceLineCache) {
+    std::string file = diagnostics.GetFile(ref);
+    if (file.empty() || SameDiagnosticFile(file, config.inputFile)) {
+        return primarySourceLines;
+    }
+    if (IsVirtualDiagnosticFile(file)) {
+        return nullptr;
+    }
+
+    auto existing = sourceLineCache.find(file);
+    if (existing != sourceLineCache.end()) {
+        return &existing->second;
+    }
+
+    std::string source = ReadFile(file);
+    if (source.empty()) {
+        return nullptr;
+    }
+
+    auto [it, inserted] = sourceLineCache.emplace(file, SplitLines(source));
+    (void)inserted;
+    return &it->second;
+}
+
+static const TokenStream* ResolveDiagnosticTokenStream(
+    const CompilerConfig& config,
+    const DiagnosticStream& diagnostics,
+    DiagnosticRef ref,
+    const TokenStream* primaryStream) {
+    std::string file = diagnostics.GetFile(ref);
+    if (file.empty() || SameDiagnosticFile(file, config.inputFile)) {
+        return primaryStream;
+    }
+    return nullptr;
+}
+
 bool WriteBinaryFile(const fs::path& path, const std::vector<u32>& data) {
     std::ofstream file(path, std::ios::binary);
     if (!file.is_open()) {
@@ -1428,9 +1493,16 @@ static void PrintDiagnosticsText(const CompilerConfig& config,
     fprintf(stderr, "\n");
 
     u32 shown = 0;
+    std::unordered_map<std::string, std::vector<std::string>> sourceLineCache;
     for (u32 i = 0; i < diagnostics.Count(); i++) {
         if (shown >= maxDiagnostics) break;
-        PrintDiagnosticText(config, diagnostics, i, stream, sourceLines);
+        const std::vector<std::string>* diagnosticSourceLines =
+            ResolveDiagnosticSourceLines(config, diagnostics, i,
+                                         sourceLines, sourceLineCache);
+        const TokenStream* diagnosticStream =
+            ResolveDiagnosticTokenStream(config, diagnostics, i, stream);
+        PrintDiagnosticText(config, diagnostics, i,
+                            diagnosticStream, diagnosticSourceLines);
         shown++;
     }
 
@@ -1522,6 +1594,7 @@ static std::string BuildDiagnosticsJson(const CompilerConfig& config,
     json += "  \"errorCount\": " + std::to_string(errorCount) + ",\n";
     json += "  \"warningCount\": " + std::to_string(warningCount) + ",\n";
     json += "  \"diagnostics\": [";
+    std::unordered_map<std::string, std::vector<std::string>> sourceLineCache;
 
     for (u32 i = 0; i < diagnostics.Count(); i++) {
         if (i > 0) json += ",";
@@ -1555,16 +1628,22 @@ static std::string BuildDiagnosticsJson(const CompilerConfig& config,
             AppendJsonUintField(json, "offset", diagnostics.offsets[i], first);
             AppendJsonUintField(json, "length", diagnostics.lengths[i], first);
         }
-        if (stream && diagnostics.tokens[i] != INVALID_DIAGNOSTIC_TOKEN) {
+        const TokenStream* diagnosticStream =
+            ResolveDiagnosticTokenStream(config, diagnostics, i, stream);
+        if (diagnosticStream && diagnostics.tokens[i] != INVALID_DIAGNOSTIC_TOKEN) {
             u32 token = diagnostics.tokens[i];
-            if (!stream->IsEOF(token)) {
-                std::string_view tokenValue = stream->GetValue(token);
+            if (!diagnosticStream->IsEOF(token)) {
+                std::string_view tokenValue = diagnosticStream->GetValue(token);
                 AppendJsonStringField(json, "token", std::string(tokenValue), first);
-                AppendJsonStringField(json, "tokenType", TokenTypeName(stream->GetType(token)), first);
+                AppendJsonStringField(json, "tokenType",
+                                      TokenTypeName(diagnosticStream->GetType(token)), first);
             }
         }
 
-        if (sourceLines && DiagnosticSpan::HasAll(spanFlags, DiagnosticSpan::HasLocationFlag)) {
+        const std::vector<std::string>* diagnosticSourceLines =
+            ResolveDiagnosticSourceLines(config, diagnostics, i,
+                                         sourceLines, sourceLineCache);
+        if (diagnosticSourceLines && DiagnosticSpan::HasAll(spanFlags, DiagnosticSpan::HasLocationFlag)) {
             std::vector<u32> contextLineNumbers;
             u32 line = diagnostics.lines[i];
             if (line > 1) contextLineNumbers.push_back(line - 1);
@@ -1575,11 +1654,11 @@ static std::string BuildDiagnosticsJson(const CompilerConfig& config,
             json += "      \"context\": [";
             bool firstContext = true;
             for (u32 contextLine : contextLineNumbers) {
-                if (contextLine == 0 || contextLine > sourceLines->size()) continue;
+                if (contextLine == 0 || contextLine > diagnosticSourceLines->size()) continue;
                 if (!firstContext) json += ",";
                 firstContext = false;
                 json += "\n        {\"line\": " + std::to_string(contextLine) +
-                        ", \"text\": \"" + EscapeJsonString((*sourceLines)[contextLine - 1]) + "\"}";
+                        ", \"text\": \"" + EscapeJsonString((*diagnosticSourceLines)[contextLine - 1]) + "\"}";
             }
             json += "\n      ]";
         }
@@ -3360,6 +3439,7 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
     auto parseStart = Clock::now();
     Parser parser;
     parser.Init(&lexer, &stream, &context);
+    parser.currentSourceName = config.inputFile;
 
     (void)parser.ParseDocument();
     auto parseEnd = Clock::now();

@@ -337,6 +337,7 @@ bool Parser::RegisterModuleFromSource(const std::string& moduleName,
     bool savedInShaderStage = inShaderStage;
     ShaderStage savedCurrentShaderStage = currentShaderStage;
     bool savedParsingEmbeddedModule = parsingEmbeddedModule;
+    std::string savedSourceName = currentSourceName;
 
     // Create new TokenStream and lexer for arena-persistent module source
     TokenStream moduleStream;
@@ -351,6 +352,7 @@ bool Parser::RegisterModuleFromSource(const std::string& moduleName,
     lookahead3 = INVALID_TOKEN;
     parsingEmbeddedModule =
         sourceName && strncmp(sourceName, "stdlib://", 9) == 0;
+    currentSourceName = sourceName ? sourceName : "";
 
     bool success = false;
     current = 0;
@@ -397,6 +399,7 @@ bool Parser::RegisterModuleFromSource(const std::string& moduleName,
     inShaderStage = savedInShaderStage;
     currentShaderStage = savedCurrentShaderStage;
     parsingEmbeddedModule = savedParsingEmbeddedModule;
+    currentSourceName = std::move(savedSourceName);
 
     return success;
 }

@@ -205,6 +205,7 @@ ERROR_CASE_TESTS = {
     "eval_infinite_loop.bwsl": "Infinite eval loops require an until condition",
     "array_size_zero.bwsl": "Invalid array size. Max 256k elements",
     "array_postfix_declarator.bwsl": "Array size must follow the type",
+    "imported_module_diagnostic_file.bwsl": "Array size must follow the field type",
     "attribute_unknown_decorator.bwsl": "Unknown decorator",
     "duplicate_outputs_block.bwsl": "Only one outputs block is allowed per pass",
     "duplicate_resources_block.bwsl": "Only one resources block is allowed per pipeline",
@@ -252,6 +253,14 @@ ERROR_CASE_TESTS = {
 
 ERROR_CASE_MODULE_DIRS = {
     "reserved_stdlib_module_import_conflict.bwsl": Path("tests/error_cases/stdlib_conflict_modules"),
+    "imported_module_diagnostic_file.bwsl": Path("tests/error_cases/diagnostic_module_file_modules"),
+}
+
+ERROR_CASE_EXTRA_EXPECTATIONS = {
+    "imported_module_diagnostic_file.bwsl": [
+        "diagnostic_module_file_modules/Common.bwsl",
+        "float4 transformations[9];",
+    ],
 }
 
 # Position checks against `bwslc -ast-json` output, keyed by fixture stem in
@@ -2689,6 +2698,16 @@ def main() -> int:
             if expected_error not in result.stdout:
                 print(f"[{RED}FAIL{NC}] error_cases/{test_file.stem}")
                 print(f"       Error: expected '{expected_error}' in error output, got: {result.stdout.strip()}")
+                failed += 1
+                continue
+
+            missing_expectations = [
+                expected for expected in ERROR_CASE_EXTRA_EXPECTATIONS.get(test_file.name, [])
+                if expected not in result.stdout
+            ]
+            if missing_expectations:
+                print(f"[{RED}FAIL{NC}] error_cases/{test_file.stem}")
+                print(f"       Error: expected diagnostic output to include {missing_expectations}, got: {result.stdout.strip()}")
                 failed += 1
                 continue
 

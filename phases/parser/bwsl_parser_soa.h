@@ -143,6 +143,7 @@ struct Parser {
     bool hasLookahead;
     bool has3TokenLookahead;
     DiagnosticPhase diagnosticPhase;
+    std::string currentSourceName;
 
     ArenaArray<ParseError> errors;
     u32 loopDepth;
@@ -204,6 +205,7 @@ struct Parser {
         hadError = false;
         panicMode = false;
         diagnosticPhase = DiagnosticPhase::Parse;
+        currentSourceName.clear();
         loopDepth = 0;
         functionDepth = 0;
         errors.Init(arena, 16);

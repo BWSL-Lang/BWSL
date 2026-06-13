@@ -744,7 +744,7 @@ void Parser::ErrorAt(TokenRef token, const char* message) {
                                diagnosticPhase,
                                message,
                                span,
-                               "",
+                               currentSourceName,
                                "",
                                "",
                                DiagnosticMessageId::ParseError);
