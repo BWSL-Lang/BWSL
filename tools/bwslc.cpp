@@ -33,6 +33,8 @@
 #include <memory>
 #include <functional>
 #include <unordered_set>
+#include <unordered_map>
+#include <csignal>
 #ifndef _WIN32
 #include <sys/wait.h>
 #endif
@@ -158,6 +160,8 @@ struct CompilerConfig {
     bool checkOnly = false;                // Run diagnostics without writing outputs
     bool readStdin = false;                // Read source from stdin instead of inputFile
     bool dumpVariantSpace = false;         // Dump variant schema/reflection JSON
+    bool watch = false;                    // Stay resident and recompile on change
+    int watchIntervalMs = 250;             // Poll interval for watch mode
     std::vector<VariantOverride> variantOverrides;
 };
 
@@ -265,6 +269,14 @@ void PrintUsage(const char* programName) {
     printf("                 Source path used for diagnostics/module resolution with --stdin\n");
     printf("  -pass <name>   Compile specific pass (default: all passes)\n");
     printf("  -stage <name>  Compile specific stage: vertex, fragment, compute (default: all)\n");
+    printf("  -watch         Stay resident after the initial build and recompile units\n");
+    printf("                 whenever their source or imported module files change.\n");
+    printf("                 Directory and manifest inputs are rescanned, so added and\n");
+    printf("                 removed files are picked up live. With -errors-json one\n");
+    printf("                 JSON build report is emitted per rebuild for engines that\n");
+    printf("                 drive hot reload from the compiler's stdout.\n");
+    printf("  -watch-interval <ms>\n");
+    printf("                 File polling interval for -watch (default: 250)\n");
     printf("\n");
     printf("Output artifact flags (SPIR-V is generated internally for validation/cross-compile):\n");
     printf("  -spv           Write generated SPIR-V files alongside requested artifacts\n");
@@ -2801,7 +2813,30 @@ static std::string IndentJsonBlock(const std::string& text, const char* indent) 
     return out;
 }
 
+// Normalize every configured input (positional files/directories and manifest
+// entries) into a flat job list. Watch mode calls this again on every poll
+// tick, which is what makes added/removed files and manifest edits show up
+// live.
+static bool BuildJobList(const CompilerConfig& config,
+                         std::vector<CompileJob>& jobs,
+                         std::string& error) {
+    for (const std::string& input : config.inputPaths) {
+        if (!AppendInputPathJobs(input, config.outputDir, jobs, error)) {
+            return false;
+        }
+    }
+    if (!config.manifestPath.empty() &&
+        !AppendManifestJobs(config.manifestPath, config.outputDir, jobs, error)) {
+        return false;
+    }
+    DeduplicateJobs(jobs);
+    return true;
+}
+
 static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader);
+static int RunWatchMode(const CompilerConfig& config,
+                        std::vector<CompileJob> jobs,
+                        BWSL::ModuleSourceCache& moduleSourceCache);
 
 // ============= Main Entry Point =============
 
@@ -2914,6 +2949,23 @@ int main(int argc, char* argv[]) {
             config.variantOverrides.push_back(std::move(overrideValue));
         } else if (arg == "-dump-variant-space") {
             config.dumpVariantSpace = true;
+        } else if (arg == "-watch" || arg == "--watch") {
+            config.watch = true;
+        } else if ((arg == "-watch-interval" || arg == "--watch-interval") && i + 1 < argc) {
+            config.watchIntervalMs = atoi(argv[++i]);
+            if (config.watchIntervalMs < 20) {
+                config.watchIntervalMs = 20;
+            }
+        } else if (arg == "-watch-interval" || arg == "--watch-interval") {
+            diagnostics.AddRaw(DiagnosticSeverity::Error,
+                               DiagnosticPhase::CLI,
+                               "Expected milliseconds after " + arg,
+                               DiagnosticSpan{},
+                               config.inputFile,
+                               "",
+                               "",
+                               DiagnosticMessageId::Raw);
+            return emitFailure(nullptr, nullptr, true);
         } else if (arg == "-ast-json" || arg == "--ast-json") {
             config.astJson = true;
         } else if ((arg == "-validation" || arg == "--validation") && i + 1 < argc) {
@@ -3030,18 +3082,15 @@ int main(int argc, char* argv[]) {
                            DiagnosticMessageId::Raw);
         return emitFailure(nullptr, nullptr, false);
     };
-    for (const std::string& input : config.inputPaths) {
-        if (!AppendInputPathJobs(input, config.outputDir, jobs, jobListError)) {
-            return failJobList();
-        }
-    }
-    if (!config.manifestPath.empty() &&
-        !AppendManifestJobs(config.manifestPath, config.outputDir, jobs, jobListError)) {
+    if (!BuildJobList(config, jobs, jobListError)) {
         return failJobList();
     }
-    DeduplicateJobs(jobs);
 
     if (config.readStdin) {
+        if (config.watch) {
+            jobListError = "-watch cannot be combined with --stdin";
+            return failJobList();
+        }
         if (!jobs.empty()) {
             jobListError = "--stdin cannot be combined with file, directory, or manifest inputs";
             return failJobList();
@@ -3061,18 +3110,24 @@ int main(int argc, char* argv[]) {
     }
 
     const bool batchMode = jobs.size() > 1;
-    if (batchMode && (config.astJson || config.dumpVariantSpace)) {
-        jobListError = config.astJson
-            ? "-ast-json is only supported for a single input file"
-            : "-dump-variant-space is only supported for a single input file";
+    if ((batchMode || config.watch) && (config.astJson || config.dumpVariantSpace)) {
+        const char* flagName = config.astJson ? "-ast-json" : "-dump-variant-space";
+        jobListError = std::string(flagName) +
+            (config.watch ? " cannot be combined with -watch"
+                          : " is only supported for a single input file");
         return failJobList();
     }
 
     // Share resolved module sources across every job in the batch: each
     // module file is located on disk and read at most once even when many
-    // compilation units import it.
+    // compilation units import it. Watch mode clears the cache before every
+    // rebuild cycle so edited modules are re-read.
     BWSL::ModuleSourceCache moduleSourceCache;
     BWSL::SetModuleSourceCache(&moduleSourceCache);
+
+    if (config.watch) {
+        return RunWatchMode(config, std::move(jobs), moduleSourceCache);
+    }
 
     if (!batchMode) {
         CompilerConfig jobConfig = config;
@@ -3771,4 +3826,415 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                config.inputFile);
         return fail();
     }
+}
+
+// ============= Watch Mode =============
+// Watch mode keeps the compiler resident, like a hot-reload service an
+// engine spawns once and talks to over stdout. The watched set is the batch
+// job list plus every module file the jobs were observed to import (recorded
+// via ModuleAccessRecorder during each compile), all polled by mtime+size
+// signature — portable across macOS/Linux/Windows without per-platform
+// watcher backends. Directory and manifest inputs are re-expanded every tick
+// so added and removed files become (or stop being) jobs live. Every rebuild
+// cycle emits one report: a text summary, or with -errors-json one
+// aggregated JSON document per build event (each document starts with '{'
+// and ends with '}' at column zero, so a consumer can frame the stream).
+
+static volatile std::sig_atomic_t g_watchStopRequested = 0;
+
+static void WatchSignalHandler(int) {
+    g_watchStopRequested = 1;
+}
+
+struct WatchFileSig {
+    bool exists = false;
+    long long mtime = 0;
+    unsigned long long size = 0;
+    bool operator==(const WatchFileSig&) const = default;
+};
+
+static WatchFileSig StatWatchFile(const std::string& path) {
+    WatchFileSig sig;
+    std::error_code ec;
+    fs::file_time_type mtime = fs::last_write_time(path, ec);
+    if (ec) return sig;
+    uintmax_t size = fs::file_size(path, ec);
+    if (ec) return sig;
+    sig.exists = true;
+    sig.mtime = static_cast<long long>(mtime.time_since_epoch().count());
+    sig.size = static_cast<unsigned long long>(size);
+    return sig;
+}
+
+struct WatchJobState {
+    CompileJob job;
+    WatchFileSig sourceSig;
+    std::unordered_set<std::string> moduleDeps;  // resolved module file paths
+    bool hadFailedModuleResolution = false;      // an import never resolved
+};
+
+// Sleep in small chunks so Ctrl-C / SIGTERM is honored promptly.
+// Returns false when a stop was requested.
+static bool WatchSleep(int ms) {
+    int remaining = ms;
+    while (remaining > 0) {
+        if (g_watchStopRequested) return false;
+        int chunk = std::min(remaining, 50);
+        std::this_thread::sleep_for(std::chrono::milliseconds(chunk));
+        remaining -= chunk;
+    }
+    return !g_watchStopRequested;
+}
+
+// Flat .bwsl listing of a -modules directory, used to detect added/removed
+// module files (module resolution itself probes each search root flatly).
+static std::vector<std::string> ScanModuleDirFiles(const std::string& dir) {
+    std::vector<std::string> files;
+    std::error_code ec;
+    fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
+    if (ec) return files;
+    for (const auto& entry : it) {
+        std::error_code entryEc;
+        if (entry.is_regular_file(entryEc) && HasBwslExtension(entry.path())) {
+            files.push_back(entry.path().string());
+        }
+    }
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+static std::string BuildJsonStringArray(const std::vector<std::string>& items,
+                                        const char* indent) {
+    if (items.empty()) {
+        return "[]";
+    }
+    std::string json = "[\n";
+    for (size_t i = 0; i < items.size(); i++) {
+        json += indent;
+        json += "  \"" + EscapeJsonString(items[i]) + "\"";
+        json += (i + 1 < items.size()) ? ",\n" : "\n";
+    }
+    json += indent;
+    json += "]";
+    return json;
+}
+
+struct WatchBuildStats {
+    size_t builtCount = 0;
+    size_t failedCount = 0;
+    int compiledStages = 0;
+    u32 errorCount = 0;
+    u32 warningCount = 0;
+    std::vector<std::string> fileJsons;
+    std::vector<std::string> failedFiles;
+};
+
+static void EmitWatchBuildReport(const CompilerConfig& config,
+                                 int buildId,
+                                 const std::vector<std::string>& triggers,
+                                 const std::vector<std::string>& removed,
+                                 const WatchBuildStats& stats,
+                                 double elapsedMs) {
+    const bool success = stats.failedCount == 0;
+    if (config.errorsJson) {
+        std::string json;
+        json += "{\n";
+        json += "  \"schemaVersion\": 2,\n";
+        json += "  \"tool\": \"bwslc\",\n";
+        json += "  \"version\": \"" VERSION "\",\n";
+        json += "  \"watch\": true,\n";
+        json += "  \"event\": \"build\",\n";
+        json += "  \"buildId\": " + std::to_string(buildId) + ",\n";
+        json += "  \"trigger\": " + BuildJsonStringArray(triggers, "  ") + ",\n";
+        json += "  \"removed\": " + BuildJsonStringArray(removed, "  ") + ",\n";
+        json += std::string("  \"success\": ") + (success ? "true" : "false") + ",\n";
+        json += "  \"fileCount\": " + std::to_string(stats.builtCount) + ",\n";
+        json += "  \"succeededCount\": " + std::to_string(stats.builtCount - stats.failedCount) + ",\n";
+        json += "  \"failedCount\": " + std::to_string(stats.failedCount) + ",\n";
+        json += "  \"errorCount\": " + std::to_string(stats.errorCount) + ",\n";
+        json += "  \"warningCount\": " + std::to_string(stats.warningCount) + ",\n";
+        json += "  \"elapsedMs\": " + std::to_string(elapsedMs) + ",\n";
+        json += "  \"files\": [\n";
+        for (size_t i = 0; i < stats.fileJsons.size(); i++) {
+            json += IndentJsonBlock(stats.fileJsons[i], "    ");
+            json += (i + 1 < stats.fileJsons.size()) ? ",\n" : "\n";
+        }
+        json += "  ]\n";
+        json += "}\n";
+        printf("%s", json.c_str());
+    } else {
+        printf("\n[watch] build #%d: %zu succeeded, %zu failed, "
+               "%u error(s), %u warning(s), %d stage(s) %s (%.1f ms)\n",
+               buildId,
+               stats.builtCount - stats.failedCount,
+               stats.failedCount,
+               stats.errorCount,
+               stats.warningCount,
+               stats.compiledStages,
+               config.checkOnly ? "checked" : "compiled",
+               elapsedMs);
+        for (const std::string& file : stats.failedFiles) {
+            printf("[watch]   failed: %s\n", file.c_str());
+        }
+        for (const std::string& file : removed) {
+            printf("[watch]   removed: %s\n", file.c_str());
+        }
+    }
+    fflush(stdout);
+}
+
+static int RunWatchMode(const CompilerConfig& config,
+                        std::vector<CompileJob> initialJobs,
+                        BWSL::ModuleSourceCache& moduleSourceCache) {
+    std::signal(SIGINT, WatchSignalHandler);
+#ifdef SIGTERM
+    std::signal(SIGTERM, WatchSignalHandler);
+#endif
+
+    using Clock = std::chrono::high_resolution_clock;
+
+    std::vector<WatchJobState> jobStates;
+    jobStates.reserve(initialJobs.size());
+    for (CompileJob& job : initialJobs) {
+        WatchJobState state;
+        state.job = std::move(job);
+        jobStates.push_back(std::move(state));
+    }
+
+    // Union of every job's module dependencies, each with its last seen
+    // signature. Rebuilt after every build cycle.
+    std::unordered_map<std::string, WatchFileSig> moduleSigs;
+
+    // -modules directories are also polled for added/removed module files:
+    // a new file there can shadow or newly satisfy an import anywhere, so
+    // set changes conservatively rebuild everything.
+    std::vector<std::string> moduleDirs;
+    std::vector<std::vector<std::string>> moduleDirSnapshots;
+    for (const std::string& dir : config.modulePaths) {
+        moduleDirs.push_back(fs::absolute(dir).string());
+        moduleDirSnapshots.push_back(ScanModuleDirFiles(moduleDirs.back()));
+    }
+
+    int buildId = 0;
+
+    // Compile the given jobs as one build cycle and report it. Source
+    // signatures are recorded before each compile so a file modified again
+    // mid-build is detected on the next tick (an extra rebuild, never a
+    // missed one).
+    auto runBuild = [&](const std::vector<size_t>& indices,
+                        const std::vector<std::string>& triggers,
+                        const std::vector<std::string>& removed) {
+        buildId++;
+        moduleSourceCache.entries.clear();
+        auto buildStart = Clock::now();
+
+        if (!config.errorsJson) {
+            printf("\n[watch] build #%d: %s %zu unit(s)\n",
+                   buildId, config.checkOnly ? "checking" : "compiling", indices.size());
+        }
+
+        WatchBuildStats stats;
+        stats.builtCount = indices.size();
+        for (size_t k = 0; k < indices.size(); k++) {
+            WatchJobState& state = jobStates[indices[k]];
+            state.sourceSig = StatWatchFile(state.job.inputFile);
+            if (!config.errorsJson) {
+                printf("\n[%zu/%zu] %s\n", k + 1, indices.size(), state.job.inputFile.c_str());
+            }
+            CompilerConfig jobConfig = config;
+            jobConfig.inputFile = state.job.inputFile;
+            jobConfig.outputDir = state.job.outputDir;
+            BWSL::ModuleAccessRecorder recorder;
+            BWSL::SetModuleAccessRecorder(&recorder);
+            JobOutcome outcome = CompileInputFile(std::move(jobConfig), false);
+            BWSL::SetModuleAccessRecorder(nullptr);
+            state.moduleDeps = std::move(recorder.modulePaths);
+            state.hadFailedModuleResolution = recorder.hadFailedResolution;
+
+            stats.compiledStages += outcome.compiledCount;
+            stats.errorCount += outcome.diagErrorCount;
+            stats.warningCount += outcome.diagWarningCount;
+            if (outcome.exitCode != 0) {
+                stats.failedCount++;
+                stats.failedFiles.push_back(state.job.inputFile);
+            }
+            if (config.errorsJson) {
+                stats.fileJsons.push_back(std::move(outcome.json));
+            }
+        }
+
+        // Refresh the watched module set: add signatures for newly seen
+        // dependencies, drop paths nothing depends on anymore.
+        std::unordered_map<std::string, WatchFileSig> newModuleSigs;
+        for (const WatchJobState& state : jobStates) {
+            for (const std::string& path : state.moduleDeps) {
+                auto existing = moduleSigs.find(path);
+                if (existing != moduleSigs.end()) {
+                    newModuleSigs.insert(*existing);
+                } else if (newModuleSigs.find(path) == newModuleSigs.end()) {
+                    newModuleSigs.emplace(path, StatWatchFile(path));
+                }
+            }
+        }
+        moduleSigs = std::move(newModuleSigs);
+
+        double elapsedMs =
+            std::chrono::duration<double, std::milli>(Clock::now() - buildStart).count();
+        EmitWatchBuildReport(config, buildId, triggers, removed, stats, elapsedMs);
+    };
+
+    // Initial build covers every job.
+    {
+        std::vector<size_t> allIndices(jobStates.size());
+        for (size_t i = 0; i < allIndices.size(); i++) allIndices[i] = i;
+        runBuild(allIndices, {}, {});
+    }
+
+    if (!config.errorsJson) {
+        printf("[watch] watching %zu unit(s), %zu module file(s); polling every %d ms (Ctrl-C to stop)\n",
+               jobStates.size(), moduleSigs.size(), config.watchIntervalMs);
+        fflush(stdout);
+    }
+
+    const int settleMs = std::min(config.watchIntervalMs, 100);
+    std::string lastJobListError;
+
+    while (WatchSleep(config.watchIntervalMs)) {
+        // 1. Re-expand inputs: directory rescans and manifest re-reads make
+        //    added/removed compilation units show up as job list changes.
+        std::vector<CompileJob> freshJobs;
+        std::string jobListError;
+        if (!BuildJobList(config, freshJobs, jobListError)) {
+            if (jobListError != lastJobListError) {
+                fprintf(stderr, "[watch] %s (keeping previous file set)\n", jobListError.c_str());
+                lastJobListError = jobListError;
+            }
+            freshJobs.clear();
+            for (const WatchJobState& state : jobStates) {
+                freshJobs.push_back(state.job);
+            }
+        } else {
+            lastJobListError.clear();
+        }
+
+        std::unordered_map<std::string, size_t> currentIndex;
+        for (size_t i = 0; i < jobStates.size(); i++) {
+            currentIndex.emplace(jobStates[i].job.inputFile, i);
+        }
+
+        std::vector<size_t> dirtyIndices;
+        std::unordered_set<size_t> dirtySet;
+        std::vector<std::string> triggers;
+        auto markDirty = [&](size_t index) {
+            if (dirtySet.insert(index).second) {
+                dirtyIndices.push_back(index);
+            }
+        };
+
+        // 2. Added and removed jobs.
+        std::unordered_set<std::string> freshKeys;
+        bool jobsAdded = false;
+        for (CompileJob& job : freshJobs) {
+            freshKeys.insert(job.inputFile);
+            if (currentIndex.find(job.inputFile) == currentIndex.end()) {
+                WatchJobState state;
+                state.job = std::move(job);
+                triggers.push_back(state.job.inputFile);
+                jobStates.push_back(std::move(state));
+                markDirty(jobStates.size() - 1);
+                jobsAdded = true;
+            }
+        }
+        std::vector<std::string> removed;
+        if (freshKeys.size() != jobStates.size()) {
+            std::vector<WatchJobState> keptStates;
+            keptStates.reserve(jobStates.size());
+            std::vector<size_t> remappedDirty;
+            for (size_t i = 0; i < jobStates.size(); i++) {
+                if (freshKeys.count(jobStates[i].job.inputFile) == 0) {
+                    removed.push_back(jobStates[i].job.inputFile);
+                    continue;
+                }
+                if (dirtySet.count(i)) {
+                    remappedDirty.push_back(keptStates.size());
+                }
+                keptStates.push_back(std::move(jobStates[i]));
+            }
+            jobStates = std::move(keptStates);
+            dirtyIndices = std::move(remappedDirty);
+            dirtySet = std::unordered_set<size_t>(dirtyIndices.begin(), dirtyIndices.end());
+        }
+
+        // 3. Changed compilation units.
+        for (size_t i = 0; i < jobStates.size(); i++) {
+            WatchFileSig sig = StatWatchFile(jobStates[i].job.inputFile);
+            if (!(sig == jobStates[i].sourceSig)) {
+                if (dirtySet.count(i) == 0) {
+                    triggers.push_back(jobStates[i].job.inputFile);
+                }
+                markDirty(i);
+            }
+        }
+
+        // 4. Changed or deleted module files dirty their dependents.
+        for (auto& [path, lastSig] : moduleSigs) {
+            WatchFileSig sig = StatWatchFile(path);
+            if (sig == lastSig) continue;
+            lastSig = sig;
+            triggers.push_back(path);
+            for (size_t i = 0; i < jobStates.size(); i++) {
+                if (jobStates[i].moduleDeps.count(path)) {
+                    markDirty(i);
+                }
+            }
+        }
+
+        // 5. Added/removed files in -modules directories can shadow or newly
+        //    satisfy any import; rebuild everything on a set change.
+        bool moduleDirSetChanged = false;
+        for (size_t d = 0; d < moduleDirs.size(); d++) {
+            std::vector<std::string> snapshot = ScanModuleDirFiles(moduleDirs[d]);
+            if (snapshot != moduleDirSnapshots[d]) {
+                moduleDirSnapshots[d] = std::move(snapshot);
+                moduleDirSetChanged = true;
+            }
+        }
+        if (moduleDirSetChanged) {
+            triggers.push_back("<module directory change>");
+            for (size_t i = 0; i < jobStates.size(); i++) {
+                markDirty(i);
+            }
+        } else if (jobsAdded) {
+            // A new unit in a watched directory may also be the module an
+            // earlier unit failed to import (each unit's directory is a
+            // module search root), so retry those.
+            for (size_t i = 0; i < jobStates.size(); i++) {
+                if (jobStates[i].hadFailedModuleResolution) {
+                    markDirty(i);
+                }
+            }
+        }
+
+        if (dirtyIndices.empty() && removed.empty()) {
+            continue;
+        }
+
+        // Let editors finish multi-step saves before reading the files.
+        if (!WatchSleep(settleMs)) {
+            break;
+        }
+
+        std::sort(dirtyIndices.begin(), dirtyIndices.end());
+        if (!config.errorsJson) {
+            for (const std::string& trigger : triggers) {
+                printf("[watch] change: %s\n", trigger.c_str());
+            }
+        }
+        runBuild(dirtyIndices, triggers, removed);
+    }
+
+    if (!config.errorsJson) {
+        printf("\n[watch] stopped\n");
+    }
+    return 0;
 }
