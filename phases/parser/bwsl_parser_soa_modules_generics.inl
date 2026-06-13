@@ -16,7 +16,10 @@ NodeRef Parser::ParseModule() {
     u32 col = loc.column;
 
     // Note: MODULE token already consumed by caller
-    Consume(TokenType::IDENTIFIER, "Expected module name");
+    if (!Consume(TokenType::IDENTIFIER, "Expected module name")) {
+        SkipBracedDeclaration(true);
+        return NodeRef::Null();
+    }
 
     std::string moduleName(stream->GetValue(previous));
     ArenaString moduleNameArena = ArenaString::MakeHashOnly(moduleName);
@@ -41,7 +44,13 @@ NodeRef Parser::ParseModule() {
     // subsequent struct/enum/function parsing doesn't OOB-read modules[].
     u32 moduleIndex = SymbolTable::AddModule(&symbolTable, moduleNameArena);
     if (moduleIndex == INVALID_INDEX) {
-        Error("Duplicate module declaration");
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "Duplicate module declaration for '%s'",
+                 moduleName.c_str());
+        ErrorAtPrevious(msg);
+        SkipBracedDeclaration(true);
+        return NodeRef::Null();
     } else {
         symbolTable.currentModuleIndex = moduleIndex;
         symbolTable.inModuleScope = true;

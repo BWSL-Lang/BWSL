@@ -208,6 +208,7 @@ ERROR_CASE_TESTS = {
     "attribute_unknown_decorator.bwsl": "Unknown decorator",
     "duplicate_outputs_block.bwsl": "Only one outputs block is allowed per pass",
     "duplicate_resources_block.bwsl": "Only one resources block is allowed per pipeline",
+    "duplicate_module_name.bwsl": "Duplicate module declaration for 'DuplicateModuleName'",
     "num_workgroups_wrong_stage.bwsl": "input.num_workgroups is only available in compute shaders",
     "vertex_function_wrong_block.bwsl": "Expected 'vertex' block in vertex_function",
     "use_before_declaration.bwsl": "Unknown identifier 'lateVar'",

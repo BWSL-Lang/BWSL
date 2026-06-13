@@ -1,0 +1,28 @@
+module DuplicateModuleName {
+    first :: () -> float {
+        return 1.0;
+    }
+}
+
+module DuplicateModuleName {
+    second :: () -> float {
+        return 2.0;
+    }
+}
+
+pipeline DuplicateModuleNamePipeline {
+    import DuplicateModuleName
+
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float value = DuplicateModuleName::first();
+            output.position = float4(attributes.position * value, 1.0);
+        }
+    }
+}
