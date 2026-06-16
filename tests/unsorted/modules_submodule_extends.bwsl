@@ -1,0 +1,25 @@
+// Test: submodule declarations extend the parent module namespace.
+// Tests: parent import exposes declarations parsed from separate submodule files.
+
+pipeline ModulesSubmoduleExtends {
+    attributes {
+        position: float3
+    }
+
+    import SubmoduleParent
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float parentValue = SubmoduleParent::baseValue(1.0);
+            float submoduleValue = SubmoduleParent::extraValue(parentValue);
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            float color = SubmoduleParent::moreValue(1.0) * 0.1;
+            output.color = float4(color, 0.0, 0.0, 1.0);
+        }
+    }
+}

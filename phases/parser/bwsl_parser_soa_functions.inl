@@ -181,6 +181,7 @@ std::string BuildModuleCacheKey(const std::string& moduleName) {
 // is installed. Returns false when the module cannot be resolved or read;
 // failed resolutions are cached too so the search-root scan runs only once.
 bool LoadModuleSourceFromDisk(const std::string& moduleName,
+                              BWSL_Arena* arena,
                               std::string* outPath,
                               std::string* outSource) {
     ModuleSourceCache::Entry* cached = nullptr;
@@ -204,7 +205,7 @@ bool LoadModuleSourceFromDisk(const std::string& moduleName,
         cached = &g_moduleSourceCache->entries[key];
     }
 
-    std::string modulePath = ResolveModulePath(moduleName);
+    std::string modulePath = ResolveModulePath(arena, moduleName);
     if (modulePath.empty()) {
         if (g_moduleAccessRecorder) {
             g_moduleAccessRecorder->hadFailedResolution = true;
@@ -238,6 +239,52 @@ bool LoadModuleSourceFromDisk(const std::string& moduleName,
     return true;
 }
 
+struct SubmoduleHeader {
+    ArenaString name;
+    ArenaString parent;
+};
+
+ArenaString MakeArenaStringFromScanToken(const TokenStream& stream, TokenRef token) {
+    ArenaString result{};
+    result.nameHash = ReverseLookup::Intern(stream.GetStart(token), stream.GetLength(token));
+    result.sourceOffset = stream.GetOffset(token);
+    result.nameLength = stream.GetLength(token);
+    result._padding[0] = 0;
+    result._padding[1] = 0;
+    return result;
+}
+
+void FindSubmoduleHeadersInSource(const std::string& source,
+                                  BWSL_Arena* scanArena,
+                                  ArenaArray<SubmoduleHeader>* headers) {
+    headers->Init(scanArena, 4);
+    if (source.find("submodule") == std::string::npos) {
+        return;
+    }
+
+    TokenStream scanStream;
+    scanStream.Init(scanArena, source.data(), source.size());
+    Lexer scanLexer(source, scanStream);
+    scanLexer.Tokenize();
+
+    for (TokenRef i = 0; i < scanStream.Count(); i++) {
+        if (scanStream.GetType(i) != TokenType::SUBMODULE) {
+            continue;
+        }
+        if (i + 3 >= scanStream.Count() ||
+            scanStream.GetType(i + 1) != TokenType::IDENTIFIER ||
+            scanStream.GetType(i + 2) != TokenType::EXTENDS ||
+            scanStream.GetType(i + 3) != TokenType::IDENTIFIER) {
+            continue;
+        }
+
+        SubmoduleHeader header;
+        header.name = MakeArenaStringFromScanToken(scanStream, i + 1);
+        header.parent = MakeArenaStringFromScanToken(scanStream, i + 3);
+        headers->Push(scanArena, header);
+    }
+}
+
 } // namespace
 
 bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
@@ -253,7 +300,7 @@ bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
 
     std::string modulePath;
     std::string moduleSource;
-    if (!LoadModuleSourceFromDisk(moduleName, &modulePath, &moduleSource)) {
+    if (!LoadModuleSourceFromDisk(moduleName, arena, &modulePath, &moduleSource)) {
         return false;
     }
 
@@ -273,7 +320,7 @@ bool Parser::FindConflictingDiskModule(const std::string& moduleName,
         return false;
     }
 
-    std::string modulePath = ResolveModulePath(moduleName);
+    std::string modulePath = ResolveModulePath(arena, moduleName);
     if (modulePath.empty()) {
         return false;
     }
@@ -294,6 +341,202 @@ bool Parser::FindConflictingDiskModule(const std::string& moduleName,
         *outModulePath = modulePath;
     }
     return differs;
+}
+
+void Parser::RegisterSubmodulesForParent(const std::string& parentModuleName) {
+    if (parentModuleName.empty()) {
+        return;
+    }
+
+    u32 parentHash = Utils::HashStr(parentModuleName.c_str());
+    if (scannedSubmoduleParents.find(parentHash) != scannedSubmoduleParents.end()) {
+        return;
+    }
+    scannedSubmoduleParents.insert(parentHash);
+
+    std::string currentPath;
+    if (!currentSourceName.empty() &&
+        currentSourceName.find("://") == std::string::npos) {
+        currentPath = NormalizeModuleFilePath(currentSourceName);
+    }
+
+    std::unordered_set<std::string> seenRoots;
+    std::unordered_set<std::string> seenFiles;
+    ArenaArray<ArenaPath> searchRoots = BuildModuleSearchRoots(arena);
+
+    for (u32 rootIndex = 0; rootIndex < searchRoots.count; rootIndex++) {
+        const ArenaPath& root = searchRoots[rootIndex];
+        std::string normalizedRoot = NormalizeModuleFilePath(root.data);
+        if (normalizedRoot.empty() ||
+            seenRoots.find(normalizedRoot) != seenRoots.end()) {
+            continue;
+        }
+        seenRoots.insert(normalizedRoot);
+
+        std::error_code ec;
+        std::filesystem::path rootPath(normalizedRoot);
+        if (!std::filesystem::exists(rootPath, ec) ||
+            !std::filesystem::is_directory(rootPath, ec)) {
+            continue;
+        }
+
+        std::filesystem::directory_iterator it(rootPath, ec);
+        if (ec) {
+            continue;
+        }
+
+        for (const std::filesystem::directory_entry& entry : it) {
+            std::error_code entryEc;
+            if (!entry.is_regular_file(entryEc)) {
+                continue;
+            }
+
+            std::filesystem::path filePath = entry.path();
+            if (filePath.extension() != ".bwsl") {
+                continue;
+            }
+
+            std::string normalizedFile = NormalizeModuleFilePath(filePath.string());
+            if (normalizedFile.empty() ||
+                normalizedFile == currentPath ||
+                seenFiles.find(normalizedFile) != seenFiles.end() ||
+                parsedSubmoduleFiles.find(normalizedFile) != parsedSubmoduleFiles.end()) {
+                continue;
+            }
+            seenFiles.insert(normalizedFile);
+
+            std::ifstream file(normalizedFile, std::ios::binary);
+            if (!file.is_open()) {
+                continue;
+            }
+            std::string source((std::istreambuf_iterator<char>(file)),
+                               std::istreambuf_iterator<char>());
+            file.close();
+
+            size_t scanArenaSize = std::max<size_t>(64 * 1024, source.size() * 8 + 4096);
+            void* scanMemory = malloc(scanArenaSize);
+            if (!scanMemory) {
+                continue;
+            }
+
+            BWSL_Arena scanArena;
+            scanArena.Initialize(scanMemory, scanArenaSize);
+            ArenaArray<SubmoduleHeader> headers;
+            FindSubmoduleHeadersInSource(source, &scanArena, &headers);
+
+            bool extendsParent = false;
+            for (u32 i = 0; i < headers.count; i++) {
+                if (headers[i].parent.nameHash == parentHash) {
+                    extendsParent = true;
+                    break;
+                }
+            }
+            if (!extendsParent) {
+                free(scanMemory);
+                continue;
+            }
+            free(scanMemory);
+
+            if (g_moduleAccessRecorder) {
+                g_moduleAccessRecorder->modulePaths.insert(normalizedFile);
+            }
+            (void)RegisterSubmoduleFromSource(source.data(), source.size(),
+                                              normalizedFile.c_str(),
+                                              parentHash);
+            parsedSubmoduleFiles.insert(normalizedFile);
+        }
+    }
+}
+
+bool Parser::RegisterSubmoduleFromSource(const char* source,
+                                         size_t sourceLength,
+                                         const char* sourceName,
+                                         u32 parentFilterHash) {
+    if (source == nullptr) {
+        return false;
+    }
+
+    char* persistentSource = (char*)arena->Allocate(sourceLength + 1, 1);
+    if (!persistentSource) {
+        return false;
+    }
+    memcpy(persistentSource, source, sourceLength);
+    persistentSource[sourceLength] = '\0';
+
+    TokenRef savedCurrent = current;
+    TokenRef savedPrevious = previous;
+    Lexer* savedLexer = lexer;
+    TokenStream* savedStream = stream;
+    bool savedHasLookahead = hasLookahead;
+    TokenRef savedLookahead = lookahead;
+    bool savedHas3TokenLookahead = has3TokenLookahead;
+    TokenRef savedLookahead3 = lookahead3;
+    bool savedInModuleScope = symbolTable.inModuleScope;
+    u32 savedCurrentModuleIdx = symbolTable.currentModuleIndex;
+    NodeRef savedRoot = context->root;
+    NodeRef savedCurrentPipeline = currentPipeline;
+    NodeRef savedCurrentPass = currentPass;
+    NodeRef savedCurrentModule = currentModule;
+    bool savedInShaderStage = inShaderStage;
+    ShaderStage savedCurrentShaderStage = currentShaderStage;
+    bool savedParsingEmbeddedModule = parsingEmbeddedModule;
+    u32 savedSubmoduleParentFilterHash = submoduleParentFilterHash;
+    std::string savedSourceName = currentSourceName;
+
+    TokenStream submoduleStream;
+    submoduleStream.Init(arena, persistentSource, sourceLength);
+    Lexer submoduleLexer(std::string(persistentSource, sourceLength), submoduleStream);
+    submoduleLexer.Tokenize();
+    lexer = &submoduleLexer;
+    stream = &submoduleStream;
+    hasLookahead = false;
+    has3TokenLookahead = false;
+    lookahead = INVALID_TOKEN;
+    lookahead3 = INVALID_TOKEN;
+    parsingEmbeddedModule = false;
+    submoduleParentFilterHash = parentFilterHash;
+    currentSourceName = sourceName ? sourceName : "";
+
+    bool success = false;
+    current = 0;
+    previous = 0;
+
+    while (!Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
+        if (Match(TokenType::SUBMODULE)) {
+            NodeRef moduleNode = ParseSubmodule();
+            if (moduleNode.IsValid()) {
+                success = true;
+            }
+        } else if (Check(TokenType::MODULE) || Check(TokenType::PIPELINE)) {
+            SkipBracedDeclaration(false);
+        } else {
+            Advance();
+        }
+        panicMode = false;
+    }
+
+    current = savedCurrent;
+    previous = savedPrevious;
+    lexer = savedLexer;
+    stream = savedStream;
+    hasLookahead = savedHasLookahead;
+    lookahead = savedLookahead;
+    has3TokenLookahead = savedHas3TokenLookahead;
+    lookahead3 = savedLookahead3;
+    symbolTable.inModuleScope = savedInModuleScope;
+    symbolTable.currentModuleIndex = savedCurrentModuleIdx;
+    context->root = savedRoot;
+    currentPipeline = savedCurrentPipeline;
+    currentPass = savedCurrentPass;
+    currentModule = savedCurrentModule;
+    inShaderStage = savedInShaderStage;
+    currentShaderStage = savedCurrentShaderStage;
+    parsingEmbeddedModule = savedParsingEmbeddedModule;
+    submoduleParentFilterHash = savedSubmoduleParentFilterHash;
+    currentSourceName = std::move(savedSourceName);
+
+    return success;
 }
 
 bool Parser::RegisterModuleFromSource(const std::string& moduleName,
@@ -334,6 +577,7 @@ bool Parser::RegisterModuleFromSource(const std::string& moduleName,
     NodeRef savedRoot = context->root;
     NodeRef savedCurrentPipeline = currentPipeline;
     NodeRef savedCurrentPass = currentPass;
+    NodeRef savedCurrentModule = currentModule;
     bool savedInShaderStage = inShaderStage;
     ShaderStage savedCurrentShaderStage = currentShaderStage;
     bool savedParsingEmbeddedModule = parsingEmbeddedModule;
@@ -358,6 +602,8 @@ bool Parser::RegisterModuleFromSource(const std::string& moduleName,
     current = 0;
     previous = 0;
 
+    // First collect modules from this source, so submodules in the same file
+    // can extend a parent declared later in the file.
     while (!Check(TokenType::EOF_TOKEN)) {
         ProgressGuard _pg_(this);
         if (Match(TokenType::MODULE)) {
@@ -374,7 +620,32 @@ bool Parser::RegisterModuleFromSource(const std::string& moduleName,
                     success = true;
                 }
             }
-        } else if (Check(TokenType::PIPELINE)) {
+        } else if (Check(TokenType::SUBMODULE) || Check(TokenType::PIPELINE)) {
+            SkipBracedDeclaration(false);
+        } else {
+            Advance();
+        }
+        panicMode = false;
+    }
+
+    current = 0;
+    previous = 0;
+    hasLookahead = false;
+    has3TokenLookahead = false;
+    lookahead = INVALID_TOKEN;
+    lookahead3 = INVALID_TOKEN;
+    currentPipeline = NodeRef::Null();
+    currentPass = NodeRef::Null();
+    currentModule = NodeRef::Null();
+    inShaderStage = false;
+
+    // Then fold submodules into any parent modules loaded above or already
+    // present in the parser's symbol table.
+    while (!Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
+        if (Match(TokenType::SUBMODULE)) {
+            (void)ParseSubmodule();
+        } else if (Check(TokenType::MODULE) || Check(TokenType::PIPELINE)) {
             SkipBracedDeclaration(false);
         } else {
             Advance();
@@ -396,6 +667,7 @@ bool Parser::RegisterModuleFromSource(const std::string& moduleName,
     context->root = savedRoot;
     currentPipeline = savedCurrentPipeline;
     currentPass = savedCurrentPass;
+    currentModule = savedCurrentModule;
     inShaderStage = savedInShaderStage;
     currentShaderStage = savedCurrentShaderStage;
     parsingEmbeddedModule = savedParsingEmbeddedModule;

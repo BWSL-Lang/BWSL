@@ -351,56 +351,150 @@ void SetModuleAccessRecorder(ModuleAccessRecorder* recorder) {
 }
 
 namespace {
-    std::string ResolveModulePath(const std::string& moduleName) {
-        // Build search roots: additional paths first (highest priority), then built-in paths
-        std::vector<std::string> searchRoots;
+    struct ArenaPath {
+        const char* data;
+        u32 length;
+    };
+
+    ArenaPath MakeArenaPath(BWSL_Arena* arena,
+                            const char* prefix,
+                            size_t prefixLength,
+                            const char* suffix = nullptr) {
+        size_t suffixLength = suffix ? std::strlen(suffix) : 0;
+        size_t totalLength = prefixLength + suffixLength;
+        char* data = static_cast<char*>(arena->Allocate(totalLength + 1, 1));
+        if (prefixLength > 0) {
+            std::memcpy(data, prefix, prefixLength);
+        }
+        if (suffixLength > 0) {
+            std::memcpy(data + prefixLength, suffix, suffixLength);
+        }
+        data[totalLength] = '\0';
+        return { data, static_cast<u32>(totalLength) };
+    }
+
+    void PushArenaPath(BWSL_Arena* arena,
+                       ArenaArray<ArenaPath>* paths,
+                       const char* prefix,
+                       size_t prefixLength,
+                       const char* suffix = nullptr) {
+        paths->Push(arena, MakeArenaPath(arena, prefix, prefixLength, suffix));
+    }
+
+    ArenaPath MakeLowercaseArenaPath(BWSL_Arena* arena, const std::string& value) {
+        char* data = static_cast<char*>(arena->Allocate(value.size() + 1, 1));
+        for (size_t i = 0; i < value.size(); i++) {
+            char c = value[i];
+            data[i] = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+        }
+        data[value.size()] = '\0';
+        return { data, static_cast<u32>(value.size()) };
+    }
+
+    ArenaPath MakeModuleCandidatePath(BWSL_Arena* arena,
+                                      const ArenaPath& root,
+                                      const ArenaPath& moduleName,
+                                      const char* suffix) {
+        size_t suffixLength = std::strlen(suffix);
+        size_t totalLength = static_cast<size_t>(root.length) + 1 +
+                             moduleName.length + suffixLength;
+        char* data = static_cast<char*>(arena->Allocate(totalLength + 1, 1));
+        size_t at = 0;
+        if (root.length > 0) {
+            std::memcpy(data + at, root.data, root.length);
+            at += root.length;
+        }
+        data[at++] = '/';
+        if (moduleName.length > 0) {
+            std::memcpy(data + at, moduleName.data, moduleName.length);
+            at += moduleName.length;
+        }
+        if (suffixLength > 0) {
+            std::memcpy(data + at, suffix, suffixLength);
+            at += suffixLength;
+        }
+        data[at] = '\0';
+        return { data, static_cast<u32>(at) };
+    }
+
+    ArenaArray<ArenaPath> BuildModuleSearchRoots(BWSL_Arena* arena) {
+        ArenaArray<ArenaPath> searchRoots;
+        u32 initialCapacity =
+            static_cast<u32>(g_additionalModuleSearchPaths.size() * 4 + 6);
+        searchRoots.Init(arena, initialCapacity);
 
         // Additional paths added by external tools (e.g., input file directory)
         for (const auto& path : g_additionalModuleSearchPaths) {
-            searchRoots.push_back(path);
-            searchRoots.push_back(path + "/modules");
-            searchRoots.push_back(path + "/../modules");
-            searchRoots.push_back(path + "/../bwsl/modules");
+            PushArenaPath(arena, &searchRoots, path.data(), path.size());
+            PushArenaPath(arena, &searchRoots, path.data(), path.size(), "/modules");
+            PushArenaPath(arena, &searchRoots, path.data(), path.size(), "/../modules");
+            PushArenaPath(arena, &searchRoots, path.data(), path.size(), "/../bwsl/modules");
         }
 
         // Built-in paths based on source file location (works in engine builds)
-        static const std::vector<std::string> builtInRoots = [] {
-            std::vector<std::string> roots;
-            std::string file = __FILE__;
-            auto pos = file.find_last_of("/\\");
-            std::string sourceDir = (pos == std::string::npos) ? std::string(".") : file.substr(0, pos);
-            roots.push_back(sourceDir + "/modules");
-            roots.push_back(sourceDir + "/../modules");
-            roots.push_back("bwsl/modules");
-            roots.push_back("modules");
-            roots.push_back("../modules");
-            roots.push_back("../../modules");
-            return roots;
-        }();
+        const char* file = __FILE__;
+        const char* slash = std::strrchr(file, '/');
+        const char* backslash = std::strrchr(file, '\\');
+        const char* separator = slash;
+        if (backslash && (!separator || backslash > separator)) {
+            separator = backslash;
+        }
+        const char* sourceDir = separator ? file : ".";
+        size_t sourceDirLength = separator
+            ? static_cast<size_t>(separator - file)
+            : 1;
 
-        for (const auto& root : builtInRoots) {
-            searchRoots.push_back(root);
+        PushArenaPath(arena, &searchRoots, sourceDir, sourceDirLength, "/modules");
+        PushArenaPath(arena, &searchRoots, sourceDir, sourceDirLength, "/../modules");
+        PushArenaPath(arena, &searchRoots, "bwsl/modules", std::strlen("bwsl/modules"));
+        PushArenaPath(arena, &searchRoots, "modules", std::strlen("modules"));
+        PushArenaPath(arena, &searchRoots, "../modules", std::strlen("../modules"));
+        PushArenaPath(arena, &searchRoots, "../../modules", std::strlen("../../modules"));
+
+        return searchRoots;
+    }
+
+    std::string NormalizeModuleFilePath(const char* path) {
+        if (path == nullptr || path[0] == '\0') {
+            return {};
         }
 
-        // Generate lowercase version of module name for case-insensitive lookup
-        std::string lowerName = moduleName;
-        for (char& c : lowerName) {
-            if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
+        std::error_code ec;
+        std::filesystem::path fsPath(path);
+        std::filesystem::path normalized = std::filesystem::weakly_canonical(fsPath, ec);
+        if (ec) {
+            ec.clear();
+            normalized = std::filesystem::absolute(fsPath, ec);
         }
+        if (ec) {
+            return path;
+        }
+        return normalized.lexically_normal().string();
+    }
 
-        std::vector<std::string> candidateNames = {
-            moduleName + "_module.bwsl",
-            moduleName + ".bwsl",
-            lowerName + "_module.bwsl",
-            lowerName + ".bwsl"
+    std::string NormalizeModuleFilePath(const std::string& path) {
+        return NormalizeModuleFilePath(path.c_str());
+    }
+
+    std::string ResolveModulePath(BWSL_Arena* arena, const std::string& moduleName) {
+        ArenaPath originalName = {
+            moduleName.c_str(),
+            static_cast<u32>(moduleName.size())
         };
+        ArenaPath lowerName = MakeLowercaseArenaPath(arena, moduleName);
+        ArenaArray<ArenaPath> searchRoots = BuildModuleSearchRoots(arena);
 
-        for (const auto& root : searchRoots) {
-            for (const auto& fileName : candidateNames) {
-                std::string candidate = root + "/" + fileName;
-                std::ifstream file(candidate);
+        for (u32 rootIndex = 0; rootIndex < searchRoots.count; rootIndex++) {
+            const ArenaPath& root = searchRoots[rootIndex];
+            for (u32 candidateIndex = 0; candidateIndex < 4; candidateIndex++) {
+                const ArenaPath& name = (candidateIndex < 2) ? originalName : lowerName;
+                const char* suffix = (candidateIndex % 2 == 0)
+                    ? "_module.bwsl"
+                    : ".bwsl";
+                ArenaPath candidate = MakeModuleCandidatePath(arena, root, name, suffix);
+                std::ifstream file(candidate.data);
                 if (file.good()) {
-                    return candidate;
+                    return NormalizeModuleFilePath(candidate.data);
                 }
             }
         }

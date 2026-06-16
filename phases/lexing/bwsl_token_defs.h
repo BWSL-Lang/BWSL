@@ -124,6 +124,7 @@ enum TokenType : uint8_t {
     RETURN,
     IMPORT,
     MODULE,
+    SUBMODULE,
     STRUCT,
     VERTEX,
     FRAGMENT,

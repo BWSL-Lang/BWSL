@@ -1,0 +1,39 @@
+// Test: Multiple differently named submodules may extend the same parent.
+
+module InlineSubmoduleParent {
+    const float BASE = 1.0;
+}
+
+submodule InlineSubmoduleA extends InlineSubmoduleParent {
+    valueA :: (float x) -> float {
+        return x + BASE;
+    }
+}
+
+submodule InlineSubmoduleB extends InlineSubmoduleParent {
+    valueB :: (float x) -> float {
+        return valueA(x) + 2.0;
+    }
+}
+
+pipeline SubmodulesSameParentDifferentNames {
+    attributes {
+        position: float3
+    }
+
+    import InlineSubmoduleParent
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float v = InlineSubmoduleParent::valueB(1.0);
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            float v = InlineSubmoduleParent::valueB(1.0);
+            output.color = float4(v * 0.1, 0.0, 0.0, 1.0);
+        }
+    }
+}

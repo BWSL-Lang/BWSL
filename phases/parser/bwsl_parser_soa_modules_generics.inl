@@ -9,64 +9,22 @@
 
 namespace BWSL {
 
-NodeRef Parser::ParseModule() {
-    TokenRef declToken = previous;  // The MODULE keyword; a doc block precedes it
-    SourceLocation loc = getLocation(stream->GetOffset(previous));
-    u32 line = loc.line;
-    u32 col = loc.column;
-
-    // Note: MODULE token already consumed by caller
-    if (!Consume(TokenType::IDENTIFIER, "Expected module name")) {
-        SkipBracedDeclaration(true);
+NodeRef Parser::FindModuleNodeByIndex(u32 moduleIndex) const {
+    if (moduleIndex == INVALID_INDEX || moduleIndex >= symbolTable.modules.count) {
         return NodeRef::Null();
     }
 
-    std::string moduleName(stream->GetValue(previous));
-    ArenaString moduleNameArena = ArenaString::MakeHashOnly(moduleName);
-
-    if (!parsingEmbeddedModule && IsEmbeddedModuleName(moduleName)) {
-        char msg[512];
-        snprintf(msg, sizeof(msg),
-                 "Module name '%s' is reserved by the embedded standard library. "
-                 "Rename this module to a non-standard-library name, for example 'My%s', and update imports to use the new name. "
-                 "Use 'import %s' when you want the embedded standard-library module.",
-                 moduleName.c_str(), moduleName.c_str(), moduleName.c_str());
-        ErrorAtPrevious(msg);
-        SkipBracedDeclaration(true);
-        return NodeRef::Null();
+    u32 moduleHash = symbolTable.modules[moduleIndex].name.nameHash;
+    for (u32 i = 0; i < ast->modules.count; i++) {
+        if (ast->modules[i].name.nameHash == moduleHash) {
+            return NodeRef(ASTNodeType::MODULE, i);
+        }
     }
+    return NodeRef::Null();
+}
 
-    // Register module name in reverse lookup for qualified type name resolution
-    ReverseLookup::Register(moduleNameArena.nameHash, moduleName.c_str());
-
-    // Create module in symbol table. AddModule returns INVALID_INDEX on
-    // duplicate declarations; in that case we stay out of module scope so
-    // subsequent struct/enum/function parsing doesn't OOB-read modules[].
-    u32 moduleIndex = SymbolTable::AddModule(&symbolTable, moduleNameArena);
-    if (moduleIndex == INVALID_INDEX) {
-        char msg[256];
-        snprintf(msg, sizeof(msg),
-                 "Duplicate module declaration for '%s'",
-                 moduleName.c_str());
-        ErrorAtPrevious(msg);
-        SkipBracedDeclaration(true);
-        return NodeRef::Null();
-    } else {
-        symbolTable.currentModuleIndex = moduleIndex;
-        symbolTable.inModuleScope = true;
-    }
-
-    // Create module AST node
-    NodeRef module = ASTFactory::MakeModule(ast, moduleName, line, col);
-    AttachDocComment(module, declToken);
-    NodeRef previousModule = currentModule;
-    NodeRef previousPipeline = currentPipeline;
-    currentModule = module;
-    currentPipeline = NodeRef::Null();
-
-    Consume(TokenType::LEFT_BRACE, "Expected '{'");
-
-    // Parse module contents (imports, functions, and structs)
+void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
+                             const std::string& moduleName) {
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
         ProgressGuard _pg_(this);
         if (Match(TokenType::IMPORT)) {
@@ -211,6 +169,65 @@ NodeRef Parser::ParseModule() {
             Advance();
         }
     }
+}
+
+NodeRef Parser::ParseModule() {
+    TokenRef declToken = previous;  // The MODULE keyword; a doc block precedes it
+    SourceLocation loc = getLocation(stream->GetOffset(previous));
+    u32 line = loc.line;
+    u32 col = loc.column;
+
+    // Note: MODULE token already consumed by caller
+    if (!Consume(TokenType::IDENTIFIER, "Expected module name")) {
+        SkipBracedDeclaration(true);
+        return NodeRef::Null();
+    }
+
+    std::string moduleName(stream->GetValue(previous));
+    ArenaString moduleNameArena = ArenaString::MakeHashOnly(moduleName);
+
+    if (!parsingEmbeddedModule && IsEmbeddedModuleName(moduleName)) {
+        char msg[512];
+        snprintf(msg, sizeof(msg),
+                 "Module name '%s' is reserved by the embedded standard library. "
+                 "Rename this module to a non-standard-library name, for example 'My%s', and update imports to use the new name. "
+                 "Use 'import %s' when you want the embedded standard-library module.",
+                 moduleName.c_str(), moduleName.c_str(), moduleName.c_str());
+        ErrorAtPrevious(msg);
+        SkipBracedDeclaration(true);
+        return NodeRef::Null();
+    }
+
+    // Register module name in reverse lookup for qualified type name resolution
+    ReverseLookup::Register(moduleNameArena.nameHash, moduleName.c_str());
+
+    // Create module in symbol table. AddModule returns INVALID_INDEX on
+    // duplicate declarations; in that case we stay out of module scope so
+    // subsequent struct/enum/function parsing doesn't OOB-read modules[].
+    u32 moduleIndex = SymbolTable::AddModule(&symbolTable, moduleNameArena);
+    if (moduleIndex == INVALID_INDEX) {
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "Duplicate module declaration for '%s'",
+                 moduleName.c_str());
+        ErrorAtPrevious(msg);
+        SkipBracedDeclaration(true);
+        return NodeRef::Null();
+    } else {
+        symbolTable.currentModuleIndex = moduleIndex;
+        symbolTable.inModuleScope = true;
+    }
+
+    // Create module AST node
+    NodeRef module = ASTFactory::MakeModule(ast, moduleName, line, col);
+    AttachDocComment(module, declToken);
+    NodeRef previousModule = currentModule;
+    NodeRef previousPipeline = currentPipeline;
+    currentModule = module;
+    currentPipeline = NodeRef::Null();
+
+    Consume(TokenType::LEFT_BRACE, "Expected '{'");
+    ParseModuleBody(module, moduleNameArena, moduleName);
 
     if (Consume(TokenType::RIGHT_BRACE, "Expected '}'")) {
         MarkNodeEndAtPreviousToken(module);
@@ -221,7 +238,127 @@ NodeRef Parser::ParseModule() {
     currentModule = previousModule;
     currentPipeline = previousPipeline;
 
+    RegisterSubmodulesForParent(moduleName);
+
     return module;
+}
+
+NodeRef Parser::ParseSubmodule() {
+    // Note: SUBMODULE token already consumed by caller.
+    TokenRef submoduleToken = current;
+    if (!Consume(TokenType::IDENTIFIER, "Expected submodule name")) {
+        SkipBracedDeclaration(true);
+        return NodeRef::Null();
+    }
+    ArenaString submoduleName = ArenaString::Make(sourceBase(),
+        stream->GetOffset(previous), stream->GetLength(previous));
+
+    if (!Consume(TokenType::EXTENDS, "Expected 'extends' after submodule name")) {
+        SkipBracedDeclaration(true);
+        return NodeRef::Null();
+    }
+
+    TokenRef parentToken = current;
+    if (!Consume(TokenType::IDENTIFIER, "Expected parent module name after 'extends'")) {
+        SkipBracedDeclaration(true);
+        return NodeRef::Null();
+    }
+    ArenaString parentName = ArenaString::Make(sourceBase(),
+        stream->GetOffset(previous), stream->GetLength(previous));
+
+    if (submoduleParentFilterHash != 0 &&
+        parentName.nameHash != submoduleParentFilterHash) {
+        SkipBracedDeclaration(true);
+        return NodeRef::Null();
+    }
+
+    if (SymbolTable::FindModuleByHash(&symbolTable, submoduleName.nameHash) != INVALID_INDEX) {
+        char msg[256];
+        std::string submoduleNameString = submoduleName.ToString(sourceBase());
+        snprintf(msg, sizeof(msg),
+                 "Submodule name '%s' conflicts with an existing module",
+                 submoduleNameString.c_str());
+        ErrorAt(submoduleToken, msg);
+        SkipBracedDeclaration(true);
+        return NodeRef::Null();
+    }
+
+    for (u32 i = 0; i < submoduleDecls.count; i++) {
+        if (submoduleDecls[i].name.nameHash == submoduleName.nameHash) {
+            char msg[256];
+            std::string submoduleNameString = submoduleName.ToString(sourceBase());
+            snprintf(msg, sizeof(msg),
+                     "Duplicate submodule declaration for '%s'",
+                     submoduleNameString.c_str());
+            ErrorAt(submoduleToken, msg);
+            SkipBracedDeclaration(true);
+            return NodeRef::Null();
+        }
+    }
+
+    std::string parentNameString = parentName.ToString(sourceBase());
+    std::string submoduleNameString = submoduleName.ToString(sourceBase());
+    if (!TryRegisterModule(parentNameString)) {
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "Unknown parent module '%s' for submodule '%s'",
+                 parentNameString.c_str(), submoduleNameString.c_str());
+        ErrorAt(parentToken, msg);
+        SkipBracedDeclaration(true);
+        return NodeRef::Null();
+    }
+
+    u32 parentIndex = SymbolTable::FindModuleByHash(&symbolTable,
+        parentName.nameHash);
+    NodeRef parentModule = FindModuleNodeByIndex(parentIndex);
+    if (parentIndex == INVALID_INDEX || parentModule.IsNull()) {
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "Unknown parent module '%s' for submodule '%s'",
+                 parentNameString.c_str(), submoduleNameString.c_str());
+        ErrorAt(parentToken, msg);
+        SkipBracedDeclaration(true);
+        return NodeRef::Null();
+    }
+
+    ArenaString parentArena = symbolTable.modules[parentIndex].name;
+    std::string resolvedParentName = parentArena.ToString(sourceBase());
+
+    if (!currentSourceName.empty() &&
+        currentSourceName.find("://") == std::string::npos) {
+        std::string normalizedCurrent = NormalizeModuleFilePath(currentSourceName);
+        if (!normalizedCurrent.empty() &&
+            parsedSubmoduleFiles.find(normalizedCurrent) != parsedSubmoduleFiles.end()) {
+            SkipBracedDeclaration(true);
+            return parentModule;
+        }
+    }
+
+    SubmoduleDeclRecord record{};
+    record.name = submoduleName;
+    record.parent = parentName;
+    submoduleDecls.Push(arena, record);
+
+    bool savedInModuleScope = symbolTable.inModuleScope;
+    u32 savedCurrentModuleIdx = symbolTable.currentModuleIndex;
+    NodeRef previousModule = currentModule;
+    NodeRef previousPipeline = currentPipeline;
+
+    symbolTable.inModuleScope = true;
+    symbolTable.currentModuleIndex = parentIndex;
+    currentModule = parentModule;
+    currentPipeline = NodeRef::Null();
+
+    Consume(TokenType::LEFT_BRACE, "Expected '{'");
+    ParseModuleBody(parentModule, parentArena, resolvedParentName);
+    Consume(TokenType::RIGHT_BRACE, "Expected '}'");
+
+    symbolTable.inModuleScope = savedInModuleScope;
+    symbolTable.currentModuleIndex = savedCurrentModuleIdx;
+    currentModule = previousModule;
+    currentPipeline = previousPipeline;
+
+    return parentModule;
 }
 
 //==============================================================================
