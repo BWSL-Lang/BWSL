@@ -152,6 +152,12 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   // Register info
   program.registerTypes =
       (u16 *)pool->Allocate(MAX_REGISTERS * sizeof(u16), 64);
+  // Some control-flow paths allocate placeholder registers whose final type is
+  // patched later by SSA. Default every slot to FLOAT so any early metadata
+  // read is deterministic across in-process batch compilations.
+  for (u32 i = 0; i < MAX_REGISTERS; i++) {
+    program.registerTypes[i] = static_cast<u16>(CoreType::FLOAT);
+  }
   program.registerCount = 0;
 
   // Struct type metadata
