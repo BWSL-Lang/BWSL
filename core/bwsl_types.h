@@ -24,11 +24,10 @@ struct ArenaString {
 
     // For strings FROM source buffer
     static ArenaString Make(const char* sourceBase, u32 offset, u16 length) {
-        std::string text(sourceBase + offset, length);
-        u32 hash = Utils::HashStr(text.c_str(), length);
-        ReverseLookup::Register(hash, text.c_str());
+        const char* text = sourceBase + offset;
+        u32 stringId = ReverseLookup::Intern(text, length);
         return {
-            hash,
+            stringId,
             offset,
             length,
             {0, 0}
@@ -40,18 +39,17 @@ struct ArenaString {
     
     // For synthetic/built-in strings NOT in source
     static ArenaString MakeHashOnly(const char* literal) {
-        const char* text = literal ? literal : "";
-        u32 hash = Utils::HashStr(text);
-        ReverseLookup::Register(hash, text);
-        return { hash, 0u, 0u, {0, 0} };
+        u32 stringId = ReverseLookup::Intern(literal);
+        return { stringId, 0u, 0u, {0, 0} };
     }
     
     static ArenaString MakeHashOnly(const std::string& str) {
-        u32 hash = Utils::HashStr(str.c_str());
-        ReverseLookup::Register(hash, str.c_str());
-        return { hash, 0u, 0u, {0, 0} };
+        u32 stringId = ReverseLookup::Intern(str);
+        return { stringId, 0u, 0u, {0, 0} };
     }
     
+    // Only for ids/hashes that are already interned or reserved literals.
+    // A naked u32 cannot recover canonical bytes for reverse lookup.
     static ArenaString MakeHashOnly(u32 precomputedHash) {
         return { precomputedHash, 0u, 0u, {0, 0} };
     }

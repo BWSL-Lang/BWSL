@@ -13,13 +13,37 @@ NodeRef Parser::ParseDocument() {
     TokenRef documentStart = current;
     TokenRef previousStart = previous;
 
-    // First collect file-scope modules so pipelines can import modules declared
-    // later in the same BWSL document.
+    // First collect file-scope modules so pipelines and submodules can refer to
+    // modules declared later in the same BWSL document.
     while (!Check(TokenType::EOF_TOKEN)) {
         ProgressGuard _pg_(this);
         if (Match(TokenType::MODULE)) {
             (void)ParseModule();
-        } else if (Check(TokenType::PIPELINE)) {
+        } else if (Check(TokenType::SUBMODULE) || Check(TokenType::PIPELINE)) {
+            SkipBracedDeclaration(false);
+        } else {
+            Advance();
+        }
+        panicMode = false;
+    }
+
+    current = documentStart;
+    previous = previousStart;
+    hasLookahead = false;
+    has3TokenLookahead = false;
+    lookahead = INVALID_TOKEN;
+    lookahead3 = INVALID_TOKEN;
+    currentPipeline = NodeRef::Null();
+    currentPass = NodeRef::Null();
+    inShaderStage = false;
+
+    // Then fold file-scope submodules into their parent modules before
+    // pipelines resolve imports and qualified references.
+    while (!Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
+        if (Match(TokenType::SUBMODULE)) {
+            (void)ParseSubmodule();
+        } else if (Check(TokenType::MODULE) || Check(TokenType::PIPELINE)) {
             SkipBracedDeclaration(false);
         } else {
             Advance();
@@ -45,10 +69,10 @@ NodeRef Parser::ParseDocument() {
             if (pipeline.IsValid()) {
                 lastPipeline = pipeline;
             }
-        } else if (Check(TokenType::MODULE)) {
+        } else if (Check(TokenType::MODULE) || Check(TokenType::SUBMODULE)) {
             SkipBracedDeclaration(false);
         } else {
-            ErrorAtCurrent("Expected file-scope 'module' or 'pipeline' declaration");
+            ErrorAtCurrent("Expected file-scope 'module', 'submodule', or 'pipeline' declaration");
             Advance();
         }
         panicMode = false;
@@ -65,7 +89,10 @@ void Parser::SkipBracedDeclaration(bool keywordAlreadyConsumed) {
         Advance();
     }
 
-    if (Check(TokenType::IDENTIFIER) || Check(TokenType::STRING)) {
+    while (!Check(TokenType::LEFT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
+        if (Check(TokenType::SEMICOLON) || Check(TokenType::RIGHT_BRACE)) {
+            return;
+        }
         Advance();
     }
 
@@ -221,6 +248,9 @@ NodeRef Parser::ParsePipeline() {
             }
         } else if (Match(TokenType::MODULE)) {
             ErrorAtPrevious("Module declarations must be declared at file scope, outside pipeline blocks");
+            SkipBracedDeclaration(true);
+        } else if (Match(TokenType::SUBMODULE)) {
+            ErrorAtPrevious("Submodule declarations must be declared at file scope, outside pipeline blocks");
             SkipBracedDeclaration(true);
         } else if (Match(TokenType::STRUCT)) {
             // Top-level struct. Registered in the symbol table for type

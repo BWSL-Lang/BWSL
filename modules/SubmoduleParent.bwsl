@@ -1,0 +1,7 @@
+module SubmoduleParent {
+    const float BASE = 2.0;
+
+    baseValue :: (float x) -> float {
+        return x + BASE;
+    }
+}

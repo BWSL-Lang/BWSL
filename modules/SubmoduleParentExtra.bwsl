@@ -1,0 +1,7 @@
+submodule SubmoduleParentExtra extends SubmoduleParent {
+    const float EXTRA = 3.0;
+
+    extraValue :: (float x) -> float {
+        return baseValue(x) + EXTRA;
+    }
+}

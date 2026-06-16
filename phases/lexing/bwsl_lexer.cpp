@@ -565,6 +565,7 @@ TokenType Lexer::FastKeywordLookup(const char* str, size_t len) {
             if (memcmp(str, "resources", 9) == 0) return TokenType::RESOURCES;
             if (memcmp(str, "readwrite", 9) == 0) return TokenType::READWRITE;
             if (memcmp(str, "writeonly", 9) == 0) return TokenType::WRITEONLY;
+            if (memcmp(str, "submodule", 9) == 0) return TokenType::SUBMODULE;
             break;
             
         case 10:

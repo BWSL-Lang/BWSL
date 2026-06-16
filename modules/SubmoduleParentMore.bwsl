@@ -1,0 +1,5 @@
+submodule SubmoduleParentMore extends SubmoduleParent {
+    moreValue :: (float x) -> float {
+        return extraValue(x) + 4.0;
+    }
+}

@@ -13,6 +13,7 @@
 #include <string_view>
 #include <vector>
 #include <fstream>
+#include <filesystem>
 #include <stdexcept>
 #include "bwsl_custom_type_registry.h"
 

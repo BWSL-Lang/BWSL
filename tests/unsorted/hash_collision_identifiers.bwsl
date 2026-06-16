@@ -1,0 +1,28 @@
+// Test: FNV-1a 32-bit collision identifiers remain distinct
+// Tests: exact interned identity for source-backed ArenaString names
+
+pipeline HashCollisionIdentifiers {
+    attributes {
+        position: float3
+    }
+
+    collide :: (float costarring, float liquid) -> float {
+        float sum = costarring + liquid;
+        return sum;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float costarring = 1.0;
+            float liquid = 2.0;
+            float scale = collide(costarring, liquid);
+            output.position = float4(attributes.position * scale, 1.0);
+        }
+
+        fragment {
+            output.color = float4(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+}

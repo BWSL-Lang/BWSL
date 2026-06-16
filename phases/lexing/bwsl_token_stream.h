@@ -198,6 +198,7 @@ public:
         table[RESOURCES] = 9;
         table[READWRITE] = 9;
         table[WRITEONLY] = 9;
+        table[SUBMODULE] = 9;
 
         // Ten character keywords
         table[ATTRIBUTES] = 10;
@@ -323,6 +324,7 @@ inline const char* TokenTypeName(TokenType type) {
         case IMPORT: return "IMPORT";
         case RETURN: return "RETURN";
         case MODULE: return "MODULE";
+        case SUBMODULE: return "SUBMODULE";
         case STRUCT: return "STRUCT";
         case BUFFER: return "BUFFER";
         case CBUFFER: return "CBUFFER";

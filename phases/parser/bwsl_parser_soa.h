@@ -223,6 +223,10 @@ struct Parser {
         currentPipeline = NodeRef::Null();
         currentModule = NodeRef::Null();
         parsingEmbeddedModule = false;
+        submoduleParentFilterHash = 0;
+        submoduleDecls.Init(arena, 8);
+        scannedSubmoduleParents.clear();
+        parsedSubmoduleFiles.clear();
         passBlockRemapActive = false;
         remapBareVariants = false;
         typeCache.Init();
@@ -237,15 +241,19 @@ struct Parser {
     NodeRef ParseDocument();
     NodeRef ParsePipeline();
 
-    // Parse a standalone module file
+    // Parse a standalone module or submodule file
     // Note: This is public to allow the CLI compiler to parse module files directly
     NodeRef ParseModuleFile() {
-        // MODULE token should be current after Init()
+        // MODULE or SUBMODULE token should be current after Init()
         if (stream->GetType(current) == TokenType::MODULE) {
             Advance();  // Consume MODULE
             return ParseModule();
         }
-        ErrorAtCurrent("Expected 'module' keyword");
+        if (stream->GetType(current) == TokenType::SUBMODULE) {
+            Advance();  // Consume SUBMODULE
+            return ParseSubmodule();
+        }
+        ErrorAtCurrent("Expected 'module' or 'submodule' keyword");
         return NodeRef::Null();
     }
 
@@ -368,6 +376,10 @@ private:
     NodeRef ParseEnumMethod();
     NodeRef ParsePatternMatch(NodeRef scrutinee);
     NodeRef ParseTypePatternMatch();
+    NodeRef ParseSubmodule();
+    void ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
+                         const std::string& moduleName);
+    NodeRef FindModuleNodeByIndex(u32 moduleIndex) const;
     NodeRef ParseConstraint();
     TypeMask ParseConstraintTypeExpression();
     TypeMask ParseConstraintType();
@@ -394,6 +406,11 @@ private:
                                   const char* source,
                                   size_t sourceLength,
                                   const char* sourceName);
+    bool RegisterSubmoduleFromSource(const char* source,
+                                     size_t sourceLength,
+                                     const char* sourceName,
+                                     u32 parentFilterHash = 0);
+    void RegisterSubmodulesForParent(const std::string& parentModuleName);
     bool FindConflictingDiskModule(const std::string& moduleName,
                                    std::string* outModulePath = nullptr);
     bool IsEmbeddedModuleName(const std::string& moduleName) const;
@@ -456,8 +473,16 @@ private:
         bool isShadow;
         LiteralValue value;
     };
+    struct SubmoduleDeclRecord {
+        ArenaString name;
+        ArenaString parent;
+    };
     std::vector<EvalBinding> evalBindings;
     std::vector<u32> evalBindingScopeStarts;
+    ArenaArray<SubmoduleDeclRecord> submoduleDecls;
+    u32 submoduleParentFilterHash = 0;
+    std::unordered_set<u32> scannedSubmoduleParents;
+    std::unordered_set<std::string> parsedSubmoduleFiles;
 
     // Global budget for eval-statement expansion. Nested eval loops
     // multiply combinatorially (outer N * inner M body expansions), and
