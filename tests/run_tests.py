@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -372,6 +373,7 @@ TEXT_GOLDEN_SUFFIXES = {".metal", ".hlsl", ".glsl", ".gles", ".vert", ".frag", "
 
 EQUIV_BACKENDS = ("spirv", "hlsl", "glsl")
 STAGE_SUFFIXES = ("vert", "frag", "comp")
+KNOWN_TEST_STEMS: set[str] = set()
 
 TRANSLATION_EXPECTATION_TESTS = {
     "interpolation_decorators": {
@@ -545,6 +547,153 @@ def run_command(args: list[str], cwd: Path | None = None) -> subprocess.Complete
         encoding="utf-8",
         errors="replace",
     )
+
+
+@dataclass
+class CompilerFileResult:
+    returncode: int
+    stdout: str
+    doc: dict | None = None
+
+
+def path_key(path: Path | str) -> Path:
+    return Path(path).resolve()
+
+
+def diagnostics_to_text(doc: dict) -> str:
+    lines: list[str] = []
+    for diagnostic in doc.get("diagnostics", []):
+        file_name = diagnostic.get("file", "")
+        line = diagnostic.get("line")
+        column = diagnostic.get("column")
+        message = diagnostic.get("message", "")
+        if file_name and line and column:
+            lines.append(f"{file_name}:{line}:{column}: {message}")
+        elif file_name and line:
+            lines.append(f"{file_name}:{line}: {message}")
+        elif file_name:
+            lines.append(f"{file_name}: {message}")
+        elif message:
+            lines.append(message)
+
+        for context in diagnostic.get("context", []):
+            text = context.get("text")
+            if text:
+                lines.append(text)
+
+    return "\n".join(lines)
+
+
+def result_from_doc(doc: dict) -> CompilerFileResult:
+    return CompilerFileResult(
+        returncode=0 if doc.get("success") is True else 1,
+        stdout=diagnostics_to_text(doc),
+        doc=doc,
+    )
+
+
+def failed_result(message: str, returncode: int = 1) -> CompilerFileResult:
+    return CompilerFileResult(returncode=returncode, stdout=message)
+
+
+def run_compiler_batch(
+    bwslc: Path,
+    root: Path,
+    files: list[Path],
+    output_dir: Path,
+    modules_dir: Path,
+    compile_args: list[str] | tuple[str, ...] = (),
+    timeout: float | None = None,
+) -> dict[Path, CompilerFileResult]:
+    if not files:
+        return {}
+
+    args = [
+        str(bwslc),
+        *(str(path) for path in files),
+        "-o",
+        str(output_dir),
+        "-modules",
+        str(modules_dir),
+        *compile_args,
+        "-errors-json",
+    ]
+
+    try:
+        result = subprocess.run(
+            args,
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        message = stdout.strip()
+        if stderr.strip():
+            if message:
+                message += "\n"
+            message += stderr.strip()
+        if message:
+            message += "\n"
+        message += f"bwslc timed out after {timeout:g} seconds"
+        return {path_key(path): failed_result(message, returncode=-1) for path in files}
+
+    if result.returncode not in (0, 1):
+        unsigned_code = result.returncode & 0xFFFFFFFF
+        message = result.stdout.strip()
+        if result.stderr.strip():
+            if message:
+                message += "\n"
+            message += result.stderr.strip()
+        if message:
+            message += "\n"
+        message += f"process exited with code {result.returncode} (0x{unsigned_code:08X})"
+        return {path_key(path): failed_result(message, result.returncode) for path in files}
+
+    try:
+        doc = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        stderr = f" stderr={result.stderr[:400]!r}" if result.stderr else ""
+        message = f"invalid batch diagnostics JSON: {exc}: {result.stdout[:800]!r}{stderr}"
+        return {path_key(path): failed_result(message, result.returncode) for path in files}
+
+    requested = {path_key(path): path for path in files}
+    outcomes: dict[Path, CompilerFileResult] = {}
+
+    if doc.get("batch") is True:
+        file_docs = doc.get("files", [])
+        if not isinstance(file_docs, list):
+            message = f"batch diagnostics JSON has no files array: {doc!r}"[:800]
+            return {path_key(path): failed_result(message, result.returncode) for path in files}
+
+        for file_doc in file_docs:
+            if not isinstance(file_doc, dict):
+                continue
+            file_name = file_doc.get("file")
+            if not file_name:
+                continue
+            key = path_key(file_name)
+            if key in requested:
+                outcomes[key] = result_from_doc(file_doc)
+    elif len(files) == 1:
+        outcomes[path_key(files[0])] = result_from_doc(doc)
+    else:
+        message = f"expected batch diagnostics JSON for {len(files)} files, got: {doc!r}"[:800]
+        return {path_key(path): failed_result(message, result.returncode) for path in files}
+
+    missing = [path for key, path in requested.items() if key not in outcomes]
+    for path in missing:
+        outcomes[path_key(path)] = failed_result(
+            f"batch diagnostics JSON omitted {path}: {result.stdout[:800]!r}",
+            result.returncode,
+        )
+
+    return outcomes
 
 
 def build_compiler(root: Path) -> bool:
@@ -733,22 +882,44 @@ def check_ast_json_positions(data: dict, expectations: list[dict]) -> tuple[bool
 
 
 def find_metal_outputs(output_dir: Path, test_name: str) -> list[Path]:
-    files = {path for path in output_dir.glob(f"{test_name}*.metal")}
+    files = {path for path in output_dir.glob(f"{test_name}*.metal") if output_belongs_to_test(path, test_name)}
     exact = output_dir / f"{test_name}.metal"
     if exact.exists():
         files.add(exact)
     return sorted(files)
 
 
+def output_belongs_to_test(path: Path, test_name: str) -> bool:
+    name = path.name
+    if not name.startswith(test_name):
+        return False
+    if len(name) > len(test_name) and name[len(test_name)] not in "._":
+        return False
+
+    for other in KNOWN_TEST_STEMS:
+        if other == test_name or len(other) <= len(test_name):
+            continue
+        if not name.startswith(other):
+            continue
+        if len(name) == len(other) or name[len(other)] in "._":
+            return False
+
+    return True
+
+
+def filter_test_outputs(paths, test_name: str) -> list[Path]:
+    return sorted(path for path in paths if output_belongs_to_test(path, test_name))
+
+
 def find_stage_outputs(output_dir: Path, test_name: str, stage: str, suffix: str) -> list[Path]:
     if suffix in ("glsl", "gles"):
-        files = set(output_dir.glob(f"{test_name}*.{suffix}.{stage}"))
+        files = filter_test_outputs(output_dir.glob(f"{test_name}*.{suffix}.{stage}"), test_name)
         if files:
-            return sorted(files)
-        files = set(output_dir.glob(f"{test_name}_*_{stage}.{suffix}"))
+            return files
+        files = filter_test_outputs(output_dir.glob(f"{test_name}_*_{stage}.{suffix}"), test_name)
         if files:
-            return sorted(files)
-        return sorted(output_dir.glob(f"{test_name}*.{stage}"))
+            return files
+        return filter_test_outputs(output_dir.glob(f"{test_name}*.{stage}"), test_name)
 
     if suffix == "internals.json":
         new_pattern = f"{test_name}*.{stage}.internals.json"
@@ -757,14 +928,14 @@ def find_stage_outputs(output_dir: Path, test_name: str, stage: str, suffix: str
         new_pattern = f"{test_name}*.{stage}.{suffix}"
         legacy_pattern = f"{test_name}_*_{stage}.{suffix}"
 
-    files = set(output_dir.glob(new_pattern))
+    files = filter_test_outputs(output_dir.glob(new_pattern), test_name)
     if files:
-        return sorted(files)
-    return sorted(output_dir.glob(legacy_pattern))
+        return files
+    return filter_test_outputs(output_dir.glob(legacy_pattern), test_name)
 
 
 def find_spirv_outputs(output_dir: Path, test_name: str) -> list[Path]:
-    files = {path for path in output_dir.glob(f"{test_name}*.spv")}
+    files = {path for path in output_dir.glob(f"{test_name}*.spv") if output_belongs_to_test(path, test_name)}
     return sorted(files)
 
 
@@ -882,7 +1053,7 @@ def find_stage_file(output_dir: Path, test_name: str, stage: str, suffix: str) -
 def find_text_golden_files(golden_dir: Path, test_name: str) -> list[Path]:
     return sorted(
         path for path in golden_dir.glob(f"{test_name}_*.*")
-        if path.suffix in TEXT_GOLDEN_SUFFIXES
+        if path.suffix in TEXT_GOLDEN_SUFFIXES and output_belongs_to_test(path, test_name)
     )
 
 
@@ -1015,6 +1186,7 @@ def find_backend_outputs(output_dir: Path, test_name: str, ext: str) -> list[Pat
             path
             for stage in STAGE_SUFFIXES
             for path in output_dir.glob(f"{test_name}*.{ext}.{stage}")
+            if output_belongs_to_test(path, test_name)
         }
         if files:
             return sorted(files)
@@ -1022,10 +1194,11 @@ def find_backend_outputs(output_dir: Path, test_name: str, ext: str) -> list[Pat
             path
             for stage in STAGE_SUFFIXES
             for path in output_dir.glob(f"{test_name}*.{stage}")
+            if output_belongs_to_test(path, test_name)
         }
         return sorted(files)
 
-    files = {path for path in output_dir.glob(f"{test_name}*.{ext}")}
+    files = {path for path in output_dir.glob(f"{test_name}*.{ext}") if output_belongs_to_test(path, test_name)}
     exact = output_dir / f"{test_name}.{ext}"
     if exact.exists():
         files.add(exact)
@@ -2256,6 +2429,18 @@ def main() -> int:
         print(f"Mode: {BLUE}updating golden files{NC}")
     print()
 
+    global KNOWN_TEST_STEMS
+    KNOWN_TEST_STEMS = {
+        path.stem
+        for directory in (unsorted_dir, script_dir / "equivalence")
+        if directory.exists()
+        for path in directory.glob("*.bwsl")
+    }
+
+    unsorted_tests: list[dict] = []
+    unsorted_compile_groups: dict[tuple[str, ...], list[Path]] = {}
+    multi_backend_validation = hlsl_validation or glsl_validation or gles_validation
+
     for test_file in sorted(unsorted_dir.glob("*.bwsl")):
         test_name = test_file.stem
 
@@ -2272,7 +2457,6 @@ def main() -> int:
             translation_expectations is not None or
             test_name == "wave_operations"
         )
-        multi_backend_validation = hlsl_validation or glsl_validation or gles_validation
         needs_all_outputs = (
             bool(text_goldens)
             or translation_expectations is not None
@@ -2287,17 +2471,39 @@ def main() -> int:
         if needs_internals:
             compile_args.append("-internals")
 
-        result = run_command(
-            [
-                str(bwslc),
-                str(test_file),
-                "-o",
-                str(output_dir),
-                "-modules",
-                str(modules_dir),
-                *compile_args,
-            ],
-            cwd=root,
+        unsorted_tests.append({
+            "file": test_file,
+            "name": test_name,
+            "translation_expectations": translation_expectations,
+            "text_goldens": text_goldens,
+        })
+        unsorted_compile_groups.setdefault(tuple(compile_args), []).append(test_file)
+
+    unsorted_compile_results: dict[Path, CompilerFileResult] = {}
+    if unsorted_compile_groups:
+        total_files = sum(len(files) for files in unsorted_compile_groups.values())
+        print(f"Compiling {total_files} shader test(s) in {len(unsorted_compile_groups)} batch group(s)...")
+        for compile_args, files in unsorted_compile_groups.items():
+            unsorted_compile_results.update(
+                run_compiler_batch(
+                    bwslc,
+                    root,
+                    files,
+                    output_dir,
+                    modules_dir,
+                    compile_args,
+                )
+            )
+        print()
+
+    for test in unsorted_tests:
+        test_file = test["file"]
+        test_name = test["name"]
+        translation_expectations = test["translation_expectations"]
+        text_goldens = test["text_goldens"]
+        result = unsorted_compile_results.get(
+            path_key(test_file),
+            failed_result("missing compiler batch result"),
         )
 
         expected_error = TOP_LEVEL_EXPECTED_ERROR_TESTS.get(test_name)
@@ -2669,6 +2875,9 @@ def main() -> int:
 
     error_case_dir = script_dir / "error_cases"
     if error_case_dir.exists():
+        error_case_tests: list[tuple[Path, str, Path]] = []
+        error_case_groups: dict[Path, list[Path]] = {}
+
         for test_file in sorted(error_case_dir.glob("*.bwsl")):
             expected_error = ERROR_CASE_TESTS.get(test_file.name)
             if expected_error is None:
@@ -2681,17 +2890,28 @@ def main() -> int:
                 continue
 
             module_search_dir = root / ERROR_CASE_MODULE_DIRS.get(test_file.name, Path("modules"))
+            error_case_tests.append((test_file, expected_error, module_search_dir))
+            error_case_groups.setdefault(module_search_dir, []).append(test_file)
 
-            result = run_command(
-                [
-                    str(bwslc),
-                    str(test_file),
-                    "-modules",
-                    str(module_search_dir),
-                    "-o",
-                    str(output_dir),
-                ],
-                cwd=root,
+        error_case_results: dict[Path, CompilerFileResult] = {}
+        if error_case_groups:
+            total_files = sum(len(files) for files in error_case_groups.values())
+            print(f"Compiling {total_files} error-case test(s) in {len(error_case_groups)} batch group(s)...")
+        for module_search_dir, files in error_case_groups.items():
+            error_case_results.update(
+                run_compiler_batch(
+                    bwslc,
+                    root,
+                    files,
+                    output_dir,
+                    module_search_dir,
+                )
+            )
+
+        for test_file, expected_error, _module_search_dir in error_case_tests:
+            result = error_case_results.get(
+                path_key(test_file),
+                failed_result("missing compiler batch result"),
             )
 
             if result.returncode == 0:
@@ -2791,23 +3011,38 @@ def main() -> int:
     # Fuzzer-found regressions. Each file was a crash or hang until the
     # referenced fix landed. Pass = bwslc exits in bounded time with code 0 or
     # 1. Fail = signal death (negative code), timeout, or other non-zero exit.
+    # Run them in chunks so batch mode also covers crash-regression inputs
+    # without letting one hang consume the full suite indefinitely.
     fuzz_regr_dir = script_dir / "fuzz_regressions"
     if fuzz_regr_dir.exists():
-        for test_file in sorted(fuzz_regr_dir.glob("*.bwsl")):
-            try:
-                result = subprocess.run(
-                    [str(bwslc), str(test_file), "-modules", str(modules_dir), "-o", str(output_dir)],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    cwd=root,
-                    timeout=5,
+        fuzz_files = sorted(fuzz_regr_dir.glob("*.bwsl"))
+        fuzz_results: dict[Path, CompilerFileResult] = {}
+        chunk_size = 32
+        if fuzz_files:
+            total_chunks = (len(fuzz_files) + chunk_size - 1) // chunk_size
+            print(f"Compiling {len(fuzz_files)} fuzz-regression test(s) in {total_chunks} batch chunk(s)...")
+        for start in range(0, len(fuzz_files), chunk_size):
+            chunk = fuzz_files[start:start + chunk_size]
+            fuzz_results.update(
+                run_compiler_batch(
+                    bwslc,
+                    root,
+                    chunk,
+                    output_dir,
+                    modules_dir,
+                    timeout=30,
                 )
-            except subprocess.TimeoutExpired:
+            )
+
+        for test_file in fuzz_files:
+            result = fuzz_results.get(
+                path_key(test_file),
+                failed_result("missing compiler batch result"),
+            )
+
+            if result.returncode == -1 and "timed out" in result.stdout:
                 print(f"[{RED}FAIL{NC}] fuzz_regressions/{test_file.stem}")
-                print("       Error: bwslc hung — fix likely reverted")
+                print("       Error: bwslc batch chunk hung - fix likely reverted")
                 failed += 1
                 continue
 
