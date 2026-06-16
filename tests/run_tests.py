@@ -269,6 +269,14 @@ ERROR_CASE_EXTRA_EXPECTATIONS = {
     ],
 }
 
+
+def diagnostic_output_contains(output: str, expected: str) -> bool:
+    if expected in output:
+        return True
+    if "/" in expected or "\\" in expected:
+        return expected.replace("\\", "/") in output.replace("\\", "/")
+    return False
+
 # Position checks against `bwslc -ast-json` output, keyed by fixture stem in
 # tests/ast_json/. Each entry's "match" keys must select exactly one node in
 # the AST (matched against the node's own JSON fields, so "line" can be used
@@ -2928,7 +2936,7 @@ def main() -> int:
 
             missing_expectations = [
                 expected for expected in ERROR_CASE_EXTRA_EXPECTATIONS.get(test_file.name, [])
-                if expected not in result.stdout
+                if not diagnostic_output_contains(result.stdout, expected)
             ]
             if missing_expectations:
                 print(f"[{RED}FAIL{NC}] error_cases/{test_file.stem}")
