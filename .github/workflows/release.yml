@@ -22,7 +22,7 @@ jobs:
       - name: Build bwslc
         env:
           CXX: ccache clang++
-        run: make bwslc
+        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make bwslc
 
       - name: Package Linux binary
         id: package
@@ -59,7 +59,7 @@ jobs:
       - name: Build bwslc
         env:
           CXX: ccache clang++
-        run: make bwslc
+        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make bwslc
 
       - name: Package macOS binary
         id: package
@@ -96,8 +96,11 @@ jobs:
           variant: sccache
 
       - name: Build with MSVC
-        shell: cmd
-        run: build.bat bwslc
+        shell: pwsh
+        run: |
+          $env:BWSL_VERSION = $env:GITHUB_REF_NAME -replace '^v', ''
+          cmd /c build.bat bwslc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package Windows binary
         shell: pwsh

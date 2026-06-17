@@ -92,6 +92,7 @@ namespace spirv_cross_wrapper {
 #include "../core/bwsl_variant_system.cpp"
 
 #include "bwsl_tool_common.h"
+#include "version.h"
 
 // Note: SPIRV-Cross is compiled separately (spirv_cross_wrapper.cpp) to avoid
 // macro conflicts with defs.h (u32, f32, f64 macros)
@@ -101,8 +102,6 @@ namespace fs = std::filesystem;
 using namespace BWSL;
 using namespace BWSL::IR;
 using namespace BWSL::ToolCommon;
-
-#define VERSION "0.8.0"
 
 // ============= Configuration =============
 
@@ -233,17 +232,19 @@ struct TimingInfo {
 
 
 void print_splash() {
-    printf(R"(
-    ╭─────────────────────────────────────╮
-    │ ░▒▓█ B W S L █▓▒░                   │
-    │ ─────────────────────────────       │
-    │ » Brawl Shading Language            │
-    │ » Compiler v 0.8.0                  │
-    │ » Made by Alexander Presthus        │
-    │ » https://github.com/apresthus/bwsl │
-    │                                     │
-    ╰─────────────────────────────────────╯
-)" "\n");
+    printf(
+        "\n"
+        "    ╭─────────────────────────────────────╮\n"
+        "    │ ░▒▓█ B W S L █▓▒░                   │\n"
+        "    │ ─────────────────────────────       │\n"
+        "    │ » Brawl Shading Language            │\n"
+        "    │ » Compiler v %-23s│\n"
+        "    │ » Made by Alexander Presthus        │\n"
+        "    │ » https://github.com/apresthus/bwsl │\n"
+        "    │                                     │\n"
+        "    ╰─────────────────────────────────────╯\n"
+        "\n",
+        VERSION);
 }
 // ============= Utility Functions =============
 
