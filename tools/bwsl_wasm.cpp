@@ -54,6 +54,7 @@ namespace spirv_cross_wrapper {
 static constexpr bool USE_DIRECT_GLES = false;
 
 // BWSL compiler includes (all standalone)
+#include "version.h"
 #include "bwsl_spirv_backend.h"
 #include "bwsl_ir_gen.h"
 #include "bwsl_ir_lowering.h"
@@ -1202,7 +1203,7 @@ const char* compile(const char* bwslSource, const char* rcfgSource, const char* 
 
 // Version info
 const char* getVersion() {
-    return "BWSL Compiler 0.8.0 (WASM)";
+    return "BWSL Compiler " VERSION " (WASM)";
 }
 
 // ============= Symbol Export for Autocomplete =============

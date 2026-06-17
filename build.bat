@@ -36,7 +36,9 @@ echo Using linked SPIRV-Tools: %SPIRV_TOOLS_LINK_LIB%
 set "DISABLED_WARNINGS=/wd4324 /wd4701 /wd4996"
 set "INCLUDE_FLAGS=/Ivendor\SPIRV-Cross /I. /Icore /Icore\middleware /Iphases\lexing /Iphases\parser /Iphases\evaluation /Iphases\ir_generation /Iphases\ir_lowering /Iphases\control_flow /Iphases\ssa /Iphases\backends\spirv /Iphases\backends\gles"
 set "CPU_FLAGS=/arch:AVX /arch:AVX2"
-set "COMMON_FLAGS=/nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB %SPIRV_TOOLS_FLAGS% %INCLUDE_FLAGS% %CPU_FLAGS% %DISABLED_WARNINGS%"
+set "VERSION_FLAGS="
+if defined BWSL_VERSION set "VERSION_FLAGS=/DVERSION=\"%BWSL_VERSION%\""
+set "COMMON_FLAGS=/nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB %SPIRV_TOOLS_FLAGS% %INCLUDE_FLAGS% %CPU_FLAGS% %DISABLED_WARNINGS% %VERSION_FLAGS%"
 :: hide the warnings coming from vendor/SPIRV-Cross
 set "SPIRV_CROSS_FLAGS=/wd4389 /wd4245 /wd4245"
 set "RELEASE_FLAGS=/O2 /W4 /MD"
