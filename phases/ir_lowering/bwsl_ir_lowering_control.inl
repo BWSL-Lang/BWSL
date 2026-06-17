@@ -693,15 +693,6 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
     return false;
   };
 
-  // Lower switch expression
-  u16 exprReg = LowerExpression(sw.expression);
-
-  // Emit the switch instruction
-  u32 switchIdx = builder.currentInstruction;
-  builder.EmitInstruction(OP_SWITCH, 0, exprReg);
-  // metadata will point to switch data index
-  program.metadata[switchIdx] = program.switchCount;
-
   // Count case arms and total values (each arm can have multiple values)
   u32 caseArmCount = sw.cases.count;
   bool hasDefault = !sw.defaultCase.IsNull();
@@ -738,12 +729,75 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
     }
   }
 
+  // If variant specialization (or another compile-time substitution) reduced
+  // the selector to a literal value, lower only the matching arm. Keep the body
+  // under switchDepth so `break` inside a case keeps the existing switch rules.
+  s32 selectorVal = 0;
+  if (GetCaseLiteralValue(sw.expression, &selectorVal)) {
+    NodeRef selectedCase = NodeRef::Null();
+    u32 matchingCaseArms = 0;
+
+    for (u32 i = 0; i < caseArmCount; i++) {
+      NodeRef caseRef = sw.cases[i];
+      const SwitchCaseData &caseData = ast->GetSwitchCase(caseRef);
+
+      if (caseData.isDefault) continue;
+
+      bool armMatches = false;
+      for (u32 v = 0; v < caseData.values.count; v++) {
+        s32 caseVal = 0;
+        if (!GetCaseLiteralValue(caseData.values[v], &caseVal)) {
+          ReportError(
+              "Error: switch case values must be compile-time literals\n");
+          return;
+        }
+        if (caseVal == selectorVal) {
+          armMatches = true;
+        }
+      }
+
+      if (armMatches) {
+        selectedCase = caseRef;
+        matchingCaseArms++;
+      }
+    }
+
+    if (matchingCaseArms > 1) {
+      ReportError(
+          "Error: switch selector resolves to multiple case arms\n");
+      return;
+    }
+
+    NodeRef selectedBody = NodeRef::Null();
+    if (selectedCase.IsValid()) {
+      selectedBody = ast->GetSwitchCase(selectedCase).body;
+    } else if (hasDefault) {
+      selectedBody = ast->GetSwitchCase(sw.defaultCase).body;
+    }
+
+    if (selectedBody.IsValid()) {
+      switchDepth++;
+      LowerStatement(selectedBody);
+      switchDepth--;
+    }
+    return;
+  }
+
   // Determine if we should use a jump table
   // Jump table is efficient when density >= 50% and range is reasonable
   s32 range = (totalCaseValues > 0) ? (maxCase - minCase + 1) : 0;
   bool useJumpTable = (totalCaseValues >= 3) && (range <= 256) &&
                       (static_cast<u32>(range) <= totalCaseValues * 2);
   (void)useJumpTable; // For future optimization - currently always use linear
+
+  // Lower switch expression
+  u16 exprReg = LowerExpression(sw.expression);
+
+  // Emit the switch instruction
+  u32 switchIdx = builder.currentInstruction;
+  builder.EmitInstruction(OP_SWITCH, 0, exprReg);
+  // metadata will point to switch data index
+  program.metadata[switchIdx] = program.switchCount;
 
   // Record switch ID and reserve case data range up-front (nested switches
   // rely on this)

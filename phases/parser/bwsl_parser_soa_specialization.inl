@@ -449,6 +449,60 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
             return newIf;
         }
 
+        case ASTNodeType::SWITCH: {
+            const SwitchData& src = ast->GetSwitch(node);
+            NodeRef srcExpression = src.expression;
+            NodeRef srcDefaultCase = src.defaultCase;
+            bool isExhaustive = src.isExhaustive;
+            ArenaArray<NodeRef> cases;
+            cases.Init(arena, src.cases.count > 0 ? src.cases.count : 1);
+            for (u32 i = 0; i < src.cases.count; i++) {
+                cases.Push(arena, src.cases[i]);
+            }
+
+            NodeRef expression = CloneNodeWithParams(srcExpression, subs, subCount);
+            NodeRef newSwitch = ASTFactory::MakeSwitch(ast, expression, line, col);
+            ast->GetSwitch(newSwitch).isExhaustive = isExhaustive;
+
+            for (u32 i = 0; i < cases.count; i++) {
+                NodeRef caseRef = cases[i];
+                const SwitchCaseData& srcCase = ast->GetSwitchCase(caseRef);
+                bool isDefault = srcCase.isDefault;
+                u32 caseLine = ast->GetLine(caseRef);
+                u32 caseCol = ast->GetColumn(caseRef);
+                ArenaArray<NodeRef> values;
+                values.Init(arena, srcCase.values.count > 0 ? srcCase.values.count : 1);
+                for (u32 v = 0; v < srcCase.values.count; v++) {
+                    values.Push(arena, srcCase.values[v]);
+                }
+
+                NodeRef body = CloneNodeWithParams(srcCase.body, subs, subCount);
+                NodeRef clonedCase = ASTFactory::MakeSwitchCase(ast, body, isDefault,
+                                                                 caseLine, caseCol);
+                for (u32 v = 0; v < values.count; v++) {
+                    NodeRef value = values[v];
+                    NodeRef clonedValue = CloneNodeWithParams(value, subs, subCount);
+                    if (clonedValue.IsValid()) {
+                        ast->GetSwitchCase(clonedCase).values.Push(arena, clonedValue);
+                    }
+                }
+                ast->GetSwitch(newSwitch).cases.Push(arena, clonedCase);
+            }
+
+            if (srcDefaultCase.IsValid()) {
+                const SwitchCaseData& srcDefault = ast->GetSwitchCase(srcDefaultCase);
+                NodeRef srcDefaultBody = srcDefault.body;
+                u32 defaultLine = ast->GetLine(srcDefaultCase);
+                u32 defaultCol = ast->GetColumn(srcDefaultCase);
+                NodeRef body = CloneNodeWithParams(srcDefaultBody, subs, subCount);
+                ast->GetSwitch(newSwitch).defaultCase =
+                    ASTFactory::MakeSwitchCase(ast, body, true,
+                                               defaultLine, defaultCol);
+            }
+
+            return newSwitch;
+        }
+
         case ASTNodeType::FOR_CSTYLE: {
             const ForCStyleData& src = ast->GetForCStyle(node);
             NodeRef init = CloneNodeWithParams(src.init, subs, subCount);

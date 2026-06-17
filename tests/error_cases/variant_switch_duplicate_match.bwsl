@@ -1,0 +1,31 @@
+// Error case: a variant-specialized switch must resolve to at most one case arm.
+
+pipeline VariantSwitchDuplicateMatch {
+    enum Mode {
+        A,
+        B
+    }
+
+    variants {
+        mode: Mode = Mode::A;
+    }
+
+    pass "Main" {
+        fragment {
+            float value = 0.0;
+
+            switch (variants.mode) {
+                case Mode::A:
+                    value = 1.0;
+
+                case Mode::A:
+                    value = 2.0;
+
+                case Mode::B:
+                    value = 3.0;
+            }
+
+            output.color = float4(value, 0.0, 0.0, 1.0);
+        }
+    }
+}
