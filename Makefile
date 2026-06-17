@@ -38,7 +38,7 @@ BWSLC_SRC = src/bwslc.cpp
 SPIRV_CROSS_WRAPPER = src/spirv_cross_wrapper.cpp
 WASM_SOURCE = src/bwsl_wasm.cpp
 EMBEDDED_MODULE_GENERATOR = scripts/gen_embedded_modules.py
-EMBEDDED_MODULE_HEADER = core/bwsl_embedded_modules.generated.h
+EMBEDDED_MODULE_HEADER = src/core/bwsl_embedded_modules.generated.h
 EMBEDDED_MODULE_SOURCES = \
 	modules/Color.bwsl \
 	modules/Compression.bwsl \
