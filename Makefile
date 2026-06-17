@@ -38,7 +38,7 @@ BWSLC_SRC = src/bwslc.cpp
 SPIRV_CROSS_WRAPPER = src/spirv_cross_wrapper.cpp
 WASM_SOURCE = src/bwsl_wasm.cpp
 EMBEDDED_MODULE_GENERATOR = scripts/gen_embedded_modules.py
-EMBEDDED_MODULE_HEADER = core/bwsl_embedded_modules.generated.h
+EMBEDDED_MODULE_HEADER = src/core/bwsl_embedded_modules.generated.h
 EMBEDDED_MODULE_SOURCES = \
 	modules/Color.bwsl \
 	modules/Compression.bwsl \
@@ -342,7 +342,7 @@ FUZZ_CXX ?= $(shell if [ -x /opt/homebrew/opt/llvm/bin/clang++ ]; then \
 	echo /opt/homebrew/opt/llvm/bin/clang++; \
 	elif [ -x /usr/local/opt/llvm/bin/clang++ ]; then \
 	echo /usr/local/opt/llvm/bin/clang++; \
-	else echo clang++; fi)
+	else echo $(CXX); fi)
 FUZZ_FLAGS = -fsanitize=fuzzer,address,undefined -g -O1 -std=c++20 \
 	-fno-omit-frame-pointer -Wall
 # Homebrew LLVM's fuzzer runtime links against its own libc++; match that

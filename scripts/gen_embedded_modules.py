@@ -155,7 +155,7 @@ def main() -> int:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("core/bwsl_embedded_modules.generated.h"),
+        default=Path("src/core/bwsl_embedded_modules.generated.h"),
         help="Header path to write, relative to repo root unless absolute.",
     )
     args = parser.parse_args()
