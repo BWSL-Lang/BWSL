@@ -10,19 +10,8 @@ import os
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 INCLUDE_DIRS = [
-    ".",
-    "core",
-    "core/middleware",
-    "phases/lexing",
-    "phases/parser",
-    "phases/evaluation",
-    "phases/ir_generation",
-    "phases/ir_lowering",
-    "phases/control_flow",
-    "phases/ssa",
-    "phases/backends/spirv",
-    "phases/backends/gles",
-    "vendor/SPIRV-Cross",
+    "src",
+    "vendor"
 ]
 
 BASE_FLAGS = [
@@ -35,10 +24,10 @@ BASE_FLAGS = [
 COMPILER = "clang++"
 
 TRANSLATION_UNITS = [
-    "tools/bwslc.cpp",
-    "tools/spirv_cross_wrapper.cpp",
-    "tools/bwslc_fuzz.cpp",
-    "tools/equiv_runner.cpp",
+    "src/bwslc.cpp",
+    "src/spirv_cross_wrapper.cpp",
+    "src/bwslc_fuzz.cpp",
+    "src/equiv_runner.cpp",
 ]
 
 
