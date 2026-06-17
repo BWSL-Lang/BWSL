@@ -342,7 +342,7 @@ FUZZ_CXX ?= $(shell if [ -x /opt/homebrew/opt/llvm/bin/clang++ ]; then \
 	echo /opt/homebrew/opt/llvm/bin/clang++; \
 	elif [ -x /usr/local/opt/llvm/bin/clang++ ]; then \
 	echo /usr/local/opt/llvm/bin/clang++; \
-	else echo clang++; fi)
+	else echo $(CXX); fi)
 FUZZ_FLAGS = -fsanitize=fuzzer,address,undefined -g -O1 -std=c++20 \
 	-fno-omit-frame-pointer -Wall
 # Homebrew LLVM's fuzzer runtime links against its own libc++; match that
