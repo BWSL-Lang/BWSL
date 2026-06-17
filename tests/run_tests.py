@@ -126,6 +126,46 @@ VARIANT_REFLECTION_TESTS = {
         "illegal_args": ["-variant", "strict=true"],
         "illegal_error": "violates rule: require",
     },
+    "variants_switch": {
+        "declared": {
+            "quality": ("Quality", "Medium"),
+            "fast": ("bool", "false"),
+        },
+        "implicit": set(),
+        "default_selected": {
+            "quality": "Medium",
+            "fast": "false",
+        },
+        "override_selected": {
+            "quality": "High",
+            "fast": "true",
+        },
+        "override_args": ["-variant", "quality=High", "-variant", "fast=true"],
+        "illegal_args": ["-variant", "quality=Low", "-variant", "fast=true"],
+        "illegal_error": "violates rule: conflict",
+        "specialization": {
+            "default": {
+                "frag_metal_contains": ["float4(0.5, 0.0, 0.0, 1.0)"],
+                "frag_metal_not_contains": ["float4(0.25, 0.0, 0.0, 1.0)", "float4(0.75, 0.0, 0.0, 1.0)", "float4(1.0, 0.0, 0.0, 1.0)"],
+                "frag_hlsl_contains": ["float4(0.5f, 0.0f, 0.0f, 1.0f)"],
+                "frag_hlsl_not_contains": ["float4(0.25f, 0.0f, 0.0f, 1.0f)", "float4(0.75f, 0.0f, 0.0f, 1.0f)", "float4(1.0f, 0.0f, 0.0f, 1.0f)"],
+                "frag_ir_contains": ["[  1] STORE_REG        r0           <- 0.5"],
+                "frag_ir_not_contains": ["SWITCH", "BRANCH", "0.25", "0.75"],
+                "frag_spirv_contains": ["OpCompositeConstruct %v4float %float_0_5"],
+                "frag_spirv_not_contains": ["OpSwitch", "OpBranchConditional", "%float_0_75", "%float_0_25"],
+            },
+            "override": {
+                "frag_metal_contains": ["float4(1.0, 0.0, 0.0, 1.0)"],
+                "frag_metal_not_contains": ["float4(0.25, 0.0, 0.0, 1.0)", "float4(0.5, 0.0, 0.0, 1.0)", "float4(0.75, 0.0, 0.0, 1.0)"],
+                "frag_hlsl_contains": ["float4(1.0f, 0.0f, 0.0f, 1.0f)"],
+                "frag_hlsl_not_contains": ["float4(0.25f, 0.0f, 0.0f, 1.0f)", "float4(0.5f, 0.0f, 0.0f, 1.0f)", "float4(0.75f, 0.0f, 0.0f, 1.0f)"],
+                "frag_ir_contains": ["[  1] STORE_REG        r0           <- 1"],
+                "frag_ir_not_contains": ["SWITCH", "BRANCH", "0.25", "0.5", "0.75"],
+                "frag_spirv_contains": ["OpCompositeConstruct %v4float %float_1"],
+                "frag_spirv_not_contains": ["OpSwitch", "OpBranchConditional", "%float_0_75", "%float_0_5", "%float_0_25"],
+            },
+        },
+    },
 }
 
 VARIANT_ERROR_TESTS = {
@@ -235,6 +275,7 @@ ERROR_CASE_TESTS = {
     "array_size_negative.bwsl": "Expected array size",
     "discard_in_vertex.bwsl": "SPIR-V validation failed",
     "switch_on_float.bwsl": "SPIR-V validation failed",
+    "variant_switch_duplicate_match.bwsl": "switch selector resolves to multiple case arms",
     "user_function_wrong_arg_count.bwsl": "SPIR-V validation failed",
     "struct_as_varying.bwsl": "SPIR-V validation failed",
     "assign_to_input.bwsl": "cannot assign to input.* - stage inputs are read-only",
@@ -1267,6 +1308,12 @@ def check_variant_specialization(output_dir: Path, test_name: str, expectations:
     vert_hlsl_path, message = find_variant_stage_file(output_dir, test_name, "vert", "hlsl")
     if vert_hlsl_path is None:
         return False, message
+    frag_metal_path, message = find_variant_stage_file(output_dir, test_name, "frag", "metal")
+    if frag_metal_path is None:
+        return False, message
+    frag_hlsl_path, message = find_variant_stage_file(output_dir, test_name, "frag", "hlsl")
+    if frag_hlsl_path is None:
+        return False, message
     vert_internals_path, message = find_variant_stage_file(output_dir, test_name, "vert", "internals.json")
     if vert_internals_path is None:
         return False, message
@@ -1276,6 +1323,8 @@ def check_variant_specialization(output_dir: Path, test_name: str, expectations:
 
     vert_metal = vert_metal_path.read_text(encoding="utf-8")
     vert_hlsl = vert_hlsl_path.read_text(encoding="utf-8")
+    frag_metal = frag_metal_path.read_text(encoding="utf-8")
+    frag_hlsl = frag_hlsl_path.read_text(encoding="utf-8")
     vert_internals = json.loads(vert_internals_path.read_text(encoding="utf-8"))
     frag_internals = json.loads(frag_internals_path.read_text(encoding="utf-8"))
 
@@ -1284,6 +1333,8 @@ def check_variant_specialization(output_dir: Path, test_name: str, expectations:
     checks = [
         ("vertex metal", vert_metal, expectations.get("vert_metal_contains"), expectations.get("vert_metal_not_contains")),
         ("vertex hlsl", vert_hlsl, expectations.get("vert_hlsl_contains"), expectations.get("vert_hlsl_not_contains")),
+        ("fragment metal", frag_metal, expectations.get("frag_metal_contains"), expectations.get("frag_metal_not_contains")),
+        ("fragment hlsl", frag_hlsl, expectations.get("frag_hlsl_contains"), expectations.get("frag_hlsl_not_contains")),
         ("vertex ir", vert_internals.get("ir", ""), expectations.get("vert_ir_contains"), expectations.get("vert_ir_not_contains")),
         ("fragment ir", frag_internals.get("ir", ""), expectations.get("frag_ir_contains"), expectations.get("frag_ir_not_contains")),
         ("fragment spirv", frag_spirv_dis, expectations.get("frag_spirv_contains") if spirv_dis_available else None, expectations.get("frag_spirv_not_contains") if spirv_dis_available else None),

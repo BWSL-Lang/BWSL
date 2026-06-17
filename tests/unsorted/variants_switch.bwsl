@@ -1,0 +1,64 @@
+// Test: variant-specialized switch statements
+// Tests: enum variant switch pruning, nested bool variant switch pruning,
+//        and legality rules for selected variant combinations.
+
+pipeline VariantsSwitch {
+    enum Quality {
+        Low,
+        Medium,
+        High
+    }
+
+    attributes {
+        position: float3
+    }
+
+    variants {
+        quality: Quality = Quality::Medium;
+        fast: bool = false;
+
+        rules {
+            conflict quality == Quality::Low, fast;
+        }
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            float weight = 0.0;
+
+            switch (variants.quality) {
+                case Quality::Low:
+                    weight = 0.25;
+                    break;
+
+                case Quality::Medium:
+                    switch (variants.fast) {
+                        case true:
+                            weight = 0.75;
+                            break;
+
+                        case false:
+                            weight = 0.5;
+                            break;
+                    }
+                    break;
+
+                case Quality::High:
+                    weight = 1.0;
+                    break;
+
+                default:
+                    weight = 0.125;
+                    break;
+            }
+
+            output.color = float4(weight, 0.0, 0.0, 1.0);
+        }
+    }
+}
