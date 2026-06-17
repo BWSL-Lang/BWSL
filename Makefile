@@ -34,9 +34,9 @@ EXE_EXT =
 endif
 
 # Source paths
-BWSLC_SRC = tools/bwslc.cpp
-SPIRV_CROSS_WRAPPER = tools/spirv_cross_wrapper.cpp
-WASM_SOURCE = tools/bwsl_wasm.cpp
+BWSLC_SRC = src/bwslc.cpp
+SPIRV_CROSS_WRAPPER = src/spirv_cross_wrapper.cpp
+WASM_SOURCE = src/bwsl_wasm.cpp
 EMBEDDED_MODULE_GENERATOR = scripts/gen_embedded_modules.py
 EMBEDDED_MODULE_HEADER = core/bwsl_embedded_modules.generated.h
 EMBEDDED_MODULE_SOURCES = \
@@ -64,7 +64,7 @@ BWSLC_SANITIZE_OUT = $(BUILD_DIR)/bwslc-sanitize$(EXE_EXT)
 BWSLC_WIN_ZIG_OUT = $(BUILD_DIR)/bwslc-win.exe
 BWSLC_WIN_ZIG_DEBUG_OUT = $(BUILD_DIR)/bwslc-win-debug.exe
 
-EQUIV_RUNNER_SRC = tools/equiv_runner.cpp
+EQUIV_RUNNER_SRC = src/equiv_runner.cpp
 EQUIV_RUNNER_OUT = $(BUILD_DIR)/equiv_runner$(EXE_EXT)
 
 # Vulkan SDK location (override by exporting VULKAN_SDK)
@@ -119,10 +119,7 @@ ifeq ($(and $(HAS_SPIRV_VAL),$(HAS_SPIRV_DIS)),)
 SPIRV_TEST_DEPS = spirv-tools
 endif
 
-BWSL_INCLUDE_DIRS = -I. -Icore -Icore/middleware \
-	-Iphases/lexing -Iphases/parser -Iphases/evaluation \
-	-Iphases/ir_generation -Iphases/ir_lowering -Iphases/control_flow \
-	-Iphases/ssa -Iphases/backends/spirv -Iphases/backends/gles
+BWSL_INCLUDE_DIRS = -Isrc -Ivendor
 
 # Native Unix toolchain
 ifeq ($(origin CXX), default)
@@ -146,8 +143,6 @@ endif
 CXXFLAGS_DEBUG ?= -g -O0 -std=c++20 -Wall -Wextra
 
 # Override the compiled-in VERSION string (e.g. BWSL_VERSION=1.2.3 make bwslc).
-# Leaves the hardcoded fallback in tools/bwslc.cpp / tools/bwsl_wasm.cpp untouched
-# when unset.
 BWSL_VERSION ?=
 VERSION_FLAGS = $(if $(BWSL_VERSION),-DVERSION='"$(BWSL_VERSION)"')
 
@@ -228,9 +223,9 @@ WASM_RELEASE_OPT = -O3 -DNDEBUG -flto
 WASM_DEBUG_OPT = -O0 -g -s ASSERTIONS=2 -s SAFE_HEAP=1
 
 # BWSL sources need defs_wasm.h for BSD type compatibility
-WASM_BWSL_INCLUDES = $(BWSL_INCLUDE_DIRS) -Itools -include tools/defs_wasm.h
+WASM_BWSL_INCLUDES = $(BWSL_INCLUDE_DIRS) -include src/defs_wasm.h
 # SPIRV-Cross wrapper must NOT have defs_wasm.h (conflicts with f32/f64 member names)
-WASM_SPIRV_INCLUDES = $(BWSL_INCLUDE_DIRS) -Itools
+WASM_SPIRV_INCLUDES = $(BWSL_INCLUDE_DIRS)
 
 # ============================================================================
 # Targets
@@ -341,7 +336,7 @@ $(SPIRV_TOOLS_STAMP): $(SPIRV_TOOLS_SRC)/CMakeLists.txt | $(BUILD_DIR)
 # libFuzzer build. Apple's bundled clang ships without libclang_rt.fuzzer on
 # some Xcode versions, so default to Homebrew LLVM when it's installed.
 # Override with e.g. `make bwslc-fuzz FUZZ_CXX=/path/to/clang++`.
-FUZZ_SRC = tools/bwslc_fuzz.cpp
+FUZZ_SRC = src/bwslc_fuzz.cpp
 FUZZ_OUT = $(BUILD_DIR)/bwslc-fuzz$(EXE_EXT)
 FUZZ_CXX ?= $(shell if [ -x /opt/homebrew/opt/llvm/bin/clang++ ]; then \
 	echo /opt/homebrew/opt/llvm/bin/clang++; \

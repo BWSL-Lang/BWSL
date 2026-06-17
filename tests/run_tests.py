@@ -2991,9 +2991,9 @@ def main() -> int:
             print(f"[{GREEN}PASS{NC}] ast_json/{test_file.stem}")
             passed += 1
 
-    stdlib_source = (root / "core" / "bwsl_stdlib.h").read_text(encoding="utf-8")
+    stdlib_source = (root / "src" / "core" / "bwsl_stdlib.h").read_text(encoding="utf-8")
     token_sources = "\n".join(
-        (root / path).read_text(encoding="utf-8")
+        (root / "src" /path).read_text(encoding="utf-8")
         for path in (
             "phases/lexing/bwsl_token_defs.h",
             "phases/lexing/bwsl_token_stream.h",
