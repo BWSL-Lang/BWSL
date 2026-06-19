@@ -2238,6 +2238,12 @@ def run_watch_mode_tests(bwslc: Path, root: Path,
 
     passed = failed = 0
 
+    def norm(p) -> str:
+        # bwslc may report forward- or backslash-separated paths depending
+        # on host platform and how the watched directory was passed in;
+        # normalize both sides before substring-matching against them.
+        return str(p).replace("\\", "/")
+
     def report(name: str, ok: bool, message: str = "") -> None:
         nonlocal passed, failed
         if ok:
@@ -2320,7 +2326,7 @@ def run_watch_mode_tests(bwslc: Path, root: Path,
                doc.get("event") == "build" and doc.get("buildId") == 1
                and doc.get("watch") is True and doc.get("success") is True
                and doc.get("fileCount") == 2,
-               f"document={doc!r}"[:400])
+               f"document={doc!r}"[:500])
 
         # 2. Breaking one unit rebuilds only that unit and reports failure.
         shader_b.write_text(
@@ -2331,9 +2337,9 @@ def run_watch_mode_tests(bwslc: Path, root: Path,
         report("rebuild_only_changed_unit",
                doc.get("buildId") == 2 and doc.get("success") is False
                and doc.get("fileCount") == 1
-               and any(str(shader_b) in t for t in doc.get("trigger", []))
+               and any(norm(shader_b) in norm(t) for t in doc.get("trigger", []))
                and doc.get("errorCount", 0) >= 1,
-               f"document={doc!r}"[:400])
+               f"document={doc!r}"[:500])
 
         # 3. Fixing it rebuilds and succeeds again.
         shader_b.write_text(WATCH_SHADER_PLAIN.format(name="WatchB"),
@@ -2343,7 +2349,7 @@ def run_watch_mode_tests(bwslc: Path, root: Path,
         report("rebuild_after_fix",
                doc.get("buildId") == 3 and doc.get("success") is True
                and doc.get("fileCount") == 1,
-               f"document={doc!r}"[:400])
+               f"document={doc!r}"[:500])
 
         # 4. Editing the module recompiles its dependent (a.bwsl), not b.
         (mods_dir / "util.bwsl").write_text(
@@ -2353,8 +2359,8 @@ def run_watch_mode_tests(bwslc: Path, root: Path,
         dep_files = [f.get("file", "") for f in doc.get("files", [])]
         report("module_edit_rebuilds_dependent",
                doc.get("fileCount") == 1 and doc.get("success") is True
-               and any(str(shader_a) in f for f in dep_files),
-               f"document={doc!r}"[:400])
+               and any(norm(shader_a) in norm(f) for f in dep_files),
+               f"document={doc!r}"[:500])
 
         # 5. A new file in the watched directory becomes a job live.
         shader_c = shaders_dir / "c.bwsl"
@@ -2364,9 +2370,9 @@ def run_watch_mode_tests(bwslc: Path, root: Path,
         doc = seen[4] if len(seen) > 4 else {}
         report("added_file_compiles",
                doc.get("success") is True
-               and any(str(shader_c) in t for t in doc.get("trigger", []))
+               and any(norm(shader_c) in norm(t) for t in doc.get("trigger", []))
                and (out_dir / "c.vert.spv").exists(),
-               f"document={doc!r}"[:400])
+               f"document={doc!r}"[:500])
     finally:
         if os.name == "nt":
             proc.terminate()

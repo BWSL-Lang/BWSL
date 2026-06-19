@@ -34,7 +34,7 @@ echo Using linked SPIRV-Tools: %SPIRV_TOOLS_LINK_LIB%
 :: C4701: potentially uninitialized local variable (the compiler is too dumb for this to be useful)
 :: C4996: strncpy is "unsafe"
 set "DISABLED_WARNINGS=/wd4324 /wd4701 /wd4996"
-set "INCLUDE_FLAGS=/Ivendor\SPIRV-Cross /I. /Icore /Icore\middleware /Iphases\lexing /Iphases\parser /Iphases\evaluation /Iphases\ir_generation /Iphases\ir_lowering /Iphases\control_flow /Iphases\ssa /Iphases\backends\spirv /Iphases\backends\gles"
+set "INCLUDE_FLAGS=/Ivendor\SPIRV-Cross /Isrc /Ivendor"
 set "CPU_FLAGS=/arch:AVX /arch:AVX2"
 set "VERSION_FLAGS="
 if defined BWSL_VERSION set "VERSION_FLAGS=/DVERSION=\"%BWSL_VERSION%\""
@@ -44,8 +44,8 @@ set "SPIRV_CROSS_FLAGS=/wd4389 /wd4245 /wd4245"
 set "RELEASE_FLAGS=/O2 /W4 /MD"
 set "DEBUG_FLAGS=/Zi /Od /W4 /MDd"
 set "LINK_FLAGS=/link /STACK:8388608"
-set "WRAPPER_SRC=tools\spirv_cross_wrapper.cpp"
-set "BWSLC_SRC=tools\bwslc.cpp"
+set "WRAPPER_SRC=src\spirv_cross_wrapper.cpp"
+set "BWSLC_SRC=src\bwslc.cpp"
 set "SCCACHE_FLAGS="
 
 set "COMPILER=cl"
@@ -108,22 +108,22 @@ exit /b 0
 :generate_embedded_modules
 where python >nul 2>&1
 if not errorlevel 1 (
-    python scripts\gen_embedded_modules.py --out core\bwsl_embedded_modules.generated.h
+    python scripts\gen_embedded_modules.py --out src\core\bwsl_embedded_modules.generated.h
     exit /b %errorlevel%
 )
 
 where py >nul 2>&1
 if not errorlevel 1 (
-    py -3 scripts\gen_embedded_modules.py --out core\bwsl_embedded_modules.generated.h
+    py -3 scripts\gen_embedded_modules.py --out src\core\bwsl_embedded_modules.generated.h
     exit /b %errorlevel%
 )
 
-if exist "core\bwsl_embedded_modules.generated.h" (
-    echo Python was not found; using existing core\bwsl_embedded_modules.generated.h.
+if exist "src\core\bwsl_embedded_modules.generated.h" (
+    echo Python was not found; using existing src\core\bwsl_embedded_modules.generated.h.
     exit /b 0
 )
 
-echo Python is required to generate core\bwsl_embedded_modules.generated.h.
+echo Python is required to generate src\core\bwsl_embedded_modules.generated.h.
 exit /b 1
 
 :ensure_msvc

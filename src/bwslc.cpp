@@ -2796,7 +2796,10 @@ static bool CollectDirectoryJobs(const fs::path& root,
 
     for (const fs::path& file : files) {
         CompileJob job;
-        job.inputFile = fs::absolute(file).string();
+        // generic_string() keeps the reported path separator consistent even
+        // when the scanned root mixes separator styles (e.g. a forward-slash
+        // root combined with directory_iterator's native-separator joins).
+        job.inputFile = fs::absolute(file).generic_string();
         fs::path relativeDir = fs::relative(file.parent_path(), root, ec);
         fs::path outDir = baseOutputDir;
         if (!ec && !relativeDir.empty() && relativeDir != ".") {

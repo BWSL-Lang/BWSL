@@ -107,10 +107,17 @@ NATIVE_SPIRV_TOOLS_INCLUDES = $(SPIRV_TOOLS_INCLUDES)
 NATIVE_SPIRV_TOOLS_LIBS = $(SPIRV_TOOLS_LIB)
 endif
 
-CCACHE := $(shell command -v ccache 2>/dev/null)
-SPIRV_CMAKE_LAUNCHER = $(if $(CCACHE),\
-	-DCMAKE_C_COMPILER_LAUNCHER=ccache \
-	-DCMAKE_CXX_COMPILER_LAUNCHER=ccache,)
+SCCACHE := $(shell command -v sccache 2>/dev/null)
+ifneq ($(SCCACHE),)
+COMPILER_LAUNCHER := $(SCCACHE)
+COMPILER_LAUNCHER_NAME := sccache
+else
+COMPILER_LAUNCHER := $(shell command -v ccache 2>/dev/null)
+COMPILER_LAUNCHER_NAME := ccache
+endif
+SPIRV_CMAKE_LAUNCHER = $(if $(COMPILER_LAUNCHER),\
+	-DCMAKE_C_COMPILER_LAUNCHER=$(COMPILER_LAUNCHER_NAME) \
+	-DCMAKE_CXX_COMPILER_LAUNCHER=$(COMPILER_LAUNCHER_NAME),)
 
 SPIRV_TEST_DEPS =
 HAS_SPIRV_VAL := $(shell command -v spirv-val 2>/dev/null)
@@ -125,9 +132,9 @@ BWSL_INCLUDE_DIRS = -Isrc -Ivendor
 ifeq ($(origin CXX), default)
 CXX = clang++
 endif
-ifneq ($(CCACHE),)
-ifeq ($(findstring ccache,$(firstword $(CXX))),)
-CXX := $(CCACHE) $(CXX)
+ifneq ($(COMPILER_LAUNCHER),)
+ifeq ($(findstring $(COMPILER_LAUNCHER_NAME),$(firstword $(CXX))),)
+CXX := $(COMPILER_LAUNCHER) $(CXX)
 endif
 endif
 ifeq ($(HOST_OS),macos)
