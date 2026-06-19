@@ -50,13 +50,9 @@ jobs:
           key: ubuntu-latest
 
       - name: Build bwslc
-        env:
-          CXX: ccache clang++
         run: make build
 
       - name: Run regression tests
-        env:
-          CXX: ccache clang++
         run: make test
 
   macos:
@@ -74,13 +70,9 @@ jobs:
           key: macos-latest
 
       - name: Build bwslc
-        env:
-          CXX: ccache clang++
         run: make build
 
       - name: Run regression tests
-        env:
-          CXX: ccache clang++
         run: make test
 
   windows:
@@ -92,12 +84,6 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up sccache
-        uses: hendrikmuhs/ccache-action@v1
-        with:
-          key: windows-latest
-          variant: sccache
-
       - name: Set up MSYS2
         uses: msys2/setup-msys2@v2
         with:
@@ -107,12 +93,11 @@ jobs:
             mingw-w64-clang-x86_64-clang
             mingw-w64-clang-x86_64-cmake
             mingw-w64-clang-x86_64-python
+            mingw-w64-clang-x86_64-sccache
             make
 
       - name: Build bwslc
         shell: msys2 {0}
-        env:
-          CXX: sccache clang++
         run: make build
 
       - name: Run regression tests
