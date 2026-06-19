@@ -91,6 +91,19 @@ else
 TARGET_ARCH_FLAGS = -march=x86-64-v3
 endif
 
+# Static-link the runtime so the result doesn't depend on DLLs/shared libs
+# being present on the target machine. Windows gets a fully static binary
+# (no mingw runtime DLLs to ship); Linux keeps libc dynamic (fully static
+# glibc is fragile) but pins libstdc++/libgcc so an older target distro's
+# libstdc++ can't mismatch. macOS has no static libSystem, so no change there.
+ifeq ($(TARGET_OS),windows)
+TARGET_LDFLAGS = -static
+else ifeq ($(TARGET_OS),linux)
+TARGET_LDFLAGS = -static-libgcc -static-libstdc++
+else
+TARGET_LDFLAGS =
+endif
+
 ifeq ($(TARGET_OS),windows)
 CMAKE_TARGET_SYSTEM_NAME = Windows
 else ifeq ($(TARGET_OS),macos)
@@ -339,7 +352,7 @@ help:
 	@echo "  make clean              Remove build artifacts"
 
 build: $(ACTIVE_WRAPPER_OBJ) $(ACTIVE_OBJ)
-	$(CXX) $(ACTIVE_CXXFLAGS) -o $(ACTIVE_OUT) $(ACTIVE_WRAPPER_OBJ) $(ACTIVE_OBJ) $(NATIVE_SPIRV_TOOLS_LIBS)
+	$(CXX) $(ACTIVE_CXXFLAGS) $(TARGET_LDFLAGS) -o $(ACTIVE_OUT) $(ACTIVE_WRAPPER_OBJ) $(ACTIVE_OBJ) $(NATIVE_SPIRV_TOOLS_LIBS)
 	@echo "Built: $(ACTIVE_OUT) (target: $(TARGET_OS)/$(TARGET_ARCH), config: $(CONFIG))"
 
 # Sanitizer build: ASan + UBSan, no optimization, frame pointers retained.
