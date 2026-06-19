@@ -108,22 +108,22 @@ exit /b 0
 :generate_embedded_modules
 where python >nul 2>&1
 if not errorlevel 1 (
-    python scripts\gen_embedded_modules.py --out core\bwsl_embedded_modules.generated.h
+    python scripts\gen_embedded_modules.py --out src\core\bwsl_embedded_modules.generated.h
     exit /b %errorlevel%
 )
 
 where py >nul 2>&1
 if not errorlevel 1 (
-    py -3 scripts\gen_embedded_modules.py --out core\bwsl_embedded_modules.generated.h
+    py -3 scripts\gen_embedded_modules.py --out src\core\bwsl_embedded_modules.generated.h
     exit /b %errorlevel%
 )
 
-if exist "core\bwsl_embedded_modules.generated.h" (
-    echo Python was not found; using existing core\bwsl_embedded_modules.generated.h.
+if exist "src\core\bwsl_embedded_modules.generated.h" (
+    echo Python was not found; using existing src\core\bwsl_embedded_modules.generated.h.
     exit /b 0
 )
 
-echo Python is required to generate core\bwsl_embedded_modules.generated.h.
+echo Python is required to generate src\core\bwsl_embedded_modules.generated.h.
 exit /b 1
 
 :ensure_msvc
