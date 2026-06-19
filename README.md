@@ -42,6 +42,14 @@ for the Windows target.
 **For WebAssembly module:**
 - [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) (`emcc` must be in PATH)
 
+#### Windows 
+
+On windows, it's recommended to use an [MSYS2](https://www.msys2.org/) CLANG64 env. Be careful to start the actual CLANG64 env after installing (it defaults to UCRT64).
+
+Install dependencies:
+
+     pacman -S mingw-w64-clang-x86_64-clang make mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-emscripten mingw-w64-clang-x86_64-sccache mingw-w64-clang-x86_64-vulkan-devel
+
 ### Build Commands
 
 ```bash
