@@ -749,7 +749,7 @@ def build_compiler(root: Path) -> bool:
     if os.name == "nt":
         result = run_command(["cmd", "/c", "build.bat", "bwslc"], cwd=root)
     else:
-        result = run_command(["make", "bwslc"], cwd=root)
+        result = run_command(["make", "build"], cwd=root)
     if result.returncode != 0:
         sys.stdout.write(result.stdout)
         return False

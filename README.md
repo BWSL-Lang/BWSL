@@ -22,22 +22,29 @@ language and tooling changes.
 
 ### Prerequisites
 
-**For native CLI compiler:**
-- macOS or Linux: `clang++` or another C++20 compiler, plus CMake for the linked SPIRV-Tools validator
-- Windows: Visual Studio Build Tools / Developer Command Prompt (`cl.exe`), plus CMake for the linked SPIRV-Tools validator
+`make build` always compiles with `clang -target <triple>`; a native build is
+just the case where `TARGET_OS`/`TARGET_ARCH` equal the host (see
+[Build Commands](#build-commands) below). That means the package
+requirements split into two groups: what you need to build *for the host*,
+and what you additionally need to build *for another OS/architecture*.
 
-The default native `make bwslc` and `build.bat` builds link the vendored
-SPIRV-Tools library so `-validation auto` runs in-process. Use
-`make bwslc USE_LINKED_SPIRV_TOOLS=0` or set `USE_LINKED_SPIRV_TOOLS=0` before
+**Native build (host == target):**
+- macOS or Linux: `clang++` (or another C++20 compiler), plus CMake for the linked SPIRV-Tools validator
+- Windows: Visual Studio Build Tools / Developer Command Prompt (`cl.exe`) for `build.bat`, or an MSYS2 CLANG64 environment for `make` (see below), plus CMake for the linked SPIRV-Tools validator
+
+The default `make build` and `build.bat` builds link the vendored SPIRV-Tools
+library so `-validation auto` runs in-process. Use
+`make build USE_LINKED_SPIRV_TOOLS=0` or set `USE_LINKED_SPIRV_TOOLS=0` before
 running `build.bat` to skip that library and fall back to external
 `spirv-val`/`spirv-dis` tools.
 
-**For Windows cross-compilation from macOS/Linux:**
-- [Zig](https://ziglang.org/) (`zig` must be in PATH)
-
-The Zig cross-build does not link SPIRV-Tools by default; it keeps the external
-validator/disassembler fallback because the SPIRV-Tools library must be built
-for the Windows target.
+**Cross-compilation** (`make build TARGET_OS=... TARGET_ARCH=...` with a
+target other than the host):
+- Always clang + lld, no extra build tool beyond what native builds already need.
+- The matching sysroot/toolchain for the *target* must additionally be on
+  `PATH` (e.g. mingw-w64 when targeting Windows). SPIRV-Tools is
+  cross-compiled too, so in-process validation still works on cross builds.
+  See the per-OS package lists below for what to install.
 
 **For WebAssembly module:**
 - [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) (`emcc` must be in PATH)
@@ -46,27 +53,60 @@ for the Windows target.
 
 On windows, it's recommended to use an [MSYS2](https://www.msys2.org/) CLANG64 env. Be careful to start the actual CLANG64 env after installing (it defaults to UCRT64).
 
-Install dependencies:
+Install dependencies for a native build:
 
      pacman -S mingw-w64-clang-x86_64-clang make mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-emscripten mingw-w64-clang-x86_64-sccache mingw-w64-clang-x86_64-vulkan-devel
+
+#### macOS
+
+Native build (Xcode's bundled clang already supports C++20):
+
+    xcode-select --install
+    brew install cmake
+
+`make bwslc-sanitize` / `make bwslc-fuzz` prefer Homebrew's LLVM when present
+(for ASan/UBSan/libFuzzer runtime support):
+
+    brew install llvm
+
+Cross-compilation, additionally:
+
+| Target | Package |
+|--------|---------|
+| `TARGET_OS=windows` | `brew install mingw-w64` (x86_64/i686 only; ARM64 Windows needs building mingw-w64 from source) |
+| `TARGET_OS=linux` | `brew install messense/macos-cross-toolchains/x86_64-unknown-linux-gnu` (or the `aarch64-unknown-linux-gnu` variant for `TARGET_ARCH=arm64`) |
+| `TARGET_OS=macos`, other `TARGET_ARCH` | Nothing extra -- Xcode Command Line Tools already cover both architectures |
+
+#### Ubuntu
+
+Native build:
+
+    sudo apt install clang lld cmake
+
+Cross-compilation, additionally:
+
+| Target | Package |
+|--------|---------|
+| `TARGET_OS=windows` | `sudo apt install mingw-w64` (x86_64/i686 only; ARM64 Windows needs a newer mingw-w64 built from source) |
+| `TARGET_OS=linux`, other `TARGET_ARCH` | `sudo apt install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross` (swap to the `x86-64-linux-gnu`/`amd64-cross` packages for the reverse direction) |
+| `TARGET_OS=macos` | Not packaged -- requires [osxcross](https://github.com/tpoechtrager/osxcross) built manually against an Apple SDK extracted from Xcode |
 
 ### Build Commands
 
 ```bash
-# Build CLI compiler (default)
-make bwslc
+# Build CLI compiler for the host (default: release)
+make build
 
-# Build CLI compiler with debug symbols
-make bwslc-debug
+# Build with debug symbols
+make build CONFIG=debug
+
+# Cross-compile for another OS/architecture (clang -target under the hood;
+# see Prerequisites above for the toolchain each target needs)
+make build TARGET_OS=windows TARGET_ARCH=x86_64
+make build TARGET_OS=linux TARGET_ARCH=arm64 CONFIG=debug
 
 # Build the native Windows CLI compiler with MSVC
 # Run this from a Visual Studio Developer Command Prompt
-make bwslc-msvc
-
-# Cross-compile a Windows CLI compiler from macOS/Linux with Zig
-make bwslc-win-zig
-
-# Windows helper without GNU Make
 build.bat
 build.bat bwslc-debug
 
@@ -86,9 +126,10 @@ All build artifacts go into the `build/` directory:
 
 ```
 build/
-├── bwslc              # Native CLI compiler on macOS/Linux
-├── bwslc.exe          # Native CLI compiler on Windows
-├── bwslc-win.exe      # Windows cross-build from macOS/Linux via Zig
+├── bwslc                       # Native CLI compiler on macOS/Linux
+├── bwslc.exe                   # Native CLI compiler on Windows
+├── bwslc-debug[.exe]           # CONFIG=debug build
+├── bwslc-<os>-<arch>[.exe]     # Cross-compiled build, e.g. bwslc-windows-x86_64.exe
 └── wasm/
     ├── bwsl.js        # WASM JavaScript wrapper
     └── bwsl.wasm      # WebAssembly binary

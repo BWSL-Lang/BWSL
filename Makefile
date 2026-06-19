@@ -1,22 +1,28 @@
 # BWSL Compiler Build System for Unix environments
-# See build.bat for Windows building.
+# See build.bat for Windows building under MSVC.
 # ============================
 #
 # Targets:
-#   make bwslc              - Build the native CLI compiler for the host
-#   make bwslc-debug        - Build the native CLI compiler with debug symbols
-#   make bwslc-win-zig      - Cross-compile a Windows CLI compiler with Zig
-#   make wasm               - Build WebAssembly module
-#   make wasm-debug         - Build WebAssembly module with debug info
-#   make clean              - Remove all build artifacts
-#   make test               - Run regression tests
-#   make install            - Copy WASM artifacts to DOCS_DIR
+#   make build               - Build the CLI compiler for TARGET_OS/TARGET_ARCH
+#   make wasm                - Build WebAssembly module
+#   make wasm-debug          - Build WebAssembly module with debug info
+#   make clean               - Remove all build artifacts
+#   make test                - Run regression tests
+#   make install             - Copy WASM artifacts to DOCS_DIR
 #
-# Native toolchains:
-#   - macOS/Linux: uses CXX (defaults to clang++)
+# `make build` always compiles with clang -target <triple>; a native build
+# for the host is simply the case where TARGET_OS/TARGET_ARCH equal the
+# host, not a separate code path. Override:
+#   TARGET_OS    - linux | macos | windows (default: host)
+#   TARGET_ARCH  - x86_64 | arm64          (default: host)
+#   CONFIG       - release | debug         (default: release)
 #
-# Cross-compilation:
-#   - macOS/Linux -> Windows: make bwslc-win-zig
+# Cross targets (TARGET_OS/TARGET_ARCH != host) need the matching
+# sysroot/toolchain already on PATH (e.g. mingw-w64 for a windows target, an
+# osxcross sysroot for a macos target).
+#
+#   make build TARGET_OS=windows TARGET_ARCH=x86_64
+#   make build TARGET_OS=linux TARGET_ARCH=arm64 CONFIG=debug
 
 ifeq ($(OS),Windows_NT)
 HOST_OS = windows
@@ -31,6 +37,81 @@ else
 HOST_OS = unknown
 endif
 EXE_EXT =
+endif
+
+HOST_ARCH_RAW := $(shell uname -m 2>/dev/null)
+ifeq ($(HOST_ARCH_RAW),aarch64)
+HOST_ARCH = arm64
+else ifeq ($(HOST_ARCH_RAW),arm64)
+HOST_ARCH = arm64
+else
+HOST_ARCH = x86_64
+endif
+
+TARGET_OS ?= $(HOST_OS)
+TARGET_ARCH ?= $(HOST_ARCH)
+CONFIG ?= release
+
+ifeq ($(TARGET_OS),windows)
+TARGET_EXE_EXT = .exe
+else
+TARGET_EXE_EXT =
+endif
+
+# The triple/arch-flag pair is computed the same way regardless of whether
+# TARGET_OS/TARGET_ARCH happen to match the host -- a native build is just
+# the target that happens to equal the host, not a different code path.
+ifeq ($(TARGET_OS),windows)
+ifeq ($(TARGET_ARCH),arm64)
+TARGET_TRIPLE = aarch64-w64-mingw32
+else
+TARGET_TRIPLE = x86_64-w64-mingw32
+endif
+else ifeq ($(TARGET_OS),macos)
+ifeq ($(TARGET_ARCH),arm64)
+TARGET_TRIPLE = arm64-apple-macos11
+else
+TARGET_TRIPLE = x86_64-apple-macos10.15
+endif
+else
+ifeq ($(TARGET_ARCH),arm64)
+TARGET_TRIPLE = aarch64-linux-gnu
+else
+TARGET_TRIPLE = x86_64-linux-gnu
+endif
+endif
+
+ifeq ($(TARGET_ARCH),arm64)
+ifeq ($(TARGET_OS),macos)
+TARGET_ARCH_FLAGS = -mcpu=apple-m1
+else
+TARGET_ARCH_FLAGS = -march=armv8-a
+endif
+else
+TARGET_ARCH_FLAGS = -march=x86-64-v3
+endif
+
+ifeq ($(TARGET_OS),windows)
+CMAKE_TARGET_SYSTEM_NAME = Windows
+else ifeq ($(TARGET_OS),macos)
+CMAKE_TARGET_SYSTEM_NAME = Darwin
+else
+CMAKE_TARGET_SYSTEM_NAME = Linux
+endif
+ifeq ($(TARGET_ARCH),arm64)
+CMAKE_TARGET_SYSTEM_PROCESSOR = aarch64
+else
+CMAKE_TARGET_SYSTEM_PROCESSOR = x86_64
+endif
+
+# Object/output naming only needs to disambiguate from the conventional
+# unsuffixed native filenames (build/bwslc, build/spirv-tools-build) so
+# existing tooling (run_tests.py, etc.) keeps finding the native build there.
+IS_CROSS := $(if $(filter $(TARGET_OS)-$(TARGET_ARCH),$(HOST_OS)-$(HOST_ARCH)),0,1)
+ifeq ($(IS_CROSS),1)
+OBJ_SUFFIX = -$(TARGET_OS)-$(TARGET_ARCH)
+else
+OBJ_SUFFIX =
 endif
 
 # Source paths
@@ -58,11 +139,14 @@ EMBEDDED_MODULE_SOURCES = \
 BUILD_DIR = build
 WASM_DIR = $(BUILD_DIR)/wasm
 
-BWSLC_OUT = $(BUILD_DIR)/bwslc$(EXE_EXT)
-BWSLC_DEBUG_OUT = $(BUILD_DIR)/bwslc-debug$(EXE_EXT)
+ifeq ($(IS_CROSS),1)
+BWSLC_OUT = $(BUILD_DIR)/bwslc-$(TARGET_OS)-$(TARGET_ARCH)$(TARGET_EXE_EXT)
+BWSLC_DEBUG_OUT = $(BUILD_DIR)/bwslc-$(TARGET_OS)-$(TARGET_ARCH)-debug$(TARGET_EXE_EXT)
+else
+BWSLC_OUT = $(BUILD_DIR)/bwslc$(TARGET_EXE_EXT)
+BWSLC_DEBUG_OUT = $(BUILD_DIR)/bwslc-debug$(TARGET_EXE_EXT)
+endif
 BWSLC_SANITIZE_OUT = $(BUILD_DIR)/bwslc-sanitize$(EXE_EXT)
-BWSLC_WIN_ZIG_OUT = $(BUILD_DIR)/bwslc-win.exe
-BWSLC_WIN_ZIG_DEBUG_OUT = $(BUILD_DIR)/bwslc-win-debug.exe
 
 EQUIV_RUNNER_SRC = src/equiv_runner.cpp
 EQUIV_RUNNER_OUT = $(BUILD_DIR)/equiv_runner$(EXE_EXT)
@@ -85,15 +169,26 @@ SPIRV_CROSS_DIR = vendor/SPIRV-Cross
 SPIRV_CROSS_INCLUDES = -I$(SPIRV_CROSS_DIR)
 SPIRV_CROSS_FLAGS = -DUSE_SPIRV_CROSS_LIB
 
-# SPIRV-Tools. Native builds link the vendored static library for in-process
-# validation; the CLI tools remain available for tests/fallbacks.
+# SPIRV-Tools. Builds link the vendored static library for in-process
+# validation, cross-compiled alongside bwslc itself when TARGET_OS/ARCH
+# differ from the host; the CLI tools remain available for tests/fallbacks.
 SPIRV_TOOLS_SRC   = vendor/SPIRV-Tools
 SPIRV_HEADERS_SRC = vendor/SPIRV-Headers
-SPIRV_TOOLS_BUILD = $(BUILD_DIR)/spirv-tools-build
+SPIRV_TOOLS_BUILD = $(BUILD_DIR)/spirv-tools-build$(OBJ_SUFFIX)
 SPIRV_TOOLS_STAMP = $(SPIRV_TOOLS_BUILD)/.bwsl-built
 SPIRV_TOOLS_INCLUDES = -I$(SPIRV_TOOLS_SRC)/include -I$(SPIRV_HEADERS_SRC)/include
 SPIRV_TOOLS_LIB = $(SPIRV_TOOLS_BUILD)/source/libSPIRV-Tools.a
 SPIRV_TOOLS_BUILD_CONFIG =
+
+# Same triple/target info the bwslc compile uses, fed to SPIRV-Tools' own
+# CMake build so it always matches whatever TARGET_OS/TARGET_ARCH selected.
+SPIRV_TOOLS_CMAKE_TARGET_FLAGS = \
+	-DCMAKE_SYSTEM_NAME=$(CMAKE_TARGET_SYSTEM_NAME) \
+	-DCMAKE_SYSTEM_PROCESSOR=$(CMAKE_TARGET_SYSTEM_PROCESSOR) \
+	-DCMAKE_C_COMPILER=clang \
+	-DCMAKE_CXX_COMPILER=clang++ \
+	-DCMAKE_C_COMPILER_TARGET=$(TARGET_TRIPLE) \
+	-DCMAKE_CXX_COMPILER_TARGET=$(TARGET_TRIPLE)
 
 USE_LINKED_SPIRV_TOOLS ?= 1
 NATIVE_SPIRV_TOOLS_PREREQS =
@@ -128,7 +223,8 @@ endif
 
 BWSL_INCLUDE_DIRS = -Isrc -Ivendor
 
-# Native Unix toolchain
+# Toolchain. Always clang, always given an explicit -target triple -- a
+# native build is simply the case where TARGET_OS/TARGET_ARCH equal the host.
 ifeq ($(origin CXX), default)
 CXX = clang++
 endif
@@ -137,72 +233,58 @@ ifeq ($(findstring $(COMPILER_LAUNCHER_NAME),$(firstword $(CXX))),)
 CXX := $(COMPILER_LAUNCHER) $(CXX)
 endif
 endif
-ifeq ($(HOST_OS),macos)
-HOST_ARCH := $(shell uname -m)
-ifeq ($(HOST_ARCH),arm64)
-CXXFLAGS ?= -O3 -mcpu=apple-m1 -std=c++20 -Wall -Wextra
-else
-CXXFLAGS ?= -O3 -march=x86-64-v3 -std=c++20 -Wall -Wextra
-endif
-else
-CXXFLAGS ?= -O3 -march=x86-64-v3 -std=c++20 -Wall -Wextra
-endif
-CXXFLAGS_DEBUG ?= -g -O0 -std=c++20 -Wall -Wextra
+CXXFLAGS ?= -O3 -target $(TARGET_TRIPLE) $(TARGET_ARCH_FLAGS) -std=c++20 -Wall -Wextra
+CXXFLAGS_DEBUG ?= -g -O0 -target $(TARGET_TRIPLE) $(TARGET_ARCH_FLAGS) -std=c++20 -Wall -Wextra
 
-# Override the compiled-in VERSION string (e.g. BWSL_VERSION=1.2.3 make bwslc).
+# Override the compiled-in VERSION string (e.g. BWSL_VERSION=1.2.3 make build).
 BWSL_VERSION ?=
 VERSION_FLAGS = $(if $(BWSL_VERSION),-DVERSION='"$(BWSL_VERSION)"')
-
-# Zig Windows cross-compilation
-ZIG ?= zig
-ZIG_WIN_TARGET ?= x86_64-windows-gnu
-ZIG_RELEASE_FLAGS ?= -OReleaseFast -march=x86-64-v3 -std=c++20 -Wall -Wextra
-ZIG_DEBUG_FLAGS ?= -ODebug -g -march=x86-64-v3 -std=c++20 -Wall -Wextra
-
-WIN_BUILD_DIR = $(subst /,\,$(BUILD_DIR))
-WIN_WASM_DIR = $(subst /,\,$(WASM_DIR))
-WIN_BWSLC_OUT = $(subst /,\,$(BWSLC_OUT))
-WIN_BWSLC_DEBUG_OUT = $(subst /,\,$(BWSLC_DEBUG_OUT))
 
 # ============================================================================
 # Platform-specific commands and object file rules
 # ============================================================================
 
-SPIRV_CROSS_WRAPPER_OBJ = $(BUILD_DIR)/spirv_cross_wrapper.o
-SPIRV_CROSS_WRAPPER_DEBUG_OBJ = $(BUILD_DIR)/spirv_cross_wrapper_debug.o
-BWSLC_OBJ = $(BUILD_DIR)/bwslc.o
-BWSLC_DEBUG_OBJ = $(BUILD_DIR)/bwslc_debug.o
-BWSLC_PREREQS = $(SPIRV_CROSS_WRAPPER_OBJ) $(EMBEDDED_MODULE_HEADER) $(NATIVE_SPIRV_TOOLS_PREREQS)
-BWSLC_DEBUG_PREREQS = $(SPIRV_CROSS_WRAPPER_DEBUG_OBJ) $(EMBEDDED_MODULE_HEADER) $(NATIVE_SPIRV_TOOLS_PREREQS)
-BWSLC_COMPILE_CMD = $(CXX) -c $(CXXFLAGS) $(VERSION_FLAGS) $(SPIRV_CROSS_FLAGS) $(NATIVE_SPIRV_TOOLS_FLAGS) \
-	$(SPIRV_CROSS_INCLUDES) $(NATIVE_SPIRV_TOOLS_INCLUDES) $(BWSL_INCLUDE_DIRS) \
-	-o $(BWSLC_OBJ) $(BWSLC_SRC)
-BWSLC_DEBUG_COMPILE_CMD = $(CXX) -c $(CXXFLAGS_DEBUG) $(VERSION_FLAGS) $(SPIRV_CROSS_FLAGS) $(NATIVE_SPIRV_TOOLS_FLAGS) \
-	$(SPIRV_CROSS_INCLUDES) $(NATIVE_SPIRV_TOOLS_INCLUDES) $(BWSL_INCLUDE_DIRS) \
-	-o $(BWSLC_DEBUG_OBJ) $(BWSLC_SRC)
-NATIVE_BWSLC_CMD = $(CXX) $(CXXFLAGS) -o $(BWSLC_OUT) $(SPIRV_CROSS_WRAPPER_OBJ) $(BWSLC_OBJ) $(NATIVE_SPIRV_TOOLS_LIBS)
-NATIVE_BWSLC_DEBUG_CMD = $(CXX) $(CXXFLAGS_DEBUG) -o $(BWSLC_DEBUG_OUT) $(SPIRV_CROSS_WRAPPER_DEBUG_OBJ) $(BWSLC_DEBUG_OBJ) $(NATIVE_SPIRV_TOOLS_LIBS)
+SPIRV_CROSS_WRAPPER_OBJ = $(BUILD_DIR)/spirv_cross_wrapper$(OBJ_SUFFIX).o
+SPIRV_CROSS_WRAPPER_DEBUG_OBJ = $(BUILD_DIR)/spirv_cross_wrapper$(OBJ_SUFFIX)_debug.o
+BWSLC_OBJ = $(BUILD_DIR)/bwslc$(OBJ_SUFFIX).o
+BWSLC_DEBUG_OBJ = $(BUILD_DIR)/bwslc$(OBJ_SUFFIX)_debug.o
 MKDIR_BUILD = mkdir -p $(BUILD_DIR)
 MKDIR_WASM = mkdir -p $(WASM_DIR)
 CLEAN_BUILD = rm -rf $(BUILD_DIR)
 
-$(SPIRV_CROSS_WRAPPER_OBJ): $(SPIRV_CROSS_WRAPPER) | $(BUILD_DIR)
+# Order-only directory bootstrap. Named distinctly from $(BUILD_DIR) (whose
+# value is literally "build") so it can't collide with the `build` target.
+BUILD_DIR_MARKER = $(BUILD_DIR)/.dir
+
+ifeq ($(CONFIG),debug)
+ACTIVE_CXXFLAGS = $(CXXFLAGS_DEBUG)
+ACTIVE_WRAPPER_OBJ = $(SPIRV_CROSS_WRAPPER_DEBUG_OBJ)
+ACTIVE_OBJ = $(BWSLC_DEBUG_OBJ)
+ACTIVE_OUT = $(BWSLC_DEBUG_OUT)
+else
+ACTIVE_CXXFLAGS = $(CXXFLAGS)
+ACTIVE_WRAPPER_OBJ = $(SPIRV_CROSS_WRAPPER_OBJ)
+ACTIVE_OBJ = $(BWSLC_OBJ)
+ACTIVE_OUT = $(BWSLC_OUT)
+endif
+
+$(SPIRV_CROSS_WRAPPER_OBJ): $(SPIRV_CROSS_WRAPPER) | $(BUILD_DIR_MARKER)
 	$(CXX) -c $(CXXFLAGS) $(SPIRV_CROSS_FLAGS) $(SPIRV_CROSS_INCLUDES) $(BWSL_INCLUDE_DIRS) \
 		-o $@ $<
 
-$(SPIRV_CROSS_WRAPPER_DEBUG_OBJ): $(SPIRV_CROSS_WRAPPER) | $(BUILD_DIR)
+$(SPIRV_CROSS_WRAPPER_DEBUG_OBJ): $(SPIRV_CROSS_WRAPPER) | $(BUILD_DIR_MARKER)
 	$(CXX) -c $(CXXFLAGS_DEBUG) $(SPIRV_CROSS_FLAGS) $(SPIRV_CROSS_INCLUDES) $(BWSL_INCLUDE_DIRS) \
 		-o $@ $<
 
 $(EMBEDDED_MODULE_HEADER): $(EMBEDDED_MODULE_GENERATOR) $(EMBEDDED_MODULE_SOURCES)
 	python3 $(EMBEDDED_MODULE_GENERATOR) --out $@
 
-$(BWSLC_OBJ): $(BWSLC_SRC) $(EMBEDDED_MODULE_HEADER) $(NATIVE_SPIRV_TOOLS_PREREQS) | $(BUILD_DIR)
+$(BWSLC_OBJ): $(BWSLC_SRC) $(EMBEDDED_MODULE_HEADER) $(NATIVE_SPIRV_TOOLS_PREREQS) | $(BUILD_DIR_MARKER)
 	$(CXX) -c $(CXXFLAGS) $(VERSION_FLAGS) $(SPIRV_CROSS_FLAGS) $(NATIVE_SPIRV_TOOLS_FLAGS) \
 		$(SPIRV_CROSS_INCLUDES) $(NATIVE_SPIRV_TOOLS_INCLUDES) $(BWSL_INCLUDE_DIRS) \
 		-o $@ $<
 
-$(BWSLC_DEBUG_OBJ): $(BWSLC_SRC) $(EMBEDDED_MODULE_HEADER) $(NATIVE_SPIRV_TOOLS_PREREQS) | $(BUILD_DIR)
+$(BWSLC_DEBUG_OBJ): $(BWSLC_SRC) $(EMBEDDED_MODULE_HEADER) $(NATIVE_SPIRV_TOOLS_PREREQS) | $(BUILD_DIR_MARKER)
 	$(CXX) -c $(CXXFLAGS_DEBUG) $(VERSION_FLAGS) $(SPIRV_CROSS_FLAGS) $(NATIVE_SPIRV_TOOLS_FLAGS) \
 		$(SPIRV_CROSS_INCLUDES) $(NATIVE_SPIRV_TOOLS_INCLUDES) $(BWSL_INCLUDE_DIRS) \
 		-o $@ $<
@@ -238,17 +320,17 @@ WASM_SPIRV_INCLUDES = $(BWSL_INCLUDE_DIRS)
 # Targets
 # ============================================================================
 
-.PHONY: all help bwslc bwslc-debug bwslc-sanitize \
-	bwslc-win-zig bwslc-win-zig-debug clean wasm wasm-debug test test-sanitize \
+.PHONY: all help build bwslc-sanitize \
+	clean wasm wasm-debug test test-sanitize \
 	install equiv_runner spirv-tools clangd-config benchmark-backend
 
-all: bwslc
+all: build
 
 help:
 	@echo "BWSL build targets:"
-	@echo "  make bwslc              Native CLI compiler"
-	@echo "  make bwslc-debug        Native CLI compiler with debug info"
-	@echo "  make bwslc-win-zig      Windows cross-build with Zig"
+	@echo "  make build              Build bwslc for TARGET_OS/TARGET_ARCH (default: host, release)"
+	@echo "                          Override with TARGET_OS=linux|macos|windows,"
+	@echo "                          TARGET_ARCH=x86_64|arm64, CONFIG=release|debug"
 	@echo "  make wasm               WebAssembly module"
 	@echo "  make wasm-debug         WebAssembly module with debug info"
 	@echo "  make spirv-tools        Build SPIRV-Tools library and CLI tools"
@@ -256,21 +338,9 @@ help:
 	@echo "  make benchmark-backend  Benchmark backend cache/validation overlap"
 	@echo "  make clean              Remove build artifacts"
 
-bwslc: $(BWSLC_PREREQS)
-	$(BWSLC_COMPILE_CMD)
-	$(NATIVE_BWSLC_CMD)
-	@echo "Built: $(BWSLC_OUT)"
-
-bwslc-debug: $(BWSLC_DEBUG_PREREQS)
-	$(BWSLC_DEBUG_COMPILE_CMD)
-	$(NATIVE_BWSLC_DEBUG_CMD)
-	@echo "Built: $(BWSLC_DEBUG_OUT)"
-
-$(BWSLC_OUT): $(SPIRV_CROSS_WRAPPER_OBJ) $(BWSLC_OBJ) $(NATIVE_SPIRV_TOOLS_PREREQS)
-	$(NATIVE_BWSLC_CMD)
-
-$(BWSLC_DEBUG_OUT): $(SPIRV_CROSS_WRAPPER_DEBUG_OBJ) $(BWSLC_DEBUG_OBJ) $(NATIVE_SPIRV_TOOLS_PREREQS)
-	$(NATIVE_BWSLC_DEBUG_CMD)
+build: $(ACTIVE_WRAPPER_OBJ) $(ACTIVE_OBJ)
+	$(CXX) $(ACTIVE_CXXFLAGS) -o $(ACTIVE_OUT) $(ACTIVE_WRAPPER_OBJ) $(ACTIVE_OBJ) $(NATIVE_SPIRV_TOOLS_LIBS)
+	@echo "Built: $(ACTIVE_OUT) (target: $(TARGET_OS)/$(TARGET_ARCH), config: $(CONFIG))"
 
 # Sanitizer build: ASan + UBSan, no optimization, frame pointers retained.
 # Used by the regression harness (`make test-sanitize`) to catch memory and
@@ -292,7 +362,7 @@ SANITIZE_LINK_FLAGS = -stdlib=libc++ -L/usr/local/opt/llvm/lib/c++ \
 	-Wl,-rpath,/usr/local/opt/llvm/lib/c++
 endif
 
-bwslc-sanitize: $(BUILD_DIR) $(EMBEDDED_MODULE_HEADER) $(NATIVE_SPIRV_TOOLS_PREREQS)
+bwslc-sanitize: $(EMBEDDED_MODULE_HEADER) $(NATIVE_SPIRV_TOOLS_PREREQS) | $(BUILD_DIR_MARKER)
 	$(SANITIZE_CXX) $(SANITIZE_FLAGS) $(SANITIZE_LINK_FLAGS) $(SPIRV_CROSS_FLAGS) \
 		$(NATIVE_SPIRV_TOOLS_FLAGS) $(SPIRV_CROSS_INCLUDES) $(NATIVE_SPIRV_TOOLS_INCLUDES) \
 		$(BWSL_INCLUDE_DIRS) -o $(BWSLC_SANITIZE_OUT) $(SPIRV_CROSS_WRAPPER) $(BWSLC_SRC) \
@@ -313,26 +383,27 @@ BENCH_BASELINE ?=
 BENCH_CANDIDATE ?= $(BWSLC_OUT)
 BENCH_BASELINE_ARG = $(if $(BENCH_BASELINE),--baseline $(BENCH_BASELINE),)
 
-benchmark-backend: bwslc
+benchmark-backend: build
 	python3 scripts/benchmark_backend_cache.py \
 		--candidate $(BENCH_CANDIDATE) \
 		$(BENCH_BASELINE_ARG) \
 		--runs $(BENCH_RUNS) \
 		--warmup $(BENCH_WARMUP)
 
-equiv_runner: $(BUILD_DIR)
+equiv_runner: | $(BUILD_DIR_MARKER)
 	$(CXX) $(CXXFLAGS) $(VULKAN_INCLUDE) -o $(EQUIV_RUNNER_OUT) \
 		$(EQUIV_RUNNER_SRC) $(VULKAN_LIBS)
 	@echo "Built: $(EQUIV_RUNNER_OUT)"
 
 spirv-tools: $(SPIRV_TOOLS_STAMP)
 
-$(SPIRV_TOOLS_STAMP): $(SPIRV_TOOLS_SRC)/CMakeLists.txt | $(BUILD_DIR)
+$(SPIRV_TOOLS_STAMP): $(SPIRV_TOOLS_SRC)/CMakeLists.txt | $(BUILD_DIR_MARKER)
 	cmake -S $(SPIRV_TOOLS_SRC) \
 		-B $(SPIRV_TOOLS_BUILD) \
 		-DCMAKE_BUILD_TYPE=Release \
 		"-DSPIRV-Headers_SOURCE_DIR=$(abspath $(SPIRV_HEADERS_SRC))" \
 		$(SPIRV_CMAKE_LAUNCHER) \
+		$(SPIRV_TOOLS_CMAKE_TARGET_FLAGS) \
 		-DSPIRV_SKIP_TESTS=ON \
 		-DSPIRV_WERROR=OFF \
 		-DSPIRV_BUILD_FUZZER=OFF
@@ -364,43 +435,13 @@ FUZZ_LINK_FLAGS = -stdlib=libc++ -L/usr/local/opt/llvm/lib/c++ \
 	-Wl,-rpath,/usr/local/opt/llvm/lib/c++
 endif
 
-bwslc-fuzz: $(BUILD_DIR) $(EMBEDDED_MODULE_HEADER)
+bwslc-fuzz: $(EMBEDDED_MODULE_HEADER) | $(BUILD_DIR_MARKER)
 	$(FUZZ_CXX) $(FUZZ_FLAGS) $(FUZZ_LINK_FLAGS) $(BWSL_INCLUDE_DIRS) -o $(FUZZ_OUT) $(FUZZ_SRC)
 	@echo "Built: $(FUZZ_OUT)"
 
-ZIG_SPIRV_CROSS_WRAPPER_OBJ = $(BUILD_DIR)/spirv_cross_wrapper_win.o
-ZIG_SPIRV_CROSS_WRAPPER_DEBUG_OBJ = $(BUILD_DIR)/spirv_cross_wrapper_win_debug.o
-ZIG_BWSLC_OBJ = $(BUILD_DIR)/bwslc_win.o
-ZIG_BWSLC_DEBUG_OBJ = $(BUILD_DIR)/bwslc_win_debug.o
-
-$(ZIG_SPIRV_CROSS_WRAPPER_OBJ): $(SPIRV_CROSS_WRAPPER) | $(BUILD_DIR)
-	$(ZIG) c++ -c -target $(ZIG_WIN_TARGET) $(ZIG_RELEASE_FLAGS) $(SPIRV_CROSS_FLAGS) \
-		$(SPIRV_CROSS_INCLUDES) $(BWSL_INCLUDE_DIRS) -o $@ $<
-
-$(ZIG_SPIRV_CROSS_WRAPPER_DEBUG_OBJ): $(SPIRV_CROSS_WRAPPER) | $(BUILD_DIR)
-	$(ZIG) c++ -c -target $(ZIG_WIN_TARGET) $(ZIG_DEBUG_FLAGS) $(SPIRV_CROSS_FLAGS) \
-		$(SPIRV_CROSS_INCLUDES) $(BWSL_INCLUDE_DIRS) -o $@ $<
-
-$(ZIG_BWSLC_OBJ): $(BWSLC_SRC) $(EMBEDDED_MODULE_HEADER) | $(BUILD_DIR)
-	$(ZIG) c++ -c -target $(ZIG_WIN_TARGET) $(ZIG_RELEASE_FLAGS) $(SPIRV_CROSS_FLAGS) \
-		$(SPIRV_CROSS_INCLUDES) $(BWSL_INCLUDE_DIRS) -o $@ $<
-
-$(ZIG_BWSLC_DEBUG_OBJ): $(BWSLC_SRC) $(EMBEDDED_MODULE_HEADER) | $(BUILD_DIR)
-	$(ZIG) c++ -c -target $(ZIG_WIN_TARGET) $(ZIG_DEBUG_FLAGS) $(SPIRV_CROSS_FLAGS) \
-		$(SPIRV_CROSS_INCLUDES) $(BWSL_INCLUDE_DIRS) -o $@ $<
-
-bwslc-win-zig: $(ZIG_SPIRV_CROSS_WRAPPER_OBJ) $(ZIG_BWSLC_OBJ)
-	$(ZIG) c++ -target $(ZIG_WIN_TARGET) $(ZIG_RELEASE_FLAGS) \
-		-o $(BWSLC_WIN_ZIG_OUT) $(ZIG_SPIRV_CROSS_WRAPPER_OBJ) $(ZIG_BWSLC_OBJ)
-	@echo "Built: $(BWSLC_WIN_ZIG_OUT)"
-
-bwslc-win-zig-debug: $(ZIG_SPIRV_CROSS_WRAPPER_DEBUG_OBJ) $(ZIG_BWSLC_DEBUG_OBJ)
-	$(ZIG) c++ -target $(ZIG_WIN_TARGET) $(ZIG_DEBUG_FLAGS) \
-		-o $(BWSLC_WIN_ZIG_DEBUG_OUT) $(ZIG_SPIRV_CROSS_WRAPPER_DEBUG_OBJ) $(ZIG_BWSLC_DEBUG_OBJ)
-	@echo "Built: $(BWSLC_WIN_ZIG_DEBUG_OUT)"
-
-$(BUILD_DIR):
+$(BUILD_DIR_MARKER):
 	$(MKDIR_BUILD)
+	@touch $@
 
 wasm: $(WASM_DIR) $(WASM_DIR)/bwsl_wasm.o $(WASM_DIR)/spirv_cross_wrapper.o
 	$(EMCC) $(WASM_DIR)/bwsl_wasm.o $(WASM_DIR)/spirv_cross_wrapper.o \
@@ -417,7 +458,7 @@ $(WASM_DIR)/spirv_cross_wrapper.o: $(SPIRV_CROSS_WRAPPER) | $(WASM_DIR)
 		-DSPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS \
 		$(WASM_COMMON_FLAGS) $(WASM_RELEASE_OPT) -o $@
 
-$(WASM_DIR): | $(BUILD_DIR)
+$(WASM_DIR): | $(BUILD_DIR_MARKER)
 	$(MKDIR_WASM)
 
 wasm-debug: $(WASM_DIR) $(EMBEDDED_MODULE_HEADER)
@@ -429,7 +470,7 @@ wasm-debug: $(WASM_DIR) $(EMBEDDED_MODULE_HEADER)
 		$(WASM_COMMON_FLAGS) $(WASM_DEBUG_OPT) -o $(WASM_DIR)/bwsl-debug.js
 	@echo "Built: $(WASM_DIR)/bwsl-debug.js"
 
-test: bwslc $(SPIRV_TEST_DEPS)
+test: build $(SPIRV_TEST_DEPS)
 	PATH="$(abspath $(SPIRV_TOOLS_BUILD)/tools):$$PATH" ./tests/run_tests.sh
 
 # ============================================================================
