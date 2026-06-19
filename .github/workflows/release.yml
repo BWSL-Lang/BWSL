@@ -19,26 +19,55 @@ jobs:
         with:
           key: ubuntu-latest-release
 
-      - name: Build bwslc
+      - name: Install cross-compilation toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang lld mingw-w64 \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
+
+      - name: Build bwslc (native linux/x64)
         env:
           CXX: ccache clang++
-        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make bwslc
+        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make build
 
-      - name: Package Linux binary
-        id: package
+      - name: Build bwslc (cross linux/arm64)
+        env:
+          CXX: ccache clang++
+        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make build TARGET_OS=linux TARGET_ARCH=arm64
+
+      - name: Build bwslc (cross windows/x64)
+        env:
+          CXX: ccache clang++
+        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make build TARGET_OS=windows TARGET_ARCH=x86_64
+
+      - name: Package binaries
         run: |
           version="${GITHUB_REF_NAME#v}"
-          arch=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')
-          artifact_name="bwslc-linux-$arch"
           mkdir -p dist
-          cp build/bwslc "dist/$artifact_name-$version"
-          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+          cp build/bwslc "dist/bwslc-linux-x64-$version"
+          cp build/bwslc-linux-arm64 "dist/bwslc-linux-arm64-$version"
+          cp build/bwslc-windows-x86_64.exe "dist/bwslc-windows-x64-$version.exe"
 
-      - name: Upload Linux binary
+      - name: Upload Linux x64 binary
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.package.outputs.artifact_name }}
-          path: dist/bwslc-*
+          name: bwslc-linux-x64
+          path: dist/bwslc-linux-x64-*
+          if-no-files-found: error
+
+      - name: Upload Linux arm64 binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: bwslc-linux-arm64
+          path: dist/bwslc-linux-arm64-*
+          if-no-files-found: error
+
+      - name: Upload Windows x64 binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: bwslc-windows-x64
+          path: dist/bwslc-windows-x64-*
           if-no-files-found: error
 
   macos:
@@ -59,7 +88,7 @@ jobs:
       - name: Build bwslc
         env:
           CXX: ccache clang++
-        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make bwslc
+        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make build
 
       - name: Package macOS binary
         id: package
@@ -79,46 +108,9 @@ jobs:
           path: dist/bwslc-*
           if-no-files-found: error
 
-  windows:
-    name: windows-latest
-    needs: linux
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: Set up sccache
-        uses: hendrikmuhs/ccache-action@v1
-        with:
-          key: windows-latest-release
-          variant: sccache
-
-      - name: Build with MSVC
-        shell: pwsh
-        run: |
-          $env:BWSL_VERSION = $env:GITHUB_REF_NAME -replace '^v', ''
-          cmd /c build.bat bwslc
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Package Windows binary
-        shell: pwsh
-        run: |
-          $version = $env:GITHUB_REF_NAME -replace '^v', ''
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item build\bwslc.exe "dist\bwslc-windows-x64-$version.exe"
-
-      - name: Upload Windows binary
-        uses: actions/upload-artifact@v7
-        with:
-          name: bwslc-windows-x64
-          path: dist/*.exe
-          if-no-files-found: error
-
   release:
     name: Release
-    needs: [linux, macos, windows]
+    needs: [linux, macos]
     runs-on: ubuntu-latest
     permissions:
       actions: read

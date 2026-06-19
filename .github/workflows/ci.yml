@@ -50,19 +50,13 @@ jobs:
           key: ubuntu-latest
 
       - name: Build bwslc
-        env:
-          CXX: ccache clang++
-        run: make bwslc
+        run: make build
 
       - name: Run regression tests
-        env:
-          CXX: ccache clang++
         run: make test
 
   macos:
     name: macos-latest
-    needs: linux
-    if: github.ref == 'refs/heads/master' || (github.event_name == 'pull_request_review' && github.event.review.state == 'approved')
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -76,19 +70,13 @@ jobs:
           key: macos-latest
 
       - name: Build bwslc
-        env:
-          CXX: ccache clang++
-        run: make bwslc
+        run: make build
 
       - name: Run regression tests
-        env:
-          CXX: ccache clang++
         run: make test
 
   windows:
     name: windows-latest
-    needs: linux
-    if: github.ref == 'refs/heads/master' || (github.event_name == 'pull_request_review' && github.event.review.state == 'approved')
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -96,32 +84,22 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up sccache
-        uses: hendrikmuhs/ccache-action@v1
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
         with:
-          key: windows-latest
-          variant: sccache
+          msystem: CLANG64
+          update: true
+          install: >-
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-python
+            mingw-w64-clang-x86_64-sccache
+            make
 
-      - name: Build SPIRV-Tools CLI
-        shell: pwsh
-        run: |
-          $workspace = $env:GITHUB_WORKSPACE -replace '\\', '/'
-          $spirvHeadersDir = "$workspace/vendor/SPIRV-Headers"
-          $spirvToolsDir = "$workspace/build/spirv-tools"
-          cmake -S vendor/SPIRV-Tools -B build/spirv-tools `
-            -DSPIRV_WERROR=OFF `
-            -DSPIRV_SKIP_TESTS=ON `
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache `
-            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
-            -DSPIRV-Headers_SOURCE_DIR="$spirvHeadersDir"
-          cmake --build build/spirv-tools --config Release --target spirv-dis spirv-val --parallel
-          "$spirvToolsDir/tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          "$spirvToolsDir/tools/Release" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Build with MSVC
-        shell: cmd
-        run: build.bat bwslc
+      - name: Build bwslc
+        shell: msys2 {0}
+        run: make build
 
       - name: Run regression tests
-        shell: cmd
-        run: build.bat test
+        shell: pwsh
+        run: python tests/run_tests.py

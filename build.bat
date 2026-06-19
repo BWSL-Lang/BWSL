@@ -41,8 +41,8 @@ if defined BWSL_VERSION set "VERSION_FLAGS=/DVERSION=\"%BWSL_VERSION%\""
 set "COMMON_FLAGS=/nologo /std:c++20 /EHsc /DUSE_SPIRV_CROSS_LIB %SPIRV_TOOLS_FLAGS% %INCLUDE_FLAGS% %CPU_FLAGS% %DISABLED_WARNINGS% %VERSION_FLAGS%"
 :: hide the warnings coming from vendor/SPIRV-Cross
 set "SPIRV_CROSS_FLAGS=/wd4389 /wd4245 /wd4245"
-set "RELEASE_FLAGS=/O2 /W4 /MD"
-set "DEBUG_FLAGS=/Zi /Od /W4 /MDd"
+set "RELEASE_FLAGS=/O2 /W4 /MT"
+set "DEBUG_FLAGS=/Zi /Od /W4 /MT"
 set "LINK_FLAGS=/link /STACK:8388608"
 set "WRAPPER_SRC=src\spirv_cross_wrapper.cpp"
 set "BWSLC_SRC=src\bwslc.cpp"
@@ -198,7 +198,7 @@ if not exist "vendor\SPIRV-Headers\include" (
 set "SPIRV_TOOLS_BUILD=build\spirv-tools-build"
 set "SPIRV_HEADERS_SOURCE_DIR=%CD%\vendor\SPIRV-Headers"
 set "SPIRV_HEADERS_SOURCE_DIR=%SPIRV_HEADERS_SOURCE_DIR:\=/%"
-cmake -S vendor\SPIRV-Tools -B "%SPIRV_TOOLS_BUILD%" -A x64 -DCMAKE_BUILD_TYPE=Release "-DSPIRV-Headers_SOURCE_DIR=%SPIRV_HEADERS_SOURCE_DIR%" %SCCACHE_FLAGS% -DSPIRV_SKIP_TESTS=ON -DSPIRV_WERROR=OFF -DSPIRV_BUILD_FUZZER=OFF
+cmake -S vendor\SPIRV-Tools -B "%SPIRV_TOOLS_BUILD%" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_DEFAULT_CMP0091=NEW -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded "-DSPIRV-Headers_SOURCE_DIR=%SPIRV_HEADERS_SOURCE_DIR%" %SCCACHE_FLAGS% -DSPIRV_SKIP_TESTS=ON -DSPIRV_WERROR=OFF -DSPIRV_BUILD_FUZZER=OFF
 if errorlevel 1 exit /b 1
 
 cmake --build "%SPIRV_TOOLS_BUILD%" --config Release --target SPIRV-Tools-static spirv-val spirv-dis --parallel
