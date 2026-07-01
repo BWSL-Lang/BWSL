@@ -1,0 +1,99 @@
+// Helper functions for the Color module
+module ColorInternals {
+
+    distanceFromPole :: (float3 pointx, float3 pointy) -> float3 {
+        return sqrt(pointx*pointx + pointy*pointy);
+    }
+
+    maxSafeChromaForL :: (float L) -> float {
+        mat3 m2 = mat3(
+        3.2409699419045214  ,-0.96924363628087983 , 0.055630079696993609,
+        -1.5373831775700935  , 1.8759675015077207  ,-0.20397695888897657 ,
+        -0.49861076029300328 , 0.041555057407175613, 1.0569715142428786
+        );
+        float sub0 = L + 16.0;
+        float sub1 = sub0 * sub0 * sub0 * .000000641;
+        float sub2 = sub1 > 0.0088564516790356308 ? sub1 : L / 903.2962962962963;
+
+        float3 top1   = (284517.0 * m2[0] - 94839.0  * m2[2]) * sub2;
+        float3 bottom = (632260.0 * m2[2] - 126452.0 * m2[1]) * sub2;
+        float3 top2   = (838422.0 * m2[2] + 769860.0 * m2[1] + 731718.0 * m2[0]) * L * sub2;
+
+        float3 bounds0x = top1 / bottom;
+        float3 bounds0y = top2 / bottom;
+
+        float3 bounds1x =              top1 / (bottom+126452.0);
+        float3 bounds1y = (top2-769860.0*L) / (bottom+126452.0);
+
+        float3 xs0 = bounds0y / (-1.0/bounds0x - bounds0x);
+        float3 xs1 = bounds1y / (-1.0/bounds1x - bounds1x);
+
+        float3 lengths0 = distanceFromPole(xs0, bounds0y + xs0 * bounds0x);
+        float3 lengths1 = distanceFromPole(xs1, bounds1y + xs1 * bounds1x);
+
+        return  min(lengths0.r,
+                    lengths1.r,
+                    lengths0.g,
+                    lengths1.g,
+                    lengths0.b,
+                    lengths1.b);
+    }
+
+    maxChromaForLH :: (float L, float H) -> float {
+        mat3 m2 = mat3(
+        3.2409699419045214   ,-0.96924363628087983 , 0.055630079696993609,
+        -1.5373831775700935  , 1.8759675015077207  ,-0.20397695888897657 ,
+        -0.49861076029300328 , 0.041555057407175613, 1.0569715142428786
+        );
+        float sub1 = pow(L + 16.0, 3.0) / 1560896.0;
+        float sub2 = sub1 > 0.0088564516790356308 ? sub1 : L / 903.2962962962963;
+
+        float3 top1   = (284517.0 * m2[0] - 94839.0  * m2[2]) * sub2;
+        float3 bottom = (632260.0 * m2[2] - 126452.0 * m2[1]) * sub2;
+        float3 top2   = (838422.0 * m2[2] + 769860.0 * m2[1] + 731718.0 * m2[0]) * L * sub2;
+
+        float3 bound0x = top1 / bottom;
+        float3 bound0y = top2 / bottom;
+
+        float3 bound1x =              top1 / (bottom+126452.0);
+        float3 bound1y = (top2-769860.0*L) / (bottom+126452.0);
+
+        float hrad = radians(H);
+        float2 hueVec = float2(cos(hrad), sin(hrad));
+
+        float3 lengths0 = bound0y / (hueVec.y - bound0x * hueVec.x)
+        lengths0 = mix(float3(1000.0), lengths0, step(float3(0.0), lengths0));
+        float3 lengths1 = bound1y / (hueVec.y - bound1x * hueVec.x)
+        lengths1 = mix(float3(1000.0), lengths1, step(float3(0.0), lengths1));
+
+        return  min(lengths0.r,
+                    lengths1.r,
+                    lengths0.g,
+                    lengths1.g,
+                    lengths0.b,
+                    lengths1.b);
+    }
+
+    fromLinear :: (float c) -> float {
+        return c <= 0.0031308 ? 12.92 * c : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+    }
+    fromLinear :: (float3 c) -> float3 {
+        return float3( fromLinear(c.r), fromLinear(c.g), fromLinear(c.b) );
+    }
+
+    toLinear :: (float c) -> float {
+        return c > 0.04045 ? pow((c + 0.055) / (1.0 + 0.055), 2.4) : c / 12.92;
+    }
+
+    toLinear :: (float3 c) -> float3 {
+        return float3( toLinear(c.r), toLinear(c.g), toLinear(c.b) );
+    }
+
+    yToL :: (float Y) -> float {
+        return Y <= 0.0088564516790356308 ? Y * 903.2962962962963 : 116.0 * pow(Y, 1.0 / 3.0) - 16.0;
+    }
+
+    lToY :: (float L) -> float {
+        return L <= 8.0 ? L / 903.2962962962963 : pow((L + 16.0) / 116.0, 3.0);
+    }
+}
