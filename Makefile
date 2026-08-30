@@ -135,6 +135,7 @@ EMBEDDED_MODULE_GENERATOR = scripts/gen_embedded_modules.py
 EMBEDDED_MODULE_HEADER = src/core/bwsl_embedded_modules.generated.h
 EMBEDDED_MODULE_SOURCES = \
 	modules/Color.bwsl \
+	modules/ColorInternals.bwsl \
 	modules/Compression.bwsl \
 	modules/Debug.bwsl \
 	modules/globals.bwsl \

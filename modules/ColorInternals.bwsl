@@ -7,12 +7,12 @@ module ColorInternals {
 
     maxSafeChromaForL :: (float L) -> float {
         mat3 m2 = mat3(
-        3.2409699419045214  ,-0.96924363628087983 , 0.055630079696993609,
-        -1.5373831775700935  , 1.8759675015077207  ,-0.20397695888897657 ,
-        -0.49861076029300328 , 0.041555057407175613, 1.0569715142428786
+        3.2409699419045214,  -0.96924363628087983,  0.055630079696993609,
+        -1.5373831775700935,  1.8759675015077207,  -0.20397695888897657,
+        -0.49861076029300328, 0.041555057407175613, 1.0569715142428786
         );
         float sub0 = L + 16.0;
-        float sub1 = sub0 * sub0 * sub0 * .000000641;
+        float sub1 = sub0 * sub0 * sub0 * 0.000000641;
         float sub2 = sub1 > 0.0088564516790356308 ? sub1 : L / 903.2962962962963;
 
         float3 top1   = (284517.0 * m2[0] - 94839.0  * m2[2]) * sub2;
@@ -61,9 +61,9 @@ module ColorInternals {
         float hrad = radians(H);
         float2 hueVec = float2(cos(hrad), sin(hrad));
 
-        float3 lengths0 = bound0y / (hueVec.y - bound0x * hueVec.x)
+        float3 lengths0 = bound0y / (hueVec.y - bound0x * hueVec.x);
         lengths0 = mix(float3(1000.0), lengths0, step(float3(0.0), lengths0));
-        float3 lengths1 = bound1y / (hueVec.y - bound1x * hueVec.x)
+        float3 lengths1 = bound1y / (hueVec.y - bound1x * hueVec.x);
         lengths1 = mix(float3(1000.0), lengths1, step(float3(0.0), lengths1));
 
         return  min(lengths0.r,

@@ -42,7 +42,7 @@ reinhardExtendedToneMap :: (float3 hdr, float whitePoint) -> float3 {
 }
 
 
-xyzToRgb(float3 tuple) -> float3 {
+xyzToRgb :: (float3 tuple) -> float3 {
     const mat3 m = mat3(
     3.2409699419045214  , -1.5373831775700935 , -0.49861076029300328 ,
     -0.96924363628087983,  1.8759675015077207 ,  0.041555057407175613,
@@ -96,7 +96,7 @@ luvToLch :: (float3 tuple) -> float3 {
     float V = tuple.z;
 
     float C = length(tuple.yz);
-    float H = degrees(atan(V,U));
+    float H = degrees(atan2(V,U));
     if (H < 0.0) {
         H = 360.0 + H;
     }
@@ -114,12 +114,12 @@ lchToLuv :: (float3 tuple) -> float3 {
 }
 
 hsluvToLch :: (float3 tuple) -> float3 {
-    tuple.g *= ColorInternals::maxChromaForLH(tuple.b, tuple.r) * .01;
+    tuple.g *= ColorInternals::maxChromaForLH(tuple.b, tuple.r) * 0.01;
     return tuple.bgr;
 }
 
 lchToHsluv :: (float3 tuple) -> float3 {
-    tuple.g /= ColorInternals::maxChromaForLH(tuple.r, tuple.b) * .01;
+    tuple.g /= ColorInternals::maxChromaForLH(tuple.r, tuple.b) * 0.01;
     return tuple.bgr;
 }
 
@@ -141,7 +141,7 @@ rgbToHsluv :: (float3 tuple) -> float3 {
 
 
 hpluvToLch :: (float3 tuple) -> float3 {
-    tuple.g *= ColorInternals::maxSafeChromaForL(tuple.b) * .01;
+    tuple.g *= ColorInternals::maxSafeChromaForL(tuple.b) * 0.01;
     return tuple.bgr;
 }
 
@@ -151,7 +151,7 @@ hpluvToRgb :: (float3 tuple) -> float3 {
 }
 
 lchToHpluv :: (float3 tuple) -> float3 {
-    tuple.g /= ColorInternals::maxSafeChromaForL(tuple.r) * .01;
+    tuple.g /= ColorInternals::maxSafeChromaForL(tuple.r) * 0.01;
     return tuple.bgr;
 }
 
@@ -189,7 +189,7 @@ rgb2hsv :: (float3 c) -> float3 {
  */
 hsluv_maxLForH :: (float hue) -> float {
     // Lightness values corresponding to the 72 even-spaced hue values
-    float lightness[72] = float[](
+    float[72] lightness = {
         54.5, 54.0, 53.5, 56.0, 60.2, 63.8,
         67.0, 69.9, 72.5, 75.1, 77.5, 80.0,
         82.4, 84.9, 87.5, 90.2, 93.2, 96.5,
@@ -202,7 +202,7 @@ hsluv_maxLForH :: (float hue) -> float {
         36.7, 41.0, 44.6, 47.9, 50.8, 53.6,
         56.3, 58.9, 59.9, 59.2, 58.5, 57.9,
         57.3, 56.8, 56.3, 55.8, 55.4, 54.9
-    );
+    };
 
     // Normalize hue to be between 0 and 360
     hue = mod(hue, 360.0);
