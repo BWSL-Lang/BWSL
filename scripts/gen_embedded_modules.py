@@ -14,6 +14,7 @@ MODULES = [
     ("Compression", "modules/Compression.bwsl"),
     ("Debug", "modules/Debug.bwsl"),
     ("Globals", "modules/globals.bwsl"),
+    ("Line2D", "modules/Line2D.bwsl"),
     ("Math", "modules/math.bwsl"),
     ("Noise", "modules/noise.bwsl"),
     ("Packing", "modules/Packing.bwsl"),

@@ -828,6 +828,68 @@ static constexpr const char kGlobalsSource[] =
     "}\n"
     ;
 
+static constexpr const char kLine2DSource[] =
+    "/*\n"
+    " * A collection of utility vector math functions for 2D lines\n"
+    " */\n"
+    "module Line2D {\n"
+    "    /* \n"
+    "     * Find the intersection between line A-B and C-D\n"
+    "     * Returns zero if there is no intersection.\n"
+    "     * Based on https://www.gamers.org/dEngine/rsc/usenet/comp.graphics.algorithms.faq\n"
+    "     */\n"
+    "    intersection :: (float2 A, float2 B, float2 C, float2 D) -> float2 {\n"
+    "        float r_numerator = (A.y - C.y) * (D.x - C.x) - (A.x - C.x) * (D.y - C.y);\n"
+    "        float r_denomenator = (B.x - A.x) * (D.y - C.y) - (B.y - A.y) * (D.x - C.x);\n"
+    "        if (r_denomenator == 0.0) {\n"
+    "            // parallel lines\n"
+    "            if (r_numerator == 0.0) {\n"
+    "                // same line\n"
+    "                return A;\n"
+    "            }\n"
+    "            return float2(0.0, 0.0);\n"
+    "        }\n"
+    "        float r = r_numerator / r_denomenator;\n"
+    "        return A + r * (B - A);\n"
+    "    }\n"
+    "    \n"
+    "    /* \n"
+    "     * Returns true if the point P is on the section of the plane \n"
+    "     * extending out perpendicularly from the line A-B\n"
+    "     * Based on https://www.gamers.org/dEngine/rsc/usenet/comp.graphics.algorithms.faq\n"
+    "     */\n"
+    "    isPointPerpendicularToLine :: (float2 A, float2 B, float2 point) -> bool {\n"
+    "        float2 lineDir = B-A;\n"
+    "        float2 perpendicular = float2(-lineDir.y, lineDir.x);\n"
+    "        float2 C = point;\n"
+    "        float2 D = point + perpendicular;\n"
+    "\n"
+    "        float r_numerator = (A.y-C.y)*(D.x-C.x)-(A.x-C.x)*(D.y-C.y);\n"
+    "        float r_denomenator = (B.x-A.x)*(D.y-C.y)-(B.y-A.y)*(D.x-C.x);\n"
+    "\n"
+    "        float r = r_numerator/r_denomenator;\n"
+    "        return 0 <= r && r <= 1;\n"
+    "    }\n"
+    "\n"
+    "    /* \n"
+    "     * Returns the distance from a point to an infinite line.\n"
+    "     * The sign communicates which side the point lies on.\n"
+    "     */\n"
+    "    distanceFromPointToLine ::(\n"
+    "        float2 point,\n"
+    "        float2 A,\n"
+    "        float2 B\n"
+    "    ) -> float {\n"
+    "        float2 ab = B - A;\n"
+    "        float2 ap = point - A;\n"
+    "        float cross = ap.x * ab.y - ap.y * ab.x;\n"
+    "\n"
+    "        return cross/length(ab);\n"
+    "    }\n"
+    "\n"
+    "}"
+    ;
+
 static constexpr const char kMathSource[] =
     "module Math {\n"
     "\n"
@@ -3120,6 +3182,7 @@ static constexpr ModuleSource kModules[] = {
     {0x961ABB95u, "Compression", "stdlib://modules/Compression.bwsl", kCompressionSource, static_cast<u32>(sizeof(kCompressionSource) - 1u)},
     {0x2A610338u, "Debug", "stdlib://modules/Debug.bwsl", kDebugSource, static_cast<u32>(sizeof(kDebugSource) - 1u)},
     {0x4620A987u, "Globals", "stdlib://modules/globals.bwsl", kGlobalsSource, static_cast<u32>(sizeof(kGlobalsSource) - 1u)},
+    {0x2590CD71u, "Line2D", "stdlib://modules/Line2D.bwsl", kLine2DSource, static_cast<u32>(sizeof(kLine2DSource) - 1u)},
     {0x5569C3AFu, "Math", "stdlib://modules/math.bwsl", kMathSource, static_cast<u32>(sizeof(kMathSource) - 1u)},
     {0x1F2ECF71u, "Noise", "stdlib://modules/noise.bwsl", kNoiseSource, static_cast<u32>(sizeof(kNoiseSource) - 1u)},
     {0x6714EC88u, "Packing", "stdlib://modules/Packing.bwsl", kPackingSource, static_cast<u32>(sizeof(kPackingSource) - 1u)},

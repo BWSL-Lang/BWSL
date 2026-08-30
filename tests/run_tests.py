@@ -565,6 +565,14 @@ TRANSLATION_EXPECTATION_TESTS = {
             "metal_contains": ["pow", "clamp("],
         },
     },
+    "module_line2d_live": {
+        "frag": {
+            "ir_contains": ["LENGTH"],
+            "hlsl_contains": ["length("],
+            "glsl_contains": ["length("],
+            "metal_contains": ["length("],
+        },
+    },
     "module_random_live": {
         "vert": {
             "ir_contains": ["XOR", "SHR", "IMUL", "SIN", "COS"],

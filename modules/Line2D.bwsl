@@ -1,0 +1,59 @@
+/*
+ * A collection of utility vector math functions for 2D lines
+ */
+module Line2D {
+    /* 
+     * Find the intersection between line A-B and C-D
+     * Returns zero if there is no intersection.
+     * Based on https://www.gamers.org/dEngine/rsc/usenet/comp.graphics.algorithms.faq
+     */
+    intersection :: (float2 A, float2 B, float2 C, float2 D) -> float2 {
+        float r_numerator = (A.y - C.y) * (D.x - C.x) - (A.x - C.x) * (D.y - C.y);
+        float r_denomenator = (B.x - A.x) * (D.y - C.y) - (B.y - A.y) * (D.x - C.x);
+        if (r_denomenator == 0.0) {
+            // parallel lines
+            if (r_numerator == 0.0) {
+                // same line
+                return A;
+            }
+            return float2(0.0, 0.0);
+        }
+        float r = r_numerator / r_denomenator;
+        return A + r * (B - A);
+    }
+    
+    /* 
+     * Returns true if the point P is on the section of the plane 
+     * extending out perpendicularly from the line A-B
+     * Based on https://www.gamers.org/dEngine/rsc/usenet/comp.graphics.algorithms.faq
+     */
+    isPointPerpendicularToLine :: (float2 A, float2 B, float2 point) -> bool {
+        float2 lineDir = B-A;
+        float2 perpendicular = float2(-lineDir.y, lineDir.x);
+        float2 C = point;
+        float2 D = point + perpendicular;
+
+        float r_numerator = (A.y-C.y)*(D.x-C.x)-(A.x-C.x)*(D.y-C.y);
+        float r_denomenator = (B.x-A.x)*(D.y-C.y)-(B.y-A.y)*(D.x-C.x);
+
+        float r = r_numerator/r_denomenator;
+        return 0 <= r && r <= 1;
+    }
+
+    /* 
+     * Returns the distance from a point to an infinite line.
+     * The sign communicates which side the point lies on.
+     */
+    distanceFromPointToLine ::(
+        float2 point,
+        float2 A,
+        float2 B
+    ) -> float {
+        float2 ab = B - A;
+        float2 ap = point - A;
+        float cross = ap.x * ab.y - ap.y * ab.x;
+
+        return cross/length(ab);
+    }
+
+}

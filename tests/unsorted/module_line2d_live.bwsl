@@ -1,0 +1,27 @@
+// Test: Color stdlib module imported from modules/
+// Tests: Color import, color-space conversion, tone mapping
+
+pipeline ModuleColorLive {
+    import Line2D
+
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            float horizontalDistanceToScreenCenter = Line2D::distanceFromPointToLine(
+                input.position.xy,
+                float2(0, 0),
+                float2(0, 1)
+            );
+            output.color = float4(horizontalDistanceToScreenCenter, 0, -horizontalDistanceToScreenCenter, 1.0);
+        }
+    }
+}
