@@ -1,0 +1,48 @@
+// Test: Line2D standard-library module imported from modules/
+// Tests: unique and parallel intersections, projection, signed distance
+
+pipeline ModuleLine2DLive {
+    import Line2D
+
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position, }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0,);
+        }
+
+        fragment {
+            Line2D::LineIntersection crossing = Line2D::intersection(
+                float2(0.0, 0.0),
+                float2(1.0, 1.0),
+                float2(0.0, 1.0),
+                float2(1.0, 0.0),
+            );
+            Line2D::LineIntersection parallel = Line2D::intersection(
+                float2(0.0, 0.0),
+                float2(1.0, 0.0),
+                float2(0.0, 1.0),
+                float2(1.0, 1.0),
+            );
+            bool projected = Line2D::isPointPerpendicularToLine(
+                float2(0.0, 0.0),
+                float2(1.0, 0.0),
+                input.position.xy,
+            );
+            float signedDistance = Line2D::distanceFromPointToLine(
+                input.position.xy,
+                float2(0.0, 0.0),
+                float2(1.0, 0.0),
+            );
+            float status = crossing.hasUniqueIntersection &&
+                           !parallel.hasUniqueIntersection && projected
+                ? signedDistance
+                : -signedDistance;
+            output.color = float4(crossing.point, status, 1.0,);
+        }
+    }
+}

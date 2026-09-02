@@ -1381,7 +1381,7 @@ void Parser::ParseUseAttributes(NodeRef pass) {
             ast->GetPass(pass).optionalAttributesMask |= (1u << idx);
         }
 
-        if (!Match(TokenType::COMMA)) break;
+        if (!Match(TokenType::COMMA) || Check(TokenType::RIGHT_BRACE)) break;
     }
     Consume(TokenType::RIGHT_BRACE, "Expected '}'");
 }
@@ -1426,7 +1426,7 @@ void Parser::ParseUseResources(NodeRef pass) {
             }
         }
 
-        if (!Match(TokenType::COMMA)) break;
+        if (!Match(TokenType::COMMA) || Check(TokenType::RIGHT_BRACE)) break;
     }
 
     Consume(TokenType::RIGHT_BRACE, "Expected '}'");
@@ -1559,6 +1559,7 @@ NodeRef Parser::ParseComputeStage() {
     u32 sizeY = parseSize("Expected workgroup size Y");
     Consume(TokenType::COMMA, "Expected ',' after workgroup size Y");
     u32 sizeZ = parseSize("Expected workgroup size Z");
+    Match(TokenType::COMMA);
     Consume(TokenType::RIGHT_BRACKET, "Expected ']' after workgroup size");
 
     if (sizeX == 0 || sizeY == 0 || sizeZ == 0) {

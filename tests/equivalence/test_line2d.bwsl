@@ -1,0 +1,76 @@
+pipeline EquivLine2D {
+    resources {
+        output: buffer<float>
+    }
+
+    import Line2D
+
+    pass "Compute" {
+        use resources { output, }
+        compute "Main" [1, 1, 1,] {
+            Line2D::LineIntersection crossing = Line2D::intersection(
+                float2(0.0, 0.0),
+                float2(1.0, 1.0),
+                float2(0.0, 1.0),
+                float2(1.0, 0.0),
+            );
+            Line2D::LineIntersection parallel = Line2D::intersection(
+                float2(0.0, 0.0),
+                float2(1.0, 0.0),
+                float2(0.0, 1.0),
+                float2(1.0, 1.0),
+            );
+            Line2D::LineIntersection collinear = Line2D::intersection(
+                float2(0.0, 0.0),
+                float2(1.0, 0.0),
+                float2(2.0, 0.0),
+                float2(3.0, 0.0),
+            );
+            Line2D::LineIntersection originCrossing = Line2D::intersection(
+                float2(-1.0, 0.0),
+                float2(1.0, 0.0),
+                float2(0.0, -1.0),
+                float2(0.0, 1.0),
+            );
+            Line2D::LineIntersection degenerate = Line2D::intersection(
+                float2(0.0, 0.0),
+                float2(0.0, 0.0),
+                float2(0.0, -1.0),
+                float2(0.0, 1.0),
+            );
+
+            resources.output[0] = crossing.hasUniqueIntersection ? 1.0 : 0.0;
+            resources.output[1] = crossing.point.x;
+            resources.output[2] = crossing.point.y;
+            resources.output[3] = crossing.lineAParameter;
+            resources.output[4] = crossing.lineBParameter;
+            resources.output[5] = parallel.hasUniqueIntersection ? 1.0 : 0.0;
+            resources.output[6] = parallel.isCollinear ? 1.0 : 0.0;
+            resources.output[7] = collinear.hasUniqueIntersection ? 1.0 : 0.0;
+            resources.output[8] = collinear.isCollinear ? 1.0 : 0.0;
+            resources.output[9] = Line2D::isPointPerpendicularToLine(
+                float2(0.0, 0.0), float2(1.0, 0.0), float2(0.5, 2.0),
+            ) ? 1.0 : 0.0;
+            resources.output[10] = Line2D::isPointPerpendicularToLine(
+                float2(0.0, 0.0), float2(1.0, 0.0), float2(2.0, 1.0),
+            ) ? 1.0 : 0.0;
+            resources.output[11] = Line2D::distanceFromPointToLine(
+                float2(0.0, 1.0), float2(0.0, 0.0), float2(1.0, 0.0),
+            );
+            resources.output[12] = Line2D::distanceFromPointToLine(
+                float2(0.0, -1.0), float2(0.0, 0.0), float2(1.0, 0.0),
+            );
+            resources.output[13] = Line2D::distanceFromPointToLine(
+                float2(3.0, 4.0), float2(0.0, 0.0), float2(0.0, 0.0),
+            );
+            resources.output[14] = Line2D::isPointPerpendicularToLine(
+                float2(0.0, 0.0), float2(0.0, 0.0), float2(0.0, 0.0),
+            ) ? 1.0 : 0.0;
+            resources.output[15] = originCrossing.hasUniqueIntersection ? 1.0 : 0.0;
+            resources.output[16] = originCrossing.point.x;
+            resources.output[17] = originCrossing.point.y;
+            resources.output[18] = degenerate.hasUniqueIntersection ? 1.0 : 0.0;
+            resources.output[19] = degenerate.isCollinear ? 1.0 : 0.0;
+        }
+    }
+}

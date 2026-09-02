@@ -667,7 +667,8 @@ NodeRef Parser::ParseFunctionCall(NodeRef function) {
                 if (arg.IsValid()) {
                     ast->GetFunctionCall(call).arguments.Push(arena, arg);
                 }
-            } while (Match(TokenType::COMMA));
+            } while (Match(TokenType::COMMA) &&
+                     !Check(TokenType::RIGHT_PAREN));
         }
 
         const auto& intrinsicData = StdLib::INTRINSICS[ast->GetFunctionCall(call).intrinsicIndex];
@@ -719,7 +720,8 @@ NodeRef Parser::ParseFunctionCall(NodeRef function) {
                 if (arg.IsValid()) {
                     ast->GetFunctionCall(call).arguments.Push(arena, arg);
                 }
-            } while (Match(TokenType::COMMA));
+            } while (Match(TokenType::COMMA) &&
+                     !Check(TokenType::RIGHT_PAREN));
         }
     }
 
