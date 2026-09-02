@@ -1462,7 +1462,8 @@ NodeRef Parser::ParseForStatement(bool isEval) {
 
             lastBodyPtr = &ast->GetForRange(loopNode).body;
 
-        } while (Match(TokenType::COMMA));
+        } while (Match(TokenType::COMMA) &&
+                 !Check(TokenType::RIGHT_PAREN));
 
         Consume(TokenType::RIGHT_PAREN, "Expected ')' after foreach clauses");
 
@@ -1703,7 +1704,8 @@ NodeRef Parser::ParseSwitch() {
             do {
                 NodeRef caseValue = ParseExpression();
                 caseValues.Push(arena, caseValue);
-            } while (Match(TokenType::COMMA));
+            } while (Match(TokenType::COMMA) &&
+                     !Check(TokenType::COLON));
             
             Consume(TokenType::COLON, "Expected ':' after case value(s)");
 

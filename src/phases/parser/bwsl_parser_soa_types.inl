@@ -210,7 +210,8 @@ NodeRef Parser::ParseArrayInitializer() {
             }
 
             ast->GetBlock(arrayNode).statements.Push(arena, element);
-        } while (Match(TokenType::COMMA));
+        } while (Match(TokenType::COMMA) &&
+                 !Check(TokenType::RIGHT_BRACE));
     }
 
     Consume(TokenType::RIGHT_BRACE, "Expected '}' after array initializer");
@@ -267,7 +268,8 @@ NodeRef Parser::ParseInlineArrayConstruction() {
                 Error(msg);
                 return NodeRef::Null();
             }
-        } while (Match(TokenType::COMMA));
+        } while (Match(TokenType::COMMA) &&
+                 !Check(TokenType::RIGHT_BRACKET));
     }
 
     Consume(TokenType::RIGHT_BRACKET, "Expected ']' after inline array construction");
@@ -817,7 +819,8 @@ NodeRef Parser::ParseEnumVariant() {
                     Error("Expected type in variant");
                     break;
                 }
-            } while (Match(TokenType::COMMA));
+            } while (Match(TokenType::COMMA) &&
+                     !Check(TokenType::RIGHT_PAREN));
         }
 
         Consume(TokenType::RIGHT_PAREN, "Expected ')' after variant types");
@@ -1008,7 +1011,8 @@ NodeRef Parser::ParsePatternMatch(NodeRef scrutinee) {
                         Error("Expected identifier or '_' in pattern binding");
                         break;
                     }
-                } while (Match(TokenType::COMMA));
+                } while (Match(TokenType::COMMA) &&
+                         !Check(TokenType::RIGHT_PAREN));
             }
 
             Consume(TokenType::RIGHT_PAREN, "Expected ')' after pattern bindings");

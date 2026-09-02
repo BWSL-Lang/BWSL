@@ -1,0 +1,53 @@
+// Test: trailing commas in delimited lists
+// Tests: declarations, calls, intrinsics, arrays, use lists, foreach, switch
+
+pipeline TrailingCommas {
+    resources {
+        output: buffer<float>
+    }
+
+    enum Pair {
+        Values(float, float,),
+
+        sum :: () -> float {
+            Values(a, b,): a + b
+            default: 0.0
+        }
+    }
+
+    add :: (
+        float a,
+        float b,
+    ) -> float {
+        return a + b;
+    }
+
+    pass "Compute" {
+        use resources { output, }
+
+        compute "Main" [1, 1, 1,] {
+            float[3] values = { 1.0, 2.0, 3.0, };
+            float[3] inlineValues = float[3][4.0, 5.0, 6.0,];
+            float result = add(
+                values[0],
+                values[1],
+            );
+            result = clamp(
+                result + inlineValues[2],
+                0.0,
+                10.0,
+            );
+
+            foreach (x in 0..2,) {
+                result = result + float(x);
+            }
+
+            switch (int(result)) {
+                case 0, 1,: result = 2.0;
+                default: result = Pair::Values(result, 1.0,).sum();
+            }
+
+            resources.output[0] = result;
+        }
+    }
+}

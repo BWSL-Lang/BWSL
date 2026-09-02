@@ -553,11 +553,4 @@ module Math {
         return cos(x) * 0.5 + 0.5;
     }
 
-    /// Cheap sine approximation for visual effects. Best for inputs in radians.
-    fast_sin :: (float x) -> float {
-        float t = fract(x * INV_TAU);
-        float t2 = t * (1.0 - t);
-        return t2 * (t2 * 32.0 - 8.0);
-    }
-
 }

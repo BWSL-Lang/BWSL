@@ -24,7 +24,7 @@ pipeline ModuleMathLive {
                 1.0
             );
             output.normal = safeNormal;
-            output.value = Math::fast_sin(angle) + wobble;
+            output.value = sin(angle) + wobble;
         }
 
         fragment {

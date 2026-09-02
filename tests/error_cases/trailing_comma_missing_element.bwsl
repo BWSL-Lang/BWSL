@@ -1,0 +1,17 @@
+// Error case: a trailing comma is allowed, but an empty list element is not.
+pipeline TrailingCommaMissingElement {
+    resources {
+        output: buffer<float>
+    }
+
+    add :: (float a, float b,) -> float {
+        return a + b;
+    }
+
+    pass "Compute" {
+        use resources { output, }
+        compute "Main" [1, 1, 1,] {
+            resources.output[0] = add(1.0,, 2.0,);
+        }
+    }
+}

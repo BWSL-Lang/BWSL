@@ -1,0 +1,112 @@
+/*
+ * Geometry helpers for infinite 2D lines and finite line segments.
+ */
+module Line2D {
+    /// Default tolerance used for degenerate and parallel line checks.
+    const float LINE_EPSILON = 1e-6;
+
+    /// Result of intersecting two infinite lines.
+    struct LineIntersection {
+        bool hasUniqueIntersection;
+        bool isCollinear;
+        float2 point;
+        float lineAParameter;
+        float lineBParameter;
+    };
+
+    /**
+     * Intersects the infinite lines through A-B and C-D.
+     *
+     * `hasUniqueIntersection` is false for parallel, collinear, and
+     * degenerate lines. For a unique intersection, `point` is the location
+     * and the parameters satisfy `point = A + lineAParameter * (B - A)` and
+     * `point = C + lineBParameter * (D - C)`.
+     */
+    intersection :: (
+        float2 A,
+        float2 B,
+        float2 C,
+        float2 D,
+    ) -> LineIntersection {
+        LineIntersection result;
+        result.hasUniqueIntersection = false;
+        result.isCollinear = false;
+        result.point = float2(0.0);
+        result.lineAParameter = 0.0;
+        result.lineBParameter = 0.0;
+
+        float2 lineA = B - A;
+        float2 lineB = D - C;
+        float lineALengthSquared = dot(lineA, lineA);
+        float lineBLengthSquared = dot(lineB, lineB);
+        float epsilonSquared = LINE_EPSILON * LINE_EPSILON;
+
+        if (lineALengthSquared <= epsilonSquared ||
+            lineBLengthSquared <= epsilonSquared) {
+            return result;
+        }
+
+        float denominator = lineA.x * lineB.y - lineA.y * lineB.x;
+        float directionScale = sqrt(lineALengthSquared * lineBLengthSquared);
+        float2 offset = C - A;
+
+        if (abs(denominator) <= LINE_EPSILON * directionScale) {
+            float offsetCrossLineA = offset.x * lineA.y - offset.y * lineA.x;
+            float offsetScale = sqrt(dot(offset, offset) * lineALengthSquared);
+            result.isCollinear = abs(offsetCrossLineA) <=
+                LINE_EPSILON * max(offsetScale, 1.0);
+            return result;
+        }
+
+        result.lineAParameter =
+            (offset.x * lineB.y - offset.y * lineB.x) / denominator;
+        result.lineBParameter =
+            (offset.x * lineA.y - offset.y * lineA.x) / denominator;
+        result.point = A + result.lineAParameter * lineA;
+        result.hasUniqueIntersection = true;
+        return result;
+    }
+
+    /**
+     * Returns true when the perpendicular projection of `point` onto the
+     * infinite line A-B lies on the closed segment A-B.
+     * Returns false when A and B describe a degenerate segment.
+     */
+    isPointPerpendicularToLine :: (
+        float2 A,
+        float2 B,
+        float2 point,
+    ) -> bool {
+        float2 line = B - A;
+        float lengthSquared = dot(line, line);
+        if (lengthSquared <= LINE_EPSILON * LINE_EPSILON) {
+            return false;
+        }
+
+        float parameter = dot(point - A, line) / lengthSquared;
+        return parameter >= -LINE_EPSILON &&
+               parameter <= 1.0 + LINE_EPSILON;
+    }
+
+    /**
+     * Returns the signed distance from `point` to the infinite line A-B.
+     * Positive values are on the left of the directed line A -> B.
+     * A degenerate line is treated as the point A and returns an unsigned
+     * point distance.
+     */
+    distanceFromPointToLine :: (
+        float2 point,
+        float2 A,
+        float2 B,
+    ) -> float {
+        float2 line = B - A;
+        float2 offset = point - A;
+        float lengthSquared = dot(line, line);
+        if (lengthSquared <= LINE_EPSILON * LINE_EPSILON) {
+            return length(offset);
+        }
+
+        float signedArea = line.x * offset.y - line.y * offset.x;
+        return signedArea / sqrt(lengthSquared);
+    }
+}

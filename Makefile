@@ -138,6 +138,7 @@ EMBEDDED_MODULE_SOURCES = \
 	modules/Compression.bwsl \
 	modules/Debug.bwsl \
 	modules/globals.bwsl \
+	modules/Line2D.bwsl \
 	modules/math.bwsl \
 	modules/noise.bwsl \
 	modules/Packing.bwsl \

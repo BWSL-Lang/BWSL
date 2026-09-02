@@ -1073,7 +1073,8 @@ void Parser::ParseFunctionParameters(NodeRef function) {
             std::make_pair(ArenaString::MakeHashOnly(paramName),
                           ArenaString::MakeHashOnly(paramType)));
 
-    } while (Match(TokenType::COMMA));
+    } while (Match(TokenType::COMMA) &&
+             !Check(TokenType::RIGHT_PAREN));
 }
 
 void Parser::ParseComputeBody(NodeRef compute) {

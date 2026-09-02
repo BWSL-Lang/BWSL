@@ -296,6 +296,7 @@ ERROR_CASE_TESTS = {
     "const_reassign.bwsl": "cannot assign to a compile-time constant",
     "break_outside_loop.bwsl": "'break' outside of a loop or switch",
     "array_index_out_of_bounds.bwsl": "is out of bounds for array of length",
+    "trailing_comma_missing_element.bwsl": "Expected expression",
 }
 
 ERROR_CASE_MODULE_DIRS = {
@@ -563,6 +564,14 @@ TRANSLATION_EXPECTATION_TESTS = {
             "hlsl_contains": ["pow(", "clamp("],
             "glsl_contains": ["pow(", "clamp("],
             "metal_contains": ["pow", "clamp("],
+        },
+    },
+    "module_line2d_live": {
+        "frag": {
+            "ir_contains": ["LENGTH", "SQRT", "DOT"],
+            "hlsl_contains": ["length(", "sqrt(", "dot("],
+            "glsl_contains": ["length(", "sqrt(", "dot("],
+            "metal_contains": ["length(", "sqrt(", "dot("],
         },
     },
     "module_random_live": {
