@@ -53,16 +53,13 @@ pipeline EquivColorConversions {
                 132.9041767229242,
                 54.47421559092585
             );
-            // BWSL intentionally exposes wrapper HPLuv saturation at 2/3 of
-            // the reference scale. Direct LCh/HPLuv conversions stay standard.
-            float3 adjustedHpluv = referenceHpluv / float3(1.0, 1.5, 1.0);
 
             values[5] = Color::hsluvToLch(referenceHsluv);
             values[6] = Color::lchToLuv(referenceLch);
             values[7] = Color::luvToXyz(referenceLuv);
             values[8] = Color::xyzToRgb(referenceXyz);
             values[9] = Color::hsluvToRgb(referenceHsluv);
-            values[10] = Color::hpluvToRgb(adjustedHpluv);
+            values[10] = Color::hpluvToRgb(referenceHpluv);
             values[11] = Color::lchToRgb(referenceLch);
             values[12] = Color::rgbToLch(rgb);
             values[13] = Color::hpluvToLch(referenceHpluv);

@@ -190,9 +190,6 @@ hpluvToLch :: (float3 tuple) -> float3 {
 }
 
 hpluvToRgb :: (float3 tuple) -> float3 {
-    // Retain the established BWSL HPLuv saturation adjustment. Public HPLuv
-    // saturation is two-thirds of the reference scale.
-    tuple.y *= 1.5;
     return lchToRgb(hpluvToLch(tuple));
 }
 
@@ -212,8 +209,7 @@ lchToHpluv :: (float3 tuple) -> float3 {
 }
 
 rgbToHpluv :: (float3 tuple) -> float3 {
-    // Inverse of the BWSL HPLuv saturation adjustment above.
-    return lchToHpluv(rgbToLch(tuple)) / float3(1.0, 1.5, 1.0);
+    return lchToHpluv(rgbToLch(tuple));
 }
 
 hsv2rgb :: (float3 c) -> float3 {

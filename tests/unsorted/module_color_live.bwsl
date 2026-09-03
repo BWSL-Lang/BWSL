@@ -40,8 +40,8 @@ pipeline ModuleColorLive {
             float3 referenceHpluv = Color::lchToHpluv(directLch);
             float3 lchFromHpluv = Color::hpluvToLch(referenceHpluv);
             float3 referenceHpluvRgb = Color::lchToRgb(lchFromHpluv);
-            float3 adjustedHpluv = Color::rgbToHpluv(hsluvRgb);
-            float3 hpluvRgb = Color::hpluvToRgb(adjustedHpluv);
+            float3 hpluv = Color::rgbToHpluv(hsluvRgb);
+            float3 hpluvRgb = Color::hpluvToRgb(hpluv);
 
             float3 hsv = Color::rgb2hsv(hpluvRgb);
             float3 hsvRgb = Color::hsv2rgb(hsv);
