@@ -2011,6 +2011,14 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
             if all_ok:
                 backends_spv["glsl"] = converted
 
+        required_backends = set(spec.get("required_backends", []))
+        missing_backends = sorted(required_backends - backends_spv.keys())
+        if missing_backends:
+            print(f"[{RED}FAIL{NC}] {test_name} "
+                  f"(missing required backend(s): {', '.join(missing_backends)})")
+            failed += 1
+            continue
+
         input_bin: Path | None = None
         if "input_values" in spec:
             input_bin = test_out / f"{test_name}_input.bin"

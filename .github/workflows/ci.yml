@@ -49,11 +49,32 @@ jobs:
         with:
           key: ubuntu-latest
 
+      - name: Install equivalence test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            glslang-tools libvulkan-dev mesa-vulkan-drivers
+          dxc_archive="$RUNNER_TEMP/dxc.tar.gz"
+          dxc_root="$RUNNER_TEMP/dxc"
+          curl -fsSL \
+            https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.7.2308/linux_dxc_2023_08_14.x86_64.tar.gz \
+            -o "$dxc_archive"
+          mkdir -p "$dxc_root"
+          tar -xzf "$dxc_archive" -C "$dxc_root"
+          echo "$dxc_root/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$dxc_root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
       - name: Build bwslc
         run: make build
 
       - name: Run regression tests
         run: make test
+
+      - name: Build equivalence runner
+        run: make equiv_runner
+
+      - name: Run numerical equivalence tests
+        run: python3 tests/run_tests.py --equivalence --no-spirv-val
 
   macos:
     name: macos-latest

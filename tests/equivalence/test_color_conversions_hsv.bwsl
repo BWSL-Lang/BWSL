@@ -1,0 +1,32 @@
+// Canonical HSV conversions plus the custom HSLuv hue lookup boundaries.
+pipeline EquivColorConversionHsv {
+    import Color
+
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+
+        compute "Main" [1, 1, 1] {
+            float3[4] values;
+            values[0] = Color::hsv2rgb(float3(0.0, 1.0, 1.0));
+            values[1] = Color::rgb2hsv(float3(1.0, 0.0, 0.0));
+            values[2] = Color::hsv2rgb(float3(1.0 / 3.0, 1.0, 1.0));
+            values[3] = Color::rgb2hsv(float3(0.0, 0.0, 1.0));
+
+            foreach (i in 0..4) {
+                int outputIndex = i * 3;
+                resources.output[outputIndex] = values[i].x;
+                resources.output[outputIndex + 1] = values[i].y;
+                resources.output[outputIndex + 2] = values[i].z;
+            }
+
+            resources.output[12] = Color::hsluv_maxLForH(0.0);
+            resources.output[13] = Color::hsluv_maxLForH(2.5);
+            resources.output[14] = Color::hsluv_maxLForH(360.0);
+            resources.output[15] = Color::hsluv_maxLForH(-5.0);
+        }
+    }
+}

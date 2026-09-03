@@ -1,0 +1,36 @@
+// Primary-color HSLuv values from the official revision-4 snapshot.
+// Source: https://github.com/hsluv/hsluv-python/blob/master/tests/snapshot-rev4.json
+pipeline EquivColorConversionPrimaries {
+    import Color
+
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+
+        compute "Main" [1, 1, 1] {
+            float3[6] values;
+            values[0] = Color::rgbToHsluv(float3(1.0, 0.0, 0.0));
+            values[1] = Color::rgbToHsluv(float3(0.0, 1.0, 0.0));
+            values[2] = Color::rgbToHsluv(float3(0.0, 0.0, 1.0));
+            values[3] = Color::hsluvToRgb(float3(
+                12.177050630061776, 100.0, 53.23711559542933
+            ));
+            values[4] = Color::hsluvToRgb(float3(
+                127.71501294924047, 100.0, 87.73551910965973
+            ));
+            values[5] = Color::hsluvToRgb(float3(
+                265.8743202181779, 100.0, 32.30087290398002
+            ));
+
+            foreach (i in 0..6) {
+                int outputIndex = i * 3;
+                resources.output[outputIndex] = values[i].x;
+                resources.output[outputIndex + 1] = values[i].y;
+                resources.output[outputIndex + 2] = values[i].z;
+            }
+        }
+    }
+}

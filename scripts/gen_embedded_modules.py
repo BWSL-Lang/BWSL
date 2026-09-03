@@ -10,6 +10,7 @@ from pathlib import Path
 
 MODULES = [
     ("Color", "modules/Color.bwsl"),
+    ("ColorInternals", "modules/ColorInternals.bwsl"),
     ("Compression", "modules/Compression.bwsl"),
     ("Debug", "modules/Debug.bwsl"),
     ("Globals", "modules/globals.bwsl"),
