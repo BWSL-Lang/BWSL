@@ -1,0 +1,79 @@
+// Core Color conversion chain using the official HSLuv revision-4 snapshot
+// entry for #4488bb.
+// Source: https://github.com/hsluv/hsluv-python/blob/master/tests/snapshot-rev4.json
+pipeline EquivColorConversions {
+    import Color
+
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+
+        compute "Main" [1, 1, 1] {
+            float3[15] values;
+            float3 rgb = float3(
+                0.26666666666666666,
+                0.5333333333333333,
+                0.7333333333333333
+            );
+            float3 xyz = Color::rgbToXyz(rgb);
+            float3 luv = Color::xyzToLuv(xyz);
+            float3 lch = Color::luvToLch(luv);
+
+            values[0] = xyz;
+            values[1] = luv;
+            values[2] = lch;
+            values[3] = Color::lchToHsluv(lch);
+            values[4] = Color::rgbToHpluv(rgb);
+
+            float3 referenceLch = float3(
+                54.47421559092585,
+                57.05455051899435,
+                241.11354325793724
+            );
+            float3 referenceLuv = float3(
+                54.47421559092585,
+                -27.561651657574515,
+                -49.95575134887872
+            );
+            float3 referenceXyz = float3(
+                0.20156302505612855,
+                0.2242419102349013,
+                0.5028141285329628
+            );
+            float3 referenceHsluv = float3(
+                241.11354325793724,
+                78.10478036232007,
+                54.47421559092585
+            );
+            float3 referenceHpluv = float3(
+                241.11354325793724,
+                132.9041767229242,
+                54.47421559092585
+            );
+            // BWSL intentionally exposes wrapper HPLuv saturation at 2/3 of
+            // the reference scale. Direct LCh/HPLuv conversions stay standard.
+            float3 adjustedHpluv = referenceHpluv / float3(1.0, 1.5, 1.0);
+
+            values[5] = Color::hsluvToLch(referenceHsluv);
+            values[6] = Color::lchToLuv(referenceLch);
+            values[7] = Color::luvToXyz(referenceLuv);
+            values[8] = Color::xyzToRgb(referenceXyz);
+            values[9] = Color::hsluvToRgb(referenceHsluv);
+            values[10] = Color::hpluvToRgb(adjustedHpluv);
+            values[11] = Color::lchToRgb(referenceLch);
+            values[12] = Color::rgbToLch(rgb);
+            values[13] = Color::hpluvToLch(referenceHpluv);
+            values[14] = Color::lchToHpluv(referenceLch);
+
+            foreach (i in 0..15) {
+                int outputIndex = i * 3;
+                resources.output[outputIndex] = values[i].x;
+                resources.output[outputIndex + 1] = values[i].y;
+                resources.output[outputIndex + 2] = values[i].z;
+            }
+        }
+    }
+}

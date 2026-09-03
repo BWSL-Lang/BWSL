@@ -4,6 +4,9 @@ module Color {
 import PostFX
 import ColorInternals
 
+const float HSLUV_EPSILON = 1e-5;
+const float HSLUV_CHROMA_EPSILON = 1e-4;
+
 // sRGB to linear
 sRGBToLinear :: (float3 srgb) -> float3 {
     float3 lo = srgb / 12.92;
@@ -66,26 +69,32 @@ xyzToLuv :: (float3 tuple) -> float3 {
     float Z = tuple.z;
 
     float L = ColorInternals::yToL(Y);
+    if (abs(L) <= HSLUV_EPSILON) {
+        return float3(0.0);
+    }
 
-    float div = 1 / dot(tuple, float3(1, 15, 3));
+    float div = 1.0 / dot(tuple, float3(1.0, 15.0, 3.0));
 
     return float3(
-    1,
-    (52 * (X*div) - 2.57179),
-    (117* (Y*div) - 6.08816)
+        1.0,
+        52.0 * X * div - 2.57179,
+        117.0 * Y * div - 6.08816
     ) * L;
 }
 
 
 luvToXyz :: (float3 tuple) -> float3 {
     float L = tuple.x;
+    if (abs(L) <= HSLUV_EPSILON) {
+        return float3(0.0);
+    }
 
     float U = tuple.y / (13.0 * L) + 0.19783000664283681;
     float V = tuple.z / (13.0 * L) + 0.468319994938791;
 
     float Y = ColorInternals::lToY(L);
     float X = 2.25 * U * Y / V;
-    float Z = (3./V - 5.)*Y - (X/3.);
+    float Z = (3.0 / V - 5.0) * Y - X / 3.0;
 
     return float3(X, Y, Z);
 }
@@ -96,9 +105,14 @@ luvToLch :: (float3 tuple) -> float3 {
     float V = tuple.z;
 
     float C = length(tuple.yz);
-    float H = degrees(atan2(V,U));
-    if (H < 0.0) {
-        H = 360.0 + H;
+    float H = 0.0;
+    // Float32 matrix conversion leaves a tiny residual chroma for neutral
+    // colors; treat it as achromatic as the reference implementation does.
+    if (C > HSLUV_CHROMA_EPSILON) {
+        H = degrees(atan2(V, U));
+        if (H < 0.0) {
+            H = 360.0 + H;
+        }
     }
 
     return float3(L, C, H);
@@ -114,13 +128,33 @@ lchToLuv :: (float3 tuple) -> float3 {
 }
 
 hsluvToLch :: (float3 tuple) -> float3 {
-    tuple.g *= ColorInternals::maxChromaForLH(tuple.b, tuple.r) * 0.01;
-    return tuple.bgr;
+    float H = tuple.r;
+    float S = tuple.g;
+    float L = tuple.b;
+    if (L <= HSLUV_EPSILON) {
+        return float3(0.0, 0.0, H);
+    }
+    if (L >= 100.0 - HSLUV_EPSILON) {
+        return float3(100.0, 0.0, H);
+    }
+
+    float C = S * ColorInternals::maxChromaForLH(L, H) * 0.01;
+    return float3(L, C, H);
 }
 
 lchToHsluv :: (float3 tuple) -> float3 {
-    tuple.g /= ColorInternals::maxChromaForLH(tuple.r, tuple.b) * 0.01;
-    return tuple.bgr;
+    float L = tuple.r;
+    float C = tuple.g;
+    float H = tuple.b;
+    if (L <= HSLUV_EPSILON) {
+        return float3(H, 0.0, 0.0);
+    }
+    if (L >= 100.0 - HSLUV_EPSILON) {
+        return float3(H, 0.0, 100.0);
+    }
+
+    float S = C / (ColorInternals::maxChromaForLH(L, H) * 0.01);
+    return float3(H, S, L);
 }
 
 lchToRgb :: (float3 tuple) -> float3 {
@@ -141,49 +175,72 @@ rgbToHsluv :: (float3 tuple) -> float3 {
 
 
 hpluvToLch :: (float3 tuple) -> float3 {
-    tuple.g *= ColorInternals::maxSafeChromaForL(tuple.b) * 0.01;
-    return tuple.bgr;
+    float H = tuple.r;
+    float P = tuple.g;
+    float L = tuple.b;
+    if (L <= HSLUV_EPSILON) {
+        return float3(0.0, 0.0, H);
+    }
+    if (L >= 100.0 - HSLUV_EPSILON) {
+        return float3(100.0, 0.0, H);
+    }
+
+    float C = P * ColorInternals::maxSafeChromaForL(L) * 0.01;
+    return float3(L, C, H);
 }
 
 hpluvToRgb :: (float3 tuple) -> float3 {
-    tuple.y *= 1.5; // saturation fix
+    // Retain the established BWSL HPLuv saturation adjustment. Public HPLuv
+    // saturation is two-thirds of the reference scale.
+    tuple.y *= 1.5;
     return lchToRgb(hpluvToLch(tuple));
 }
 
 lchToHpluv :: (float3 tuple) -> float3 {
-    tuple.g /= ColorInternals::maxSafeChromaForL(tuple.r) * 0.01;
-    return tuple.bgr;
+    float L = tuple.r;
+    float C = tuple.g;
+    float H = tuple.b;
+    if (L <= HSLUV_EPSILON) {
+        return float3(H, 0.0, 0.0);
+    }
+    if (L >= 100.0 - HSLUV_EPSILON) {
+        return float3(H, 0.0, 100.0);
+    }
+
+    float P = C / (ColorInternals::maxSafeChromaForL(L) * 0.01);
+    return float3(H, P, L);
 }
 
 rgbToHpluv :: (float3 tuple) -> float3 {
+    // Inverse of the BWSL HPLuv saturation adjustment above.
     return lchToHpluv(rgbToLch(tuple)) / float3(1.0, 1.5, 1.0);
 }
 
 hsv2rgb :: (float3 c) -> float3 {
-    vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    float4 K = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
     float3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
-    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+    return c.z * lerp(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
 }
 
 rgb2hsv :: (float3 c) -> float3 {
-    vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
-    vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
-    vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+    float4 K = float4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    float4 p = lerp(float4(c.bg, K.wz), float4(c.gb, K.xy), step(c.b, c.g));
+    float4 q = lerp(float4(p.xyw, c.r), float4(c.r, p.yzx), step(p.x, c.r));
     float d = q.x - min(q.w, q.y);
     float e = 1.0e-10;
     return float3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
 }
 
-/** 
- * Calculates the maximum HSLUV lightness for a given hue, 
+/**
+ * Calculates the maximum HSLUV lightness for a given hue,
  * so that one component in the RGB model would be 0.
  * Once this lightness is exceeded, the color will become more white.
  *
- * This is useful for custom shading of "shining" objects, 
+ * This is useful for custom shading of "shining" objects,
  * where the brightest parts are white.
  * such as neon lights and lasers.
- * 
- * Examples: 
+ *
+ * Examples:
  * blue   L=75.6 #b3b3ff -> L=32.3 #0000ff
  * orange L=73.1 #ff9974 -> L=64.7 #ff7400
  */
@@ -205,10 +262,15 @@ hsluv_maxLForH :: (float hue) -> float {
     };
 
     // Normalize hue to be between 0 and 360
-    hue = mod(hue, 360.0);
+    float normalizedHue = hue - floor(hue / 360.0) * 360.0;
+    // Keep an exact full turn on the first table entry even on backends where
+    // the quotient above rounds just below 1.0.
+    if (normalizedHue >= 360.0) {
+        return lightness[0];
+    }
 
     // Calculate the index in the array
-    float index = hue / 5.0; // 360/72 = 5 degrees per step
+    float index = normalizedHue / 5.0; // 360/72 = 5 degrees per step
 
     // Find the indices of the surrounding lightness values
     int index0 = int(floor(index));
@@ -218,7 +280,7 @@ hsluv_maxLForH :: (float hue) -> float {
     float frac = index - float(index0);
 
     // Linearly interpolate between the two closest lightness values
-    float maxBrightness = mix(lightness[index0], lightness[index1], frac);
+    float maxBrightness = lerp(lightness[index0], lightness[index1], frac);
 
     return maxBrightness;
 }

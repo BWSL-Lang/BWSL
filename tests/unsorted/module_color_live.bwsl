@@ -21,7 +21,36 @@ pipeline ModuleColorLive {
             float3 linear = Color::sRGBToLinear(input.baseColor);
             float3 lit = linear * float3(2.0, 1.5, 1.25);
             float3 mapped = Color::ACESFilm(lit);
-            output.color = float4(Color::linearToSRGB(mapped), 1.0);
+            float3 srgb = Color::linearToSRGB(mapped);
+
+            float3 xyz = Color::rgbToXyz(srgb);
+            float3 luv = Color::xyzToLuv(xyz);
+            float3 lch = Color::luvToLch(luv);
+            float3 hsluv = Color::lchToHsluv(lch);
+            float3 lchFromHsluv = Color::hsluvToLch(hsluv);
+            float3 luvFromLch = Color::lchToLuv(lchFromHsluv);
+            float3 xyzFromLuv = Color::luvToXyz(luvFromLch);
+            float3 rgbFromXyz = Color::xyzToRgb(xyzFromLuv);
+
+            float3 directLch = Color::rgbToLch(rgbFromXyz);
+            float3 directRgb = Color::lchToRgb(directLch);
+            float3 wrapperHsluv = Color::rgbToHsluv(directRgb);
+            float3 hsluvRgb = Color::hsluvToRgb(wrapperHsluv);
+
+            float3 referenceHpluv = Color::lchToHpluv(directLch);
+            float3 lchFromHpluv = Color::hpluvToLch(referenceHpluv);
+            float3 referenceHpluvRgb = Color::lchToRgb(lchFromHpluv);
+            float3 adjustedHpluv = Color::rgbToHpluv(hsluvRgb);
+            float3 hpluvRgb = Color::hpluvToRgb(adjustedHpluv);
+
+            float3 hsv = Color::rgb2hsv(hpluvRgb);
+            float3 hsvRgb = Color::hsv2rgb(hsv);
+            float maxLightness = Color::hsluv_maxLForH(hsluv.x);
+
+            float3 result = (directRgb + hsluvRgb + referenceHpluvRgb +
+                             hpluvRgb + hsvRgb) * 0.2;
+            result *= 0.99 + maxLightness * 0.0001;
+            output.color = float4(clamp(result, 0.0, 1.0), 1.0);
         }
     }
 }

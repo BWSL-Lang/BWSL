@@ -62,9 +62,9 @@ module ColorInternals {
         float2 hueVec = float2(cos(hrad), sin(hrad));
 
         float3 lengths0 = bound0y / (hueVec.y - bound0x * hueVec.x);
-        lengths0 = mix(float3(1000.0), lengths0, step(float3(0.0), lengths0));
+        lengths0 = lerp(float3(1000.0), lengths0, step(float3(0.0), lengths0));
         float3 lengths1 = bound1y / (hueVec.y - bound1x * hueVec.x);
-        lengths1 = mix(float3(1000.0), lengths1, step(float3(0.0), lengths1));
+        lengths1 = lerp(float3(1000.0), lengths1, step(float3(0.0), lengths1));
 
         return  min(lengths0.r,
                     lengths1.r,
