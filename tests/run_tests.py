@@ -401,6 +401,71 @@ AST_JSON_POSITION_TESTS = {
     ],
 }
 
+# Semantic references emitted only by `-ast-json`. The expected IDs exercise
+# both real SoA nodes (`TYPE:index`) and owner-scoped declarations that do not
+# have AST nodes of their own (parameters, fields, and stage interfaces).
+AST_JSON_REFERENCE_TESTS = {
+    "references": {
+        "symbols": [
+            {
+                "match": {"kind": "module", "name": "ReferenceMath"},
+                "expect": {"id": "MODULE:0", "declaration": "MODULE:0",
+                           "stableId": "module:ReferenceMath"},
+            },
+            {
+                "match": {"kind": "struct", "name": "Payload"},
+                "expect": {"id": "STRUCT_DECL:0", "owner": "MODULE:0",
+                           "stableId": "module:ReferenceMath/type:Payload"},
+            },
+            {
+                "match": {"kind": "struct-field", "name": "uv"},
+                "expect": {"id": "STRUCT_DECL:0/field:0", "owner": "STRUCT_DECL:0",
+                           "type": "float2", "definitions": ["ASSIGNMENT:0"],
+                           "stableId": "module:ReferenceMath/type:Payload/field:uv"},
+            },
+            {
+                "match": {"kind": "function", "name": "makePayload"},
+                "expect": {"id": "FUNCTION:0", "owner": "MODULE:0", "type": "Payload",
+                           "stableId": "module:ReferenceMath/function:makePayload(float2)->Payload"},
+            },
+            {
+                "match": {"kind": "parameter", "name": "sourceUv"},
+                "expect": {"id": "FUNCTION:0/parameter:0", "owner": "FUNCTION:0",
+                           "type": "float2",
+                           "stableId": "module:ReferenceMath/function:makePayload(float2)->Payload/parameter:0"},
+            },
+            {
+                "match": {"kind": "attribute", "name": "position"},
+                "expect": {"id": "ATTRIBUTE_DECL:0", "owner": "PIPELINE:0",
+                           "type": "float3",
+                           "stableId": "pipeline:AstJsonReferences/attribute:position"},
+            },
+            {
+                "match": {"kind": "stage-interface", "name": "uv"},
+                "expect": {"id": "PASS:0/interface:uv", "owner": "PASS:0",
+                           "type": "float2", "definitions": ["ASSIGNMENT:4"],
+                           "stableId": "pipeline:AstJsonReferences/pass:Main/interface:uv"},
+            },
+            {
+                "match": {"kind": "core-type", "name": "float2"},
+                "expect": {"id": "builtin:type:float2", "owner": "builtin",
+                           "stableId": "builtin:type:float2"},
+            },
+        ],
+        "references": [
+            {"to": "MODULE:0", "role": "import", "from_prefix": "PIPELINE:0/import:"},
+            {"to": "FUNCTION:0", "role": "call", "from_prefix": "FUNCTION_CALL:"},
+            {"to": "FUNCTION:0/parameter:0", "role": "read", "from_prefix": "IDENTIFIER:"},
+            {"to": "STRUCT_DECL:0/field:0", "role": "write", "from_prefix": "MEMBER_ACCESS:"},
+            {"to": "STRUCT_DECL:0/field:0", "role": "member", "from_prefix": "MEMBER_ACCESS:"},
+            {"to": "ATTRIBUTE_DECL:0", "role": "attribute", "from_prefix": "MEMBER_ACCESS:"},
+            {"to": "PASS:0/interface:uv", "role": "output", "from_prefix": "MEMBER_ACCESS:"},
+            {"to": "PASS:0/interface:uv", "role": "input", "from_prefix": "MEMBER_ACCESS:"},
+            {"to": "builtin:type:float2", "role": "type", "from_prefix": "VARIABLE_DECL:"},
+        ],
+    },
+}
+
 FORBIDDEN_SOURCE_ALIAS_NAMES = (
     "mix",
     "frac",
@@ -935,6 +1000,74 @@ def check_ast_json_positions(data: dict, expectations: list[dict]) -> tuple[bool
             actual = node.get(key)
             if actual != expected:
                 return False, f"node ({desc}): {key} is {actual}, expected {expected}"
+
+    return True, ""
+
+
+def check_ast_json_references(data: dict, expectations: dict) -> tuple[bool, str]:
+    reference_index = data.get("referenceIndex")
+    if not isinstance(reference_index, dict):
+        return False, "AST JSON has no 'referenceIndex' object"
+    if reference_index.get("format") != "bwsl.references.v1":
+        return False, f"unexpected reference format {reference_index.get('format')!r}"
+    if reference_index.get("unit") != data.get("sourceFile"):
+        return False, "reference IDs are not scoped by the AST JSON sourceFile"
+    if reference_index.get("nodeIdFormat") != "TYPE:index":
+        return False, "reference index does not advertise TYPE:index node IDs"
+
+    symbols = reference_index.get("symbols")
+    references = reference_index.get("references")
+    if not isinstance(symbols, list) or not isinstance(references, list):
+        return False, "reference index symbols/references must be arrays"
+
+    symbol_ids = [symbol.get("id") for symbol in symbols if isinstance(symbol, dict)]
+    if len(symbol_ids) != len(symbols) or any(not value for value in symbol_ids):
+        return False, "every semantic symbol must have a non-empty ID"
+    if len(symbol_ids) != len(set(symbol_ids)):
+        return False, "semantic symbol IDs are not unique"
+    stable_ids = [symbol["stableId"] for symbol in symbols if symbol.get("stableId")]
+    if len(stable_ids) != len(set(stable_ids)):
+        return False, "externally addressable semantic stable IDs are not unique"
+
+    reference_keys: list[tuple[str, str, str]] = []
+    for reference in references:
+        if not isinstance(reference, dict):
+            return False, "every semantic reference must be an object"
+        key = (reference.get("from"), reference.get("to"), reference.get("role"))
+        if any(not value for value in key):
+            return False, f"semantic reference has an empty field: {reference}"
+        if key[1] not in symbol_ids:
+            return False, f"semantic reference target {key[1]!r} is not a symbol"
+        reference_keys.append(key)
+    if len(reference_keys) != len(set(reference_keys)):
+        return False, "semantic references contain duplicate from/to/role records"
+
+    for case in expectations.get("symbols", []):
+        match = case["match"]
+        description = ", ".join(f"{key}={value}" for key, value in match.items())
+        found = [
+            symbol for symbol in symbols
+            if all(symbol.get(key) == value for key, value in match.items())
+        ]
+        if len(found) != 1:
+            return False, f"expected exactly one symbol matching ({description}), found {len(found)}"
+        for key, expected in case.get("expect", {}).items():
+            actual = found[0].get(key)
+            if actual != expected:
+                return False, f"symbol ({description}): {key} is {actual!r}, expected {expected!r}"
+
+    for case in expectations.get("references", []):
+        found = [
+            reference for reference in references
+            if reference.get("to") == case["to"]
+            and reference.get("role") == case["role"]
+            and reference.get("from", "").startswith(case.get("from_prefix", ""))
+        ]
+        if not found:
+            return False, (
+                f"missing {case['role']!r} reference to {case['to']!r} "
+                f"from {case.get('from_prefix', '')!r}"
+            )
 
     return True, ""
 
@@ -3024,9 +3157,10 @@ def main() -> int:
     ast_json_dir = script_dir / "ast_json"
     if ast_json_dir.exists():
         for test_file in sorted(ast_json_dir.glob("*.bwsl")):
-            expectations = AST_JSON_POSITION_TESTS.get(test_file.stem)
-            if expectations is None:
-                print(f"[{YELLOW}SKIP{NC}] ast_json/{test_file.stem} (position expectations not defined)")
+            position_expectations = AST_JSON_POSITION_TESTS.get(test_file.stem)
+            reference_expectations = AST_JSON_REFERENCE_TESTS.get(test_file.stem)
+            if position_expectations is None and reference_expectations is None:
+                print(f"[{YELLOW}SKIP{NC}] ast_json/{test_file.stem} (expectations not defined)")
                 skipped += 1
                 continue
 
@@ -3055,12 +3189,21 @@ def main() -> int:
                 failed += 1
                 continue
 
-            ok, message = check_ast_json_positions(data, expectations)
-            if not ok:
-                print(f"[{RED}FAIL{NC}] ast_json/{test_file.stem}")
-                print(f"       Error: AST position mismatch: {message}")
-                failed += 1
-                continue
+            if position_expectations is not None:
+                ok, message = check_ast_json_positions(data, position_expectations)
+                if not ok:
+                    print(f"[{RED}FAIL{NC}] ast_json/{test_file.stem}")
+                    print(f"       Error: AST position mismatch: {message}")
+                    failed += 1
+                    continue
+
+            if reference_expectations is not None:
+                ok, message = check_ast_json_references(data, reference_expectations)
+                if not ok:
+                    print(f"[{RED}FAIL{NC}] ast_json/{test_file.stem}")
+                    print(f"       Error: AST reference mismatch: {message}")
+                    failed += 1
+                    continue
 
             print(f"[{GREEN}PASS{NC}] ast_json/{test_file.stem}")
             passed += 1

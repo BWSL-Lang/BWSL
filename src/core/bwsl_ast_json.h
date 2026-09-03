@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bwsl_ast_soa.h"
+#include "bwsl_ast_reference_index.h"
 #include "bwsl_reflection_json.h"
 #include <cctype>
 #include <cmath>
@@ -1043,6 +1044,71 @@ inline void AppendNodeCounts(std::ostringstream& json, const AST& ast) {
     json << "}";
 }
 
+inline void AppendReferenceIndex(std::ostringstream& json, const AST& ast,
+                                 const std::string& sourceFile) {
+    const AstReferenceIndex::Index referenceIndex = AstReferenceIndex::Build(ast);
+    bool first = true;
+    json << "{";
+    AppendStringField(json, first, "format", "bwsl.references.v1");
+    AppendStringField(json, first, "unit", sourceFile);
+    AppendStringField(json, first, "nodeIdFormat", "TYPE:index");
+    AppendStringField(json, first, "syntheticIdFormat",
+                      "<owner-id>/<kind>:<index-or-name>");
+    AppendStringField(json, first, "stableIdFormat",
+                      "qualified semantic path for externally addressable symbols");
+
+    AppendFieldName(json, first, "symbols");
+    json << "[";
+    for (size_t i = 0; i < referenceIndex.symbols.size(); i++) {
+        if (i > 0) json << ",";
+        const AstReferenceIndex::Symbol& symbol = referenceIndex.symbols[i];
+        bool symbolFirst = true;
+        json << "{";
+        AppendStringField(json, symbolFirst, "id", symbol.id);
+        AppendStringField(json, symbolFirst, "kind", symbol.kind);
+        AppendStringField(json, symbolFirst, "name", symbol.name);
+        if (!symbol.declaration.empty()) {
+            AppendStringField(json, symbolFirst, "declaration", symbol.declaration);
+        }
+        if (!symbol.owner.empty()) {
+            AppendStringField(json, symbolFirst, "owner", symbol.owner);
+        }
+        if (!symbol.type.empty()) {
+            AppendStringField(json, symbolFirst, "type", symbol.type);
+        }
+        if (!symbol.stableId.empty()) {
+            AppendStringField(json, symbolFirst, "stableId", symbol.stableId);
+        }
+        if (!symbol.definitions.empty()) {
+            AppendFieldName(json, symbolFirst, "definitions");
+            json << "[";
+            for (size_t definitionIndex = 0;
+                 definitionIndex < symbol.definitions.size(); definitionIndex++) {
+                if (definitionIndex > 0) json << ",";
+                AppendStringValue(json, symbol.definitions[definitionIndex]);
+            }
+            json << "]";
+        }
+        json << "}";
+    }
+    json << "]";
+
+    AppendFieldName(json, first, "references");
+    json << "[";
+    for (size_t i = 0; i < referenceIndex.references.size(); i++) {
+        if (i > 0) json << ",";
+        const AstReferenceIndex::Reference& reference = referenceIndex.references[i];
+        bool referenceFirst = true;
+        json << "{";
+        AppendStringField(json, referenceFirst, "from", reference.from);
+        AppendStringField(json, referenceFirst, "to", reference.to);
+        AppendStringField(json, referenceFirst, "role", reference.role);
+        json << "}";
+    }
+    json << "]";
+    json << "}";
+}
+
 inline std::string SerializeASTJson(const AST& ast, NodeRef root,
                                     const std::string& sourceFile) {
     std::ostringstream json;
@@ -1071,6 +1137,9 @@ inline std::string SerializeASTJson(const AST& ast, NodeRef root,
 
     AppendFieldName(json, first, "nodeCounts");
     AppendNodeCounts(json, ast);
+
+    AppendFieldName(json, first, "referenceIndex");
+    AppendReferenceIndex(json, ast, sourceFile);
     json << "}";
     return json.str();
 }

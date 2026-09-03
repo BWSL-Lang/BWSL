@@ -1,0 +1,42 @@
+// AST JSON semantic-reference coverage. This deliberately combines module,
+// function, parameter, local, type/member, attribute, and stage-interface use.
+module ReferenceMath {
+    struct Payload {
+        float2 uv;
+    };
+
+    makePayload :: (float2 sourceUv) -> Payload {
+        Payload result;
+        result.uv = sourceUv;
+        return result;
+    }
+
+    readPayload :: (Payload value) -> float2 {
+        return value.uv;
+    }
+}
+
+pipeline AstJsonReferences {
+    attributes {
+        position: float3
+    }
+
+    import ReferenceMath
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            ReferenceMath::Payload payload =
+                ReferenceMath::makePayload(attributes.position.xy);
+            float2 localUv = ReferenceMath::readPayload(payload);
+            output.position = float4(attributes.position, 1.0);
+            output.uv = localUv;
+        }
+
+        fragment {
+            float2 localUv = input.uv;
+            output.color = float4(localUv, 0.0, 1.0);
+        }
+    }
+}
