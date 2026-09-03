@@ -57,7 +57,7 @@ jobs:
           dxc_archive="$RUNNER_TEMP/dxc.tar.gz"
           dxc_root="$RUNNER_TEMP/dxc"
           curl -fsSL \
-            https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.10.2605.37/linux_dxc_2026_08_11.x86_64.tar.gz \
+            https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.7.2308/linux_dxc_2023_08_14.x86_64.tar.gz \
             -o "$dxc_archive"
           mkdir -p "$dxc_root"
           tar -xzf "$dxc_archive" -C "$dxc_root"

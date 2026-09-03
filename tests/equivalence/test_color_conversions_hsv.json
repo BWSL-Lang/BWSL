@@ -1,5 +1,6 @@
 {
     "groups": [1, 1, 1],
+    "required_backends": ["spirv", "hlsl", "glsl"],
     "output_binding": 0,
     "output_size": 64,
     "output_type": "float",
