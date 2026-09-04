@@ -9,6 +9,7 @@
 #include "core/bwsl_custom_type_registry.h"
 #include "core/bwsl_diagnostics.h"
 #include <cstddef>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
@@ -21,11 +22,40 @@ namespace BWSL {
 void AddModuleSearchPath(const std::string& path);
 void ClearModuleSearchPaths();
 
+// A snapshot of submodule discovery for one compilation session. Canonical
+// roots and files are indexed once, including files with no submodules.
+// Owns its data independently of any compilation arena.
+struct SubmoduleIndex {
+    struct File {
+        std::string source; // retained only when the file contains submodules
+        std::vector<u32> parents;
+    };
+    struct Directory {
+        std::unordered_map<u32, std::vector<std::string>> byParent;
+    };
+    std::unordered_map<std::string, std::string> normalizedPaths;
+    std::unordered_map<std::string, File> files;
+    std::unordered_map<std::string, Directory> directories;
+    std::unique_ptr<char[]> scanMemory;
+    size_t scanCapacity = 0;
+
+    void Clear() {
+        normalizedPaths.clear();
+        files.clear();
+        directories.clear();
+    }
+};
+
+// Watch mode uses this on changed discovery candidates, including files
+// previously known to contain no submodules.
+std::vector<u32> ReadSubmoduleParentsFromFile(const std::string& path);
+
 // Cross-compilation module source cache.
 // When installed, module name resolution and disk reads consult the cache
 // first, so a module file is resolved and read at most once per batch even
 // when many compilation units import it. The cache outlives any single
 // CompilationContext; the caller owns it and keeps it alive while installed.
+// Call Clear() before a rebuild or after changing the working directory.
 struct ModuleSourceCache {
     struct Entry {
         bool found = false;       // false = resolution failed (negative entry)
@@ -35,6 +65,12 @@ struct ModuleSourceCache {
     // Keyed by module name + the search-path configuration in effect, since
     // different compilation units may resolve the same name differently.
     std::unordered_map<std::string, Entry> entries;
+    SubmoduleIndex submodules;
+
+    void Clear() {
+        entries.clear();
+        submodules.Clear();
+    }
 };
 void SetModuleSourceCache(ModuleSourceCache* cache);
 
@@ -46,6 +82,8 @@ void SetModuleSourceCache(ModuleSourceCache* cache);
 // recompilation of its dependents. The caller owns the recorder.
 struct ModuleAccessRecorder {
     std::unordered_set<std::string> modulePaths;  // resolved module file paths
+    std::unordered_set<std::string> submoduleRoots; // includes nonexistent roots
+    std::unordered_set<u32> submoduleParents;
     bool hadFailedResolution = false;             // some import never resolved
 };
 void SetModuleAccessRecorder(ModuleAccessRecorder* recorder);
@@ -144,6 +182,11 @@ struct Parser {
     bool has3TokenLookahead;
     DiagnosticPhase diagnosticPhase;
     std::string currentSourceName;
+    bool collectTimings = false;
+    double moduleDiscoveryMs = 0.0;
+    SubmoduleIndex localSubmoduleIndex; // fallback when no session cache is installed
+    std::vector<std::string> submoduleSearchRoots;
+    bool submoduleSearchRootsInitialized = false;
 
     ArenaArray<ParseError> errors;
     u32 loopDepth;
@@ -206,6 +249,11 @@ struct Parser {
         panicMode = false;
         diagnosticPhase = DiagnosticPhase::Parse;
         currentSourceName.clear();
+        collectTimings = false;
+        moduleDiscoveryMs = 0.0;
+        localSubmoduleIndex.Clear();
+        submoduleSearchRoots.clear();
+        submoduleSearchRootsInitialized = false;
         loopDepth = 0;
         functionDepth = 0;
         errors.Init(arena, 16);

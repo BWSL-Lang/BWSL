@@ -3,6 +3,7 @@
 #pragma once
 #include "bwsl_parser_soa.cpp"
 #include "core/bwsl_embedded_modules.generated.h"
+#include <chrono>
 
 //==============================================================================
 // Helper functions
@@ -285,7 +286,74 @@ void FindSubmoduleHeadersInSource(const std::string& source,
     }
 }
 
+SubmoduleIndex::File ReadSubmoduleFile(const std::string& path, SubmoduleIndex& index) {
+    SubmoduleIndex::File result;
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) return result;
+    std::string source((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    if (source.find("submodule") == std::string::npos) return result;
+
+    size_t scanArenaSize = std::max<size_t>(64 * 1024, source.size() * 8 + 4096);
+    if (scanArenaSize > index.scanCapacity) {
+        std::unique_ptr<char[]> memory(new (std::nothrow) char[scanArenaSize]);
+        if (!memory) return result;
+        index.scanMemory = std::move(memory);
+        index.scanCapacity = scanArenaSize;
+    }
+    BWSL_Arena scanArena;
+    scanArena.Initialize(index.scanMemory.get(), index.scanCapacity);
+    ArenaArray<SubmoduleHeader> headers;
+    FindSubmoduleHeadersInSource(source, &scanArena, &headers);
+    for (u32 i = 0; i < headers.count; i++) {
+        u32 parent = headers[i].parent.nameHash;
+        if (std::find(result.parents.begin(), result.parents.end(), parent) == result.parents.end()) {
+            result.parents.push_back(parent);
+        }
+    }
+    if (!result.parents.empty()) result.source = std::move(source);
+    return result;
+}
+
+const std::string& IndexedModulePath(SubmoduleIndex& index, const std::string& path) {
+    auto [it, inserted] = index.normalizedPaths.try_emplace(path);
+    if (inserted) it->second = NormalizeModuleFilePath(path);
+    return it->second;
+}
+
+const SubmoduleIndex::Directory& IndexSubmoduleDirectory(SubmoduleIndex& index,
+                                                        const std::string& root) {
+    auto [dir, inserted] = index.directories.try_emplace(root);
+    if (!inserted) return dir->second;
+
+    std::error_code ec;
+    std::filesystem::directory_iterator it(root, ec);
+    if (ec) return dir->second;
+    std::unordered_set<std::string> seenFiles;
+    for (const std::filesystem::directory_entry& entry : it) {
+        std::error_code entryEc;
+        if (!entry.is_regular_file(entryEc) || entry.path().extension() != ".bwsl") continue;
+        // The root is already canonical and an ordinary directory entry is
+        // one filename beneath it. Only symlinks need another filesystem walk.
+        std::string path = entry.path().string();
+        if (entry.is_symlink(entryEc)) path = IndexedModulePath(index, path);
+        if (entryEc) continue;
+        if (path.empty() || !seenFiles.insert(path).second) continue;
+        auto [file, newFile] = index.files.try_emplace(path);
+        if (newFile) file->second = ReadSubmoduleFile(path, index);
+        for (u32 parent : file->second.parents) {
+            dir->second.byParent[parent].push_back(path);
+        }
+    }
+    return dir->second;
+}
+
 } // namespace
+
+std::vector<u32> ReadSubmoduleParentsFromFile(const std::string& path) {
+    SubmoduleIndex scratch;
+    return ReadSubmoduleFile(path, scratch).parents;
+}
 
 bool Parser::TryRegisterModuleFromDisk(const std::string& moduleName) {
     if (moduleName.empty()) {
@@ -344,107 +412,60 @@ bool Parser::FindConflictingDiskModule(const std::string& moduleName,
 }
 
 void Parser::RegisterSubmodulesForParent(const std::string& parentModuleName) {
-    if (parentModuleName.empty()) {
-        return;
-    }
-
+    if (parentModuleName.empty()) return;
     u32 parentHash = Utils::HashStr(parentModuleName.c_str());
-    if (scannedSubmoduleParents.find(parentHash) != scannedSubmoduleParents.end()) {
-        return;
+    if (!scannedSubmoduleParents.insert(parentHash).second) return;
+
+    using Clock = std::chrono::steady_clock;
+    auto start = collectTimings ? Clock::now() : Clock::time_point{};
+    SubmoduleIndex& index = g_moduleSourceCache
+        ? g_moduleSourceCache->submodules : localSubmoduleIndex;
+    if (!submoduleSearchRootsInitialized) {
+        std::unordered_set<std::string> seenRoots;
+        ArenaArray<ArenaPath> roots = BuildModuleSearchRoots(arena);
+        for (u32 i = 0; i < roots.count; i++) {
+            const std::string& root = IndexedModulePath(index, roots[i].data);
+            if (!root.empty() && seenRoots.insert(root).second) {
+                submoduleSearchRoots.push_back(root);
+            }
+        }
+        submoduleSearchRootsInitialized = true;
     }
-    scannedSubmoduleParents.insert(parentHash);
 
     std::string currentPath;
-    if (!currentSourceName.empty() &&
-        currentSourceName.find("://") == std::string::npos) {
-        currentPath = NormalizeModuleFilePath(currentSourceName);
+    if (!currentSourceName.empty() && currentSourceName.find("://") == std::string::npos) {
+        currentPath = IndexedModulePath(index, currentSourceName);
+    }
+    if (g_moduleAccessRecorder) {
+        g_moduleAccessRecorder->submoduleParents.insert(parentHash);
+        g_moduleAccessRecorder->submoduleRoots.insert(submoduleSearchRoots.begin(),
+                                                     submoduleSearchRoots.end());
     }
 
-    std::unordered_set<std::string> seenRoots;
+    // Gather candidates before parsing them: discovery time excludes grammar
+    // work and nested imports. Map elements remain stable across rehashes.
+    std::vector<const std::pair<const std::string, SubmoduleIndex::File>*> candidates;
     std::unordered_set<std::string> seenFiles;
-    ArenaArray<ArenaPath> searchRoots = BuildModuleSearchRoots(arena);
-
-    for (u32 rootIndex = 0; rootIndex < searchRoots.count; rootIndex++) {
-        const ArenaPath& root = searchRoots[rootIndex];
-        std::string normalizedRoot = NormalizeModuleFilePath(root.data);
-        if (normalizedRoot.empty() ||
-            seenRoots.find(normalizedRoot) != seenRoots.end()) {
-            continue;
+    for (const std::string& root : submoduleSearchRoots) {
+        const auto& directory = IndexSubmoduleDirectory(index, root);
+        auto matches = directory.byParent.find(parentHash);
+        if (matches == directory.byParent.end()) continue;
+        for (const std::string& path : matches->second) {
+            if (path != currentPath && seenFiles.insert(path).second) {
+                candidates.push_back(&*index.files.find(path));
+            }
         }
-        seenRoots.insert(normalizedRoot);
-
-        std::error_code ec;
-        std::filesystem::path rootPath(normalizedRoot);
-        if (!std::filesystem::exists(rootPath, ec) ||
-            !std::filesystem::is_directory(rootPath, ec)) {
-            continue;
-        }
-
-        std::filesystem::directory_iterator it(rootPath, ec);
-        if (ec) {
-            continue;
-        }
-
-        for (const std::filesystem::directory_entry& entry : it) {
-            std::error_code entryEc;
-            if (!entry.is_regular_file(entryEc)) {
-                continue;
-            }
-
-            std::filesystem::path filePath = entry.path();
-            if (filePath.extension() != ".bwsl") {
-                continue;
-            }
-
-            std::string normalizedFile = NormalizeModuleFilePath(filePath.string());
-            if (normalizedFile.empty() ||
-                normalizedFile == currentPath ||
-                seenFiles.find(normalizedFile) != seenFiles.end() ||
-                parsedSubmoduleFiles.find(normalizedFile) != parsedSubmoduleFiles.end()) {
-                continue;
-            }
-            seenFiles.insert(normalizedFile);
-
-            std::ifstream file(normalizedFile, std::ios::binary);
-            if (!file.is_open()) {
-                continue;
-            }
-            std::string source((std::istreambuf_iterator<char>(file)),
-                               std::istreambuf_iterator<char>());
-            file.close();
-
-            size_t scanArenaSize = std::max<size_t>(64 * 1024, source.size() * 8 + 4096);
-            void* scanMemory = malloc(scanArenaSize);
-            if (!scanMemory) {
-                continue;
-            }
-
-            BWSL_Arena scanArena;
-            scanArena.Initialize(scanMemory, scanArenaSize);
-            ArenaArray<SubmoduleHeader> headers;
-            FindSubmoduleHeadersInSource(source, &scanArena, &headers);
-
-            bool extendsParent = false;
-            for (u32 i = 0; i < headers.count; i++) {
-                if (headers[i].parent.nameHash == parentHash) {
-                    extendsParent = true;
-                    break;
-                }
-            }
-            if (!extendsParent) {
-                free(scanMemory);
-                continue;
-            }
-            free(scanMemory);
-
-            if (g_moduleAccessRecorder) {
-                g_moduleAccessRecorder->modulePaths.insert(normalizedFile);
-            }
-            (void)RegisterSubmoduleFromSource(source.data(), source.size(),
-                                              normalizedFile.c_str(),
-                                              parentHash);
-            parsedSubmoduleFiles.insert(normalizedFile);
-        }
+    }
+    if (collectTimings) {
+        moduleDiscoveryMs += std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+    }
+    for (const auto* candidate : candidates) {
+        const auto& [path, file] = *candidate;
+        if (parsedSubmoduleFiles.find(path) != parsedSubmoduleFiles.end()) continue;
+        if (g_moduleAccessRecorder) g_moduleAccessRecorder->modulePaths.insert(path);
+        (void)RegisterSubmoduleFromSource(file.source.data(), file.source.size(),
+                                         path.c_str(), parentHash);
+        parsedSubmoduleFiles.insert(path);
     }
 }
 

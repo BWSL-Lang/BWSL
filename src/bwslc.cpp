@@ -179,6 +179,7 @@ struct ShaderTiming {
 struct TimingInfo {
     double lexMs = 0.0;
     double parseMs = 0.0;
+    double moduleDiscoveryMs = 0.0; // included in parseMs
     double totalMs = 0.0;
     std::vector<std::pair<std::string, ShaderTiming>> shaderTimings;  // name -> timing
 
@@ -187,6 +188,8 @@ struct TimingInfo {
         printf("  Lexer + Parser:    %8.3f ms\n", lexMs + parseMs);
         printf("    - Lexer init:    %8.3f ms\n", lexMs);
         printf("    - Parse:         %8.3f ms\n", parseMs);
+        printf("      Discovery:     %8.3f ms\n", moduleDiscoveryMs);
+        printf("      Parse remaining:%7.3f ms\n", std::max(0.0, parseMs - moduleDiscoveryMs));
         printf("\n  Per-shader breakdown:\n");
         double totalShaderMs = 0.0;
         double totalValidationMs = 0.0;
@@ -3201,10 +3204,8 @@ int main(int argc, char* argv[]) {
         return failJobList();
     }
 
-    // Share resolved module sources across every job in the batch: each
-    // module file is located on disk and read at most once even when many
-    // compilation units import it. Watch mode clears the cache before every
-    // rebuild cycle so edited modules are re-read.
+    // Share resolved sources and submodule discovery across batch jobs.
+    // Watch mode clears the snapshot before each rebuild cycle.
     BWSL::ModuleSourceCache moduleSourceCache;
     BWSL::SetModuleSourceCache(&moduleSourceCache);
 
@@ -3444,10 +3445,12 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
     Parser parser;
     parser.Init(&lexer, &stream, &context);
     parser.currentSourceName = config.inputFile;
+    parser.collectTimings = config.showTiming;
 
     (void)parser.ParseDocument();
     auto parseEnd = Clock::now();
     timing.parseMs = std::chrono::duration<double, std::milli>(parseEnd - parseStart).count();
+    timing.moduleDiscoveryMs = parser.moduleDiscoveryMs;
 
     if (parser.hadError) {
         return fail(&stream, &sourceLines);
@@ -3954,6 +3957,8 @@ struct WatchJobState {
     CompileJob job;
     WatchFileSig sourceSig;
     std::unordered_set<std::string> moduleDeps;  // resolved module file paths
+    std::unordered_set<std::string> submoduleRoots;
+    std::unordered_set<u32> submoduleParents;
     bool hadFailedModuleResolution = false;      // an import never resolved
 };
 
@@ -3985,6 +3990,16 @@ static std::vector<std::string> ScanModuleDirFiles(const std::string& dir) {
     }
     std::sort(files.begin(), files.end());
     return files;
+}
+
+using SubmoduleDirectorySnapshot = std::unordered_map<std::string, WatchFileSig>;
+
+static SubmoduleDirectorySnapshot SnapshotSubmoduleDirectory(const std::string& root) {
+    SubmoduleDirectorySnapshot snapshot;
+    for (const std::string& path : ScanModuleDirFiles(root)) {
+        snapshot.emplace(path, StatWatchFile(path));
+    }
+    return snapshot;
 }
 
 static std::string BuildJsonStringArray(const std::vector<std::string>& items,
@@ -4088,6 +4103,7 @@ static int RunWatchMode(const CompilerConfig& config,
     // Union of every job's module dependencies, each with its last seen
     // signature. Rebuilt after every build cycle.
     std::unordered_map<std::string, WatchFileSig> moduleSigs;
+    std::unordered_map<std::string, SubmoduleDirectorySnapshot> submoduleSnapshots;
 
     // -modules directories are also polled for added/removed module files:
     // a new file there can shadow or newly satisfy an import anywhere, so
@@ -4109,7 +4125,7 @@ static int RunWatchMode(const CompilerConfig& config,
                         const std::vector<std::string>& triggers,
                         const std::vector<std::string>& removed) {
         buildId++;
-        moduleSourceCache.entries.clear();
+        moduleSourceCache.Clear();
         auto buildStart = Clock::now();
 
         if (!config.errorsJson) {
@@ -4133,6 +4149,8 @@ static int RunWatchMode(const CompilerConfig& config,
             JobOutcome outcome = CompileInputFile(std::move(jobConfig), false);
             BWSL::SetModuleAccessRecorder(nullptr);
             state.moduleDeps = std::move(recorder.modulePaths);
+            state.submoduleRoots = std::move(recorder.submoduleRoots);
+            state.submoduleParents = std::move(recorder.submoduleParents);
             state.hadFailedModuleResolution = recorder.hadFailedResolution;
 
             stats.compiledStages += outcome.compiledCount;
@@ -4161,6 +4179,23 @@ static int RunWatchMode(const CompilerConfig& config,
             }
         }
         moduleSigs = std::move(newModuleSigs);
+
+        // Discovery includes implicit and currently missing roots. Watch
+        // negative candidates too: an ordinary file can become a submodule.
+        // Keep existing snapshots so changes during a rebuild are not lost.
+        decltype(submoduleSnapshots) nextSnapshots;
+        for (const WatchJobState& state : jobStates) {
+            for (const std::string& root : state.submoduleRoots) {
+                if (nextSnapshots.count(root)) continue;
+                auto existing = submoduleSnapshots.find(root);
+                if (existing != submoduleSnapshots.end()) {
+                    nextSnapshots.emplace(root, std::move(existing->second));
+                } else {
+                    nextSnapshots.emplace(root, SnapshotSubmoduleDirectory(root));
+                }
+            }
+        }
+        submoduleSnapshots = std::move(nextSnapshots);
 
         double elapsedMs =
             std::chrono::duration<double, std::milli>(Clock::now() - buildStart).count();
@@ -4271,6 +4306,36 @@ static int RunWatchMode(const CompilerConfig& config,
                     markDirty(i);
                 }
             }
+        }
+
+        // A new or edited discovery candidate can now extend a loaded parent.
+        // Inspect its headers before marking jobs dirty, so ordinary edits
+        // to unrelated shaders do not cause recompilation of their neighbors.
+        // Deletions and removed headers are covered by moduleDeps above.
+        for (auto& [root, previous] : submoduleSnapshots) {
+            auto snapshot = SnapshotSubmoduleDirectory(root);
+            for (const auto& [path, sig] : snapshot) {
+                auto old = previous.find(path);
+                if (old != previous.end() && old->second == sig) continue;
+                std::vector<u32> parents = BWSL::ReadSubmoduleParentsFromFile(path);
+                if (parents.empty()) continue;
+                bool relevant = false;
+                for (size_t i = 0; i < jobStates.size(); i++) {
+                    const WatchJobState& state = jobStates[i];
+                    if (!state.submoduleRoots.count(root)) continue;
+                    for (u32 parent : parents) {
+                        if (state.submoduleParents.count(parent)) {
+                            markDirty(i);
+                            relevant = true;
+                            break;
+                        }
+                    }
+                }
+                if (relevant && std::find(triggers.begin(), triggers.end(), path) == triggers.end()) {
+                    triggers.push_back(path);
+                }
+            }
+            previous = std::move(snapshot);
         }
 
         // 5. Added/removed files in -modules directories can shadow or newly

@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <array>
 #include <unordered_map>
 
 namespace BWSL{
@@ -306,11 +307,36 @@ namespace BWSL{
         return std::strlen(lhs) == length && std::memcmp(lhs, rhs, length) == 0;
     }
 
+    // Immutable, allocation-free index. A zero slot is empty; other slots
+    // hold an index + 1 into BUILTIN_STRINGS. Keep the load below one half.
+    inline constexpr size_t BUILTIN_COUNT = sizeof(BUILTIN_STRINGS) / sizeof(BUILTIN_STRINGS[0]);
+    inline constexpr size_t BUILTIN_INDEX_CAPACITY = [] {
+        size_t capacity = 1;
+        while (capacity < BUILTIN_COUNT * 2) capacity *= 2;
+        return capacity;
+    }();
+    static_assert(BUILTIN_COUNT < 65535);
+
+    constexpr size_t BuiltinSlot(u32 id) {
+        return (id ^ (id >> 16)) & (BUILTIN_INDEX_CAPACITY - 1);
+    }
+
+    inline constexpr auto BUILTIN_INDEX = [] {
+        std::array<u16, BUILTIN_INDEX_CAPACITY> slots{};
+        for (size_t i = 0; i < BUILTIN_COUNT; i++) {
+            size_t slot = BuiltinSlot(BUILTIN_STRINGS[i].hash);
+            while (slots[slot] != 0) slot = (slot + 1) & (BUILTIN_INDEX_CAPACITY - 1);
+            slots[slot] = static_cast<u16>(i + 1);
+        }
+        return slots;
+    }();
+
     inline const char* FindBuiltinString(u32 id) {
-        for (const auto& entry : BUILTIN_STRINGS) {
-            if (entry.hash == id) {
-                return entry.str;
-            }
+        size_t slot = BuiltinSlot(id);
+        while (u16 index = BUILTIN_INDEX[slot]) {
+            const auto& entry = BUILTIN_STRINGS[index - 1];
+            if (entry.hash == id) return entry.str;
+            slot = (slot + 1) & (BUILTIN_INDEX_CAPACITY - 1);
         }
         return nullptr;
     }
@@ -351,17 +377,14 @@ namespace BWSL{
     }
 
     inline u32 InternWithHash(u32 hash, const char* str, u16 length) {
+        if (const char* builtin = FindBuiltinString(hash)) {
+            if (TextEquals(builtin, str, length)) return hash;
+        }
         auto& buckets = GetInternBuckets();
         auto& bucket = buckets[hash];
         for (u32 id : bucket) {
             if (IdMatchesText(id, str, length)) {
                 return id;
-            }
-        }
-
-        for (const auto& entry : BUILTIN_STRINGS) {
-            if (entry.hash == hash && TextEquals(entry.str, str, length)) {
-                return hash;
             }
         }
 
@@ -398,10 +421,7 @@ namespace BWSL{
     }
 
     inline std::string GetString(u32 hash) {
-        // Check builtin table first
-        for (const auto& entry : BUILTIN_STRINGS) {
-            if (entry.hash == hash) return entry.str;
-        }
+        if (const char* builtin = FindBuiltinString(hash)) return builtin;
 
         // Check dynamic table
         auto& dynTable = GetDynamicTable();

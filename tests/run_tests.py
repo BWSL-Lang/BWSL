@@ -3290,6 +3290,11 @@ def main() -> int:
     passed += watch_passed
     failed += watch_failed
 
+    from parser_module_tests import run_parser_module_tests
+    module_passed, module_failed = run_parser_module_tests(bwslc)
+    passed += module_passed
+    failed += module_failed
+
     equiv_passed = equiv_failed = 0
     if args.equivalence:
         runner = equiv_runner_path(root)
