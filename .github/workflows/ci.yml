@@ -61,8 +61,15 @@ jobs:
             -o "$dxc_archive"
           mkdir -p "$dxc_root"
           tar -xzf "$dxc_archive" -C "$dxc_root"
+          # This release archive stores bin/dxc as mode 0644.
+          chmod +x "$dxc_root/bin/dxc"
           echo "$dxc_root/bin" >> "$GITHUB_PATH"
           echo "LD_LIBRARY_PATH=$dxc_root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      - name: Verify equivalence test tools
+        run: |
+          dxc --version
+          glslangValidator --version
 
       - name: Build bwslc
         run: make build

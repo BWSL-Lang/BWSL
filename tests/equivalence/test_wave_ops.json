@@ -1,5 +1,9 @@
 {
     "output_size": 32,
     "output_type": "float",
-    "tolerance": 1e-2
+    "tolerance": 1e-2,
+    "required_backends": ["spirv", "hlsl"],
+    "backend_notes": {
+        "glsl": "SPIRV-Cross subgroup min/max requires Vulkan semantics; BWSL's GLSL output uses desktop OpenGL semantics. This test requires native and HLSL execution."
+    }
 }

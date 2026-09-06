@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import math
 import os
 import re
 import shutil
@@ -18,6 +19,8 @@ GREEN = "\033[0;32m"
 YELLOW = "\033[1;33m"
 BLUE = "\033[0;34m"
 NC = "\033[0m"
+DXC = os.environ.get("BWSL_DXC", "dxc")
+HLSL_SPIRV_OPT = os.environ.get("BWSL_HLSL_SPIRV_OPT")
 
 
 INLINE_RETURN_TESTS = {
@@ -842,7 +845,7 @@ def has_metal_tooling() -> bool:
 
 
 def has_hlsl_tooling() -> bool:
-    return shutil.which("dxc") is not None
+    return shutil.which(DXC) is not None
 
 
 def has_glsl_tooling() -> bool:
@@ -1347,7 +1350,7 @@ def run_hlsl_compile(hlsl_file: Path) -> subprocess.CompletedProcess[str]:
     profile = HLSL_PROFILE[stage]
     return run_command(
         [
-            "dxc",
+            DXC,
             "-T",
             profile,
             "-E",
@@ -1554,13 +1557,21 @@ def convert_hlsl_to_spirv(hlsl_file: Path, out_spv: Path,
         input_path = hlsl_file.with_suffix(hlsl_file.suffix + ".vk")
         input_path.write_text(patched, encoding="utf-8")
 
+    # An explicitly selected standalone optimizer bypasses DXC's bundled
+    # SPIRV-Tools optimizer. DXIL validation still uses normal optimization.
+    unoptimized = out_spv.with_suffix(".unoptimized.spv") if HLSL_SPIRV_OPT else out_spv
     result = run_command([
-        "dxc", "-spirv", "-T", profile, "-E", "main",
-        "-fvk-use-dx-layout",
-        str(input_path), "-Fo", str(out_spv),
+        DXC, "-spirv", "-T", profile, "-E", "main",
+        "-fvk-use-dx-layout", "-fspv-target-env=vulkan1.1",
+        *(["-O0"] if HLSL_SPIRV_OPT else []),
+        str(input_path), "-Fo", str(unoptimized),
     ])
     if result.returncode != 0:
-        return False, result.stdout.strip()
+        return False, result.stdout.strip() or f"DXC exited with code {result.returncode}"
+    if HLSL_SPIRV_OPT:
+        result = run_command([HLSL_SPIRV_OPT, "-O", str(unoptimized), "-o", str(out_spv)])
+        if result.returncode != 0:
+            return False, result.stdout.strip() or f"spirv-opt exited with code {result.returncode}"
     return True, ""
 
 
@@ -1585,7 +1596,7 @@ def convert_glsl_to_spirv(glsl_file: Path, out_spv: Path,
             input_path.write_text(patched, encoding="utf-8")
 
     result = run_command([
-        "glslangValidator", "-V", "-S", gstage,
+        "glslangValidator", "-V", "--target-env", "vulkan1.1", "-S", gstage,
         str(input_path), "-o", str(out_spv),
     ])
     if result.returncode != 0:
@@ -1732,9 +1743,19 @@ def compare_bytes(reference: bytes, actual: bytes, spec: dict) -> tuple[bool, st
         return False, f"unsupported output_type for tolerance: {output_type}"
 
     for i, (r, a) in enumerate(zip(ref_vals, act_vals)):
+        if r == a:
+            continue  # Includes matching signed infinities.
+        if not math.isfinite(r) or not math.isfinite(a):
+            return False, f"element {i}: non-finite mismatch ref={r} actual={a}"
         if abs(r - a) > tolerance:
             return False, f"element {i}: ref={r:.6f} actual={a:.6f} diff={abs(r-a):.6g}"
     return True, ""
+
+
+def missing_equivalence_backends(spec: dict, available) -> list[str]:
+    """All requested output paths must execute, unless a spec opts out explicitly."""
+    required = set(spec.get("required_backends", ["spirv", "hlsl", "glsl"]))
+    return sorted(required - set(available))
 
 
 def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
@@ -1798,6 +1819,12 @@ def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
                 if not ok_fv: print(f"       frag: {msg_fv}")
                 return False
         backends[cross_name] = (vert_spv, frag_spv)
+
+    missing = missing_equivalence_backends(spec, backends)
+    if missing:
+        print(f"[{RED}FAIL{NC}] {test_name} "
+              f"(missing required backend(s): {', '.join(missing)})")
+        return False
 
     # Materialize raster resource bindings (SSBO / UBO) if requested. The same
     # on-disk buffer is reused by every backend since contents are identical.
@@ -2008,7 +2035,8 @@ def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
         extra.append("depth")
     if vbo_spec is not None:
         extra.append("vbo")
-    tag = ", ".join(["raster", *extra])
+    oracle = "CPU oracle" if "expected_values" in spec else "differential only"
+    tag = ", ".join(["raster", oracle, *extra])
     print(f"[{GREEN}PASS{NC}] {test_name} ({backend_names}, {tag})")
     return True
 
@@ -2144,8 +2172,10 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
             if all_ok:
                 backends_spv["glsl"] = converted
 
-        required_backends = set(spec.get("required_backends", []))
-        missing_backends = sorted(required_backends - backends_spv.keys())
+        missing_backends = missing_equivalence_backends(spec, backends_spv)
+        for backend, reason in spec.get("backend_notes", {}).items():
+            if backend not in backends_spv:
+                print(f"       {test_name}: {backend} not exercised: {reason}")
         if missing_backends:
             print(f"[{RED}FAIL{NC}] {test_name} "
                   f"(missing required backend(s): {', '.join(missing_backends)})")
@@ -2206,7 +2236,8 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
             failed += 1
         else:
             backend_names = ", ".join(sorted(outputs.keys()))
-            print(f"[{GREEN}PASS{NC}] {test_name} ({backend_names})")
+            oracle = "CPU oracle" if "expected_values" in spec else "differential only"
+            print(f"[{GREEN}PASS{NC}] {test_name} ({backend_names}, {oracle})")
             passed += 1
 
     print("----------------------------------------")
@@ -2541,9 +2572,15 @@ def run_watch_mode_tests(bwslc: Path, root: Path,
 
 
 def main() -> int:
+    global DXC, HLSL_SPIRV_OPT
     parser = argparse.ArgumentParser(description="BWSL Regression Test Runner")
     parser.add_argument("--metal", "-m", action="store_true", help="Enable Metal shader validation (macOS only)")
     parser.add_argument("--hlsl", action="store_true", help="Enable HLSL validation via dxc")
+    parser.add_argument("--dxc", default=os.environ.get("BWSL_DXC"),
+                        help="DXC executable path (or set BWSL_DXC); used for validation and equivalence")
+    parser.add_argument("--hlsl-spirv-opt", default=os.environ.get("BWSL_HLSL_SPIRV_OPT"),
+                        help="Use DXC -O0 followed by this standalone spirv-opt -O for HLSL round trips; "
+                             "DXIL validation is unchanged (or set BWSL_HLSL_SPIRV_OPT)")
     parser.add_argument("--glsl", action="store_true", help="Enable GLSL validation via glslangValidator")
     parser.add_argument("--gles", action="store_true", help="Enable GLES validation via glslangValidator")
     parser.add_argument("--all-validators", "-A", action="store_true", help="Enable Metal/HLSL/GLSL/GLES validators")
@@ -2563,6 +2600,24 @@ def main() -> int:
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed output")
     args = parser.parse_args()
+
+    if args.dxc:
+        resolved_dxc = shutil.which(args.dxc)
+        if resolved_dxc is None:
+            parser.error(f"DXC executable not found or not executable: {args.dxc}")
+        DXC = resolved_dxc
+    if args.hlsl_spirv_opt:
+        optimizer = shutil.which(args.hlsl_spirv_opt)
+        if optimizer is None:
+            parser.error(f"SPIR-V optimizer not found or not executable: {args.hlsl_spirv_opt}")
+        HLSL_SPIRV_OPT = str(Path(optimizer).resolve())
+        print(f"HLSL round-trip optimization: DXC -O0, then {HLSL_SPIRV_OPT} -O")
+        print(run_command([HLSL_SPIRV_OPT, "--version"]).stdout.strip())
+    if (args.hlsl or args.all_validators or args.equivalence) and has_hlsl_tooling():
+        DXC = str(Path(shutil.which(DXC)).resolve())
+        version = run_command([DXC, "--version"])
+        print(f"DXC: {DXC}")
+        print(version.stdout.strip())
 
     metal_validation = args.metal or args.all_validators or args.update_golden
     hlsl_validation = args.hlsl or args.all_validators
@@ -3300,8 +3355,10 @@ def main() -> int:
         runner = equiv_runner_path(root)
         if not runner.exists():
             print(f"{YELLOW}Warning: equiv_runner not found at {runner}. Build with `make equiv_runner`.{NC}")
+            equiv_failed += 1
         elif not has_hlsl_tooling() or not has_glsl_tooling():
             print(f"{YELLOW}Warning: equivalence tests require both dxc and glslangValidator on PATH{NC}")
+            equiv_failed += 1
         else:
             equiv_passed, equiv_failed = run_equivalence_suite(
                 root, bwslc, runner, modules_dir, verbose,
