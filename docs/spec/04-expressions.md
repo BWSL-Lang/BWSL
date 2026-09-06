@@ -74,6 +74,12 @@ an explicit integer conversion or bitcast when starting with a floating value.
 Scalar float-to-int/uint assignment performs the same truncating conversion
 as the corresponding explicit cast.
 
+Signed integer `/` truncates toward zero, and `%` returns the corresponding
+remainder: `a - b * (a / b)`. A nonzero remainder has the sign of the dividend,
+so `-4 % 3` is `-1` and `4 % -3` is `1`. This also applies component-wise to
+integer vectors and during compile-time evaluation. Floating-point `mod()`
+keeps its floor-based modulo behavior.
+
 Scalar `&&` and `||` evaluate the left operand first and short-circuit:
 `&&` evaluates its right operand only when the left is true, and `||` only
 when the left is false. A scalar `condition ? a : b` evaluates its condition

@@ -1,0 +1,13 @@
+// Independent expectations cover all operand signs and vector components.
+pipeline SignedRemainder {
+ resources { output: buffer<int> }
+ pass "Main" { use resources { output } compute "Main" [8,1,1] {
+  uint idx=input.global_id.x;
+  int x=(int(idx)-4)*5+1;
+  int4 r=int4(x,-x,x,-x)%int4(3,3,-3,-3);
+  resources.output[idx*4u]=r.x;
+  resources.output[idx*4u+1u]=r.y;
+  resources.output[idx*4u+2u]=r.z;
+  resources.output[idx*4u+3u]=r.w;
+ } }
+}

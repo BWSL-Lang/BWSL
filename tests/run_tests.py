@@ -179,6 +179,7 @@ VARIANT_ERROR_TESTS = {
 }
 
 ERROR_CASE_TESTS = {
+    "array_negative_remainder_index.bwsl": "out of bounds",
     'function_void_return_value.bwsl': 'Void function cannot return a value',
     'remaining_float_bitwise.bwsl': 'Bitwise operators require integer operands',
     'remaining_float_bitwise_not.bwsl': 'Bitwise operators require integer operands',

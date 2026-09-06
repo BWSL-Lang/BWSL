@@ -944,7 +944,22 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             EmitBinaryAssign(instIdx, dest, "/");
             return;
         case IR::OP_IMOD:
-            EmitBinaryAssign(instIdx, dest, "%");
+            if (mask(static_cast<CoreType>(Type(instIdx))) & TypeMasks::UINT_TYPES) {
+                EmitBinaryAssign(instIdx, dest, "%");
+            } else {
+                // GLSL `%` does not preserve OpSRem for negative operands
+                // across drivers/toolchains. Use truncating integer division.
+                EmitRegWithDecl(dest);
+                out.Lit(" = (");
+                EmitExpr(Op(instIdx, 0));
+                out.Lit(" - ");
+                EmitExpr(Op(instIdx, 1));
+                out.Lit(" * (");
+                EmitExpr(Op(instIdx, 0));
+                out.Lit(" / ");
+                EmitExpr(Op(instIdx, 1));
+                out.Lit("));");
+            }
             return;
         case IR::OP_FMOD:
             EmitFuncAssign(instIdx, dest, "mod", 2);
@@ -2122,6 +2137,16 @@ bool GLESBuilder::EmitConstantExpr(u16 reg, u32 depth) {
         EmitType(Type(definition)); out.Chr('(');
         ok = EmitConstantExpr(Op(definition, 0), depth + 1);
         out.Chr(')');
+    } else if (op == IR::OP_IMOD && (mask(static_cast<CoreType>(Type(definition))) & TypeMasks::INT_TYPES)) {
+        out.Chr('(');
+        ok = EmitConstantExpr(Op(definition, 0), depth + 1);
+        out.Lit(" - ");
+        ok = EmitConstantExpr(Op(definition, 1), depth + 1) && ok;
+        out.Lit(" * (");
+        ok = EmitConstantExpr(Op(definition, 0), depth + 1) && ok;
+        out.Lit(" / ");
+        ok = EmitConstantExpr(Op(definition, 1), depth + 1) && ok;
+        out.Lit("))");
     } else {
         const char* operation = nullptr;
         bool unary = false;

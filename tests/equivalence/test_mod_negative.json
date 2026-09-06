@@ -1,5 +1,6 @@
 {
     "output_size": 32,
     "output_type": "float",
-    "tolerance": 1e-5
+    "tolerance": 1e-5,
+    "expected_values": [209, 165, 118, 74, 0, 206, 162, 115]
 }

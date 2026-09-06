@@ -903,8 +903,6 @@ inline bool TryFoldArrayIndex(AST* ast, NodeRef ref, s64* value, bool* isUnsigne
   case BinaryOpType::MODULO:
     if (!right) return false;
     *value = left % right;
-    // Signed IR modulo uses OpSMod (the divisor determines the sign).
-    if (*value && ((*value < 0) != (right < 0))) *value += right;
     break;
   case BinaryOpType::BITWISE_AND: *value = left & right; break;
   case BinaryOpType::BITWISE_OR: *value = left | right; break;
