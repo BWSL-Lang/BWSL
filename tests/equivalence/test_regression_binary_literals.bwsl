@@ -1,0 +1,31 @@
+// Binary literals must work in values, constants, eval, array and workgroup sizes.
+pipeline BinaryLiterals {
+    resources { output: buffer<uint> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [0b1000, 1, 1] {
+            uint i = input.global_id.x;
+            uint result = 0u;
+            if (i == 0u) { result = uint(0b1010); }
+            if (i == 1u) { result = 0B1010U; }
+            if (i == 2u) { result = 0b10000000000000000000000000000000u; }
+            if (i == 3u) { result = 0b11111111111111111111111111111111u; }
+            if (i == 4u) {
+                uint[0b10] a;
+                a[0] = 3u;
+                a[1] = 7u;
+                result = a[0] + a[1];
+            }
+            if (i == 5u) { result = uint(-0b1010); }
+            if (i == 6u) {
+                const uint mask = 0b10101010u;
+                result = 0b11110000u & mask;
+            }
+            if (i == 7u) {
+                eval int number = 0b111;
+                result = uint(number);
+            }
+            resources.output[i] = result;
+        }
+    }
+}

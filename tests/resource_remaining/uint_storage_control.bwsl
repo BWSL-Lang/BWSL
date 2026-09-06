@@ -1,0 +1,8 @@
+pipeline UIntStorage {
+ struct Inner { uint[2] values; }; struct Outer { Inner[2] inner; };
+ resources { src: buffer<Outer> output: buffer<float> }
+ pass "Main" { use resources { src, output } compute "Main" [1,1,1] {
+  bool enabled = resources.src[0].inner[0].values[0] != 0u;
+  resources.output[0] = enabled ? 1.0 : 0.0;
+ } }
+}

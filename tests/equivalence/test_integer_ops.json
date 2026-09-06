@@ -2,6 +2,7 @@
     "groups": [1, 1, 1],
     "output_binding": 0,
     "output_size": 16,
-    "output_type": "bytes",
-    "tolerance": 0.0
+    "output_type": "int",
+    "tolerance": 0.0,
+    "expected_values": [-18422, 17211, 103266, 111673]
 }

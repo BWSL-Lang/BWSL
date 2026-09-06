@@ -1,0 +1,46 @@
+// Generated QA: limits_buffers_30
+pipeline QA {
+
+
+resources {
+buf0: buffer<float>
+buf1: buffer<float>
+buf2: buffer<float>
+buf3: buffer<float>
+buf4: buffer<float>
+buf5: buffer<float>
+buf6: buffer<float>
+buf7: buffer<float>
+buf8: buffer<float>
+buf9: buffer<float>
+buf10: buffer<float>
+buf11: buffer<float>
+buf12: buffer<float>
+buf13: buffer<float>
+buf14: buffer<float>
+buf15: buffer<float>
+buf16: buffer<float>
+buf17: buffer<float>
+buf18: buffer<float>
+buf19: buffer<float>
+buf20: buffer<float>
+buf21: buffer<float>
+buf22: buffer<float>
+buf23: buffer<float>
+buf24: buffer<float>
+buf25: buffer<float>
+buf26: buffer<float>
+buf27: buffer<float>
+buf28: buffer<float>
+buf29: buffer<float>
+output: buffer<float>
+}
+pass "Main" {
+
+use resources { buf0, buf1, buf2, buf3, buf4, buf5, buf6, buf7, buf8, buf9, buf10, buf11, buf12, buf13, buf14, buf15, buf16, buf17, buf18, buf19, buf20, buf21, buf22, buf23, buf24, buf25, buf26, buf27, buf28, buf29, output }
+compute "Main" [4, 1, 1] {
+uint idx = input.global_id.x;
+resources.output[idx] = resources.buf0[idx] + resources.buf1[idx] + resources.buf2[idx] + resources.buf3[idx] + resources.buf4[idx] + resources.buf5[idx] + resources.buf6[idx] + resources.buf7[idx] + resources.buf8[idx] + resources.buf9[idx] + resources.buf10[idx] + resources.buf11[idx] + resources.buf12[idx] + resources.buf13[idx] + resources.buf14[idx] + resources.buf15[idx] + resources.buf16[idx] + resources.buf17[idx] + resources.buf18[idx] + resources.buf19[idx] + resources.buf20[idx] + resources.buf21[idx] + resources.buf22[idx] + resources.buf23[idx] + resources.buf24[idx] + resources.buf25[idx] + resources.buf26[idx] + resources.buf27[idx] + resources.buf28[idx] + resources.buf29[idx];
+}
+}
+}

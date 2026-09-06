@@ -1,0 +1,8 @@
+// Regression: Enum value must be a valid 32-bit integer literal.
+pipeline Remaining {
+    enum E { A=2.5 }
+    pass "Main" {
+        vertex { output.position=float4(0.0,0.0,0.0,1.0); }
+        fragment { int x=0; output.color=float4(1.0); }
+    }
+}

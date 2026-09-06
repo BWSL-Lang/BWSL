@@ -1,0 +1,23 @@
+pipeline EvalVectorConversions {
+    resources { output: buffer<uint> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            eval uint2 high = uint2(float2(2147483648.0, 4294967040.0));
+            eval uint2 signedBits = uint2(int2(-1, 17));
+            eval float2 booleans = float2(true, false);
+            eval uint scalar = uint(-1);
+            eval float2 fromUnsigned = float2(uint2(2147483648u, 1073741824u));
+            uint i = input.global_id.x;
+            uint result = scalar;
+            if (i == 0u) { result = high.x; }
+            if (i == 1u) { result = high.y; }
+            if (i == 2u) { result = signedBits.x; }
+            if (i == 3u) { result = signedBits.y; }
+            if (i == 4u) { result = uint(booleans.x + booleans.y); }
+            if (i == 6u) { result = uint(fromUnsigned.x); }
+            if (i == 7u) { result = uint(fromUnsigned.y); }
+            resources.output[i] = result;
+        }
+    }
+}

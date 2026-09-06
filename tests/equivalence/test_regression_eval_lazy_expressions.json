@@ -1,0 +1,27 @@
+{
+  "note": "Compile-time logical and ternary expressions execute only selected operands, with correct postfix results.",
+  "groups": [
+    1,
+    1,
+    1
+  ],
+  "output_binding": 0,
+  "output_size": 32,
+  "output_type": "int",
+  "tolerance": 0,
+  "required_backends": [
+    "spirv",
+    "hlsl",
+    "glsl"
+  ],
+  "expected_values": [
+    0,
+    1,
+    7,
+    1,
+    1,
+    2,
+    2,
+    2
+  ]
+}

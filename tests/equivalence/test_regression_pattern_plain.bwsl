@@ -1,0 +1,16 @@
+pipeline PatternFunctions {
+    resources { output: buffer<float> }
+    enum Mode : uint { A = 7u, B = 42u }
+    using ModeAlias = Mode
+    score :: (ModeAlias m) -> float { A: 1.0 B: 2.0 }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint i = input.global_id.x;
+            Mode m = Mode::A;
+            if (i % 2u == 1u) { m = Mode::B; }
+            resources.output[i] = score(m);
+        }
+    }
+}

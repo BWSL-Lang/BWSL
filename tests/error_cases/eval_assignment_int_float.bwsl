@@ -1,0 +1,11 @@
+// Error: Type mismatch in compile-time assignment
+pipeline InvalidEvalAssignment {
+    pass "Main" {
+        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+        fragment {
+            eval int n = 2;
+            eval { n = 2.5; }
+            output.color = float4(1.0);
+        }
+    }
+}

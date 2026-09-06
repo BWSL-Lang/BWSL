@@ -1,0 +1,8 @@
+// Regression: const.
+pipeline Remaining {
+
+    pass "Main" {
+        vertex { output.position=float4(0.0,0.0,0.0,1.0); }
+        fragment { const float3 x=float3(1.0); x.xy=float2(2.0); output.color=float4(1.0); }
+    }
+}

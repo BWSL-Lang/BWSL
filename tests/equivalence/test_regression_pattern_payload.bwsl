@@ -1,0 +1,20 @@
+pipeline PatternFunctions {
+    resources { output: buffer<float> }
+    enum Shape { Circle(float radius), Box(float2 size), Empty }
+    area :: (Shape shape, float scale) -> float {
+        Circle(r): r * r * scale
+        Box(size): { return size.x * size.y * scale; }
+        default: 5.0
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint i = input.global_id.x;
+            Shape shape = Shape::Circle(float(i + 1u));
+            if (i % 3u == 1u) { shape = Shape::Box(float2(float(i), 2.0)); }
+            if (i % 3u == 2u) { shape = Shape::Empty; }
+            resources.output[i] = area(shape, 2.0);
+        }
+    }
+}

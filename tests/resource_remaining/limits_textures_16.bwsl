@@ -1,0 +1,31 @@
+// Generated QA: limits_textures_16
+pipeline QA {
+
+attributes { position: float3 uv: float2 }
+resources {
+tex0: texture2D
+tex1: texture2D
+tex2: texture2D
+tex3: texture2D
+tex4: texture2D
+tex5: texture2D
+tex6: texture2D
+tex7: texture2D
+tex8: texture2D
+tex9: texture2D
+tex10: texture2D
+tex11: texture2D
+tex12: texture2D
+tex13: texture2D
+tex14: texture2D
+tex15: texture2D
+}
+pass "Main" {
+use attributes { position, uv }
+use resources { tex0, tex1, tex2, tex3, tex4, tex5, tex6, tex7, tex8, tex9, tex10, tex11, tex12, tex13, tex14, tex15 }
+vertex { output.position = float4(attributes.position, 1.0); output.uv = attributes.uv; }
+fragment {
+output.color = sample(resources.tex0, input.uv) + sample(resources.tex1, input.uv) + sample(resources.tex2, input.uv) + sample(resources.tex3, input.uv) + sample(resources.tex4, input.uv) + sample(resources.tex5, input.uv) + sample(resources.tex6, input.uv) + sample(resources.tex7, input.uv) + sample(resources.tex8, input.uv) + sample(resources.tex9, input.uv) + sample(resources.tex10, input.uv) + sample(resources.tex11, input.uv) + sample(resources.tex12, input.uv) + sample(resources.tex13, input.uv) + sample(resources.tex14, input.uv) + sample(resources.tex15, input.uv);
+}
+}
+}

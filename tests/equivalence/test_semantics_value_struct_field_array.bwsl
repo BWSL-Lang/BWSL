@@ -1,0 +1,9 @@
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline Semantics_value_struct_field_array {
+ resources { output: buffer<int> }
+ struct Box {int[2] values;}; f :: (int[2] a) -> int {a[0]+=7;return a[0];}
+ pass "Compute" { use resources { output } compute "Main" [64,1,1] {
+ uint idx=input.global_id.x; int n=int(idx);
+ Box a; a.values[0]=n;a.values[1]=4; int r=f(a.values); resources.output[idx]=a.values[0]*100+r;
+ } }
+}

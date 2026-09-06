@@ -1,0 +1,23 @@
+pipeline EvalLazyExpressions {
+    resources { output: buffer<int> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            eval int count = 0;
+            eval bool a = false && bool(++count);
+            eval bool b = true || bool(++count);
+            eval int c = false ? ++count : 7;
+            eval int d = true ? ++count : ++count;
+            eval int post = count++;
+            eval int finalCount = count;
+            uint i = input.global_id.x;
+            int result = finalCount;
+            if (i == 0u) { result = a ? 1 : 0; }
+            if (i == 1u) { result = b ? 1 : 0; }
+            if (i == 2u) { result = c; }
+            if (i == 3u) { result = d; }
+            if (i == 4u) { result = post; }
+            resources.output[i] = result;
+        }
+    }
+}

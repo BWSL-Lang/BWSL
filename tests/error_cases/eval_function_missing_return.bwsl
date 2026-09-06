@@ -1,0 +1,7 @@
+// Invalid eval function must diagnose instead of escaping evaluation.
+pipeline InvalidEvalFunction {
+    eval test :: (int n) -> int { int k = n; }
+    pass "Main" {
+        vertex { eval int value = test(2); output.position = float4(float(value)); }
+    }
+}

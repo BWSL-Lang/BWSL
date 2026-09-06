@@ -1,0 +1,13 @@
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline Regression_pointer_branch_struct {
+    resources { output: buffer<int> }
+    struct Box {int x; int y;};
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [64, 1, 1] {
+            uint idx = input.global_id.x;
+            int n = int(idx);
+            Box a; a.x=n; a.y=2; Box b; b.x=3; b.y=4; Box^ p=^a; if(n%2==1) p=^b; Box v=p^; v.x+=5; p^ = v; resources.output[idx]=a.x*100+b.x;
+        }
+    }
+}

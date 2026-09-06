@@ -1,0 +1,19 @@
+pipeline EvalAssignments {
+    resources { output: buffer<float> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            eval float f = 2;
+            eval int n = 3;
+            eval uint u = 4;
+            eval bool b = false;
+            eval { f = 6; n = 9u; u = 8; b = true; f++; --n; ++u; }
+            uint i = input.global_id.x;
+            float result = f;
+            if (i % 4u == 1u) { result = float(n); }
+            if (i % 4u == 2u) { result = float(u); }
+            if (i % 4u == 3u) { result = b ? 1.0 : 0.0; }
+            resources.output[i] = result;
+        }
+    }
+}

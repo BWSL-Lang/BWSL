@@ -1,0 +1,9 @@
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline Semantics_range_capture_values {
+ resources { output: buffer<int> }
+
+ pass "Compute" { use resources { output } compute "Main" [64,1,1] {
+ uint idx=input.global_id.x; int n=int(idx);
+ int step=2; int end=8; int sum=0; for(i in 0..end by step){sum+=i;step=-2;end=0;} resources.output[idx]=sum;
+ } }
+}

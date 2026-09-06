@@ -1,0 +1,1 @@
+pipeline Shared { resources { a: texture2D b: texture2D sharedSampler: sampler } pass "Main" { use resources { a, b, sharedSampler } vertex { output.position = float4(0.0,0.0,0.0,1.0); } fragment { output.color = sample(resources.a, resources.sharedSampler, float2(0.3)) + sample(resources.b, resources.sharedSampler, float2(0.3)); } } }

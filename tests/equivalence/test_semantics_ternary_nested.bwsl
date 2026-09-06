@@ -1,0 +1,9 @@
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline Semantics_ternary_nested {
+ resources { output: buffer<int> }
+
+ pass "Compute" { use resources { output } compute "Main" [64,1,1] {
+ uint idx=input.global_id.x; int n=int(idx);
+ int x=n; int r=n%2==0 ? (n%4==0?++x:--x) : 100; resources.output[idx]=x*100+r;
+ } }
+}

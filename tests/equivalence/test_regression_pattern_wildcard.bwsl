@@ -1,0 +1,18 @@
+pipeline PatternFunctions {
+    resources { output: buffer<float> }
+    enum Value { Pair(float first, float second), Other }
+    pick :: (float factor, Value value) -> float {
+        Pair(_, b): b * factor
+        Other: -1.0
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint i = input.global_id.x;
+            Value value = Value::Pair(100.0, float(i));
+            if (i % 2u == 1u) { value = Value::Other; }
+            resources.output[i] = pick(3.0, value);
+        }
+    }
+}

@@ -1,0 +1,7 @@
+// Independent expected values are in the adjacent JSON.
+pipeline Remaining {
+ resources { output: buffer<uint> }
+ pass "Compute" { use resources { output }
+ compute "Main" [64,1,1] { uint idx=input.global_id.x; uint[010] a; a[9]=uint(010)+0b10u+0x10u; resources.output[idx]=a[9]+idx; }
+ }
+}

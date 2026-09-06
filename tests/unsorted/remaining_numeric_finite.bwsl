@@ -1,0 +1,11 @@
+pipeline FiniteLiterals {
+ pass "Main" {
+  vertex { output.position=float4(0.0,0.0,0.0,1.0); }
+  fragment {
+   float tiny=1.401298464e-45f;
+   float largest=3.402823466e38f;
+   float roundedToZero=1e-99999;
+   output.color=float4(tiny,largest,roundedToZero,1.0f);
+  }
+ }
+}

@@ -6,23 +6,19 @@ suite (2026-06-11, extended 2026-06-12). These files are **not** picked up by
 and can be promoted into `tests/unsorted/` (or `tests/equivalence/`) the
 moment it is fixed.
 
-## Open issues
+## Previously open issues
 
-Each repro file carries a comment header with the full details. Summary:
+The three previously open issues are fixed:
 
-- `free_function_pattern_arms.bwsl` — spec says ordinary functions support
-  enum pattern-match arm bodies; the parser rejects them (enum methods only).
-- `eval_pipeline_scope_function.bwsl` — pipeline-scope `eval fn :: ...`
-  declarations parse but are callable neither at comptime nor at runtime.
-- `wrong_accept_missing_return.bwsl` — a non-void function with a return on
-  only one control path compiles without diagnostics; the fall-through path
-  yields an undefined value (needs control-flow analysis to reject).
+- Ordinary enum pattern functions: `tests/unsorted/regression_free_function_pattern_arms.bwsl`
+  and five `test_regression_pattern_*` execution oracles.
+- Pipeline eval functions: `tests/unsorted/regression_eval_pipeline_scope_function.bwsl`
+  and `test_regression_eval_pipeline_functions` plus invalid-return/recursion checks.
+- Missing non-void returns: `tests/error_cases/function_missing_return.bwsl`
+  and related conditional, switch and loop controls.
 
-Each repro compiles with:
-
-```bash
-./build/bwslc tests/known_issues/<file>.bwsl -modules modules -o /tmp/out
-```
+Historical reproductions remain here; the regression cases above run in the
+normal validator and execution suites.
 
 ## 1. ~~`sample_cmp` emits no SPIR-V~~ (FIXED)
 
@@ -144,8 +140,9 @@ body ran zero times with no diagnostic. Fixed in `LowerForRange`
 (`phases/ir_lowering/bwsl_ir_lowering_control.inl`): when the `by` step is a
 compile-time negative constant (a negative literal or unary minus over a
 literal), the loop condition flips to `>` (exclusive) / `>=` (inclusive),
-using the unsigned variants for uint iterators. Runtime-valued steps keep the
-ascending compare.
+using the unsigned variants for uint iterators. Runtime-valued signed steps now choose the comparison at runtime. Bounds and
+step are captured once; zero steps execute no iterations, and iteration stops
+before wrapping. The `test_semantics_range_*` execution tests cover these cases.
 
 Coverage: `tests/unsorted/loops_range_descending.bwsl` (exclusive, inclusive,
 inclusive-to-zero, and an ascending control) and

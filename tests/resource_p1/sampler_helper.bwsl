@@ -1,0 +1,9 @@
+pipeline Helper {
+ resources { tex: texture2D a: sampler b: sampler }
+ first :: (float2 uv) -> float4 { return sample(resources.tex, resources.a, uv); }
+ second :: (float2 uv) -> float4 { return sample(resources.tex, resources.b, uv); }
+ pass "Main" { use resources { tex, a, b }
+ vertex { output.position = float4(0.0,0.0,0.0,1.0); }
+ fragment { output.color = first(float2(0.3)) - second(float2(0.3)); }
+ }
+}

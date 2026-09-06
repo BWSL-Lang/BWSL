@@ -1,0 +1,18 @@
+pipeline VectorPattern {
+    resources { output: buffer<float> }
+    enum Mode { A, B }
+    choose :: (Mode mode) -> float2 {
+        A: { eval float2 v = float2(2.0, 3.0); return v; }
+        B: float2(5.0, 7.0)
+    }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint i = input.global_id.x;
+            Mode mode = Mode::A;
+            if (i % 2u == 1u) { mode = Mode::B; }
+            float2 v = choose(mode);
+            resources.output[i] = v.x * 10.0 + v.y;
+        }
+    }
+}

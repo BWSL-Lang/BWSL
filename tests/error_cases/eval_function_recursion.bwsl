@@ -1,0 +1,7 @@
+// Invalid eval function must diagnose instead of escaping evaluation.
+pipeline InvalidEvalFunction {
+    eval recurse :: (int n) -> int { return recurse(n); }
+    pass "Main" {
+        vertex { eval int value = recurse(2); output.position = float4(float(value)); }
+    }
+}
