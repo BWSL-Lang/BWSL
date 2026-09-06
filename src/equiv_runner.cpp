@@ -1249,6 +1249,23 @@ int main(int argc, char **argv) {
     if (data.size() % 4 != 0) die("SPIR-V size not a multiple of 4");
     pass_spirvs.push_back(std::move(data));
   }
+  // BWSL reserves HLSL register space 3 for its dispatch-count cbuffer.
+  // Detect the corresponding SPIR-V descriptor decoration after DXC's
+  // roundtrip; native NumWorkgroups needs no host-side buffer.
+  bool needs_num_workgroups = false;
+  for (const auto &bytes : pass_spirvs) {
+    auto word = [&](size_t index) { uint32_t value; std::memcpy(&value, bytes.data() + index * 4, 4); return value; };
+    for (size_t offset = 5; offset < bytes.size() / 4;) {
+      uint32_t size = word(offset) >> 16, opcode = word(offset) & 0xFFFF;
+      if (!size || offset + size > bytes.size() / 4) die("invalid SPIR-V instruction size");
+      // OpDecorate = 71, DescriptorSet = 34.
+      if (opcode == 71 && size == 4 && word(offset + 2) == 34 && word(offset + 3) == 3)
+        needs_num_workgroups = true;
+      offset += size;
+    }
+  }
+  if (needs_num_workgroups && args.descriptor_set >= 3)
+    die("descriptor set 3 is reserved for the HLSL NumWorkgroups buffer");
 
   std::vector<char> input_bytes;
   if (!args.input_path.empty()) {
@@ -1369,6 +1386,29 @@ int main(int argc, char **argv) {
   // slot 1 (or up through args.descriptor_set).
   uint32_t max_set = args.descriptor_set;
   std::vector<VkDescriptorSetLayout> all_layouts(max_set + 1, dsl);
+  VkDescriptorSetLayout empty_dsl = VK_NULL_HANDLE, dispatch_dsl = VK_NULL_HANDLE;
+  std::vector<Buffer> dispatch_buffers;
+  if (needs_num_workgroups) {
+    VkDescriptorSetLayoutCreateInfo empty_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    VK_CHECK(vkCreateDescriptorSetLayout(dev, &empty_info, nullptr, &empty_dsl));
+    VkDescriptorSetLayoutBinding dispatch_binding{};
+    dispatch_binding.binding = 0;
+    dispatch_binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    dispatch_binding.descriptorCount = 1;
+    dispatch_binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorSetLayoutCreateInfo dispatch_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    dispatch_info.bindingCount = 1;
+    dispatch_info.pBindings = &dispatch_binding;
+    VK_CHECK(vkCreateDescriptorSetLayout(dev, &dispatch_info, nullptr, &dispatch_dsl));
+    all_layouts.resize(4, empty_dsl);
+    all_layouts[3] = dispatch_dsl;
+    for (const auto &pass : args.passes) {
+      Buffer buffer = make_host_buffer(dev, phys, 16, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+      uint32_t values[4] = {pass.groups[0], pass.groups[1], pass.groups[2], 0};
+      std::memcpy(buffer.mapped, values, sizeof(values));
+      dispatch_buffers.push_back(buffer);
+    }
+  }
 
   // ===== Pipeline layout =====
   VkPipelineLayoutCreateInfo plci{
@@ -1400,13 +1440,15 @@ int main(int argc, char **argv) {
 
   // ===== Descriptor pool + sets (one per bound slot) =====
   uint32_t num_sets = max_set + 1;
-  VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                 (uint32_t)bindings.size() * num_sets};
+  std::vector<VkDescriptorPoolSize> pool_sizes = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                 (uint32_t)bindings.size() * num_sets}};
+  if (needs_num_workgroups)
+    pool_sizes.push_back({VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<uint32_t>(args.passes.size())});
   VkDescriptorPoolCreateInfo dpci{
       VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-  dpci.maxSets = num_sets;
-  dpci.poolSizeCount = 1;
-  dpci.pPoolSizes = &pool_size;
+  dpci.maxSets = num_sets + static_cast<uint32_t>(dispatch_buffers.size());
+  dpci.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
+  dpci.pPoolSizes = pool_sizes.data();
   VkDescriptorPool dpool;
   VK_CHECK(vkCreateDescriptorPool(dev, &dpci, nullptr, &dpool));
 
@@ -1418,6 +1460,25 @@ int main(int argc, char **argv) {
   dsai.pSetLayouts = alloc_layouts.data();
   std::vector<VkDescriptorSet> dsets(num_sets);
   VK_CHECK(vkAllocateDescriptorSets(dev, &dsai, dsets.data()));
+  std::vector<VkDescriptorSet> dispatch_sets(dispatch_buffers.size());
+  if (needs_num_workgroups) {
+    std::vector<VkDescriptorSetLayout> layouts(dispatch_sets.size(), dispatch_dsl);
+    VkDescriptorSetAllocateInfo dispatch_alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dispatch_alloc.descriptorPool = dpool;
+    dispatch_alloc.descriptorSetCount = static_cast<uint32_t>(layouts.size());
+    dispatch_alloc.pSetLayouts = layouts.data();
+    VK_CHECK(vkAllocateDescriptorSets(dev, &dispatch_alloc, dispatch_sets.data()));
+    for (size_t p = 0; p < dispatch_sets.size(); ++p) {
+      VkDescriptorBufferInfo info{dispatch_buffers[p].buffer, 0, 16};
+      VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      write.dstSet = dispatch_sets[p];
+      write.dstBinding = 0;
+      write.descriptorCount = 1;
+      write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+      write.pBufferInfo = &info;
+      vkUpdateDescriptorSets(dev, 1, &write, 0, nullptr);
+    }
+  }
 
   VkDescriptorBufferInfo out_info{out_buf.buffer, 0, VK_WHOLE_SIZE};
   VkDescriptorBufferInfo in_info{};
@@ -1467,6 +1528,8 @@ int main(int argc, char **argv) {
   vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0,
                           num_sets, dsets.data(), 0, nullptr);
   for (size_t p = 0; p < pipelines.size(); ++p) {
+    if (needs_num_workgroups)
+      vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 3, 1, &dispatch_sets[p], 0, nullptr);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[p]);
     vkCmdDispatch(cmd, args.passes[p].groups[0], args.passes[p].groups[1],
                   args.passes[p].groups[2]);
@@ -1501,6 +1564,13 @@ int main(int argc, char **argv) {
   for (auto mod : shaders) vkDestroyShaderModule(dev, mod, nullptr);
   vkDestroyPipelineLayout(dev, pl, nullptr);
   vkDestroyDescriptorSetLayout(dev, dsl, nullptr);
+  if (dispatch_dsl) vkDestroyDescriptorSetLayout(dev, dispatch_dsl, nullptr);
+  if (empty_dsl) vkDestroyDescriptorSetLayout(dev, empty_dsl, nullptr);
+  for (auto &buffer : dispatch_buffers) {
+    vkUnmapMemory(dev, buffer.memory);
+    vkDestroyBuffer(dev, buffer.buffer, nullptr);
+    vkFreeMemory(dev, buffer.memory, nullptr);
+  }
   if (in_buf) {
     vkUnmapMemory(dev, in_buf->memory);
     vkDestroyBuffer(dev, in_buf->buffer, nullptr);
