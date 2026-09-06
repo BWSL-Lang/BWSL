@@ -1,0 +1,6 @@
+pipeline DispatchWithUniform {
+ resources { scale: float output: buffer<uint> }
+ pass "Main" { use resources { scale, output } compute "Main" [1,1,1] {
+  resources.output[input.global_id.x] = input.num_workgroups.x + uint(resources.scale);
+ } }
+}

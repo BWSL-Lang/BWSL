@@ -1,0 +1,9 @@
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline Semantics_short_circuit_division_guard {
+ resources { output: buffer<int> }
+
+ pass "Compute" { use resources { output } compute "Main" [64,1,1] {
+ uint idx=input.global_id.x; int n=int(idx);
+ bool r=n!=0 && 100/n>2; resources.output[idx]=r?1:0;
+ } }
+}

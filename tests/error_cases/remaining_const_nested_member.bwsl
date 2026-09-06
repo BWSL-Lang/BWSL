@@ -1,0 +1,8 @@
+// Regression: const.
+pipeline Remaining {
+    struct Inner { int n; } struct Outer { Inner inner; }
+    pass "Main" {
+        vertex { output.position=float4(0.0,0.0,0.0,1.0); }
+        fragment { const Outer x=Outer(Inner(1)); x.inner.n=2; output.color=float4(1.0); }
+    }
+}

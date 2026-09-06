@@ -1,0 +1,21 @@
+// Regression: previously rejected documented function form.
+pipeline FreeFunctionPatternArms {
+    attributes {
+        position: float3
+    }
+
+    enum Mode { A, B }
+
+    score :: (Mode m) -> float {
+        A: 1.0
+        B: 2.0
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, score(Mode::A));
+        }
+    }
+}

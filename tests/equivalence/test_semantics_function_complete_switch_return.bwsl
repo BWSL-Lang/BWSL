@@ -1,0 +1,9 @@
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline Semantics_function_complete_switch_return {
+ resources { output: buffer<int> }
+ f :: (int x) -> int {switch(x%3){case 0:{return 4;}case 1:{return 5;}default:{return 6;}}}
+ pass "Compute" { use resources { output } compute "Main" [64,1,1] {
+ uint idx=input.global_id.x; int n=int(idx);
+ resources.output[idx]=f(n);
+ } }
+}

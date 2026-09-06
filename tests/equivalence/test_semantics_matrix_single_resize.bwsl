@@ -1,0 +1,9 @@
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline Semantics_matrix_single_resize {
+ resources { output: buffer<int> }
+
+ pass "Compute" { use resources { output } compute "Main" [64,1,1] {
+ uint idx=input.global_id.x; int n=int(idx);
+ mat3 m=mat3(mat2(1.0,2.0,3.0,4.0)); resources.output[idx]=int(m[0][0]+m[1][1]+m[2][2]);
+ } }
+}

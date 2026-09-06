@@ -1,0 +1,8 @@
+// Regression: Invalid or out-of-range float literal.
+pipeline Remaining {
+
+    pass "Main" {
+        vertex { output.position=float4(0.0,0.0,0.0,1.0); }
+        fragment { float x=1e99999; output.color=float4(1.0); }
+    }
+}

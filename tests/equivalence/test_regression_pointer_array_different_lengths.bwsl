@@ -1,0 +1,13 @@
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline Regression_pointer_array_different_lengths {
+    resources { output: buffer<int> }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [64, 1, 1] {
+            uint idx = input.global_id.x;
+            int n = int(idx);
+            int[1] a; a[0]=10; int[4] b; b[0]=20;b[1]=30;b[2]=40;b[3]=50; int^ p=^a[0]; if(n%2==1) p=^b[n%4]; p^ += n; resources.output[idx]=a[0]*1000+b[0]*100+b[1]*10+b[2]+b[3];
+        }
+    }
+}

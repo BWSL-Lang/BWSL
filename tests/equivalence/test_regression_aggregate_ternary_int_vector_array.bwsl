@@ -1,0 +1,11 @@
+// Select every aggregate field, testing both condition outcomes on the GPU.
+pipeline AggregateTernary {
+ struct Item { int3[2] v; };
+ resources { output: buffer<float> }
+ pass "Main" { use resources { output } compute "Main" [64,1,1] {
+  uint idx = input.global_id.x; float n = float(idx);
+  Item a; Item b; a.v[0]=int3(int(n),2,3); a.v[1]=int3(4,5,6); b.v[0]=int3(int(n)+10,20,30); b.v[1]=int3(40,50,60);
+  Item c = (idx % 2u) == 0u ? a : b;
+  resources.output[idx] = float(c.v[0].x+c.v[0].y+c.v[0].z+c.v[1].x+c.v[1].y+c.v[1].z);
+ } }
+}

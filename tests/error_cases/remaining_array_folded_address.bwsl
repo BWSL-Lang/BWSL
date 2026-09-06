@@ -1,0 +1,8 @@
+// Regression: is out of bounds for array of length.
+pipeline Remaining {
+
+    pass "Main" {
+        vertex { output.position=float4(0.0,0.0,0.0,1.0); }
+        fragment { int[2] a; int^ p=^a[(1<<2)-2]; output.color=float4(1.0); }
+    }
+}

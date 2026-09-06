@@ -1,0 +1,1 @@
+pipeline CrossStage { resources { tex: texture2D nearest: sampler linear: sampler } pass "Main" { use resources { tex, nearest, linear } vertex { output.position = sample_lod(resources.tex, resources.nearest, float2(0.3), 0.0); } fragment { output.color = sample(resources.tex, resources.linear, float2(0.3)); } } }

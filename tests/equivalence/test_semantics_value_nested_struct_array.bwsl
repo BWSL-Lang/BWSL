@@ -1,0 +1,9 @@
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline Semantics_value_nested_struct_array {
+ resources { output: buffer<int> }
+ struct Inner {int x; int y;}; struct Box {Inner v; int[2] weights;}; f :: (Box a) -> int {a.v.x+=7; a.weights[0]+=5; return a.v.x*10+a.weights[0];}
+ pass "Compute" { use resources { output } compute "Main" [64,1,1] {
+ uint idx=input.global_id.x; int n=int(idx);
+ Box a; a.v.x=n; a.v.y=2; a.weights[0]=3; a.weights[1]=4; int r=f(a); resources.output[idx]=a.v.x*1000+a.weights[0]*100+r;
+ } }
+}

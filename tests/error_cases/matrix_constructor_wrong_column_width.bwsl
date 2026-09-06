@@ -1,0 +1,1 @@
+pipeline Invalid {  pass "Main" { vertex {output.position=float4(mat3(float2(1.0),float2(2.0),float2(3.0))[0],1.0);} } }

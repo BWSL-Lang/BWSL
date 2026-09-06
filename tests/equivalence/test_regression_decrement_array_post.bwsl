@@ -1,0 +1,13 @@
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline Regression_decrement_array_post {
+    resources { output: buffer<int> }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [64, 1, 1] {
+            uint idx = input.global_id.x;
+            int n = int(idx);
+            int[2] a; a[0]=n; a[1]=7; int r=a[0]--; resources.output[idx]=a[0]*100+r;
+        }
+    }
+}

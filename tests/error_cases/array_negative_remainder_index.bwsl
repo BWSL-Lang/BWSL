@@ -1,0 +1,1 @@
+pipeline Bad { pass "Main" { vertex { int[2] a; output.position=float4(a[(-4)%3]); } } }

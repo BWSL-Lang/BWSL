@@ -1,0 +1,8 @@
+// Regression: Variable already declared in this scope.
+pipeline Remaining {
+
+    pass "Main" {
+        vertex { output.position=float4(0.0,0.0,0.0,1.0); }
+        fragment { float x=1.0; float x=2.0; output.color=float4(1.0); }
+    }
+}

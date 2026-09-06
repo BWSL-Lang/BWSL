@@ -1,0 +1,16 @@
+// Eval vectors must materialize into runtime constructors before and after assignment.
+pipeline EvalVector {
+    resources { output: buffer<uint> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [16, 1, 1] {
+            eval uint4 v = uint4(4294967295u, 2147483648u, 17u, 31u);
+            uint4 original = v;
+            eval { v = uint4(2147483649u, 4294967294u, 41u, 53u); }
+            uint4 updated = v;
+            uint i = input.global_id.x;
+            uint lane = i % 4u;
+            resources.output[i] = i < 8u ? original[lane] : updated[lane];
+        }
+    }
+}

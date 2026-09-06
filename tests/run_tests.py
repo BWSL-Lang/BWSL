@@ -179,6 +179,11 @@ VARIANT_ERROR_TESTS = {
 }
 
 ERROR_CASE_TESTS = {
+    "array_negative_remainder_index.bwsl": "out of bounds",
+    'function_void_return_value.bwsl': 'Void function cannot return a value',
+    'remaining_float_bitwise.bwsl': 'Bitwise operators require integer operands',
+    'remaining_float_bitwise_not.bwsl': 'Bitwise operators require integer operands',
+    'remaining_float_shift.bwsl': 'Bitwise operators require integer operands',
     "backend_spelling_alias_rejected.bwsl": "Function not found: mix",
     "invalid_intrinsic_arity.bwsl": "'sin' accepts at most 1 arguments, got 2",
     "missing_semicolon.bwsl": "Expected ';' after expression",
@@ -300,6 +305,72 @@ ERROR_CASE_TESTS = {
     "break_outside_loop.bwsl": "'break' outside of a loop or switch",
     "array_index_out_of_bounds.bwsl": "is out of bounds for array of length",
     "trailing_comma_missing_element.bwsl": "Expected expression",
+    "pattern_function_after_default.bwsl": "Pattern arms after default are unreachable",
+    "pattern_function_bindings.bwsl": "Pattern binding count does not match enum variant payload",
+    "pattern_function_duplicate.bwsl": "Duplicate enum variant in pattern arms",
+    "pattern_function_incomplete.bwsl": "Pattern function must cover every enum variant or provide default",
+    "pattern_function_missing_return.bwsl": "Pattern arm must return a value on every path",
+    "pattern_function_unknown.bwsl": "Unknown enum variant in pattern arm",
+    "eval_assignment_int_float.bwsl": "Type mismatch in compile-time assignment",
+    "eval_assignment_int_bool.bwsl": "Type mismatch in compile-time assignment",
+    "eval_assignment_uint_negative.bwsl": "Type mismatch in compile-time assignment",
+    "eval_assignment_uint_float.bwsl": "Type mismatch in compile-time assignment",
+    "eval_assignment_bool_int.bwsl": "Type mismatch in compile-time assignment",
+    "eval_assignment_int_overflow.bwsl": "Type mismatch in compile-time assignment",
+    "eval_assignment_vector_width.bwsl": "Type mismatch in compile-time assignment",
+    "eval_assignment_vector_component_type.bwsl": "Type mismatch in compile-time assignment",
+    "eval_function_recursion.bwsl": "Eval function call depth exceeded",
+    "eval_function_missing_return.bwsl": "Non-void function must return a value on every reachable path",
+    "eval_function_return_type.bwsl": "Type mismatch in eval function return",
+    "eval_vector_constructor_empty.bwsl": "Compile-time declaration initializer is not a compile-time value",
+    "eval_vector_constructor_few.bwsl": "Compile-time declaration initializer is not a compile-time value",
+    "eval_vector_constructor_many.bwsl": "Compile-time declaration initializer is not a compile-time value",
+    "eval_vector_constructor_short_vector.bwsl": "Compile-time declaration initializer is not a compile-time value",
+    "function_missing_return.bwsl": "Non-void function must return a value on every reachable path",
+    "function_bare_return.bwsl": "Non-void function must return a value on every reachable path",
+    "function_conditional_bare_return.bwsl": "Non-void function must return a value on every reachable path",
+    "function_switch_missing_return.bwsl": "Non-void function must return a value on every reachable path",
+    "matrix_constructor_partial_args.bwsl": "matrix constructor requires one scalar, one matrix, exact column vectors, or exactly rows*columns scalar arguments",
+    "matrix_constructor_excess_args.bwsl": "matrix constructor requires one scalar, one matrix, exact column vectors, or exactly rows*columns scalar arguments",
+    "matrix_constructor_wrong_column_width.bwsl": "matrix constructor requires one scalar, one matrix, exact column vectors, or exactly rows*columns scalar arguments",
+    "remaining_const_postfix.bwsl": "const",
+    "remaining_const_prefix.bwsl": "const",
+    "remaining_const_member.bwsl": "const",
+    "remaining_const_swizzle.bwsl": "const",
+    "remaining_const_nested_member.bwsl": "const",
+    "remaining_const_member_address.bwsl": "const",
+    "remaining_expression_assign.bwsl": "Invalid assignment target",
+    "remaining_call_assign.bwsl": "Invalid assignment target",
+    "remaining_call_member_assign.bwsl": "Invalid assignment target",
+    "remaining_literal_postfix.bwsl": "Invalid assignment target",
+    "remaining_expression_prefix.bwsl": "Invalid assignment target",
+    "remaining_literal_address.bwsl": "Invalid assignment target",
+    "remaining_array_fraction.bwsl": "Array size must be an integer literal",
+    "remaining_array_scientific.bwsl": "Array size must be an integer literal",
+    "remaining_array_float_spelling.bwsl": "Array size must be an integer literal",
+    "remaining_array_huge.bwsl": "Array size must be an integer literal",
+    "remaining_hex_empty.bwsl": "Invalid or out-of-range 32-bit integer literal",
+    "remaining_binary_empty.bwsl": "Invalid or out-of-range 32-bit integer literal",
+    "remaining_binary_invalid.bwsl": "Invalid or out-of-range 32-bit integer literal",
+    "remaining_integer_overflow.bwsl": "Invalid or out-of-range 32-bit integer literal",
+    "remaining_unsigned_overflow.bwsl": "Invalid or out-of-range 32-bit integer literal",
+    "remaining_hex_overflow.bwsl": "Invalid or out-of-range 32-bit integer literal",
+    "remaining_binary_overflow.bwsl": "Invalid or out-of-range 32-bit integer literal",
+    "remaining_float_overflow.bwsl": "Invalid or out-of-range float literal",
+    "remaining_float32_overflow.bwsl": "Invalid or out-of-range float literal",
+    "remaining_enum_fraction.bwsl": "Enum value must be a valid 32-bit integer literal",
+    "remaining_enum_overflow.bwsl": "Enum value must be a valid 32-bit integer literal",
+    "remaining_array_folded_read.bwsl": "is out of bounds for array of length",
+    "remaining_array_folded_store.bwsl": "is out of bounds for array of length",
+    "remaining_array_folded_address.bwsl": "is out of bounds for array of length",
+    "remaining_array_folded_negative.bwsl": "is out of bounds for array of length",
+    "remaining_array_folded_unsigned.bwsl": "is out of bounds for array of length",
+    "remaining_array_folded_ternary.bwsl": "is out of bounds for array of length",
+    "remaining_duplicate_local.bwsl": "Variable already declared in this scope",
+    "remaining_duplicate_array.bwsl": "Variable already declared in this scope",
+    "remaining_duplicate_struct.bwsl": "Duplicate struct declaration",
+    "remaining_duplicate_case.bwsl": "Duplicate switch case value",
+    "remaining_duplicate_default.bwsl": "Duplicate switch default case",
 }
 
 ERROR_CASE_MODULE_DIRS = {
@@ -3349,6 +3420,29 @@ def main() -> int:
     module_passed, module_failed = run_parser_module_tests(bwslc)
     passed += module_passed
     failed += module_failed
+
+    from p1_regression_tests import run_p1_regression_tests
+    p1_passed, p1_failed = run_p1_regression_tests(bwslc, output_dir / "p1_validation")
+    passed += p1_passed
+    failed += p1_failed
+
+    if metal_validation:
+        from resource_p1_tests import run_resource_p1_suite
+        resource_passed, resource_failed = run_resource_p1_suite(bwslc, output_dir, verbose)
+        from resource_remaining_tests import run_resource_remaining_suite
+        remaining_passed, remaining_failed = run_resource_remaining_suite(bwslc, output_dir, verbose)
+        resource_passed += remaining_passed
+        resource_failed += remaining_failed
+        passed += resource_passed
+        failed += resource_failed
+
+    if gles_validation:
+        from gles_regression_tests import run_gles_regression_tests
+        gles_reg_passed, gles_reg_failed = run_gles_regression_tests(
+            bwslc, output_dir / "gles_regressions",
+            equiv_runner_path(root) if args.equivalence else None)
+        passed += gles_reg_passed
+        failed += gles_reg_failed
 
     equiv_passed = equiv_failed = 0
     if args.equivalence:

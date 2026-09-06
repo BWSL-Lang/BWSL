@@ -1,0 +1,7 @@
+pipeline Samplers {
+ resources { tex: texture2D nearest: sampler linear: sampler }
+ pass "Main" { use resources { tex, nearest, linear }
+ vertex { float2[3] p; p[0] = float2(-1.0,-1.0); p[1] = float2(3.0,-1.0); p[2] = float2(-1.0,3.0); output.position = float4(p[input.vertex_id],0.0,1.0); }
+ fragment { output.color = sample(resources.tex, resources.nearest, float2(0.375)) - sample(resources.tex, resources.linear, float2(0.375)); }
+ }
+}

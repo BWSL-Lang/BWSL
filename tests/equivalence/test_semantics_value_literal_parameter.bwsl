@@ -1,0 +1,9 @@
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline Semantics_value_literal_parameter {
+ resources { output: buffer<int> }
+ f :: (int x) -> int { x+=1; return x; }
+ pass "Compute" { use resources { output } compute "Main" [64,1,1] {
+ uint idx=input.global_id.x; int n=int(idx);
+ resources.output[idx]=f(n)+f(3);
+ } }
+}

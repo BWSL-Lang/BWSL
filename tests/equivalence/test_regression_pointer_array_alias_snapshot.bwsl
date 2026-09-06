@@ -1,0 +1,13 @@
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline Regression_pointer_array_alias_snapshot {
+    resources { output: buffer<int> }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [64, 1, 1] {
+            uint idx = input.global_id.x;
+            int n = int(idx);
+            int[4] a; a[0]=10;a[1]=20;a[2]=30;a[3]=40; int^ p=^a[0]; int^ q=^a[0]; for(int i=0;i<4;i++) { p=^a[i]; if(i==n%4) q=p; } q^ = 100+n; resources.output[idx]=a[0]*1000+a[1]*100+a[2]*10+a[3];
+        }
+    }
+}

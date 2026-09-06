@@ -1,0 +1,17 @@
+// Generated QA: texture3D_sample_offset_explicit
+pipeline QA {
+
+attributes { position: float3 uv: float2 }
+resources {
+tex: texture3D
+samp: sampler
+}
+pass "Main" {
+use attributes { position, uv }
+use resources { tex, samp }
+vertex { output.position = float4(attributes.position, 1.0); output.uv = attributes.uv; }
+fragment {
+output.color = sample_offset(resources.tex, resources.samp, float3(input.uv, 0.5), int3(1, -1, 0));
+}
+}
+}

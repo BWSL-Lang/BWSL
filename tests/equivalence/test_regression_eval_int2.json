@@ -1,0 +1,35 @@
+{
+  "note": "Eval vector substitution and typed reassignment, including exact unsigned lanes.",
+  "groups": [
+    1,
+    1,
+    1
+  ],
+  "output_binding": 0,
+  "output_size": 64,
+  "output_type": "int",
+  "tolerance": 0,
+  "required_backends": [
+    "spirv",
+    "hlsl",
+    "glsl"
+  ],
+  "expected_values": [
+    3,
+    -7,
+    3,
+    -7,
+    3,
+    -7,
+    3,
+    -7,
+    -13,
+    17,
+    -13,
+    17,
+    -13,
+    17,
+    -13,
+    17
+  ]
+}

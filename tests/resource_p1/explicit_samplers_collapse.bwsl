@@ -1,0 +1,13 @@
+// The same texture sampled with two independently bindable samplers is lowered
+// to two uses of one generated sampler. Reflection nevertheless lists both.
+pipeline SamplerIdentity {
+    resources { tex: texture2D nearest: sampler linear: sampler }
+    pass "Main" {
+        use resources { tex, nearest, linear }
+        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+        fragment {
+            output.color = sample(resources.tex, resources.nearest, float2(0.31))
+                         - sample(resources.tex, resources.linear, float2(0.31));
+        }
+    }
+}
