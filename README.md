@@ -2,7 +2,74 @@
 
 BWSL (Brawl Shading Language) is a graphics and compute shader language with a compiler that generates SPIR-V and cross-compiles to Metal, HLSL, GLSL, and GLSL ES (WebGL).
 
-[Public Docs Here](https://www.bwsl.dev) 
+[Documentation](https://www.bwsl.dev) · [Language reference](https://www.bwsl.dev/docs/language) · [Getting started](#getting-started)
+
+## Example Shaders
+
+A graphics pipeline keeps its vertex and fragment stages together. Values written
+to `output.uv` in the vertex stage become interpolated `input.uv` values in the
+fragment stage. Floating-point varyings use perspective-correct interpolation by
+default. Decorate the vertex-stage output assignment with `@noperspective` for
+linear interpolation in screen space, or `@flat` to disable interpolation—for
+example, `@flat output.uv = attributes.texcoord;`. See
+[varying interpolation](https://www.bwsl.dev/docs/language/shader-io#interpolation-qualifiers).
+
+<!-- These are BWSL examples; hlsl provides approximate highlighting on GitHub. -->
+
+```hlsl
+pipeline Gradient {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            float3 color = float3(input.uv, 0.5);
+            output.color = float4(color, 1.0);
+        }
+    }
+}
+```
+
+Compute passes use the same pipeline structure, with explicit resources and
+workgroup sizes. This shader squares the first 1,024 elements of a buffer, using
+64 threads per workgroup. Bind a buffer with at least 1,024 floats and dispatch
+16 workgroups along X:
+
+```hlsl
+pipeline SquareValues {
+    resources {
+        values: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { values }
+
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            if (index >= 1024u) {
+                return;
+            }
+
+            float value = resources.values[index];
+            resources.values[index] = value * value;
+        }
+    }
+}
+```
+
+Explore [modules](https://www.bwsl.dev/docs/language/modules),
+[generics](https://www.bwsl.dev/docs/language/generics),
+[enums and pattern matching](https://www.bwsl.dev/docs/types/enums), and
+[compile-time evaluation](https://www.bwsl.dev/docs/language/eval).
 
 ## Getting Started
 
@@ -252,7 +319,7 @@ Supported WASM flags:
 - `-internals`
 - `-modules <path>` (repeatable)
 
-See [docs/language.md](docs/language.md) for the language reference.
+See the [official language reference](https://www.bwsl.dev/docs/language).
 
 ## Language Overview
 
@@ -310,30 +377,13 @@ Near-term planned work:
 Resources are declared directly in BWSL source with pipeline-level
 `resources { ... }` blocks and imported into passes with `use resources { ... }`.
 
-## Example Shader
+## Syntax Highlighting
 
-```bwsl
-pipeline Demo {
-    attributes {
-        position: float3
-        texcoord: float2
-    }
-
-    pass "Main" {
-        use attributes { position, texcoord }
-
-        vertex {
-            output.position = float4(attributes.position, 1.0);
-            output.uv = attributes.texcoord;
-        }
-
-        fragment {
-            float3 color = float3(input.uv, 0.5);
-            output.color = float4(color, 1.0);
-        }
-    }
-}
-```
+The [VS Code extension](tools/vscode-bwsl) provides BWSL syntax highlighting and
+compiler diagnostics. On GitHub, this README and `.bwsl` files use HLSL
+highlighting as an approximation; BWSL-specific keywords may remain uncolored.
+Native GitHub support requires adding BWSL to
+[GitHub Linguist](https://github.com/github-linguist/linguist/blob/main/CONTRIBUTING.md#adding-a-language).
 
 ## Project Structure
 

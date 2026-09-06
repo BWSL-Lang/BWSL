@@ -1,4 +1,6 @@
-*.bwsl text eol=lf
+# Approximate GitHub highlighting until Linguist supports BWSL.
+# Exclude the fallback language from repository language statistics.
+*.bwsl text eol=lf linguist-language=HLSL -linguist-detectable
 *.rcfg text eol=lf
 *.h text eol=lf
 *.cpp text eol=lf
