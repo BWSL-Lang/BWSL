@@ -77,6 +77,9 @@ struct EvalStateSoA {
     // while executing expanded scopes.
     void* comptimeUser;
     bool (*lookupComptimeBinding)(void* user, u32 nameHash, LiteralValue* outValue);
+    bool (*updateComptimeBinding)(void* user, u32 nameHash, const LiteralValue& value);
+    bool (*evaluateComptimeFunction)(void* user, NodeRef call, const LiteralValue* args,
+                                    u32 argCount, LiteralValue* outValue);
 };
 
 // Compile-time evaluator for SoA AST

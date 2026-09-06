@@ -158,6 +158,8 @@ inline void IRLowering::LowerForCStyle(NodeRef ref) {
   }
 
   u32 loopHeader = builder.currentInstruction;
+  builder.EmitInstruction(OP_JUMP, 0, 0);
+  program.metadata[loopHeader] = builder.currentInstruction;
 
   // Condition check
   bool needsReturnGuard = (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF);
@@ -216,11 +218,28 @@ inline void IRLowering::LowerForCStyle(NodeRef ref) {
   if (hasBranch) {
     program.SetBranchTargets(branchIdx, bodyStart, loopEnd);
 
-    // Annotate loop structure
-    program.structureInfo[branchIdx] =
-        IRProgram::PackStructure(IRProgram::STRUCT_LOOP_HEADER, loopEnd);
-    program.continueInfo[branchIdx] = continueTarget;
   }
+  bool conditionHasControlFlow = false;
+  if (hasBranch) {
+    for (u32 i = loopHeader + 1; i < branchIdx; ++i) {
+      if (IsTerminator(static_cast<OpCode>(program.opcodes[i]))) {
+        conditionHasControlFlow = true;
+        break;
+      }
+    }
+  }
+  // Keep a single ordinary header for straight-line conditions. A separate
+  // loop header is needed only when evaluating the condition branches (or
+  // when the source loop has no condition at all).
+  u32 mergeInstruction = loopHeader;
+  if (hasBranch && !conditionHasControlFlow) {
+    program.opcodes[loopHeader] = OP_NOP;
+    program.metadata[loopHeader] = 0;
+    mergeInstruction = branchIdx;
+  }
+  program.structureInfo[mergeInstruction] =
+      IRProgram::PackStructure(IRProgram::STRUCT_LOOP_HEADER, loopEnd);
+  program.continueInfo[mergeInstruction] = continueTarget;
 
   // Restore outer scope — drops the iterator binding (and anything the
   // increment clause introduced) so subsequent references resolve to
@@ -230,145 +249,92 @@ inline void IRLowering::LowerForCStyle(NodeRef ref) {
 
 inline void IRLowering::LowerForRange(NodeRef ref) {
   const ForRangeData &forLoop = ast->GetForRange(ref);
-
-  // Snapshot outer scope so the iterator (and any body-scope locals)
-  // don't leak out, shadowing / mis-typing later references.
   auto savedOuterVariableRegisters = variableRegisters;
-
-  // Infer iterator type from range bounds WITHOUT lowering yet
-  // This preserves the correct control flow structure for SPIR-V
   bool isUnsigned = IsExpressionUnsigned(forLoop.rangeEnd);
   CoreType iterType = isUnsigned ? CoreType::UINT : CoreType::INT;
 
-  // Allocate iterator register and initialize to rangeStart
+  // A range captures its bounds and step once, in source order. In particular,
+  // a body assignment to the original step variable cannot change direction.
+  u16 start = forLoop.rangeStart.IsNull() ? EmitConstantInt(0) : LowerExpression(forLoop.rangeStart);
+  start = CopyArgumentValue(ConvertRegisterToType(start, iterType));
+  u16 end = CopyArgumentValue(ConvertRegisterToType(LowerExpression(forLoop.rangeEnd), iterType));
+  u16 step = forLoop.step.IsNull() ? EmitConstantInt(1) : LowerExpression(forLoop.step);
+  step = CopyArgumentValue(step);
+  CoreType stepType = GetRegisterType(step);
+  if (stepType != CoreType::INT && stepType != CoreType::UINT)
+    ReportError("Error: range step must be an integer\n");
+
+  auto binary = [&](OpCode op, u16 lhs, u16 rhs) {
+    u16 result = AllocateRegister();
+    SetRegisterType(result, CoreType::BOOL);
+    builder.EmitInstruction(op, result, lhs, rhs);
+    return result;
+  };
+  u16 zero = stepType == CoreType::UINT ? EmitConstantUint(0) : EmitConstantInt(0);
+  u16 ascending = binary(stepType == CoreType::UINT ? OP_UGT : OP_IGT, step, zero);
+  u16 descending = stepType == CoreType::UINT ? builder.EmitConstantBool(false)
+                                             : binary(OP_ILT, step, zero);
+  u16 increment = ConvertRegisterToType(step, iterType);
   u16 iterReg = AllocateRegister();
   SetRegisterType(iterReg, iterType);
-  if (!forLoop.rangeStart.IsNull()) {
-    // Check if rangeStart is a literal - if so, emit the right constant type
-    if (forLoop.rangeStart.Type() == ASTNodeType::LITERAL) {
-      const LiteralData &lit = ast->GetLiteral(forLoop.rangeStart);
-      if (lit.value.type == LiteralValue::INT && isUnsigned) {
-        // Convert int literal to uint constant
-        u16 startReg = EmitConstantUint(static_cast<u32>(lit.value.intValue));
-        builder.EmitInstruction(OP_STORE_REG, iterReg, startReg);
-      } else if (lit.value.type == LiteralValue::UINT && !isUnsigned) {
-        // Convert uint literal to int constant
-        u16 startReg = EmitConstantInt(static_cast<int>(lit.value.uintValue));
-        builder.EmitInstruction(OP_STORE_REG, iterReg, startReg);
-      } else {
-        u16 startReg = LowerExpression(forLoop.rangeStart);
-        builder.EmitInstruction(OP_STORE_REG, iterReg, startReg);
-      }
-    } else {
-      u16 startReg = LowerExpression(forLoop.rangeStart);
-      builder.EmitInstruction(OP_STORE_REG, iterReg, startReg);
-    }
-  } else {
-    // Default start is 0
-    u16 zeroReg = isUnsigned ? EmitConstantUint(0) : EmitConstantInt(0);
-    builder.EmitInstruction(OP_STORE_REG, iterReg, zeroReg);
-  }
-
-  // Store iterator variable mapping
+  builder.EmitInstruction(OP_STORE_REG, iterReg, start);
+  u16 advanceValid = AllocateRegister();
+  SetRegisterType(advanceValid, CoreType::BOOL);
+  builder.EmitInstruction(OP_STORE_REG, advanceValid, builder.EmitConstantBool(true));
   if (!forLoop.iteratorVar.IsNull()) {
-    // iteratorVar is stored as an identifier in the AST
-    const IdentifierData &iterVar = ast->GetIdentifier(forLoop.iteratorVar);
-    variableRegisters[iterVar.name.nameHash] = iterReg;
-  }
-
-  // A compile-time negative step makes this a descending range, which must
-  // compare with > / >= instead of < / <=. Only literal and negated-literal
-  // steps are recognized; runtime-valued steps keep the ascending compare.
-  bool stepIsNegative = false;
-  if (!forLoop.step.IsNull()) {
-    NodeRef stepRef = forLoop.step;
-    if (stepRef.Type() == ASTNodeType::UNARY_OP) {
-      const UnaryOpData &stepOp = ast->GetUnaryOp(stepRef);
-      if (stepOp.op == UnaryOpType::NEGATE &&
-          stepOp.operand.Type() == ASTNodeType::LITERAL) {
-        const LiteralData &lit = ast->GetLiteral(stepOp.operand);
-        if (lit.value.type == LiteralValue::INT) {
-          stepIsNegative = lit.value.intValue > 0;
-        } else if (lit.value.type == LiteralValue::UINT) {
-          stepIsNegative = lit.value.uintValue > 0;
-        }
-      }
-    } else if (stepRef.Type() == ASTNodeType::LITERAL) {
-      const LiteralData &lit = ast->GetLiteral(stepRef);
-      stepIsNegative = lit.value.type == LiteralValue::INT && lit.value.intValue < 0;
-    }
+    const IdentifierData &iter = ast->GetIdentifier(forLoop.iteratorVar);
+    variableRegisters[iter.name.nameHash] = iterReg;
   }
 
   u32 loopHeader = builder.currentInstruction;
-
-  // Now lower rangeEnd inside the loop header where it belongs
-  u16 endReg = LowerExpression(forLoop.rangeEnd);
-
-  // Condition: iter < rangeEnd (or <= if inclusive); flipped for descending
-  // Use unsigned comparison for uint, signed for int
-  u16 condReg = AllocateRegister();
-  SetRegisterType(condReg, CoreType::BOOL); // Comparison result is BOOL
-  OpCode cmpOp;
-  if (isUnsigned) {
-    cmpOp = stepIsNegative ? (forLoop.inclusive ? OP_UGE : OP_UGT)
-                           : (forLoop.inclusive ? OP_ULE : OP_ULT);
-  } else {
-    cmpOp = stepIsNegative ? (forLoop.inclusive ? OP_IGE : OP_IGT)
-                           : (forLoop.inclusive ? OP_ILE : OP_ILT);
-  }
-  builder.EmitInstruction(cmpOp, condReg, iterReg, endReg);
-  if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF) {
+  u16 below = binary(isUnsigned ? (forLoop.inclusive ? OP_ULE : OP_ULT)
+                                : (forLoop.inclusive ? OP_ILE : OP_ILT), iterReg, end);
+  u16 above = binary(isUnsigned ? (forLoop.inclusive ? OP_UGE : OP_UGT)
+                                : (forLoop.inclusive ? OP_IGE : OP_IGT), iterReg, end);
+  u16 forward = binary(OP_AND, ascending, below);
+  u16 backward = binary(OP_AND, descending, above);
+  u16 condReg = binary(OP_AND, binary(OP_OR, forward, backward), advanceValid);
+  if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF)
     condReg = CombineLoopCondition(condReg);
-  }
-
   u32 branchIdx = builder.currentInstruction;
   builder.EmitInstruction(OP_BRANCH, 0, condReg);
-
   u32 bodyStart = builder.currentInstruction;
-
-  // Body - track loop depth for nested if-statement merge handling
   loopDepth++;
   PushLoopContext();
-  if (!forLoop.body.IsNull()) {
-    LowerStatement(forLoop.body);
-  }
+  if (!forLoop.body.IsNull()) LowerStatement(forLoop.body);
   loopDepth--;
 
-  // Continue target = start of increment
   u32 continueTarget = builder.currentInstruction;
-
-  // Increment by step (default 1) - use appropriate type for constant
-  // Note: IADD works for both signed and unsigned (bit-identical operation)
-  u16 stepReg;
-  if (forLoop.step.IsNull()) {
-    stepReg = isUnsigned ? EmitConstantUint(1) : EmitConstantInt(1);
+  u16 next = AllocateRegister();
+  SetRegisterType(next, iterType);
+  if (isUnsigned) {
+    builder.EmitInstruction(OP_IADD, next, iterReg, increment);
   } else {
-    stepReg = LowerExpression(forLoop.step);
+    // Perform the addition as uint so C-like target optimizers cannot assume
+    // signed overflow never occurs and remove the termination check below.
+    u16 unsignedIter = ConvertRegisterToType(iterReg, CoreType::UINT);
+    u16 unsignedStep = ConvertRegisterToType(increment, CoreType::UINT);
+    u16 unsignedNext = AllocateRegister();
+    SetRegisterType(unsignedNext, CoreType::UINT);
+    builder.EmitInstruction(OP_IADD, unsignedNext, unsignedIter, unsignedStep);
+    builder.EmitInstruction(OP_U2I, next, unsignedNext);
   }
-  builder.EmitInstruction(OP_IADD, iterReg, iterReg, stepReg);
-
-  // Jump back to loop header
+  // Stop on wraparound, including inclusive ranges at INT/UINT boundaries.
+  u16 forwardValid = binary(isUnsigned ? OP_UGT : OP_IGT, next, iterReg);
+  u16 backwardValid = binary(isUnsigned ? OP_ULT : OP_ILT, next, iterReg);
+  u16 valid = binary(OP_OR, binary(OP_AND, ascending, forwardValid),
+                           binary(OP_AND, descending, backwardValid));
+  builder.EmitInstruction(OP_STORE_REG, advanceValid, valid);
+  builder.EmitInstruction(OP_STORE_REG, iterReg, next);
   u32 backEdgeIdx = builder.currentInstruction;
   builder.EmitInstruction(OP_JUMP, 0, 0);
   program.metadata[backEdgeIdx] = loopHeader;
-
-  // If inside an outer loop, emit NOP to create dedicated merge block
-  // This prevents inner merge from conflicting with outer continue target
-  // The merge point must be the NOP instruction itself
-  u32 loopEnd = builder.currentInstruction; // NOP is the merge point
+  u32 loopEnd = builder.currentInstruction;
   builder.EmitInstruction(OP_NOP, 0, 0);
-
-  // Patch break/skip jumps
   PopLoopContext(continueTarget, loopEnd);
-
-  // Patch branch: true = continue into body, false = exit loop
   program.SetBranchTargets(branchIdx, bodyStart, loopEnd);
-
-  // Annotate loop structure
-  program.structureInfo[branchIdx] =
-      IRProgram::PackStructure(IRProgram::STRUCT_LOOP_HEADER, loopEnd);
+  program.structureInfo[branchIdx] = IRProgram::PackStructure(IRProgram::STRUCT_LOOP_HEADER, loopEnd);
   program.continueInfo[branchIdx] = continueTarget;
-
   variableRegisters = std::move(savedOuterVariableRegisters);
 }
 

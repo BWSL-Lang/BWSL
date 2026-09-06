@@ -925,6 +925,9 @@ private:
                     case LiteralValue::INT2: return {"int2", {}};
                     case LiteralValue::INT3: return {"int3", {}};
                     case LiteralValue::INT4: return {"int4", {}};
+                    case LiteralValue::UINT2: return {"uint2", {}};
+                    case LiteralValue::UINT3: return {"uint3", {}};
+                    case LiteralValue::UINT4: return {"uint4", {}};
                 }
                 return {};
             }

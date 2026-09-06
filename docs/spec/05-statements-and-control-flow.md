@@ -94,6 +94,16 @@ The current parser accepts several loop families:
   foreach (x in 0..w, y in 0..h) { ... }
   ```
 
+A range evaluates and captures its start, end and step once on entry, in that
+order. The default step is one. Positive steps visit increasing values and
+negative signed steps visit decreasing values; a runtime-computed step follows
+the same rule as a literal. `..` excludes the endpoint and `..=` includes it
+when reached. A zero step performs no iterations. A step whose direction does
+not approach the endpoint likewise performs no iterations. Changing the
+original bound or step variables in the body does not change the captured
+range. Iteration stops if its next addition would wrap the iterator's integer
+type, including at an inclusive type-limit endpoint.
+
 ## Loop
 
 The current parser accepts:
@@ -163,17 +173,41 @@ eval int taps = 4;
 ```
 
 The initializer must evaluate to a compile-time value and must be compatible
-with the declared type. Assignments to visible eval bindings are executed by
-the comptime pass:
+with the declared type. Assignments retain that declared type and use the same
+compatibility rules: integers can promote to float, nonnegative signed integers
+can convert to uint, and uint values within the signed range can convert to int.
+Other scalar kinds and vector component types or widths must match; use an
+explicit constructor for a conversion. Assignments to visible eval bindings are
+executed by the comptime pass:
 
 ```bwsl
 eval int sum = 0;
 sum = sum + 1;
 ```
 
-The current comptime value domain is limited to scalar and vector literals plus
+The current comptime value domain is limited to scalar and numeric vector literals
+(`float2/3/4`, `int2/3/4`, and `uint2/3/4`) plus
 existing enum, module, and variant constants. Richer comptime data is planned
 but not currently part of the language.
+
+### Eval Functions
+
+Pipeline-scope eval functions can be called with compile-time arguments from eval
+initializers or runtime expressions. Their result is substituted into emitted code.
+
+```bwsl
+eval taps :: (int quality) -> int {
+    return quality * 2 + 1;
+}
+```
+
+Function execution supports typed local declarations, assignments, scalar
+increments/decrements, if statements, range loops, counted loops, and while loops.
+Returns stop execution immediately, including within loops. Arguments and return
+values must match their declared types using the eval assignment rules above.
+Nested calls and recursion share the execution budgets and have a maximum call
+depth of 128. An executed path without a return value is an error. Statements
+that require runtime execution are rejected inside an evaluated function.
 
 ### Eval If
 

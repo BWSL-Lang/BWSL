@@ -46,12 +46,16 @@ struct TextureBinding {
     PixelFormat format = PixelFormat::RGBA8Unorm;
     bool isArray = false;
     bool isCubemap = false;
+    bool isVolume = false;
+    bool separateSampler = false;
+    u32 defaultSamplerBinding = 0;
     u8 stages = 2;  // Bitmask: 1=vertex, 2=fragment, 3=both
 };
 
 struct SamplerBinding {
     std::string name;
     u32 bindingIndex = 0;
+    u32 descriptorBinding = 0;
     u8 stages = 2;
 };
 

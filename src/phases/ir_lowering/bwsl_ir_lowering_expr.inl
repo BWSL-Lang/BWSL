@@ -61,6 +61,40 @@ inline u16 IRLowering::LowerExpression(NodeRef ref) {
   case ASTNodeType::TERNARY_EXPRESSION: {
     auto &tern = ast->GetTernaryExpression(ref);
     u16 condReg = LowerExpression(tern.condition);
+    if (mask(GetRegisterType(condReg)) & TypeMasks::SCALAR_TYPES) {
+      condReg = EnsureBoolCondition(condReg);
+      // Scalar conditionals execute exactly one arm. Stores into a shared
+      // result register become a typed SSA phi, including aggregate values.
+      auto dominatingNodes = nodeRegisters;
+      u16 selected = AllocateRegister();
+      u32 branch = builder.currentInstruction;
+      builder.EmitInstruction(OP_BRANCH, 0, condReg);
+      u32 trueTarget = builder.currentInstruction;
+      u16 trueReg = LowerExpression(tern.trueExpr);
+      CoreType resultType = GetRegisterType(trueReg);
+      SetRegisterType(selected, resultType);
+      if (trueReg < MAX_REGISTERS)
+        program.registerStructTypes[selected] = program.registerStructTypes[trueReg];
+      builder.EmitInstruction(OP_STORE_REG, selected, trueReg);
+      u32 jump = builder.currentInstruction;
+      builder.EmitInstruction(OP_JUMP, 0, 0);
+      nodeRegisters = dominatingNodes;
+      u32 falseTarget = builder.currentInstruction;
+      u16 falseReg = LowerExpression(tern.falseExpr);
+      if (trueReg < MAX_REGISTERS && falseReg < MAX_REGISTERS &&
+          ((program.registerStorageInfo[trueReg] | program.registerStorageInfo[falseReg]) &
+           IRProgram::STORAGE_IS_PTR)) {
+        ReportError("Error: ternary expression with pointer operands is not supported; select the dereferenced value instead or use if/else.\n");
+      }
+      builder.EmitInstruction(OP_STORE_REG, selected, falseReg);
+      u32 merge = builder.currentInstruction;
+      builder.EmitInstruction(OP_NOP, 0, 0);
+      program.SetBranchTargets(branch, trueTarget, falseTarget);
+      program.structureInfo[branch] = IRProgram::PackStructure(IRProgram::STRUCT_IF_HEADER, merge);
+      program.metadata[jump] = merge;
+      nodeRegisters = std::move(dominatingNodes);
+      return selected;
+    }
     u16 trueReg = LowerExpression(tern.trueExpr);
     u16 falseReg = LowerExpression(tern.falseExpr);
     CoreType resultType = GetRegisterType(trueReg);
@@ -241,6 +275,25 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
     if (fieldPtr != 0) return fieldPtr;
   }
 
+  if (unop.op == UnaryOpType::ADDRESS_OF &&
+      unop.operand.Type() == ASTNodeType::ARRAY_ACCESS) {
+    const ArrayAccessData &access = ast->GetArrayAccess(unop.operand);
+    u16 array = LowerExpression(access.array);
+    if (array < MAX_REGISTERS &&
+        (program.registerStorageInfo[array] & IRProgram::STORAGE_IS_LOCAL_ARRAY)) {
+      u16 index = LowerExpression(access.index);
+      if (!CheckConstArrayIndexBounds(array, index, access.index)) return 0xFFFF;
+      u16 pointer = AllocateRegister();
+      CoreType elementType = GetRegisterType(array);
+      SetRegisterType(pointer, elementType);
+      program.registerStructTypes[pointer] = program.registerStructTypes[array];
+      program.registerStorageInfo[pointer] = IRProgram::STORAGE_IS_PTR |
+          IRProgram::STORAGE_IS_FIELD_PTR | (static_cast<u32>(elementType) << 8);
+      builder.EmitInstruction(OP_STORAGE_INDEX, pointer, array, index);
+      return pointer;
+    }
+  }
+
   u16 operand = LowerExpression(unop.operand);
   u16 dest = AllocateRegister();
 
@@ -269,12 +322,17 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
                            type == CoreType::BOOL4)
                               ? type
                               : CoreType::BOOL;
+    if (resultType == CoreType::BOOL) operand = EnsureBoolCondition(operand);
     builder.EmitInstruction(op, dest, operand);
     SetRegisterType(dest, resultType);
     return dest;
   }
   case UnaryOpType::BITWISE_NOT: {
     CoreType type = GetRegisterType(operand);
+    if (!(mask(type) & (TypeMasks::INT_TYPES | TypeMasks::UINT_TYPES))) {
+      ReportError("Bitwise operators require integer operands\n");
+      return 0xFFFF;
+    }
     op = OP_NOT;
     builder.EmitInstruction(op, dest, operand);
     SetRegisterType(dest, type); // Bitwise NOT preserves type
@@ -284,23 +342,25 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
     // ++x: Add 1 to operand, store back, return new value
     CoreType type = GetRegisterType(operand);
     bool isFloat = (mask(type) & TypeMasks::FLOAT_TYPES) != 0;
-    u16 one = isFloat ? builder.EmitConstant(1.0f) : EmitConstantInt(1);
+    u16 one = isFloat ? builder.EmitConstant(1.0f) :
+              type == CoreType::UINT ? EmitConstantUint(1) : EmitConstantInt(1);
     op = isFloat ? OP_FADD : OP_IADD;
     builder.EmitInstruction(op, dest, operand, one);
     SetRegisterType(dest, type);
     // Store back to the operand location (assuming it's a variable)
-    builder.EmitInstruction(OP_STORE_REG, operand, dest);
+    StoreLValue(unop.operand, dest);
     return dest;
   }
   case UnaryOpType::PRE_DECREMENT: {
     // --x: Subtract 1 from operand, store back, return new value
     CoreType type = GetRegisterType(operand);
     bool isFloat = (mask(type) & TypeMasks::FLOAT_TYPES) != 0;
-    u16 one = isFloat ? builder.EmitConstant(1.0f) : EmitConstantInt(1);
+    u16 one = isFloat ? builder.EmitConstant(1.0f) :
+              type == CoreType::UINT ? EmitConstantUint(1) : EmitConstantInt(1);
     op = isFloat ? OP_FSUB : OP_ISUB;
     builder.EmitInstruction(op, dest, operand, one);
     SetRegisterType(dest, type);
-    builder.EmitInstruction(OP_STORE_REG, operand, dest);
+    StoreLValue(unop.operand, dest);
     return dest;
   }
   case UnaryOpType::POST_INCREMENT: {
@@ -309,12 +369,13 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
     builder.EmitInstruction(OP_STORE_REG, dest, operand); // dest = old value
     SetRegisterType(dest, type);
     bool isFloat = (mask(type) & TypeMasks::FLOAT_TYPES) != 0;
-    u16 one = isFloat ? builder.EmitConstant(1.0f) : EmitConstantInt(1);
+    u16 one = isFloat ? builder.EmitConstant(1.0f) :
+              type == CoreType::UINT ? EmitConstantUint(1) : EmitConstantInt(1);
     u16 newVal = AllocateRegister();
     op = isFloat ? OP_FADD : OP_IADD;
     builder.EmitInstruction(op, newVal, operand, one);
     SetRegisterType(newVal, type);
-    builder.EmitInstruction(OP_STORE_REG, operand, newVal);
+    StoreLValue(unop.operand, newVal);
     return dest; // Return old value
   }
   case UnaryOpType::POST_DECREMENT: {
@@ -324,12 +385,13 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
     builder.EmitInstruction(OP_STORE_REG, dest, operand); // dest = old value
     SetRegisterType(dest, type);
     bool isFloat = (mask(type) & TypeMasks::FLOAT_TYPES) != 0;
-    u16 one = isFloat ? builder.EmitConstant(1.0f) : EmitConstantInt(1);
+    u16 one = isFloat ? builder.EmitConstant(1.0f) :
+              type == CoreType::UINT ? EmitConstantUint(1) : EmitConstantInt(1);
     u16 newVal = AllocateRegister();
     op = isFloat ? OP_FSUB : OP_ISUB;
     builder.EmitInstruction(op, newVal, operand, one);
     SetRegisterType(newVal, type);
-    builder.EmitInstruction(OP_STORE_REG, operand, newVal);
+    StoreLValue(unop.operand, newVal);
     return dest; // Return old value
   }
   case UnaryOpType::ADDRESS_OF: {
@@ -514,6 +576,26 @@ inline u16 IRLowering::LowerLiteral(NodeRef ref) {
 inline u16 IRLowering::LowerBinaryOp(NodeRef ref) {
   const BinaryOpData &binop = ast->GetBinaryOp(ref);
   u16 left = LowerExpression(binop.left);
+  if ((binop.op == BinaryOpType::AND || binop.op == BinaryOpType::OR) &&
+      (mask(GetRegisterType(left)) & TypeMasks::SCALAR_TYPES)) {
+    left = EnsureBoolCondition(left);
+    auto dominatingNodes = nodeRegisters;
+    u16 selected = AllocateRegister();
+    SetRegisterType(selected, CoreType::BOOL);
+    builder.EmitInstruction(OP_STORE_REG, selected, left);
+    u32 branch = builder.currentInstruction;
+    builder.EmitInstruction(OP_BRANCH, 0, left);
+    u32 rightTarget = builder.currentInstruction;
+    u16 right = EnsureBoolCondition(LowerExpression(binop.right));
+    builder.EmitInstruction(OP_STORE_REG, selected, right);
+    u32 merge = builder.currentInstruction;
+    builder.EmitInstruction(OP_NOP, 0, 0);
+    if (binop.op == BinaryOpType::AND) program.SetBranchTargets(branch, rightTarget, merge);
+    else program.SetBranchTargets(branch, merge, rightTarget);
+    program.structureInfo[branch] = IRProgram::PackStructure(IRProgram::STRUCT_IF_HEADER, merge);
+    nodeRegisters = std::move(dominatingNodes);
+    return selected;
+  }
   u16 right = LowerExpression(binop.right);
   u16 dest = AllocateRegister();
 
@@ -521,6 +603,15 @@ inline u16 IRLowering::LowerBinaryOp(NodeRef ref) {
   CoreType rightType = GetRegisterType(right);
   TypeMask leftMask = mask(leftType);
   TypeMask rightMask = mask(rightType);
+
+  const bool bitwise = binop.op == BinaryOpType::BITWISE_AND ||
+      binop.op == BinaryOpType::BITWISE_OR || binop.op == BinaryOpType::BITWISE_XOR ||
+      binop.op == BinaryOpType::LEFT_SHIFT || binop.op == BinaryOpType::RIGHT_SHIFT;
+  if (bitwise && (!(leftMask & (TypeMasks::INT_TYPES | TypeMasks::UINT_TYPES)) ||
+                  !(rightMask & (TypeMasks::INT_TYPES | TypeMasks::UINT_TYPES)))) {
+    ReportError("Bitwise operators require integer operands\n");
+    return 0xFFFF;
+  }
 
   auto allowsFloatPromotion = [](BinaryOpType op) {
     switch (op) {

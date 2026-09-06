@@ -2,6 +2,7 @@
 #include "bwsl_spirv_backend.h"
 #include "phases/ir_generation/bwsl_ir_analysis.h"
 #include "core/bwsl_utils.h"
+#include "core/bwsl_resource_reflection.h"
 #include "SPIRV-Headers/include/spirv/unified1/GLSL.std.450.h"
 #include <array>
 #include <cstring>

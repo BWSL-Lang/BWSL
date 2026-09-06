@@ -151,10 +151,16 @@ struct CompiledVariant {
         u8 stages = 0;
         ResourceAccessMode access = ResourceAccessMode::ReadOnly;
         bool combinedSampledImage = false;
+        bool separateImageSampler = false;
         std::string combinedWith;
+        std::string defaultSamplerFor;
+        std::vector<CombinedSamplerUniform> combinedSamplerUniforms;
+        std::string builtin;
+        u32 byteSize = 0;
         enum class Type { UniformBuffer, StorageBuffer, Texture, Sampler, StorageImage } type;
     };
     std::vector<ResourceBinding> resources;
+    std::vector<ResourceBinding> hlslResources;
     
     // Vertex input layout (for validation/debugging)
     struct AttributeBinding {
@@ -178,7 +184,10 @@ struct PipelineShaderSet {
     std::time_t lastModified;
     
     // Cached AST for this pipeline (avoid re-parsing)
+    std::string cachedSource;
     std::unique_ptr<CompilationContext> cachedContext;
+    std::unique_ptr<TokenStream> cachedTokens;
+    std::unique_ptr<Lexer> cachedLexer;
     std::unique_ptr<Parser> cachedParser;
     bool astCached = false;
     
@@ -459,17 +468,22 @@ private:
             return false;
         }
         
-        std::string source((std::istreambuf_iterator<char>(file)),
-                           std::istreambuf_iterator<char>());
+        shaderSet.cachedSource.assign(std::istreambuf_iterator<char>(file),
+                                      std::istreambuf_iterator<char>());
         file.close();
         
         // Create compilation context
         shaderSet.cachedContext = std::make_unique<CompilationContext>();
         
         // Create lexer and parser
-        auto lexer = std::make_unique<Lexer>(source);
+        shaderSet.cachedTokens = std::make_unique<TokenStream>();
+        shaderSet.cachedTokens->Init(&shaderSet.cachedContext->arena,
+                                    shaderSet.cachedSource.data(), shaderSet.cachedSource.size());
+        shaderSet.cachedLexer = std::make_unique<Lexer>(shaderSet.cachedSource, *shaderSet.cachedTokens);
+        shaderSet.cachedLexer->Tokenize();
         shaderSet.cachedParser = std::make_unique<Parser>();
-        shaderSet.cachedParser->Init(lexer.get(), shaderSet.cachedContext.get());
+        shaderSet.cachedParser->Init(shaderSet.cachedLexer.get(), shaderSet.cachedTokens.get(),
+                                    shaderSet.cachedContext.get());
         
         shaderSet.cachedParser->ParseDocument();
         
@@ -517,7 +531,7 @@ private:
         
         for (u32 i = 0; i < pipeline.passes.count; i++) {
             const PassData& pass = ast.GetPass(pipeline.passes[i]);
-            if (pass.name.view(shaderSet.cachedParser->sourceBase()) == passName) {
+            if (pass.name.nameHash == Utils::HashStr(passName.c_str())) {
                 targetPassRef = pipeline.passes[i];
                 break;
             }
@@ -594,7 +608,8 @@ private:
         
         // Lower AST to IR
         IR::IRLowering lowering;
-        lowering.Initialize(&irPool, &shaderSet.cachedParser->symbolTable, &ast);
+        lowering.Initialize(&irPool, &shaderSet.cachedParser->symbolTable, &ast,
+                            shaderSet.cachedSource.data());
         lowering.currentStage = stage;
 
         const PassData* owningPass = nullptr;
@@ -623,6 +638,7 @@ private:
         for (u32 i = 0; i < block.statements.count; i++) {
             lowering.LowerStatement(block.statements[i]);
         }
+        if (lowering.hadError) return false;
         
         // Ensure return at end
         if (lowering.program.instructionCount == 0 ||
@@ -634,9 +650,6 @@ private:
         IR::OptimizationPass optimizer;
         optimizer.SpecializeForVariant(&lowering.program, config.vertexPulling.attributeMask);
         
-        // Dead code elimination - removes unused attribute code paths
-        optimizer.EliminateDeadCode(&lowering.program);
-        
         // --- CFG Construction ---
         Memory::BWEMemoryArena cfgArena;
         char cfgMem[512 * 1024];
@@ -646,15 +659,11 @@ private:
         cfgBuilder.Init(&lowering.program, &cfgArena);
         cfgBuilder.Build();
         
-        // --- Dead Block Elimination (removes unreachable blocks after specialization) ---
-        optimizer.EliminateDeadBlocks(&lowering.program, &cfgBuilder.cfg);
-        
-        // --- Rebuild CFG after dead block elimination (block structure changed) ---
-        cfgBuilder.Init(&lowering.program, &cfgArena);
-        cfgBuilder.Build();
-        
-        // --- SSA Conversion ---
-        SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena);
+        // Use the same CFG/SSA path as the CLI. The legacy pre-SSA DCE pass
+        // treats output-store destinations as definitions and can delete the
+        // actual value producer. SSA handles unreachable blocks after specialization.
+        if (cfgBuilder.cfg.blockCount > 1)
+            SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena);
 
         if (outExplicitSamplerUses) {
             std::vector<ExplicitSamplerUse> stageUses =
@@ -780,6 +789,7 @@ private:
                                            explicitSamplerUses);
 
         variant.resources.clear();
+        variant.hlslResources.clear();
         variant.resources.reserve(reflected.size());
         for (const ReflectedResourceBinding& resource : reflected) {
             CompiledVariant::ResourceBinding binding;
@@ -789,9 +799,15 @@ private:
             binding.stages = resource.stages;
             binding.access = resource.access;
             binding.combinedSampledImage = resource.combinedSampledImage;
+            binding.separateImageSampler = resource.separateImageSampler;
             binding.combinedWith = resource.combinedWith;
+            binding.defaultSamplerFor = resource.defaultSamplerFor;
+            binding.combinedSamplerUniforms = resource.combinedSamplerUniforms;
+            binding.builtin = resource.builtin;
+            binding.byteSize = resource.byteSize;
             binding.type = MapReflectedResourceType(resource.type);
-            variant.resources.push_back(std::move(binding));
+            if (resource.hlslOnly) variant.hlslResources.push_back(std::move(binding));
+            else variant.resources.push_back(std::move(binding));
         }
     }
 };

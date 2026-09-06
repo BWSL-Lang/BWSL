@@ -6,6 +6,12 @@
 
 #pragma once
 
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <vector>
+#include <stdexcept>
+
 #include "core/bwsl_defs.h"
 #include "core/bwsl_arena.h"
 #include "phases/ir_generation/bwsl_ir_gen.h"
@@ -13,6 +19,7 @@
 #include "phases/control_flow/bwsl_cfg.h"
 #include "core/bwsl_render_config.h"
 #include "core/bwsl_ast_soa.h"
+#include "core/bwsl_resource_reflection.h"
 #include "phases/ir_lowering/bwsl_ir_lowering.h"  // For PassVaryingContext, VaryingInfo
 #include "phases/ir_generation/bwsl_ir_analysis.h"  // For IRAnalysis
 
@@ -141,23 +148,35 @@ static constexpr const char* GEOM_FUNCS[] = {
 };
 
 // ============================================================================
-// Arena-based string builder - no malloc, no std::string
+// Growable output buffer; shader text must not be truncated at an arena limit.
 // ============================================================================
 
 struct StringBuilder {
+    std::vector<char> storage;
     char* data;
     u32 len;
     u32 cap;
 
-    void Init(Memory::BWEMemoryArena* arena, u32 capacity) {
-        data = static_cast<char*>(arena->Allocate(capacity));
+    void Init(Memory::BWEMemoryArena*, u32 capacity) {
+        storage.resize(capacity);
+        data = storage.data();
         len = 0;
         cap = capacity;
+    }
+
+    void Ensure(u32 extra) {
+        if (len + extra + 1 <= cap) return;
+        u32 next = cap;
+        while (len + extra + 1 > next) next *= 2;
+        storage.resize(next);
+        data = storage.data();
+        cap = next;
     }
 
     // Append compile-time string literal
     template<u32 N>
     void Lit(const char (&s)[N]) {
+        Ensure(N);
         if (len + N - 1 < cap) {
             for (u32 i = 0; i < N - 1; i++) data[len++] = s[i];
         }
@@ -165,22 +184,24 @@ struct StringBuilder {
 
     // Append C string
     void Str(const char* s) {
+        Ensure(static_cast<u32>(strlen(s)));
         while (*s && len < cap - 1) data[len++] = *s++;
     }
 
     // Append with known length
     void Raw(const char* s, u32 length) {
+        Ensure(length);
         if (len + length < cap) {
             for (u32 i = 0; i < length; i++) data[len++] = s[i];
         }
     }
 
     // Single char
-    void Chr(char c) { if (len < cap - 1) data[len++] = c; }
+    void Chr(char c) { Ensure(1); data[len++] = c; }
 
     // Integer (no snprintf)
     void Int(s32 v) {
-        if (v < 0) { Chr('-'); v = -v; }
+        if (v < 0) { Chr('-'); Uint(0u - static_cast<u32>(v)); return; }
         if (v == 0) { Chr('0'); return; }
         char buf[12]; u32 n = 0;
         while (v > 0) { buf[n++] = '0' + (v % 10); v /= 10; }
@@ -195,19 +216,18 @@ struct StringBuilder {
         while (n > 0) Chr(buf[--n]);
     }
 
-    // Float (6 decimal places)
+    // Round-trip precision, including tiny/large values and negative zero.
     void Flt(f32 v) {
-        if (v < 0) { Chr('-'); v = -v; }
-        s32 intPart = static_cast<s32>(v);
-        Int(intPart);
-        Chr('.');
-        f32 frac = v - intPart;
-        for (int i = 0; i < 6; i++) {
-            frac *= 10.0f;
-            char d = static_cast<char>(frac);
-            Chr('0' + d);
-            frac -= d;
+        if (!std::isfinite(v)) {
+            u32 bits;
+            memcpy(&bits, &v, sizeof(bits));
+            Lit("uintBitsToFloat("); Uint(bits); Lit("u)");
+            return;
         }
+        char text[48];
+        snprintf(text, sizeof(text), "%.9g", static_cast<double>(v));
+        Str(text);
+        if (!strchr(text, '.') && !strchr(text, 'e') && !strchr(text, 'E')) Lit(".0");
     }
 
     // Newline + indent (4 spaces per level)
@@ -224,17 +244,10 @@ struct StringBuilder {
 // ============================================================================
 
 struct RegInfo {
-    u16 useCount;      // Times this register is read
-    u16 defInst;       // Instruction that defines it
-    u16 defBlock;      // Block where first defined (0xFFFF = unset)
-    u8 flags;          // Inlineable, trivial load, etc.
+    u8 flags;
 };
 
-static constexpr u8 REG_INLINEABLE      = 0x01;
-static constexpr u8 REG_TRIVIAL         = 0x02;  // Simple load, always inline
-static constexpr u8 REG_EMITTED         = 0x04;  // Already emitted as temp
-static constexpr u8 REG_DECLARED        = 0x08;  // Type has been declared for this reg
-static constexpr u8 REG_MULTI_BLOCK_DEF = 0x10;  // Defined in multiple blocks, needs hoisting
+static constexpr u8 REG_DECLARED = 0x01;
 
 // ============================================================================
 // GLSL ES Backend
@@ -298,7 +311,6 @@ struct GLESBuilder {
         regInfo = static_cast<RegInfo*>(arena->Allocate(regCount * sizeof(RegInfo)));
         for (u32 i = 0; i < regCount; i++) {
             regInfo[i] = {};
-            regInfo[i].defBlock = 0xFFFF;  // Mark as unset
         }
 
         out.Init(arena, 64 * 1024);  // 64KB output buffer
@@ -315,7 +327,6 @@ struct GLESBuilder {
 
 private:
     // ===== Analysis Pass =====
-    void CountUses();
 
     // ===== Emission =====
     void EmitHeader();
@@ -323,11 +334,20 @@ private:
     void EmitOutputs();
     void EmitUniforms();
     void EmitMain();
-    void EmitBlockRecursive(u32 blockIdx, u32 stopAt, bool* emitted);
+    void EmitControlFlow();
+    struct LoopScope {
+        u32 header;
+        u32 merge;
+        u32 continuation;
+        bool inContinuation;
+    };
+    bool EmitBlockEdge(u32 fromBlock, u32 toBlock, u32 stopBlock,
+                       const LoopScope* loop, u32 depth);
+    bool EmitStructuredRegion(u32 block, u32 stopBlock,
+                              const LoopScope* loop, u32 depth);
     void EmitPhiAssignments(u32 fromBlock, u32 toBlock);
     void EmitInstruction(u32 instIdx);
 
-    void EmitPhiDeclarations();
     void EmitUndefDeclarations();
     void EmitDefaultValue(u16 type);
     void EmitStructDeclarations();
@@ -339,11 +359,15 @@ private:
 
     // ===== Expression Emission =====
     void EmitExpr(u16 reg);
-    void EmitExprForInst(u32 instIdx);
+    void EmitTexture(u16 reg, u32 metadata = 0);
+    bool EmitConstantExpr(u16 reg, u32 depth = 0);
+    void EmitTextureOffset(u16 reg);
+    void EmitSelect(u32 instIdx);
+    void EmitShuffleExpr(u32 instIdx);
+    void EmitLoadExpr(u32 instIdx);
     void EmitBinaryOp(u32 instIdx, const char* op);
     void EmitUnaryOp(u32 instIdx, const char* op);
     void EmitFuncCall(u32 instIdx, const char* func, u32 arity);
-    void EmitConstant(u32 instIdx);
     void EmitSwizzle(u32 instIdx);
     void EmitVecConstruct(u32 instIdx);
 
@@ -387,18 +411,17 @@ private:
         return false;
     }
 
-    bool ShouldInline(u16 reg) const {
-        return regInfo[reg].useCount == 1 &&
-               (regInfo[reg].flags & REG_INLINEABLE) &&
-               !(regInfo[reg].flags & REG_EMITTED);
-    }
-
     bool IsValidOperand(u16 op) const;
 
     u16 Op(u32 inst, u32 idx) const { return ir->GetOperand(inst, idx); }
     u16 Opcode(u32 inst) const { return ir->opcodes[inst]; }
     u16 Dest(u32 inst) const { return ir->destinations[inst]; }
-    u16 Type(u32 inst) const { return ir->types[inst]; }
+    u16 Type(u32 inst) const {
+        u16 reg = ir->destinations[inst];
+        if (reg < regCount && ir->registerTypes && ir->registerTypes[reg] != 0)
+            return ir->registerTypes[reg];
+        return ir->types[inst];
+    }
 };
 
 

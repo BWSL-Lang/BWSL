@@ -30,6 +30,10 @@ struct ComptimeState {
 
     ComptimeBudget budget;
     bool hadError;
+    NodeRef currentPipeline;
+    u32 functionDepth;
+    bool hasReturn;
+    LiteralValue returnValue;
 };
 
 static void InitBudget(ComptimeBudget* budget) {
@@ -212,6 +216,9 @@ static bool CoerceLiteralToType(const TypeInfo& typeInfo, LiteralValue* value) {
         case CoreType::INT2: return value->type == LiteralValue::INT2;
         case CoreType::INT3: return value->type == LiteralValue::INT3;
         case CoreType::INT4: return value->type == LiteralValue::INT4;
+        case CoreType::UINT2: return value->type == LiteralValue::UINT2;
+        case CoreType::UINT3: return value->type == LiteralValue::UINT3;
+        case CoreType::UINT4: return value->type == LiteralValue::UINT4;
         default:
             return typeInfo.coreType == CoreType::INVALID;
     }
@@ -251,9 +258,40 @@ static NodeRef MakeLiteralNode(AST* ast, const LiteralValue& value, u32 line, u3
             return ASTFactory::MakeLiteralUint(ast, value.uintValue, line, col);
         case LiteralValue::BOOL:
             return ASTFactory::MakeLiteralBool(ast, value.boolValue, line, col);
+        case LiteralValue::FLOAT2:
+        case LiteralValue::FLOAT3:
+        case LiteralValue::FLOAT4:
+        case LiteralValue::INT2:
+        case LiteralValue::INT3:
+        case LiteralValue::INT4:
+        case LiteralValue::UINT2:
+        case LiteralValue::UINT3:
+        case LiteralValue::UINT4: {
+            static const char* names[] = {
+                "float2", "float3", "float4", "int2", "int3", "int4", "uint2", "uint3", "uint4"
+            };
+            NodeRef result = ASTFactory::MakeFunctionCall(ast,
+                ArenaString::MakeHashOnly(names[value.type - LiteralValue::FLOAT2]), line, col);
+            for (u8 i = 0; i < value.VectorSize(); ++i) {
+                NodeRef component = value.type <= LiteralValue::FLOAT4
+                    ? ASTFactory::MakeLiteralFloat(ast, value.floatVec[i], line, col)
+                    : value.type <= LiteralValue::INT4
+                        ? ASTFactory::MakeLiteralInt(ast, value.intVec[i], line, col)
+                        : ASTFactory::MakeLiteralUint(ast, value.uintVec[i], line, col);
+                ast->GetFunctionCall(result).arguments.Push(ast->arena, component);
+            }
+            return result;
+        }
         default:
             return NodeRef::Null();
     }
+}
+
+static bool EvalFunctionHook(void* user, NodeRef call, const LiteralValue* args,
+                             u32 argCount, LiteralValue* outValue);
+
+static bool EvalUpdateHook(void* user, u32 nameHash, const LiteralValue& value) {
+    return UpdateBinding(static_cast<ComptimeState*>(user), nameHash, value);
 }
 
 static bool EvalExpression(ComptimeState* state, NodeRef expr, LiteralValue* outValue) {
@@ -262,6 +300,8 @@ static bool EvalExpression(ComptimeState* state, NodeRef expr, LiteralValue* out
                                   &state->context->evalCache, state->arena);
     evalState.comptimeUser = state;
     evalState.lookupComptimeBinding = EvalLookupHook;
+    evalState.updateComptimeBinding = EvalUpdateHook;
+    evalState.evaluateComptimeFunction = EvalFunctionHook;
     return CompileTimeEvaluatorSoA::CanEvaluateNode(&evalState, expr) &&
            CompileTimeEvaluatorSoA::EvaluateNode(&evalState, expr, outValue);
 }
@@ -384,7 +424,7 @@ static NodeRef CloneNode(ComptimeState* state, NodeRef node) {
             const AssignmentData& src = state->ast->GetAssignment(node);
             return ASTFactory::MakeAssignment(state->ast, CloneNode(state, src.target),
                                               CloneNode(state, src.value), line, col,
-                                              src.interpolation);
+                                              src.interpolation, src.isCompound);
         }
         case ASTNodeType::BLOCK:
             return CloneBlockLike(state, node, false);
@@ -402,6 +442,12 @@ static NodeRef CloneNode(ComptimeState* state, NodeRef node) {
         }
         case ASTNodeType::FUNCTION_CALL: {
             const FunctionCallData& src = state->ast->GetFunctionCall(node);
+            if (EvalFunctionHook(state, node, nullptr, src.arguments.count, nullptr)) {
+                LiteralValue value;
+                if (EvalExpression(state, node, &value)) {
+                    return MakeLiteralNode(state->ast, value, line, col);
+                }
+            }
             if (src.name.nameHash == TypeHashes::FLOAT && src.arguments.count == 1) {
                 LiteralValue argValue;
                 if (EvalExpression(state, src.arguments[0], &argValue)) {
@@ -550,7 +596,7 @@ static bool ProcessRuntimeChildren(ComptimeState* state, NodeRef stmt) {
 
 static bool BindCompileTimeDecl(ComptimeState* state, NodeRef stmt, bool requireEvalContext) {
     const VariableDeclData& decl = state->ast->GetVariableDecl(stmt);
-    if (!decl.isEval && !(requireEvalContext && decl.isConst)) return false;
+    if (!decl.isEval && !(requireEvalContext && decl.isConst) && !state->functionDepth) return false;
     if (decl.initializer.IsNull()) {
         Report(state, stmt, "Compile-time declarations must be initialized");
         return true;
@@ -570,8 +616,9 @@ static bool BindCompileTimeDecl(ComptimeState* state, NodeRef stmt, bool require
 
     AddBinding(state, decl.name.nameHash, typeInfo, value);
 
-    if (Symbol* sym = SymbolTable::LookupByHash(state->symbols, decl.name.nameHash)) {
-        if (sym->kind == SymbolKind::VARIABLE) {
+    if (!state->functionDepth) {
+        Symbol* sym = SymbolTable::LookupByHash(state->symbols, decl.name.nameHash);
+        if (sym && sym->kind == SymbolKind::VARIABLE) {
             VariableData& var = state->symbols->variables[sym->index];
             var.typeInfo = typeInfo;
             var.isConst = true;
@@ -597,6 +644,10 @@ static bool ExecuteAssignmentIfComptime(ComptimeState* state, NodeRef stmt) {
         Report(state, assign.value, "Compile-time assignment value is not a compile-time value");
         return true;
     }
+    if (!CoerceLiteralToType(state->bindings[index].typeInfo, &value)) {
+        Report(state, stmt, "Type mismatch in compile-time assignment");
+        return true;
+    }
     UpdateBinding(state, ident.name.nameHash, value);
     return true;
 }
@@ -604,7 +655,7 @@ static bool ExecuteAssignmentIfComptime(ComptimeState* state, NodeRef stmt) {
 static bool ExecuteBlockAsEval(ComptimeState* state, NodeRef blockRef, BlockData& outBlock) {
     const BlockData& block = state->ast->GetBlock(blockRef);
     PushScope(state);
-    for (u32 i = 0; i < block.statements.count && !state->hadError; i++) {
+    for (u32 i = 0; i < block.statements.count && !state->hadError && !state->hasReturn; i++) {
         ExecuteStatement(state, block.statements[i], outBlock, true);
     }
     PopScope(state);
@@ -671,12 +722,12 @@ static bool ExecuteEvalForRange(ComptimeState* state, NodeRef stmt, BlockData& o
     }
 
     const IdentifierData& iterator = state->ast->GetIdentifier(loop.iteratorVar);
-    auto shouldContinue = [&](s32 value) {
+    auto shouldContinue = [&](s64 value) {
         if (step > 0) return loop.inclusive ? value <= end : value < end;
         return loop.inclusive ? value >= end : value > end;
     };
 
-    for (s32 i = start; shouldContinue(i); i += step) {
+    for (s64 i = start; shouldContinue(i); i += step) {
         if (++state->budget.loopIterations > state->budget.maxLoopIterations) {
             Report(state, stmt, "Eval for exceeded iteration limit");
             return false;
@@ -689,6 +740,7 @@ static bool ExecuteEvalForRange(ComptimeState* state, NodeRef stmt, BlockData& o
         ExecuteStatement(state, loop.body, outBlock, true);
         PopScope(state);
         if (state->hadError) return false;
+        if (state->hasReturn) return true;
     }
     return true;
 }
@@ -729,6 +781,7 @@ static bool ExecuteEvalLoop(ComptimeState* state, NodeRef stmt, BlockData& outBl
             }
             ExecuteStatement(state, loop.body, outBlock, true);
             if (state->hadError) return false;
+            if (state->hasReturn) return true;
             bool done = false;
             if (!checkUntil(&done)) return false;
             if (done) break;
@@ -747,6 +800,7 @@ static bool ExecuteEvalLoop(ComptimeState* state, NodeRef stmt, BlockData& outBl
         }
         ExecuteStatement(state, loop.body, outBlock, true);
         if (state->hadError) return false;
+        if (state->hasReturn) return true;
         bool done = false;
         if (!checkUntil(&done)) return false;
         if (done) return true;
@@ -776,11 +830,13 @@ static bool ExecuteEvalWhile(ComptimeState* state, NodeRef stmt, BlockData& outB
         }
         ExecuteStatement(state, loop.body, outBlock, true);
         if (state->hadError) return false;
+        if (state->hasReturn) return true;
     }
 }
 
 static bool ExecuteStatement(ComptimeState* state, NodeRef stmt, BlockData& outBlock, bool evalContext) {
     if (stmt.IsNull()) return true;
+    if (state->hasReturn) return true;
     if (!CheckExecutedBudget(state, stmt)) return false;
 
     switch (stmt.Type()) {
@@ -793,7 +849,7 @@ static bool ExecuteStatement(ComptimeState* state, NodeRef stmt, BlockData& outB
             break;
         case ASTNodeType::VARIABLE_DECL: {
             const VariableDeclData& decl = state->ast->GetVariableDecl(stmt);
-            if (decl.isEval || (evalContext && decl.isConst)) {
+            if (decl.isEval || (evalContext && decl.isConst) || state->functionDepth) {
                 BindCompileTimeDecl(state, stmt, evalContext);
                 return !state->hadError;
             }
@@ -801,6 +857,30 @@ static bool ExecuteStatement(ComptimeState* state, NodeRef stmt, BlockData& outB
         }
         case ASTNodeType::ASSIGNMENT:
             if (ExecuteAssignmentIfComptime(state, stmt)) return !state->hadError;
+            break;
+        case ASTNodeType::UNARY_OP: {
+            const UnaryOpData& unary = state->ast->GetUnaryOp(stmt);
+            if (unary.operand.Type() == ASTNodeType::IDENTIFIER &&
+                (unary.op == UnaryOpType::PRE_INCREMENT || unary.op == UnaryOpType::POST_INCREMENT ||
+                 unary.op == UnaryOpType::PRE_DECREMENT || unary.op == UnaryOpType::POST_DECREMENT)) {
+                LiteralValue value;
+                if (LookupBindingValue(state, state->ast->GetIdentifier(unary.operand).name.nameHash, nullptr)) {
+                    if (!EvalExpression(state, stmt, &value)) Report(state, stmt, "Invalid compile-time increment or decrement");
+                    return !state->hadError;
+                }
+            }
+            break;
+        }
+        case ASTNodeType::RETURN:
+            if (state->functionDepth) {
+                const AssignmentData& ret = state->ast->GetAssignment(stmt);
+                if (ret.value.IsNull() || !EvalExpression(state, ret.value, &state->returnValue)) {
+                    Report(state, stmt, "Eval function must return a compile-time value");
+                    return false;
+                }
+                state->hasReturn = true;
+                return true;
+            }
             break;
         case ASTNodeType::IF_STATEMENT:
             if (evalContext) return ExecuteEvalIf(state, stmt, outBlock, true);
@@ -831,6 +911,7 @@ static bool ExecuteStatement(ComptimeState* state, NodeRef stmt, BlockData& outB
                     ExecuteStatement(state, loop.body, outBlock, true);
                     PopScope(state);
                     if (state->hadError) return false;
+                    if (state->hasReturn) return true;
                 }
                 return true;
             }
@@ -854,6 +935,10 @@ static bool ExecuteStatement(ComptimeState* state, NodeRef stmt, BlockData& outB
             break;
     }
 
+    if (state->functionDepth) {
+        Report(state, stmt, "Statement cannot be executed in an eval function");
+        return false;
+    }
     if (!ProcessRuntimeChildren(state, stmt)) return false;
     NodeRef cloned = CloneNode(state, stmt);
     if (!cloned.IsValid()) return !state->hadError;
@@ -865,6 +950,68 @@ static bool ExecuteStatement(ComptimeState* state, NodeRef stmt, BlockData& outB
         AddShadow(state, decl.name.nameHash);
     }
     return !state->hadError;
+}
+
+static bool EvalFunctionHook(void* user, NodeRef call, const LiteralValue* args,
+                             u32 argCount, LiteralValue* outValue) {
+    auto* state = static_cast<ComptimeState*>(user);
+    if (state->currentPipeline.IsNull()) return false;
+    const FunctionCallData& callData = state->ast->GetFunctionCall(call);
+    const PipelineData& pipeline = state->ast->GetPipeline(state->currentPipeline);
+    NodeRef selected = NodeRef::Null();
+    LiteralValue selectedArgs[16]{};
+    u32 bestConversions = INVALID_U32;
+    for (u32 i = 0; i < pipeline.functions.count; ++i) {
+        NodeRef candidate = pipeline.functions[i];
+        const FunctionDeclData& fn = state->ast->GetFunction(candidate);
+        if (!fn.isEval || fn.name.nameHash != callData.name.nameHash || fn.parameters.count != argCount) continue;
+        if (!args) return true;
+        u32 conversions = 0;
+        LiteralValue coerced[16]{};
+        bool compatible = argCount <= 16;
+        for (u32 p = 0; p < argCount && compatible; ++p) {
+            coerced[p] = args[p];
+            compatible = CoerceLiteralToType(TypeInfoFromTypeName(fn.parameters[p].second), &coerced[p]);
+            if (coerced[p].type != args[p].type) ++conversions;
+        }
+        if (compatible && conversions < bestConversions) {
+            selected = candidate;
+            bestConversions = conversions;
+            for (u32 p = 0; p < argCount; ++p) selectedArgs[p] = coerced[p];
+        }
+    }
+    if (selected.IsNull()) return false;
+    if (state->functionDepth >= 128) {
+        Report(state, call, "Eval function call depth exceeded");
+        return false;
+    }
+    const FunctionDeclData& fn = state->ast->GetFunction(selected);
+    bool savedReturn = state->hasReturn;
+    LiteralValue savedValue = state->returnValue;
+    state->hasReturn = false;
+    ++state->functionDepth;
+    PushScope(state);
+    for (u32 p = 0; p < argCount; ++p) {
+        AddBinding(state, fn.parameters[p].first.nameHash,
+                   TypeInfoFromTypeName(fn.parameters[p].second), selectedArgs[p]);
+    }
+    BlockData unused{};
+    bool ok = ExecuteStatement(state, fn.body, unused, true);
+    if (ok && !state->hasReturn) {
+        Report(state, call, "Eval function completed without returning a value");
+        ok = false;
+    }
+    if (ok && !CoerceLiteralToType(TYPE_INFO(fn.returnType, 1, false), &state->returnValue)) {
+        Report(state, call, "Type mismatch in eval function return");
+        ok = false;
+    }
+    LiteralValue result = state->returnValue;
+    PopScope(state);
+    --state->functionDepth;
+    state->hasReturn = savedReturn;
+    state->returnValue = savedValue;
+    if (ok && outValue) *outValue = result;
+    return ok;
 }
 
 static bool ProcessBlock(ComptimeState* state, NodeRef blockRef) {
@@ -896,6 +1043,19 @@ static bool ProcessFunction(ComptimeState* state, NodeRef functionRef) {
     if (fn.isEval) return true;
     if (fn.body.IsNull()) return true;
     if (fn.body.Type() == ASTNodeType::BLOCK) return ProcessBlock(state, fn.body);
+    if (fn.body.Type() == ASTNodeType::PATTERN_MATCH) {
+        const PatternMatchData& match = state->ast->GetPatternMatch(fn.body);
+        for (u32 a = 0; a < match.arms.count; ++a) {
+            NodeRef armRef = match.arms[a];
+            NodeRef body = state->ast->GetPatternMatch(armRef).body;
+            if (body.Type() == ASTNodeType::BLOCK) {
+                if (!ProcessBlock(state, body)) return false;
+            } else {
+                state->ast->GetPatternMatch(armRef).body = CloneNode(state, body);
+            }
+        }
+        return !state->hadError;
+    }
     if (fn.body.Type() == ASTNodeType::VERTEX_STAGE ||
         fn.body.Type() == ASTNodeType::FRAGMENT_STAGE ||
         fn.body.Type() == ASTNodeType::COMPUTE_STAGE) {
@@ -951,6 +1111,7 @@ static bool ProcessStruct(ComptimeState* state, NodeRef structRef) {
 }
 
 static bool ProcessPipeline(ComptimeState* state, NodeRef pipelineRef) {
+    state->currentPipeline = pipelineRef;
     PipelineData& pipeline = state->ast->GetPipeline(pipelineRef);
     for (u32 i = 0; i < pipeline.functions.count; i++) {
         if (!ProcessFunction(state, pipeline.functions[i])) return false;

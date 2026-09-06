@@ -113,6 +113,8 @@ void Parser::SkipBracedDeclaration(bool keywordAlreadyConsumed) {
 }
 
 NodeRef Parser::ParsePipeline() {
+    const u32 firstMemberAccess = ast->memberAccesses.count;
+    const u32 firstFunctionCall = ast->functionCalls.count;
     TokenRef declToken = current;  // The PIPELINE keyword; a doc block precedes it
     SourceLocation loc = getLocation(stream->GetOffset(current));
     u32 line = loc.line;
@@ -240,7 +242,9 @@ NodeRef Parser::ParsePipeline() {
                 ast->GetPipeline(pipeline).passes.Push(arena, pass);
             }
         } else if (Match(TokenType::EVAL)) {
-            ParseEvalStatement();
+            NodeRef declaration = ParseEvalStatement();
+            if (declaration.Type() == ASTNodeType::FUNCTION)
+                ast->GetPipeline(pipeline).functions.Push(arena, declaration);
         } else if (Match(TokenType::ENUM)) {
             NodeRef enumDecl = ParseEnum();
             if (enumDecl.IsValid()) {
@@ -284,6 +288,7 @@ NodeRef Parser::ParsePipeline() {
     if (Consume(TokenType::RIGHT_BRACE, "Expected '}' after pipeline body")) {
         MarkNodeEndAtPreviousToken(pipeline);
     }
+    FinalizeParsedResourceBindings(pipeline, firstMemberAccess, firstFunctionCall);
 
     context->root = pipeline;
     PARSER_TIMING_PRINT();
@@ -1289,7 +1294,8 @@ void Parser::ParsePassOutputs(NodeRef pass) {
             if (decorator == "location") {
                 Consume(TokenType::LEFT_PAREN, "Expected '(' after @location");
                 Consume(TokenType::NUMBER, "Expected numeric location");
-                location = SafeParseU32(stream->GetValue(previous), 0);
+                if (!TryParseU32(stream->GetValue(previous), &location))
+                    Error("Fragment output location must be a valid 32-bit integer literal");
                 Consume(TokenType::RIGHT_PAREN, "Expected ')' after @location");
             } else {
                 Error("Unknown fragment output decorator");
@@ -1546,12 +1552,12 @@ NodeRef Parser::ParseComputeStage() {
     auto parseSize = [&](const char* message) -> u32 {
         Consume(TokenType::NUMBER, message);
         std::string_view num = stream->GetValue(previous);
-        if (num.find('.') != std::string_view::npos || num.find('e') != std::string_view::npos ||
-            num.find('E') != std::string_view::npos) {
+        u32 value = 0;
+        if (!TryParseU32(num, &value)) {
             Error("Workgroup size must be an integer literal");
             return 1;
         }
-        return SafeParseU32(num, 0);
+        return value;
     };
 
     u32 sizeX = parseSize("Expected workgroup size X");
@@ -1565,7 +1571,8 @@ NodeRef Parser::ParseComputeStage() {
     if (sizeX == 0 || sizeY == 0 || sizeZ == 0) {
         Error("Workgroup size components must be greater than 0");
     }
-    if (sizeX * sizeY * sizeZ > 1024u) {
+    if (sizeX > 1024u || sizeY > 1024u || sizeZ > 1024u ||
+        static_cast<u64>(sizeX) * sizeY * sizeZ > 1024u) {
         Error("Workgroup size exceeds maximum (1024 invocations)");
     }
 
@@ -1594,6 +1601,7 @@ NodeRef Parser::ParseShaderStage(ASTNodeType stageType) {
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     NodeRef body = ASTFactory::MakeBlock(ast, loc.line, loc.column);
 
+    SymbolTable::EnterScope(&symbolTable);
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
         ProgressGuard _pg_(this);
         NodeRef stmt = ParseStatement();
@@ -1603,6 +1611,7 @@ NodeRef Parser::ParseShaderStage(ASTNodeType stageType) {
     }
 
     bool hasEnd = Consume(TokenType::RIGHT_BRACE, "Expected '}' after shader stage body");
+    SymbolTable::ExitScope(&symbolTable);
     if (hasEnd) {
         MarkNodeEndAtPreviousToken(body);
     }

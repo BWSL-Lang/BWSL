@@ -17,6 +17,22 @@ static inline int SafeFloatToInt(float x) {
     return (int)x;
 }
 
+static inline u32 SafeFloatToUint(float x) {
+    if (std::isnan(x) || x <= 0.0f) return 0;
+    if (x >= static_cast<float>(UINT_MAX)) return UINT_MAX;
+    return static_cast<u32>(x);
+}
+
+static bool EvalScalarCondition(const LiteralValue& value, bool* result) {
+    switch (value.type) {
+        case LiteralValue::BOOL: *result = value.boolValue; return true;
+        case LiteralValue::INT: *result = value.intValue != 0; return true;
+        case LiteralValue::UINT: *result = value.uintValue != 0; return true;
+        case LiteralValue::FLOAT: *result = value.floatValue != 0.0f; return true;
+        default: return false;
+    }
+}
+
 // Pre-computed hashes for vector constructor names
 static const u32 kFloat2Hash = Utils::HashStr("float2");
 static const u32 kFloat3Hash = Utils::HashStr("float3");
@@ -24,6 +40,9 @@ static const u32 kFloat4Hash = Utils::HashStr("float4");
 static const u32 kInt2Hash = Utils::HashStr("int2");
 static const u32 kInt3Hash = Utils::HashStr("int3");
 static const u32 kInt4Hash = Utils::HashStr("int4");
+static const u32 kUint2Hash = Utils::HashStr("uint2");
+static const u32 kUint3Hash = Utils::HashStr("uint3");
+static const u32 kUint4Hash = Utils::HashStr("uint4");
 static const u32 kVec2Hash = Utils::HashStr("vec2");
 static const u32 kVec3Hash = Utils::HashStr("vec3");
 static const u32 kVec4Hash = Utils::HashStr("vec4");
@@ -81,6 +100,18 @@ static bool IsVectorConstructor(u32 nameHash, LiteralValue::Type* outType = null
         if (outType) *outType = LiteralValue::INT4;
         return true;
     }
+    if (nameHash == kUint2Hash) {
+        if (outType) *outType = LiteralValue::UINT2;
+        return true;
+    }
+    if (nameHash == kUint3Hash) {
+        if (outType) *outType = LiteralValue::UINT3;
+        return true;
+    }
+    if (nameHash == kUint4Hash) {
+        if (outType) *outType = LiteralValue::UINT4;
+        return true;
+    }
     return false;
 }
 
@@ -99,6 +130,8 @@ void CompileTimeEvaluatorSoA::Init(EvalStateSoA* state, Parser* parser, AST* ast
     state->iterationCount = 0;
     state->comptimeUser = nullptr;
     state->lookupComptimeBinding = nullptr;
+    state->updateComptimeBinding = nullptr;
+    state->evaluateComptimeFunction = nullptr;
 }
 
 void CompileTimeEvaluatorSoA::SetError(EvalStateSoA* state, const char* msg) {
@@ -257,6 +290,12 @@ bool CompileTimeEvaluatorSoA::CanEvaluateNode(EvalStateSoA* state, NodeRef node)
             return CanEvaluateNode(state, unaryOp.operand);
         }
 
+        case ASTNodeType::TERNARY_EXPRESSION: {
+            const TernaryExprData& expr = state->ast->GetTernaryExpression(node);
+            return CanEvaluateNode(state, expr.condition) && CanEvaluateNode(state, expr.trueExpr) &&
+                   CanEvaluateNode(state, expr.falseExpr);
+        }
+
         case ASTNodeType::FUNCTION_CALL: {
             // Only certain intrinsics can be evaluated at compile time
             const FunctionCallData& func = state->ast->GetFunctionCall(node);
@@ -276,6 +315,14 @@ bool CompileTimeEvaluatorSoA::CanEvaluateNode(EvalStateSoA* state, NodeRef node)
             }
 
             if (!(func.flags & FunctionCallFlags::IS_INTRINSIC)) {
+                if (state->evaluateComptimeFunction &&
+                    state->evaluateComptimeFunction(state->comptimeUser, node, nullptr,
+                                                     func.arguments.count, nullptr)) {
+                    for (u32 i = 0; i < func.arguments.count; ++i) {
+                        if (!CanEvaluateNode(state, func.arguments[i])) return false;
+                    }
+                    return true;
+                }
                 // Check for user-defined eval functions
                 u32 argCount = func.arguments.count;
                 if (argCount > 16) return false;
@@ -347,6 +394,18 @@ bool CompileTimeEvaluatorSoA::EvaluateBinaryOp(EvalStateSoA* state, NodeRef node
 
     LiteralValue leftVal, rightVal;
     if (!EvaluateNode(state, binOp.left, &leftVal)) return false;
+    if (binOp.op == BinaryOpType::AND || binOp.op == BinaryOpType::OR) {
+        bool left, right;
+        if (!EvalScalarCondition(leftVal, &left)) return false;
+        outValue->type = LiteralValue::BOOL;
+        if ((binOp.op == BinaryOpType::AND && !left) || (binOp.op == BinaryOpType::OR && left)) {
+            outValue->boolValue = left;
+            return true;
+        }
+        if (!EvaluateNode(state, binOp.right, &rightVal) || !EvalScalarCondition(rightVal, &right)) return false;
+        outValue->boolValue = right;
+        return true;
+    }
     if (!EvaluateNode(state, binOp.right, &rightVal)) return false;
 
     // Type coercion: promote int to float if needed
@@ -428,11 +487,27 @@ bool CompileTimeEvaluatorSoA::EvaluateUnaryOp(EvalStateSoA* state, NodeRef node,
     LiteralValue operandVal;
     if (!EvaluateNode(state, unaryOp.operand, &operandVal)) return false;
 
+    if (unaryOp.op == UnaryOpType::PRE_INCREMENT || unaryOp.op == UnaryOpType::POST_INCREMENT ||
+        unaryOp.op == UnaryOpType::PRE_DECREMENT || unaryOp.op == UnaryOpType::POST_DECREMENT) {
+        if (!state->updateComptimeBinding || unaryOp.operand.Type() != ASTNodeType::IDENTIFIER) return false;
+        bool increment = unaryOp.op == UnaryOpType::PRE_INCREMENT || unaryOp.op == UnaryOpType::POST_INCREMENT;
+        LiteralValue updated = operandVal;
+        if (updated.type == LiteralValue::INT) updated.intValue = (int)((u32)updated.intValue + (increment ? 1u : ~0u));
+        else if (updated.type == LiteralValue::UINT) updated.uintValue += increment ? 1u : ~0u;
+        else if (updated.type == LiteralValue::FLOAT) updated.floatValue += increment ? 1.0f : -1.0f;
+        else return false;
+        if (!state->updateComptimeBinding(state->comptimeUser,
+                state->ast->GetIdentifier(unaryOp.operand).name.nameHash, updated)) return false;
+        *outValue = unaryOp.op == UnaryOpType::POST_INCREMENT || unaryOp.op == UnaryOpType::POST_DECREMENT
+            ? operandVal : updated;
+        return true;
+    }
+
     switch (unaryOp.op) {
         case UnaryOpType::NEGATE:
             if (operandVal.type == LiteralValue::INT) {
                 outValue->type = LiteralValue::INT;
-                outValue->intValue = -operandVal.intValue;
+                outValue->intValue = (int)(0u - (u32)operandVal.intValue);
                 return true;
             } else if (operandVal.type == LiteralValue::FLOAT) {
                 outValue->type = LiteralValue::FLOAT;
@@ -465,29 +540,9 @@ bool CompileTimeEvaluatorSoA::EvaluateUnaryOp(EvalStateSoA* state, NodeRef node,
 
         case UnaryOpType::PRE_INCREMENT:
         case UnaryOpType::POST_INCREMENT:
-            if (operandVal.type == LiteralValue::INT) {
-                outValue->type = LiteralValue::INT;
-                outValue->intValue = operandVal.intValue + 1;
-                return true;
-            } else if (operandVal.type == LiteralValue::FLOAT) {
-                outValue->type = LiteralValue::FLOAT;
-                outValue->floatValue = operandVal.floatValue + 1.0f;
-                return true;
-            }
-            break;
-
         case UnaryOpType::PRE_DECREMENT:
         case UnaryOpType::POST_DECREMENT:
-            if (operandVal.type == LiteralValue::INT) {
-                outValue->type = LiteralValue::INT;
-                outValue->intValue = operandVal.intValue - 1;
-                return true;
-            } else if (operandVal.type == LiteralValue::FLOAT) {
-                outValue->type = LiteralValue::FLOAT;
-                outValue->floatValue = operandVal.floatValue - 1.0f;
-                return true;
-            }
-            break;
+            break; // Handled above through the mutable comptime environment.
 
         case UnaryOpType::ADDRESS_OF:
         case UnaryOpType::DEREFERENCE:
@@ -543,8 +598,8 @@ bool CompileTimeEvaluatorSoA::EvaluateFunctionCall(EvalStateSoA* state, NodeRef 
                 return true;
             case LiteralValue::UINT:
                 if (args[0].type == LiteralValue::UINT) outValue->uintValue = args[0].uintValue;
-                else if (args[0].type == LiteralValue::INT) outValue->uintValue = args[0].intValue < 0 ? 0u : (u32)args[0].intValue;
-                else if (args[0].type == LiteralValue::FLOAT) outValue->uintValue = (u32)SafeFloatToInt(args[0].floatValue);
+                else if (args[0].type == LiteralValue::INT) outValue->uintValue = (u32)args[0].intValue;
+                else if (args[0].type == LiteralValue::FLOAT) outValue->uintValue = SafeFloatToUint(args[0].floatValue);
                 else if (args[0].type == LiteralValue::BOOL) outValue->uintValue = args[0].boolValue ? 1u : 0u;
                 else return false;
                 return true;
@@ -560,18 +615,35 @@ bool CompileTimeEvaluatorSoA::EvaluateFunctionCall(EvalStateSoA* state, NodeRef 
         }
     }
 
-    // Handle vector constructors (float2, float3, float4, int2, int3, int4)
+    // Materialize numeric vector constructors without losing unsigned lanes.
     LiteralValue::Type vecType;
     if (IsVectorConstructor(nameHash, &vecType)) {
         outValue->type = vecType;
         u8 expectedComponents = 0;
         bool isFloat = (vecType == LiteralValue::FLOAT2 || vecType == LiteralValue::FLOAT3 || vecType == LiteralValue::FLOAT4);
+        bool isUnsigned = (vecType >= LiteralValue::UINT2 && vecType <= LiteralValue::UINT4);
 
         switch (vecType) {
-            case LiteralValue::FLOAT2: case LiteralValue::INT2: expectedComponents = 2; break;
-            case LiteralValue::FLOAT3: case LiteralValue::INT3: expectedComponents = 3; break;
-            case LiteralValue::FLOAT4: case LiteralValue::INT4: expectedComponents = 4; break;
+            case LiteralValue::FLOAT2: case LiteralValue::INT2: case LiteralValue::UINT2: expectedComponents = 2; break;
+            case LiteralValue::FLOAT3: case LiteralValue::INT3: case LiteralValue::UINT3: expectedComponents = 3; break;
+            case LiteralValue::FLOAT4: case LiteralValue::INT4: case LiteralValue::UINT4: expectedComponents = 4; break;
             default: break;
+        }
+
+        u32 providedComponents = 0;
+        for (u32 i = 0; i < argCount; ++i) {
+            if (!args[i].IsVector() && args[i].type != LiteralValue::FLOAT &&
+                args[i].type != LiteralValue::INT && args[i].type != LiteralValue::UINT &&
+                args[i].type != LiteralValue::BOOL) {
+                SetError(state, "Vector constructor requires numeric or bool components");
+                return false;
+            }
+            providedComponents += args[i].VectorSize();
+        }
+        if (!(argCount == 1 ? providedComponents == 1 || providedComponents >= expectedComponents
+                           : providedComponents == expectedComponents)) {
+            SetError(state, "Vector constructor has incorrect component count");
+            return false;
         }
 
         // Initialize to zero
@@ -590,21 +662,29 @@ bool CompileTimeEvaluatorSoA::EvaluateFunctionCall(EvalStateSoA* state, NodeRef 
                 // Copy components from vector argument
                 u8 srcSize = args[i].VectorSize();
                 bool srcIsFloat = (args[i].type >= LiteralValue::FLOAT2 && args[i].type <= LiteralValue::FLOAT4);
+                bool srcIsUnsigned = (args[i].type >= LiteralValue::UINT2 && args[i].type <= LiteralValue::UINT4);
                 for (u8 j = 0; j < srcSize && componentIndex < expectedComponents; j++) {
                     if (isFloat) {
-                        outValue->floatVec[componentIndex++] = srcIsFloat ? args[i].floatVec[j] : (float)args[i].intVec[j];
+                        outValue->floatVec[componentIndex++] = srcIsFloat ? args[i].floatVec[j]
+                            : srcIsUnsigned ? (float)args[i].uintVec[j] : (float)args[i].intVec[j];
+                    } else if (isUnsigned) {
+                        outValue->uintVec[componentIndex++] = srcIsUnsigned ? args[i].uintVec[j]
+                            : srcIsFloat ? SafeFloatToUint(args[i].floatVec[j]) : (u32)args[i].intVec[j];
                     } else {
-                        outValue->intVec[componentIndex++] = srcIsFloat ? SafeFloatToInt(args[i].floatVec[j]) : args[i].intVec[j];
+                        outValue->intVec[componentIndex++] = srcIsFloat ? SafeFloatToInt(args[i].floatVec[j])
+                            : srcIsUnsigned ? (int)args[i].uintVec[j] : args[i].intVec[j];
                     }
                 }
             } else {
                 // Scalar argument
                 float fval = 0.0f;
                 int ival = 0;
+                u32 uval = 0;
                 switch (args[i].type) {
-                    case LiteralValue::FLOAT: fval = args[i].floatValue; ival = SafeFloatToInt(fval); break;
-                    case LiteralValue::INT: ival = args[i].intValue; fval = (float)ival; break;
-                    case LiteralValue::UINT: ival = (int)args[i].uintValue; fval = (float)args[i].uintValue; break;
+                    case LiteralValue::FLOAT: fval = args[i].floatValue; ival = SafeFloatToInt(fval); uval = SafeFloatToUint(fval); break;
+                    case LiteralValue::INT: ival = args[i].intValue; fval = (float)ival; uval = (u32)ival; break;
+                    case LiteralValue::UINT: uval = args[i].uintValue; ival = (int)uval; fval = (float)uval; break;
+                    case LiteralValue::BOOL: ival = args[i].boolValue ? 1 : 0; uval = (u32)ival; fval = (float)ival; break;
                     default: break;
                 }
 
@@ -612,12 +692,14 @@ bool CompileTimeEvaluatorSoA::EvaluateFunctionCall(EvalStateSoA* state, NodeRef 
                     // Broadcast single scalar to all components
                     for (u8 j = 0; j < expectedComponents; j++) {
                         if (isFloat) outValue->floatVec[j] = fval;
+                        else if (isUnsigned) outValue->uintVec[j] = uval;
                         else outValue->intVec[j] = ival;
                     }
                     componentIndex = expectedComponents;
                 } else {
                     // Single component
                     if (isFloat) outValue->floatVec[componentIndex++] = fval;
+                    else if (isUnsigned) outValue->uintVec[componentIndex++] = uval;
                     else outValue->intVec[componentIndex++] = ival;
                 }
             }
@@ -744,6 +826,10 @@ bool CompileTimeEvaluatorSoA::EvaluateFunctionCall(EvalStateSoA* state, NodeRef 
         }
     }
 
+    if (state->evaluateComptimeFunction &&
+        state->evaluateComptimeFunction(state->comptimeUser, node, args, argCount, outValue)) {
+        return true;
+    }
     SetError(state, "Cannot evaluate function at compile time");
     return false;
 }
@@ -810,6 +896,14 @@ bool CompileTimeEvaluatorSoA::EvaluateNode(EvalStateSoA* state, NodeRef node, Li
 
         case ASTNodeType::FUNCTION_CALL:
             return EvaluateFunctionCall(state, node, outValue);
+
+        case ASTNodeType::TERNARY_EXPRESSION: {
+            const TernaryExprData& expr = state->ast->GetTernaryExpression(node);
+            LiteralValue value;
+            bool condition;
+            if (!EvaluateNode(state, expr.condition, &value) || !EvalScalarCondition(value, &condition)) return false;
+            return EvaluateNode(state, condition ? expr.trueExpr : expr.falseExpr, outValue);
+        }
 
         case ASTNodeType::MEMBER_ACCESS: {
             const MemberAccessData& access = state->ast->GetMemberAccess(node);

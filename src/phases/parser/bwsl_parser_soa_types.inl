@@ -12,8 +12,12 @@ namespace BWSL {
 bool Parser::ParseArraySizeValue(u32* outSize) {
     if (Match(TokenType::NUMBER)) {
         std::string_view sizeStr = PreviousValue();
-        int size = SafeParseInt(sizeStr);
-        if (size <= 0 || static_cast<u32>(size) > MAX_ARRAY_SIZE) {
+        u32 size = 0;
+        if (!TryParseU32(sizeStr, &size)) {
+            Error("Array size must be an integer literal within the 32-bit range");
+            return false;
+        }
+        if (size == 0 || size > MAX_ARRAY_SIZE) {
             Error("Invalid array size. Max 256k elements");
             return false;
         }
@@ -173,6 +177,10 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
     // Add to symbol table
     Symbol* sym = SymbolTable::AddSymbol(&symbolTable, ArenaString::MakeHashOnly(varName), SymbolKind::VARIABLE);
 
+    if (!sym) {
+        Error("Variable already declared in this scope");
+        return NodeRef::Null();
+    }
     if (sym) {
         VariableData& varData = symbolTable.variables[sym->index];
         varData.typeInfo = arrayInfo;
@@ -834,20 +842,10 @@ NodeRef Parser::ParseEnumVariant() {
             std::string_view numStr = stream->GetValue(previous);
 
             u32 value = 0;
-            if (numStr.length() >= 2 && numStr[0] == '0') {
-                char prefix = numStr[1];
-                if (prefix == 'b' || prefix == 'B') {
-                    value = SafeParseU32(numStr.substr(2), 2);
-                } else if (prefix == 'x' || prefix == 'X') {
-                    value = SafeParseU32(numStr.substr(2), 16);
-                } else {
-                    value = SafeParseU32(numStr, 0);
-                }
-            } else {
-                value = SafeParseU32(numStr, 0);
-            }
+            if (!TryParseU32(numStr, &value))
+                Error("Enum value must be a valid 32-bit integer literal");
             if (negative) {
-                value = static_cast<u32>(-static_cast<s32>(value));
+                value = 0u - value;
             }
 
             ast->GetEnumDecl(variant).currentVariant.value = value;
@@ -1372,6 +1370,8 @@ NodeRef Parser::ParseStruct() {
             // Add to module's struct list
             symbolTable.modules[symbolTable.currentModuleIndex].structIndices.Push(
                 arena, sym->index);
+        } else {
+            Error("Duplicate struct declaration");
         }
     } else {
         // Global struct - register name for debug symbol lookup
@@ -1384,6 +1384,8 @@ NodeRef Parser::ParseStruct() {
 
             // Register with global registry using pointer to stored copy
             g_customTypes.RegisterType(structData.name, &symbolTable.structs[sym->index]);
+        } else {
+            Error("Duplicate struct declaration");
         }
     }
 

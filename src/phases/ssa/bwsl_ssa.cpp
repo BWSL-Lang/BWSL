@@ -519,9 +519,6 @@ void SSAConstructor::Rename() {
         ir->phiOperandOffsets[phiCount] = phiOpIdx;
     }
     
-    // Reset blockPhiCount for use as "next PHI index" during second pass
-    memset(blockPhiCount, 0, cfg->blockCount * sizeof(u32));
-    
     // Track which blocks got visited by the dominator-tree rename.
     // Blocks missed here are unreachable (e.g. the latch of a loop
     // whose body unconditionally `break`s) and need two kinds of
@@ -676,7 +673,10 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
     u32 firstInst = cfg->firstInst[block];
     u32 lastInst = cfg->lastInst[block];
     u32 instCount = (lastInst >= firstInst) ? (lastInst - firstInst + 1) : 0;
-    u32 pushedCapacity = instCount + variableCount;
+    // A block can push once per instruction and once per PHI. Reserving the
+    // entire function's variable count for every block made this temporary
+    // arena storage quadratic for heavily inlined, branching shaders.
+    u32 pushedCapacity = instCount + blockPhiCount[block];
     if (pushedCapacity == 0) {
         pushedCapacity = 1;
     }

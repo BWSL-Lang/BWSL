@@ -3,6 +3,203 @@
 #include "bwsl_ir_lowering.h"
 namespace BWSL::IR {
 
+inline void IRLowering::RegisterLocalArray(u16 reg, CoreType elementType,
+                                            u32 structHash, u32 length, u32 nameHash) {
+  if (program.localArrayCount == program.localArrayCapacity) {
+    u32 old = program.localArrayCapacity;
+    u32 capacity = old ? old * 2 : 16;
+    auto grow = [&](auto*& data) {
+      using Element = std::remove_pointer_t<std::remove_reference_t<decltype(data)>>;
+      Element* next = static_cast<Element*>(pool->Allocate(capacity * sizeof(Element), 64));
+      if (old) memcpy(next, data, old * sizeof(Element));
+      data = next;
+    };
+    grow(program.localArrayNameHashes);
+    grow(program.localArrayTypes);
+    grow(program.localArrayStructTypes);
+    grow(program.localArraySizes);
+    grow(program.localArrayRegisters);
+    program.localArrayCapacity = capacity;
+  }
+  u32 index = program.localArrayCount++;
+  program.localArrayNameHashes[index] = nameHash;
+  program.localArrayTypes[index] = static_cast<u16>(elementType);
+  program.localArrayStructTypes[index] = structHash;
+  program.localArraySizes[index] = length;
+  program.localArrayRegisters[index] = reg;
+  program.registerStorageInfo[reg] = (index << IRProgram::STORAGE_BINDING_SHIFT) |
+      IRProgram::STORAGE_IS_PTR | IRProgram::STORAGE_IS_LOCAL_ARRAY;
+  SetRegisterType(reg, elementType);
+  program.registerStructTypes[reg] = structHash;
+}
+
+inline u16 IRLowering::CopyArgumentValue(u16 source) {
+  u16 copy = AllocateRegister();
+  CoreType type = GetRegisterType(source);
+  SetRegisterType(copy, type);
+  u32 storage = source < MAX_REGISTERS ? program.registerStorageInfo[source] : 0;
+  u32 structHash = source < MAX_REGISTERS ? program.registerStructTypes[source] : 0;
+  program.registerStructTypes[copy] = structHash;
+  auto arrayField = structArrayValueRegs.find(source);
+  bool isArrayField = arrayField != structArrayValueRegs.end();
+  if ((storage & IRProgram::STORAGE_IS_LOCAL_ARRAY) || isArrayField) {
+    u32 array = storage >> IRProgram::STORAGE_BINDING_SHIFT;
+    u32 count = isArrayField ? arrayField->second.length : program.localArraySizes[array];
+    type = isArrayField ? arrayField->second.elemType : static_cast<CoreType>(program.localArrayTypes[array]);
+    structHash = isArrayField ? arrayField->second.elemStructHash : program.localArrayStructTypes[array];
+    if (structHash) {
+      u32 canonical = LookupOrRegisterStructType(structHash);
+      if (canonical) structHash = canonical;
+    }
+    RegisterLocalArray(copy, type, structHash, count, 0);
+    // One bounded copy loop works for arbitrary fixed lengths without emitting
+    // one IR register per element. Struct elements copy their complete value.
+    u16 index = AllocateRegister();
+    SetRegisterType(index, CoreType::UINT);
+    builder.EmitInstruction(OP_STORE_REG, index, EmitConstantUint(0));
+    u32 header = builder.currentInstruction;
+    u16 condition = AllocateRegister();
+    SetRegisterType(condition, CoreType::BOOL);
+    builder.EmitInstruction(OP_ULT, condition, index, EmitConstantUint(count));
+    u32 branch = builder.currentInstruction;
+    builder.EmitInstruction(OP_BRANCH, 0, condition);
+    u32 body = builder.currentInstruction;
+    u16 value = AllocateRegister();
+    SetRegisterType(value, type);
+    program.registerStructTypes[value] = structHash;
+    if (isArrayField) {
+      const StructArrayValueInfo& field = arrayField->second;
+      builder.EmitInstruction(OP_STRUCT_ARRAY_EXTRACT, value, field.parentStructReg, field.fieldIndex, index);
+      program.metadata[builder.currentInstruction - 1] = field.parentStructHash;
+    } else {
+      builder.EmitInstruction(OP_ARRAY_LOAD, value, source, index);
+    }
+    builder.EmitInstruction(OP_ARRAY_STORE, copy, index, value);
+    u32 continuation = builder.currentInstruction;
+    builder.EmitInstruction(OP_IADD, index, index, EmitConstantUint(1));
+    u32 jump = builder.currentInstruction;
+    builder.EmitInstruction(OP_JUMP, 0, 0);
+    program.metadata[jump] = header;
+    u32 merge = builder.currentInstruction;
+    builder.EmitInstruction(OP_NOP, 0, 0);
+    program.SetBranchTargets(branch, body, merge);
+    program.structureInfo[branch] = IRProgram::PackStructure(IRProgram::STRUCT_LOOP_HEADER, merge);
+    program.continueInfo[branch] = continuation;
+  } else {
+    // Pointer parameters copy the pointer value, preserving its pointee. Plain
+    // values do not inherit the caller's address-taken or storage metadata.
+    if (storage & IRProgram::STORAGE_IS_PTR)
+      program.registerStorageInfo[copy] = storage;
+    builder.EmitInstruction(OP_STORE_REG, copy, source);
+  }
+  return copy;
+}
+
+inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
+                                             const EnumData &enumData) {
+  const PatternMatchData &match = ast->GetPatternMatch(pattern);
+  auto savedVariables = variableRegisters;
+  auto savedStructTypes = variableStructTypes;
+  auto savedConstants = constVariables;
+  auto savedNodes = nodeRegisters;
+  bool sumType = (enumData.flags & EnumData::IS_SUM_TYPE) != 0;
+  u16 tag = receiver;
+  if (sumType) {
+    tag = AllocateRegister();
+    SetRegisterType(tag, CoreType::INT);
+    builder.EmitInstruction(OP_ENUM_TAG, tag, receiver);
+  }
+  u16 matched = AllocateRegister();
+  SetRegisterType(matched, CoreType::BOOL);
+  builder.EmitInstruction(OP_STORE_REG, matched, builder.EmitConstantBool(false));
+  for (u32 a = 0; a < match.arms.count; ++a) {
+    const PatternMatchData &arm = ast->GetPatternMatch(match.arms[a]);
+    variableRegisters = savedVariables;
+    variableStructTypes = savedStructTypes;
+    constVariables = savedConstants;
+    nodeRegisters = savedNodes;
+    u32 variantIndex = 0xFFFFFFFF;
+    for (u32 v = 0; !arm.isDefault && v < enumData.variants.count; ++v) {
+      if (enumData.variants[v].name.nameHash == arm.variantHash) { variantIndex = v; break; }
+    }
+    u16 condition = AllocateRegister();
+    SetRegisterType(condition, CoreType::BOOL);
+    builder.EmitInstruction(OP_NOT, condition, matched);
+    if (!arm.isDefault) {
+      if (variantIndex == 0xFFFFFFFF) {
+        ReportError("Error: unknown enum variant in pattern arm\n");
+        return;
+      }
+      u32 value = sumType ? variantIndex : enumData.variants[variantIndex].value;
+      u16 expected = GetRegisterType(tag) == CoreType::UINT ? EmitConstantUint(value) : EmitConstantInt(static_cast<s32>(value));
+      u16 equal = AllocateRegister();
+      SetRegisterType(equal, CoreType::BOOL);
+      builder.EmitInstruction(OP_IEQ, equal, tag, expected);
+      u16 both = AllocateRegister();
+      SetRegisterType(both, CoreType::BOOL);
+      builder.EmitInstruction(OP_AND, both, equal, condition);
+      condition = both;
+    }
+    u32 branch = builder.currentInstruction;
+    builder.EmitInstruction(OP_BRANCH, 0, condition);
+    u32 bodyStart = builder.currentInstruction;
+    builder.EmitInstruction(OP_STORE_REG, matched, builder.EmitConstantBool(true));
+    if (variantIndex != 0xFFFFFFFF) {
+      const EnumData::Variant &variant = enumData.variants[variantIndex];
+      u32 payloadIndex = 0;
+      for (u32 f = 0; f < variant.associatedTypes.count; ++f) {
+        CoreType type = variant.associatedTypes[f];
+        u32 hash = f < variant.associatedTypeHashes.count ? variant.associatedTypeHashes[f] : 0;
+        u32 width = GetEnumPayloadFieldCount(type, hash);
+        if (f < arm.bindings.count && arm.bindings[f].first.nameHash != Utils::HashStr("_")) {
+          u32 name = arm.bindings[f].first.nameHash;
+          u16 value = AllocateRegister();
+          SetRegisterType(value, type);
+          if (width == 1 || (type == CoreType::CUSTOM && IsSumEnumTypeHash(hash))) {
+            builder.EmitInstruction(OP_ENUM_FIELD, value, receiver, EmitConstantInt(payloadIndex));
+            if (type == CoreType::CUSTOM) {
+              u32 structHash = LookupOrRegisterStructType(hash);
+              program.registerStructTypes[value] = structHash != 0 ? structHash : hash;
+              variableStructTypes[name] = program.registerStructTypes[value];
+            }
+          } else if (type != CoreType::CUSTOM && width <= 4) {
+            u16 components[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+            for (u32 c = 0; c < width; ++c) {
+              components[c] = AllocateRegister();
+              SetRegisterType(components[c], GetScalarComponentType(type));
+              builder.EmitInstruction(OP_ENUM_FIELD, components[c], receiver, EmitConstantInt(payloadIndex + c));
+            }
+            builder.EmitInstruction(OP_VEC_CONSTRUCT, value, components[0], components[1], components[2], components[3]);
+            program.metadata[builder.currentInstruction - 1] = width;
+          } else {
+            ReportError("Error: binding flattened struct enum payloads is not supported yet\n");
+          }
+          variableRegisters[name] = value;
+          constVariables.erase(name);
+        }
+        payloadIndex += width;
+      }
+    }
+    if (arm.body.Type() == ASTNodeType::BLOCK) {
+      LowerBlock(arm.body);
+    } else {
+      u16 value = LowerExpression(arm.body);
+      builder.EmitInstruction(OP_STORE_REG, inlineReturnReg, value);
+      SetRegisterType(inlineReturnReg, GetRegisterType(value));
+      if (value < MAX_REGISTERS) program.registerStructTypes[inlineReturnReg] = program.registerStructTypes[value];
+      builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg, builder.EmitConstantBool(true));
+    }
+    u32 merge = builder.currentInstruction;
+    builder.EmitInstruction(OP_NOP, 0, 0);
+    program.SetBranchTargets(branch, bodyStart, merge);
+    program.structureInfo[branch] = IRProgram::PackStructure(IRProgram::STRUCT_IF_HEADER, merge);
+  }
+  variableRegisters = savedVariables;
+  variableStructTypes = savedStructTypes;
+  constVariables = savedConstants;
+  nodeRegisters = savedNodes;
+}
+
 inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
   const FunctionCallData &call = ast->GetFunctionCall(ref);
 
@@ -284,7 +481,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
                 const auto &param = method.parameters[p];
                 if (param.second.nameHash != Utils::HashStr("self") &&
                     param.first.nameHash != 0) {
-                  variableRegisters[param.first.nameHash] = args[argIdx++];
+                  variableRegisters[param.first.nameHash] = CopyArgumentValue(args[argIdx++]);
                 }
               }
               auto baseVarRegs = variableRegisters;
@@ -464,7 +661,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
                 if (param.second.nameHash != Utils::HashStr("self") &&
                     param.first.nameHash != 0) {
                   // Map parameter name to argument register
-                  variableRegisters[param.first.nameHash] = args[argIdx++];
+                  variableRegisters[param.first.nameHash] = CopyArgumentValue(args[argIdx++]);
                 }
               }
 
@@ -789,6 +986,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       case Intrinsic::LENGTH:
       case Intrinsic::DISTANCE:
       case Intrinsic::DOT:
+      case Intrinsic::DETERMINANT:
         resultType = CoreType::FLOAT;
         break;
       case Intrinsic::ANY:
@@ -1103,6 +1301,23 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
           }
         }
 
+        bool exactScalars = call.arguments.count == numColumns * numRows;
+        if (exactScalars) {
+          for (u32 i = 0; i < argCount; ++i) {
+            CoreType type = GetRegisterType(args[i]);
+            if (type != CoreType::FLOAT && type != CoreType::INT && type != CoreType::UINT)
+              exactScalars = false;
+          }
+        }
+        if (!argsAreColumnVectors && !exactScalars) {
+          ReportError("Error: matrix constructor requires one scalar, one matrix, exact column vectors, or exactly rows*columns scalar arguments\n");
+          SetRegisterType(dest, constructedType);
+          return dest;
+        }
+        if (exactScalars) {
+          for (u32 i = 0; i < argCount; ++i)
+            args[i] = ConvertRegisterToType(args[i], CoreType::FLOAT);
+        }
         u16 columnRegs[4];
         if (argsAreColumnVectors) {
           // Arguments are already column vectors - use them directly
@@ -1439,18 +1654,20 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   for (u32 i = 0; i < paramCount; i++) {
     const auto &param = method.parameters[i];
     u32 paramNameHash = param.first.nameHash;
-    variableRegisters[paramNameHash] = args[i];
+    u16 paramReg = CopyArgumentValue(args[i]);
+    variableRegisters[paramNameHash] = paramReg;
+    constVariables.erase(paramNameHash);
 
     u32 paramTypeHash = 0;
     CoreType paramType =
         ResolveCoreTypeFromHash(param.second.nameHash, &paramTypeHash);
     if (paramType != CoreType::INVALID && paramType != CoreType::VOID) {
-      SetRegisterType(args[i], paramType);
+      SetRegisterType(paramReg, paramType);
       if ((paramType == CoreType::CUSTOM || paramType == CoreType::ENUM) &&
-          paramTypeHash != 0 && args[i] < MAX_REGISTERS) {
+          paramTypeHash != 0 && paramReg < MAX_REGISTERS) {
         u32 structHash = LookupOrRegisterStructType(paramTypeHash);
         if (structHash != 0) {
-          program.registerStructTypes[args[i]] = structHash;
+          program.registerStructTypes[paramReg] = structHash;
           variableStructTypes[paramNameHash] = structHash;
         }
       }
@@ -1777,7 +1994,9 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   for (u32 i = 0; i < paramCount; i++) {
     const auto &param = func.parameters[i];
     u32 paramNameHash = param.first.nameHash; // Parameter name
-    variableRegisters[paramNameHash] = args[i];
+    u16 paramReg = CopyArgumentValue(args[i]);
+    variableRegisters[paramNameHash] = paramReg;
+    constVariables.erase(paramNameHash);
 
     // Also set the type for the parameter based on the type name
     // The second element of the pair is the type name (e.g., "uint",
@@ -1787,13 +2006,13 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
         ResolveCoreTypeFromHash(param.second.nameHash, &paramTypeHash);
 
     if (paramType != CoreType::INVALID && paramType != CoreType::VOID) {
-      SetRegisterType(args[i], paramType);
+      SetRegisterType(paramReg, paramType);
       if ((paramType == CoreType::CUSTOM || paramType == CoreType::ENUM) &&
           paramTypeHash != 0) {
         u32 structHash = LookupOrRegisterStructType(paramTypeHash);
 
         if (structHash != 0) {
-          program.registerStructTypes[args[i]] = structHash;
+          program.registerStructTypes[paramReg] = structHash;
           // Also set variableStructTypes for local struct member access
           // (e.g., mat.albedo)
           variableStructTypes[paramNameHash] = structHash;
@@ -1824,7 +2043,26 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   }
 
   // Lower the function body
-  if (func.body.Type() == ASTNodeType::BLOCK) {
+  if (func.body.Type() == ASTNodeType::PATTERN_MATCH) {
+    const PatternMatchData &match = ast->GetPatternMatch(func.body);
+    const EnumData *enumData = nullptr;
+    for (u32 p = 0; p < func.parameters.count; ++p) {
+      if (func.parameters[p].first.nameHash == match.scrutinee.nameHash) {
+        enumData = SymbolTable::ResolveEnumDataByHash(symbols,
+            SymbolTable::ResolveTypeAliasHashInScope(symbols, func.parameters[p].second.nameHash,
+                                                     AliasOwnerKind(), AliasOwnerModuleIndex()));
+        break;
+      }
+    }
+    auto receiver = variableRegisters.find(match.scrutinee.nameHash);
+    if (!enumData || receiver == variableRegisters.end()) {
+      ReportError("Error: pattern function requires an enum argument\n");
+    } else {
+      SetRegisterType(returnReg, func.returnType);
+      builder.EmitInstruction(OP_STORE_REG, returnReg, EmitZeroConstant(func.returnType));
+      LowerEnumPatternBody(func.body, receiver->second, *enumData);
+    }
+  } else if (func.body.Type() == ASTNodeType::BLOCK) {
     LowerBlock(func.body);
   } else {
     // Single expression body
