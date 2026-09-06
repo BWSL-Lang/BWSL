@@ -49,9 +49,9 @@ pipeline ConditionalControlFlow {
     }
 
     // Test 5: return if with no value (early exit)
-    testReturnIfVoid :: (float x) -> float {
+    testReturnIfVoid :: (float x) -> void {
         return if (x < 0.0);
-        return x * 2.0;
+        return;
     }
 
     pass "Main" {

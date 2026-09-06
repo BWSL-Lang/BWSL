@@ -1,0 +1,8 @@
+// Regression: Invalid assignment target.
+pipeline Remaining {
+    f :: () -> float { return 1.0; }
+    pass "Main" {
+        vertex { output.position=float4(0.0,0.0,0.0,1.0); }
+        fragment { f()=2.0; output.color=float4(1.0); }
+    }
+}

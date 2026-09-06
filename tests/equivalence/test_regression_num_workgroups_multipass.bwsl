@@ -1,0 +1,14 @@
+pipeline DispatchCounts { resources { output: buffer<uint> }
+ pass "First" { use resources { output } compute "Main" [1,1,1] {
+   uint3 g = input.num_workgroups;
+   uint3 p = input.global_id;
+   uint idx = p.x + g.x * (p.y + g.y * p.z);
+   resources.output[idx] = g.x + 10u*g.y + 100u*g.z + idx;
+ } }
+ pass "Second" { use resources { output } compute "Main" [1,1,1] {
+   uint3 g = input.num_workgroups;
+   uint3 p = input.global_id;
+   uint idx = p.x + g.x * (p.y + g.y * p.z);
+   resources.output[idx] = g.x + 10u*g.y + 100u*g.z + idx;
+ } }
+}

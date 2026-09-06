@@ -34,6 +34,12 @@ User-defined nominal types include:
 - `enum` types
 - module-qualified custom types such as `Module::Type`
 
+Matrix constructors accept one numeric scalar (the diagonal), one matrix
+(conversion or resize), exactly one float-vector column per column of the
+result, or exactly `rows * columns` numeric scalars in column order. Integer
+scalar arguments convert to float. Partial, excess, mixed-shape and
+wrong-width argument lists are rejected rather than padded or truncated.
+
 ## Type Aliases
 
 Scoped type aliases use `using Alias = Type`:
@@ -57,6 +63,13 @@ Current `const` rules include:
 - top-level and pass-level `const` values are parsed and may be compile-time
   evaluated when possible
 - module-level `const` declarations currently require literal initializers
+- assignments, increments and stores through members or swizzles cannot modify
+  a const value; taking a mutable address of a const value is also rejected
+- a const pointer cannot be rebound, but its mutable pointee can be written
+
+Local names must be unique within their lexical scope. Nested blocks, shader
+stages and switch arms have separate scopes; sibling scopes may reuse a name.
+Duplicate struct names are rejected.
 
 ## Arrays
 
@@ -72,10 +85,15 @@ mat4[64] bones;
 Current array-size rules:
 
 - sizes must be compile-time values
-- integer literals are accepted
+- positive integer literal spellings are accepted; float and scientific
+  spellings such as `[2.5]` and `[2e2]` are rejected
 - already-evaluated compile-time constants are accepted where supported by the
   parser
 - the implementation currently rejects sizes above 256k elements
+
+Constant indices, including folded integer arithmetic and selected ternary
+arms, are checked against the array bounds for reads, writes and address-taking.
+Mutable runtime indices are not treated as compile-time constants.
 
 ## Structs
 

@@ -1,0 +1,1 @@
+pipeline Invalid { f :: (float x) -> float { return; } pass "Main" { vertex {output.position=float4(f(1.0));} } }

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import math
 import os
 import re
 import shutil
@@ -18,6 +19,8 @@ GREEN = "\033[0;32m"
 YELLOW = "\033[1;33m"
 BLUE = "\033[0;34m"
 NC = "\033[0m"
+DXC = os.environ.get("BWSL_DXC", "dxc")
+HLSL_SPIRV_OPT = os.environ.get("BWSL_HLSL_SPIRV_OPT")
 
 
 INLINE_RETURN_TESTS = {
@@ -176,6 +179,10 @@ VARIANT_ERROR_TESTS = {
 }
 
 ERROR_CASE_TESTS = {
+    'function_void_return_value.bwsl': 'Void function cannot return a value',
+    'remaining_float_bitwise.bwsl': 'Bitwise operators require integer operands',
+    'remaining_float_bitwise_not.bwsl': 'Bitwise operators require integer operands',
+    'remaining_float_shift.bwsl': 'Bitwise operators require integer operands',
     "backend_spelling_alias_rejected.bwsl": "Function not found: mix",
     "invalid_intrinsic_arity.bwsl": "'sin' accepts at most 1 arguments, got 2",
     "missing_semicolon.bwsl": "Expected ';' after expression",
@@ -275,7 +282,7 @@ ERROR_CASE_TESTS = {
     "array_size_negative.bwsl": "Expected array size",
     "discard_in_vertex.bwsl": "SPIR-V validation failed",
     "switch_on_float.bwsl": "SPIR-V validation failed",
-    "variant_switch_duplicate_match.bwsl": "switch selector resolves to multiple case arms",
+    "variant_switch_duplicate_match.bwsl": "Duplicate switch case value",
     "user_function_wrong_arg_count.bwsl": "SPIR-V validation failed",
     "struct_as_varying.bwsl": "SPIR-V validation failed",
     "assign_to_input.bwsl": "cannot assign to input.* - stage inputs are read-only",
@@ -297,6 +304,72 @@ ERROR_CASE_TESTS = {
     "break_outside_loop.bwsl": "'break' outside of a loop or switch",
     "array_index_out_of_bounds.bwsl": "is out of bounds for array of length",
     "trailing_comma_missing_element.bwsl": "Expected expression",
+    "pattern_function_after_default.bwsl": "Pattern arms after default are unreachable",
+    "pattern_function_bindings.bwsl": "Pattern binding count does not match enum variant payload",
+    "pattern_function_duplicate.bwsl": "Duplicate enum variant in pattern arms",
+    "pattern_function_incomplete.bwsl": "Pattern function must cover every enum variant or provide default",
+    "pattern_function_missing_return.bwsl": "Pattern arm must return a value on every path",
+    "pattern_function_unknown.bwsl": "Unknown enum variant in pattern arm",
+    "eval_assignment_int_float.bwsl": "Type mismatch in compile-time assignment",
+    "eval_assignment_int_bool.bwsl": "Type mismatch in compile-time assignment",
+    "eval_assignment_uint_negative.bwsl": "Type mismatch in compile-time assignment",
+    "eval_assignment_uint_float.bwsl": "Type mismatch in compile-time assignment",
+    "eval_assignment_bool_int.bwsl": "Type mismatch in compile-time assignment",
+    "eval_assignment_int_overflow.bwsl": "Type mismatch in compile-time assignment",
+    "eval_assignment_vector_width.bwsl": "Type mismatch in compile-time assignment",
+    "eval_assignment_vector_component_type.bwsl": "Type mismatch in compile-time assignment",
+    "eval_function_recursion.bwsl": "Eval function call depth exceeded",
+    "eval_function_missing_return.bwsl": "Non-void function must return a value on every reachable path",
+    "eval_function_return_type.bwsl": "Type mismatch in eval function return",
+    "eval_vector_constructor_empty.bwsl": "Compile-time declaration initializer is not a compile-time value",
+    "eval_vector_constructor_few.bwsl": "Compile-time declaration initializer is not a compile-time value",
+    "eval_vector_constructor_many.bwsl": "Compile-time declaration initializer is not a compile-time value",
+    "eval_vector_constructor_short_vector.bwsl": "Compile-time declaration initializer is not a compile-time value",
+    "function_missing_return.bwsl": "Non-void function must return a value on every reachable path",
+    "function_bare_return.bwsl": "Non-void function must return a value on every reachable path",
+    "function_conditional_bare_return.bwsl": "Non-void function must return a value on every reachable path",
+    "function_switch_missing_return.bwsl": "Non-void function must return a value on every reachable path",
+    "matrix_constructor_partial_args.bwsl": "matrix constructor requires one scalar, one matrix, exact column vectors, or exactly rows*columns scalar arguments",
+    "matrix_constructor_excess_args.bwsl": "matrix constructor requires one scalar, one matrix, exact column vectors, or exactly rows*columns scalar arguments",
+    "matrix_constructor_wrong_column_width.bwsl": "matrix constructor requires one scalar, one matrix, exact column vectors, or exactly rows*columns scalar arguments",
+    "remaining_const_postfix.bwsl": "const",
+    "remaining_const_prefix.bwsl": "const",
+    "remaining_const_member.bwsl": "const",
+    "remaining_const_swizzle.bwsl": "const",
+    "remaining_const_nested_member.bwsl": "const",
+    "remaining_const_member_address.bwsl": "const",
+    "remaining_expression_assign.bwsl": "Invalid assignment target",
+    "remaining_call_assign.bwsl": "Invalid assignment target",
+    "remaining_call_member_assign.bwsl": "Invalid assignment target",
+    "remaining_literal_postfix.bwsl": "Invalid assignment target",
+    "remaining_expression_prefix.bwsl": "Invalid assignment target",
+    "remaining_literal_address.bwsl": "Invalid assignment target",
+    "remaining_array_fraction.bwsl": "Array size must be an integer literal",
+    "remaining_array_scientific.bwsl": "Array size must be an integer literal",
+    "remaining_array_float_spelling.bwsl": "Array size must be an integer literal",
+    "remaining_array_huge.bwsl": "Array size must be an integer literal",
+    "remaining_hex_empty.bwsl": "Invalid or out-of-range 32-bit integer literal",
+    "remaining_binary_empty.bwsl": "Invalid or out-of-range 32-bit integer literal",
+    "remaining_binary_invalid.bwsl": "Invalid or out-of-range 32-bit integer literal",
+    "remaining_integer_overflow.bwsl": "Invalid or out-of-range 32-bit integer literal",
+    "remaining_unsigned_overflow.bwsl": "Invalid or out-of-range 32-bit integer literal",
+    "remaining_hex_overflow.bwsl": "Invalid or out-of-range 32-bit integer literal",
+    "remaining_binary_overflow.bwsl": "Invalid or out-of-range 32-bit integer literal",
+    "remaining_float_overflow.bwsl": "Invalid or out-of-range float literal",
+    "remaining_float32_overflow.bwsl": "Invalid or out-of-range float literal",
+    "remaining_enum_fraction.bwsl": "Enum value must be a valid 32-bit integer literal",
+    "remaining_enum_overflow.bwsl": "Enum value must be a valid 32-bit integer literal",
+    "remaining_array_folded_read.bwsl": "is out of bounds for array of length",
+    "remaining_array_folded_store.bwsl": "is out of bounds for array of length",
+    "remaining_array_folded_address.bwsl": "is out of bounds for array of length",
+    "remaining_array_folded_negative.bwsl": "is out of bounds for array of length",
+    "remaining_array_folded_unsigned.bwsl": "is out of bounds for array of length",
+    "remaining_array_folded_ternary.bwsl": "is out of bounds for array of length",
+    "remaining_duplicate_local.bwsl": "Variable already declared in this scope",
+    "remaining_duplicate_array.bwsl": "Variable already declared in this scope",
+    "remaining_duplicate_struct.bwsl": "Duplicate struct declaration",
+    "remaining_duplicate_case.bwsl": "Duplicate switch case value",
+    "remaining_duplicate_default.bwsl": "Duplicate switch default case",
 }
 
 ERROR_CASE_MODULE_DIRS = {
@@ -842,7 +915,7 @@ def has_metal_tooling() -> bool:
 
 
 def has_hlsl_tooling() -> bool:
-    return shutil.which("dxc") is not None
+    return shutil.which(DXC) is not None
 
 
 def has_glsl_tooling() -> bool:
@@ -1347,7 +1420,7 @@ def run_hlsl_compile(hlsl_file: Path) -> subprocess.CompletedProcess[str]:
     profile = HLSL_PROFILE[stage]
     return run_command(
         [
-            "dxc",
+            DXC,
             "-T",
             profile,
             "-E",
@@ -1554,13 +1627,21 @@ def convert_hlsl_to_spirv(hlsl_file: Path, out_spv: Path,
         input_path = hlsl_file.with_suffix(hlsl_file.suffix + ".vk")
         input_path.write_text(patched, encoding="utf-8")
 
+    # An explicitly selected standalone optimizer bypasses DXC's bundled
+    # SPIRV-Tools optimizer. DXIL validation still uses normal optimization.
+    unoptimized = out_spv.with_suffix(".unoptimized.spv") if HLSL_SPIRV_OPT else out_spv
     result = run_command([
-        "dxc", "-spirv", "-T", profile, "-E", "main",
-        "-fvk-use-dx-layout",
-        str(input_path), "-Fo", str(out_spv),
+        DXC, "-spirv", "-T", profile, "-E", "main",
+        "-fvk-use-dx-layout", "-fspv-target-env=vulkan1.1",
+        *(["-O0"] if HLSL_SPIRV_OPT else []),
+        str(input_path), "-Fo", str(unoptimized),
     ])
     if result.returncode != 0:
-        return False, result.stdout.strip()
+        return False, result.stdout.strip() or f"DXC exited with code {result.returncode}"
+    if HLSL_SPIRV_OPT:
+        result = run_command([HLSL_SPIRV_OPT, "-O", str(unoptimized), "-o", str(out_spv)])
+        if result.returncode != 0:
+            return False, result.stdout.strip() or f"spirv-opt exited with code {result.returncode}"
     return True, ""
 
 
@@ -1585,7 +1666,7 @@ def convert_glsl_to_spirv(glsl_file: Path, out_spv: Path,
             input_path.write_text(patched, encoding="utf-8")
 
     result = run_command([
-        "glslangValidator", "-V", "-S", gstage,
+        "glslangValidator", "-V", "--target-env", "vulkan1.1", "-S", gstage,
         str(input_path), "-o", str(out_spv),
     ])
     if result.returncode != 0:
@@ -1732,9 +1813,19 @@ def compare_bytes(reference: bytes, actual: bytes, spec: dict) -> tuple[bool, st
         return False, f"unsupported output_type for tolerance: {output_type}"
 
     for i, (r, a) in enumerate(zip(ref_vals, act_vals)):
+        if r == a:
+            continue  # Includes matching signed infinities.
+        if not math.isfinite(r) or not math.isfinite(a):
+            return False, f"element {i}: non-finite mismatch ref={r} actual={a}"
         if abs(r - a) > tolerance:
             return False, f"element {i}: ref={r:.6f} actual={a:.6f} diff={abs(r-a):.6g}"
     return True, ""
+
+
+def missing_equivalence_backends(spec: dict, available) -> list[str]:
+    """All requested output paths must execute, unless a spec opts out explicitly."""
+    required = set(spec.get("required_backends", ["spirv", "hlsl", "glsl"]))
+    return sorted(required - set(available))
 
 
 def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
@@ -1798,6 +1889,12 @@ def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
                 if not ok_fv: print(f"       frag: {msg_fv}")
                 return False
         backends[cross_name] = (vert_spv, frag_spv)
+
+    missing = missing_equivalence_backends(spec, backends)
+    if missing:
+        print(f"[{RED}FAIL{NC}] {test_name} "
+              f"(missing required backend(s): {', '.join(missing)})")
+        return False
 
     # Materialize raster resource bindings (SSBO / UBO) if requested. The same
     # on-disk buffer is reused by every backend since contents are identical.
@@ -2008,7 +2105,8 @@ def run_raster_equiv_test(test_name: str, test_out: Path, spec: dict,
         extra.append("depth")
     if vbo_spec is not None:
         extra.append("vbo")
-    tag = ", ".join(["raster", *extra])
+    oracle = "CPU oracle" if "expected_values" in spec else "differential only"
+    tag = ", ".join(["raster", oracle, *extra])
     print(f"[{GREEN}PASS{NC}] {test_name} ({backend_names}, {tag})")
     return True
 
@@ -2144,8 +2242,10 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
             if all_ok:
                 backends_spv["glsl"] = converted
 
-        required_backends = set(spec.get("required_backends", []))
-        missing_backends = sorted(required_backends - backends_spv.keys())
+        missing_backends = missing_equivalence_backends(spec, backends_spv)
+        for backend, reason in spec.get("backend_notes", {}).items():
+            if backend not in backends_spv:
+                print(f"       {test_name}: {backend} not exercised: {reason}")
         if missing_backends:
             print(f"[{RED}FAIL{NC}] {test_name} "
                   f"(missing required backend(s): {', '.join(missing_backends)})")
@@ -2206,7 +2306,8 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
             failed += 1
         else:
             backend_names = ", ".join(sorted(outputs.keys()))
-            print(f"[{GREEN}PASS{NC}] {test_name} ({backend_names})")
+            oracle = "CPU oracle" if "expected_values" in spec else "differential only"
+            print(f"[{GREEN}PASS{NC}] {test_name} ({backend_names}, {oracle})")
             passed += 1
 
     print("----------------------------------------")
@@ -2541,9 +2642,15 @@ def run_watch_mode_tests(bwslc: Path, root: Path,
 
 
 def main() -> int:
+    global DXC, HLSL_SPIRV_OPT
     parser = argparse.ArgumentParser(description="BWSL Regression Test Runner")
     parser.add_argument("--metal", "-m", action="store_true", help="Enable Metal shader validation (macOS only)")
     parser.add_argument("--hlsl", action="store_true", help="Enable HLSL validation via dxc")
+    parser.add_argument("--dxc", default=os.environ.get("BWSL_DXC"),
+                        help="DXC executable path (or set BWSL_DXC); used for validation and equivalence")
+    parser.add_argument("--hlsl-spirv-opt", default=os.environ.get("BWSL_HLSL_SPIRV_OPT"),
+                        help="Use DXC -O0 followed by this standalone spirv-opt -O for HLSL round trips; "
+                             "DXIL validation is unchanged (or set BWSL_HLSL_SPIRV_OPT)")
     parser.add_argument("--glsl", action="store_true", help="Enable GLSL validation via glslangValidator")
     parser.add_argument("--gles", action="store_true", help="Enable GLES validation via glslangValidator")
     parser.add_argument("--all-validators", "-A", action="store_true", help="Enable Metal/HLSL/GLSL/GLES validators")
@@ -2563,6 +2670,24 @@ def main() -> int:
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed output")
     args = parser.parse_args()
+
+    if args.dxc:
+        resolved_dxc = shutil.which(args.dxc)
+        if resolved_dxc is None:
+            parser.error(f"DXC executable not found or not executable: {args.dxc}")
+        DXC = resolved_dxc
+    if args.hlsl_spirv_opt:
+        optimizer = shutil.which(args.hlsl_spirv_opt)
+        if optimizer is None:
+            parser.error(f"SPIR-V optimizer not found or not executable: {args.hlsl_spirv_opt}")
+        HLSL_SPIRV_OPT = str(Path(optimizer).resolve())
+        print(f"HLSL round-trip optimization: DXC -O0, then {HLSL_SPIRV_OPT} -O")
+        print(run_command([HLSL_SPIRV_OPT, "--version"]).stdout.strip())
+    if (args.hlsl or args.all_validators or args.equivalence) and has_hlsl_tooling():
+        DXC = str(Path(shutil.which(DXC)).resolve())
+        version = run_command([DXC, "--version"])
+        print(f"DXC: {DXC}")
+        print(version.stdout.strip())
 
     metal_validation = args.metal or args.all_validators or args.update_golden
     hlsl_validation = args.hlsl or args.all_validators
@@ -3295,13 +3420,38 @@ def main() -> int:
     passed += module_passed
     failed += module_failed
 
+    from p1_regression_tests import run_p1_regression_tests
+    p1_passed, p1_failed = run_p1_regression_tests(bwslc, output_dir / "p1_validation")
+    passed += p1_passed
+    failed += p1_failed
+
+    if metal_validation:
+        from resource_p1_tests import run_resource_p1_suite
+        resource_passed, resource_failed = run_resource_p1_suite(bwslc, output_dir, verbose)
+        from resource_remaining_tests import run_resource_remaining_suite
+        remaining_passed, remaining_failed = run_resource_remaining_suite(bwslc, output_dir, verbose)
+        resource_passed += remaining_passed
+        resource_failed += remaining_failed
+        passed += resource_passed
+        failed += resource_failed
+
+    if gles_validation:
+        from gles_regression_tests import run_gles_regression_tests
+        gles_reg_passed, gles_reg_failed = run_gles_regression_tests(
+            bwslc, output_dir / "gles_regressions",
+            equiv_runner_path(root) if args.equivalence else None)
+        passed += gles_reg_passed
+        failed += gles_reg_failed
+
     equiv_passed = equiv_failed = 0
     if args.equivalence:
         runner = equiv_runner_path(root)
         if not runner.exists():
             print(f"{YELLOW}Warning: equiv_runner not found at {runner}. Build with `make equiv_runner`.{NC}")
+            equiv_failed += 1
         elif not has_hlsl_tooling() or not has_glsl_tooling():
             print(f"{YELLOW}Warning: equivalence tests require both dxc and glslangValidator on PATH{NC}")
+            equiv_failed += 1
         else:
             equiv_passed, equiv_failed = run_equivalence_suite(
                 root, bwslc, runner, modules_dir, verbose,

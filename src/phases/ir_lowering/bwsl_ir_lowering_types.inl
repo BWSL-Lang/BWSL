@@ -833,10 +833,110 @@ inline u16 IRLowering::EmitConstantInt(u32 value) {
   return 0x4000 | (u16)slot;
 }
 
+// Fold only pure integer ASTs. In particular, do not infer constants from a
+// mutable local's current register: a later loop iteration may change it.
+inline bool TryFoldArrayIndex(AST* ast, NodeRef ref, s64* value, bool* isUnsigned,
+                              u32 depth = 0) {
+  if (!ref.IsValid() || depth > 128) return false;
+  if (ref.Type() == ASTNodeType::LITERAL) {
+    const LiteralValue& literal = ast->GetLiteral(ref).value;
+    *isUnsigned = literal.type == LiteralValue::UINT;
+    if (literal.type == LiteralValue::INT) *value = literal.intValue;
+    else if (literal.type == LiteralValue::UINT) *value = literal.uintValue;
+    else if (literal.type == LiteralValue::BOOL) *value = literal.boolValue;
+    else return false;
+    return true;
+  }
+  if (ref.Type() == ASTNodeType::UNARY_OP) {
+    const UnaryOpData& op = ast->GetUnaryOp(ref);
+    if (op.op != UnaryOpType::NEGATE && op.op != UnaryOpType::NOT &&
+        op.op != UnaryOpType::BITWISE_NOT) return false;
+    if (!TryFoldArrayIndex(ast, op.operand, value, isUnsigned, depth + 1)) return false;
+    if (op.op == UnaryOpType::NOT) { *value = !*value; *isUnsigned = false; }
+    else if (op.op == UnaryOpType::BITWISE_NOT)
+      *value = *isUnsigned ? static_cast<s64>(~static_cast<u32>(*value))
+                           : static_cast<s64>(~static_cast<s32>(*value));
+    else if (*isUnsigned) *value = 0u - static_cast<u32>(*value);
+    else { if (*value == INT32_MIN) return false; *value = -*value; }
+    return true;
+  }
+  if (ref.Type() == ASTNodeType::FUNCTION_CALL) {
+    const FunctionCallData& call = ast->GetFunctionCall(ref);
+    bool toUint = call.name.nameHash == Utils::HashStr("uint");
+    if ((!toUint && call.name.nameHash != Utils::HashStr("int")) ||
+        call.arguments.count != 1 ||
+        !TryFoldArrayIndex(ast, call.arguments[0], value, isUnsigned, depth + 1)) return false;
+    *isUnsigned = toUint;
+    *value = toUint ? static_cast<s64>(static_cast<u32>(*value))
+                    : static_cast<s64>(static_cast<s32>(*value));
+    return true;
+  }
+  if (ref.Type() == ASTNodeType::TERNARY_EXPRESSION) {
+    const TernaryExprData& ternary = ast->GetTernaryExpression(ref);
+    s64 condition; bool conditionUnsigned;
+    if (!TryFoldArrayIndex(ast, ternary.condition, &condition, &conditionUnsigned, depth + 1)) return false;
+    return TryFoldArrayIndex(ast, condition ? ternary.trueExpr : ternary.falseExpr,
+                             value, isUnsigned, depth + 1);
+  }
+  if (ref.Type() != ASTNodeType::BINARY_OP) return false;
+  const BinaryOpData& op = ast->GetBinaryOp(ref);
+  s64 left, right; bool leftUnsigned, rightUnsigned;
+  if (!TryFoldArrayIndex(ast, op.left, &left, &leftUnsigned, depth + 1)) return false;
+  if ((op.op == BinaryOpType::AND && !left) || (op.op == BinaryOpType::OR && left)) {
+    *value = left != 0; *isUnsigned = false; return true;
+  }
+  if (!TryFoldArrayIndex(ast, op.right, &right, &rightUnsigned, depth + 1)) return false;
+  // Mixed signedness follows normal lowering, which can change with overloads;
+  // leave those cases to runtime rather than guessing a conversion here.
+  if (leftUnsigned != rightUnsigned) return false;
+  *isUnsigned = leftUnsigned;
+  switch (op.op) {
+  case BinaryOpType::ADD: *value = left + right; break;
+  case BinaryOpType::SUBTRACT: *value = left - right; break;
+  case BinaryOpType::MULTIPLY:
+    if (leftUnsigned) *value = static_cast<u32>(static_cast<u64>(left) * static_cast<u64>(right));
+    else *value = left * right;
+    break;
+  case BinaryOpType::DIVIDE:
+    if (!right) return false;
+    *value = left / right; break;
+  case BinaryOpType::MODULO:
+    if (!right) return false;
+    *value = left % right;
+    // Signed IR modulo uses OpSMod (the divisor determines the sign).
+    if (*value && ((*value < 0) != (right < 0))) *value += right;
+    break;
+  case BinaryOpType::BITWISE_AND: *value = left & right; break;
+  case BinaryOpType::BITWISE_OR: *value = left | right; break;
+  case BinaryOpType::BITWISE_XOR: *value = left ^ right; break;
+  case BinaryOpType::LEFT_SHIFT:
+    if (right < 0 || right >= 32) return false;
+    *value = static_cast<u32>(left) << right;
+    if (!leftUnsigned) *value = static_cast<s32>(*value);
+    break;
+  case BinaryOpType::RIGHT_SHIFT:
+    if (right < 0 || right >= 32) return false;
+    *value = left >> right; break;
+  case BinaryOpType::EQUALS: *value = left == right; *isUnsigned = false; break;
+  case BinaryOpType::NOT_EQUALS: *value = left != right; *isUnsigned = false; break;
+  case BinaryOpType::LESS: *value = left < right; *isUnsigned = false; break;
+  case BinaryOpType::LESS_EQUAL: *value = left <= right; *isUnsigned = false; break;
+  case BinaryOpType::GREATER: *value = left > right; *isUnsigned = false; break;
+  case BinaryOpType::GREATER_EQUAL: *value = left >= right; *isUnsigned = false; break;
+  case BinaryOpType::AND: *value = left && right; *isUnsigned = false; break;
+  case BinaryOpType::OR: *value = left || right; *isUnsigned = false; break;
+  default: return false;
+  }
+  if (*isUnsigned) *value = static_cast<u32>(*value);
+  else if (*value < INT32_MIN || *value > INT32_MAX) return false;
+  return true;
+}
+
 // Reports an error when a constant index into a local array of known length
 // is statically out of bounds (negative or >= length). Returns true when the
 // access is fine or cannot be checked statically.
-inline bool IRLowering::CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg) {
+inline bool IRLowering::CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
+                                                  NodeRef indexExpr) {
   if (baseReg >= MAX_REGISTERS) return true;
   u32 info = program.registerStorageInfo[baseReg];
   if (!(info & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY)) return true;
@@ -855,7 +955,8 @@ inline bool IRLowering::CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg) {
     if (slot >= program.uintCount) return true;
     indexValue = program.uintConstants[slot];
   } else {
-    return true; // Runtime index - not statically checkable
+    bool isUnsigned;
+    if (!TryFoldArrayIndex(ast, indexExpr, &indexValue, &isUnsigned)) return true;
   }
 
   if (indexValue < 0 || indexValue >= static_cast<s64>(length)) {
@@ -894,10 +995,12 @@ inline u16 IRLowering::ConvertRegisterToType(u16 reg, CoreType targetType) {
     } else if (sourceType == CoreType::UINT) {
       convOp = OP_U2F;
     }
-  } else if (targetType == CoreType::INT && sourceType == CoreType::UINT) {
-    convOp = OP_U2I;
-  } else if (targetType == CoreType::UINT && sourceType == CoreType::INT) {
-    convOp = OP_I2U;
+  } else if (targetType == CoreType::INT) {
+    if (sourceType == CoreType::UINT) convOp = OP_U2I;
+    else if (sourceType == CoreType::FLOAT) convOp = OP_F2I;
+  } else if (targetType == CoreType::UINT) {
+    if (sourceType == CoreType::INT) convOp = OP_I2U;
+    else if (sourceType == CoreType::FLOAT) convOp = OP_F2U;
   }
 
   if (convOp == OP_NOP) {

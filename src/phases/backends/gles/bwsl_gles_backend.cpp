@@ -31,102 +31,6 @@ static bool UsesNoPerspectiveInterpolation(const IR::PassVaryingContext* varying
 }
 
 // ============================================================================
-// Analysis Pass - Count register uses for inlining decisions
-// ============================================================================
-
-void GLESBuilder::CountUses() {
-    // First pass: count how many times each register is used as an operand
-    for (u32 i = 0; i < ir->instructionCount; i++) {
-        for (u32 j = 0; j < 4; j++) {
-            u16 op = ir->GetOperand(i, j);
-            // Only count real register references (not constants or invalid)
-            if ((op & 0xC000) == 0 && op < regCount) {
-                regInfo[op].useCount++;
-            }
-        }
-
-        // STORE_OUTPUT uses the dest field as the value to store, not as a definition
-        // So we need to count dest as a use for STORE_OUTPUT
-        if (ir->opcodes[i] == IR::OP_STORE_OUTPUT) {
-            u16 valueReg = ir->destinations[i];
-            if ((valueReg & 0xC000) == 0 && valueReg < regCount) {
-                regInfo[valueReg].useCount++;
-            }
-        }
-
-        // Direct GLES lowers FRem as x - y * trunc(x / y), so each operand is
-        // emitted twice. Count the extra uses to avoid inlining expressions
-        // that would need hidden temporaries.
-        if (ir->opcodes[i] == IR::OP_FREM) {
-            for (u32 j = 0; j < 2; j++) {
-                u16 op = ir->GetOperand(i, j);
-                if ((op & 0xC000) == 0 && op < regCount) {
-                    regInfo[op].useCount++;
-                }
-            }
-        }
-    }
-
-    // Also count PHI operand uses - these are stored separately
-    if (ir->phiCount > 0 && ir->phiOperandValues) {
-        for (u32 phiIdx = 0; phiIdx < ir->phiCount; phiIdx++) {
-            u32 opCount = ir->GetPhiOperandCount(phiIdx);
-            for (u32 opIdx = 0; opIdx < opCount; opIdx++) {
-                u16 srcValue = ir->GetPhiOperandValue(phiIdx, opIdx);
-                if ((srcValue & 0xC000) == 0 && srcValue < regCount) {
-                    regInfo[srcValue].useCount++;
-                }
-            }
-        }
-    }
-
-    // Second pass: determine which instructions can be inlined
-    // Also track which registers are defined in multiple blocks (need hoisting)
-    for (u32 i = 0; i < ir->instructionCount; i++) {
-        u16 dest = ir->destinations[i];
-        if (dest >= regCount) continue;
-
-        u16 opcode = ir->opcodes[i];
-
-        // STORE_OUTPUT uses dest as the value to store, not as a definition
-        // So don't set defInst for STORE_OUTPUT
-        if (opcode != IR::OP_STORE_OUTPUT) {
-            regInfo[dest].defInst = static_cast<u16>(i);
-
-            // Track which block this register is defined in
-            // If defined in multiple blocks, mark for hoisting
-            if (cfg && cfg->instToBlock) {
-                u32 thisBlock = cfg->instToBlock[i];
-                if (regInfo[dest].defBlock == 0xFFFF) {
-                    // First definition - record the block
-                    regInfo[dest].defBlock = static_cast<u16>(thisBlock);
-                } else if (regInfo[dest].defBlock != thisBlock) {
-                    // Already defined in a different block - needs hoisting
-                    regInfo[dest].flags |= REG_MULTI_BLOCK_DEF;
-                }
-            }
-        }
-
-        // Trivial loads always inline (no temp needed)
-        if (opcode == IR::OP_LOAD_CONST ||
-            opcode == IR::OP_LOAD_REG ||
-            opcode == IR::OP_LOAD_ATTR ||
-            opcode == IR::OP_LOAD_INPUT ||
-            opcode == IR::OP_LOAD_UNIFORM) {
-            regInfo[dest].flags |= REG_TRIVIAL | REG_INLINEABLE;
-        }
-        // Pure expressions with single use can inline
-        else if (regInfo[dest].useCount == 1 &&
-                 (!ir->registerTypes || dest >= ir->registerCount ||
-                  (ir->registerTypes[dest] != static_cast<u16>(CoreType::CUSTOM) &&
-                   ir->registerTypes[dest] != static_cast<u16>(CoreType::ENUM))) &&
-                 !IR::HasSideEffects(static_cast<IR::OpCode>(opcode))) {
-            regInfo[dest].flags |= REG_INLINEABLE;
-        }
-    }
-}
-
-// ============================================================================
 // Header Emission
 // ============================================================================
 
@@ -152,6 +56,27 @@ void GLESBuilder::EmitHeader() {
     }
     out.NL(0);
     EmitStructDeclarations();
+
+    bool finiteHelper = false, normalHelper = false;
+    for (u32 i = 0; i < ir->instructionCount; ++i) {
+        finiteHelper |= ir->opcodes[i] == IR::OP_ISFINITE;
+        normalHelper |= ir->opcodes[i] == IR::OP_ISNORMAL;
+    }
+    for (u32 kind = 0; kind < 2; ++kind) {
+        if (!(kind == 0 ? finiteHelper : normalHelper)) continue;
+        const char* name = kind == 0 ? "bwsl_isfinite" : "bwsl_isnormal";
+        out.Lit("bool "); out.Str(name); out.Lit("(float x) { ");
+        if (kind == 0) out.Lit("return !isnan(x) && !isinf(x); }\n");
+        else out.Lit("uint e = floatBitsToUint(x) & 2139095040u; return e != 0u && e != 2139095040u; }\n");
+        for (u32 n = 2; n <= 4; ++n) {
+            out.Lit("bvec"); out.Uint(n); out.Chr(' '); out.Str(name);
+            out.Lit("(vec"); out.Uint(n); out.Lit(" x) { return bvec"); out.Uint(n); out.Chr('(');
+            for (u32 c = 0; c < n; ++c) {
+                if (c) out.Lit(", "); out.Str(name); out.Lit("(x."); out.Chr(Str::SWIZZLE[c]); out.Chr(')');
+            }
+            out.Lit("); }\n");
+        }
+    }
 
     bool needsFrexp = false;
     bool needsGatherPolyfill = false;
@@ -458,22 +383,24 @@ void GLESBuilder::EmitOutputs() {
 }
 
 void GLESBuilder::EmitUniforms() {
-    bool usedTextures[16] = {};
-    bool usedTextureLevels[16] = {};
+    bool usedTextures[32] = {};
+    bool usedTextureLevels[32] = {};
+    bool shadowTextures[32] = {};
     for (u32 i = 0; i < ir->instructionCount; i++) {
         if (!IR::IsTextureOp(static_cast<IR::OpCode>(ir->opcodes[i]))) continue;
         u16 texReg = ir->GetOperand(i, 0);
         if ((texReg & 0xF000) != 0x2000) continue;
         u16 texSlot = texReg & 0x0FFF;
-        if (texSlot < 16) {
+        if (texSlot < 32) {
             usedTextures[texSlot] = true;
+            if (ir->opcodes[i] == IR::OP_TEX_SAMPLE_CMP) shadowTextures[texSlot] = true;
             if (ir->opcodes[i] == IR::OP_TEX_LEVELS) {
                 usedTextureLevels[texSlot] = true;
             }
         }
     }
 
-    bool emittedTextures[16] = {};
+    bool emittedTextures[32] = {};
 
     // Emit uniform buffer declarations from render config
     if (renderConfig) {
@@ -511,35 +438,46 @@ void GLESBuilder::EmitUniforms() {
         }
 
         // Emit samplers
-        u32 texSlot = 0;
         for (const auto& tex : renderConfig->textures) {
+            const u32 texSlot = tex.bindingIndex;
             bool isVertex = (stage == ShaderStage::Vertex);
             bool isFragment = (stage == ShaderStage::Fragment);
             bool stageMatch = (isVertex && (tex.stages & 1)) || (isFragment && (tex.stages & 2));
 
             if (!stageMatch) {
-                texSlot++;
                 continue;
             }
 
-            out.Lit("uniform ");
-            if (tex.isCubemap) {
-                out.Lit("samplerCube");
-            } else if (tex.isArray) {
-                out.Lit("sampler2DArray");
-            } else {
-                out.Lit("sampler2D");
-            }
-            out.Lit(" u_");
-            out.Str(tex.name.c_str());
-            out.Lit(";\n");
-            if (texSlot < 16 && usedTextureLevels[texSlot]) {
+            auto emitSampler = [&](u32 metadata) {
+                out.Lit("uniform highp ");
+                if (tex.isCubemap) out.Str(shadowTextures[texSlot] ? "samplerCubeShadow" : "samplerCube");
+                else if (tex.isArray) out.Str(shadowTextures[texSlot] ? "sampler2DArrayShadow" : "sampler2DArray");
+                else if (tex.isVolume) out.Lit("sampler3D");
+                else out.Str(shadowTextures[texSlot] ? "sampler2DShadow" : "sampler2D");
+                out.Chr(' '); EmitTexture(static_cast<u16>(0x2000 | texSlot), metadata);
+                out.Lit(";\n");
+            };
+            if (tex.separateSampler) {
+                // ES combines a texture and sampler into one uniform. Preserve
+                // each pair under the same descriptor-based name as SPIRV-Cross.
+                std::vector<u16> emittedPairs;
+                for (u32 i = 0; i < ir->instructionCount; ++i) {
+                    if (!IR::IsTextureOp(static_cast<IR::OpCode>(ir->opcodes[i])) ||
+                        (Op(i, 0) & 0x0FFF) != texSlot) continue;
+                    u32 metadata = ir->metadata[i];
+                    u16 sampler = TextureOpHasExplicitSampler(metadata)
+                        ? GetTextureOpExplicitSamplerBinding(metadata) : 0xFFFFu;
+                    if (std::find(emittedPairs.begin(), emittedPairs.end(), sampler) != emittedPairs.end()) continue;
+                    emittedPairs.push_back(sampler);
+                    emitSampler(metadata);
+                }
+            } else emitSampler(0);
+            if (texSlot < 32 && usedTextureLevels[texSlot]) {
                 out.Lit("uniform int ");
                 EmitTextureLevelsUniformName(static_cast<u16>(0x2000 | texSlot));
                 out.Lit(";\n");
             }
-            if (texSlot < 16) emittedTextures[texSlot] = true;
-            texSlot++;
+            if (texSlot < 32) emittedTextures[texSlot] = true;
         }
         out.NL(0);
     } else {
@@ -558,7 +496,7 @@ void GLESBuilder::EmitUniforms() {
     }
 
     bool emittedFallbackTexture = false;
-    for (u32 i = 0; i < 16; i++) {
+    for (u32 i = 0; i < 32; i++) {
         if (!usedTextures[i] || emittedTextures[i]) continue;
         out.Lit("uniform sampler2D sampler");
         out.Uint(i);
@@ -580,147 +518,167 @@ void GLESBuilder::EmitUniforms() {
 // ============================================================================
 
 void GLESBuilder::EmitMain() {
-
-#if 0  // Enable for debugging
-         DebugDumpRegisterInfo();
-#endif
-
     out.Lit("void main() {\n");
     indent = 1;
 
-       // Hoist PHI result declarations to function scope (fixes scoping issue)
-    EmitPhiDeclarations();
-    
-    // Declare undef registers with default values (fixes undefined variable issue)
+    // Array registers carry their element CoreType; declare actual array storage.
+    for (u32 i = 0; i < ir->localArrayCount; ++i) {
+        u16 reg = ir->localArrayRegisters[i];
+        if (reg >= regCount || (regInfo[reg].flags & REG_DECLARED)) continue;
+        out.NL(indent);
+        if (ir->localArrayStructTypes && ir->localArrayStructTypes[i])
+            EmitStructTypeName(ir->localArrayStructTypes[i]);
+        else EmitType(ir->localArrayTypes[i]);
+        out.Chr(' '); EmitReg(reg); out.Chr('['); out.Uint(ir->localArraySizes[i]); out.Lit("];");
+        regInfo[reg].flags |= REG_DECLARED;
+    }
     EmitUndefDeclarations();
-
-    // Debug: print varyings info
-    #if 0  // Enable for debugging
-    if (varyings) {
-        printf("Varyings count=%u:\n", varyings->count);
-        for (u32 i = 0; i < varyings->count; i++) {
-            printf("  [%u] slot=%u, type=%u, name=%s\n",
-                   i, varyings->varyings[i].slot,
-                   static_cast<u32>(varyings->varyings[i].type),
-                   varyings->varyings[i].name);
-        }
-    }
-    #endif
-
-    // Debug: print STORE_OUTPUT instructions
-    #if 0  // Enable for debugging
-    for (u32 i = 0; i < ir->instructionCount; i++) {
-        if (ir->opcodes[i] == IR::OP_STORE_OUTPUT) {
-            u16 slot = ir->GetOperand(i, 0);
-            u16 valueReg = ir->destinations[i];
-            printf("STORE_OUTPUT[%u]: slot=%u, value=r%u\n", i, slot, valueReg);
-        }
-    }
-    #endif
-
-    // Debug: print all phis with high register numbers (exit block phis)
-    #if 0  // Enable for debugging phi issues
-    if (ir->phiCount > 0 && ir->phiBlockIndices && ir->phiResultRegs) {
-        for (u32 phiIdx = 0; phiIdx < ir->phiCount; phiIdx++) {
-            u16 resultReg = ir->phiResultRegs[phiIdx];
-            u32 phiBlock = ir->phiBlockIndices[phiIdx];
-            // Print phis in exit block or with high register numbers
-            if (resultReg >= 640 || (cfg && phiBlock == cfg->exitBlock)) {
-                printf("PHI[%u]: result=r%u, block=%u (exit=%u), operands: ",
-                       phiIdx, resultReg, phiBlock,
-                       cfg ? cfg->exitBlock : 0xFFFFFFFF);
-                u32 opCount = ir->GetPhiOperandCount(phiIdx);
-                for (u32 opIdx = 0; opIdx < opCount; opIdx++) {
-                    u32 srcBlock = ir->GetPhiOperandBlock(phiIdx, opIdx);
-                    u16 srcValue = ir->GetPhiOperandValue(phiIdx, opIdx);
-                    printf("[block=%u, val=r%u] ", srcBlock, srcValue);
-                }
-                printf("\n");
-            }
-        }
-    }
-    // Debug: print STORE_OUTPUT instructions and their operands
-    for (u32 i = 0; i < ir->instructionCount; i++) {
-        if (ir->opcodes[i] == IR::OP_STORE_OUTPUT) {
-            u16 slot = ir->GetOperand(i, 0);
-            u16 valueReg = ir->destinations[i];
-            printf("STORE_OUTPUT[%u]: slot=%u, value=r%u\n", i, slot, valueReg);
-        }
-    }
-    // Debug: find any instruction that defines r644
-    for (u32 i = 0; i < ir->instructionCount; i++) {
-        u16 dest = ir->destinations[i];
-        if (dest >= 643 && dest <= 646) {
-            u32 blockIdx = cfg ? cfg->instToBlock[i] : 0xFFFFFFFF;
-            printf("INST[%u] opcode=%u defines r%u in block=%u (operands: %u, %u, %u, %u)\n",
-                   i, ir->opcodes[i], dest, blockIdx,
-                   ir->GetOperand(i, 0), ir->GetOperand(i, 1),
-                   ir->GetOperand(i, 2), ir->GetOperand(i, 3));
-        }
-    }
-    printf("Exit block = %u\n", cfg ? cfg->exitBlock : 0xFFFFFFFF);
-    #endif
-
-    // Use CFG-based block emission if available
     if (cfg && cfg->blockCount > 0) {
-        // Track which blocks have been emitted
-        bool* emitted = static_cast<bool*>(arena->Allocate(cfg->blockCount * sizeof(bool)));
-        for (u32 i = 0; i < cfg->blockCount; i++) emitted[i] = false;
-
-        // Debug: find which blocks contain STORE_OUTPUT instructions
-        #if 0  // Enable for debugging
-        u32 exitBlock = cfg->exitBlock;
-        for (u32 b = 0; b < cfg->blockCount; b++) {
-            u32 first = cfg->firstInst[b];
-            u32 last = cfg->lastInst[b];
-            for (u32 i = first; i <= last; i++) {
-                if (ir->opcodes[i] == IR::OP_STORE_OUTPUT) {
-                    printf("Block %u contains STORE_OUTPUT at inst %u (succs=%d, merge=%u)\n",
-                           b, i, cfg->successorCount[b],
-                           cfg->mergeBlocks ? cfg->mergeBlocks[b] : 0xFFFFFFFF);
-                }
-            }
-            // Check if this block leads to exit
-            u8 succCount = cfg->successorCount[b];
-            for (u8 s = 0; s < succCount && succCount < 3; s++) {
-                if (cfg->GetSuccessor(b, s) == exitBlock) {
-                    printf("Block %u (merge=%u) leads to exit block %u\n", b,
-                           cfg->mergeBlocks ? cfg->mergeBlocks[b] : 0xFFFFFFFF, exitBlock);
-                }
-            }
-        }
-        printf("Entry=%u, Exit=%u, BlockCount=%u\n", cfg->entryBlock, cfg->exitBlock, cfg->blockCount);
-        #endif
-
-        // Emit starting from entry block
-        EmitBlockRecursive(cfg->entryBlock, NO_BLOCK, emitted);
-
-        // Ensure exit block is emitted at the end (at top level)
-        // This is important because exit block may not have been emitted if it was
-        // skipped due to being inside nested control flow
-        if (cfg->exitBlock != NO_BLOCK && !emitted[cfg->exitBlock]) {
-            emitted[cfg->exitBlock] = true;
-            u32 first = cfg->firstInst[cfg->exitBlock];
-            u32 last = cfg->lastInst[cfg->exitBlock];
-            for (u32 i = first; i <= last; i++) {
-                u16 opcode = ir->opcodes[i];
-                // Skip control flow
-                if (opcode == IR::OP_BRANCH || opcode == IR::OP_JUMP ||
-                    opcode == IR::OP_RET || opcode == IR::OP_SWITCH || opcode == IR::OP_PHI) {
-                    continue;
-                }
-                EmitInstruction(i);
-            }
-        }
+        EmitControlFlow();
     } else {
-        // Fallback: linear instruction emission
-        for (u32 i = 0; i < ir->instructionCount; i++) {
-            EmitInstruction(i);
-        }
+        for (u32 i = 0; i < ir->instructionCount; ++i) EmitInstruction(i);
     }
-
     out.NL(0);
     out.Lit("}\n");
+}
+
+bool GLESBuilder::EmitBlockEdge(u32 fromBlock, u32 toBlock, u32 stopBlock,
+                                const LoopScope* loop, u32 depth) {
+    if (toBlock == NO_BLOCK || toBlock >= cfg->blockCount) {
+        out.NL(indent); out.Lit("return;");
+        return false;
+    }
+    // Give each edge's parallel-copy temporaries their own lexical scope.
+    out.NL(indent); out.Chr('{'); ++indent;
+    EmitPhiAssignments(fromBlock, toBlock);
+    --indent; out.NL(indent); out.Chr('}');
+    if (loop) {
+        if (toBlock == loop->merge) {
+            out.NL(indent); out.Lit("break;");
+            return false;
+        }
+        if (toBlock == loop->header) {
+            out.NL(indent); out.Lit("continue;");
+            return false;
+        }
+        if (toBlock == loop->continuation && !loop->inContinuation) {
+            // A source `skip` still executes the for-loop increment. Emit the
+            // continue region on that edge before GLSL's continue statement.
+            LoopScope continuing = *loop;
+            continuing.inContinuation = true;
+            EmitStructuredRegion(toBlock, NO_BLOCK, &continuing, depth + 1);
+            return false;
+        }
+    }
+    if (toBlock == stopBlock) return true;
+    return EmitStructuredRegion(toBlock, stopBlock, loop, depth + 1);
+}
+
+bool GLESBuilder::EmitStructuredRegion(u32 block, u32 stopBlock,
+                                       const LoopScope* loop, u32 depth) {
+    // A loop header is visited once to open its scope and once for its body.
+    if (depth > cfg->blockCount * 2 + 1)
+        throw std::runtime_error("Direct GLES cannot structure this control-flow graph");
+    u32 visited = 0;
+    while (block != stopBlock && block != NO_BLOCK && block < cfg->blockCount) {
+        if (++visited > cfg->blockCount)
+            throw std::runtime_error("Direct GLES found an unannotated control-flow cycle");
+        // CFG construction does not call RecoverStructure. Read the original
+        // lowering annotations, whose targets are instruction indices.
+        u32 last = cfg->lastInst[block];
+        u32 structure = ir->structureInfo ? ir->structureInfo[last] : 0;
+        u32 mergeInst = structure & IR::IRProgram::STRUCT_TARGET_MASK;
+        u32 merge = structure && mergeInst < ir->instructionCount ? cfg->instToBlock[mergeInst] : NO_BLOCK;
+        u32 continueInst = (structure & IR::IRProgram::STRUCT_TYPE_MASK) == IR::IRProgram::STRUCT_LOOP_HEADER &&
+                           ir->continueInfo ? ir->continueInfo[last] : NO_BLOCK;
+        u32 continuation = continueInst < ir->instructionCount ? cfg->instToBlock[continueInst] : NO_BLOCK;
+        if (continuation != NO_BLOCK && (!loop || block != loop->header)) {
+            LoopScope inner = {block, merge, continuation, false};
+            out.NL(indent); out.Lit("for (;;) {"); ++indent;
+            EmitStructuredRegion(block, NO_BLOCK, &inner, depth + 1);
+            --indent; out.NL(indent); out.Chr('}');
+            block = merge;
+            continue;
+        }
+
+        u32 terminal = NO_BLOCK;
+        for (u32 i = cfg->firstInst[block]; i <= cfg->lastInst[block] && i < ir->instructionCount; ++i) {
+            u16 op = ir->opcodes[i];
+            if (op == IR::OP_BRANCH || op == IR::OP_JUMP || op == IR::OP_SWITCH || op == IR::OP_RET) {
+                terminal = i;
+                break;
+            }
+            if (op == IR::OP_DISCARD) {
+                EmitInstruction(i);
+                return false;
+            }
+            if (op != IR::OP_PHI) EmitInstruction(i);
+        }
+        u16 op = terminal == NO_BLOCK ? IR::OP_NOP : ir->opcodes[terminal];
+        if (op == IR::OP_RET || cfg->TotalSuccessorCount(block) == 0) {
+            out.NL(indent); out.Lit("return;");
+            return false;
+        }
+        if (op == IR::OP_SWITCH) {
+            // Case bodies are mutually exclusive, with no source fallthrough.
+            // Using if/else also lets a case's loop break/skip target its loop
+            // directly, without an intervening GLSL switch catching the break.
+            u32 data = ir->metadata[terminal];
+            u32 count = ir->GetSwitchCaseCount(data);
+            bool reachesMerge = false;
+            for (u32 c = 0; c < count; ++c) {
+                out.NL(indent); out.Str(c ? "else if (" : "if (");
+                EmitExpr(Op(terminal, 0)); out.Lit(" == ");
+                u16 selector = Op(terminal, 0);
+                bool unsignedSelector = selector < regCount && ir->registerTypes &&
+                    ir->registerTypes[selector] == static_cast<u16>(CoreType::UINT);
+                if (unsignedSelector) {
+                    out.Uint(static_cast<u32>(ir->GetSwitchCaseValue(data, c))); out.Chr('u');
+                } else out.Int(ir->GetSwitchCaseValue(data, c));
+                out.Lit(") {"); ++indent;
+                u32 target = ir->GetSwitchCaseTarget(data, c);
+                reachesMerge |= EmitBlockEdge(block, target < ir->instructionCount ? cfg->instToBlock[target] : NO_BLOCK,
+                                               merge, loop, depth);
+                --indent; out.NL(indent); out.Chr('}');
+            }
+            if (count) { out.Lit(" else {"); ++indent; }
+            u32 target = ir->GetSwitchDefaultTarget(data);
+            reachesMerge |= EmitBlockEdge(block, target < ir->instructionCount ? cfg->instToBlock[target] : NO_BLOCK,
+                                           merge, loop, depth);
+            if (count) { --indent; out.NL(indent); out.Chr('}'); }
+            if (!reachesMerge) return false;
+            block = merge;
+            continue;
+        }
+        if (op == IR::OP_BRANCH) {
+            // Selection merge code is emitted after both arms, restoring
+            // source-level reconvergence for derivatives and implicit LOD.
+            // Loop conditions/until branches instead exit via break/continue.
+            u32 branchStop = merge != NO_BLOCK ? merge : stopBlock;
+            out.NL(indent); out.Lit("if ("); EmitExpr(Op(terminal, 0)); out.Lit(") {"); ++indent;
+            bool thenFalls = EmitBlockEdge(block, cfg->GetSuccessor(block, 0), branchStop, loop, depth);
+            --indent; out.NL(indent); out.Lit("} else {"); ++indent;
+            bool elseFalls = EmitBlockEdge(block, cfg->GetSuccessor(block, 1), branchStop, loop, depth);
+            --indent; out.NL(indent); out.Chr('}');
+            if (merge == NO_BLOCK) return thenFalls || elseFalls;
+            if (!thenFalls && !elseFalls) return false;
+            block = merge;
+            continue;
+        }
+        return EmitBlockEdge(block, cfg->GetAnySuccessor(block, 0), stopBlock, loop, depth);
+    }
+    return block == stopBlock;
+}
+
+void GLESBuilder::EmitControlFlow() {
+    // Registers must survive loop edges and both arms of a selection.
+    for (u32 reg = 0; reg < regCount; ++reg) {
+        if (regInfo[reg].flags & REG_DECLARED) continue;
+        u16 type = ir->registerTypes ? ir->registerTypes[reg] : 0;
+        if (type == 0 || type == static_cast<u16>(CoreType::VOID)) continue;
+        out.NL(indent); EmitRegWithDecl(static_cast<u16>(reg)); out.Chr(';');
+    }
+    EmitStructuredRegion(cfg->entryBlock, NO_BLOCK, nullptr, 0);
 }
 
 void GLESBuilder::EmitDefaultValue(u16 type) {
@@ -774,276 +732,25 @@ void GLESBuilder::EmitUndefDeclarations() {
 }
 
 
-void GLESBuilder::EmitPhiDeclarations() {
-    bool emittedAny = false;
-
-    // 1. Emit declarations for PHI result registers
-    if (ir->phiCount > 0 && ir->phiResultRegs && ir->phiTypes) {
-        for (u32 phiIdx = 0; phiIdx < ir->phiCount; phiIdx++) {
-            u16 resultReg = ir->phiResultRegs[phiIdx];
-            u16 type = ir->phiTypes[phiIdx];
-
-            // Skip if already declared
-            if (resultReg >= regCount) continue;
-            if (regInfo[resultReg].flags & REG_DECLARED) continue;
-
-            // Mark as declared so EmitRegWithDecl won't re-declare inside branches
-            regInfo[resultReg].flags |= REG_DECLARED;
-
-            // Emit type and register name with default initialization
-            out.NL(indent);
-            EmitType(type);
-            out.Chr(' ');
-            EmitReg(resultReg);
-            out.Lit(" = ");
-            EmitDefaultValue(type);
-            out.Chr(';');
-            emittedAny = true;
-        }
-    }
-
-    // 2. Emit declarations for registers defined in multiple blocks
-    // These need hoisting to function scope so they're visible in all branches
-    if (ir->registerTypes) {
-        for (u32 reg = 0; reg < regCount; reg++) {
-            // Skip if not a multi-block definition or already declared
-            if (!(regInfo[reg].flags & REG_MULTI_BLOCK_DEF)) continue;
-            if (regInfo[reg].flags & REG_DECLARED) continue;
-
-            u16 type = ir->registerTypes[reg];
-            if (type == 0) continue;  // No type info
-
-            // Mark as declared
-            regInfo[reg].flags |= REG_DECLARED;
-
-            // Emit type and register name with default initialization
-            out.NL(indent);
-            EmitType(type);
-            out.Chr(' ');
-            EmitReg(static_cast<u16>(reg));
-            out.Lit(" = ");
-            EmitDefaultValue(type);
-            out.Chr(';');
-            emittedAny = true;
-        }
-    }
-
-    // Add blank line after declarations if we emitted any
-    if (emittedAny) {
-        out.NL(0);
-    }
-}
-
 // Emit PHI assignments when transitioning from one block to another
 // PHI nodes in toBlock that have values from fromBlock need assignments
 void GLESBuilder::EmitPhiAssignments(u32 fromBlock, u32 toBlock) {
     if (!ir->phiCount || !ir->phiBlockIndices) return;
-
-    for (u32 phiIdx = 0; phiIdx < ir->phiCount; phiIdx++) {
-        if (ir->phiBlockIndices[phiIdx] != toBlock) continue;
-
-        u32 opCount = ir->GetPhiOperandCount(phiIdx);
-        for (u32 opIdx = 0; opIdx < opCount; opIdx++) {
-            u32 srcBlock = ir->GetPhiOperandBlock(phiIdx, opIdx);
-            if (srcBlock == fromBlock) {
-                u16 srcValue = ir->GetPhiOperandValue(phiIdx, opIdx);
-                u16 destReg = ir->phiResultRegs[phiIdx];
-
-                out.NL(indent);
-                // We DON'T use EmitRegWithDecl here - the variable was already
-                // declared at function scope by EmitPhiDeclarations
-                EmitReg(destReg);  // Just emit "rXXX", no type prefix
-                out.Lit(" = ");
-                EmitExpr(srcValue);
-                out.Chr(';');
-                break;
-            }
+    // Phi assignments are parallel copies: save every source before overwriting
+    // any phi destination (for example, swapping two variables in a loop).
+    for (u32 phi = 0; phi < ir->phiCount; ++phi) {
+        if (ir->phiBlockIndices[phi] != toBlock) continue;
+        for (u32 i = 0; i < ir->GetPhiOperandCount(phi); ++i) {
+            if (ir->GetPhiOperandBlock(phi, i) != fromBlock) continue;
+            out.NL(indent); EmitRegisterType(ir->phiResultRegs[phi]); out.Lit(" bwsl_phi"); out.Uint(phi);
+            out.Lit(" = "); EmitExpr(ir->GetPhiOperandValue(phi, i)); out.Chr(';');
         }
     }
-}
-
-void GLESBuilder::EmitBlockRecursive(u32 blockIdx, u32 stopAt, bool* emitted) {
-    // Don't emit past the stop point (merge block)
-    if (blockIdx == stopAt || blockIdx == NO_BLOCK) return;
-
-    // Don't emit already-emitted blocks
-    if (emitted[blockIdx]) return;
-
-    // IMPORTANT: Don't emit exit block inside nested control flow
-    // The exit block should be emitted last, at the top level (indent==1)
-    // This prevents output stores from being placed inside if-else branches
-    if (blockIdx == cfg->exitBlock && indent > 1) {
-        return;  // Will be emitted later when we reach top level
-    }
-
-    emitted[blockIdx] = true;
-
-    // Debug: track when exit block is emitted
-    #if 0
-    if (blockIdx == cfg->exitBlock) {
-        printf("Emitting exit block %u at indent=%u, stopAt=%u\n", blockIdx, indent, stopAt);
-    }
-    #endif
-
-    // Emit all instructions in this block (except control flow terminators)
-    u32 first = cfg->firstInst[blockIdx];
-    u32 last = cfg->lastInst[blockIdx];
-
-    for (u32 i = first; i <= last; i++) {
-        u16 opcode = ir->opcodes[i];
-
-        // Skip control flow - we handle it structurally
-        if (opcode == IR::OP_BRANCH || opcode == IR::OP_JUMP ||
-            opcode == IR::OP_RET || opcode == IR::OP_SWITCH) {
-            continue;
-        }
-
-        // Skip PHI - handled via EmitPhiAssignments
-        if (opcode == IR::OP_PHI) {
-            continue;
-        }
-
-        EmitInstruction(i);
-    }
-
-    // Handle control flow based on successor count
-    u8 succCount = cfg->successorCount[blockIdx];
-    u32 mergeBlock = cfg->mergeBlocks ? cfg->mergeBlocks[blockIdx] : NO_BLOCK;
-
-    if (succCount == 0) {
-        // No successors - end of function or return
-        // Check if last instruction is RET
-        // Only emit return at top level (indent == 1 means we're at main() body level)
-        // Inside nested control structures, let control flow fall through naturally
-        if (last < ir->instructionCount && ir->opcodes[last] == IR::OP_RET) {
-            if (indent == 1 && stopAt == NO_BLOCK) {
-                out.NL(indent);
-                out.Lit("return;");
-            }
-            // If inside nested structure, don't emit return - let control fall through
-        }
-    }
-    else if (succCount == 1) {
-        // Unconditional - emit PHI assignments then continue
-        u32 nextBlock = cfg->GetSuccessor(blockIdx, 0);
-        EmitPhiAssignments(blockIdx, nextBlock);
-        EmitBlockRecursive(nextBlock, stopAt, emitted);
-    }
-    else if (succCount == 2) {
-        // Conditional branch - emit if/else structure
-        u32 thenBlock = cfg->GetSuccessor(blockIdx, 0);
-        u32 elseBlock = cfg->GetSuccessor(blockIdx, 1);
-
-        // Find the condition from the BRANCH instruction
-        u16 condReg = 0;
-        for (u32 i = first; i <= last; i++) {
-            if (ir->opcodes[i] == IR::OP_BRANCH) {
-                condReg = ir->GetOperand(i, 0);
-                break;
-            }
-        }
-
-        // Emit if statement
-        out.NL(indent);
-        out.Lit("if (");
-        EmitExpr(condReg);
-        out.Lit(") {");
-        indent++;
-
-        // Emit PHI assignments for then branch
-        EmitPhiAssignments(blockIdx, thenBlock);
-        // Emit then block (stop at merge point)
-        EmitBlockRecursive(thenBlock, mergeBlock, emitted);
-
-        // Emit PHI assignments to merge block from then branch if we didn't descend
-        if (mergeBlock != NO_BLOCK && thenBlock != mergeBlock) {
-            // Find the actual block that jumps to merge from the then path
-            // This is complex - for now emit at end of then branch
-        }
-
-        indent--;
-        out.NL(indent);
-
-        // Check if there's an else block (elseBlock != mergeBlock)
-        if (elseBlock != mergeBlock && elseBlock != NO_BLOCK && !emitted[elseBlock]) {
-            out.Lit("} else {");
-            indent++;
-            // Emit PHI assignments for else branch
-            EmitPhiAssignments(blockIdx, elseBlock);
-            EmitBlockRecursive(elseBlock, mergeBlock, emitted);
-            indent--;
-            out.NL(indent);
-        } else if (elseBlock == mergeBlock && mergeBlock != NO_BLOCK) {
-            // Else goes directly to merge - emit PHI assignments
-            out.Lit("} else {");
-            indent++;
-            EmitPhiAssignments(blockIdx, mergeBlock);
-            indent--;
-            out.NL(indent);
-        }
-
-        out.Lit("}");
-
-        // Continue after merge block
-        if (mergeBlock != NO_BLOCK && !emitted[mergeBlock]) {
-            EmitBlockRecursive(mergeBlock, stopAt, emitted);
-        }
-    }
-    else if (cfg->IsSwitchBlock(blockIdx)) {
-        // Switch statement - emit switch structure
-        // Find the switch instruction
-        u16 condReg = 0;
-        for (u32 i = first; i <= last; i++) {
-            if (ir->opcodes[i] == IR::OP_SWITCH) {
-                condReg = ir->GetOperand(i, 0);
-                break;
-            }
-        }
-
-        out.NL(indent);
-        out.Lit("switch (");
-        EmitExpr(condReg);
-        out.Lit(") {");
-
-        // Get switch data from metadata
-        u32 switchDataIdx = ir->metadata[last];
-        if (switchDataIdx < ir->switchCount) {
-            u32 caseCount = ir->GetSwitchCaseCount(switchDataIdx);
-            for (u32 c = 0; c < caseCount; c++) {
-                s32 caseVal = ir->GetSwitchCaseValue(switchDataIdx, c);
-                u32 caseTarget = ir->GetSwitchCaseTarget(switchDataIdx, c);
-
-                out.NL(indent);
-                out.Lit("case ");
-                out.Int(caseVal);
-                out.Lit(":");
-                indent++;
-                EmitPhiAssignments(blockIdx, caseTarget);
-                EmitBlockRecursive(caseTarget, mergeBlock, emitted);
-                out.NL(indent);
-                out.Lit("break;");
-                indent--;
-            }
-
-            u32 defaultTarget = ir->GetSwitchDefaultTarget(switchDataIdx);
-            if (defaultTarget != NO_BLOCK) {
-                out.NL(indent);
-                out.Lit("default:");
-                indent++;
-                EmitPhiAssignments(blockIdx, defaultTarget);
-                EmitBlockRecursive(defaultTarget, mergeBlock, emitted);
-                out.NL(indent);
-                out.Lit("break;");
-                indent--;
-            }
-        }
-
-        out.NL(indent);
-        out.Lit("}");
-
-        // Continue after merge block
-        if (mergeBlock != NO_BLOCK && !emitted[mergeBlock]) {
-            EmitBlockRecursive(mergeBlock, stopAt, emitted);
+    for (u32 phi = 0; phi < ir->phiCount; ++phi) {
+        if (ir->phiBlockIndices[phi] != toBlock) continue;
+        for (u32 i = 0; i < ir->GetPhiOperandCount(phi); ++i) {
+            if (ir->GetPhiOperandBlock(phi, i) != fromBlock) continue;
+            out.NL(indent); EmitReg(ir->phiResultRegs[phi]); out.Lit(" = bwsl_phi"); out.Uint(phi); out.Chr(';');
         }
     }
 }
@@ -1056,18 +763,12 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
     u16 opcode = ir->opcodes[instIdx];
     u16 dest = ir->destinations[instIdx];
 
-    // Skip if this instruction's result is inlined elsewhere
-    // BUT don't skip STORE_OUTPUT - its dest is the value to store, not a result
-    if (opcode != IR::OP_STORE_OUTPUT && dest < regCount && ShouldInline(dest)) {
-        return;
-    }
-
     out.NL(indent);
 
     // Handle different instruction categories
     switch (opcode) {
         // ===== Control Flow =====
-        // These are handled structurally by EmitBlockRecursive
+        // These are handled by EmitControlFlow
         case IR::OP_NOP:
         case IR::OP_JUMP:
         case IR::OP_BRANCH:
@@ -1160,11 +861,11 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_LOAD_ATTR:
         case IR::OP_LOAD_INPUT:
         case IR::OP_LOAD_UNIFORM:
-            // These are inlined when used, but if multi-use, emit assignment
-            if (dest < regCount && regInfo[dest].useCount > 1) {
+            // Materialize loads at their definition, like all other SSA values.
+            if (dest < regCount) {
                 EmitRegWithDecl(dest);
                 out.Lit(" = ");
-                EmitExprForInst(instIdx);
+                EmitLoadExpr(instIdx);
                 out.Lit(";");
             }
             return;
@@ -1294,7 +995,10 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             EmitFuncAssign(instIdx, dest, "fract", 1);
             return;
         case IR::OP_FMA:
-            EmitFuncAssign(instIdx, dest, "fma", 3);
+            EmitRegWithDecl(dest);
+            out.Lit(" = ("); EmitExpr(Op(instIdx, 0)); out.Lit(" * ");
+            EmitExpr(Op(instIdx, 1)); out.Lit(" + "); EmitExpr(Op(instIdx, 2));
+            out.Lit(");");
             return;
 
         case IR::OP_SQRT:
@@ -1455,9 +1159,16 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_XOR:
             EmitBinaryAssign(instIdx, dest, "^");
             return;
-        case IR::OP_NOT:
-            EmitUnaryAssign(instIdx, dest, "~");
+        case IR::OP_NOT: {
+            CoreType type = static_cast<CoreType>(Type(instIdx));
+            if (type == CoreType::BOOL)
+                EmitUnaryAssign(instIdx, dest, "!");
+            else if (type == CoreType::BOOL2 || type == CoreType::BOOL3 || type == CoreType::BOOL4)
+                EmitFuncAssign(instIdx, dest, "not", 1);
+            else
+                EmitUnaryAssign(instIdx, dest, "~");
             return;
+        }
         case IR::OP_SHL:
             EmitBinaryAssign(instIdx, dest, "<<");
             return;
@@ -1569,7 +1280,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             // Reinterpret bits - use GLSL bitcast functions
             u16 srcReg = Op(instIdx, 0);
             u16 srcType = (ir->registerTypes && srcReg < ir->registerCount) ? ir->registerTypes[srcReg] : 0;
-            u16 dstType = ir->types[instIdx];
+            u16 dstType = Type(instIdx);
             auto scalarFamily = [](u16 type) -> CoreType {
                 CoreType t = static_cast<CoreType>(type);
                 switch (t) {
@@ -1620,10 +1331,18 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             EmitFuncAssign(instIdx, dest, "isinf", 1);
             return;
         case IR::OP_ISFINITE:
-            EmitFuncAssign(instIdx, dest, "isfinite", 1);
+            EmitFuncAssign(instIdx, dest, "bwsl_isfinite", 1);
             return;
         case IR::OP_ISNORMAL:
-            EmitFuncAssign(instIdx, dest, "isnormal", 1);
+            EmitFuncAssign(instIdx, dest, "bwsl_isnormal", 1);
+            return;
+        case IR::OP_ANY:
+        case IR::OP_ALL:
+            if (Op(instIdx, 0) < regCount && ir->registerTypes[Op(instIdx, 0)] == static_cast<u16>(CoreType::BOOL)) {
+                EmitRegWithDecl(dest); out.Lit(" = "); EmitExpr(Op(instIdx, 0)); out.Chr(';');
+            } else {
+                EmitFuncAssign(instIdx, dest, opcode == IR::OP_ANY ? "any" : "all", 1);
+            }
             return;
 
         // ===== Vector Operations =====
@@ -1656,19 +1375,33 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             out.Lit(";\n");
             out.NL(indent);
             EmitRegWithDecl(dest);
-            out.Chr('.');
-            out.Chr(Str::SWIZZLE[componentIdx & 3]);
+            out.Chr('['); out.Uint(componentIdx); out.Chr(']');
             out.Lit(" = ");
             EmitExpr(valueReg);
             out.Lit(";");
             return;
         }
 
+        case IR::OP_VEC_INSERT_DYNAMIC:
+            EmitRegWithDecl(dest); out.Lit(" = "); EmitExpr(Op(instIdx, 0)); out.Chr(';');
+            out.NL(indent); EmitReg(dest); out.Chr('['); EmitExpr(Op(instIdx, 2)); out.Lit("] = ");
+            EmitExpr(Op(instIdx, 1)); out.Chr(';');
+            return;
+
         // ===== Texture =====
+        case IR::OP_TEX_SAMPLE_CMP: {
+            EmitRegWithDecl(dest); out.Lit(" = "); EmitType(Type(instIdx));
+            out.Lit("(texture("); EmitTexture(Op(instIdx, 0), ir->metadata[instIdx]);
+            u16 coord = Op(instIdx, 1);
+            bool threeCoordinates = coord < regCount && ir->registerTypes[coord] == static_cast<u16>(CoreType::FLOAT3);
+            out.Str(threeCoordinates ? ", vec4(" : ", vec3(");
+            EmitExpr(coord); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Lit(")));");
+            return;
+        }
         case IR::OP_TEX_SAMPLE:
             EmitRegWithDecl(dest);
             out.Lit(" = texture(");
-            EmitExpr(Op(instIdx, 0));  // sampler
+            EmitTexture(Op(instIdx, 0), ir->metadata[instIdx]);  // sampler
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));  // coord
             out.Lit(");");
@@ -1677,18 +1410,18 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_TEX_SAMPLE_OFFSET:
             EmitRegWithDecl(dest);
             out.Lit(" = textureOffset(");
-            EmitExpr(Op(instIdx, 0));
+            EmitTexture(Op(instIdx, 0), ir->metadata[instIdx]);
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));
             out.Lit(", ");
-            EmitExpr(Op(instIdx, 2));
+            EmitTextureOffset(Op(instIdx, 2));
             out.Lit(");");
             return;
 
         case IR::OP_TEX_SAMPLE_LOD:
             EmitRegWithDecl(dest);
             out.Lit(" = textureLod(");
-            EmitExpr(Op(instIdx, 0));  // sampler
+            EmitTexture(Op(instIdx, 0), ir->metadata[instIdx]);  // sampler
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));  // coord
             out.Lit(", ");
@@ -1699,13 +1432,13 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_TEX_SAMPLE_LOD_OFFSET:
             EmitRegWithDecl(dest);
             out.Lit(" = textureLodOffset(");
-            EmitExpr(Op(instIdx, 0));
+            EmitTexture(Op(instIdx, 0), ir->metadata[instIdx]);
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));
             out.Lit(", ");
             EmitExpr(Op(instIdx, 2));
             out.Lit(", ");
-            EmitExpr(Op(instIdx, 3));
+            EmitTextureOffset(Op(instIdx, 3));
             out.Lit(");");
             return;
 
@@ -1713,7 +1446,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             // GLSL ES 300 has texture with bias
             EmitRegWithDecl(dest);
             out.Lit(" = texture(");
-            EmitExpr(Op(instIdx, 0));  // sampler
+            EmitTexture(Op(instIdx, 0), ir->metadata[instIdx]);  // sampler
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));  // coord
             out.Lit(", ");
@@ -1724,11 +1457,11 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_TEX_SAMPLE_BIAS_OFFSET:
             EmitRegWithDecl(dest);
             out.Lit(" = textureOffset(");
-            EmitExpr(Op(instIdx, 0));
+            EmitTexture(Op(instIdx, 0), ir->metadata[instIdx]);
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));
             out.Lit(", ");
-            EmitExpr(Op(instIdx, 3));
+            EmitTextureOffset(Op(instIdx, 3));
             out.Lit(", ");
             EmitExpr(Op(instIdx, 2));
             out.Lit(");");
@@ -1737,7 +1470,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_TEX_SAMPLE_GRAD:
             EmitRegWithDecl(dest);
             out.Lit(" = textureGrad(");
-            EmitExpr(Op(instIdx, 0));  // sampler
+            EmitTexture(Op(instIdx, 0), ir->metadata[instIdx]);  // sampler
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));  // coord
             out.Lit(", ");
@@ -1750,7 +1483,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_TEX_FETCH:
             EmitRegWithDecl(dest);
             out.Lit(" = texelFetch(");
-            EmitExpr(Op(instIdx, 0));  // sampler
+            EmitTexture(Op(instIdx, 0), ir->metadata[instIdx]);  // sampler
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));  // coord (ivec)
             out.Lit(", ");
@@ -1761,23 +1494,33 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_TEX_FETCH_OFFSET:
             EmitRegWithDecl(dest);
             out.Lit(" = texelFetchOffset(");
-            EmitExpr(Op(instIdx, 0));
+            EmitTexture(Op(instIdx, 0), ir->metadata[instIdx]);
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));
             out.Lit(", ");
             EmitExpr(Op(instIdx, 2));
             out.Lit(", ");
-            EmitExpr(Op(instIdx, 3));
+            EmitTextureOffset(Op(instIdx, 3));
             out.Lit(");");
             return;
 
         case IR::OP_TEX_SIZE:
             EmitRegWithDecl(dest);
             out.Lit(" = textureSize(");
-            EmitExpr(Op(instIdx, 0));  // sampler
+            EmitTexture(Op(instIdx, 0), ir->metadata[instIdx]);  // sampler
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));  // lod
-            out.Lit(");");
+            out.Chr(')');
+            if (renderConfig && Type(instIdx) == static_cast<u16>(CoreType::INT2)) {
+                u16 slot = Op(instIdx, 0) & 0x0FFF;
+                for (const auto& texture : renderConfig->textures) {
+                    if (texture.bindingIndex == slot && (texture.isVolume || texture.isArray)) {
+                        out.Lit(".xy");
+                        break;
+                    }
+                }
+            }
+            out.Chr(';');
             return;
 
         case IR::OP_TEX_LEVELS:
@@ -1790,7 +1533,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_TEX_GATHER:
             EmitRegWithDecl(dest);
             out.Lit(" = bwsl_texture_gather(");
-            EmitExpr(Op(instIdx, 0));  // sampler
+            EmitTexture(Op(instIdx, 0), ir->metadata[instIdx]);  // sampler
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));  // coord
             out.Lit(", ");
@@ -1801,7 +1544,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_TEX_GATHER_OFFSET:
             EmitRegWithDecl(dest);
             out.Lit(" = bwsl_texture_gather_offset(");
-            EmitExpr(Op(instIdx, 0));
+            EmitTexture(Op(instIdx, 0), ir->metadata[instIdx]);
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));
             out.Lit(", ");
@@ -1853,11 +1596,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_SELECT:
             EmitRegWithDecl(dest);
             out.Lit(" = ");
-            EmitExpr(Op(instIdx, 0));  // condition
-            out.Lit(" ? ");
-            EmitExpr(Op(instIdx, 1));  // true value
-            out.Lit(" : ");
-            EmitExpr(Op(instIdx, 2));  // false value
+            EmitSelect(instIdx);
             out.Lit(";");
             return;
 
@@ -1885,7 +1624,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         case IR::OP_MAT_CONSTRUCT: {
             // Build matrix from values
-            u16 type = ir->types[instIdx];
+            u16 type = Type(instIdx);
             EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitType(type);
@@ -1914,7 +1653,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         case IR::OP_MAT_IDENTITY: {
             // Identity matrix
-            u16 type = ir->types[instIdx];
+            u16 type = Type(instIdx);
             EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitType(type);
@@ -1924,7 +1663,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         case IR::OP_MAT_ZERO: {
             // Zero matrix
-            u16 type = ir->types[instIdx];
+            u16 type = Type(instIdx);
             EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitType(type);
@@ -2074,9 +1813,9 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         case IR::OP_ARRAY_STORE: {
             // Store to array element
-            u16 arrayReg = Op(instIdx, 0);
-            u16 indexReg = Op(instIdx, 1);
-            u16 valueReg = Op(instIdx, 2);
+            u16 arrayReg = dest;
+            u16 indexReg = Op(instIdx, 0);
+            u16 valueReg = Op(instIdx, 1);
             EmitExpr(arrayReg);
             out.Chr('[');
             EmitExpr(indexReg);
@@ -2088,7 +1827,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 
         case IR::OP_ARRAY_CONSTRUCT: {
             // Build array from elements
-            u16 type = ir->types[instIdx];
+            u16 type = Type(instIdx);
             EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitType(type);
@@ -2195,48 +1934,27 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 // ============================================================================
 
 void GLESBuilder::EmitExpr(u16 reg) {
-    // Check for constant reference
+    // Bool must precede float; uint and texture handles share an encoding,
+    // so texture instructions explicitly call EmitTexture instead.
+    if ((reg & 0xC000) == 0xC000) {
+        u16 idx = reg & 0x3FFF;
+        out.Str(idx < ir->boolCount && ir->boolConstants[idx] ? "true" : "false");
+        return;
+    }
     if (reg & 0x8000) {
-        // Float constant
         u16 idx = reg & 0x7FFF;
-        if (idx < ir->floatCount) {
-            out.Flt(ir->floatConstants[idx]);
-        } else {
-            out.Lit("0.0 /* missing float */");
-        }
+        out.Flt(idx < ir->floatCount ? ir->floatConstants[idx] : 0.0f);
         return;
     }
     if (reg & 0x4000) {
-        // Int constant (0x4000) or Bool constant (0xC000)
-        if ((reg & 0xC000) == 0xC000) {
-            // Bool constant
-            u16 idx = reg & 0x3FFF;
-            if (idx < ir->boolCount) {
-                out.Str(ir->boolConstants[idx] ? "true" : "false");
-            } else {
-                out.Lit("false /* missing bool */");
-            }
-        } else {
-            // Int constant
-            u16 idx = reg & 0x3FFF;
-            if (idx < ir->intCount) {
-                out.Int(ir->intConstants[idx]);
-            } else {
-                out.Lit("0 /* missing int */");
-            }
-        }
+        u16 idx = reg & 0x3FFF;
+        out.Int(idx < ir->intCount ? static_cast<s32>(ir->intConstants[idx]) : 0);
         return;
     }
-
-    if ((reg & 0xF000) == 0x2000) {
-        u16 texSlot = reg & 0x0FFF;
-        if (renderConfig && texSlot < renderConfig->textures.size()) {
-            out.Lit("u_");
-            out.Str(renderConfig->textures[texSlot].name.c_str());
-        } else {
-            out.Lit("sampler");
-            out.Uint(texSlot);
-        }
+    if ((reg & 0xE000) == 0x2000) {
+        u16 idx = reg & 0x1FFF;
+        out.Uint(idx < ir->uintCount ? ir->uintConstants[idx] : 0u);
+        out.Chr('u');
         return;
     }
 
@@ -2246,16 +1964,12 @@ void GLESBuilder::EmitExpr(u16 reg) {
         return;
     }
 
-    // Real register - check if we should inline it
-    if (reg < regCount && ShouldInline(reg)) {
-        regInfo[reg].flags |= REG_EMITTED;
-        EmitExprForInst(regInfo[reg].defInst);
-    } else {
-        EmitReg(reg);
-    }
+    // Keep values at their defining instruction, including mutable reads and
+    // values crossing loop edges. The driver can optimize the temporaries.
+    EmitReg(reg);
 }
 
-void GLESBuilder::EmitExprForInst(u32 instIdx) {
+void GLESBuilder::EmitLoadExpr(u32 instIdx) {
     u16 opcode = ir->opcodes[instIdx];
 
     switch (opcode) {
@@ -2279,8 +1993,8 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
             // Check for built-in inputs (slot >= 0x80)
             if (inputIdx >= 0x80) {
                 switch (inputIdx) {
-                    case 0x80: out.Lit("gl_VertexID"); return;
-                    case 0x81: out.Lit("gl_InstanceID"); return;
+                    case 0x80: out.Lit("uint(gl_VertexID)"); return;
+                    case 0x81: out.Lit("uint(gl_InstanceID)"); return;
                     case 0x90: out.Lit("gl_GlobalInvocationID"); return;
                     case 0x91: out.Lit("gl_LocalInvocationID"); return;
                     case 0x92: out.Lit("gl_WorkGroupID"); return;
@@ -2312,16 +2026,15 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
 
         case IR::OP_LOAD_UNIFORM: {
             u16 uniformIdx = Op(instIdx, 0);
-            if (renderConfig && uniformIdx < renderConfig->uniformBuffers.size()) {
-                const auto& ub = renderConfig->uniformBuffers[uniformIdx];
-                out.Lit("ub_");
-                out.Str(ub.name.c_str());
-                out.Lit(".u_");
-                out.Str(ub.name.c_str());
-            } else {
-                out.Lit("u_uniform");
-                out.Uint(uniformIdx);
+            if (renderConfig) {
+                for (const auto& ub : renderConfig->uniformBuffers) {
+                    if (ub.bindingIndex != uniformIdx) continue;
+                    out.Lit("ub_"); out.Str(ub.name.c_str());
+                    out.Lit(".u_"); out.Str(ub.name.c_str());
+                    return;
+                }
             }
+            out.Lit("u_uniform"); out.Uint(uniformIdx);
             return;
         }
 
@@ -2330,618 +2043,8 @@ void GLESBuilder::EmitExprForInst(u32 instIdx) {
             EmitExpr(Op(instIdx, 0));
             return;
 
-        // ===== Arithmetic (Float) =====
-        case IR::OP_FADD: case IR::OP_IADD:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" + "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_FSUB: case IR::OP_ISUB:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" - "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_FMUL: case IR::OP_IMUL:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" * "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_FDIV: case IR::OP_IDIV:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" / "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_IMOD:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" % "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_FMOD:
-            out.Lit("mod("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_FREM:
-            out.Chr('(');
-            EmitExpr(Op(instIdx, 0));
-            out.Lit(" - ");
-            EmitExpr(Op(instIdx, 1));
-            out.Lit(" * trunc(");
-            EmitExpr(Op(instIdx, 0));
-            out.Lit(" / ");
-            EmitExpr(Op(instIdx, 1));
-            out.Lit("))");
-            return;
-        case IR::OP_FNEG: case IR::OP_INEG:
-            out.Lit("(-"); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_FABS: case IR::OP_IABS:
-            out.Lit("abs("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_FMIN: case IR::OP_IMIN: case IR::OP_UMIN:
-            out.Lit("min("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_FMAX: case IR::OP_IMAX: case IR::OP_UMAX:
-            out.Lit("max("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_FCLAMP: case IR::OP_ICLAMP: case IR::OP_UCLAMP:
-            out.Lit("clamp("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
-            return;
-        case IR::OP_FLOOR:
-            out.Lit("floor("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_CEIL:
-            out.Lit("ceil("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_ROUND:
-            out.Lit("round("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_TRUNC:
-            out.Lit("trunc("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_FRACT:
-            out.Lit("fract("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_FMA:
-            out.Lit("fma("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
-            return;
-
-        // ===== Math Functions =====
-        case IR::OP_SQRT:
-            out.Lit("sqrt("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_RSQRT:
-            out.Lit("inversesqrt("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_POW:
-            out.Lit("pow("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_EXP:
-            out.Lit("exp("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_EXP2:
-            out.Lit("exp2("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_LOG:
-            out.Lit("log("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_LOG2:
-            out.Lit("log2("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_LDEXP:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" * exp2(float("); EmitExpr(Op(instIdx, 1)); out.Lit(")))");
-            return;
-        case IR::OP_MODF_STRUCT:
-            EmitStructTypeName(ir->metadata[instIdx]);
-            out.Chr('(');
-            EmitExpr(Op(instIdx, 0));
-            out.Lit(" - trunc(");
-            EmitExpr(Op(instIdx, 0));
-            out.Lit("), trunc(");
-            EmitExpr(Op(instIdx, 0));
-            out.Lit("))");
-            return;
-        case IR::OP_FREXP_STRUCT:
-            out.Lit("bwsl_frexp("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_SIN:
-            out.Lit("sin("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_COS:
-            out.Lit("cos("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_TAN:
-            out.Lit("tan("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_ASIN:
-            out.Lit("asin("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_ACOS:
-            out.Lit("acos("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_ATAN:
-            out.Lit("atan("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_ATAN2:
-            out.Lit("atan("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_SINH:
-            out.Lit("sinh("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_COSH:
-            out.Lit("cosh("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_TANH:
-            out.Lit("tanh("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_SIGN:
-            out.Lit("sign("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_ISNAN:
-            out.Lit("isnan("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_ISINF:
-            out.Lit("isinf("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_ISFINITE:
-            out.Lit("isfinite("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_ISNORMAL:
-            out.Lit("isnormal("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-
-        // ===== Geometric =====
-        case IR::OP_DOT:
-            out.Lit("dot("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_CROSS:
-            out.Lit("cross("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_LENGTH:
-            out.Lit("length("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_NORMALIZE:
-            out.Lit("normalize("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_DISTANCE:
-            out.Lit("distance("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_REFLECT:
-            out.Lit("reflect("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_REFRACT:
-            out.Lit("refract("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
-            return;
-        case IR::OP_FACEFORWARD:
-            out.Lit("faceforward("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
-            return;
-
-        // ===== Interpolation =====
-        case IR::OP_LERP:
-            out.Lit("mix("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
-            return;
-        case IR::OP_SMOOTHSTEP:
-            out.Lit("smoothstep("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
-            return;
-        case IR::OP_STEP:
-            out.Lit("step("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_SATURATE:
-            out.Lit("clamp("); EmitExpr(Op(instIdx, 0)); out.Lit(", 0.0, 1.0)");
-            return;
-        case IR::OP_DEGREES:
-            out.Lit("degrees("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_RADIANS:
-            out.Lit("radians("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-
-        // ===== Comparison =====
-        case IR::OP_FEQ: case IR::OP_IEQ:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" == "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_FNE: case IR::OP_INE:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" != "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_FLT: case IR::OP_ILT: case IR::OP_ULT:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" < "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_FLE: case IR::OP_ILE: case IR::OP_ULE:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" <= "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_FGT: case IR::OP_IGT: case IR::OP_UGT:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" > "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_FGE: case IR::OP_IGE: case IR::OP_UGE:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" >= "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-
-        // ===== Bitwise =====
-        case IR::OP_AND:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" & "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_OR:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" | "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_XOR:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" ^ "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_NOT:
-            out.Lit("(~"); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_SHL:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" << "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_SHR: case IR::OP_ASR:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" >> "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_POPCNT:
-            out.Lit("bitCount("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_CLZ:
-            out.Lit("(("); EmitExpr(Op(instIdx, 0)); out.Lit(" == 0) ? 32 : (31 - findMSB("); EmitExpr(Op(instIdx, 0)); out.Lit(")))");
-            return;
-        case IR::OP_CTZ:
-            out.Lit("(("); EmitExpr(Op(instIdx, 0)); out.Lit(" == 0) ? 32 : findLSB("); EmitExpr(Op(instIdx, 0)); out.Lit("))");
-            return;
-        case IR::OP_REVERSE_BITS:
-            out.Lit("bitfieldReverse("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_BITFIELD_EXTRACT:
-            out.Lit("bitfieldExtract("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
-            return;
-        case IR::OP_BITFIELD_INSERT:
-            out.Lit("bitfieldInsert("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Lit(", "); EmitExpr(Op(instIdx, 3)); out.Chr(')');
-            return;
-        case IR::OP_PACK_UNORM2X16:
-            out.Lit("packUnorm2x16("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_UNPACK_UNORM2X16:
-            out.Lit("unpackUnorm2x16("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_PACK_UNORM4X8:
-            out.Lit("packUnorm4x8("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_UNPACK_UNORM4X8:
-            out.Lit("unpackUnorm4x8("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_PACK_SNORM2X16:
-            out.Lit("packSnorm2x16("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_UNPACK_SNORM2X16:
-            out.Lit("unpackSnorm2x16("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_PACK_SNORM4X8:
-            out.Lit("packSnorm4x8("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_UNPACK_SNORM4X8:
-            out.Lit("unpackSnorm4x8("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_PACK_HALF2X16:
-            out.Lit("packHalf2x16("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_UNPACK_HALF2X16:
-            out.Lit("unpackHalf2x16("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-
-        // ===== Type Conversion =====
-        case IR::OP_F2I:
-            out.Lit("int("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_I2F:
-            out.Lit("float("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_F2U:
-            out.Lit("uint("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_U2F:
-            out.Lit("float("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_I2U:
-            out.Lit("uint("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_U2I:
-            out.Lit("int("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_BITCAST: {
-            u16 srcReg = Op(instIdx, 0);
-            u16 srcType = (ir->registerTypes && srcReg < ir->registerCount) ? ir->registerTypes[srcReg] : 0;
-            u16 dstType = ir->types[instIdx];
-            auto scalarFamily = [](u16 type) -> CoreType {
-                CoreType t = static_cast<CoreType>(type);
-                switch (t) {
-                    case CoreType::FLOAT: case CoreType::FLOAT2: case CoreType::FLOAT3: case CoreType::FLOAT4: return CoreType::FLOAT;
-                    case CoreType::INT: case CoreType::INT2: case CoreType::INT3: case CoreType::INT4: return CoreType::INT;
-                    case CoreType::UINT: case CoreType::UINT2: case CoreType::UINT3: case CoreType::UINT4: return CoreType::UINT;
-                    default: return t;
-                }
-            };
-            CoreType srcFamily = scalarFamily(srcType);
-            CoreType dstFamily = scalarFamily(dstType);
-            if (srcFamily == CoreType::FLOAT && dstFamily == CoreType::INT) {
-                out.Lit("floatBitsToInt("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            } else if (srcFamily == CoreType::FLOAT && dstFamily == CoreType::UINT) {
-                out.Lit("floatBitsToUint("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            } else if (srcFamily == CoreType::INT && dstFamily == CoreType::FLOAT) {
-                out.Lit("intBitsToFloat("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            } else if (srcFamily == CoreType::UINT && dstFamily == CoreType::FLOAT) {
-                out.Lit("uintBitsToFloat("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            } else {
-                EmitExpr(Op(instIdx, 0));
-            }
-            return;
-        }
-
-        // ===== Vector Operations =====
-        case IR::OP_VEC_CONSTRUCT: {
-            u16 type = ir->types[instIdx];
-            u16 dest = ir->destinations[instIdx];
-
-            // Try register type if instruction type is invalid
-            if ((type == 0 || type == static_cast<u16>(CoreType::VOID) ||
-                 type == static_cast<u16>(CoreType::INVALID)) &&
-                ir->registerTypes && dest < regCount) {
-                type = ir->registerTypes[dest];
-            }
-
-            // Count actual valid operands
-            u32 validCount = 0;
-            for (u32 i = 0; i < 4; i++) {
-                u16 op = Op(instIdx, i);
-                if (IsValidOperand(op)) {
-                    validCount++;
-                } else {
-                    break;
-                }
-            }
-            if (validCount == 0) validCount = 1;
-
-            // Determine component count from TYPE (not operand count!)
-            // vec4(vec3, float) has 2 operands but 4 components
-            u32 components = 4;  // Default to vec4
-            if (type == static_cast<u16>(CoreType::FLOAT2) ||
-                type == static_cast<u16>(CoreType::INT2) ||
-                type == static_cast<u16>(CoreType::UINT2)) {
-                components = 2;
-            } else if (type == static_cast<u16>(CoreType::FLOAT3) ||
-                       type == static_cast<u16>(CoreType::INT3) ||
-                       type == static_cast<u16>(CoreType::UINT3)) {
-                components = 3;
-            } else if (type == static_cast<u16>(CoreType::FLOAT4) ||
-                       type == static_cast<u16>(CoreType::INT4) ||
-                       type == static_cast<u16>(CoreType::UINT4)) {
-                components = 4;
-            } else if (type == static_cast<u16>(CoreType::FLOAT) ||
-                       type == static_cast<u16>(CoreType::INT) ||
-                       type == static_cast<u16>(CoreType::UINT) ||
-                       type == static_cast<u16>(CoreType::BOOL)) {
-                components = 1;
-            } else {
-                // Unknown type - use validCount as last resort
-                components = validCount;
-            }
-
-            EmitType(type);
-
-            out.Chr('(');
-
-            // Check if this is a scalar splat (all operands are the same)
-            bool isScalarSplat = validCount > 1;
-            u16 firstOp = Op(instIdx, 0);
-            for (u32 i = 1; i < validCount && isScalarSplat; i++) {
-                if (Op(instIdx, i) != firstOp) {
-                    isScalarSplat = false;
-                }
-            }
-
-            if (isScalarSplat) {
-                // Scalar splat: emit single value, GLSL will broadcast
-                EmitExpr(firstOp);
-            } else {
-                // Normal case: emit the minimum of validCount and components
-                // This handles both vec4(vec3, float) and prevents extra args
-                u32 emitCount = (validCount < components) ? validCount : components;
-                for (u32 i = 0; i < emitCount; i++) {
-                    u16 op = Op(instIdx, i);
-                    if (i > 0) out.Lit(", ");
-                    EmitExpr(op);
-                }
-            }
-            out.Chr(')');
-            return;
-        }
-
-        case IR::OP_VEC_EXTRACT: {
-            EmitExpr(Op(instIdx, 0));
-            out.Chr('.');
-            out.Chr(Str::SWIZZLE[Op(instIdx, 1) & 3]);
-            return;
-        }
-
-        case IR::OP_VEC_SHUFFLE: {
-            EmitExpr(Op(instIdx, 0));
-            out.Chr('.');
-            u16 mask = Op(instIdx, 1);
-            u16 resultType = ir->types[instIdx];
-            u32 components = 1;
-            if (resultType >= static_cast<u16>(CoreType::FLOAT2) && resultType <= static_cast<u16>(CoreType::FLOAT4)) {
-                components = resultType - static_cast<u16>(CoreType::FLOAT2) + 2;
-            } else if (resultType >= static_cast<u16>(CoreType::INT2) && resultType <= static_cast<u16>(CoreType::INT4)) {
-                components = resultType - static_cast<u16>(CoreType::INT2) + 2;
-            }
-            for (u32 i = 0; i < components; i++) {
-                out.Chr(Str::SWIZZLE[(mask >> (i * 2)) & 0x3]);
-            }
-            return;
-        }
-
-        case IR::OP_VEC_INSERT: {
-            // This is tricky to inline - emit the vector and note modification needed
-            EmitExpr(Op(instIdx, 0));
-            return;
-        }
-
-        // ===== Matrix Operations =====
-        case IR::OP_MAT_MUL: case IR::OP_MAT_VEC_MUL: case IR::OP_VEC_MAT_MUL:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" * "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_MAT_TRANSPOSE:
-            out.Lit("transpose("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_MAT_INVERSE:
-            out.Lit("inverse("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_MAT_DET:
-            out.Lit("determinant("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_MAT_SCALE:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" * "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_MAT_CONSTRUCT: {
-            u16 type = ir->types[instIdx];
-            EmitType(type);
-            out.Chr('(');
-            u32 cols = (type == static_cast<u16>(CoreType::MAT4)) ? 4 :
-                       (type == static_cast<u16>(CoreType::MAT3)) ? 3 : 2;
-            for (u32 i = 0; i < cols && i < 4; i++) {
-                if (i > 0) out.Lit(", ");
-                EmitExpr(Op(instIdx, i));
-            }
-            out.Chr(')');
-            return;
-        }
-        case IR::OP_MAT_IDENTITY: {
-            u16 type = ir->types[instIdx];
-            EmitType(type);
-            out.Lit("(1.0)");
-            return;
-        }
-        case IR::OP_MAT_ZERO: {
-            u16 type = ir->types[instIdx];
-            EmitType(type);
-            out.Lit("(0.0)");
-            return;
-        }
-
-        case IR::OP_STRUCT_EXTRACT: {
-            u16 structReg = Op(instIdx, 0);
-            u16 fieldIdx = Op(instIdx, 1);
-            u32 structHash = (ir->registerStructTypes && structReg < ir->registerCount)
-                                 ? ir->registerStructTypes[structReg]
-                                 : 0;
-            EmitExpr(structReg);
-            out.Chr('.');
-            EmitStructFieldNameByIndex(structHash, fieldIdx);
-            return;
-        }
-
-        case IR::OP_STRUCT_ARRAY_EXTRACT: {
-            // Inline element read from an array field: struct.field[index]
-            u16 structReg = Op(instIdx, 0);
-            u16 fieldIdx = Op(instIdx, 1);
-            u16 indexReg = Op(instIdx, 2);
-            u32 structHash = ir->metadata[instIdx];
-            if (structHash == 0 && ir->registerStructTypes &&
-                structReg < ir->registerCount) {
-                structHash = ir->registerStructTypes[structReg];
-            }
-            EmitExpr(structReg);
-            out.Chr('.');
-            EmitStructFieldNameByIndex(structHash, fieldIdx);
-            out.Chr('[');
-            EmitExpr(indexReg);
-            out.Chr(']');
-            return;
-        }
-
-        // ===== Texture Operations =====
-        case IR::OP_TEX_SAMPLE:
-            out.Lit("texture("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_TEX_SAMPLE_OFFSET:
-            out.Lit("textureOffset("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
-            return;
-        case IR::OP_TEX_SAMPLE_LOD:
-            out.Lit("textureLod("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
-            return;
-        case IR::OP_TEX_SAMPLE_LOD_OFFSET:
-            out.Lit("textureLodOffset("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Lit(", "); EmitExpr(Op(instIdx, 3)); out.Chr(')');
-            return;
-        case IR::OP_TEX_SAMPLE_BIAS:
-            out.Lit("texture("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
-            return;
-        case IR::OP_TEX_SAMPLE_BIAS_OFFSET:
-            out.Lit("textureOffset("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 3)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
-            return;
-        case IR::OP_TEX_SAMPLE_GRAD:
-            out.Lit("textureGrad("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Lit(", "); EmitExpr(Op(instIdx, 3)); out.Chr(')');
-            return;
-        case IR::OP_TEX_FETCH:
-            out.Lit("texelFetch("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
-            return;
-        case IR::OP_TEX_FETCH_OFFSET:
-            out.Lit("texelFetchOffset("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Lit(", "); EmitExpr(Op(instIdx, 3)); out.Chr(')');
-            return;
-        case IR::OP_TEX_SIZE:
-            out.Lit("textureSize("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Chr(')');
-            return;
-        case IR::OP_TEX_LEVELS:
-            out.Lit("max("); EmitTextureLevelsUniformName(Op(instIdx, 0)); out.Lit(", 1)");
-            return;
-        case IR::OP_TEX_GATHER:
-            out.Lit("bwsl_texture_gather("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
-            return;
-        case IR::OP_TEX_GATHER_OFFSET:
-            out.Lit("bwsl_texture_gather_offset("); EmitExpr(Op(instIdx, 0)); out.Lit(", "); EmitExpr(Op(instIdx, 1)); out.Lit(", "); EmitExpr(Op(instIdx, 2)); out.Lit(", "); EmitExpr(Op(instIdx, 3)); out.Chr(')');
-            return;
-        case IR::OP_LOAD_TEX_HANDLE:
-            out.Lit("u_");
-            if (renderConfig && Op(instIdx, 0) < renderConfig->textures.size()) {
-                out.Str(renderConfig->textures[Op(instIdx, 0)].name.c_str());
-            } else {
-                out.Lit("sampler");
-                out.Uint(Op(instIdx, 0));
-            }
-            return;
-
-        // ===== Derivatives =====
-        case IR::OP_DDX: case IR::OP_DDX_FINE: case IR::OP_DDX_COARSE:
-            out.Lit("dFdx("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_DDY: case IR::OP_DDY_FINE: case IR::OP_DDY_COARSE:
-            out.Lit("dFdy("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-        case IR::OP_FWIDTH: case IR::OP_FWIDTH_FINE: case IR::OP_FWIDTH_COARSE:
-            out.Lit("fwidth("); EmitExpr(Op(instIdx, 0)); out.Chr(')');
-            return;
-
-        // ===== Select (ternary) =====
-        case IR::OP_SELECT:
-            out.Chr('('); EmitExpr(Op(instIdx, 0)); out.Lit(" ? "); EmitExpr(Op(instIdx, 1)); out.Lit(" : "); EmitExpr(Op(instIdx, 2)); out.Chr(')');
-            return;
-
-        // ===== Array Operations =====
-        case IR::OP_ARRAY_ACCESS:
-        case IR::OP_ARRAY_LOAD:
-            EmitExpr(Op(instIdx, 0));
-            out.Chr('[');
-            EmitExpr(Op(instIdx, 1));
-            out.Chr(']');
-            return;
-
-        case IR::OP_ARRAY_CONSTRUCT: {
-            u16 type = ir->types[instIdx];
-            EmitType(type);
-            out.Lit("[](");
-            for (u32 i = 0; i < 4; i++) {
-                u16 op = Op(instIdx, i);
-                if (op == 0x3FFF) break;
-                if (i > 0) out.Lit(", ");
-                EmitExpr(op);
-            }
-            out.Chr(')');
-            return;
-        }
-
-        // ===== Enum Operations =====
-        case IR::OP_ENUM_CONSTRUCT:
-        case IR::OP_ENUM_TAG:
-        case IR::OP_ENUM_FIELD:
-            EmitExpr(Op(instIdx, 0));
-            return;
-
         default:
-            // For any unhandled opcode, reference the temp variable
-            // This ensures we don't produce invalid code
-            EmitReg(ir->destinations[instIdx]);
+            out.Lit("0.0 /* unsupported load */");
             return;
     }
 }
@@ -2973,56 +2076,160 @@ void GLESBuilder::EmitFuncCall(u32 instIdx, const char* func, u32 arity) {
     out.Chr(')');
 }
 
-void GLESBuilder::EmitConstant(u32 instIdx) {
-    u16 constRef = Op(instIdx, 0);
-    EmitExpr(constRef);
+static u32 GLESComponentCount(u16 type) {
+    switch (static_cast<CoreType>(type)) {
+        case CoreType::BOOL2: case CoreType::INT2: case CoreType::UINT2: case CoreType::FLOAT2: return 2;
+        case CoreType::BOOL3: case CoreType::INT3: case CoreType::UINT3: case CoreType::FLOAT3: return 3;
+        case CoreType::BOOL4: case CoreType::INT4: case CoreType::UINT4: case CoreType::FLOAT4: return 4;
+        default: return 1;
+    }
+}
+
+bool GLESBuilder::EmitConstantExpr(u16 reg, u32 depth) {
+    if (depth > 32 || reg == 0x3FFF) return false;
+    if (reg >= 0x2000) { EmitExpr(reg); return true; }
+    u32 definition = NO_BLOCK;
+    for (u32 i = 0; i < ir->instructionCount; ++i) {
+        u16 op = ir->opcodes[i];
+        if (Dest(i) != reg || IR::IsOutputOpcode(static_cast<IR::OpCode>(op)) ||
+            op == IR::OP_BRANCH || op == IR::OP_JUMP || op == IR::OP_RET ||
+            op == IR::OP_NOP) continue;
+        if (definition != NO_BLOCK) return false;
+        definition = i;
+    }
+    if (definition == NO_BLOCK) return false;
+    u16 op = Opcode(definition);
+    u32 start = out.len;
+    bool ok = false;
+    if (op == IR::OP_LOAD_CONST || op == IR::OP_LOAD_REG || op == IR::OP_STORE_REG) {
+        ok = EmitConstantExpr(Op(definition, 0), depth + 1);
+    } else if (op == IR::OP_VEC_CONSTRUCT) {
+        EmitType(Type(definition)); out.Chr('(');
+        ok = true;
+        bool first = true;
+        const u32 components = GLESComponentCount(Type(definition));
+        u32 consumed = 0;
+        for (u32 i = 0; i < 4 && consumed < components; ++i) {
+            u16 value = Op(definition, i);
+            if (value == 0x3FFF) continue;
+            if (!first) out.Lit(", ");
+            first = false;
+            if (!EmitConstantExpr(value, depth + 1)) { ok = false; break; }
+            consumed += value < regCount ? GLESComponentCount(ir->registerTypes[value]) : 1;
+        }
+        out.Chr(')');
+    } else if (op >= IR::OP_F2I && op <= IR::OP_U2I) {
+        EmitType(Type(definition)); out.Chr('(');
+        ok = EmitConstantExpr(Op(definition, 0), depth + 1);
+        out.Chr(')');
+    } else {
+        const char* operation = nullptr;
+        bool unary = false;
+        switch (op) {
+            case IR::OP_INEG: case IR::OP_FNEG: operation = "-"; unary = true; break;
+            case IR::OP_IADD: case IR::OP_FADD: operation = " + "; break;
+            case IR::OP_ISUB: case IR::OP_FSUB: operation = " - "; break;
+            case IR::OP_IMUL: case IR::OP_FMUL: operation = " * "; break;
+            case IR::OP_IDIV: case IR::OP_FDIV: operation = " / "; break;
+            case IR::OP_IMOD: operation = " % "; break;
+            case IR::OP_SHL: operation = " << "; break;
+            case IR::OP_SHR: case IR::OP_ASR: operation = " >> "; break;
+            case IR::OP_AND: operation = " & "; break;
+            case IR::OP_OR: operation = " | "; break;
+            case IR::OP_XOR: operation = " ^ "; break;
+            case IR::OP_NOT: operation = "~"; unary = true; break;
+            default: break;
+        }
+        if (!operation) return false;
+        out.Chr('(');
+        if (unary) out.Str(operation);
+        ok = EmitConstantExpr(Op(definition, 0), depth + 1);
+        if (!unary) {
+            out.Str(operation);
+            ok = EmitConstantExpr(Op(definition, 1), depth + 1) && ok;
+        }
+        out.Chr(')');
+    }
+    if (!ok) out.len = start;
+    return ok;
+}
+
+void GLESBuilder::EmitTextureOffset(u16 reg) {
+    // GLSL offset operands must remain constant expressions, even when the IR
+    // materializes a literal vector in an SSA temporary.
+    if (!EmitConstantExpr(reg)) EmitExpr(reg);
+}
+
+void GLESBuilder::EmitTexture(u16 reg, u32 metadata) {
+    u16 slot = reg & 0x0FFF;
+    if (renderConfig) {
+        for (const auto& texture : renderConfig->textures) {
+            if (texture.bindingIndex != slot) continue;
+            if (texture.separateSampler) {
+                u32 binding = texture.defaultSamplerBinding;
+                if (TextureOpHasExplicitSampler(metadata)) {
+                    u16 samplerSlot = GetTextureOpExplicitSamplerBinding(metadata);
+                    for (const auto& sampler : renderConfig->samplers)
+                        if (sampler.bindingIndex == samplerSlot) binding = sampler.descriptorBinding;
+                }
+                out.Lit("bwsl_tex_0_"); out.Uint(slot);
+                out.Lit("_sampler_2_"); out.Uint(binding);
+                return;
+            }
+            out.Lit("u_"); out.Str(texture.name.c_str());
+            return;
+        }
+    }
+    out.Lit("sampler"); out.Uint(slot);
+}
+
+void GLESBuilder::EmitSelect(u32 instIdx) {
+    u16 condition = Op(instIdx, 2);
+    u32 count = condition < regCount ? GLESComponentCount(ir->registerTypes[condition]) : 1;
+    if (count == 1) {
+        out.Chr('('); EmitExpr(condition); out.Lit(" ? ");
+        EmitExpr(Op(instIdx, 1)); out.Lit(" : "); EmitExpr(Op(instIdx, 0)); out.Chr(')');
+        return;
+    }
+    // GLSL's ternary takes a scalar condition; construct vector select per lane.
+    EmitType(Type(instIdx)); out.Chr('(');
+    for (u32 i = 0; i < count; ++i) {
+        if (i) out.Lit(", ");
+        EmitExpr(condition); out.Chr('.'); out.Chr(Str::SWIZZLE[i]); out.Lit(" ? ");
+        EmitExpr(Op(instIdx, 1)); out.Chr('.'); out.Chr(Str::SWIZZLE[i]); out.Lit(" : ");
+        EmitExpr(Op(instIdx, 0)); out.Chr('.'); out.Chr(Str::SWIZZLE[i]);
+    }
+    out.Chr(')');
+}
+
+void GLESBuilder::EmitShuffleExpr(u32 instIdx) {
+    u16 type = Type(instIdx);
+    u32 count = GLESComponentCount(type);
+    u16 first = Op(instIdx, 0), second = Op(instIdx, 1);
+    u32 firstCount = first < regCount ? GLESComponentCount(ir->registerTypes[first]) : 4;
+    if (count > 1) { EmitType(type); out.Chr('('); }
+    for (u32 i = 0; i < count; ++i) {
+        if (i) out.Lit(", ");
+        u32 component = (ir->metadata[instIdx] >> (i * 4)) & 15;
+        bool fromFirst = component < firstCount;
+        EmitExpr(fromFirst ? first : second);
+        out.Chr('['); out.Uint(fromFirst ? component : component - firstCount); out.Chr(']');
+    }
+    if (count > 1) out.Chr(')');
 }
 
 void GLESBuilder::EmitSwizzle(u32 instIdx) {
-    u16 dest = ir->destinations[instIdx];
-    EmitRegWithDecl(dest);
-    out.Lit(" = ");
-    EmitExpr(Op(instIdx, 0));
-    out.Chr('.');
-
-    // Swizzle mask is in operand 1, packed as 4x2-bit indices
-    u16 mask = Op(instIdx, 1);
-    u16 resultType = ir->types[instIdx];
-    u32 components = 1;
-
-    // Determine component count from result type
-    if (resultType >= static_cast<u16>(CoreType::FLOAT2) &&
-        resultType <= static_cast<u16>(CoreType::FLOAT4)) {
-        components = resultType - static_cast<u16>(CoreType::FLOAT2) + 2;
-    }
-
-    for (u32 i = 0; i < components; i++) {
-        u8 idx = (mask >> (i * 2)) & 0x3;
-        out.Chr(Str::SWIZZLE[idx]);
-    }
-    out.Lit(";");
+    EmitRegWithDecl(Dest(instIdx)); out.Lit(" = "); EmitShuffleExpr(instIdx); out.Chr(';');
 }
 
 // Helper to check if an operand is a valid value reference
 bool GLESBuilder::IsValidOperand(u16 op) const {
     if (op == 0x3FFF) return false;  // Explicit invalid marker
 
-    // Check constant references for valid indices
-    if (op & 0x8000) {
-        // Float constant - check index is in range
-        u16 idx = op & 0x7FFF;
-        return idx < ir->floatCount;
-    }
-    if ((op & 0xC000) == 0xC000) {
-        // Bool constant - check index is in range
-        u16 idx = op & 0x3FFF;
-        return idx < ir->boolCount;
-    }
-    if (op & 0x4000) {
-        // Int constant - check index is in range
-        u16 idx = op & 0x3FFF;
-        return idx < ir->intCount;
-    }
+    if ((op & 0xC000) == 0xC000) return (op & 0x3FFF) < ir->boolCount;
+    if (op & 0x8000) return (op & 0x7FFF) < ir->floatCount;
+    if (op & 0x4000) return (op & 0x3FFF) < ir->intCount;
+    if ((op & 0xE000) == 0x2000) return (op & 0x1FFF) < ir->uintCount;
 
     // Register reference - always valid (r0 is valid!)
     return true;
@@ -3030,7 +2237,7 @@ bool GLESBuilder::IsValidOperand(u16 op) const {
 
 void GLESBuilder::EmitVecConstruct(u32 instIdx) {
     u16 dest = ir->destinations[instIdx];
-    u16 type = ir->types[instIdx];
+    u16 type = Type(instIdx);
 
     EmitRegWithDecl(dest);
     out.Lit(" = ");
@@ -3177,7 +2384,6 @@ void GLESBuilder::EmitFuncAssign(u32 instIdx, u16 dest, const char* func, u32 ar
 // ============================================================================
 
 std::string_view GLESBuilder::Emit() {
-    CountUses();
     EmitHeader();
     EmitInputs();
     EmitOutputs();

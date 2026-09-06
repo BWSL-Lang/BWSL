@@ -1,0 +1,1 @@
+pipeline Bad { bad :: (x:float) -> void { if (x>0.0) { return 1.0; } } }

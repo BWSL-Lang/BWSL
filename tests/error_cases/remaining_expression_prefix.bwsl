@@ -1,0 +1,8 @@
+// Regression: Invalid assignment target.
+pipeline Remaining {
+
+    pass "Main" {
+        vertex { output.position=float4(0.0,0.0,0.0,1.0); }
+        fragment { int x=1; ++(x+1); output.color=float4(1.0); }
+    }
+}

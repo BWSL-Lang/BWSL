@@ -3,5 +3,6 @@
     "output_binding": 0,
     "output_size": 16,
     "output_type": "float",
-    "tolerance": 0.0
+    "tolerance": 0.0,
+    "expected_values": [2.5, 7.25, 12.0, 16.75]
 }

@@ -24,12 +24,53 @@
 
 namespace spirv_cross_wrapper {
 
+static std::string MetalResourceBindingError(spirv_cross::CompilerMSL& compiler) {
+    const auto resources = compiler.get_shader_resources();
+    for (const auto& buffer : resources.uniform_buffers)
+        if (compiler.get_decoration(buffer.id, spv::DecorationBinding) >= 31)
+            return "error: Metal supports buffer bindings 0 through 30; reduce buffer resources or vertex-pulling attributes";
+    for (const auto& buffer : resources.storage_buffers)
+        if (compiler.get_decoration(buffer.id, spv::DecorationBinding) >= 31)
+            return "error: Metal supports buffer bindings 0 through 30; reduce buffer resources or vertex-pulling attributes";
+    for (const auto& sampler : resources.separate_samplers)
+        if (compiler.get_decoration(sampler.id, spv::DecorationBinding) >= 16)
+            return "error: Metal supports sampler bindings 0 through 15";
+    if (resources.separate_samplers.size() + resources.sampled_images.size() > 16)
+        return "error: Metal supports at most 16 active samplers";
+    return {};
+}
+
+static uint32_t RequiredMSLVersion(const spirv_cross::CompilerMSL& compiler) {
+    for (auto capability : compiler.get_declared_capabilities()) {
+        switch (capability) {
+            case spv::CapabilityGroupNonUniformVote:
+            case spv::CapabilityGroupNonUniformArithmetic:
+            case spv::CapabilityGroupNonUniformBallot:
+            case spv::CapabilityGroupNonUniformClustered:
+            case spv::CapabilityGroupNonUniformQuad:
+                return spirv_cross::CompilerMSL::Options::make_msl_version(2, 1);
+            default: break;
+        }
+    }
+    return spirv_cross::CompilerMSL::Options::make_msl_version(2, 0);
+}
+
 // Helper to add MSL resource bindings that preserve SPIR-V binding indices
 // Note: Metal only allows sampler indices 0-15, so we remap sampler bindings
 // to stay within this range while keeping texture bindings as-is.
 static void preserveBindingIndices(spirv_cross::CompilerMSL& compiler, spv::ExecutionModel stage) {
     auto resources = compiler.get_shader_resources();
-    uint32_t nextSamplerSlot = 0;  // Track sampler slots separately (0-15 max)
+    bool samplerSlots[16] = {};
+    for (const auto& res : resources.separate_samplers) {
+        uint32_t binding = compiler.get_decoration(res.id, spv::DecorationBinding);
+        if (binding >= 16) SPIRV_CROSS_THROW("Metal supports sampler bindings 0 through 15");
+        samplerSlots[binding] = true;
+    }
+    auto allocateSamplerSlot = [&]() -> uint32_t {
+        for (uint32_t slot = 0; slot < 16; ++slot)
+            if (!samplerSlots[slot]) { samplerSlots[slot] = true; return slot; }
+        SPIRV_CROSS_THROW("Metal supports at most 16 active samplers");
+    };
 
     // Helper lambda to add binding for a resource (non-sampler)
     auto addBinding = [&](const spirv_cross::Resource& res) {
@@ -59,17 +100,21 @@ static void preserveBindingIndices(spirv_cross::CompilerMSL& compiler, spv::Exec
         mslBinding.msl_buffer = binding;
         mslBinding.msl_texture = binding;
         // Remap sampler to sequential slots within 0-15 range
-        mslBinding.msl_sampler = nextSamplerSlot < 16 ? nextSamplerSlot++ : 15;
+        mslBinding.msl_sampler = allocateSamplerSlot();
         compiler.add_msl_resource_binding(mslBinding);
     };
 
     // Uniform buffers
     for (const auto& res : resources.uniform_buffers) {
+        if (compiler.get_decoration(res.id, spv::DecorationBinding) >= 31)
+            SPIRV_CROSS_THROW("Metal supports buffer bindings 0 through 30; reduce buffer resources or vertex-pulling attributes");
         addBinding(res);
     }
 
     // Storage buffers
     for (const auto& res : resources.storage_buffers) {
+        if (compiler.get_decoration(res.id, spv::DecorationBinding) >= 31)
+            SPIRV_CROSS_THROW("Metal supports buffer bindings 0 through 30; reduce buffer resources or vertex-pulling attributes");
         addBinding(res);
     }
 
@@ -89,7 +134,7 @@ static void preserveBindingIndices(spirv_cross::CompilerMSL& compiler, spv::Exec
         mslBinding.binding = binding;
         mslBinding.msl_buffer = binding;
         mslBinding.msl_texture = binding;
-        mslBinding.msl_sampler = nextSamplerSlot < 16 ? nextSamplerSlot++ : 15;
+        mslBinding.msl_sampler = binding;
         compiler.add_msl_resource_binding(mslBinding);
     }
 
@@ -180,8 +225,9 @@ std::string CompileToMSL(const std::vector<uint32_t>& spirv) {
     spirv_cross::CompilerMSL compiler(spirv);
     spirv_cross::CompilerMSL::Options mslOpts;
     mslOpts.platform = spirv_cross::CompilerMSL::Options::macOS;
-    mslOpts.msl_version = spirv_cross::CompilerMSL::Options::make_msl_version(2, 0);
+    mslOpts.msl_version = RequiredMSLVersion(compiler);
     compiler.set_msl_options(mslOpts);
+    if (auto error = MetalResourceBindingError(compiler); !error.empty()) return error;
 
     // Preserve SPIR-V binding indices in Metal output
     auto entry = compiler.get_entry_points_and_stages()[0];
@@ -193,8 +239,9 @@ std::string CompileToMSL(const std::vector<uint32_t>& spirv) {
         spirv_cross::CompilerMSL compiler(spirv);
         spirv_cross::CompilerMSL::Options mslOpts;
         mslOpts.platform = spirv_cross::CompilerMSL::Options::macOS;
-        mslOpts.msl_version = spirv_cross::CompilerMSL::Options::make_msl_version(2, 0);
+        mslOpts.msl_version = RequiredMSLVersion(compiler);
         compiler.set_msl_options(mslOpts);
+        if (auto error = MetalResourceBindingError(compiler); !error.empty()) return error;
 
         // Preserve SPIR-V binding indices in Metal output
         auto entry = compiler.get_entry_points_and_stages()[0];
@@ -213,14 +260,26 @@ std::string CompileToHLSL(const std::vector<uint32_t>& spirv, int shaderModel) {
 #ifdef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
     spirv_cross::CompilerHLSL compiler(spirv);
     spirv_cross::CompilerHLSL::Options hlslOpts;
-    hlslOpts.shader_model = shaderModel;
+    auto numWorkgroups = compiler.remap_num_workgroups_builtin();
+    if (numWorkgroups) {
+        compiler.set_name(numWorkgroups, "bwsl_num_workgroups");
+        compiler.set_decoration(numWorkgroups, spv::DecorationDescriptorSet, 3);
+        compiler.set_decoration(numWorkgroups, spv::DecorationBinding, 0);
+    }
+    hlslOpts.shader_model = numWorkgroups && shaderModel < 51 ? 51 : shaderModel;
     compiler.set_hlsl_options(hlslOpts);
     return compiler.compile();
 #else
     try {
         spirv_cross::CompilerHLSL compiler(spirv);
         spirv_cross::CompilerHLSL::Options hlslOpts;
-        hlslOpts.shader_model = shaderModel;
+        auto numWorkgroups = compiler.remap_num_workgroups_builtin();
+        if (numWorkgroups) {
+            compiler.set_name(numWorkgroups, "bwsl_num_workgroups");
+            compiler.set_decoration(numWorkgroups, spv::DecorationDescriptorSet, 3);
+            compiler.set_decoration(numWorkgroups, spv::DecorationBinding, 0);
+        }
+        hlslOpts.shader_model = numWorkgroups && shaderModel < 51 ? 51 : shaderModel;
         compiler.set_hlsl_options(hlslOpts);
         return compiler.compile();
     } catch (const spirv_cross::CompilerError& e) {
@@ -356,6 +415,19 @@ static void PatchGLSLES300Packing4x8Builtins(std::string& source,
     source.insert(GLSLESPolyfillInsertionPoint(source), polyfill);
 }
 
+static void combineGLSLSamplers(spirv_cross::CompilerGLSL& compiler) {
+    uint32_t dummy = compiler.build_dummy_sampler_for_combined_images();
+    compiler.build_combined_image_samplers();
+    for (const auto& pair : compiler.get_combined_image_samplers()) {
+        std::string name = "bwsl_tex_" + std::to_string(compiler.get_decoration(pair.image_id, spv::DecorationDescriptorSet)) +
+            "_" + std::to_string(compiler.get_decoration(pair.image_id, spv::DecorationBinding)) + "_sampler_";
+        if (pair.sampler_id == dummy) name += "dummy";
+        else name += std::to_string(compiler.get_decoration(pair.sampler_id, spv::DecorationDescriptorSet)) +
+            "_" + std::to_string(compiler.get_decoration(pair.sampler_id, spv::DecorationBinding));
+        compiler.set_name(pair.combined_id, name);
+    }
+}
+
 std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, bool es) {
 #ifdef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
     if (auto err = CheckGLSLESSPIRVCompatRaw(spirv, glslVersion, es); !err.empty()) {
@@ -371,7 +443,8 @@ std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, b
     glslOpts.vulkan_semantics = false;
     glslOpts.separate_shader_objects = true;
     compiler.set_common_options(glslOpts);
-    std::string result = compiler.compile();
+    combineGLSLSamplers(compiler);
+        std::string result = compiler.compile();
     PatchGLSLES300Packing4x8Builtins(result, glslVersion, es);
     if (auto err = CheckGLSLESEmittedCompat(result, glslVersion, es); !err.empty()) {
         return err;
@@ -392,6 +465,7 @@ std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, b
         glslOpts.vulkan_semantics = false;
         glslOpts.separate_shader_objects = true;
         compiler.set_common_options(glslOpts);
+        combineGLSLSamplers(compiler);
         std::string result = compiler.compile();
         PatchGLSLES300Packing4x8Builtins(result, glslVersion, es);
         if (auto err = CheckGLSLESEmittedCompat(result, glslVersion, es); !err.empty()) {
@@ -440,7 +514,8 @@ std::string CompileToGLSLWithVaryings(
         }
     }
 
-    std::string result = compiler.compile();
+    combineGLSLSamplers(compiler);
+        std::string result = compiler.compile();
     if (auto err = CheckGLSLESEmittedCompat(result, glslVersion, es); !err.empty()) {
         return err;
     }
@@ -470,6 +545,7 @@ std::string CompileToGLSLWithVaryings(
             }
         }
 
+        combineGLSLSamplers(compiler);
         std::string result = compiler.compile();
         if (auto err = CheckGLSLESEmittedCompat(result, glslVersion, es); !err.empty()) {
             return err;

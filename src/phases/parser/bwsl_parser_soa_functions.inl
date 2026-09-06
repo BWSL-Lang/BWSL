@@ -113,7 +113,7 @@ bool Parser::ValidateAssignmentTarget(NodeRef target) {
             Symbol* sym = SymbolTable::LookupAny(&symbolTable, ast->GetIdentifier(target).name);
             if (sym && sym->kind == SymbolKind::VARIABLE) {
                 const VariableData& varData = symbolTable.variables[sym->index];
-                if (varData.isConst && !varData.isEval) {
+                if (varData.isConst && !varData.isMutableEval) {
                     char msg[256];
                     snprintf(msg, sizeof(msg), "Cannot assign to const variable '%s'",
                             ast->GetIdentifier(target).name.ToString(sourceBase()).c_str());
@@ -125,15 +125,26 @@ bool Parser::ValidateAssignmentTarget(NodeRef target) {
         }
 
         case ASTNodeType::MEMBER_ACCESS:
-            return true;
+            return ValidateAssignmentTarget(ast->GetMemberAccess(target).object);
 
         case ASTNodeType::ARRAY_ACCESS:
             return ValidateAssignmentTarget(ast->GetArrayAccess(target).array);
 
-        default:
-            Error("Invalid assignment target");
+        case ASTNodeType::UNARY_OP:
+            // A const pointer may still point at mutable data. Pointee const
+            // protection is checked when taking the address.
+            if (ast->GetUnaryOp(target).op == UnaryOpType::DEREFERENCE) return true;
+            break;
+
+        case ASTNodeType::LITERAL:
+            Error("Invalid assignment target: cannot assign to a compile-time constant");
             return false;
+
+        default:
+            break;
     }
+    Error("Invalid assignment target");
+    return false;
 }
 
 bool Parser::TryRegisterModule(const std::string& moduleName) {
@@ -701,6 +712,108 @@ bool Parser::RegisterModuleFromSource(const std::string& moduleName,
 // Function parsing
 //==============================================================================
 
+namespace {
+enum FunctionExit : u32 {
+    FunctionFallsThrough = 1, FunctionReturnsValue = 2,
+    FunctionReturnsWithoutValue = 4, FunctionBreaks = 8, FunctionContinues = 16,
+    FunctionDiscards = 32
+};
+
+bool GetLiteralCondition(const AST* ast, NodeRef condition, bool& truth) {
+    if (condition.Type() != ASTNodeType::LITERAL) return false;
+    const auto& value = ast->GetLiteral(condition).value;
+    switch (value.type) {
+    case LiteralValue::BOOL: truth = value.boolValue; return true;
+    case LiteralValue::INT: truth = value.intValue != 0; return true;
+    case LiteralValue::UINT: truth = value.uintValue != 0; return true;
+    case LiteralValue::FLOAT: truth = value.floatValue != 0.0f; return true;
+    default: return false;
+    }
+}
+
+u32 AnalyzeFunctionExits(const AST* ast, NodeRef node, u32 loopDepth = 0) {
+    if (node.IsNull()) return FunctionFallsThrough;
+    switch (node.Type()) {
+    case ASTNodeType::RETURN:
+        return ast->GetAssignment(node).value.IsNull() ? FunctionReturnsWithoutValue : FunctionReturnsValue;
+    case ASTNodeType::DISCARD_STATEMENT: return FunctionDiscards;
+    case ASTNodeType::BREAK_STATEMENT: return FunctionBreaks;
+    case ASTNodeType::SKIP_STATEMENT: return FunctionContinues;
+    case ASTNodeType::BLOCK: {
+        u32 exits = FunctionFallsThrough;
+        const auto& statements = ast->GetBlock(node).statements;
+        for (u32 i = 0; i < statements.count; ++i) {
+            NodeRef statement = statements[i];
+            if (!(exits & FunctionFallsThrough)) break;
+            exits = (exits & ~FunctionFallsThrough) | AnalyzeFunctionExits(ast, statement, loopDepth);
+        }
+        return exits;
+    }
+    case ASTNodeType::IF_STATEMENT: {
+        const auto& statements = ast->GetBlock(node).statements;
+        if (statements.count < 2) return FunctionFallsThrough;
+        u32 yes = AnalyzeFunctionExits(ast, statements[1], loopDepth);
+        u32 no = statements.count > 2 ? AnalyzeFunctionExits(ast, statements[2], loopDepth) : FunctionFallsThrough;
+        bool truth;
+        if (GetLiteralCondition(ast, statements[0], truth)) return truth ? yes : no;
+        return yes | no;
+    }
+    case ASTNodeType::SWITCH: {
+        const auto& sw = ast->GetSwitch(node);
+        u32 exits = 0;
+        bool hasDefault = false;
+        for (u32 i = 0; i < sw.cases.count; ++i) {
+            NodeRef armRef = sw.cases[i];
+            const auto& arm = ast->GetSwitchCase(armRef);
+            hasDefault |= arm.isDefault;
+            exits |= AnalyzeFunctionExits(ast, arm.body, loopDepth);
+        }
+        if (sw.defaultCase.IsValid()) {
+            hasDefault = true;
+            exits |= AnalyzeFunctionExits(ast, ast->GetSwitchCase(sw.defaultCase).body, loopDepth);
+        }
+        if (!hasDefault && !sw.isExhaustive) exits |= FunctionFallsThrough;
+        if (!loopDepth && (exits & FunctionBreaks))
+            exits = (exits & ~FunctionBreaks) | FunctionFallsThrough;
+        return exits;
+    }
+    case ASTNodeType::FOR_CSTYLE: {
+        const auto& loop = ast->GetForCStyle(node);
+        bool infinite = loop.condition.IsNull();
+        bool truth;
+        if (GetLiteralCondition(ast, loop.condition, truth)) {
+            if (!truth) return FunctionFallsThrough;
+            infinite = true;
+        }
+        u32 exits = AnalyzeFunctionExits(ast, loop.body, loopDepth + 1);
+        return (exits & (FunctionReturnsValue | FunctionReturnsWithoutValue | FunctionDiscards)) |
+               ((!infinite || (exits & FunctionBreaks)) ? FunctionFallsThrough : 0);
+    }
+    case ASTNodeType::LOOP: {
+        const auto& loop = ast->GetLoop(node);
+        u32 exits = AnalyzeFunctionExits(ast, loop.body, loopDepth + 1);
+        bool definitelyRuns = loop.count.IsNull();
+        if (loop.count.Type() == ASTNodeType::LITERAL) {
+            const auto& value = ast->GetLiteral(loop.count).value;
+            definitelyRuns = (value.type == LiteralValue::INT && value.intValue > 0) ||
+                             (value.type == LiteralValue::UINT && value.uintValue > 0);
+        }
+        bool canFinish = !loop.count.IsNull() || !loop.untilCondition.IsNull() || (exits & FunctionBreaks);
+        if (definitelyRuns && !(exits & (FunctionFallsThrough | FunctionBreaks | FunctionContinues))) canFinish = false;
+        return (exits & (FunctionReturnsValue | FunctionReturnsWithoutValue | FunctionDiscards)) |
+               (canFinish ? FunctionFallsThrough : 0);
+    }
+    case ASTNodeType::FOR_RANGE:
+        return FunctionFallsThrough | (AnalyzeFunctionExits(ast, ast->GetForRange(node).body, loopDepth + 1) &
+            (FunctionReturnsValue | FunctionReturnsWithoutValue | FunctionDiscards));
+    case ASTNodeType::FOR_COLLECTION:
+        return FunctionFallsThrough | (AnalyzeFunctionExits(ast, ast->GetForCollection(node).body, loopDepth + 1) &
+            (FunctionReturnsValue | FunctionReturnsWithoutValue | FunctionDiscards));
+    default: return FunctionFallsThrough;
+    }
+}
+} // namespace
+
 NodeRef Parser::ParseFunction() {
     TokenRef declToken = current;  // Function name token; a doc block precedes it
 
@@ -923,7 +1036,66 @@ NodeRef Parser::ParseFunction() {
             }
         }
 
-        if (isTypePatternBody) {
+        NodeRef enumScrutinee = NodeRef::Null();
+        const EnumData* patternEnum = nullptr;
+        if (!isGenericFunction) {
+            const FunctionDeclData& fn = ast->GetFunction(function);
+            for (u32 p = 0; p < fn.parameters.count; ++p) {
+                const EnumData* enumData = SymbolTable::ResolveEnumDataByHash(
+                    &symbolTable, SymbolTable::ResolveTypeAliasHash(&symbolTable, fn.parameters[p].second.nameHash));
+                if (!enumData) continue;
+                bool startsArm = Check(TokenType::DEFAULT) &&
+                    stream->GetType(PeekNext()) == static_cast<u8>(TokenType::COLON);
+                if (Check(TokenType::IDENTIFIER)) {
+                    TokenType nextType = static_cast<TokenType>(stream->GetType(PeekNext()));
+                    if (nextType == TokenType::COLON || nextType == TokenType::LEFT_PAREN) {
+                        u32 variantHash = Utils::HashStr(std::string(stream->GetValue(current)).c_str());
+                        for (u32 v = 0; v < enumData->variants.count; ++v) {
+                            startsArm |= enumData->variants[v].name.nameHash == variantHash;
+                        }
+                    }
+                }
+                if (startsArm) {
+                    enumScrutinee = ASTFactory::MakeIdentifier(ast, fn.parameters[p].first, line, col);
+                    patternEnum = enumData;
+                }
+                break; // Implicit arm bodies dispatch on the first enum parameter.
+            }
+        }
+
+        if (enumScrutinee.IsValid()) {
+            NodeRef body = ParsePatternMatch(enumScrutinee);
+            ast->GetFunction(function).body = body;
+            const PatternMatchData& match = ast->GetPatternMatch(body);
+            std::vector<bool> covered(patternEnum->variants.count, false);
+            bool hasDefault = false;
+            for (u32 a = 0; a < match.arms.count; ++a) {
+                const PatternMatchData& arm = ast->GetPatternMatch(match.arms[a]);
+                if (hasDefault) Error("Pattern arms after default are unreachable");
+                if (arm.isDefault) {
+                    hasDefault = true;
+                } else {
+                    u32 variant = patternEnum->variants.count;
+                    for (u32 v = 0; v < patternEnum->variants.count; ++v) {
+                        if (patternEnum->variants[v].name.nameHash == arm.variantHash) { variant = v; break; }
+                    }
+                    if (variant == patternEnum->variants.count) {
+                        Error("Unknown enum variant in pattern arm");
+                    } else {
+                        if (covered[variant]) Error("Duplicate enum variant in pattern arms");
+                        covered[variant] = true;
+                        if (arm.bindings.count != 0 && arm.bindings.count != patternEnum->variants[variant].associatedTypes.count)
+                            Error("Pattern binding count does not match enum variant payload");
+                    }
+                }
+                if (arm.body.Type() == ASTNodeType::BLOCK &&
+                    (AnalyzeFunctionExits(ast, arm.body) & (FunctionFallsThrough | FunctionReturnsWithoutValue)))
+                    Error("Pattern arm must return a value on every path");
+            }
+            if (!hasDefault && std::find(covered.begin(), covered.end(), false) != covered.end())
+                Error("Pattern function must cover every enum variant or provide default");
+            if (body.IsValid() && ast->GetEndLine(body) != 0) MarkNodeEndAtPreviousToken(function);
+        } else if (isTypePatternBody) {
             NodeRef body = ParseTypePatternMatch();
             ast->GetFunction(function).body = body;
             if (Consume(TokenType::RIGHT_BRACE, "Expected '}' after type pattern match")) {
@@ -932,7 +1104,7 @@ NodeRef Parser::ParseFunction() {
             }
         } else {
             // Regular function with statements
-            NodeRef body = ParseBlock();
+            NodeRef body = ParseBlock(false);
             ast->GetFunction(function).body = body;
             if (body.IsValid() && ast->GetEndLine(body) != 0) {
                 MarkNodeEndAtPreviousToken(function);
@@ -940,6 +1112,18 @@ NodeRef Parser::ParseFunction() {
         }
     }
 
+    const FunctionDeclData& parsedFunction = ast->GetFunction(function);
+    if (parsedFunction.body.Type() == ASTNodeType::BLOCK &&
+        parsedFunction.returnType == CoreType::VOID &&
+        (AnalyzeFunctionExits(ast, parsedFunction.body) & FunctionReturnsValue)) {
+        Error("Void function cannot return a value");
+    }
+    if (parsedFunction.body.Type() == ASTNodeType::BLOCK &&
+        parsedFunction.returnType != CoreType::VOID && parsedFunction.returnType != CoreType::INVALID &&
+        (AnalyzeFunctionExits(ast, parsedFunction.body) &
+         (FunctionFallsThrough | FunctionReturnsWithoutValue))) {
+        Error("Non-void function must return a value on every reachable path");
+    }
     SymbolTable::ExitScope(&symbolTable);
 
     return function;

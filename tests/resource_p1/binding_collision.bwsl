@@ -1,0 +1,12 @@
+// Valid SPIR-V, invalid Metal: the uniform and storage buffer both become [[buffer(1)]].
+pipeline BindingCollision {
+    attributes { position: float3 }
+    resources { scale: float values: buffer<float> }
+    pass "Main" {
+        use attributes { position }
+        use resources { scale, values }
+        vertex {
+            output.position = float4(attributes.position * resources.scale, resources.values[input.vertex_id]);
+        }
+    }
+}

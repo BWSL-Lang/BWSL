@@ -27,6 +27,11 @@ struct SPIRVBuilder {
     alignas(64) u32* localVarIds;        // Maps IR register -> OpVariable ID (for address-taken vars)
     alignas(64) u32* localArrayVarIds;   // SPIR-V IDs for local array variables
     alignas(64) u32* localArrayElemPtrTypes;  // Pointer types for local array elements
+    // Rebound local pointers carry a runtime producer tag, without requiring
+    // VariablePointers support in downstream GLSL/HLSL/Metal compilers.
+    std::vector<std::vector<u32>> localPointerTargets;
+    std::vector<u32> localPointerTagVars;
+    std::vector<u32> localPointerIndexVars;
     u32 nextId;
     u32 idCapacity;
     u32 spvVersion = SpvVersion_1_2;
@@ -80,10 +85,12 @@ struct SPIRVBuilder {
     u32 imageTypeId = 0;              // OpTypeImage for 2D sampled texture
     u32 arrayImageTypeId = 0;         // OpTypeImage for 2D array sampled texture
     u32 cubeImageTypeId = 0;          // OpTypeImage for cube sampled texture
+    u32 volumeImageTypeId = 0;        // OpTypeImage for 3D sampled texture
     u32 samplerTypeId = 0;            // OpTypeSampler
     u32 sampledImageTypeId = 0;       // OpTypeSampledImage
     u32 arraySampledImageTypeId = 0;  // OpTypeSampledImage for array textures
     u32 cubeSampledImageTypeId = 0;   // OpTypeSampledImage for cube textures
+    u32 volumeSampledImageTypeId = 0;
 
     // Storage image type IDs (for image load/store operations)
     u32 storageImageTypeId = 0;       // OpTypeImage for 2D storage image (read/write)
@@ -92,6 +99,9 @@ struct SPIRVBuilder {
     // Track which texture bindings are array/cubemap textures
     bool textureIsArray[32] = {false};
     bool textureIsCubemap[32] = {false};
+    bool textureIsVolume[32] = {false};
+    bool textureIsSeparate[32] = {false};
+    u32 defaultSamplerIds[32] = {};
 
     // Built-in input type IDs (cached for reuse)
     u32 globalInvocationIdVarId = 0;
@@ -153,6 +163,7 @@ struct SPIRVBuilder {
     alignas(64) u32* blockIRIndices;    // Maps IR instruction index -> block
     alignas(64) u32* blockMergePoints;  // Structured control flow merge points
     u32 blockCount;
+    u32 blockCapacity;
 
     // ============= Branch Condition Override =============
     // Used to pre-convert branch conditions to bool before OpSelectionMerge
@@ -256,7 +267,7 @@ struct SPIRVBuilder {
     
     // ID allocation
     u32 AllocateId() { return nextId++; }
-    u32 GetSpirvId(u16 ir_register);
+    u32 GetSpirvId(u16 ir_register, bool readValue = true);
     u32 GetSpirvIdForBitwise(u16 ir_register, bool useUint);
 
     // Type management (cached)
@@ -274,10 +285,12 @@ struct SPIRVBuilder {
     u32 GetImageTypeId();               // Get OpTypeImage ID for 2D sampled texture
     u32 GetArrayImageTypeId();          // Get OpTypeImage ID for 2D array sampled texture
     u32 GetCubeImageTypeId();           // Get OpTypeImage ID for cube sampled texture
+    u32 GetVolumeImageTypeId();
     u32 GetSamplerTypeId();             // Get OpTypeSampler ID
     u32 GetSampledImageTypeId();        // Get OpTypeSampledImage ID
     u32 GetArraySampledImageTypeId();   // Get OpTypeSampledImage ID for array textures
     u32 GetCubeSampledImageTypeId();    // Get OpTypeSampledImage ID for cube textures
+    u32 GetVolumeSampledImageTypeId();
     u32 GetStorageImageTypeId();        // Get OpTypeImage ID for 2D storage image (read/write)
 
     // Constant management
@@ -308,6 +321,10 @@ struct SPIRVBuilder {
     
     // IR translation
     void TranslateInstruction(u32 ir_idx);
+    u32 LocalPointerValueType(u16 reg);
+    u32 LocalPointerTag(u16 reg);
+    u32 LocalPointerTarget(u32 producer, u32 index = 0, u32 depth = 0);
+    u32 SelectLocalValue(u32 type, u32 condition, u32 whenTrue, u32 whenFalse);
     spv::Op IRToSpvOp(IR::OpCode op);
     
     // Control flow
@@ -365,7 +382,8 @@ private:
     void GrowCurrentFunction();
     void GetSampledTextureTypeIds(u16 texSlot, u32* sampledImageType, u32* imageType);
     bool LoadSampledTexture(u16 texReg, CoreType missingResultType, u32 dest,
-                            bool needImage, SampledTextureLoad* outLoad);
+                            bool needImage, SampledTextureLoad* outLoad,
+                            u32 metadata = 0);
     
     // Fast parallel array helpers
     inline void SetSpirvId(u16 ir_reg, u32 spv_id) {
@@ -381,7 +399,7 @@ private:
 
 // ============= Inline Implementations (Hot Path) =============
 
-inline u32 SPIRVBuilder::GetSpirvId(u16 ir_register) {
+inline u32 SPIRVBuilder::GetSpirvId(u16 ir_register, bool readValue) {
     // Handle special encoding for constants
     // Check bool first since 0xC000 & 0x8000 == 0x8000
     if ((ir_register & 0xC000) == 0xC000) {
@@ -412,6 +430,17 @@ inline u32 SPIRVBuilder::GetSpirvId(u16 ir_register) {
 
     // Regular register
     if (ir_register >= idCapacity) return 0;
+
+    if (readValue && localVarIds && localVarIds[ir_register] != 0) {
+        // Address-taken locals have one authoritative Function-storage slot.
+        // Every ordinary value use must observe stores through any alias.
+        CoreType type = static_cast<CoreType>(ir->registerTypes[ir_register]);
+        u32 typeId = (type == CoreType::CUSTOM || type == CoreType::ENUM)
+            ? GetStructTypeId(ir->registerStructTypes[ir_register]) : GetTypeId(type);
+        u32 loaded = AllocateId();
+        Emit(spv::OpLoad, typeId, loaded, localVarIds[ir_register]);
+        return loaded;
+    }
 
     u32 id = spirvIds[ir_register];
     if (id == 0) {

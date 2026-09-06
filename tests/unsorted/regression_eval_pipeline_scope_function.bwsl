@@ -1,0 +1,25 @@
+// Regression: previously rejected documented function form.
+pipeline EvalPipelineScopeFunction {
+    attributes {
+        position: float3
+    }
+
+    eval taps :: (int quality) -> int {
+        return quality * 2 + 1;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            eval int count = taps(2);
+
+            float sum = 0.0;
+            eval for (i in 0..count) {
+                sum += 0.5;
+            }
+
+            output.position = float4(attributes.position, sum);
+        }
+    }
+}

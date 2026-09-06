@@ -55,6 +55,14 @@ The current lexer accepts:
 - scientific notation: `1e3`, `2.5e-4`
 - optional float suffix: `1.0f`
 
+Integer spellings must contain a complete value in the 32-bit unsigned payload
+range `0`–`4294967295`; a `u`/`U` suffix selects `uint`, while unsuffixed
+payloads are interpreted as signed 32-bit integers. Leading zeroes remain
+decimal (`010` is ten). Empty radix prefixes, invalid radix digits and values
+outside that payload range are rejected. Floating literals must round to a
+finite float32 value; overflow is rejected, subnormals are accepted, and values
+below the representable range may round to zero.
+
 Two lexical ambiguities are handled in favor of existing language syntax:
 
 - `0..10` tokenizes as `NUMBER`, `DOT_DOT`, `NUMBER`

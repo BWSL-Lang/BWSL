@@ -1,0 +1,9 @@
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline Semantics_value_array_repeated_calls {
+ resources { output: buffer<int> }
+ f :: (int[2] a) -> int {a[0]+=7; return a[0];}
+ pass "Compute" { use resources { output } compute "Main" [64,1,1] {
+ uint idx=input.global_id.x; int n=int(idx);
+ int[2] a; a[0]=n;a[1]=4; int sum=0; sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); sum+=f(a); resources.output[idx]=a[0]*100+sum;
+ } }
+}

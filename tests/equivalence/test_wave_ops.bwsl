@@ -5,10 +5,12 @@ pipeline EquivWaveOps {
     }
 
     // Wave/subgroup operations — results depend on the hardware subgroup
-    // size, but since all three backends (native SPIR-V, HLSL→SPIR-V,
-    // GLSL→SPIR-V) compile to the same Vulkan subgroup ops and run on the
+    // size, but since native SPIR-V and HLSL→SPIR-V compile to the same
+    // Vulkan subgroup ops and run on the
     // same device under the equivalence harness, the values must match
     // across backends byte-for-byte.
+    // Desktop GLSL subgroup min/max is unsupported by SPIRV-Cross; the JSON
+    // spec explicitly requires the two supported execution paths.
     //
     // To keep the test deterministic we combine a subgroup-size-
     // independent portion (wave_all/wave_any over constants, wave_broadcast

@@ -361,7 +361,8 @@ private:
     void ParseResources(NodeRef owner, bool ownerIsPipeline = true);
     void RegisterParsedResource(const std::string& resourceName,
                                 const std::string& typeName,
-                                u32 bindingIndex);
+                                    u32 bindingIndex);
+    void FinalizeParsedResourceBindings(NodeRef pipeline, u32 firstMemberAccess, u32 firstFunctionCall);
     void ParseVariants(NodeRef owner, bool ownerIsPipeline = true);
     void ParseVariantRules(NodeRef owner, bool ownerIsPipeline = true);
     void ParsePassBody(NodeRef pass);
@@ -383,7 +384,7 @@ private:
     void ParsePassOutputs(NodeRef pass);
     NodeRef ParseAttributeDecl();
     NodeRef ParseResourceDecl();
-    NodeRef ParseBlock();
+    NodeRef ParseBlock(bool createScope = true);
     NodeRef ParseStatement();
     NodeRef ParseCustomTypeVarDecl();
     NodeRef ParseExpression();

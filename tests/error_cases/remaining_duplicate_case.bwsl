@@ -1,0 +1,8 @@
+// Regression: Duplicate switch case value.
+pipeline Remaining {
+
+    pass "Main" {
+        vertex { output.position=float4(0.0,0.0,0.0,1.0); }
+        fragment { int n=1; switch(n) { case 1: n=2; case 0+1: n=3; } output.color=float4(1.0); }
+    }
+}

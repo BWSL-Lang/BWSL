@@ -93,7 +93,20 @@ Pattern arms support:
 ## Pattern Matching in Functions
 
 The same arm syntax is also used in ordinary functions that dispatch on enum
-arguments.
+arguments. An implicit arm body matches the function's first enum parameter;
+other parameters remain available in every arm.
+
+```bwsl
+score :: (Mode mode, float scale) -> float {
+    A: scale
+    B: { return scale * 2.0; }
+}
+```
+
+Ordinary pattern functions require each variant to be covered once or a final
+`default` arm. A payload arm may omit all bindings or name every payload field,
+using `_` for ignored fields. Block arms must return a value on every path.
+Only the selected arm executes, including its side effects.
 
 ## Enum Member Access
 

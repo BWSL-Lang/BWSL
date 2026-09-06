@@ -65,6 +65,22 @@ The parser's current precedence order, from tighter to looser, is:
 14. assignment and compound assignment
 
 Assignment is right-associative. Ternary is also parsed right-associatively.
+Assignments, increments, decrements and address-taking require a writable
+variable, member, indexed element or dereference. Temporary expression and
+function-call results are not assignment targets.
+
+Bitwise and shift operators require signed or unsigned integer operands. Use
+an explicit integer conversion or bitcast when starting with a floating value.
+Scalar float-to-int/uint assignment performs the same truncating conversion
+as the corresponding explicit cast.
+
+Scalar `&&` and `||` evaluate the left operand first and short-circuit:
+`&&` evaluates its right operand only when the left is true, and `||` only
+when the left is false. A scalar `condition ? a : b` evaluates its condition
+once and then evaluates only the selected arm. Numeric scalar conditions use
+zero as false and nonzero as true. Side effects in an unselected operand or
+arm do not occur. Boolean-vector operations remain component-wise operations;
+they do not provide scalar short-circuiting.
 
 ## Compound Assignment
 
@@ -75,8 +91,8 @@ The parser accepts:
 - `&=`, `|=`, `^=`
 - `<<=`, `>>=`
 
-Compound assignments are lowered as ordinary assignment of the corresponding
-binary expression.
+Compound assignments apply the corresponding binary operation and store its
+result. The target, including any index expression, is evaluated once.
 
 ## Special Namespaces
 

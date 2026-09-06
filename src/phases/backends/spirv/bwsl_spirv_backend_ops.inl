@@ -5,11 +5,121 @@
 
 namespace BWSL {
 
+u32 SPIRVBuilder::LocalPointerValueType(u16 reg) {
+  CoreType type = static_cast<CoreType>((ir->registerStorageInfo[reg] >> 8) & 0xFF);
+  if (type == CoreType::CUSTOM || type == CoreType::ENUM)
+    return GetStructTypeId(ir->registerStructTypes[reg]);
+  return GetTypeId(type);
+}
+
+u32 SPIRVBuilder::LocalPointerTag(u16 reg) {
+  if (localPointerTagVars[reg]) {
+    u32 value = AllocateId();
+    Emit(spv::OpLoad, GetTypeId(CoreType::UINT), value, localPointerTagVars[reg]);
+    return value;
+  }
+  return GetIntConstantId(localPointerTargets[reg].front() + 1, true);
+}
+
+u32 SPIRVBuilder::LocalPointerTarget(u32 producer, u32 capturedIndex, u32 depth) {
+  if (depth > 64) return 0;
+  u16 base = ir->GetOperand(producer, 0);
+  if (ir->opcodes[producer] == IR::OP_LOCAL_VAR_PTR) return localVarIds[base];
+  u16 reg = ir->destinations[producer];
+  u32 pointerType = GetPointerTypeId(LocalPointerValueType(reg), spv::StorageClassFunction);
+  u32 result = AllocateId();
+  if (ir->opcodes[producer] == IR::OP_LOCAL_FIELD_PTR) {
+    bool nested = (ir->registerStorageInfo[base] & IR::IRProgram::STORAGE_IS_FIELD_PTR) != 0;
+    u32 parent = nested ? LocalPointerTarget(localPointerTargets[base].front(), capturedIndex, depth + 1)
+                        : localVarIds[base];
+    Emit(spv::OpAccessChain, pointerType, result, parent,
+         GetIntConstantId(ir->GetOperand(producer, 1), false));
+  } else {
+    u16 indexReg = ir->GetOperand(producer, 1);
+    u32 index = capturedIndex ? capturedIndex : GetSpirvId(indexReg);
+    Emit(spv::OpAccessChain, pointerType, result, GetSpirvId(base), index);
+  }
+  return result;
+}
+
+u32 SPIRVBuilder::SelectLocalValue(u32 type, u32 condition, u32 whenTrue, u32 whenFalse) {
+  // OpSelect before SPIR-V 1.4 cannot directly select matrices or structs.
+  // Recursively select their components; all targets are private locals.
+  std::vector<u32> components;
+  u32 vectorWidth = 0;
+  for (u32 i = 0; i < typesConstants.count;) {
+    u32 size = typesConstants.words[i] >> 16;
+    spv::Op op = static_cast<spv::Op>(typesConstants.words[i] & 0xFFFF);
+    if (size == 0) break;
+    if (size >= 2 && typesConstants.words[i + 1] == type) {
+      if (op == spv::OpTypeVector) vectorWidth = typesConstants.words[i + 3];
+      if (op == spv::OpTypeStruct) {
+        for (u32 j = 2; j < size; ++j) components.push_back(typesConstants.words[i + j]);
+      } else if (op == spv::OpTypeMatrix) {
+        components.assign(typesConstants.words[i + 3], typesConstants.words[i + 2]);
+      } else if (op == spv::OpTypeArray) {
+        u32 lengthId = typesConstants.words[i + 3], elementType = typesConstants.words[i + 2];
+        for (u32 j = 0; j < typesConstants.count;) {
+          u32 words = typesConstants.words[j] >> 16;
+          if (words == 0) break;
+          if ((typesConstants.words[j] & 0xFFFF) == spv::OpConstant && words == 4 &&
+              typesConstants.words[j + 2] == lengthId) {
+            components.assign(typesConstants.words[j + 3], elementType);
+            break;
+          }
+          j += words;
+        }
+      }
+      break;
+    }
+    i += size;
+  }
+  if (!components.empty()) {
+    std::vector<u32> values;
+    for (u32 c = 0; c < components.size(); ++c) {
+      u32 t = AllocateId(), f = AllocateId();
+      Emit(spv::OpCompositeExtract, components[c], t, whenTrue, c);
+      Emit(spv::OpCompositeExtract, components[c], f, whenFalse, c);
+      values.push_back(SelectLocalValue(components[c], condition, t, f));
+    }
+    u32 result = AllocateId();
+    u32 words = 3 + static_cast<u32>(values.size());
+    while (currentFunctionSize + words > currentFunctionCapacity) GrowCurrentFunction();
+    currentFunction[currentFunctionSize++] = (words << 16) | spv::OpCompositeConstruct;
+    currentFunction[currentFunctionSize++] = type;
+    currentFunction[currentFunctionSize++] = result;
+    for (u32 value : values) currentFunction[currentFunctionSize++] = value;
+    return result;
+  }
+  if (vectorWidth) {
+    u32 vectorCondition = AllocateId();
+    u32 boolType = GetTypeId(vectorWidth == 2 ? CoreType::BOOL2 :
+                             vectorWidth == 3 ? CoreType::BOOL3 : CoreType::BOOL4);
+    if (vectorWidth == 2) Emit(spv::OpCompositeConstruct, boolType, vectorCondition, condition, condition);
+    if (vectorWidth == 3) Emit(spv::OpCompositeConstruct, boolType, vectorCondition, condition, condition, condition);
+    if (vectorWidth == 4) Emit(spv::OpCompositeConstruct, boolType, vectorCondition, condition, condition, condition, condition);
+    condition = vectorCondition;
+  }
+  u32 result = AllocateId();
+  Emit(spv::OpSelect, type, result, condition, whenTrue, whenFalse);
+  return result;
+}
+
 void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   IR::OpCode op = static_cast<IR::OpCode>(ir->opcodes[ir_idx]);
   spv::Op spv_op = IRToSpvOp(op);
 
-  u32 dest = GetSpirvId(ir->destinations[ir_idx]);
+  u16 resultReg = ir->destinations[ir_idx];
+  bool writesAddressTaken = resultReg < idCapacity && localVarIds[resultReg] != 0 &&
+      !IR::IsOutputOpcode(op) && op != IR::OP_LOCAL_STORE && op != IR::OP_ARRAY_STORE &&
+      op != IR::OP_STORE_LOCAL && op != IR::OP_STRUCT_STORE && op != IR::OP_NOP;
+  if (writesAddressTaken) {
+    // These registers deliberately bypass SSA renaming. Each new value still
+    // needs a unique SPIR-V ID before being stored into its local memory slot.
+    spirvIds[resultReg] = AllocateId();
+    hasPreAllocatedId[resultReg] = false;
+  }
+  u32 dest = GetSpirvId(resultReg, false);
 
   // Ensure the instruction result type exists in the type section. Individual
   // cases still compute the concrete result type they need for emission.
@@ -184,6 +294,18 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     // just aliases without emitting another definition.
     u16 dest_reg = ir->destinations[ir_idx];
     u16 src_reg = ir->GetOperand(ir_idx, 0);
+    if (dest_reg < localPointerTagVars.size() && localPointerTagVars[dest_reg]) {
+      Emit(spv::OpStore, localPointerTagVars[dest_reg], LocalPointerTag(src_reg));
+      if (localPointerIndexVars[dest_reg]) {
+        u32 index = GetIntConstantId(0, true);
+        if (localPointerIndexVars[src_reg]) {
+          index = AllocateId();
+          Emit(spv::OpLoad, GetTypeId(CoreType::UINT), index, localPointerIndexVars[src_reg]);
+        }
+        Emit(spv::OpStore, localPointerIndexVars[dest_reg], index);
+      }
+      break;
+    }
     u32 src_id = GetSpirvId(src_reg);
 
     if (dest_reg < idCapacity && hasPreAllocatedId[dest_reg]) {
@@ -406,6 +528,10 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       CoreType regType = static_cast<CoreType>(ir->registerTypes[dest_reg]);
       if (regType != CoreType::VOID && regType != CoreType::INVALID) {
         result_type = GetTypeId(regType);
+        if ((mask(regType) & TypeMasks::UINT_TYPES) != 0) {
+          if (op == IR::OP_IDIV) spv_op = spv::OpUDiv;
+          if (op == IR::OP_IMOD) spv_op = spv::OpUMod;
+        }
       }
     }
     Emit(spv_op, result_type, dest, op1, op2);
@@ -3735,8 +3861,10 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             result = sel_id;
           }
         }
-      } else if (baseType == CoreType::FLOAT2 || baseType == CoreType::FLOAT3 ||
-                 baseType == CoreType::FLOAT4) {
+      } else if ((mask(baseType) & (TypeMasks::FLOAT_VECTORS |
+                                   TypeMasks::INT_VECTORS |
+                                   TypeMasks::UINT_VECTORS |
+                                   TypeMasks::BOOL_VECTORS)) != 0) {
         // Vector element extraction
         bool isConstIndex = (index_reg & 0xC000) == 0x4000;
         if (isConstIndex) {
@@ -4117,6 +4245,25 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       }
     }
 
+    if (ir->registerStorageInfo && base_reg < ir->registerCount &&
+        (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY)) {
+      if (localPointerTagVars[dest_reg]) {
+        Emit(spv::OpStore, localPointerTagVars[dest_reg], GetIntConstantId(ir_idx + 1, true));
+        u32 captured = index_id;
+        if (GetOperandType(index_reg) != CoreType::UINT) {
+          captured = AllocateId();
+          Emit(spv::OpBitcast, GetTypeId(CoreType::UINT), captured, index_id);
+        }
+        Emit(spv::OpStore, localPointerIndexVars[dest_reg], captured);
+      }
+      u32 elementType = GetTypeId(elemType);
+      if ((elemType == CoreType::CUSTOM || elemType == CoreType::ENUM) && ir->registerStructTypes)
+        elementType = GetStructTypeId(ir->registerStructTypes[dest_reg]);
+      u32 pointerType = GetPointerTypeId(elementType, spv::StorageClassFunction);
+      Emit(spv::OpAccessChain, pointerType, dest, base_id, index_id);
+      break;
+    }
+
     // Determine storage class - first check tracked storage class from previous
     // pointer ops
     spv::StorageClass storageClass = spv::StorageClassStorageBuffer;
@@ -4474,36 +4621,17 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
   case IR::OP_LOCAL_LOAD: {
     // Load from local pointer - OpLoad
-    // The pointer register's storageInfo contains the source variable register
+    // Storage metadata supplies the pointee type, not the selected address.
     u16 ptr_reg = ir->GetOperand(ir_idx, 0);
     u32 storageInfo = 0;
     if (ir->registerStorageInfo && ptr_reg < ir->registerCount) {
       storageInfo = ir->registerStorageInfo[ptr_reg];
     }
-    bool isFieldPtr = (storageInfo & IR::IRProgram::STORAGE_IS_FIELD_PTR) != 0;
-    // Extract source register (bits 16-31) and pointee type (bits 8-15)
-    u16 src_reg = static_cast<u16>((storageInfo >> 16) & 0xFFFF);
     CoreType pointeeType = static_cast<CoreType>((storageInfo >> 8) & 0xFF);
     if (pointeeType == CoreType::INVALID || pointeeType == CoreType::VOID) {
       pointeeType = CoreType::FLOAT; // Fallback
     }
-    u32 var_id = 0;
-    if (isFieldPtr) {
-      // Field pointers route through the access chain we stored in
-      // spirvIds[ptr_reg]. The base struct's OpVariable still needs an
-      // OpStore at the ADDRESS_OF site to keep memory coherent with
-      // register-level struct writes (handled by OP_LOCAL_FIELD_PTR).
-      var_id = GetSpirvId(ptr_reg);
-    } else {
-      // Get the OpVariable for the source register
-      if (src_reg < idCapacity) {
-        var_id = localVarIds[src_reg];
-      }
-      if (var_id == 0) {
-        // Fallback: use the pointer register's SPIR-V ID
-        var_id = GetSpirvId(ptr_reg);
-      }
-    }
+    u32 var_id = GetSpirvId(ptr_reg);
     u32 result_type_id = GetTypeId(pointeeType);
     // For struct pointees, resolve the struct type id from the hash stored on
     // the pointer register. Without this, loading from a struct pointer emits
@@ -4514,6 +4642,29 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       if (structHash != 0) {
         result_type_id = GetStructTypeId(structHash);
       }
+    }
+    if (localPointerTagVars[ptr_reg]) {
+      u32 tag = LocalPointerTag(ptr_reg), value = 0, capturedIndex = 0;
+      if (localPointerIndexVars[ptr_reg]) {
+        capturedIndex = AllocateId();
+        Emit(spv::OpLoad, GetTypeId(CoreType::UINT), capturedIndex, localPointerIndexVars[ptr_reg]);
+      }
+      for (u32 producer : localPointerTargets[ptr_reg]) {
+        u32 selected = AllocateId(), candidateIndex = capturedIndex;
+        Emit(spv::OpIEqual, GetTypeId(CoreType::BOOL), selected, tag,
+             GetIntConstantId(producer + 1, true));
+        if (capturedIndex) {
+          // Different candidate arrays can have different lengths. Inactive
+          // candidates use element zero rather than the selected array's index.
+          candidateIndex = SelectLocalValue(GetTypeId(CoreType::UINT), selected,
+                                            capturedIndex, GetIntConstantId(0, true));
+        }
+        u32 loaded = AllocateId();
+        Emit(spv::OpLoad, result_type_id, loaded, LocalPointerTarget(producer, candidateIndex));
+        value = value == 0 ? loaded : SelectLocalValue(result_type_id, selected, loaded, value);
+      }
+      Emit(spv::OpCopyObject, result_type_id, dest, value);
+      break;
     }
     Emit(spv::OpLoad, result_type_id, dest, var_id);
     // Track the loaded register's struct type so subsequent OpCompositeExtract
@@ -4532,31 +4683,32 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_LOCAL_STORE: {
     // Store to local pointer - OpStore
     // Format: dest=0, operand0=ptr, operand1=value
-    // The pointer register's storageInfo contains the source variable register
+    // Storage metadata supplies the pointee type, not the selected address.
     u16 ptr_reg = ir->GetOperand(ir_idx, 0);
     u16 val_reg = ir->GetOperand(ir_idx, 1);
 
-    u32 storageInfo = 0;
-    if (ir->registerStorageInfo && ptr_reg < ir->registerCount) {
-      storageInfo = ir->registerStorageInfo[ptr_reg];
-    }
-    bool isFieldPtr = (storageInfo & IR::IRProgram::STORAGE_IS_FIELD_PTR) != 0;
-    // Extract source register (bits 16-31)
-    u16 src_reg = static_cast<u16>((storageInfo >> 16) & 0xFFFF);
-    u32 var_id = 0;
-    if (isFieldPtr) {
-      var_id = GetSpirvId(ptr_reg);
-    } else {
-      // Get the OpVariable for the source register
-      if (src_reg < idCapacity) {
-        var_id = localVarIds[src_reg];
-      }
-      if (var_id == 0) {
-        // Fallback: use the pointer register's SPIR-V ID
-        var_id = GetSpirvId(ptr_reg);
-      }
-    }
+    u32 var_id = GetSpirvId(ptr_reg);
     u32 val_id = GetSpirvId(val_reg);
+    if (localPointerTagVars[ptr_reg]) {
+      u32 tag = LocalPointerTag(ptr_reg), type = LocalPointerValueType(ptr_reg), capturedIndex = 0;
+      if (localPointerIndexVars[ptr_reg]) {
+        capturedIndex = AllocateId();
+        Emit(spv::OpLoad, GetTypeId(CoreType::UINT), capturedIndex, localPointerIndexVars[ptr_reg]);
+      }
+      for (u32 producer : localPointerTargets[ptr_reg]) {
+        u32 selected = AllocateId(), candidateIndex = capturedIndex;
+        Emit(spv::OpIEqual, GetTypeId(CoreType::BOOL), selected, tag,
+             GetIntConstantId(producer + 1, true));
+        if (capturedIndex) {
+          candidateIndex = SelectLocalValue(GetTypeId(CoreType::UINT), selected,
+                                            capturedIndex, GetIntConstantId(0, true));
+        }
+        u32 target = LocalPointerTarget(producer, candidateIndex), old = AllocateId();
+        Emit(spv::OpLoad, type, old, target);
+        Emit(spv::OpStore, target, SelectLocalValue(type, selected, val_id, old));
+      }
+      break;
+    }
     Emit(spv::OpStore, var_id, val_id);
     break;
   }
@@ -4573,7 +4725,10 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
     // Ensure the base struct OpVariable holds the current SSA value so the
     // subsequent access chain sees the same data that register code sees.
-    u32 var_id = (base_reg < idCapacity) ? localVarIds[base_reg] : 0;
+    bool nestedPointer = ir->registerStorageInfo && base_reg < ir->registerCount &&
+        (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_FIELD_PTR);
+    u32 var_id = nestedPointer ? GetSpirvId(base_reg)
+                              : (base_reg < idCapacity ? localVarIds[base_reg] : 0);
     if (var_id == 0) {
       fprintf(stderr,
               "Error: OP_LOCAL_FIELD_PTR without pre-allocated variable for "
@@ -4581,7 +4736,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
               base_reg);
       break;
     }
-    u32 base_val_id = GetSpirvId(base_reg);
+    u32 base_val_id = nestedPointer ? 0 : GetSpirvId(base_reg);
     if (base_val_id != 0) {
       Emit(spv::OpStore, var_id, base_val_id);
     }
@@ -4878,7 +5033,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     // Get result type (float4 for most texture samples)
     u32 result_type = GetTypeId(CoreType::FLOAT4);
     SampledTextureLoad texture{};
-    if (!LoadSampledTexture(tex_reg, CoreType::FLOAT4, dest, false, &texture)) {
+    if (!LoadSampledTexture(tex_reg, CoreType::FLOAT4, dest, false, &texture, ir->metadata[ir_idx])) {
       break;
     }
 
@@ -5017,7 +5172,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u32 coord_id = GetSpirvId(coord_reg);
 
     SampledTextureLoad texture{};
-    if (!LoadSampledTexture(tex_reg, CoreType::FLOAT4, dest, false, &texture)) {
+    if (!LoadSampledTexture(tex_reg, CoreType::FLOAT4, dest, false, &texture, ir->metadata[ir_idx])) {
       break;
     }
 
@@ -5058,7 +5213,14 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
     u32 result_type = GetResultType(ir->destinations[ir_idx], tex_reg);
     u32 lod_id = GetSpirvId(lod_reg);
-    Emit(spv::OpImageQuerySizeLod, result_type, dest, texture.imageId, lod_id);
+    if (textureIsVolume[texture.slot] || textureIsArray[texture.slot]) {
+      // The source API returns xy; query all native dimensions first.
+      u32 size = AllocateId();
+      Emit(spv::OpImageQuerySizeLod, GetTypeId(CoreType::INT3), size, texture.imageId, lod_id);
+      Emit(spv::OpVectorShuffle, result_type, dest, size, size, 0, 1);
+    } else {
+      Emit(spv::OpImageQuerySizeLod, result_type, dest, texture.imageId, lod_id);
+    }
     break;
   }
 
@@ -5144,6 +5306,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     break;
 
     // TODO: Add more opcode translations (OP_DISCARD for OpKill, etc.)
+  }
+  if (writesAddressTaken) {
+    Emit(spv::OpStore, localVarIds[resultReg], GetSpirvId(resultReg, false));
   }
 }
 

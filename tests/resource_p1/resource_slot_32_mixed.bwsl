@@ -1,0 +1,35 @@
+pipeline MixedSlots { resources {
+lead: float
+tex1: texture2D
+tex2: texture2D
+tex3: texture2D
+tex4: texture2D
+tex5: texture2D
+tex6: texture2D
+tex7: texture2D
+tex8: texture2D
+tex9: texture2D
+tex10: texture2D
+tex11: texture2D
+tex12: texture2D
+tex13: texture2D
+tex14: texture2D
+tex15: texture2D
+tex16: texture2D
+tex17: texture2D
+tex18: texture2D
+tex19: texture2D
+tex20: texture2D
+tex21: texture2D
+tex22: texture2D
+tex23: texture2D
+tex24: texture2D
+tex25: texture2D
+tex26: texture2D
+tex27: texture2D
+tex28: texture2D
+tex29: texture2D
+tex30: texture2D
+tex31: texture2D
+tex32: texture2D
+} pass "Main" { use resources { lead, tex32 } vertex { output.position = float4(0.0,0.0,0.0,1.0); } fragment { output.color = sample(resources.tex32, float2(0.5)) + float4(resources.lead); } } }

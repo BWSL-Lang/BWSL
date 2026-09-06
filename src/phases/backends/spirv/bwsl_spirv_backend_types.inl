@@ -370,6 +370,25 @@ u32 SPIRVBuilder::GetCubeSampledImageTypeId() {
   return cubeSampledImageTypeId;
 }
 
+u32 SPIRVBuilder::GetVolumeImageTypeId() {
+  if (volumeImageTypeId != 0) return volumeImageTypeId;
+  volumeImageTypeId = AllocateId();
+  u32 ops[] = {volumeImageTypeId, GetTypeId(CoreType::FLOAT),
+               static_cast<u32>(spv::Dim3D), 0, 0, 0, 1,
+               static_cast<u32>(spv::ImageFormatUnknown)};
+  EmitToSection(&typesConstants, spv::OpTypeImage, ops, 8);
+  return volumeImageTypeId;
+}
+
+u32 SPIRVBuilder::GetVolumeSampledImageTypeId() {
+  if (volumeSampledImageTypeId != 0) return volumeSampledImageTypeId;
+  u32 image = GetVolumeImageTypeId();
+  volumeSampledImageTypeId = AllocateId();
+  u32 ops[] = {volumeSampledImageTypeId, image};
+  EmitToSection(&typesConstants, spv::OpTypeSampledImage, ops, 2);
+  return volumeSampledImageTypeId;
+}
+
 void SPIRVBuilder::GetSampledTextureTypeIds(u16 texSlot, u32* sampledImageType,
                                             u32* imageType) {
   if (textureIsArray[texSlot]) {
@@ -378,6 +397,9 @@ void SPIRVBuilder::GetSampledTextureTypeIds(u16 texSlot, u32* sampledImageType,
   } else if (textureIsCubemap[texSlot]) {
     if (sampledImageType) *sampledImageType = GetCubeSampledImageTypeId();
     if (imageType) *imageType = GetCubeImageTypeId();
+  } else if (textureIsVolume[texSlot]) {
+    if (sampledImageType) *sampledImageType = GetVolumeSampledImageTypeId();
+    if (imageType) *imageType = GetVolumeImageTypeId();
   } else {
     if (sampledImageType) *sampledImageType = GetSampledImageTypeId();
     if (imageType) *imageType = GetImageTypeId();
@@ -386,10 +408,10 @@ void SPIRVBuilder::GetSampledTextureTypeIds(u16 texSlot, u32* sampledImageType,
 
 bool SPIRVBuilder::LoadSampledTexture(u16 texReg, CoreType missingResultType,
                                       u32 dest, bool needImage,
-                                      SampledTextureLoad* outLoad) {
+                                      SampledTextureLoad* outLoad, u32 metadata) {
   SampledTextureLoad load{};
   load.slot = texReg & 0x0FFF;
-  load.variableId = textureIds[load.slot];
+  load.variableId = load.slot < 32 ? textureIds[load.slot] : 0;
 
   if (load.variableId == 0) {
     Emit(spv::OpUndef, GetTypeId(missingResultType), dest);
@@ -397,8 +419,25 @@ bool SPIRVBuilder::LoadSampledTexture(u16 texReg, CoreType missingResultType,
     return false;
   }
 
-  GetSampledTextureTypeIds(load.slot, &load.sampledImageTypeId,
-                           needImage ? &load.imageTypeId : nullptr);
+  GetSampledTextureTypeIds(load.slot, &load.sampledImageTypeId, &load.imageTypeId);
+
+  if (textureIsSeparate[load.slot]) {
+    load.imageId = AllocateId();
+    Emit(spv::OpLoad, load.imageTypeId, load.imageId, load.variableId);
+    if (!needImage) {
+      u32 samplerVariable = defaultSamplerIds[load.slot];
+      if (TextureOpHasExplicitSampler(metadata)) {
+        u16 samplerSlot = GetTextureOpExplicitSamplerBinding(metadata);
+        samplerVariable = samplerSlot < 32 ? samplerIds[samplerSlot] : 0;
+      }
+      u32 sampler = AllocateId();
+      Emit(spv::OpLoad, GetSamplerTypeId(), sampler, samplerVariable);
+      load.sampledImageId = AllocateId();
+      Emit(spv::OpSampledImage, load.sampledImageTypeId, load.sampledImageId, load.imageId, sampler);
+    }
+    if (outLoad) *outLoad = load;
+    return true;
+  }
 
   load.sampledImageId = AllocateId();
   Emit(spv::OpLoad, load.sampledImageTypeId, load.sampledImageId,

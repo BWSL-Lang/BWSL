@@ -1,0 +1,10 @@
+pipeline BoolStorage {
+
+ resources {
+  src: bool3
+  output: buffer<float>
+ }
+ pass "Main" { use resources { src, output } compute "Main" [1,1,1] {
+  bool b = resources.src.x; resources.output[0] = b ? 1.0 : 0.0;
+ } }
+}

@@ -1,0 +1,6 @@
+pipeline InvalidEvalVector {
+    pass "Main" { vertex {
+        eval float3 v = float3(1.0, 2.0, 3.0, 4.0);
+        output.position = float4(v, 1.0);
+    } }
+}

@@ -1,0 +1,8 @@
+// Regression: Duplicate struct declaration.
+pipeline Remaining {
+    struct S { float x; } struct S { int x; }
+    pass "Main" {
+        vertex { output.position=float4(0.0,0.0,0.0,1.0); }
+        fragment { S x; output.color=float4(1.0); }
+    }
+}

@@ -204,34 +204,45 @@ static TypeInfo MakeTypeInfoForResource(SymbolTableData* table, const ResourceDa
     }
 }
 
-// Fuzzer-proof integer parsers: return 0 on empty / malformed / out-of-range
-// input instead of throwing. The lexer's number rules are not strict enough
-// to guarantee std::stoul / std::stoi success (e.g. "0x" with no digits,
-// "0b2", trailing garbage); these helpers keep the parser safe against
-// adversarial input.
-inline u32 SafeParseU32(std::string_view s, int base = 0) {
-    if (s.empty()) return 0;
-    try {
-        return static_cast<u32>(std::stoul(std::string(s), nullptr, base));
-    } catch (const std::exception&) {
-        return 0;
+// Consume the entire token and report failure separately from the valid zero
+// value. Integers have a 32-bit payload; leading zeroes remain decimal.
+inline bool TryParseU32(std::string_view text, u32* outValue) {
+    if (!text.empty() && (text.back() == 'u' || text.back() == 'U'))
+        text.remove_suffix(1);
+    u32 base = 10;
+    if (text.size() >= 2 && text[0] == '0') {
+        if (text[1] == 'x' || text[1] == 'X') {
+            base = 16;
+            text.remove_prefix(2);
+        } else if (text[1] == 'b' || text[1] == 'B') {
+            base = 2;
+            text.remove_prefix(2);
+        }
     }
+    if (text.empty()) return false;
+    u32 value = 0;
+    for (char c : text) {
+        u32 digit = c >= '0' && c <= '9' ? static_cast<u32>(c - '0') :
+                    c >= 'a' && c <= 'f' ? static_cast<u32>(c - 'a' + 10) :
+                    c >= 'A' && c <= 'F' ? static_cast<u32>(c - 'A' + 10) : 16u;
+        if (digit >= base || value > (UINT32_MAX - digit) / base) return false;
+        value = value * base + digit;
+    }
+    *outValue = value;
+    return true;
 }
-inline int SafeParseInt(std::string_view s, int base = 0) {
-    if (s.empty()) return 0;
-    try {
-        return std::stoi(std::string(s), nullptr, base);
-    } catch (const std::exception&) {
-        return 0;
-    }
-}
-inline float SafeParseFloat(std::string_view s) {
-    if (s.empty()) return 0.0f;
-    try {
-        return std::stof(std::string(s));
-    } catch (const std::exception&) {
-        return 0.0f;
-    }
+
+inline bool TryParseFloat(std::string_view text, float* outValue) {
+    if (!text.empty() && (text.back() == 'f' || text.back() == 'F'))
+        text.remove_suffix(1);
+    if (text.empty()) return false;
+    std::string terminated(text);
+    char* end = nullptr;
+    float value = std::strtof(terminated.c_str(), &end);
+    if (end != terminated.c_str() + terminated.size() ||
+        !std::isfinite(value)) return false;
+    *outValue = value;
+    return true;
 }
 
 } // namespace
@@ -323,6 +334,147 @@ void Parser::RegisterParsedResource(const std::string& resourceName,
     data.coreType = static_cast<u8>(coreType);
     data.arraySize = ExtractFixedArraySize(typeName);
     data.structTypeHash = ResolveResourceStructHash(resolvedType, coreType, baseType);
+}
+
+// Plan pipeline-wide identities before independently lowering its stages.
+void Parser::FinalizeParsedResourceBindings(NodeRef pipeline, u32 firstMemberAccess, u32 firstFunctionCall) {
+    const auto& declarations = ast->GetPipeline(pipeline).resources;
+    // Vulkan/SPIR-V external storage has no bool representation. Reject the
+    // source declaration (including nested fields) before it becomes an
+    // invalid uniform/storage block; local bool values remain supported.
+    std::vector<u32> visitingTypes;
+    auto containsBool = [&](auto&& self, CoreType type, u32 hash) -> bool {
+        if (type == CoreType::BOOL || type == CoreType::BOOL2 ||
+            type == CoreType::BOOL3 || type == CoreType::BOOL4) return true;
+        if (!hash || std::find(visitingTypes.begin(), visitingTypes.end(), hash) != visitingTypes.end()) return false;
+        visitingTypes.push_back(hash);
+        bool found = false;
+        const Symbol* symbol = SymbolTable::LookupByHash(&symbolTable, hash);
+        const StructData* structure = nullptr;
+        if (symbol && symbol->kind == SymbolKind::CUSTOM_TYPE && symbol->index < symbolTable.structs.count)
+            structure = &symbolTable.structs[symbol->index];
+        if (!structure) structure = g_customTypes.LookupType(hash);
+        if (structure) {
+            for (u32 i = 0; i < structure->fields.count && !found; ++i) {
+                const auto& field = structure->fields[i];
+                found = self(self, field.type.coreType, field.type.customTypeHash);
+            }
+        } else if (const auto* enumeration = SymbolTable::ResolveEnumDataByHash(&symbolTable, hash)) {
+            for (u32 i = 0; i < enumeration->variants.count && !found; ++i) {
+                const auto& variant = enumeration->variants[i];
+                for (u32 j = 0; j < variant.associatedTypes.count && !found; ++j)
+                    found = self(self, variant.associatedTypes[j],
+                                 j < variant.associatedTypeHashes.count ? variant.associatedTypeHashes[j] : 0);
+            }
+        }
+        visitingTypes.pop_back();
+        return found;
+    };
+    std::vector<ResourceData*> resources;
+    std::vector<u32> hashes;
+    std::vector<bool> referenced;
+    for (u32 i = 0; i < declarations.count; ++i) {
+        const auto& declaration = ast->GetResourceDecl(declarations[i]);
+        Symbol* symbol = SymbolTable::LookupResource(&symbolTable, declaration.name);
+        if (!symbol || symbol->index >= symbolTable.resources.count) continue;
+        auto* resource = &symbolTable.resources[symbol->index];
+        if ((resource->type == ResourceBinding::UniformBuffer || resource->type == ResourceBinding::StorageBuffer) &&
+            containsBool(containsBool, static_cast<CoreType>(resource->coreType), resource->structTypeHash)) {
+            std::string message = "External resource '" + declaration.name.ToString(sourceBase()) +
+                "' contains bool storage, which is unsupported; use uint fields and compare them with 0u in shader code";
+            TokenRef declarationToken = previous;
+            const u32 line = ast->GetLine(declarations[i]), column = ast->GetColumn(declarations[i]);
+            for (TokenRef token = 0; token < stream->Count(); ++token) {
+                auto location = getLocation(stream->GetOffset(token));
+                if (location.line == line && location.column == column) { declarationToken = token; break; }
+            }
+            ErrorAt(declarationToken, message);
+        }
+        resources.push_back(resource);
+        hashes.push_back(declaration.name.nameHash);
+        referenced.push_back(false);
+    }
+    auto resourceIndex = [&](NodeRef node) -> int {
+        if (node.IsNull() || node.Type() != ASTNodeType::MEMBER_ACCESS) return -1;
+        const auto& access = ast->GetMemberAccess(node);
+        if (access.object.IsNull() || access.object.Type() != ASTNodeType::IDENTIFIER ||
+            ast->GetIdentifier(access.object).identifierKind != SpecialIdentifier::RESOURCES) return -1;
+        for (size_t i = 0; i < hashes.size(); ++i)
+            if (hashes[i] == access.member.nameHash) return static_cast<int>(i);
+        return -1;
+    };
+    for (u32 i = firstMemberAccess; i < ast->memberAccesses.count; ++i) {
+        const auto& access = ast->memberAccesses[i];
+        if (access.object.IsNull() || access.object.Type() != ASTNodeType::IDENTIFIER ||
+            ast->GetIdentifier(access.object).identifierKind != SpecialIdentifier::RESOURCES) continue;
+        for (size_t j = 0; j < hashes.size(); ++j)
+            if (hashes[j] == access.member.nameHash) referenced[j] = true;
+    }
+    std::vector<std::pair<int, int>> pairs;
+    const size_t samplerCount = std::count_if(resources.begin(), resources.end(), [](const ResourceData* r) {
+        return r->type == ResourceBinding::Sampler;
+    });
+    for (u32 i = firstFunctionCall; i < ast->functionCalls.count; ++i) {
+        const auto& call = ast->functionCalls[i];
+        if (call.arguments.count < 1) continue;
+        if (!(call.flags & FunctionCallFlags::IS_INTRINSIC) && samplerCount > 1) {
+            for (u32 argument = 0; argument < call.arguments.count; ++argument) {
+                int index = resourceIndex(call.arguments[argument]);
+                if (index >= 0 && resources[index]->type == ResourceBinding::Texture)
+                    resources[index]->separateSampler = true;
+            }
+            continue;
+        }
+        int texture = resourceIndex(call.arguments[0]);
+        if (texture < 0 || resources[texture]->type != ResourceBinding::Texture) continue;
+        if (call.flags & FunctionCallFlags::IS_INTRINSIC) {
+            int sampler = call.arguments.count > 1 ? resourceIndex(call.arguments[1]) : -1;
+            if (sampler >= 0 && resources[sampler]->type == ResourceBinding::Sampler)
+                pairs.emplace_back(texture, sampler);
+        }
+    }
+    for (const auto& a : pairs) for (const auto& b : pairs) {
+        if ((a.first == b.first && a.second != b.second) ||
+            (a.second == b.second && a.first != b.first)) {
+            resources[a.first]->separateSampler = true;
+            resources[a.second]->separateSampler = true;
+            resources[b.first]->separateSampler = true;
+            resources[b.second]->separateSampler = true;
+        }
+    }
+    bool changed;
+    do {
+        changed = false;
+        for (const auto& pair : pairs) {
+            bool separate = resources[pair.first]->separateSampler || resources[pair.second]->separateSampler;
+            if (separate && (!resources[pair.first]->separateSampler || !resources[pair.second]->separateSampler)) {
+                resources[pair.first]->separateSampler = resources[pair.second]->separateSampler = true;
+                changed = true;
+            }
+        }
+    } while (changed);
+
+    if (resources.size() <= 32) return;
+    if (resources.size() > 255) {
+        Error("Pipeline resource declarations exceed the supported limit of 255");
+        return;
+    }
+    if (std::count(referenced.begin(), referenced.end(), true) > 32) {
+        Error("Pipeline references more than the supported limit of 32 resources");
+        return;
+    }
+    // Keep live low slots stable; reuse only unused declarations' slots.
+    bool occupied[32] = {};
+    for (size_t i = 0; i < resources.size(); ++i)
+        if (referenced[i] && resources[i]->bindingIndex < 32) occupied[resources[i]->bindingIndex] = true;
+    for (size_t i = 0; i < resources.size(); ++i) {
+        if (!referenced[i]) { resources[i]->bindingIndex = UINT32_MAX; continue; }
+        if (resources[i]->bindingIndex < 32) continue;
+        u32 slot = 0;
+        while (slot < 32 && occupied[slot]) ++slot;
+        resources[i]->bindingIndex = slot;
+        occupied[slot] = true;
+    }
 }
 
 // Global module search paths - can be extended by external tools (e.g., bwslc)

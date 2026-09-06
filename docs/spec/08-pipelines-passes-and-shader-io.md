@@ -32,6 +32,40 @@ Current intended model:
   output. That reflection is the authoritative ABI for set, binding, stage, and
   access information.
 
+Texture/sampler pairs that are used one-to-one may use a combined sampled-image
+descriptor. Reusing a texture with different samplers, or sharing a sampler
+between textures, preserves each sampler's identity through separate image and
+sampler descriptors. Reflection marks these with `abi: "separate_image"` and
+`abi: "sampler"`; separate samplers use descriptor set 2. If the same separate
+texture also uses implicit sampling, reflection includes its generated sampler
+with `defaultSamplerFor` naming that texture. For GLSL and GLES, each separate
+pair becomes a combined sampler uniform; the texture's `combinedSamplerUniforms`
+entries give its uniform name and sampler descriptor. Hosts should use these
+resolved mappings rather than infer bindings from declaration order.
+
+The current compiler supports 32 referenced resources per pipeline. Larger
+declaration blocks are supported when unused declarations can be removed and
+the referenced resources compacted into available slots. Referencing more than
+32 resources is diagnosed before backend emission.
+
+External uniform and storage-buffer types cannot contain `bool`, including
+boolean vectors and fields nested in structs or fixed arrays. Such declarations
+are rejected with a source diagnostic. Store a flag as `uint` and read it with
+`flag != 0u`; local boolean values and boolean aggregate fields remain supported.
+
+Metal buffer bindings must fit 0–30 and sampler bindings 0–15. The compiler
+reports an error when its resolved bindings exceed those limits. Ordinary
+shaders target MSL 2.0; subgroup vote, arithmetic, ballot, clustered and quad
+operations select MSL 2.1, which supports those operations on macOS.
+
+An explicitly requested text target that cannot be generated makes the CLI
+return a nonzero exit code and includes the backend's diagnostic. `-all` can
+omit the documented GLSL subgroup operations requiring Vulkan semantics and
+GLES 300 compute/storage resources and unavailable ES 3.1 integer builtins; it prints a capability-exclusion warning
+for each omitted target. Other target failures still fail the compilation.
+Successfully generated stages or targets may remain in the output directory
+when another requested target fails; callers must check the exit code.
+
 ## Attributes
 
 Pipeline attributes are declared in an `attributes` block:
@@ -302,3 +336,11 @@ Current implementation rules include:
 `compute_graph` exists in the parser and compiler, but the public usage surface
 is not yet settled. It should remain documented as provisional until a stable
 example and semantics write-up exist.
+
+For HLSL compute shaders using `input.num_workgroups`, the host must bind a
+16-byte constant buffer at `b0, space3` containing three uint32 dispatch counts
+`(x, y, z)` and one padding word. Space 3 is reserved for this auxiliary
+buffer. Reflection lists it separately in `hlslResources` with
+`builtin: "num_workgroups"`, `valueType: "uint3"` and `byteSize: 16`; it is
+not part of the common `resources` list. This target uses at least shader
+model 5.1. Native SPIR-V and Metal obtain the counts from their builtins.

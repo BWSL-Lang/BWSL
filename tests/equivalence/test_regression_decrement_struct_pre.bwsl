@@ -1,0 +1,13 @@
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline Regression_decrement_struct_pre {
+    resources { output: buffer<int> }
+    struct Box { int x; };
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [64, 1, 1] {
+            uint idx = input.global_id.x;
+            int n = int(idx);
+            Box a; a.x=n; int r=--a.x; resources.output[idx]=a.x*100+r;
+        }
+    }
+}

@@ -1,0 +1,38 @@
+// Pipeline eval functions must execute declarations, calls, branches and range loops.
+pipeline EvalFunctions {
+    resources { output: buffer<int> }
+    eval taps :: (int quality) -> int { return quality * 2 + 1; }
+    eval relay :: (int n) -> int { return taps(n); }
+    eval sumTo :: (int count) -> int {
+        int sum = 0;
+        for (i in 0..count) { sum += i; }
+        return sum;
+    }
+    eval factorial :: (int n) -> int {
+        if (n < 2) { return 1; }
+        return n * factorial(n - 1);
+    }
+    eval early :: (int n) -> int {
+        for (i in 0..10) { if (i == n) { return i + 10; } }
+        return -1;
+    }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            eval int a = taps(2);
+            eval int b = sumTo(taps(2));
+            eval int c = factorial(5);
+            eval int d = early(3);
+            uint i = input.global_id.x;
+            int result = a;
+            if (i == 1u) { result = b; }
+            if (i == 2u) { result = c; }
+            if (i == 3u) { result = d; }
+            if (i == 4u) { result = relay(3); }
+            if (i == 5u) { result = sumTo(3); }
+            if (i == 6u) { result = factorial(4); }
+            if (i == 7u) { result = early(20); }
+            resources.output[i] = result;
+        }
+    }
+}

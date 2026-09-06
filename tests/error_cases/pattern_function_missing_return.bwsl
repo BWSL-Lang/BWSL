@@ -1,0 +1,5 @@
+pipeline InvalidPattern {
+    enum Mode { A, B }
+    score :: (Mode m) -> float { A: { float x = 1.0; } B: 2.0 }
+    pass "Main" { vertex { output.position = float4(1.0); } }
+}

@@ -1,0 +1,20 @@
+pipeline PatternFunctions {
+    resources { output: buffer<float> }
+    enum Mode { A, B }
+    score :: (Mode mode, uint index) -> float {
+        A: { resources.output[index] += 1.0; return 3.0; }
+        B: { resources.output[index] += 10.0; return 7.0; }
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint i = input.global_id.x;
+            Mode m = Mode::A;
+            if (i % 2u == 1u) { m = Mode::B; }
+            resources.output[i] = 0.0;
+            float scoreValue = score(m, i);
+            resources.output[i] = scoreValue + resources.output[i] * 100.0;
+        }
+    }
+}

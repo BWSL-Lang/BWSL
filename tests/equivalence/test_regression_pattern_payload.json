@@ -1,0 +1,27 @@
+{
+  "note": "Ordinary function enum pattern dispatch with independent output oracle.",
+  "groups": [
+    1,
+    1,
+    1
+  ],
+  "output_binding": 0,
+  "output_size": 32,
+  "output_type": "float",
+  "tolerance": 0,
+  "required_backends": [
+    "spirv",
+    "hlsl",
+    "glsl"
+  ],
+  "expected_values": [
+    2,
+    4,
+    5,
+    32,
+    16,
+    5,
+    98,
+    28
+  ]
+}

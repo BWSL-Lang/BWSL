@@ -1,0 +1,9 @@
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline Semantics_short_circuit_loop {
+ resources { output: buffer<int> }
+
+ pass "Compute" { use resources { output } compute "Main" [64,1,1] {
+ uint idx=input.global_id.x; int n=int(idx);
+ int x=0; int sum=0; for(int i=0;i<n%5 && ++x<4;i++){sum+=i;} resources.output[idx]=x*100+sum;
+ } }
+}

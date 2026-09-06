@@ -1,0 +1,17 @@
+// Generated QA: resource_uniform_bool
+pipeline QA {
+
+
+resources {
+src: bool
+output: buffer<float>
+}
+pass "Main" {
+
+use resources { src, output }
+compute "Main" [4, 1, 1] {
+uint idx = input.global_id.x;
+bool v = resources.src; resources.output[idx] = v ? 1.0 : 0.0;
+}
+}
+}
