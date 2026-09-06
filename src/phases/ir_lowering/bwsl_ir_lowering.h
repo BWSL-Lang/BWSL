@@ -382,6 +382,8 @@ struct IRLowering {
   u32 GetTypeAlignment(CoreType type);
 
   void LowerAssignment(NodeRef ref);
+  void StoreLValue(NodeRef target, u16 valueReg,
+                   InterpolationMode interpolation = InterpolationMode::Default);
 
   void LowerIfStatement(NodeRef ref);
 
@@ -398,6 +400,9 @@ struct IRLowering {
   u16 LowerMemberAccess(NodeRef ref);
 
   u16 LowerFunctionCall(NodeRef ref);
+  u16 CopyArgumentValue(u16 source);
+  void RegisterLocalArray(u16 reg, CoreType elementType, u32 structHash,
+                          u32 length, u32 nameHash);
 
   u16 TryLowerStructMethodCall(const FunctionCallData &call, u16 receiverReg,
                                u16 *args, u32 argCount, u16 dest,
@@ -406,6 +411,7 @@ struct IRLowering {
   // Try to inline a function call, returns the result register or 0xFFFF if
   // inlining failed
   u16 TryInlineFunction(const FunctionCallData &call, u16 *args, u32 argCount);
+  void LowerEnumPatternBody(NodeRef pattern, u16 receiver, const EnumData &enumData);
 
   // Get type name hash for a CoreType using TypeHashes constants
   static u32 GetCoreTypeNameHash(CoreType type);
@@ -428,7 +434,8 @@ struct IRLowering {
   u16 AllocateRegister();
 
   u16 EmitConstantInt(u32 value);
-  bool CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg);
+  bool CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
+                                 NodeRef indexExpr = NodeRef::Null());
 
   u16 EmitConstantUint(u32 value);
 

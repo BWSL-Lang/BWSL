@@ -31,8 +31,9 @@ static bool IsOutputAssignmentTarget(AST* ast, NodeRef target) {
     return IsOutputAssignmentTarget(ast, access.object);
 } 
 
-NodeRef Parser::ParseBlock() { 
+NodeRef Parser::ParseBlock(bool createScope) {
     PARSER_TIME_BLOCK();
+    if (createScope) SymbolTable::EnterScope(&symbolTable);
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     NodeRef block = ASTFactory::MakeBlock(ast, loc.line, loc.column);
 
@@ -48,6 +49,7 @@ NodeRef Parser::ParseBlock() {
         MarkNodeEndAtPreviousToken(block);
     }
 
+    if (createScope) SymbolTable::ExitScope(&symbolTable);
     return block;
 }
 
@@ -306,7 +308,9 @@ NodeRef Parser::ParseStatement() {
             // Single statement without braces - wrap in a synthetic block
             SourceLocation bodyLoc = getLocation(stream->GetOffset(current));
             body = ASTFactory::MakeBlock(ast, bodyLoc.line, bodyLoc.column);
+            SymbolTable::EnterScope(&symbolTable);
             NodeRef stmt = ParseStatement();
+            SymbolTable::ExitScope(&symbolTable);
             if (stmt.IsValid()) {
                 ast->GetBlock(body).statements.Push(arena, stmt);
             }
@@ -326,7 +330,9 @@ NodeRef Parser::ParseStatement() {
                 // else statement; (single statement without braces)
                 SourceLocation elseLoc = getLocation(stream->GetOffset(current));
                 NodeRef elseBody = ASTFactory::MakeBlock(ast, elseLoc.line, elseLoc.column);
+                SymbolTable::EnterScope(&symbolTable);
                 NodeRef elseStmt = ParseStatement();
+                SymbolTable::ExitScope(&symbolTable);
                 if (elseStmt.IsValid()) {
                     ast->GetBlock(elseBody).statements.Push(arena, elseStmt);
                 }
@@ -366,10 +372,7 @@ NodeRef Parser::ParseStatement() {
             if (expr.IsValid()) Consume(TokenType::SEMICOLON, "Expected ';' after assignment");
             return expr;
         } else if (stream->GetType(next) == TokenType::LEFT_PAREN) {
-            Advance(); // consume the identifier
-            NodeRef identifierNode = ASTFactory::MakeIdentifier(ast, std::string(stream->GetValue(previous)), line, col);
-            Consume(TokenType::LEFT_PAREN, "Expected '(' after function name");
-            NodeRef call = ParseFunctionCall(identifierNode);
+            NodeRef call = ParseExpression();
             if (call.IsValid()) Consume(TokenType::SEMICOLON, "Expected ';' after function call");
             return call;
         } else if (stream->GetType(next) == TokenType::IDENTIFIER) {
@@ -499,6 +502,9 @@ NodeRef Parser::ParseStatement() {
             VariableData& varData = symbolTable.variables[sym->index];
             varData.typeInfo = GetTypeInfoFromToken(varType);
             varData.storageClass = storageClass;
+        } else {
+            Error("Variable already declared in this scope");
+            return NodeRef::Null();
         }
 
         return varDecl;
@@ -693,6 +699,10 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
     // Register variable in symbol table
     Symbol* varSym = SymbolTable::AddSymbol(&symbolTable,
         ArenaString::MakeHashOnly(varName), SymbolKind::VARIABLE);
+    if (!varSym) {
+        Error("Variable already declared in this scope");
+        return NodeRef::Null();
+    }
     if (varSym) {
         if (resolvedDeclType.coreType != CoreType::INVALID) {
             symbolTable.variables[varSym->index].typeInfo = resolvedDeclType;

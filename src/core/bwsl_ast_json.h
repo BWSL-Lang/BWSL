@@ -281,6 +281,21 @@ inline void AppendLiteralValue(std::ostringstream& json, const LiteralValue& val
             json << "]";
             break;
         }
+        case LiteralValue::UINT2:
+        case LiteralValue::UINT3:
+        case LiteralValue::UINT4: {
+            AppendStringField(json, first, "literalType",
+                              value.type == LiteralValue::UINT2 ? "UINT2" :
+                              value.type == LiteralValue::UINT3 ? "UINT3" : "UINT4");
+            AppendFieldName(json, first, "value");
+            json << "[";
+            for (u8 i = 0; i < value.VectorSize(); i++) {
+                if (i > 0) json << ",";
+                json << value.uintVec[i];
+            }
+            json << "]";
+            break;
+        }
         case LiteralValue::INT2:
         case LiteralValue::INT3:
         case LiteralValue::INT4: {

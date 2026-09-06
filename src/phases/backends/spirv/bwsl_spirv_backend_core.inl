@@ -30,15 +30,16 @@ void SPIRVBuilder::Initialize(BWSL_Arena *arena, IR::IRProgram *ir,
   idDecorations = (u32 *)arena->Allocate(idCapacity * sizeof(u32), 64);
   hasPreAllocatedId = (bool *)arena->Allocate(idCapacity * sizeof(bool), 64);
   localVarIds = (u32 *)arena->Allocate(idCapacity * sizeof(u32), 64);
-  localArrayVarIds = (u32 *)arena->Allocate(32 * sizeof(u32), 64);
-  localArrayElemPtrTypes = (u32 *)arena->Allocate(32 * sizeof(u32), 64);
+  const u32 localArrayCapacity = std::max(1u, ir->localArrayCount);
+  localArrayVarIds = (u32 *)arena->Allocate(localArrayCapacity * sizeof(u32), 64);
+  localArrayElemPtrTypes = (u32 *)arena->Allocate(localArrayCapacity * sizeof(u32), 64);
   memset(spirvIds, 0, idCapacity * sizeof(u32));
   memset(idTypes, 0, idCapacity * sizeof(u16));
   memset(idDecorations, 0, idCapacity * sizeof(u32));
   memset(hasPreAllocatedId, 0, idCapacity * sizeof(bool));
   memset(localVarIds, 0, idCapacity * sizeof(u32));
-  memset(localArrayVarIds, 0, 32 * sizeof(u32));
-  memset(localArrayElemPtrTypes, 0, 32 * sizeof(u32));
+  memset(localArrayVarIds, 0, localArrayCapacity * sizeof(u32));
+  memset(localArrayElemPtrTypes, 0, localArrayCapacity * sizeof(u32));
 
   // Initialize storage pointer element type tracking
   storagePtrElemTypes = (u32 *)arena->Allocate(idCapacity * sizeof(u32), 64);
@@ -120,10 +121,12 @@ void SPIRVBuilder::Initialize(BWSL_Arena *arena, IR::IRProgram *ir,
 
   // Initialize block management
   blockCount = 0;
-  blockLabels = (u32 *)arena->Allocate(256 * sizeof(u32), 64);
-  blockIRIndices = (u32 *)arena->Allocate(256 * sizeof(u32), 64);
-  blockMergePoints = (u32 *)arena->Allocate(256 * sizeof(u32), 64);
-  memset(blockLabels, 0, 256 * sizeof(u32));
+  blockCapacity = cfg ? std::max(4u, cfg->blockCount) : 4u;
+  blockLabels = (u32 *)arena->Allocate(blockCapacity * sizeof(u32), 64);
+  blockIRIndices = (u32 *)arena->Allocate(blockCapacity * sizeof(u32), 64);
+  blockMergePoints = (u32 *)arena->Allocate(blockCapacity * sizeof(u32), 64);
+  memset(blockLabels, 0, blockCapacity * sizeof(u32));
+  memset(blockMergePoints, 0, blockCapacity * sizeof(u32));
 
   // Initialize interface variables
   inputCount = outputCount = 0;

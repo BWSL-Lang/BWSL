@@ -146,6 +146,7 @@ struct CompilerConfig {
     bool outputHlsl  = false;              // HLSL output (requires -hlsl flag)
     bool outputGlsl  = false;              // GLSL output (requires -glsl flag)
     bool outputGlslEs = false;             // GLSL ES output for WebGL/mobile (requires -gles flag)
+    bool allowTargetCapabilityExclusions = false; // -all may omit documented unavailable GL/ES features
     bool useDirectGles = false;            // Use direct IR→GLES backend (bypass SPIRV-Cross)
     bool verbose     = false;
     bool dumpIr      = false;
@@ -290,7 +291,7 @@ void PrintUsage(const char* programName) {
     printf("  -glsl          Generate GLSL output via SPIR-V (version 450)\n");
     printf("  -gles          Generate GLSL ES output for WebGL 2.0 / OpenGL ES 3.0 via SPIR-V\n");
     printf("                 (version 300 es)\n");
-    printf("  -gles-direct   Generate GLSL ES directly from IR (bypass SPIRV-Cross, faster)\n");
+    printf("  -gles-direct   Generate GLSL ES from IR (local pointers use SPIRV-Cross)\n");
     printf("  -webgl         Alias for -gles\n");
     printf("  -bindings      Output resolved resource bindings JSON\n");
     printf("  -errors-json   Print machine-readable diagnostics JSON for IDE integrations\n");
@@ -821,7 +822,7 @@ static bool IsKnownGLESFallbackError(const std::string& source) {
            source.find("GLSL.std.450 ModfStruct") != std::string::npos ||
            source.find("GLSL.std.450 Ldexp") != std::string::npos ||
            source.find("textureQueryLevels") != std::string::npos ||
-           source.find("textureGatherOffset") != std::string::npos ||
+           source.find("textureGather") != std::string::npos ||
            source.find("fine/coarse derivative") != std::string::npos;
 }
 
@@ -830,7 +831,7 @@ static std::string SelectGLESSource(const CrossCompileResult& crossResult,
                                     double directGlesMs,
                                     bool useDirectGles,
                                     double* selectedMs) {
-    if (useDirectGles) {
+    if (useDirectGles && !directGlesSource.empty()) {
         if (selectedMs) *selectedMs = directGlesMs;
         return directGlesSource;
     }
@@ -2202,8 +2203,22 @@ CompileResult CompileShaderStage(
 
     result.explicitSamplerUses = CollectExplicitSamplerUses(lowering.program, stage);
 
-    const bool emitDirectGles =
-        useDirectGles || (allowDirectGlesFallback && ProgramNeedsDirectGLESFallback(lowering.program));
+    bool hasLocalPointers = false;
+    for (u32 i = 0; i < lowering.program.instructionCount; ++i) {
+        switch (static_cast<IR::OpCode>(lowering.program.opcodes[i])) {
+            case IR::OP_LOCAL_VAR_PTR:
+            case IR::OP_LOCAL_FIELD_PTR:
+            case IR::OP_LOCAL_LOAD:
+            case IR::OP_LOCAL_STORE:
+                hasLocalPointers = true;
+                break;
+            default: break;
+        }
+    }
+    // Local pointer identity is represented by the SPIR-V memory lowering.
+    // Reuse that path until the direct emitter has equivalent pointer support.
+    const bool emitDirectGles = !hasLocalPointers &&
+        (useDirectGles || (allowDirectGlesFallback && ProgramNeedsDirectGLESFallback(lowering.program)));
 
     // Direct GLES output (bypasses SPIRV-Cross)
     if (emitDirectGles) {
@@ -2305,38 +2320,55 @@ struct StageOutputResult {
     bool skipRemainingPass = false;
 };
 
+static bool IsCrossCompileError(const std::string& source) {
+    return source.empty() || source.rfind("error:", 0) == 0 ||
+           source.rfind("SPIRV-Cross threw an exception:", 0) == 0;
+}
+
+static bool IsDocumentedTargetCapabilityExclusion(const std::string& source) {
+    return source.find("This subgroup operation is only supported in Vulkan semantics") != std::string::npos ||
+           (source.find("GLSL ES 300 does not support builtin '") != std::string::npos &&
+            source.find("requires ES 310+") != std::string::npos) ||
+           source.find("does not support storage buffers (requires ES 310+)") != std::string::npos ||
+           source.find("does not support storage images (requires ES 310+)") != std::string::npos ||
+           source.find("does not support compute shaders (requires ES 310+)") != std::string::npos;
+}
+
 static bool WriteCrossCompileOutput(bool enabled,
                                     double ms,
                                     double& timingSlot,
                                     const std::string& source,
                                     const std::string& path,
-                                    const char* warningLabel,
+                                    const char* targetLabel,
                                     bool quiet,
                                     DiagnosticStream* diagnostics = nullptr,
                                     const std::string& file = "",
                                     const std::string& pass = "",
-                                    const std::string& stage = "") {
+                                    const std::string& stage = "",
+                                    bool allowCapabilityExclusion = false) {
     if (!enabled) return true;
-
     timingSlot = ms;
-    if (!source.empty() && source.find("error") == std::string::npos) {
+    bool capabilityExclusion = false;
+    std::string detail;
+    if (!IsCrossCompileError(source)) {
         if (WriteTextFile(path, source)) {
-            if (!quiet) {
-                printf("    -> %s\n", path.c_str());
-            }
+            if (!quiet) printf("    -> %s\n", path.c_str());
+            return true;
         }
-        return true;
+        detail = "could not write output file '" + path + "'";
+    } else {
+        detail = source.empty() ? "backend returned no shader source" : source;
+        capabilityExclusion = allowCapabilityExclusion && IsDocumentedTargetCapabilityExclusion(source);
     }
-
     if (diagnostics) {
         AddStageDiagnostic(*diagnostics,
-                           DiagnosticSeverity::Warning,
+                           capabilityExclusion ? DiagnosticSeverity::Warning : DiagnosticSeverity::Error,
                            DiagnosticPhase::Compile,
                            DiagnosticMessageId::CrossCompileFailed,
-                           std::string(warningLabel) + " cross-compilation failed",
+                           std::string(targetLabel) + (capabilityExclusion ? " target omitted by -all: " : " cross-compilation failed: ") + detail,
                            file, pass, stage);
     }
-    return false;
+    return capabilityExclusion;
 }
 
 static void WriteWebGLSidecarIfNeeded(const CompileResult& result,
@@ -2493,7 +2525,8 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         backendCache.FindOrAdd(result.spirv, BuildBackendCacheOptions(result.hasWaveOps));
 
 #ifdef USE_SPIRV_CROSS_LIB
-    const u8 crossRequestMask = BuildCrossRequestMask(config);
+    const u8 crossRequestMask = BuildCrossRequestMask(config) |
+        (config.outputGlslEs && result.directGlesSource.empty() ? CrossCacheGlslEs : 0);
     const u8 crossMissingMask =
         static_cast<u8>(crossRequestMask & ~backendCache.crossDoneMask[backendCacheIndex]);
 #endif
@@ -2501,50 +2534,19 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
     const bool validationNeeded = validationRequested && validatorAvailable;
     TimedValidationResult validationTimed;
     bool hasValidationResult = false;
-    std::future<TimedValidationResult> validationFuture;
     if (validationNeeded) {
         if (backendCache.validationDone[backendCacheIndex]) {
             validationTimed.result = backendCache.LoadValidation(backendCacheIndex);
             shaderTime.validationMs = 0.0;
             hasValidationResult = true;
         } else {
-#ifdef USE_SPIRV_CROSS_LIB
-            if (crossMissingMask != 0) {
-                validationFuture = std::async(std::launch::async, [&result, &spvPath]() {
-                    return ValidateSpirvTimed(result.spirv, spvPath);
-                });
-            } else {
-                validationTimed = ValidateSpirvTimed(result.spirv, spvPath);
-                shaderTime.validationMs = validationTimed.ms;
-                backendCache.StoreValidation(backendCacheIndex, validationTimed.result);
-                hasValidationResult = true;
-            }
-#else
+            // SPIRV-Cross assumes valid input and can assert on malformed IDs.
+            // Finish validation before any requested text backend sees the module.
             validationTimed = ValidateSpirvTimed(result.spirv, spvPath);
             shaderTime.validationMs = validationTimed.ms;
             backendCache.StoreValidation(backendCacheIndex, validationTimed.result);
             hasValidationResult = true;
-#endif
         }
-    }
-
-#ifdef USE_SPIRV_CROSS_LIB
-    std::future<CrossCompileResult> crossFuture;
-    if (crossMissingMask != 0) {
-        crossFuture = std::async(std::launch::async,
-                                 [&result, crossMissingMask]() {
-                                     return ParallelCrossCompileMasked(result.spirv,
-                                                                       crossMissingMask,
-                                                                       result.hasWaveOps);
-                                 });
-    }
-#endif
-
-    if (validationFuture.valid()) {
-        validationTimed = validationFuture.get();
-        shaderTime.validationMs = validationTimed.ms;
-        backendCache.StoreValidation(backendCacheIndex, validationTimed.result);
-        hasValidationResult = true;
     }
 
     if (validationNeeded && hasValidationResult) {
@@ -2559,11 +2561,6 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
                                        "SPIR-V validation requested but " + validation.message,
                                        config.inputFile, passName, stageName);
                 }
-#ifdef USE_SPIRV_CROSS_LIB
-                if (crossFuture.valid()) {
-                    (void)crossFuture.get();
-                }
-#endif
                 output.skipRemainingPass = true;
                 return output;
             }
@@ -2588,21 +2585,19 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
                                    "SPIR-V validation failed:\n" + validation.message,
                                    config.inputFile, passName, stageName);
             }
-#ifdef USE_SPIRV_CROSS_LIB
-            if (crossFuture.valid()) {
-                (void)crossFuture.get();
-            }
-#endif
             output.skipRemainingPass = true;
             return output;
         }
     }
 
+    bool targetsSucceeded = true;
 #ifdef USE_SPIRV_CROSS_LIB
     CrossCompileResult computedCrossResult;
     u8 computedCrossMask = 0;
-    if (crossFuture.valid()) {
-        computedCrossResult = crossFuture.get();
+    if (crossMissingMask != 0) {
+        computedCrossResult = ParallelCrossCompileMasked(result.spirv,
+                                                        crossMissingMask,
+                                                        result.hasWaveOps);
         computedCrossMask = crossMissingMask;
         StoreCrossCompileCache(backendCache, backendCacheIndex,
                                computedCrossMask, computedCrossResult);
@@ -2613,19 +2608,20 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
                                          crossRequestMask, computedCrossMask,
                                          computedCrossResult);
 
-    WriteCrossCompileOutput(config.outputMetal, crossResult.metalMs,
+    targetsSucceeded &= WriteCrossCompileOutput(config.outputMetal, crossResult.metalMs,
                             shaderTime.metalCrossMs, crossResult.metal,
                             stageOutputPath + ".metal", "Metal", quiet,
                             diagnostics, config.inputFile, passName, stageName);
-    WriteCrossCompileOutput(config.outputHlsl, crossResult.hlslMs,
+    targetsSucceeded &= WriteCrossCompileOutput(config.outputHlsl, crossResult.hlslMs,
                             shaderTime.hlslCrossMs, crossResult.hlsl,
                             stageOutputPath + ".hlsl", "HLSL", quiet,
                             diagnostics, config.inputFile, passName, stageName);
-    WriteCrossCompileOutput(config.outputGlsl, crossResult.glslMs,
+    targetsSucceeded &= WriteCrossCompileOutput(config.outputGlsl, crossResult.glslMs,
                             shaderTime.glslCrossMs, crossResult.glsl,
                             BuildGlslOutputPath(outputStemPath, stageName, "glsl", disambiguateGlslOutputs),
                             "GLSL", quiet,
-                            diagnostics, config.inputFile, passName, stageName);
+                            diagnostics, config.inputFile, passName, stageName,
+                            config.allowTargetCapabilityExclusions);
 
     if (config.outputGlslEs) {
         double glesMs = 0.0;
@@ -2634,25 +2630,16 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
             result.timing.glslEsCrossMs,
             config.useDirectGles, &glesMs);
         shaderTime.glslEsCrossMs = glesMs;
-        if (!glesSource.empty() && glesSource.find("error") == std::string::npos) {
-            std::string glslEsPath = BuildGlslOutputPath(outputStemPath, stageName, "gles", disambiguateGlslOutputs);
-            if (WriteTextFile(glslEsPath, glesSource)) {
-                if (!quiet) {
-                    printf("    -> %s\n", glslEsPath.c_str());
-                }
-            }
+        std::string glslEsPath = BuildGlslOutputPath(outputStemPath, stageName, "gles", disambiguateGlslOutputs);
+        bool glesSucceeded = WriteCrossCompileOutput(true, shaderTime.glslEsCrossMs,
+            shaderTime.glslEsCrossMs, glesSource, glslEsPath, "GLSL ES", quiet,
+            diagnostics, config.inputFile, passName, stageName,
+            config.allowTargetCapabilityExclusions);
+        targetsSucceeded &= glesSucceeded;
+        if (glesSucceeded && !IsCrossCompileError(glesSource)) {
             WriteWebGLSidecarIfNeeded(result, glslEsPath, pass, parser,
                                       sourceBase, context, pipeline,
                                       writeWebGLSidecar, isVertexStage, quiet);
-        } else {
-            if (diagnostics) {
-                AddStageDiagnostic(*diagnostics,
-                                   DiagnosticSeverity::Warning,
-                                   DiagnosticPhase::Compile,
-                                   DiagnosticMessageId::CrossCompileFailed,
-                                   "GLSL ES cross-compilation failed",
-                                   config.inputFile, passName, stageName);
-            }
         }
     }
 #else
@@ -2662,7 +2649,7 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         std::string metalSource = CrossCompileToMetal(spvPath);
         auto metalEnd = Clock::now();
         double metalMs = std::chrono::duration<double, std::milli>(metalEnd - metalStart).count();
-        WriteCrossCompileOutput(true, metalMs, shaderTime.metalCrossMs,
+        targetsSucceeded &= WriteCrossCompileOutput(true, metalMs, shaderTime.metalCrossMs,
                                 metalSource, stageOutputPath + ".metal", "Metal", quiet,
                                 diagnostics, config.inputFile, passName, stageName);
     }
@@ -2672,7 +2659,7 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         std::string hlslSource = CrossCompileToHLSL(spvPath, result.hasWaveOps);
         auto hlslEnd = Clock::now();
         double hlslMs = std::chrono::duration<double, std::milli>(hlslEnd - hlslStart).count();
-        WriteCrossCompileOutput(true, hlslMs, shaderTime.hlslCrossMs,
+        targetsSucceeded &= WriteCrossCompileOutput(true, hlslMs, shaderTime.hlslCrossMs,
                                 hlslSource, stageOutputPath + ".hlsl", "HLSL", quiet,
                                 diagnostics, config.inputFile, passName, stageName);
     }
@@ -2682,11 +2669,12 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         std::string glslSource = CrossCompileToGLSL(spvPath);
         auto glslEnd = Clock::now();
         double glslMs = std::chrono::duration<double, std::milli>(glslEnd - glslStart).count();
-        WriteCrossCompileOutput(true, glslMs, shaderTime.glslCrossMs,
+        targetsSucceeded &= WriteCrossCompileOutput(true, glslMs, shaderTime.glslCrossMs,
                                 glslSource,
                                 BuildGlslOutputPath(outputStemPath, stageName, "glsl", disambiguateGlslOutputs),
                                 "GLSL", quiet,
-                                diagnostics, config.inputFile, passName, stageName);
+                                diagnostics, config.inputFile, passName, stageName,
+                                config.allowTargetCapabilityExclusions);
     }
     if (config.outputGlslEs) {
         using Clock = std::chrono::high_resolution_clock;
@@ -2694,25 +2682,16 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         std::string glslEsSource = CrossCompileToGLSLCLI(spvPath, 300);
         auto glslEsEnd = Clock::now();
         shaderTime.glslEsCrossMs = std::chrono::duration<double, std::milli>(glslEsEnd - glslEsStart).count();
-        if (!glslEsSource.empty() && glslEsSource.find("error") == std::string::npos) {
-            std::string glslEsPath = BuildGlslOutputPath(outputStemPath, stageName, "gles", disambiguateGlslOutputs);
-            if (WriteTextFile(glslEsPath, glslEsSource)) {
-                if (!quiet) {
-                    printf("    -> %s\n", glslEsPath.c_str());
-                }
-            }
+        std::string glslEsPath = BuildGlslOutputPath(outputStemPath, stageName, "gles", disambiguateGlslOutputs);
+        bool glesSucceeded = WriteCrossCompileOutput(true, shaderTime.glslEsCrossMs,
+            shaderTime.glslEsCrossMs, glslEsSource, glslEsPath, "GLSL ES", quiet,
+            diagnostics, config.inputFile, passName, stageName,
+            config.allowTargetCapabilityExclusions);
+        targetsSucceeded &= glesSucceeded;
+        if (glesSucceeded && !IsCrossCompileError(glslEsSource)) {
             WriteWebGLSidecarIfNeeded(result, glslEsPath, pass, parser,
                                       sourceBase, context, pipeline,
                                       writeWebGLSidecar, isVertexStage, quiet);
-        } else {
-            if (diagnostics) {
-                AddStageDiagnostic(*diagnostics,
-                                   DiagnosticSeverity::Warning,
-                                   DiagnosticPhase::Compile,
-                                   DiagnosticMessageId::CrossCompileFailed,
-                                   "GLSL ES cross-compilation failed",
-                                   config.inputFile, passName, stageName);
-            }
         }
     }
 #endif
@@ -2742,7 +2721,7 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
                          shaderTime.validationMs + shaderTime.metalCrossMs + shaderTime.hlslCrossMs +
                          shaderTime.glslCrossMs + shaderTime.glslEsCrossMs;
 
-    output.success = true;
+    output.success = targetsSucceeded;
     return output;
 }
 
@@ -3000,6 +2979,7 @@ int main(int argc, char* argv[]) {
             config.outputGlslEs = true;
             config.useDirectGles = true;
         } else if (arg == "-all") {
+            config.allowTargetCapabilityExclusions = true;
             config.outputSpirv = true;
             config.outputMetal = true;
             config.outputHlsl = true;

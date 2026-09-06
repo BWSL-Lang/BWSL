@@ -275,7 +275,7 @@ ERROR_CASE_TESTS = {
     "array_size_negative.bwsl": "Expected array size",
     "discard_in_vertex.bwsl": "SPIR-V validation failed",
     "switch_on_float.bwsl": "SPIR-V validation failed",
-    "variant_switch_duplicate_match.bwsl": "switch selector resolves to multiple case arms",
+    "variant_switch_duplicate_match.bwsl": "Duplicate switch case value",
     "user_function_wrong_arg_count.bwsl": "SPIR-V validation failed",
     "struct_as_varying.bwsl": "SPIR-V validation failed",
     "assign_to_input.bwsl": "cannot assign to input.* - stage inputs are read-only",

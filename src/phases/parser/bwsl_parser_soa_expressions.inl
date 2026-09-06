@@ -22,29 +22,7 @@ NodeRef Parser::ParseAssignment() {
     if (MatchMask(TokenMasks::ASSIGNMENT_OPERATORS)) {
         TokenType assignOp = PreviousTokenType();
 
-        // Const checking
-        if (expr.Type() == ASTNodeType::IDENTIFIER) {
-            Symbol* sym = SymbolTable::LookupAny(&symbolTable, ast->GetIdentifier(expr).name);
-            if (sym && sym->kind == SymbolKind::VARIABLE) {
-                const VariableData& varData = symbolTable.variables[sym->index];
-                if (varData.isConst && !varData.isEval) {
-                    ErrorAtPrevious("Cannot assign to const variable");
-                    return expr;
-                }
-            }
-        } else if (expr.Type() == ASTNodeType::ARRAY_ACCESS) {
-            NodeRef arrayBase = ast->GetArrayAccess(expr).array;
-            if (arrayBase.Type() == ASTNodeType::IDENTIFIER) {
-                Symbol* sym = SymbolTable::LookupAny(&symbolTable, ast->GetIdentifier(arrayBase).name);
-                if (sym && sym->kind == SymbolKind::VARIABLE) {
-                    const VariableData& varData = symbolTable.variables[sym->index];
-                    if (varData.isConst && !varData.isEval) {
-                        ErrorAtPrevious("Cannot modify const array");
-                        return expr;
-                    }
-                }
-            }
-        }
+        if (!ValidateAssignmentTarget(expr)) return expr;
 
         SourceLocation loc = getLocation(stream->GetOffset(previous));
         NodeRef value = ParseAssignment();
@@ -69,7 +47,8 @@ NodeRef Parser::ParseAssignment() {
             value = ASTFactory::MakeBinaryOp(ast, binOp, expr, value, loc.line, loc.column);
         }
 
-        return ASTFactory::MakeAssignment(ast, expr, value, loc.line, loc.column);
+        return ASTFactory::MakeAssignment(ast, expr, value, loc.line, loc.column,
+                                          InterpolationMode::Default, assignOp != TokenType::ASSIGN);
     }
 
     return expr;
@@ -141,6 +120,7 @@ NodeRef Parser::ParseUnary() {
     if (Match(TokenType::INCREMENT)) {
         NodeRef operand = ParseUnary();
         if (!operand.IsValid()) return NodeRef::Null();
+        if (!ValidateAssignmentTarget(operand)) return NodeRef::Null();
         return ASTFactory::MakeUnaryOp(ast, UnaryOpType::PRE_INCREMENT, operand, loc.line, loc.column);
     }
 
@@ -148,6 +128,7 @@ NodeRef Parser::ParseUnary() {
     if (Match(TokenType::DECREMENT)) {
         NodeRef operand = ParseUnary();
         if (!operand.IsValid()) return NodeRef::Null();
+        if (!ValidateAssignmentTarget(operand)) return NodeRef::Null();
         return ASTFactory::MakeUnaryOp(ast, UnaryOpType::PRE_DECREMENT, operand, loc.line, loc.column);
     }
 
@@ -162,6 +143,7 @@ NodeRef Parser::ParseUnary() {
     if (Match(TokenType::BITWISE_XOR)) {
         NodeRef operand = ParseUnary();
         if (!operand.IsValid()) return NodeRef::Null();
+        if (!ValidateAssignmentTarget(operand)) return NodeRef::Null();
         return ASTFactory::MakeUnaryOp(ast, UnaryOpType::ADDRESS_OF, operand, loc.line, loc.column);
     }
 
@@ -362,10 +344,12 @@ NodeRef Parser::ParsePostfix() {
         } else if (Match(TokenType::INCREMENT)) {
             // Postfix increment: x++
             SourceLocation loc = getLocation(stream->GetOffset(previous));
+            if (!ValidateAssignmentTarget(expr)) return NodeRef::Null();
             expr = ASTFactory::MakeUnaryOp(ast, UnaryOpType::POST_INCREMENT, expr, loc.line, loc.column);
         } else if (Match(TokenType::DECREMENT)) {
             // Postfix decrement: x--
             SourceLocation loc = getLocation(stream->GetOffset(previous));
+            if (!ValidateAssignmentTarget(expr)) return NodeRef::Null();
             expr = ASTFactory::MakeUnaryOp(ast, UnaryOpType::POST_DECREMENT, expr, loc.line, loc.column);
         } else if (Check(TokenType::BITWISE_XOR)) {
             // Could be postfix dereference (x^) or binary XOR (x ^ y)
@@ -440,9 +424,9 @@ NodeRef Parser::ParsePrimary() {
 
     if (Match(TokenType::NUMBER)) {
         std::string_view numStr = stream->GetValue(previous);
-        bool isHex = numStr.size() > 2 && numStr[0] == '0' &&
+        bool isHex = numStr.size() >= 2 && numStr[0] == '0' &&
                      (numStr[1] == 'x' || numStr[1] == 'X');
-        bool isBin = numStr.size() > 2 && numStr[0] == '0' &&
+        bool isBin = numStr.size() >= 2 && numStr[0] == '0' &&
                      (numStr[1] == 'b' || numStr[1] == 'B');
         bool hasDecimal = numStr.find('.') != std::string::npos;
         bool hasFloatSuffix = (!isHex && !isBin) && !numStr.empty() &&
@@ -451,20 +435,20 @@ NodeRef Parser::ParsePrimary() {
                            (numStr.find('e') != std::string::npos ||
                             numStr.find('E') != std::string::npos);
         if (hasDecimal || hasFloatSuffix || hasExponent) {
-            float value = SafeParseFloat(numStr);
+            float value = 0.0f;
+            if (!TryParseFloat(numStr, &value)) {
+                ErrorAtPrevious("Invalid or out-of-range float literal");
+                return NodeRef::Null();
+            }
             return ASTFactory::MakeLiteralFloat(ast, value, line, col);
         } else {
             // Check for unsigned suffix 'u' or 'U'
             bool isUnsigned = (!numStr.empty() && (numStr.back() == 'u' || numStr.back() == 'U'));
-            std::string parseStr(numStr);
-            if (isUnsigned) {
-                parseStr.pop_back();  // Remove the 'u' suffix for parsing
+            u32 parsed = 0;
+            if (!TryParseU32(numStr, &parsed)) {
+                ErrorAtPrevious("Invalid or out-of-range 32-bit integer literal");
+                return NodeRef::Null();
             }
-
-            // Use SafeParseU32 with base 0 to auto-detect hex (0x), octal (0),
-            // or decimal. Handles the full uint32 range for hex literals like
-            // 0x9E3779B9u and returns 0 on malformed input (fuzzer-safe).
-            unsigned long parsed = SafeParseU32(parseStr, 0);
 
             if (isUnsigned) {
                 return ASTFactory::MakeLiteralUint(ast, static_cast<uint32_t>(parsed), line, col);

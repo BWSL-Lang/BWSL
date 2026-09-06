@@ -12,9 +12,9 @@ inline bool DecodeSwizzleByHash(u32 nameHash, u16 lengthHint, u8 outIndices[4],
   const char rgba[] = {'r', 'g', 'b', 'a'};
   const char *sets[] = {xyzw, rgba};
 
-  u32 minLen = 2;
+  u32 minLen = 1;
   u32 maxLen = 4;
-  if (lengthHint >= 2 && lengthHint <= 4) {
+  if (lengthHint >= 1 && lengthHint <= 4) {
     minLen = lengthHint;
     maxLen = lengthHint;
   }
@@ -258,27 +258,29 @@ inline bool ResolveDirectStructArrayFieldAccess(
 
 inline u16 IRLowering::TryLowerLocalFieldAddressOf(NodeRef memberRef) {
   const MemberAccessData &access = ast->GetMemberAccess(memberRef);
-
-  if (access.object.Type() != ASTNodeType::IDENTIFIER) return 0;
-  const IdentifierData &obj = ast->GetIdentifier(access.object);
-  if (obj.identifierKind != SpecialIdentifier::NONE) return 0;
-
-  // The identifier must be a user variable we've already allocated a
-  // register for. LowerIdentifier handles symbol lookup + caching.
-  u16 baseReg = LowerIdentifier(access.object);
-  if (baseReg >= MAX_REGISTERS) return 0;
-
-  // Base must carry a struct type hash (either from declaration or
-  // inferred). Swizzle / vector-component cases hit when the base
-  // type is a vector with no struct hash — bail and let the existing
-  // ADDRESS_OF path reject them.
-  u32 structTypeHash = program.registerStructTypes[baseReg];
-  if (structTypeHash == 0) {
-    auto varIt = variableStructTypes.find(obj.name.nameHash);
-    if (varIt != variableStructTypes.end()) {
-      structTypeHash = varIt->second;
-      program.registerStructTypes[baseReg] = structTypeHash;
+  u16 baseReg = 0;
+  u32 structTypeHash = 0;
+  bool baseIsPointer = false;
+  if (access.object.Type() == ASTNodeType::IDENTIFIER) {
+    const IdentifierData &obj = ast->GetIdentifier(access.object);
+    if (obj.identifierKind != SpecialIdentifier::NONE) return 0;
+    baseReg = LowerIdentifier(access.object);
+    if (baseReg >= MAX_REGISTERS) return 0;
+    structTypeHash = program.registerStructTypes[baseReg];
+    if (structTypeHash == 0) {
+      auto varIt = variableStructTypes.find(obj.name.nameHash);
+      if (varIt != variableStructTypes.end()) {
+        structTypeHash = varIt->second;
+        program.registerStructTypes[baseReg] = structTypeHash;
+      }
     }
+  } else if (access.object.Type() == ASTNodeType::MEMBER_ACCESS) {
+    baseReg = TryLowerLocalFieldAddressOf(access.object);
+    if (baseReg == 0 || baseReg >= MAX_REGISTERS) return 0;
+    structTypeHash = program.registerStructTypes[baseReg];
+    baseIsPointer = true;
+  } else {
+    return 0;
   }
   if (structTypeHash == 0) return 0;
 
@@ -326,8 +328,9 @@ inline u16 IRLowering::TryLowerLocalFieldAddressOf(NodeRef memberRef) {
 
   // Base struct variable's address is effectively taken — SSA must
   // leave its register alone.
-  program.registerStorageInfo[baseReg] |=
-      IR::IRProgram::STORAGE_IS_ADDRESS_TAKEN;
+  if (!baseIsPointer) {
+    program.registerStorageInfo[baseReg] |= IR::IRProgram::STORAGE_IS_ADDRESS_TAKEN;
+  }
 
   // If the field is itself a struct/enum, propagate its type hash so
   // chained member access on the dereferenced pointer sees the right
@@ -467,22 +470,8 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
       }
     }
 
-    // Register the array for local array tracking
-    program.localArrayNameHashes[program.localArrayCount] =
-        varDecl.name.nameHash;
-    program.localArrayTypes[program.localArrayCount] =
-        static_cast<u16>(arrayElementType);
-    program.localArrayStructTypes[program.localArrayCount] =
-        arrayElementStructHash;
-    program.localArraySizes[program.localArrayCount] = arrayLength;
-    program.localArrayRegisters[program.localArrayCount] = varReg;
-    program.localArrayCount++;
-
-    // Mark the register as an array pointer
-    program.registerStorageInfo[varReg] =
-        ((program.localArrayCount - 1)
-         << IR::IRProgram::STORAGE_BINDING_SHIFT) |
-        IR::IRProgram::STORAGE_IS_PTR | IR::IRProgram::STORAGE_IS_LOCAL_ARRAY;
+    RegisterLocalArray(varReg, arrayElementType, arrayElementStructHash,
+                       arrayLength, varDecl.name.nameHash);
   }
 
   // If there's an initializer, evaluate it
@@ -609,9 +598,18 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
 
 inline void IRLowering::LowerAssignment(NodeRef ref) {
   const AssignmentData &assign = ast->GetAssignment(ref);
+  if (assign.isCompound && assign.value.Type() == ASTNodeType::BINARY_OP) {
+    // Resolve a compound assignment's lvalue exactly once. AST cloning may
+    // give the desugared binary operand a different node from the target.
+    u16 oldValue = LowerExpression(assign.target);
+    nodeRegisters[ast->GetBinaryOp(assign.value).left.packed] = oldValue;
+  }
   u16 valueReg = LowerExpression(assign.value);
+  StoreLValue(assign.target, valueReg, assign.interpolation);
+}
 
-  NodeRef target = assign.target;
+inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
+                                  InterpolationMode interpolation) {
 
   if (target.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &ident = ast->GetIdentifier(target);
@@ -675,6 +673,79 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
   } else if (target.Type() == ASTNodeType::MEMBER_ACCESS) {
     const MemberAccessData &access = ast->GetMemberAccess(target);
 
+    // A nested lvalue updates its immediate aggregate, then writes that
+    // aggregate back through its parent. Keep resource/output handling below.
+    NodeRef root = access.object;
+    while (root.Type() == ASTNodeType::MEMBER_ACCESS ||
+           root.Type() == ASTNodeType::ARRAY_ACCESS ||
+           root.Type() == ASTNodeType::UNARY_OP) {
+      if (root.Type() == ASTNodeType::MEMBER_ACCESS)
+        root = ast->GetMemberAccess(root).object;
+      else if (root.Type() == ASTNodeType::ARRAY_ACCESS)
+        root = ast->GetArrayAccess(root).array;
+      else
+        root = ast->GetUnaryOp(root).operand;
+    }
+    bool localRoot = root.Type() == ASTNodeType::IDENTIFIER &&
+        (ast->GetIdentifier(root).identifierKind == SpecialIdentifier::NONE ||
+         ast->GetIdentifier(root).identifierKind == SpecialIdentifier::SELF);
+    if (localRoot && access.object.Type() != ASTNodeType::IDENTIFIER) {
+      u16 objectReg = LowerExpression(access.object);
+      CoreType objectType = GetRegisterType(objectReg);
+      u32 structHash = objectReg < MAX_REGISTERS
+                           ? program.registerStructTypes[objectReg] : 0;
+      u32 fieldIndex = 0;
+      CoreType fieldType = CoreType::INVALID;
+      if (structHash && FindStructField(structHash, access.member.nameHash,
+                                       &fieldIndex, &fieldType, nullptr)) {
+        u16 updated = AllocateRegister();
+        SetRegisterType(updated, objectType);
+        program.registerStructTypes[updated] = structHash;
+        valueReg = ConvertRegisterToType(valueReg, fieldType);
+        builder.EmitInstruction(OP_STRUCT_INSERT, updated, objectReg,
+                                static_cast<u16>(fieldIndex), valueReg);
+        program.metadata[builder.currentInstruction - 1] = structHash;
+        StoreLValue(access.object, updated, interpolation);
+        return;
+      }
+      if ((mask(objectType) & (TypeMasks::FLOAT_VECTORS |
+                               TypeMasks::INT_VECTORS |
+                               TypeMasks::UINT_VECTORS |
+                               TypeMasks::BOOL_VECTORS)) != 0) {
+        u8 indices[4] = {};
+        u32 length = 0;
+        if (DecodeSwizzleByHash(access.member.nameHash, access.member.nameLength,
+                                indices, &length)) {
+          for (u32 j = 0; j < length; ++j) {
+            for (u32 k = 0; k < j; ++k) {
+              if (indices[j] == indices[k]) {
+                ReportError("Error: swizzle assignment target has duplicate components\n");
+                return;
+              }
+            }
+          }
+          u16 updated = objectReg;
+          for (u32 j = 0; j < length; ++j) {
+            u16 component = valueReg;
+            if (length > 1) {
+              component = AllocateRegister();
+              SetRegisterType(component, (mask(objectType) & TypeMasks::FLOAT_VECTORS) ? CoreType::FLOAT :
+                  (mask(objectType) & TypeMasks::UINT_VECTORS) ? CoreType::UINT :
+                  (mask(objectType) & TypeMasks::BOOL_VECTORS) ? CoreType::BOOL : CoreType::INT);
+              builder.EmitInstruction(OP_VEC_EXTRACT, component, valueReg,
+                                      static_cast<u16>(j));
+            }
+            u16 next = AllocateRegister();
+            SetRegisterType(next, objectType);
+            builder.EmitInstruction(OP_VEC_INSERT, next, updated, indices[j], component);
+            updated = next;
+          }
+          StoreLValue(access.object, updated, interpolation);
+          return;
+        }
+      }
+    }
+
     if (access.object.Type() == ASTNodeType::MEMBER_ACCESS) {
       const MemberAccessData &baseAccess =
           ast->GetMemberAccess(access.object);
@@ -702,7 +773,7 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
             nameStr = nameBuf;
           }
           u16 slot = (u16)ResolveOutputSlotForStore(outputNameHash, outputType,
-                                               nameStr, assign.interpolation);
+                                               nameStr, interpolation);
 
           u16 outputReg = AllocateRegister();
           SetRegisterType(outputReg, outputType);
@@ -812,7 +883,7 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
           nameStr = nameBuf;
         }
         u16 slot = (u16)ResolveOutputSlotForStore(nameHash, valueType, nameStr,
-                                             assign.interpolation);
+                                             interpolation);
         CoreType declaredOutputType = GetFragmentOutputType(nameHash);
         if (currentStage == ShaderStage::Fragment &&
             declaredOutputType != CoreType::INVALID &&
@@ -1133,67 +1204,51 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
   } else if (target.Type() == ASTNodeType::ARRAY_ACCESS) {
     const ArrayAccessData &arrAccess = ast->GetArrayAccess(target);
 
-    // `s.field[i] = value` where `field` is an array held by value in a
-    // struct register. Extracting the array and storing into the copy
-    // loses the write, and materializing array-typed temporaries breaks
-    // SPIRV-Cross MSL output. Instead emit a fused two-level insert that
-    // produces the updated struct value, then store it back — the same
-    // insert-and-store-back pattern plain field assignments use.
+    // Array fields are held by value inside their immediate struct. Rebuild
+    // that struct and write it through the entire parent lvalue, including
+    // nested fields and struct-array elements.
     if (arrAccess.array.Type() == ASTNodeType::MEMBER_ACCESS) {
-      const MemberAccessData &fieldAccess =
-          ast->GetMemberAccess(arrAccess.array);
-      if (fieldAccess.object.Type() == ASTNodeType::IDENTIFIER) {
-        const IdentifierData &obj = ast->GetIdentifier(fieldAccess.object);
-        if (obj.identifierKind == SpecialIdentifier::NONE ||
-            obj.identifierKind == SpecialIdentifier::SELF) {
-          u32 structTypeHash = 0;
-          auto varIt = variableStructTypes.find(obj.name.nameHash);
-          if (varIt != variableStructTypes.end()) {
-            structTypeHash = varIt->second;
-          }
-
-          auto structIt = structTypeHash != 0
-                              ? structTypeMap.find(structTypeHash)
-                              : structTypeMap.end();
-          if (structIt != structTypeMap.end()) {
-            const IRProgram::StructTypeInfo &info =
-                program.structTypes[structIt->second];
-            for (u16 fi = 0; fi < info.fieldCount; fi++) {
-              if (program.structFieldNameHashes[info.fieldOffset + fi] !=
-                  fieldAccess.member.nameHash) {
-                continue;
-              }
-              if (!program.structFieldArraySizes ||
-                  program.structFieldArraySizes[info.fieldOffset + fi] == 0) {
-                break; // Not an array field - use the regular paths below
-              }
-
-              if (currentStructMethodIsConst &&
-                  obj.name.nameHash == Utils::HashStr("self")) {
-                ReportError("Error: cannot assign to receiver field inside "
-                            "const method\n");
-                return;
-              }
-
-              u16 objReg = GetOrAllocateVariable(obj.name.nameHash);
-              if (initializedVariables.find(obj.name.nameHash) ==
-                  initializedVariables.end()) {
-                u16 zeroStruct = EmitZeroStruct(structTypeHash);
-                builder.EmitInstruction(OP_STORE_REG, objReg, zeroStruct);
-                initializedVariables.insert(obj.name.nameHash);
-              }
-
-              u16 indexReg = LowerExpression(arrAccess.index);
-              u16 newStructReg = AllocateRegister();
-              SetRegisterType(newStructReg, CoreType::CUSTOM);
-              program.registerStructTypes[newStructReg] = structTypeHash;
-              builder.EmitInstruction(OP_STRUCT_ARRAY_INSERT, newStructReg,
-                                      objReg, fi, indexReg, valueReg);
-              program.metadata[builder.currentInstruction - 1] =
-                  structTypeHash;
-              builder.EmitInstruction(OP_STORE_REG, objReg, newStructReg);
-              return;
-            }
+      const MemberAccessData &fieldAccess = ast->GetMemberAccess(arrAccess.array);
+      NodeRef root = fieldAccess.object;
+      while (root.Type() == ASTNodeType::MEMBER_ACCESS || root.Type() == ASTNodeType::ARRAY_ACCESS) {
+        root = root.Type() == ASTNodeType::MEMBER_ACCESS
+            ? ast->GetMemberAccess(root).object : ast->GetArrayAccess(root).array;
+      }
+      bool localRoot = root.Type() == ASTNodeType::IDENTIFIER &&
+          (ast->GetIdentifier(root).identifierKind == SpecialIdentifier::NONE ||
+           ast->GetIdentifier(root).identifierKind == SpecialIdentifier::SELF);
+      if (localRoot) {
+        const auto &identifier = ast->GetIdentifier(root);
+        if (currentStructMethodIsConst && identifier.name.nameHash == Utils::HashStr("self")) {
+          ReportError("Error: cannot assign to receiver field inside const method\n");
+          return;
+        }
+        auto rootType = variableStructTypes.find(identifier.name.nameHash);
+        if (rootType != variableStructTypes.end() &&
+            initializedVariables.find(identifier.name.nameHash) == initializedVariables.end()) {
+          u16 rootReg = GetOrAllocateVariable(identifier.name.nameHash);
+          builder.EmitInstruction(OP_STORE_REG, rootReg, EmitZeroStruct(rootType->second));
+          initializedVariables.insert(identifier.name.nameHash);
+        }
+        u16 objectReg = LowerExpression(fieldAccess.object);
+        u32 structHash = objectReg < MAX_REGISTERS ? program.registerStructTypes[objectReg] : 0;
+        auto structure = structTypeMap.find(structHash);
+        if (structHash && structure != structTypeMap.end()) {
+          const auto &info = program.structTypes[structure->second];
+          for (u16 field = 0; field < info.fieldCount; ++field) {
+            u32 fieldOffset = info.fieldOffset + field;
+            if (program.structFieldNameHashes[fieldOffset] != fieldAccess.member.nameHash) continue;
+            if (!program.structFieldArraySizes || !program.structFieldArraySizes[fieldOffset]) break;
+            u16 indexReg = LowerExpression(arrAccess.index);
+            u16 arrayReg = LowerExpression(arrAccess.array);
+            if (!CheckConstArrayIndexBounds(arrayReg, indexReg, arrAccess.index)) return;
+            u16 updated = AllocateRegister();
+            SetRegisterType(updated, CoreType::CUSTOM);
+            program.registerStructTypes[updated] = structHash;
+            builder.EmitInstruction(OP_STRUCT_ARRAY_INSERT, updated, objectReg, field, indexReg, valueReg);
+            program.metadata[builder.currentInstruction - 1] = structHash;
+            StoreLValue(fieldAccess.object, updated, interpolation);
+            return;
           }
         }
       }
@@ -1232,44 +1287,37 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
         SetRegisterType(newVecReg, baseType);
         builder.EmitInstruction(OP_VEC_INSERT_DYNAMIC, newVecReg, baseReg,
                                 valueReg, indexReg);
-        builder.EmitInstruction(OP_STORE_REG, baseReg, newVecReg);
+        StoreLValue(arrAccess.array, newVecReg, interpolation);
         return;
       }
 
-      // Matrix-column write: `M[i] = col_vec` where M is a matrix-typed
-      // local and i is a compile-time integer. Emit OP_VEC_INSERT
-      // (OpCompositeInsert) so the matrix type is preserved — the
-      // generic ARRAY_STORE fallback aliases baseReg to value, turning
-      // the matrix into a column-vec and breaking subsequent reads.
-      //
-      // Only fire when the LHS is `identifier[i]` — a simple local
-      // matrix variable. If the LHS is `struct.field[i]` (array-of-
-      // matrix field), the CoreType is wrong for matrix semantics
-      // (we have no "array of mat4" CoreType, so the register may
-      // carry mat4 spuriously). Fall through to generic ARRAY_STORE
-      // so STRUCT_INSERT can reconstitute the struct correctly.
-      bool baseIsLocalMatrix =
-          arrAccess.array.Type() == ASTNodeType::IDENTIFIER;
-      bool baseIsMat =
-          baseType == CoreType::MAT2 || baseType == CoreType::MAT3 ||
-          baseType == CoreType::MAT4;
-      CoreType expectedCol = (baseType == CoreType::MAT4)   ? CoreType::FLOAT4
-                           : (baseType == CoreType::MAT3)   ? CoreType::FLOAT3
-                           : (baseType == CoreType::MAT2)   ? CoreType::FLOAT2
-                                                            : CoreType::INVALID;
-      bool indexIsConst = (indexReg & 0x4000) != 0;
-      if (baseIsLocalMatrix && baseIsMat && indexIsConst &&
-          valueType == expectedCol) {
-        u16 slot = indexReg & 0x3FFF;
-        u16 literalIdx = 0;
-        if (slot < program.intCount) {
-          literalIdx = static_cast<u16>(program.intConstants[slot]);
+      bool localArray = (program.registerStorageInfo[baseReg] &
+                           IR::IRProgram::STORAGE_IS_LOCAL_ARRAY) != 0 ||
+                        structArrayValueRegs.count(baseReg) != 0;
+      bool baseIsMat = (mask(baseType) & TypeMasks::MATRIX_TYPES) != 0;
+      CoreType expectedCol = (baseType == CoreType::MAT4) ? CoreType::FLOAT4 :
+                            (baseType == CoreType::MAT3) ? CoreType::FLOAT3 : CoreType::FLOAT2;
+      if (!localArray && baseIsMat && valueType == expectedCol) {
+        u32 count = baseType == CoreType::MAT4 ? 4 : baseType == CoreType::MAT3 ? 3 : 2;
+        u16 columns[4] = {};
+        for (u32 c = 0; c < count; ++c) {
+          u16 index = EmitConstantInt(static_cast<int>(c));
+          u16 old = AllocateRegister();
+          SetRegisterType(old, expectedCol);
+          builder.EmitInstruction(OP_ARRAY_LOAD, old, baseReg, index);
+          u16 selected = AllocateRegister();
+          SetRegisterType(selected, CoreType::BOOL);
+          builder.EmitInstruction(OP_IEQ, selected, indexReg,
+                                  ConvertRegisterToType(index, GetRegisterType(indexReg)));
+          columns[c] = AllocateRegister();
+          SetRegisterType(columns[c], expectedCol);
+          builder.EmitInstruction(OP_SELECT, columns[c], old, valueReg, selected);
         }
-        u16 newMatReg = AllocateRegister();
-        SetRegisterType(newMatReg, baseType);
-        builder.EmitInstruction(OP_VEC_INSERT, newMatReg, baseReg,
-                                literalIdx, valueReg);
-        builder.EmitInstruction(OP_STORE_REG, baseReg, newMatReg);
+        u16 updated = AllocateRegister();
+        SetRegisterType(updated, baseType);
+        builder.EmitInstruction(OP_MAT_CONSTRUCT, updated, columns[0], columns[1], columns[2], columns[3]);
+        program.metadata[builder.currentInstruction - 1] = count;
+        StoreLValue(arrAccess.array, updated, interpolation);
         return;
       }
     }
@@ -1291,7 +1339,7 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
         }
       }
     }
-    if (!CheckConstArrayIndexBounds(baseReg, indexReg)) {
+    if (!CheckConstArrayIndexBounds(baseReg, indexReg, arrAccess.index)) {
       return;
     }
     builder.EmitInstruction(OP_ARRAY_STORE, baseReg, indexReg, valueReg);
@@ -1426,7 +1474,7 @@ inline u16 IRLowering::LowerArrayAccess(NodeRef ref) {
     }
   } else {
     // Regular array load
-    if (!CheckConstArrayIndexBounds(baseReg, indexReg)) {
+    if (!CheckConstArrayIndexBounds(baseReg, indexReg, access.index)) {
       return 0;
     }
     builder.EmitInstruction(OP_ARRAY_LOAD, dest, baseReg, indexReg);

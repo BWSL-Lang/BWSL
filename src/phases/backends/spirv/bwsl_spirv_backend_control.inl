@@ -13,6 +13,20 @@ u32 SPIRVBuilder::GetOrCreateBlockLabel(u32 ir_idx) {
     }
   }
 
+  if (blockCount == blockCapacity) {
+    u32 newCapacity = blockCapacity * 2;
+    auto grow = [&](u32*& values) {
+      u32* replacement = (u32*)arena->Allocate(newCapacity * sizeof(u32), 64);
+      memcpy(replacement, values, blockCount * sizeof(u32));
+      memset(replacement + blockCount, 0, (newCapacity - blockCount) * sizeof(u32));
+      values = replacement;
+    };
+    grow(blockLabels);
+    grow(blockIRIndices);
+    grow(blockMergePoints);
+    blockCapacity = newCapacity;
+  }
+
   // Create new label
   u32 label_id = AllocateId();
   blockLabels[blockCount] = label_id;
@@ -463,6 +477,49 @@ void SPIRVBuilder::EmitFunctionBody() {
     }
   }
 
+  localPointerTargets.assign(idCapacity, {});
+  localPointerTagVars.assign(idCapacity, 0);
+  localPointerIndexVars.assign(idCapacity, 0);
+  for (u32 i = 0; i < ir->instructionCount; ++i) {
+    u16 reg = ir->destinations[i];
+    IR::OpCode op = static_cast<IR::OpCode>(ir->opcodes[i]);
+    u16 base = ir->GetOperand(i, 0);
+    bool arrayAddress = op == IR::OP_STORAGE_INDEX && ir->registerStorageInfo &&
+        base < ir->registerCount &&
+        (ir->registerStorageInfo[base] & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY);
+    if (reg < idCapacity && (op == IR::OP_LOCAL_VAR_PTR ||
+                            op == IR::OP_LOCAL_FIELD_PTR || arrayAddress))
+      localPointerTargets[reg].push_back(i);
+  }
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (u32 i = 0; i < ir->instructionCount; ++i) {
+      if (ir->opcodes[i] != IR::OP_STORE_REG && ir->opcodes[i] != IR::OP_LOAD_REG) continue;
+      u16 dst = ir->destinations[i], src = ir->GetOperand(i, 0);
+      if (dst >= idCapacity || src >= idCapacity) continue;
+      for (u32 target : localPointerTargets[src]) {
+        auto &targets = localPointerTargets[dst];
+        if (std::find(targets.begin(), targets.end(), target) == targets.end()) {
+          targets.push_back(target);
+          changed = true;
+        }
+      }
+    }
+  }
+  for (u32 r = 0; r < idCapacity; ++r) {
+    bool hasArrayTarget = false;
+    for (u32 producer : localPointerTargets[r])
+      hasArrayTarget |= ir->opcodes[producer] == IR::OP_STORAGE_INDEX;
+    if (localPointerTargets[r].size() > 1 || hasArrayTarget) {
+      localPointerTagVars[r] = AllocateId();
+      // An index is part of the pointer value. Copies must snapshot it, so
+      // rebinding the original pointer in a later loop iteration cannot
+      // retarget an earlier alias.
+      if (hasArrayTarget) localPointerIndexVars[r] = AllocateId();
+    }
+  }
+
   // Pre-pass: collect all OP_LOCAL_VAR_PTR instructions and pre-allocate
   // OpVariable IDs. SPIR-V requires all OpVariable instructions to be at the
   // start of the first block. We use a separate "emittedLocalVars" flag array
@@ -478,6 +535,10 @@ void SPIRVBuilder::EmitFunctionBody() {
     bool isFieldPtr = (ir->opcodes[i] == IR::OP_LOCAL_FIELD_PTR);
     if (isVarPtr || isFieldPtr) {
       u16 var_reg = ir->GetOperand(i, 0);
+      if (isFieldPtr && ir->registerStorageInfo && var_reg < ir->registerCount &&
+          (ir->registerStorageInfo[var_reg] & IR::IRProgram::STORAGE_IS_FIELD_PTR)) {
+        continue; // Nested field access extends an existing pointer.
+      }
 
       // Check if we already created a variable for this source register
       if (var_reg < idCapacity && localVarIds[var_reg] == 0) {
@@ -504,6 +565,10 @@ void SPIRVBuilder::EmitFunctionBody() {
       bool isFieldPtr = (ir->opcodes[i] == IR::OP_LOCAL_FIELD_PTR);
       if (isVarPtr || isFieldPtr) {
         u16 var_reg = ir->GetOperand(i, 0);
+      if (isFieldPtr && ir->registerStorageInfo && var_reg < ir->registerCount &&
+          (ir->registerStorageInfo[var_reg] & IR::IRProgram::STORAGE_IS_FIELD_PTR)) {
+        continue; // Nested field access extends an existing pointer.
+      }
         if (var_reg < idCapacity && localVarIds[var_reg] != 0 &&
             emittedLocalVars && !emittedLocalVars[var_reg]) {
           CoreType varType = CoreType::FLOAT;
@@ -538,6 +603,15 @@ void SPIRVBuilder::EmitFunctionBody() {
           emittedLocalVars[var_reg] = true;
         }
       }
+    }
+
+    u32 tagType = GetPointerTypeId(GetTypeId(CoreType::UINT), spv::StorageClassFunction);
+    u32 zeroTag = GetIntConstantId(0, true);
+    for (u32 variable : localPointerTagVars) {
+      if (variable) Emit(spv::OpVariable, tagType, variable, spv::StorageClassFunction, zeroTag);
+    }
+    for (u32 variable : localPointerIndexVars) {
+      if (variable) Emit(spv::OpVariable, tagType, variable, spv::StorageClassFunction, zeroTag);
     }
 
     // Emit local array OpVariables

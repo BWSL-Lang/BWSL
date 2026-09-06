@@ -428,6 +428,9 @@ inline RenderConfig CreateSyntheticRenderConfig(const AST& ast,
     auto appendResource = [&](const std::string& resourceName,
                               const std::string& typeName,
                               const ResourceData& resource) {
+        // Compacted pipelines retain unused declarations for source tooling,
+        // but those declarations have no backend resource slot.
+        if (resource.bindingIndex >= 32) return;
         switch (resource.type) {
             case ResourceBinding::UniformBuffer: {
                 UniformBufferBinding binding;
@@ -444,6 +447,9 @@ inline RenderConfig CreateSyntheticRenderConfig(const AST& ast,
                 binding.bindingIndex = resource.bindingIndex;
                 binding.isArray = resource.isArrayTexture;
                 binding.isCubemap = resource.isCubemapTexture;
+                binding.isVolume = static_cast<CoreType>(resource.coreType) == CoreType::TEXTURE3D;
+                binding.separateSampler = resource.separateSampler;
+                binding.defaultSamplerBinding = ResolveDefaultSamplerBinding(symbols, resource.bindingIndex);
                 binding.stages = resource.stageFlags;
                 config.textures.push_back(std::move(binding));
                 break;
@@ -452,6 +458,7 @@ inline RenderConfig CreateSyntheticRenderConfig(const AST& ast,
                 SamplerBinding binding;
                 binding.name = resourceName;
                 binding.bindingIndex = resource.bindingIndex;
+                binding.descriptorBinding = ResolveSeparateSamplerBinding(symbols, resource.bindingIndex);
                 binding.stages = resource.stageFlags;
                 config.samplers.push_back(std::move(binding));
                 break;

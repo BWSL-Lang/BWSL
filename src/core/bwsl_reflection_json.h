@@ -72,13 +72,50 @@ inline std::string StageFlagsToJsonArray(u8 stageFlags, bool prettySpacing = fal
     return json;
 }
 
+inline void AppendCombinedSamplerUniformsJson(std::ostringstream& json,
+                                             const std::vector<CombinedSamplerUniform>& uniforms) {
+    if (uniforms.empty()) return;
+    json << ",\"combinedSamplerUniforms\":[";
+    for (size_t i = 0; i < uniforms.size(); ++i) {
+        const auto& uniform = uniforms[i];
+        if (i) json << ",";
+        json << "{\"name\":\"" << EscapeJsonString(uniform.name)
+             << "\",\"sampler\":\"" << EscapeJsonString(uniform.samplerName)
+             << "\",\"samplerSet\":" << uniform.samplerSet
+             << ",\"samplerBinding\":" << uniform.samplerBinding
+             << ",\"stages\":" << StageFlagsToJsonArray(uniform.stages) << "}";
+    }
+    json << "]";
+}
+
+inline void AppendHLSLResourcesJson(std::ostringstream& json,
+                                   const std::vector<ReflectedResourceBinding>& resources) {
+    bool first = true;
+    for (const auto& resource : resources) {
+        if (!resource.hlslOnly) continue;
+        if (first) json << ",\"hlslResources\":[";
+        else json << ",";
+        first = false;
+        json << "{\"name\":\"" << EscapeJsonString(resource.name)
+             << "\",\"type\":\"uniform\",\"set\":" << resource.set
+             << ",\"binding\":" << resource.binding
+             << ",\"stages\":" << StageFlagsToJsonArray(resource.stages)
+             << ",\"builtin\":\"" << EscapeJsonString(resource.builtin)
+             << "\",\"valueType\":\"uint3\",\"byteSize\":" << resource.byteSize << "}";
+    }
+    if (!first) json << "]";
+}
+
 inline void AppendCompactResourceReflectionJson(
     std::ostringstream& json,
     const std::vector<ReflectedResourceBinding>& resources) {
     json << "\"resources\":[";
+    bool first = true;
     for (size_t i = 0; i < resources.size(); i++) {
         const ReflectedResourceBinding& resource = resources[i];
-        if (i > 0) json << ",";
+        if (resource.hlslOnly) continue;
+        if (!first) json << ",";
+        first = false;
         json << "{";
         json << "\"name\":\"" << EscapeJsonString(resource.name) << "\",";
         json << "\"type\":\"" << ResourceTypeToString(resource.type) << "\",";
@@ -92,14 +129,23 @@ inline void AppendCompactResourceReflectionJson(
                 json << ",\"combinedWith\":\"" << EscapeJsonString(resource.combinedWith) << "\"";
             }
         }
+        if (resource.separateImageSampler)
+            json << ",\"abi\":\"" << (resource.type == ::ResourceBinding::Texture ? "separate_image" : "sampler") << "\"";
+        if (!resource.defaultSamplerFor.empty())
+            json << ",\"defaultSamplerFor\":\"" << EscapeJsonString(resource.defaultSamplerFor) << "\"";
+        AppendCombinedSamplerUniformsJson(json, resource.combinedSamplerUniforms);
         json << "}";
     }
     json << "]";
+    AppendHLSLResourcesJson(json, resources);
 }
 
 inline std::string BuildPrettyResourceBindingsJson(
     const std::string& passName,
-    const std::vector<ReflectedResourceBinding>& bindings) {
+    const std::vector<ReflectedResourceBinding>& allBindings) {
+    std::vector<ReflectedResourceBinding> bindings;
+    for (const auto& binding : allBindings)
+        if (!binding.hlslOnly) bindings.push_back(binding);
     std::string json = "{\n";
     json += "  \"pass\": \"" + EscapeJsonString(passName) + "\",\n";
     json += "  \"resources\": [\n";
@@ -119,13 +165,24 @@ inline std::string BuildPrettyResourceBindingsJson(
                 json += ",\n      \"combinedWith\": \"" + EscapeJsonString(binding.combinedWith) + "\"";
             }
         }
+        if (binding.separateImageSampler)
+            json += ",\n      \"abi\": \"" + std::string(binding.type == ::ResourceBinding::Texture ? "separate_image" : "sampler") + "\"";
+        if (!binding.defaultSamplerFor.empty())
+            json += ",\n      \"defaultSamplerFor\": \"" + EscapeJsonString(binding.defaultSamplerFor) + "\"";
+        std::ostringstream uniforms;
+        AppendCombinedSamplerUniformsJson(uniforms, binding.combinedSamplerUniforms);
+        json += uniforms.str();
         json += "\n";
         json += "    }";
         if (i + 1 < bindings.size()) json += ",";
         json += "\n";
     }
 
-    json += "  ]\n";
+    json += "  ]";
+    std::ostringstream hlslResources;
+    AppendHLSLResourcesJson(hlslResources, allBindings);
+    json += hlslResources.str();
+    json += "\n";
     json += "}\n";
     return json;
 }

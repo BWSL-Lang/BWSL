@@ -25,6 +25,14 @@ struct ResourceReflectionConfig {
     u32 descriptorSet = 0;
 };
 
+struct CombinedSamplerUniform {
+    std::string name;
+    std::string samplerName;
+    u32 samplerSet = 2;
+    u32 samplerBinding = 0;
+    u8 stages = 0;
+};
+
 struct ReflectedResourceBinding {
     std::string name;
     ::ResourceBinding::Type type = ::ResourceBinding::Buffer;
@@ -35,7 +43,13 @@ struct ReflectedResourceBinding {
     u8 bindingSlot = 0xFF;
     ResourceAccessMode access = ResourceAccessMode::ReadOnly;
     bool combinedSampledImage = false;
+    bool separateImageSampler = false;
+    bool hlslOnly = false;
+    std::string builtin;
+    u32 byteSize = 0;
     std::string combinedWith;
+    std::string defaultSamplerFor;
+    std::vector<CombinedSamplerUniform> combinedSamplerUniforms;
 };
 
 constexpr u32 TEX_METADATA_EXPLICIT_SAMPLER_FLAG = 0x80000000u;
@@ -243,8 +257,72 @@ inline u32 ResolveResourceSet(const ResourceData& resource) {
     return resource.type == ::ResourceBinding::StorageBuffer ? 1u : 0u;
 }
 
+inline u32 ResolveSeparateSamplerBinding(const SymbolTableData& symbols, u32 slot) {
+    u32 binding = 0;
+    for (u32 i = 0; i < symbols.resources.count; ++i) {
+        const auto& resource = symbols.resources[i];
+        if (resource.type == ::ResourceBinding::Sampler && resource.bindingIndex < slot)
+            ++binding;
+    }
+    return binding;
+}
+
+inline u32 ResolveDefaultSamplerBinding(const SymbolTableData& symbols, u32 textureSlot) {
+    u32 binding = ResolveSeparateSamplerBinding(symbols, 32);
+    for (u32 i = 0; i < symbols.resources.count; ++i) {
+        const auto& resource = symbols.resources[i];
+        if (resource.type == ::ResourceBinding::Texture && resource.bindingIndex < textureSlot)
+            ++binding;
+    }
+    return binding;
+}
+
 inline u32 ResolveResourceBindingIndex(const ResourceData& resource,
-                                       const ResourceReflectionConfig& config) {
+                                       const ResourceReflectionConfig& config,
+                                       const SymbolTableData* symbols = nullptr) {
+    // Metal flattens descriptor sets into one buffer namespace. Preserve
+    // noncolliding storage slots and move only those occupied by vertex
+    // pulling or shifted uniforms. Use declarations so every stage agrees.
+    if (resource.type == ::ResourceBinding::StorageBuffer && symbols &&
+        GetVertexPullingBindingCount(config) != 0) {
+        std::vector<u32> occupied;
+        const u32 count = GetVertexPullingBindingCount(config);
+        for (u32 i = 0; i < count; ++i)
+            occupied.push_back(config.baseBufferBinding + i);
+        for (u32 i = 0; i < symbols->resources.count; ++i) {
+            const auto& candidate = symbols->resources[i];
+            if (candidate.type == ::ResourceBinding::UniformBuffer &&
+                candidate.bindingIndex < 32) {
+                occupied.push_back(ResolveResourceBindingIndex(candidate, config));
+            }
+        }
+        auto contains = [&](u32 value) {
+            return std::find(occupied.begin(), occupied.end(), value) != occupied.end();
+        };
+        std::vector<u32> collisions;
+        for (u32 i = 0; i < symbols->resources.count; ++i) {
+            const auto& candidate = symbols->resources[i];
+            if (candidate.type != ::ResourceBinding::StorageBuffer ||
+                candidate.bindingIndex >= 32) continue;
+            if (contains(candidate.bindingIndex)) collisions.push_back(candidate.bindingIndex);
+        }
+        std::sort(collisions.begin(), collisions.end());
+        collisions.erase(std::unique(collisions.begin(), collisions.end()), collisions.end());
+        for (u32 i = 0; i < symbols->resources.count; ++i) {
+            const auto& candidate = symbols->resources[i];
+            if (candidate.type == ::ResourceBinding::StorageBuffer &&
+                candidate.bindingIndex < 32 &&
+                !std::binary_search(collisions.begin(), collisions.end(), candidate.bindingIndex))
+                occupied.push_back(candidate.bindingIndex);
+        }
+        for (u32 oldBinding : collisions) {
+            u32 replacement = 0;
+            while (contains(replacement)) ++replacement;
+            occupied.push_back(replacement);
+            if (oldBinding == resource.bindingIndex) return replacement;
+        }
+        return resource.bindingIndex;
+    }
     if (ResolveResourceSet(resource) != config.descriptorSet) {
         return resource.bindingIndex;
     }
@@ -289,11 +367,13 @@ inline std::vector<ExplicitSamplerUse> CollectExplicitSamplerUses(const IR::IRPr
             case IR::OP_TEX_SAMPLE_LOD:
             case IR::OP_TEX_SAMPLE_BIAS:
             case IR::OP_TEX_SAMPLE_GRAD:
-            case IR::OP_TEX_SAMPLE_CMP: {
+            case IR::OP_TEX_SAMPLE_CMP:
+            case IR::OP_TEX_SAMPLE_OFFSET:
+            case IR::OP_TEX_SAMPLE_LOD_OFFSET:
+            case IR::OP_TEX_SAMPLE_BIAS_OFFSET:
+            case IR::OP_TEX_GATHER:
+            case IR::OP_TEX_GATHER_OFFSET: {
                 const u32 metadata = ir.metadata[i];
-                if (!TextureOpHasExplicitSampler(metadata)) {
-                    break;
-                }
 
                 const u16 texReg = ir.GetOperand(i, 0);
                 if ((texReg & 0xF000) != 0x2000) {
@@ -301,7 +381,8 @@ inline std::vector<ExplicitSamplerUse> CollectExplicitSamplerUses(const IR::IRPr
                 }
 
                 appendUse(static_cast<u16>(texReg & 0x0FFFu),
-                          GetTextureOpExplicitSamplerBinding(metadata));
+                          TextureOpHasExplicitSampler(metadata)
+                              ? GetTextureOpExplicitSamplerBinding(metadata) : 0xFFFFu);
                 break;
             }
             default:
@@ -310,6 +391,47 @@ inline std::vector<ExplicitSamplerUse> CollectExplicitSamplerUses(const IR::IRPr
     }
 
     return uses;
+}
+
+struct SeparateSamplerPlan {
+    u32 textures = 0;
+    u32 samplers = 0;
+    u32 defaults = 0;
+};
+
+inline SeparateSamplerPlan BuildSeparateSamplerPlan(const SymbolTableData& symbols,
+                                                     const std::vector<ExplicitSamplerUse>& uses) {
+    SeparateSamplerPlan plan;
+    for (u32 i = 0; i < symbols.resources.count; ++i) {
+        const auto& resource = symbols.resources[i];
+        if (!resource.separateSampler || resource.bindingIndex >= 32) continue;
+        if (resource.type == ::ResourceBinding::Texture) plan.textures |= 1u << resource.bindingIndex;
+    }
+    for (const auto& a : uses) for (const auto& b : uses) {
+        if (a.textureBinding >= 32 || a.samplerBinding >= 32 ||
+            b.textureBinding >= 32 || b.samplerBinding >= 32) continue;
+        if ((a.textureBinding == b.textureBinding && a.samplerBinding != b.samplerBinding) ||
+            (a.samplerBinding == b.samplerBinding && a.textureBinding != b.textureBinding)) {
+            plan.textures |= (1u << a.textureBinding) | (1u << b.textureBinding);
+        }
+    }
+    bool changed;
+    do {
+        auto before = plan.textures;
+        for (const auto& use : uses) {
+            if (use.textureBinding >= 32 || use.samplerBinding >= 32) continue;
+            if (plan.textures & (1u << use.textureBinding)) plan.samplers |= 1u << use.samplerBinding;
+        }
+        for (const auto& use : uses) {
+            if (use.textureBinding >= 32 || use.samplerBinding >= 32) continue;
+            if (plan.samplers & (1u << use.samplerBinding)) plan.textures |= 1u << use.textureBinding;
+        }
+        changed = before != plan.textures;
+    } while (changed);
+    for (const auto& use : uses)
+        if (use.textureBinding < 32 && use.samplerBinding == 0xFFFFu &&
+            (plan.textures & (1u << use.textureBinding))) plan.defaults |= 1u << use.textureBinding;
+    return plan;
 }
 
 inline ReflectedResourceBinding* FindReflectedResourceBinding(
@@ -371,7 +493,7 @@ inline std::vector<ReflectedResourceBinding> BuildResolvedResourceReflection(
         binding.name = std::move(name);
         binding.type = resource.type;
         binding.set = ResolveResourceSet(resource);
-        binding.binding = ResolveResourceBindingIndex(resource, config);
+        binding.binding = ResolveResourceBindingIndex(resource, config, &symbols);
         binding.stages = stages;
         binding.resourceIndex = declaredIndex;
         binding.bindingSlot = static_cast<u8>(resource.bindingIndex);
@@ -401,7 +523,7 @@ inline std::vector<ReflectedResourceBinding> BuildResolvedResourceReflection(
             binding.name = std::move(name);
             binding.type = resource.type;
             binding.set = ResolveResourceSet(resource);
-            binding.binding = ResolveResourceBindingIndex(resource, config);
+            binding.binding = ResolveResourceBindingIndex(resource, config, &symbols);
             binding.stages = stages;
             binding.bindingSlot = static_cast<u8>(resource.bindingIndex);
             binding.access = CollectResourceAccess(resource, vertexAnalysis, fragmentAnalysis, computeAnalysis);
@@ -427,7 +549,19 @@ inline std::vector<ReflectedResourceBinding> BuildResolvedResourceReflection(
                    bindings.end());
 
     if (explicitSamplerUses) {
+        const auto plan = BuildSeparateSamplerPlan(symbols, *explicitSamplerUses);
+        for (auto& binding : bindings) {
+            if (binding.bindingSlot >= 32) continue;
+            if (binding.type == ::ResourceBinding::Texture && (plan.textures & (1u << binding.bindingSlot)))
+                binding.separateImageSampler = true;
+            if (binding.type == ::ResourceBinding::Sampler && (plan.samplers & (1u << binding.bindingSlot))) {
+                binding.separateImageSampler = true;
+                binding.set = 2;
+                binding.binding = ResolveSeparateSamplerBinding(symbols, binding.bindingSlot);
+            }
+        }
         for (const ExplicitSamplerUse& use : *explicitSamplerUses) {
+            if (use.samplerBinding == 0xFFFFu) continue;
             ReflectedResourceBinding* textureBinding =
                 FindReflectedResourceBinding(bindings, ::ResourceBinding::Texture,
                                              use.textureBinding, use.stageFlags);
@@ -437,6 +571,7 @@ inline std::vector<ReflectedResourceBinding> BuildResolvedResourceReflection(
             if (!textureBinding || !samplerBinding) {
                 continue;
             }
+            if (textureBinding->separateImageSampler) continue;
 
             if (textureBinding->combinedWith.empty() ||
                 textureBinding->combinedWith == samplerBinding->name) {
@@ -452,8 +587,63 @@ inline std::vector<ReflectedResourceBinding> BuildResolvedResourceReflection(
                 samplerBinding->binding = textureBinding->binding;
             }
         }
+        for (const auto& use : *explicitSamplerUses) {
+            if (use.textureBinding >= 32 || use.samplerBinding != 0xFFFFu ||
+                !(plan.defaults & (1u << use.textureBinding))) continue;
+            auto* texture = FindReflectedResourceBinding(bindings, ::ResourceBinding::Texture,
+                                                        use.textureBinding, use.stageFlags);
+            if (!texture) continue;
+            std::string textureName = texture->name;
+            std::string name = textureName + "__default_sampler";
+            auto existing = std::find_if(bindings.begin(), bindings.end(), [&](const auto& binding) {
+                return binding.name == name && binding.defaultSamplerFor == textureName;
+            });
+            if (existing != bindings.end()) { existing->stages |= use.stageFlags; continue; }
+            ReflectedResourceBinding binding;
+            binding.name = std::move(name);
+            binding.type = ::ResourceBinding::Sampler;
+            binding.set = 2;
+            binding.binding = ResolveDefaultSamplerBinding(symbols, use.textureBinding);
+            binding.stages = use.stageFlags;
+            binding.separateImageSampler = true;
+            binding.defaultSamplerFor = std::move(textureName);
+            bindings.push_back(std::move(binding));
+        }
+        for (const auto& use : *explicitSamplerUses) {
+            if (use.textureBinding >= 32 || !(plan.textures & (1u << use.textureBinding))) continue;
+            auto* texture = FindReflectedResourceBinding(bindings, ::ResourceBinding::Texture,
+                                                        use.textureBinding, use.stageFlags);
+            if (!texture) continue;
+            const u32 samplerBinding = use.samplerBinding == 0xFFFFu
+                ? ResolveDefaultSamplerBinding(symbols, use.textureBinding)
+                : ResolveSeparateSamplerBinding(symbols, use.samplerBinding);
+            CombinedSamplerUniform uniform;
+            uniform.name = "bwsl_tex_" + std::to_string(texture->set) + "_" + std::to_string(texture->binding) +
+                "_sampler_2_" + std::to_string(samplerBinding);
+            uniform.samplerBinding = samplerBinding;
+            uniform.stages = use.stageFlags;
+            for (const auto& binding : bindings)
+                if (binding.type == ::ResourceBinding::Sampler && binding.set == 2 && binding.binding == samplerBinding)
+                    uniform.samplerName = binding.name;
+            auto existing = std::find_if(texture->combinedSamplerUniforms.begin(), texture->combinedSamplerUniforms.end(),
+                [&](const auto& candidate) { return candidate.name == uniform.name; });
+            if (existing == texture->combinedSamplerUniforms.end()) texture->combinedSamplerUniforms.push_back(std::move(uniform));
+            else existing->stages |= uniform.stages;
+        }
     }
 
+    if (computeAnalysis && computeAnalysis->UsesNumWorkgroups()) {
+        ReflectedResourceBinding dispatch;
+        dispatch.name = "bwsl_num_workgroups";
+        dispatch.type = ::ResourceBinding::UniformBuffer;
+        dispatch.set = 3;
+        dispatch.binding = 0;
+        dispatch.stages = SymbolTable::ShaderStageToBit(ShaderStage::Compute);
+        dispatch.hlslOnly = true;
+        dispatch.builtin = "num_workgroups";
+        dispatch.byteSize = 16;
+        bindings.push_back(std::move(dispatch));
+    }
     return bindings;
 }
 

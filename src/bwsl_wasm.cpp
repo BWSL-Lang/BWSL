@@ -55,24 +55,24 @@ static constexpr bool USE_DIRECT_GLES = false;
 
 // BWSL compiler includes (all standalone)
 #include "version.h"
-#include "bwsl_spirv_backend.h"
-#include "bwsl_ir_gen.h"
-#include "bwsl_ir_lowering.h"
-#include "bwsl_ir_analysis.h"
-#include "bwsl_cfg.h"
-#include "bwsl_ssa.h"
-#include "bwsl_parser_soa.h"
-#include "bwsl_resource_reflection.h"
-#include "bwsl_reflection_json.h"
-#include "bwsl_lexer.h"
-#include "bwsl_eval_soa.h"
-#include "bwsl_comptime_interpreter.h"
-#include "bwsl_variant_system.h"
-#include "bwsl_arena.h"
-#include "bwsl_mem_pool.h"
-#include "bwsl_render_config.h"
-#include "bwsl_compute_graph.h"
-#include "bwsl_gles_backend.h"
+#include "phases/backends/spirv/bwsl_spirv_backend.h"
+#include "phases/ir_generation/bwsl_ir_gen.h"
+#include "phases/ir_lowering/bwsl_ir_lowering.h"
+#include "phases/ir_generation/bwsl_ir_analysis.h"
+#include "phases/control_flow/bwsl_cfg.h"
+#include "phases/ssa/bwsl_ssa.h"
+#include "phases/parser/bwsl_parser_soa.h"
+#include "core/bwsl_resource_reflection.h"
+#include "core/bwsl_reflection_json.h"
+#include "phases/lexing/bwsl_lexer.h"
+#include "phases/evaluation/bwsl_eval_soa.h"
+#include "phases/evaluation/bwsl_comptime_interpreter.h"
+#include "core/bwsl_variant_system.h"
+#include "core/bwsl_arena.h"
+#include "core/bwsl_mem_pool.h"
+#include "core/bwsl_render_config.h"
+#include "phases/ir_generation/bwsl_compute_graph.h"
+#include "phases/backends/gles/bwsl_gles_backend.h"
 
 // Unity build: include all implementation files
 #include "phases/lexing/bwsl_lexer.cpp"
@@ -546,6 +546,12 @@ static ShaderOutput CompileShaderStage(
         lowering.LowerStatement(block.statements[i]);
     }
 
+    if (lowering.hadError) {
+        output.error = "IR lowering failed";
+        for (const auto& diagnostic : lowering.diagnostics) output.error += "\n" + diagnostic;
+        return output;
+    }
+
     // Ensure return
     if (lowering.program.instructionCount == 0 ||
         lowering.program.opcodes[lowering.program.instructionCount - 1] != OP_RET) {
@@ -554,8 +560,10 @@ static ShaderOutput CompileShaderStage(
 
     // CFG/SSA for control flow
     Memory::BWEMemoryArena cfgArena;
-    char cfgMem[128 * 1024];
-    cfgArena.Initialize(cfgMem, sizeof(cfgMem));
+    // Match the native compiler's CFG/SSA budget without consuming the
+    // constrained WebAssembly stack. Selected-arm expressions add blocks.
+    std::vector<char> cfgMem(512 * 1024);
+    cfgArena.Initialize(cfgMem.data(), cfgMem.size());
 
     CFGBuilder cfgBuilder;
     CFG* cfgPtr = nullptr;
@@ -581,8 +589,8 @@ static ShaderOutput CompileShaderStage(
 
     // Generate SPIR-V
     Memory::BWEMemoryArena spirvArena;
-    char spirvMem[512 * 1024];
-    spirvArena.Initialize(spirvMem, sizeof(spirvMem));
+    std::vector<char> spirvMem(512 * 1024);
+    spirvArena.Initialize(spirvMem.data(), spirvMem.size());
 
     SPIRVBuilder builder;
     builder.Initialize(&spirvArena, &lowering.program, stage,

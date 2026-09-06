@@ -772,6 +772,9 @@ bool Parser::CoerceLiteralToType(const TypeInfo& typeInfo, LiteralValue* value) 
             return value->type == LiteralValue::INT3;
         case CoreType::INT4:
             return value->type == LiteralValue::INT4;
+        case CoreType::UINT2: return value->type == LiteralValue::UINT2;
+        case CoreType::UINT3: return value->type == LiteralValue::UINT3;
+        case CoreType::UINT4: return value->type == LiteralValue::UINT4;
 
         default:
             return false;
@@ -793,7 +796,10 @@ NodeRef Parser::MakeLiteralNodeFromValue(const LiteralValue& value, u32 line, u3
         case LiteralValue::FLOAT4:
         case LiteralValue::INT2:
         case LiteralValue::INT3:
-        case LiteralValue::INT4: {
+        case LiteralValue::INT4:
+        case LiteralValue::UINT2:
+        case LiteralValue::UINT3:
+        case LiteralValue::UINT4: {
             const char* constructorName = nullptr;
             u8 componentCount = 0;
             bool isFloat = true;
@@ -804,6 +810,9 @@ NodeRef Parser::MakeLiteralNodeFromValue(const LiteralValue& value, u32 line, u3
                 case LiteralValue::INT2: constructorName = "int2"; componentCount = 2; isFloat = false; break;
                 case LiteralValue::INT3: constructorName = "int3"; componentCount = 3; isFloat = false; break;
                 case LiteralValue::INT4: constructorName = "int4"; componentCount = 4; isFloat = false; break;
+                case LiteralValue::UINT2: constructorName = "uint2"; componentCount = 2; isFloat = false; break;
+                case LiteralValue::UINT3: constructorName = "uint3"; componentCount = 3; isFloat = false; break;
+                case LiteralValue::UINT4: constructorName = "uint4"; componentCount = 4; isFloat = false; break;
                 default: break;
             }
 
@@ -812,7 +821,9 @@ NodeRef Parser::MakeLiteralNodeFromValue(const LiteralValue& value, u32 line, u3
             for (u8 c = 0; c < componentCount; c++) {
                 NodeRef arg = isFloat
                     ? ASTFactory::MakeLiteralFloat(ast, value.floatVec[c], line, col)
-                    : ASTFactory::MakeLiteralInt(ast, value.intVec[c], line, col);
+                    : value.type >= LiteralValue::UINT2
+                        ? ASTFactory::MakeLiteralUint(ast, value.uintVec[c], line, col)
+                        : ASTFactory::MakeLiteralInt(ast, value.intVec[c], line, col);
                 callData.arguments.Push(arena, arg);
             }
             return vecCall;
@@ -849,6 +860,7 @@ bool Parser::BindCompileTimeVariable(NodeRef varDecl) {
     }
 
     VariableData& varData = symbolTable.variables[sym->index];
+    varData.isMutableEval = decl.isEval || !decl.isConst;
 
     if (decl.initializer.IsNull()) {
         if (!varData.isEval) {
@@ -1268,6 +1280,7 @@ NodeRef Parser::ParseEvalStatement() {
         // It's an eval function
         NodeRef func = ParseFunction();
         if (func.IsValid()) {
+            ast->GetFunction(func).isEval = true;
             const FunctionDeclData& decl = ast->GetFunction(func);
             std::vector<OverloadTypeMask> paramMasks;
             BuildParamMasks(decl.parameters, paramMasks);
@@ -1337,6 +1350,7 @@ NodeRef Parser::ParseEvalStatement() {
         varData.typeInfo = typeInfo;
         varData.isConst = true;
         varData.isEval = true;
+        varData.isMutableEval = true;
         varData.constExpr = expr;
         varData.hasEvalValue = false;
     } else {
@@ -1690,6 +1704,7 @@ NodeRef Parser::ParseSwitch() {
     // Create switch node
     NodeRef switchNode = ASTFactory::MakeSwitch(ast, expression, line, col);
     SwitchData& switchData = ast->GetSwitch(switchNode);
+    std::vector<u32> seenCaseValues;
 
     // Parse switch body
     Consume(TokenType::LEFT_BRACE, "Expected '{' after switch expression");
@@ -1703,6 +1718,15 @@ NodeRef Parser::ParseSwitch() {
             
             do {
                 NodeRef caseValue = ParseExpression();
+                LiteralValue constant;
+                if (EvaluateNodeWithEvalBindings(caseValue, &constant) &&
+                    (constant.type == LiteralValue::INT || constant.type == LiteralValue::UINT)) {
+                    u32 value = constant.type == LiteralValue::UINT
+                                    ? constant.uintValue : static_cast<u32>(constant.intValue);
+                    if (std::find(seenCaseValues.begin(), seenCaseValues.end(), value) != seenCaseValues.end())
+                        Error("Duplicate switch case value");
+                    seenCaseValues.push_back(value);
+                }
                 caseValues.Push(arena, caseValue);
             } while (Match(TokenType::COMMA) &&
                      !Check(TokenType::COLON));
@@ -1713,6 +1737,7 @@ NodeRef Parser::ParseSwitch() {
             NodeRef caseBody = ASTFactory::MakeBlock(ast, loc.line, loc.column);
             BlockData& bodyBlock = ast->GetBlock(caseBody);
 
+            SymbolTable::EnterScope(&symbolTable);
             while (!Check(TokenType::CASE) && !Check(TokenType::DEFAULT) &&
                    !Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
                 NodeRef stmt = ParseStatement();
@@ -1720,6 +1745,7 @@ NodeRef Parser::ParseSwitch() {
                     bodyBlock.statements.Push(arena, stmt);
                 }
             }
+            SymbolTable::ExitScope(&symbolTable);
 
             // Create case node and add all values
             NodeRef caseNode = ASTFactory::MakeSwitchCase(ast, caseBody, false, line, col);
@@ -1730,19 +1756,22 @@ NodeRef Parser::ParseSwitch() {
             switchData.cases.Push(arena, caseNode);
 
         } else if (Match(TokenType::DEFAULT)) {
+            if (switchData.defaultCase.IsValid()) Error("Duplicate switch default case");
             Consume(TokenType::COLON, "Expected ':' after 'default'");
 
             // Parse default body
             NodeRef defaultBody = ASTFactory::MakeBlock(ast, loc.line, loc.column);
             BlockData& bodyBlock = ast->GetBlock(defaultBody);
 
-            while (!Check(TokenType::CASE) && !Check(TokenType::RIGHT_BRACE) &&
+            SymbolTable::EnterScope(&symbolTable);
+            while (!Check(TokenType::CASE) && !Check(TokenType::DEFAULT) && !Check(TokenType::RIGHT_BRACE) &&
                    !Check(TokenType::EOF_TOKEN)) {
                 NodeRef stmt = ParseStatement();
                 if (stmt.IsValid()) {
                     bodyBlock.statements.Push(arena, stmt);
                 }
             }
+            SymbolTable::ExitScope(&symbolTable);
 
             // Create default case node and store in switch
             NodeRef defaultNode = ASTFactory::MakeSwitchCase(ast, defaultBody, true, line, col);

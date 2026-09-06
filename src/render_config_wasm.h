@@ -79,6 +79,9 @@ struct RenderTargetDescriptor {
     uint32_t sampleCount = 1;
     uint32_t arrayLength = 1;
     bool isCubemap = false;
+    bool isVolume = false;
+    bool separateSampler = false;
+    uint32_t defaultSamplerBinding = 0;
 };
 
 // Render target helpers
@@ -127,6 +130,7 @@ struct TextureBinding {
 struct SamplerBinding {
     std::string name;
     uint32_t bindingIndex = 0;
+    uint32_t descriptorBinding = 0;
     uint8_t stages = 2;  // Bitmask: 1=vertex, 2=fragment, 3=both (default fragment)
 };
 

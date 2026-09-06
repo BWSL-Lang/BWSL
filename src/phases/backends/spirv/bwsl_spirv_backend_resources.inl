@@ -151,122 +151,53 @@ void SPIRVBuilder::DeclareResources() {
     resourceCount++;
   }
 
-  // ============= Textures (combined image samplers) =============
-  // First create shared image and sampled image types if any textures used
-  u32 sampled_image_type_id = 0;
-  u32 ptr_sampled_image_type = 0;
-  u32 array_sampled_image_type_id = 0;
-  u32 ptr_array_sampled_image_type = 0;
-  u32 cube_sampled_image_type_id = 0;
-  u32 ptr_cube_sampled_image_type = 0;
-
-  // Check if we need array/cube texture types by looking up textures in symbol
-  // table
-  bool needsArrayTexture = false;
-  bool needsCubeTexture = false;
-  bool needsRegularTexture = false;
-
-  if (analysis.usedTextureMask != 0 && symbols) {
-    for (u32 binding = 0; binding < 32; binding++) {
-      if (!(analysis.usedTextureMask & (1 << binding)))
-        continue;
-
-      // Look up texture in symbol table to check if it's an array or cubemap
-      bool isArray = false;
-      bool isCubemap = false;
-      for (u32 r = 0; r < symbols->resources.count; r++) {
-        const ResourceData &resData = symbols->resources[r];
-        if (resData.bindingIndex == binding &&
-            resData.type == ResourceBinding::Texture) {
-          isArray = resData.isArrayTexture;
-          isCubemap = resData.isCubemapTexture;
-          break;
-        }
-      }
-      textureIsArray[binding] = isArray;
-      textureIsCubemap[binding] = isCubemap;
-      if (isArray)
-        needsArrayTexture = true;
-      else if (isCubemap)
-        needsCubeTexture = true;
-      else
-        needsRegularTexture = true;
+  // Preserve the legacy combined ABI for one-to-one pairs. A texture or
+  // sampler reused with different partners needs independent descriptors.
+  SeparateSamplerPlan samplerPlan;
+  if (symbols) samplerPlan = BuildSeparateSamplerPlan(*symbols, CollectExplicitSamplerUses(*ir, stage));
+  for (u32 binding = 0; binding < 32; ++binding) {
+    if (!(analysis.usedTextureMask & (1u << binding))) continue;
+    if (symbols) for (u32 r = 0; r < symbols->resources.count; ++r) {
+      const auto& resource = symbols->resources[r];
+      if (resource.bindingIndex != binding || resource.type != ResourceBinding::Texture) continue;
+      textureIsArray[binding] = resource.isArrayTexture;
+      textureIsCubemap[binding] = resource.isCubemapTexture;
+      textureIsVolume[binding] = static_cast<CoreType>(resource.coreType) == CoreType::TEXTURE3D;
+      break;
     }
-  }
-
-  if (analysis.usedTextureMask != 0) {
-    // Create regular 2D texture types if needed
-    if (needsRegularTexture) {
-      sampled_image_type_id = GetSampledImageTypeId();
-
-      ptr_sampled_image_type = AllocateId();
-      {
-        u32 ops[] = {ptr_sampled_image_type, spv::StorageClassUniformConstant,
-                     sampled_image_type_id};
-        EmitToSection(&typesConstants, spv::OpTypePointer, ops, 3);
-      }
-    }
-
-    // Create 2D array texture types if needed
-    if (needsArrayTexture) {
-      array_sampled_image_type_id = GetArraySampledImageTypeId();
-
-      ptr_array_sampled_image_type = AllocateId();
-      {
-        u32 ops[] = {ptr_array_sampled_image_type,
-                     spv::StorageClassUniformConstant,
-                     array_sampled_image_type_id};
-        EmitToSection(&typesConstants, spv::OpTypePointer, ops, 3);
-      }
-    }
-
-    // Create cube texture types if needed
-    if (needsCubeTexture) {
-      cube_sampled_image_type_id = GetCubeSampledImageTypeId();
-
-      ptr_cube_sampled_image_type = AllocateId();
-      {
-        u32 ops[] = {ptr_cube_sampled_image_type,
-                     spv::StorageClassUniformConstant,
-                     cube_sampled_image_type_id};
-        EmitToSection(&typesConstants, spv::OpTypePointer, ops, 3);
-      }
-    }
-  }
-
-  // Create texture variables for each used binding
-  for (u8 binding = 0; binding < 32; binding++) {
-    if (!(analysis.usedTextureMask & (1 << binding)))
-      continue;
-
-    // Select the correct pointer type based on texture type
-    u32 ptr_type;
-    if (textureIsArray[binding]) {
-      ptr_type = ptr_array_sampled_image_type;
-    } else if (textureIsCubemap[binding]) {
-      ptr_type = ptr_cube_sampled_image_type;
-    } else {
-      ptr_type = ptr_sampled_image_type;
-    }
-
-    u32 tex_var_id = AllocateId();
-    {
-      u32 ops[] = {ptr_type, tex_var_id, spv::StorageClassUniformConstant};
-      EmitToSection(&globals, spv::OpVariable, ops, 3);
-    }
-
-    u32 set_val[] = {0};
-    u32 textureBinding =
-        ResolveVertexPullingCollisionBinding(vertexPullingConfig, set_val[0],
-                                            binding);
-    u32 bind_val[] = {textureBinding};
-    EmitDecoration(tex_var_id, spv::DecorationDescriptorSet, set_val, 1);
-    EmitDecoration(tex_var_id, spv::DecorationBinding, bind_val, 1);
-
-    textureIds[binding] = tex_var_id;
+    textureIsSeparate[binding] = (samplerPlan.textures & (1u << binding)) != 0;
+    u32 sampledType = 0, imageType = 0;
+    GetSampledTextureTypeIds(binding, &sampledType, &imageType);
+    u32 pointerType = GetPointerTypeId(textureIsSeparate[binding] ? imageType : sampledType,
+                                      spv::StorageClassUniformConstant);
+    u32 variable = AllocateId();
+    u32 ops[] = {pointerType, variable, spv::StorageClassUniformConstant};
+    EmitToSection(&globals, spv::OpVariable, ops, 3);
+    u32 set = 0;
+    u32 resolved = ResolveVertexPullingCollisionBinding(vertexPullingConfig, set, binding);
+    EmitDecoration(variable, spv::DecorationDescriptorSet, &set, 1);
+    EmitDecoration(variable, spv::DecorationBinding, &resolved, 1);
+    textureIds[binding] = variable;
     bindingSets[resourceCount] = 0;
-    bindingIndices[resourceCount] = (u8)textureBinding;
-    resourceCount++;
+    bindingIndices[resourceCount++] = static_cast<u8>(resolved);
+  }
+  auto declareSampler = [&](u32 binding) {
+    u32 variable = AllocateId();
+    u32 pointer = GetPointerTypeId(GetSamplerTypeId(), spv::StorageClassUniformConstant);
+    u32 ops[] = {pointer, variable, spv::StorageClassUniformConstant};
+    EmitToSection(&globals, spv::OpVariable, ops, 3);
+    u32 set = 2;
+    EmitDecoration(variable, spv::DecorationDescriptorSet, &set, 1);
+    EmitDecoration(variable, spv::DecorationBinding, &binding, 1);
+    bindingSets[resourceCount] = 2;
+    bindingIndices[resourceCount++] = static_cast<u8>(binding);
+    return variable;
+  };
+  if (symbols) for (u32 binding = 0; binding < 32; ++binding) {
+    if (samplerPlan.samplers & (1u << binding))
+      samplerIds[binding] = declareSampler(ResolveSeparateSamplerBinding(*symbols, binding));
+    if (samplerPlan.defaults & (1u << binding))
+      defaultSamplerIds[binding] = declareSampler(ResolveDefaultSamplerBinding(*symbols, binding));
   }
 
   // ============= Storage Buffers =============
@@ -490,9 +421,19 @@ void SPIRVBuilder::DeclareResources() {
       }
 
       u32 set_val[] = {1};
-      u32 actualBinding =
-          ResolveVertexPullingCollisionBinding(vertexPullingConfig, set_val[0],
-                                              binding);
+      ResourceReflectionConfig reflectionConfig;
+      reflectionConfig.vertexPullingMode = vertexPullingConfig.mode == VertexInputMode::SeparateBuffers
+          ? ResourceReflectionConfig::VertexPullingMode::SeparateBuffers
+          : vertexPullingConfig.mode == VertexInputMode::UnifiedWithOffsets
+              ? ResourceReflectionConfig::VertexPullingMode::UnifiedWithOffsets
+              : ResourceReflectionConfig::VertexPullingMode::Disabled;
+      reflectionConfig.attributeMask = vertexPullingConfig.attributeMask;
+      reflectionConfig.baseBufferBinding = vertexPullingConfig.baseBufferBinding;
+      reflectionConfig.descriptorSet = vertexPullingConfig.descriptorSet;
+      ResourceData storageResource;
+      storageResource.type = ResourceBinding::StorageBuffer;
+      storageResource.bindingIndex = binding;
+      u32 actualBinding = ResolveResourceBindingIndex(storageResource, reflectionConfig, symbols);
       u32 bind_val[] = {actualBinding};
       EmitDecoration(ssbo_var_id, spv::DecorationDescriptorSet, set_val, 1);
       EmitDecoration(ssbo_var_id, spv::DecorationBinding, bind_val, 1);

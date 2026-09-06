@@ -66,7 +66,8 @@ constexpr std::array<spv::Op, 256> BuildIrToSpvOpTable() {
     table[IR::OP_ISUB] = spv::OpISub;
     table[IR::OP_IMUL] = spv::OpIMul;
     table[IR::OP_IDIV] = spv::OpSDiv;
-    table[IR::OP_IMOD] = spv::OpSMod;
+    // Match integer division's truncation toward zero and compile-time `%`.
+    table[IR::OP_IMOD] = spv::OpSRem;
     table[IR::OP_INEG] = spv::OpSNegate;
     table[IR::OP_IABS] = spv::OpExtInst;
     table[IR::OP_IMIN] = spv::OpExtInst;

@@ -29,6 +29,19 @@ The parser currently accepts more than one parameter spelling, including:
 The spec should treat `Type name` as canonical for now, while recording the
 other accepted spellings as implementation-defined compatibility syntax.
 
+Ordinary parameters are passed by value. A call gives each parameter its own
+mutable local copy; assigning to that parameter does not change the caller's
+argument. Struct copies include nested fields and fixed arrays. Fixed-array
+parameters receive independent array storage, including when the same array
+is passed to two parameters or a function is called repeatedly.
+
+Pointer-typed function parameters remain unsupported by the current parser.
+Local pointers retain their reference behavior: writing through an alias
+changes its pointee. Passing an ordinary value that also has a local pointer
+alias still gives the callee an independent value copy. A mutable method's
+`self` receiver retains its existing receiver-mutation behavior; its other
+ordinary parameters follow the value-copy rule.
+
 ## Return Types
 
 Function return types currently include:
@@ -39,6 +52,11 @@ Function return types currently include:
 - `fragment_function`
 - `compute_function`
 - `pass_block`
+
+An ordinary non-void function must return a value on every reachable path.
+A conditional return without another return for the remaining paths is
+rejected. Paths that cannot complete, such as an unconditional infinite loop,
+do not require a following return.
 
 ## Function Scope
 
@@ -168,3 +186,7 @@ current supported surface does not include:
 
 - angle-bracket generic parameters like `foo<T>`
 - `where` clauses
+
+A void function may use a bare `return`, but cannot return a value. Non-void
+functions must return a value on every reachable path that finishes. A fragment
+discard terminates the invocation and does not require a return value.
