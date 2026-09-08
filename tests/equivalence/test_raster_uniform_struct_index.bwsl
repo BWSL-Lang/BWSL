@@ -1,0 +1,22 @@
+// Direct UBO indexing plus mutation/phi selection of a local value copy.
+// The local copy must never be treated as an alias of immutable uniform data.
+pipeline RasterUniformStructIndex {
+    struct Data { float4[16] values; mat4[4] matrices; };
+    resources { data: Data }
+    pass "Main" {
+        use resources { data }
+        vertex {
+            float2[3] p;
+            p[0]=float2(-1.0,-1.0); p[1]=float2(3.0,-1.0); p[2]=float2(-1.0,3.0);
+            output.position=float4(p[input.vertex_id],0.0,1.0);
+        }
+        fragment {
+            uint i=uint(input.position.x)+4u*uint(input.position.y);
+            Data local=resources.data;
+            local.values[i]=local.values[i]+float4(100.0,0.0,0.0,0.0);
+            if (i%2u==0u) { local.values[i]=float4(42.0,0.0,0.0,1.0); }
+            float4 transformed=resources.data.matrices[i%4u]*float4(1.0,0.0,0.0,1.0);
+            output.color=float4(resources.data.values[i].x,local.values[i].x,transformed.x,1.0);
+        }
+    }
+}

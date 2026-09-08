@@ -565,6 +565,12 @@ STAGE_SUFFIXES = ("vert", "frag", "comp")
 KNOWN_TEST_STEMS: set[str] = set()
 
 TRANSLATION_EXPECTATION_TESTS = {
+    "uniform_struct_dynamic_index": {
+        "frag": {
+            "spirv_contains": ["OpAccessChain %_ptr_Uniform_v4float", "OpAccessChain %_ptr_Uniform_mat4v4float"],
+            "spirv_not_contains": ["OpAccessChain %_ptr_Function"],
+        },
+    },
     "interpolation_decorators": {
         "vert": {
             "spirv_contains": [

@@ -2302,6 +2302,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
       // Load the value
       Emit(spv::OpLoad, load_type_id, dest, member_ptr_id);
+      if (uniformType == CoreType::CUSTOM) {
+        uniformStructPointers[dest] = member_ptr_id;
+      }
     }
     break;
   }
@@ -3215,6 +3218,22 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     if (struct_type_id == 0) {
       Emit(spv::OpUndef, isInsert ? GetTypeId(CoreType::FLOAT) : elem_type_id,
            dest);
+      break;
+    }
+
+    // A uniform-backed value is immutable throughout the invocation. Index
+    // its array in Uniform storage instead of copying the entire struct to
+    // per-invocation Function memory for every element read. Only exact load
+    // values qualify; modified structs, local pointers and phi values retain
+    // the scratch path below.
+    const auto uniform = uniformStructPointers.find(struct_id);
+    if (!isInsert && uniform != uniformStructPointers.end()) {
+      u32 elem_ptr = AllocateId();
+      Emit(spv::OpAccessChain,
+           GetPointerTypeId(elem_type_id, spv::StorageClassUniform), elem_ptr,
+           uniform->second, GetIntConstantId(field_idx, true),
+           GetSpirvId(index_reg));
+      Emit(spv::OpLoad, elem_type_id, dest, elem_ptr);
       break;
     }
 
