@@ -48,6 +48,7 @@ void SPIRVBuilder::Initialize(BWSL_Arena *arena, IR::IRProgram *ir,
   // Initialize storage pointer storage class tracking
   storagePtrStorageClass = (u32 *)arena->Allocate(idCapacity * sizeof(u32), 64);
   memset(storagePtrStorageClass, 0, idCapacity * sizeof(u32));
+  uniformStructPointers.clear();
 
   // Initialize type arrays
   memset(typeIds, 0, sizeof(typeIds));

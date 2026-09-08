@@ -1,0 +1,14 @@
+// Dynamic UBO struct-array reads must not spill the whole block to Function storage.
+pipeline UniformStructDynamicIndex {
+    struct Lighting { float4[16] colors; mat4[4] matrices; };
+    resources { lighting: Lighting }
+    pass "Main" {
+        use resources { lighting }
+        vertex { output.position=float4(0.0,0.0,0.0,1.0); }
+        fragment {
+            uint i=uint(input.position.x)%16u;
+            float4 color=resources.lighting.colors[i];
+            output.color=resources.lighting.matrices[i%4u]*color;
+        }
+    }
+}

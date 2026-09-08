@@ -10,6 +10,7 @@
 #include "core/bwsl_arena.h"
 #include "SPIRV-Headers/include/spirv/unified1/spirv.hpp"
 #include <vector>
+#include <unordered_map>
 
 // Constants from SPIRV spec
 constexpr u32 SpvMagicNumber = spv::MagicNumber;
@@ -194,6 +195,11 @@ struct SPIRVBuilder {
     // Tracks storage class for pointer registers (IR register -> spv::StorageClass)
     // 0 = use default/IR-based lookup, non-zero = use this storage class
     alignas(64) u32* storagePtrStorageClass;
+
+    // Immutable uniform struct values retain their source address. Key by
+    // SPIR-V value ID (not a mutable IR register), so edited local copies and
+    // phi-selected values keep ordinary value semantics.
+    std::unordered_map<u32, u32> uniformStructPointers;
 
     // ============= IR Mapping Tables =============
     IR::IRProgram* ir;
