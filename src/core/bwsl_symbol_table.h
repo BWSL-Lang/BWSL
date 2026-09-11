@@ -327,6 +327,10 @@ struct SymbolTableData {
     BWSL_Arena* arena;
 
     ArenaArray<Symbol> symbols;
+    // Index chains are newest-first. Keep links out of Symbol so payload scans
+    // retain their existing stride, and use indices so arena growth is safe.
+    ArenaArray<u32> symbolBucketHeads;
+    ArenaArray<u32> symbolPrevious;  // Parallel to symbols; previous in bucket
 
     //------------ Type-specific data arrays (parallel to symbols via index) ---------------//
     
@@ -436,6 +440,12 @@ namespace SymbolTable {
     inline void Init(SymbolTableData* table, BWSL_Arena* arena) {
         table->arena = arena;
         table->symbols.Init(arena, 64);
+        table->symbolPrevious.Init(arena, 64);
+        table->symbolBucketHeads.Init(arena, 64);
+        table->symbolBucketHeads.count = table->symbolBucketHeads.capacity;
+        for (u32 i = 0; i < table->symbolBucketHeads.count; ++i) {
+            table->symbolBucketHeads[i] = INVALID_INDEX;
+        }
         table->variables.Init(arena, 32);
         table->functions.Init(arena, 32);
         table->genericFunctions.Init(arena, 16);
@@ -459,10 +469,40 @@ namespace SymbolTable {
     }
 
     
-    // Lookup by pre-computed hash @redundant??
+    inline u32 SymbolBucket(const SymbolTableData* table, u32 hash) {
+        // Mix the full string ID before masking: interned collision IDs and
+        // reserved names need not have well-distributed low bits.
+        hash ^= hash >> 16;
+        hash *= 0x7feb352du;
+        hash ^= hash >> 15;
+        hash *= 0x846ca68bu;
+        hash ^= hash >> 16;
+        return hash & (table->symbolBucketHeads.count - 1);
+    }
+
+    // Candidates can have different full hashes; callers must check the name.
+    inline u32 FirstSymbolInBucket(const SymbolTableData* table, u32 hash) {
+        return table->symbolBucketHeads[SymbolBucket(table, hash)];
+    }
+
+    inline void GrowSymbolIndex(SymbolTableData* table) {
+        const u32 bucketCount = table->symbolBucketHeads.count * 2;
+        table->symbolBucketHeads.Init(table->arena, bucketCount);
+        table->symbolBucketHeads.count = bucketCount;
+        for (u32 i = 0; i < bucketCount; ++i) {
+            table->symbolBucketHeads[i] = INVALID_INDEX;
+        }
+        // Rebuild oldest-first to preserve shadowing and scope-exit ordering.
+        for (u32 i = 0; i < table->symbols.count; ++i) {
+            const u32 bucket = SymbolBucket(table, table->symbols[i].name.nameHash);
+            table->symbolPrevious[i] = table->symbolBucketHeads[bucket];
+            table->symbolBucketHeads[bucket] = i;
+        }
+    }
+
     inline Symbol* LookupByHash(SymbolTableData* table, u32 hash) {
-        // Search from current scope outward
-        for (int i = table->symbols.count - 1; i >= 0; i--) {
+        for (u32 i = FirstSymbolInBucket(table, hash); i != INVALID_INDEX;
+             i = table->symbolPrevious[i]) {
             if (table->symbols[i].name.nameHash == hash) {
                 return &table->symbols[i];
             }
@@ -629,7 +669,8 @@ namespace SymbolTable {
     }
 
     inline Symbol* LookupResource(SymbolTableData* table, const ArenaString& name) {
-        for (int i = table->symbols.count - 1; i >= 0; i--) {
+        for (u32 i = FirstSymbolInBucket(table, name.nameHash); i != INVALID_INDEX;
+             i = table->symbolPrevious[i]) {
             if (table->symbols[i].namespaceKind == NamespaceKind::RESOURCES &&
                 table->symbols[i].name.nameHash == name.nameHash) {
                 return &table->symbols[i];
@@ -689,7 +730,8 @@ namespace SymbolTable {
 
     inline Symbol* FindSymbolInAliasScope(SymbolTableData* table, u32 nameHash,
                                           NamespaceKind ownerKind, u32 ownerModuleIndex) {
-        for (int i = table->symbols.count - 1; i >= 0; i--) {
+        for (u32 i = FirstSymbolInBucket(table, nameHash); i != INVALID_INDEX;
+             i = table->symbolPrevious[i]) {
             Symbol& sym = table->symbols[i];
             if (sym.name.nameHash != nameHash || sym.namespaceKind != ownerKind) {
                 continue;
@@ -1028,9 +1070,17 @@ namespace SymbolTable {
     inline void ExitScope(SymbolTableData* table) {
         if (table->currentScope == 0) return;
 
-        // Remove symbols from current scope by truncating to scopeStart
+        // Undo insertions in reverse order before truncating. This restores
+        // outer bindings even when this scope caused the index to grow.
         u32 scopeStart = table->scopeStartIndices[table->currentScope];
+        for (u32 i = table->symbols.count; i > scopeStart;) {
+            --i;
+            const u32 bucket = SymbolBucket(table, table->symbols[i].name.nameHash);
+            assert(table->symbolBucketHeads[bucket] == i);
+            table->symbolBucketHeads[bucket] = table->symbolPrevious[i];
+        }
         table->symbols.count = scopeStart;
+        table->symbolPrevious.count = scopeStart;
         table->scopeStartIndices.count--;  // Pop the scope start index
         table->currentScope--;
     }
@@ -1045,7 +1095,8 @@ namespace SymbolTable {
 
             // Check for duplicates in same namespace/module
             u32 scopeStart = table->scopeStartIndices[table->currentScope];
-            for (u32 i = scopeStart; i < table->symbols.count; i++) {
+            for (u32 i = FirstSymbolInBucket(table, name.nameHash);
+                 i != INVALID_INDEX && i >= scopeStart; i = table->symbolPrevious[i]) {
             Symbol& existing = table->symbols[i];
             if (existing.name.nameHash == name.nameHash &&
             existing.namespaceKind == ns &&
@@ -1116,7 +1167,16 @@ namespace SymbolTable {
             break;
             }
 
+            // Keep load at most one live symbol per bucket on average. Retain
+            // capacity across scope exits to avoid repeated arena allocations.
+            if (table->symbols.count == table->symbolBucketHeads.count) {
+                GrowSymbolIndex(table);
+            }
+            const u32 symbolIndex = table->symbols.count;
+            const u32 bucket = SymbolBucket(table, name.nameHash);
             table->symbols.Push(table->arena, sym);
+            table->symbolPrevious.Push(table->arena, table->symbolBucketHeads[bucket]);
+            table->symbolBucketHeads[bucket] = symbolIndex;
             return &table->symbols[table->symbols.count - 1];
     }
     
@@ -1127,7 +1187,8 @@ namespace SymbolTable {
     inline Symbol* Lookup(SymbolTableData* table, const ArenaString& name,
         NamespaceKind ns = NamespaceKind::GLOBAL, u32 moduleIndex = INVALID_INDEX) {
             // Search from current scope outward
-            for (int i = table->symbols.count - 1; i >= 0; i--) {
+            for (u32 i = FirstSymbolInBucket(table, name.nameHash); i != INVALID_INDEX;
+                 i = table->symbolPrevious[i]) {
                 Symbol& sym = table->symbols[i];
                 bool isMatch = sym.name == name && sym.namespaceKind == ns && (ns != NamespaceKind::MODULE || sym.moduleIndex == moduleIndex);
                
@@ -1159,7 +1220,8 @@ namespace SymbolTable {
 
     inline Symbol* LookupFunctionOverloadInNamespace(SymbolTableData* table, const ArenaString& name,
         const OverloadTypeMask* argMasks, u32 argCount, NamespaceKind ns, u32 moduleIndex) {
-            for (int i = table->symbols.count - 1; i >= 0; i--) {
+            for (u32 i = FirstSymbolInBucket(table, name.nameHash); i != INVALID_INDEX;
+                 i = table->symbolPrevious[i]) {
                 Symbol& sym = table->symbols[i];
                 if (sym.kind != SymbolKind::FUNCTION) continue;
                 if (sym.name.nameHash != name.nameHash) continue;
@@ -1252,7 +1314,8 @@ namespace SymbolTable {
     inline bool ValidateResourceAccess(SymbolTableData* table, const ArenaString& resourceName, ShaderStage stage, [[maybe_unused]] const char* sourceBase = nullptr) {
         // Resources are registered with their short name in the RESOURCES namespace
         // The namespace disambiguates them from other symbols
-        for (int i = table->symbols.count - 1; i >= 0; i--) {
+        for (u32 i = FirstSymbolInBucket(table, resourceName.nameHash); i != INVALID_INDEX;
+             i = table->symbolPrevious[i]) {
             Symbol& sym = table->symbols[i];
             if (sym.namespaceKind == NamespaceKind::RESOURCES &&
                 sym.name.nameHash == resourceName.nameHash &&

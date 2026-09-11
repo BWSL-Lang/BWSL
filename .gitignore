@@ -45,6 +45,7 @@ __pycache__
 # Test output files (keep .bwsl and .rcfg source files)
 tests/output/
 tests/equivalence/output/
+tests/qa_2026_09_06
 
 # Golden files should be tracked (un-ignore)
 !tests/golden/

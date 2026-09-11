@@ -667,7 +667,8 @@ namespace {
         const std::vector<OverloadTypeMask>& paramMasks, NamespaceKind ns, u32 moduleIndex,
         u64 signatureKey) {
         u32 scopeStart = table->scopeStartIndices[table->currentScope];
-        for (u32 i = scopeStart; i < table->symbols.count; i++) {
+        for (u32 i = SymbolTable::FirstSymbolInBucket(table, name.nameHash);
+             i != INVALID_INDEX && i >= scopeStart; i = table->symbolPrevious[i]) {
             Symbol& existing = table->symbols[i];
             if (existing.kind != SymbolKind::FUNCTION) continue;
             if (existing.name.nameHash != name.nameHash) continue;

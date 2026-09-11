@@ -336,7 +336,7 @@ WASM_SPIRV_INCLUDES = $(BWSL_INCLUDE_DIRS)
 # ============================================================================
 
 .PHONY: all help build bwslc-sanitize \
-	clean wasm wasm-debug test test-sanitize \
+	clean wasm wasm-debug test test-sanitize test-symbol-table test-symbol-table-sanitize \
 	install equiv_runner spirv-tools clangd-config benchmark-backend
 
 all: build
@@ -387,7 +387,7 @@ bwslc-sanitize: $(EMBEDDED_MODULE_HEADER) $(NATIVE_SPIRV_TOOLS_PREREQS) | $(BUIL
 # Run the Python regression harness against the sanitized binary. We pass
 # --compiler so run_tests.py uses the sanitized build instead of build/bwslc,
 # and halt_on_error + abort_on_error make any ASan/UBSan hit a test failure.
-test-sanitize: bwslc-sanitize
+test-sanitize: bwslc-sanitize test-symbol-table-sanitize
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=1 \
 	UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_stacktrace=1 \
 	python3 tests/run_tests.py --compiler $(BWSLC_SANITIZE_OUT) --no-spirv-val
@@ -485,7 +485,13 @@ wasm-debug: $(WASM_DIR) $(EMBEDDED_MODULE_HEADER)
 		$(WASM_COMMON_FLAGS) $(WASM_DEBUG_OPT) -o $(WASM_DIR)/bwsl-debug.js
 	@echo "Built: $(WASM_DIR)/bwsl-debug.js"
 
-test: build $(SPIRV_TEST_DEPS)
+test-symbol-table:
+	python3 tests/run_symbol_table_tests.py
+
+test-symbol-table-sanitize:
+	python3 tests/run_symbol_table_tests.py --sanitize
+
+test: build $(SPIRV_TEST_DEPS) test-symbol-table
 	PATH="$(abspath $(SPIRV_TOOLS_BUILD)/tools):$$PATH" ./tests/run_tests.sh
 
 # ============================================================================
