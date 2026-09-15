@@ -2159,7 +2159,11 @@ CompileResult CompileShaderStage(
     // CFG Construction
     auto cfgStart = Clock::now();
     Memory::BWEMemoryArena cfgArena;
-    std::vector<char> cfgMem(512 * 1024);
+    // Large material shaders inline several lighting and surface functions.
+    // Scale scratch with lowered IR instead of exhausting a fixed 512 KiB arena.
+    const size_t stageScratchBytes = std::max<size_t>(512 * 1024,
+        static_cast<size_t>(lowering.program.instructionCount) * 512);
+    std::vector<char> cfgMem(stageScratchBytes);
     cfgArena.Initialize(cfgMem.data(), cfgMem.size());
 
     CFGBuilder cfgBuilder;
@@ -2262,7 +2266,7 @@ CompileResult CompileShaderStage(
     auto spirvStart = Clock::now();
 
     Memory::BWEMemoryArena spirvArena;
-    std::vector<char> spirvMem(512 * 1024);
+    std::vector<char> spirvMem(stageScratchBytes);
     spirvArena.Initialize(spirvMem.data(), spirvMem.size());
 
     SPIRVBuilder builder;
