@@ -1138,6 +1138,13 @@ void Parser::ParseFunctionParameters(NodeRef function) {
     do {
         std::string paramName;
         std::string paramType;
+        const SourceLocation firstLoc = getLocation(stream->GetOffset(current));
+        ParameterSourcePositions positions;
+        positions.typePosition = AST::PackPosition(firstLoc.line, firstLoc.column);
+        auto recordName = [&]() {
+            const SourceLocation loc = getLocation(stream->GetOffset(previous));
+            positions.namePosition = AST::PackPosition(loc.line, loc.column);
+        };
 
         // Check for type-first syntax: "type name" (C-style)
         if (CheckMask(TokenMasks::CORE_TYPES)) {
@@ -1162,6 +1169,7 @@ void Parser::ParseFunctionParameters(NodeRef function) {
             if (Check(TokenType::IDENTIFIER)) {
                 Advance();
                 paramName = std::string(stream->GetValue(previous));
+                recordName();
             } else {
                 // Anonymous parameter (just type)
                 paramName = "";
@@ -1188,6 +1196,7 @@ void Parser::ParseFunctionParameters(NodeRef function) {
                 if (Check(TokenType::IDENTIFIER)) {
                     Advance();
                     paramName = std::string(stream->GetValue(previous));
+                    recordName();
                 } else {
                     // Anonymous parameter with module-qualified type
                     paramName = "";
@@ -1195,6 +1204,9 @@ void Parser::ParseFunctionParameters(NodeRef function) {
             } else if (Match(TokenType::COLON)) {
                 // We have name: type
                 paramName = identifierStr;
+                positions.namePosition = AST::PackPosition(firstLoc.line, firstLoc.column);
+                const SourceLocation typeLoc = getLocation(stream->GetOffset(current));
+                positions.typePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
 
                 // Parse type (could be core type, custom type, or module-qualified type)
                 if (MatchMask(TokenMasks::CORE_TYPES)) {
@@ -1235,6 +1247,7 @@ void Parser::ParseFunctionParameters(NodeRef function) {
                 if (Check(TokenType::IDENTIFIER)) {
                     Advance();
                     paramName = std::string(stream->GetValue(previous));
+                    recordName();
                 } else {
                     paramName = "";
                 }
@@ -1243,6 +1256,7 @@ void Parser::ParseFunctionParameters(NodeRef function) {
                 paramType = identifierStr;
                 Advance();
                 paramName = std::string(stream->GetValue(previous));
+                recordName();
             } else {
                 // Just identifier, treat as custom type with anonymous parameter
                 paramType = identifierStr;
@@ -1277,6 +1291,7 @@ void Parser::ParseFunctionParameters(NodeRef function) {
         ast->GetFunction(function).parameters.Push(arena,
             std::make_pair(ArenaString::MakeHashOnly(paramName),
                           ArenaString::MakeHashOnly(paramType)));
+        ast->GetFunction(function).parameterPositions.Push(arena, positions);
 
     } while (Match(TokenType::COMMA) &&
              !Check(TokenType::RIGHT_PAREN));

@@ -18,7 +18,8 @@ NodeRef Parser::ParseDocument() {
     while (!Check(TokenType::EOF_TOKEN)) {
         ProgressGuard _pg_(this);
         if (Match(TokenType::MODULE)) {
-            (void)ParseModule();
+            NodeRef module = ParseModule();
+            if (module.IsValid()) ast->documentRoots.Push(arena, module);
         } else if (Check(TokenType::SUBMODULE) || Check(TokenType::PIPELINE)) {
             SkipBracedDeclaration(false);
         } else {
@@ -68,6 +69,7 @@ NodeRef Parser::ParseDocument() {
             NodeRef pipeline = ParsePipeline();
             if (pipeline.IsValid()) {
                 lastPipeline = pipeline;
+                ast->documentRoots.Push(arena, pipeline);
             }
         } else if (Check(TokenType::MODULE) || Check(TokenType::SUBMODULE)) {
             SkipBracedDeclaration(false);

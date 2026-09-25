@@ -1109,6 +1109,22 @@ def check_ast_json_references(data: dict, expectations: dict) -> tuple[bool, str
     if len(stable_ids) != len(set(stable_ids)):
         return False, "externally addressable semantic stable IDs are not unique"
 
+    # Validate occurrence endpoints too, including exported synthetic IDs.
+    occurrence_ids: set[str] = set()
+
+    def collect_ids(value):
+        if isinstance(value, dict):
+            if isinstance(value.get("id"), str):
+                occurrence_ids.add(value["id"])
+            for child in value.values():
+                collect_ids(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_ids(child)
+
+    collect_ids(data.get("modules", []))
+    collect_ids(data.get("pipelines", []))
+
     reference_keys: list[tuple[str, str, str]] = []
     for reference in references:
         if not isinstance(reference, dict):
@@ -1116,6 +1132,8 @@ def check_ast_json_references(data: dict, expectations: dict) -> tuple[bool, str
         key = (reference.get("from"), reference.get("to"), reference.get("role"))
         if any(not value for value in key):
             return False, f"semantic reference has an empty field: {reference}"
+        if key[0] not in occurrence_ids and key[0] not in symbol_ids:
+            return False, f"semantic reference source {key[0]!r} is not exported"
         if key[1] not in symbol_ids:
             return False, f"semantic reference target {key[1]!r} is not a symbol"
         reference_keys.append(key)
@@ -3339,6 +3357,18 @@ def main() -> int:
 
             print(f"[{GREEN}PASS{NC}] ast_json/{test_file.stem}")
             passed += 1
+
+    ast_regressions = run_command(
+        [sys.executable, str(script_dir / "ast_json_tests.py"), "--compiler", str(bwslc)],
+        cwd=root,
+    )
+    if ast_regressions.returncode == 0:
+        print(f"[{GREEN}PASS{NC}] ast_json/issue94_regressions")
+        passed += 1
+    else:
+        print(f"[{RED}FAIL{NC}] ast_json/issue94_regressions")
+        print(ast_regressions.stdout)
+        failed += 1
 
     stdlib_source = (root / "src" / "core" / "bwsl_stdlib.h").read_text(encoding="utf-8")
     token_sources = "\n".join(
