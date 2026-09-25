@@ -144,7 +144,9 @@ public:
         for (u32 i = 0; i < ast_.variableDecls.count; i++) {
             NodeRef ref(ASTNodeType::VARIABLE_DECL, i);
             if (visitedVariables_.find(ref.packed) == visitedVariables_.end()) {
+                PushScope();
                 VisitVariableDecl(ref);
+                PopScope();
             }
         }
         for (u32 i = 0; i < ast_.functions.count; i++) {
@@ -160,6 +162,8 @@ public:
 private:
     struct Binding {
         std::string id;
+        // Expression bindings use declaration IDs for custom types, so a short
+        // name cannot be reinterpreted in the caller's module.
         std::string type;
     };
 
@@ -182,7 +186,8 @@ private:
     std::unordered_map<u32, std::string> ownerNames_;
     std::vector<NodeRef> functionRefs_;
 
-    std::unordered_map<std::string, Binding> variablesByName_;
+    std::unordered_map<std::string, Binding> typesByScope_;
+    std::unordered_map<std::string, std::vector<std::string>> usingScopes_;
     std::unordered_map<std::string, Binding> typesByName_;
     std::unordered_map<std::string, std::string> modulesByName_;
     std::unordered_map<std::string, std::vector<FunctionTarget>> functionsByScope_;
@@ -198,6 +203,7 @@ private:
     std::unordered_set<u32> visitedVariables_;
     std::unordered_set<u32> visitedStages_;
 
+    std::string currentOwner_;
     std::string currentModule_;
     std::string currentPipeline_;
     std::string currentPass_;
@@ -285,14 +291,11 @@ private:
         const std::string name = ResolveName(function.name);
         FunctionTarget target;
         target.id = NodeId(ref);
-        target.returnType = ReturnTypeName(function);
+        target.returnType = CanonicalType(ReturnTypeName(function), owner);
         for (u32 i = 0; i < function.parameters.count; i++) {
-            target.parameterTypes.push_back(ResolveName(function.parameters[i].second));
+            target.parameterTypes.push_back(CanonicalType(ResolveName(function.parameters[i].second), owner));
         }
         functionsByScope_[ScopedKey(owner, name)].push_back(target);
-        // Unqualified fallback is useful for imported/using declarations and
-        // for declarations not represented by a container array.
-        functionsByScope_[ScopedKey({}, name)].push_back(target);
     }
 
     std::string FunctionStableId(NodeRef ref, const std::string& owner) const {
@@ -378,6 +381,19 @@ private:
             SetOwner(pass.computeShader, id, ResolveName(pass.name));
         }
 
+        auto addUsingScopes = [&](const std::string& owner, const ArenaArray<ArenaString>& imports) {
+            for (u32 i = 0; i < imports.count; i++) {
+                auto module = modulesByName_.find(ResolveName(imports[i]));
+                if (module != modulesByName_.end()) usingScopes_[owner].push_back(module->second);
+            }
+        };
+        for (u32 i = 0; i < ast_.modules.count; i++) {
+            addUsingScopes(NodeId(NodeRef(ASTNodeType::MODULE, i)), ast_.modules[i].usingImports);
+        }
+        for (u32 i = 0; i < ast_.pipelines.count; i++) {
+            addUsingScopes(NodeId(NodeRef(ASTNodeType::PIPELINE, i)), ast_.pipelines[i].usingImports);
+        }
+
         for (u32 i = 0; i < ast_.structDecls.count; i++) {
             NodeRef ref(ASTNodeType::STRUCT_DECL, i);
             const StructDeclData& structure = ast_.GetStructDecl(ref);
@@ -387,10 +403,11 @@ private:
             AddSymbol({id, "struct", name, id, owner, {}, {}});
             const std::string stableOwner = StableIdOf(owner);
             if (!stableOwner.empty()) SetStableId(id, stableOwner + "/type:" + name);
-            typesByName_.emplace(name, Binding{id, name});
+            typesByScope_[ScopedKey(owner, name)] = {id, id};
+            typesByName_[id] = {id, id};
             const std::string ownerName = OwnerName(ref);
             if (!ownerName.empty()) {
-                typesByName_[ownerName + "::" + name] = {id, ownerName + "::" + name};
+                typesByName_[ownerName + "::" + name] = {id, id};
             }
             for (u32 fieldIndex = 0; fieldIndex < structure.fields.count; fieldIndex++) {
                 const StructFieldData& field = structure.fields[fieldIndex];
@@ -423,9 +440,10 @@ private:
             AddSymbol({id, "enum", name, id, OwnerOf(ref), {}, {}});
             const std::string stableOwner = StableIdOf(OwnerOf(ref));
             if (!stableOwner.empty()) SetStableId(id, stableOwner + "/type:" + name);
-            typesByName_.emplace(name, Binding{id, name});
+            typesByScope_[ScopedKey(OwnerOf(ref), name)] = {id, id};
+            typesByName_[id] = {id, id};
             const std::string ownerName = OwnerName(ref);
-            if (!ownerName.empty()) typesByName_[ownerName + "::" + name] = {id, name};
+            if (!ownerName.empty()) typesByName_[ownerName + "::" + name] = {id, id};
             for (u32 j = 0; j < enumeration.variants.count; j++) {
                 NodeRef variantRef = enumeration.variants[j];
                 const EnumDeclData& variant = ast_.GetEnumDecl(variantRef);
@@ -485,7 +503,6 @@ private:
             const std::string type = ResolveName(variable.type);
             AddSymbol({NodeId(ref), variable.isConst ? "constant" : "variable", name,
                        NodeId(ref), OwnerOf(ref), type, {}});
-            variablesByName_.emplace(name, Binding{NodeId(ref), type});
         }
 
         for (u32 i = 0; i < ast_.functions.count; i++) {
@@ -536,27 +553,91 @@ private:
         // Declaration-to-type edges are useful even when the declaration is
         // never referenced by executable code.
         for (const Symbol& symbol : std::vector<Symbol>(index_.symbols)) {
-            if (!symbol.type.empty() && symbol.kind != "function" && symbol.kind != "method") {
-                AddTypeReference(symbol.id, symbol.type, "type");
+            // Locals need their lexical context, which is only available when visited.
+            if (!symbol.type.empty() && symbol.kind != "function" && symbol.kind != "method" &&
+                symbol.kind != "variable" && symbol.kind != "constant") {
+                AddReference(symbol.id, EnsureType(symbol.type, symbol.owner).id, "type");
             }
+        }
+        for (auto& entry : fields_) {
+            const Symbol* field = FindSymbol(entry.second.id);
+            if (field) entry.second.type = CanonicalType(field->type, field->owner);
         }
     }
 
-    Binding EnsureType(const std::string& typeName) {
+    std::string CurrentOwner() const {
+        if (!currentOwner_.empty()) return currentOwner_;
+        if (!currentPass_.empty()) return currentPass_;
+        if (!currentPipeline_.empty()) return currentPipeline_;
+        return currentModule_;
+    }
+
+    std::vector<std::string> VisibleScopes(std::string owner) const {
+        std::vector<std::string> result;
+        while (!owner.empty()) {
+            result.push_back(owner);
+            auto symbol = symbolIndices_.find(owner);
+            if (symbol == symbolIndices_.end()) break;
+            owner = index_.symbols[symbol->second].owner;
+        }
+        // A using declaration exposes names; a plain import only exposes its qualifier.
+        const size_t lexicalCount = result.size();
+        for (size_t i = 0; i < lexicalCount; i++) {
+            auto imported = usingScopes_.find(result[i]);
+            if (imported != usingScopes_.end()) {
+                for (const auto& module : imported->second) {
+                    if (std::find(result.begin(), result.end(), module) == result.end()) {
+                        result.push_back(module);
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    Binding EnsureType(const std::string& typeName, const std::string& owner) {
         if (typeName.empty() || typeName == "void" || typeName == "invalid") return {};
         auto exact = typesByName_.find(typeName);
         if (exact != typesByName_.end()) return exact->second;
-
-        const size_t separator = typeName.rfind("::");
-        if (separator != std::string::npos) {
-            auto shortName = typesByName_.find(typeName.substr(separator + 2));
-            if (shortName != typesByName_.end()) return shortName->second;
+        if (typeName.find("::") != std::string::npos) return {};
+        for (const auto& scope : VisibleScopes(owner)) {
+            auto found = typesByScope_.find(ScopedKey(scope, typeName));
+            if (found != typesByScope_.end()) return found->second;
         }
 
+        // Unknown user types must not become invented builtin symbols.
+        bool builtin = false;
+        for (u32 i = 1; i < static_cast<u32>(CoreType::COUNT); i++) {
+            CoreType core = static_cast<CoreType>(i);
+            if (core == CoreType::CUSTOM || core == CoreType::ENUM ||
+                core == CoreType::CONSTRAINT) continue;
+            if (SourceTypeName(core) == typeName) { builtin = true; break; }
+        }
+        if (!builtin) return {};
         const std::string id = "builtin:type:" + typeName;
         AddSymbol({id, "core-type", typeName, id, "builtin", {}, {}});
         SetStableId(id, id);
         return {id, typeName};
+    }
+
+    Binding EnsureType(const std::string& typeName) {
+        return EnsureType(typeName, CurrentOwner());
+    }
+
+    std::string CanonicalType(std::string name, std::string owner) {
+        Binding type = EnsureType(name, owner);
+        return type.id.empty() ? std::string() : type.type;
+    }
+
+    std::string TypeSpelling(const std::string& type) const {
+        auto found = symbolIndices_.find(type);
+        if (found == symbolIndices_.end()) return type;
+        const Symbol& symbol = index_.symbols[found->second];
+        auto owner = symbolIndices_.find(symbol.owner);
+        if (owner != symbolIndices_.end() && index_.symbols[owner->second].kind == "module") {
+            return index_.symbols[owner->second].name + "::" + symbol.name;
+        }
+        return symbol.name;
     }
 
     void AddTypeReference(const std::string& from, const std::string& typeName,
@@ -578,42 +659,39 @@ private:
             auto found = scope->find(name);
             if (found != scope->end()) return found->second;
         }
-        auto global = variablesByName_.find(name);
-        return global == variablesByName_.end() ? Binding{} : global->second;
-    }
-
-    static bool EquivalentTypeNames(const std::string& lhs, const std::string& rhs) {
-        if (lhs.empty() || rhs.empty() || lhs == rhs) return true;
-        const size_t lhsSeparator = lhs.rfind("::");
-        const size_t rhsSeparator = rhs.rfind("::");
-        const std::string lhsShort = lhsSeparator == std::string::npos
-            ? lhs : lhs.substr(lhsSeparator + 2);
-        const std::string rhsShort = rhsSeparator == std::string::npos
-            ? rhs : rhs.substr(rhsSeparator + 2);
-        return lhsShort == rhsShort;
+        for (const auto& scope : VisibleScopes(CurrentOwner())) {
+            auto field = fields_.find(ScopedKey(scope, name));
+            if (field != fields_.end()) return field->second;
+        }
+        return {};
     }
 
     FunctionTarget ResolveFunction(const std::string& scope, const std::string& name,
                                    const std::vector<ExprInfo>& arguments) const {
-        const std::string scopes[] = {scope, currentPass_, currentPipeline_, currentModule_, {}};
+        // Explicit receivers/qualifiers cannot fall back into a different scope.
+        const auto scopes = scope.empty() ? VisibleScopes(CurrentOwner())
+                                         : std::vector<std::string>{scope};
         for (const std::string& candidateScope : scopes) {
             auto found = functionsByScope_.find(ScopedKey(candidateScope, name));
             if (found == functionsByScope_.end()) continue;
+            const FunctionTarget* match = nullptr;
             for (const FunctionTarget& target : found->second) {
                 if (target.parameterTypes.size() != arguments.size()) continue;
                 bool matches = true;
                 for (size_t i = 0; i < arguments.size(); i++) {
-                    if (!EquivalentTypeNames(target.parameterTypes[i], arguments[i].type)) {
+                    if (!arguments[i].type.empty() && !target.parameterTypes[i].empty() &&
+                        target.parameterTypes[i] != arguments[i].type) {
                         matches = false;
                         break;
                     }
                 }
-                if (matches) return target;
+                if (matches) {
+                    if (match) return {}; // Ambiguous, so do not claim a semantic target.
+                    match = &target;
+                }
             }
-            for (const FunctionTarget& target : found->second) {
-                if (target.parameterTypes.size() == arguments.size()) return target;
-            }
-            if (!found->second.empty()) return found->second.front();
+            if (match) return *match;
+            return {};
         }
         return {};
     }
@@ -675,11 +753,16 @@ private:
         const std::string previousPass = currentPass_;
         currentPass_ = NodeId(ref);
 
+        for (u32 i = 0; i < pass.usedAttributes.count; i++) {
+            auto attribute = attributes_.find(ScopedKey(currentPipeline_, ResolveName(pass.usedAttributes[i])));
+            if (attribute != attributes_.end()) {
+                AddReference(currentPass_ + "/used-attribute:" + std::to_string(i),
+                             attribute->second.id, "attribute");
+            }
+        }
         PushScope();
         for (u32 i = 0; i < pass.consts.count; i++) {
             VisitVariableDecl(pass.consts[i]);
-            const VariableDeclData& variable = ast_.GetVariableDecl(pass.consts[i]);
-            Bind(ResolveName(variable.name), {NodeId(pass.consts[i]), ResolveName(variable.type)});
         }
         for (u32 i = 0; i < pass.functions.count; i++) VisitFunction(pass.functions[i], currentPass_);
         VisitStage(pass.vertexShader, ASTNodeType::VERTEX_STAGE);
@@ -706,6 +789,8 @@ private:
         if (ref.IsNull() || !visitedFunctions_.insert(ref.packed).second) return;
         const FunctionDeclData& function = ast_.GetFunction(ref);
         const std::string functionId = NodeId(ref);
+        const std::string previousOwner = currentOwner_;
+        currentOwner_ = functionId;
         const std::string previousModule = currentModule_;
         const std::string previousPipeline = currentPipeline_;
         const std::string previousPass = currentPass_;
@@ -725,11 +810,12 @@ private:
                 SetStableId(parameterId, stableFunction + "/parameter:" + std::to_string(i));
             }
             AddTypeReference(parameterId, type, "type");
-            Bind(name, {parameterId, type});
+            Bind(name, {parameterId, CanonicalType(type, functionId)});
         }
         VisitNode(function.body);
         PopScope();
 
+        currentOwner_ = previousOwner;
         currentModule_ = previousModule;
         currentPipeline_ = previousPipeline;
         currentPass_ = previousPass;
@@ -743,7 +829,7 @@ private:
         const std::string name = ResolveName(variable.name);
         const std::string type = ResolveName(variable.type);
         AddTypeReference(NodeId(ref), type, "type");
-        Bind(name, {NodeId(ref), type});
+        Bind(name, {NodeId(ref), CanonicalType(type, CurrentOwner())});
     }
 
     Binding EnsureInterface(const std::string& name, bool fragmentOutput) {
@@ -863,22 +949,25 @@ private:
                     return {target.returnType, target.id};
                 }
             }
+            return {};
         }
 
         if ((call.flags & FunctionCallFlags::IS_METHOD_CALL) != 0 && call.moduleObject.IsValid()) {
             ExprInfo receiver = VisitExpr(call.moduleObject, "read");
             Binding receiverType = EnsureType(receiver.type);
+            if (receiverType.id.empty()) return {};
             FunctionTarget target = ResolveFunction(receiverType.id, name, arguments);
             if (!target.id.empty()) {
                 AddReference(NodeId(ref), target.id, "call");
                 return {target.returnType, target.id};
             }
+            return {};
         }
 
-        auto declaredType = typesByName_.find(name);
-        if (declaredType != typesByName_.end()) {
-            AddReference(NodeId(ref), declaredType->second.id, "construct");
-            return {declaredType->second.type, declaredType->second.id};
+        Binding declaredType = EnsureType(name);
+        if (!declaredType.id.empty() && declaredType.id.rfind("builtin:", 0) != 0) {
+            AddReference(NodeId(ref), declaredType.id, "construct");
+            return {declaredType.type, declaredType.id};
         }
 
         FunctionTarget target = ResolveFunction({}, name, arguments);
@@ -981,7 +1070,7 @@ private:
                 if (!target.target.empty()) {
                     AddDefinition(target.target, NodeId(ref));
                     Symbol* symbol = FindSymbol(target.target);
-                    if (symbol && symbol->type.empty() && !value.type.empty()) symbol->type = value.type;
+                    if (symbol && symbol->type.empty() && !value.type.empty()) symbol->type = TypeSpelling(value.type);
                 }
                 break;
             }

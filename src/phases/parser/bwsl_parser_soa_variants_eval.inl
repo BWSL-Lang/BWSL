@@ -1513,6 +1513,7 @@ NodeRef Parser::ParseForStatement(bool isEval) {
 
             Consume(TokenType::IDENTIFIER, "Expected variable name in for loop init");
             std::string varName(stream->GetValue(previous));
+            const SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
 
             NodeRef initializer = NodeRef::Null();
             if (Match(TokenType::ASSIGN)) {
@@ -1523,6 +1524,8 @@ NodeRef Parser::ParseForStatement(bool isEval) {
                 ArenaString::MakeHashOnly(varName),
                 ArenaString::MakeHashOnly(typeStr),
                 initializer, false, line, col);
+            ast->GetVariableDecl(firstPart).typePosition = AST::PackPosition(line, col);
+            ast->GetVariableDecl(firstPart).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
 
             // Add to symbol table
             Symbol* sym = SymbolTable::AddSymbol(&symbolTable, ArenaString::MakeHashOnly(varName), SymbolKind::VARIABLE);

@@ -342,12 +342,14 @@ inline void AppendNodeArrayField(std::ostringstream& json, bool& first,
 }
 
 inline void AppendArenaStringArray(std::ostringstream& json,
-                                   const ArenaArray<ArenaString>& values) {
+                                   const ArenaArray<ArenaString>& values,
+                                   const std::string& idPrefix = {}) {
     json << "[";
     for (u32 i = 0; i < values.count; i++) {
         if (i > 0) json << ",";
         bool first = true;
         json << "{";
+        if (!idPrefix.empty()) AppendStringField(json, first, "id", idPrefix + std::to_string(i));
         AppendArenaStringFields(json, first, "name", values[i]);
         json << "}";
     }
@@ -356,9 +358,10 @@ inline void AppendArenaStringArray(std::ostringstream& json,
 
 inline void AppendArenaStringArrayField(std::ostringstream& json, bool& first,
                                         const char* name,
-                                        const ArenaArray<ArenaString>& values) {
+                                        const ArenaArray<ArenaString>& values,
+                                        const std::string& idPrefix = {}) {
     AppendFieldName(json, first, name);
-    AppendArenaStringArray(json, values);
+    AppendArenaStringArray(json, values, idPrefix);
 }
 
 inline void AppendCoreTypeArray(std::ostringstream& json,
@@ -381,13 +384,29 @@ inline void AppendU32Array(std::ostringstream& json,
     json << "]";
 }
 
+inline void AppendPackedPosition(std::ostringstream& json, bool& first, u32 position,
+                                 const char* lineField, const char* columnField) {
+    if (position == 0) return;
+    u32 line = 0, column = 0;
+    AST::UnpackPosition(position, line, column);
+    AppendUIntField(json, first, lineField, line);
+    AppendUIntField(json, first, columnField, column);
+}
+
 inline void AppendFunctionParameters(std::ostringstream& json,
-    const ArenaArray<std::pair<ArenaString, ArenaString>>& params) {
+    const ArenaArray<std::pair<ArenaString, ArenaString>>& params,
+    const std::string& idPrefix,
+    const ArenaArray<ParameterSourcePositions>* positions = nullptr) {
     json << "[";
     for (u32 i = 0; i < params.count; i++) {
         if (i > 0) json << ",";
         bool first = true;
         json << "{";
+        AppendStringField(json, first, "id", idPrefix + std::to_string(i));
+        if (positions && i < positions->count) {
+            AppendPackedPosition(json, first, (*positions)[i].namePosition, "nameLine", "nameColumn");
+            AppendPackedPosition(json, first, (*positions)[i].typePosition, "typeLine", "typeColumn");
+        }
         AppendArenaStringFields(json, first, "name", params[i].first);
         AppendArenaStringFields(json, first, "type", params[i].second);
         json << "}";
@@ -396,12 +415,14 @@ inline void AppendFunctionParameters(std::ostringstream& json,
 }
 
 inline void AppendStructFields(std::ostringstream& json,
-                               const ArenaArray<StructFieldData>& fields) {
+                               const ArenaArray<StructFieldData>& fields,
+                               const std::string& owner) {
     json << "[";
     for (u32 i = 0; i < fields.count; i++) {
         if (i > 0) json << ",";
         bool first = true;
         json << "{";
+        AppendStringField(json, first, "id", owner + "/field:" + std::to_string(i));
         AppendArenaStringFields(json, first, "name", fields[i].name);
         AppendFieldName(json, first, "type");
         AppendTypeInfo(json, fields[i].type);
@@ -754,6 +775,7 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
                 node.moduleObject.Type() == ASTNodeType::IDENTIFIER) {
                 AppendStringField(json, first, "moduleName",
                                   ResolveArenaString(ast.GetIdentifier(node.moduleObject).name));
+                AppendNodeField(json, first, "qualifier", ast, node.moduleObject, depth);
             } else if ((node.flags & FunctionCallFlags::IS_METHOD_CALL) != 0 &&
                        node.moduleObject.IsValid()) {
                 AppendNodeField(json, first, "receiver", ast, node.moduleObject, depth);
@@ -804,7 +826,12 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             const AttributeDeclData& node = ast.GetAttributeDecl(ref);
             AppendArenaStringFields(json, first, "name", node.name);
             AppendArenaStringFields(json, first, "dataType", node.dataType);
-            AppendArenaStringFields(json, first, "compression", node.compression);
+            if (node.compression.nameHash == 0) {
+                AppendFieldName(json, first, "compression");
+                json << "null";
+            } else {
+                AppendArenaStringFields(json, first, "compression", node.compression);
+            }
             AppendUIntField(json, first, "attributeIndex", node.attributeIndex);
             AppendBoolField(json, first, "isInstance", node.isInstance);
             break;
@@ -859,7 +886,8 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             const FunctionDeclData& node = ast.GetFunction(ref);
             AppendArenaStringFields(json, first, "name", node.name);
             AppendFieldName(json, first, "parameters");
-            AppendFunctionParameters(json, node.parameters);
+            AppendFunctionParameters(json, node.parameters, NodeRefId(ref) + "/parameter:",
+                                     &node.parameterPositions);
             AppendStringField(json, first, "returnType", FunctionReturnTypeToString(node));
             AppendNodeField(json, first, "body", ast, node.body, depth);
             AppendBoolField(json, first, "isEval", node.isEval);
@@ -871,7 +899,7 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             const StructDeclData& node = ast.GetStructDecl(ref);
             AppendArenaStringFields(json, first, "name", node.name);
             AppendFieldName(json, first, "fields");
-            AppendStructFields(json, node.fields);
+            AppendStructFields(json, node.fields, NodeRefId(ref));
             AppendNodeArrayField(json, first, "methods", ast, node.methods, depth);
             break;
         }
@@ -884,7 +912,8 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
         case ASTNodeType::PASS: {
             const PassData& node = ast.GetPass(ref);
             AppendArenaStringFields(json, first, "name", node.name);
-            AppendArenaStringArrayField(json, first, "usedAttributes", node.usedAttributes);
+            AppendArenaStringArrayField(json, first, "usedAttributes", node.usedAttributes,
+                                        NodeRefId(ref) + "/used-attribute:");
             AppendArenaStringArrayField(json, first, "usedResources", node.usedResources);
             AppendFieldName(json, first, "fragmentOutputs");
             AppendFragmentOutputs(json, node.fragmentOutputs);
@@ -909,7 +938,7 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
         case ASTNodeType::PIPELINE: {
             const PipelineData& node = ast.GetPipeline(ref);
             AppendArenaStringFields(json, first, "name", node.name);
-            AppendArenaStringArrayField(json, first, "imports", node.imports);
+            AppendArenaStringArrayField(json, first, "imports", node.imports, NodeRefId(ref) + "/import:");
             AppendArenaStringArrayField(json, first, "usingImports", node.usingImports);
             AppendNodeArrayField(json, first, "attributes", ast, node.attributes, depth);
             AppendNodeArrayField(json, first, "resources", ast, node.resources, depth);
@@ -928,7 +957,7 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
         case ASTNodeType::MODULE: {
             const ModuleNodeData& node = ast.GetModule(ref);
             AppendArenaStringFields(json, first, "name", node.name);
-            AppendArenaStringArrayField(json, first, "imports", node.imports);
+            AppendArenaStringArrayField(json, first, "imports", node.imports, NodeRefId(ref) + "/import:");
             AppendArenaStringArrayField(json, first, "usingImports", node.usingImports);
             AppendNodeArrayField(json, first, "functions", ast, node.functions, depth);
             AppendNodeArrayField(json, first, "structs", ast, node.structs, depth);
@@ -968,7 +997,7 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             AppendNodeField(json, first, "defaultArm", ast, node.defaultArm, depth);
             AppendNodeField(json, first, "body", ast, node.body, depth);
             AppendFieldName(json, first, "bindings");
-            AppendFunctionParameters(json, node.bindings);
+            AppendFunctionParameters(json, node.bindings, NodeRefId(ref) + "/binding:");
             AppendNodeArrayField(json, first, "statements", ast, node.statements, depth);
             AppendArenaStringFields(json, first, "variantName", node.variantName);
             AppendBoolField(json, first, "isEval", node.isEval);
@@ -1131,8 +1160,22 @@ inline std::string SerializeASTJson(const AST& ast, NodeRef root,
     json << "{";
     AppendStringField(json, first, "schema", "bwsl.ast.v2");
     AppendStringField(json, first, "sourceFile", sourceFile);
+    // Retained for v2 consumers; roots is the document-level entry point.
     AppendFieldName(json, first, "root");
     AppendNode(json, ast, root, 0);
+    AppendFieldName(json, first, "roots");
+    std::vector<NodeRef> roots;
+    for (u32 i = 0; i < ast.documentRoots.count; i++) roots.push_back(ast.documentRoots[i]);
+    std::stable_sort(roots.begin(), roots.end(), [&](NodeRef a, NodeRef b) {
+        if (ast.GetLine(a) != ast.GetLine(b)) return ast.GetLine(a) < ast.GetLine(b);
+        return ast.GetColumn(a) < ast.GetColumn(b);
+    });
+    json << "[";
+    for (size_t i = 0; i < roots.size(); i++) {
+        if (i > 0) json << ",";
+        AppendStringValue(json, NodeRefId(roots[i]));
+    }
+    json << "]";
 
     AppendFieldName(json, first, "modules");
     json << "[";

@@ -212,9 +212,15 @@ struct LoopData {
 
 // Function definition in AST - 24 bytes + ArenaArray
 // Named FunctionDeclData to avoid conflict with FunctionData in bwsl_symbol_table.h
+struct ParameterSourcePositions {
+    u32 namePosition = 0;
+    u32 typePosition = 0;
+};
+
 struct FunctionDeclData {
     ArenaString name;
     ArenaArray<std::pair<ArenaString, ArenaString>> parameters;
+    ArenaArray<ParameterSourcePositions> parameterPositions;
     CoreType returnType;
     u32 returnTypeHash;
     u32 ownerStructTypeHash;
@@ -476,6 +482,8 @@ struct AST {
     ArenaArray<TypePatternArmData> typePatternArms;
     ArenaArray<SwitchCaseData> switchCases;
     ArenaArray<SwitchData> switches;
+    // Declarations written in the scanned document, excluding imported files.
+    ArenaArray<NodeRef> documentRoots;
     ArenaArray<PipelineData> pipelines;
     ArenaArray<ComputeGraphData> computeGraphs;
 
@@ -543,6 +551,7 @@ struct AST {
         typePatternArms.Init(arena, 8);     // Type pattern arms
         switchCases.Init(arena, 8);         // Switch case arms
         switches.Init(arena, 4);            // Less common
+        documentRoots.Init(arena, 4);
         pipelines.Init(arena, 1);           // Usually just one
         computeGraphs.Init(arena, 1);       // Optional
 
@@ -1434,6 +1443,7 @@ namespace ASTFactory {
         data.returnTypeHash = 0;
         data.ownerStructTypeHash = 0;
         data.parameters.Init(ast->arena, 4);
+        data.parameterPositions.Init(ast->arena, 0);
         data.body = NodeRef::Null();
         data.isEval = false;
         data.isStructMethod = false;
@@ -2189,6 +2199,7 @@ namespace ASTClone {
         FunctionDeclData& dst = ast->GetFunction(newFunc);
 
         dst.isEval = src.isEval;
+        dst.parameterPositions = src.parameterPositions;
 
         // Clone parameters with type substitution
         for (u32 i = 0; i < src.parameters.count; i++) {
