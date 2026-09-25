@@ -691,9 +691,26 @@ private:
                 }
             }
             if (match) return *match;
-            return {};
+            // A non-matching overload does not hide viable outer overloads.
         }
         return {};
+    }
+
+    std::string ResolveQualifiedModule(const ArenaString& writtenName,
+                                       u32 qualifiedNameHash) const {
+        // The parser canonicalizes this name using the aliases in the source
+        // scope, while preserving the written qualifier in the identifier node.
+        // moduleIndex is a symbol-table index, not an AST module-pool index.
+        if (qualifiedNameHash != 0) {
+            const std::string qualifiedName = ReverseLookup::GetString(qualifiedNameHash);
+            const size_t separator = qualifiedName.find("::");
+            if (separator != std::string::npos) {
+                auto module = modulesByName_.find(qualifiedName.substr(0, separator));
+                if (module != modulesByName_.end()) return module->second;
+            }
+        }
+        auto module = modulesByName_.find(ResolveName(writtenName));
+        return module == modulesByName_.end() ? std::string() : module->second;
     }
 
     void VisitImports(const std::string& owner, const ArenaArray<ArenaString>& imports) {
@@ -897,17 +914,16 @@ private:
             }
 
             if (member.isModuleQualified) {
-                const std::string moduleName = ResolveName(object.name);
-                auto module = modulesByName_.find(moduleName);
-                if (module != modulesByName_.end()) {
-                    AddReference(NodeId(member.object), module->second, "qualifier");
-                    FunctionTarget function = ResolveFunction(module->second, memberName, {});
+                const std::string module = ResolveQualifiedModule(object.name, member.qualifiedNameHash);
+                if (!module.empty()) {
+                    AddReference(NodeId(member.object), module, "qualifier");
+                    FunctionTarget function = ResolveFunction(module, memberName, {});
                     if (!function.id.empty()) {
                         AddReference(NodeId(ref), function.id, role);
                         return {function.returnType, function.id};
                     }
-                    auto type = typesByName_.find(moduleName + "::" + memberName);
-                    if (type != typesByName_.end()) {
+                    auto type = typesByScope_.find(ScopedKey(module, memberName));
+                    if (type != typesByScope_.end()) {
                         AddReference(NodeId(ref), type->second.id, "type");
                         return {type->second.type, type->second.id};
                     }
@@ -939,11 +955,11 @@ private:
         const std::string name = ResolveName(call.name);
         if ((call.flags & FunctionCallFlags::IS_MODULE_FUNCTION) != 0 &&
             call.moduleObject.Type() == ASTNodeType::IDENTIFIER) {
-            const std::string moduleName = ResolveName(ast_.GetIdentifier(call.moduleObject).name);
-            auto module = modulesByName_.find(moduleName);
-            if (module != modulesByName_.end()) {
-                AddReference(NodeId(call.moduleObject), module->second, "qualifier");
-                FunctionTarget target = ResolveFunction(module->second, name, arguments);
+            const std::string module = ResolveQualifiedModule(
+                ast_.GetIdentifier(call.moduleObject).name, call.moduleQualifiedHash);
+            if (!module.empty()) {
+                AddReference(NodeId(call.moduleObject), module, "qualifier");
+                FunctionTarget target = ResolveFunction(module, name, arguments);
                 if (!target.id.empty()) {
                     AddReference(NodeId(ref), target.id, "call");
                     return {target.returnType, target.id};

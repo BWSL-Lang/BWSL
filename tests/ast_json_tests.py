@@ -285,6 +285,81 @@ class AstJsonTests(unittest.TestCase):
         self.assert_edge(data, 'FUNCTION_CALL:0', 'FUNCTION:0', 'call')
         self.assert_edge(data, 'FUNCTION_CALL:1', 'FUNCTION:1', 'call')
 
+    def test_nonmatching_pass_overload_allows_pipeline_overload(self):
+        data = self.parse('''
+            pipeline P {
+                helper :: () -> float { return 1.0; }
+                pass "Main" {
+                    helper :: (float value) -> float { return value; }
+                    run :: () -> float { return helper(); }
+                }
+            }
+        ''')
+        self.assert_edge(data, 'FUNCTION_CALL:0', 'FUNCTION:0', 'call')
+
+    def test_nonmatching_pipeline_overload_allows_using_overload(self):
+        data = self.parse('''
+            module Helpers { helper :: () -> float { return 1.0; } }
+            pipeline P {
+                import Helpers as H
+                using H
+                helper :: (float value) -> float { return value; }
+                pass "Main" { run :: () -> float { return helper(); } }
+            }
+        ''')
+        self.assert_edge(data, 'FUNCTION_CALL:0', 'FUNCTION:0', 'call')
+
+    def test_alias_qualified_calls_keep_owner_scope(self):
+        data = self.parse('''
+            module First { helper :: () -> float { return 1.0; } }
+            module Second { helper :: () -> float { return 2.0; } }
+            module A {
+                import First as T
+                run :: () -> float { return T::helper(); }
+            }
+            module B {
+                import Second as T
+                run :: () -> float { return T::helper(); }
+            }
+        ''')
+        for i, call in enumerate(self.nodes(data, 'FUNCTION_CALL', 'helper')):
+            self.assertEqual(call['moduleName'], 'T')
+            self.assertEqual(call['qualifier']['name'], 'T')
+            self.assert_edge(data, call['qualifier']['id'], f'MODULE:{i}', 'qualifier')
+            self.assert_edge(data, call['id'], f'FUNCTION:{i}', 'call')
+
+    def test_alias_qualified_member_preserves_written_name(self):
+        # Parse-only function references exercise MEMBER_ACCESS separately from calls.
+        data = self.parse('''
+            module First { helper :: () -> float { return 1.0; } }
+            module Second { helper :: () -> float { return 2.0; } }
+            module A {
+                import First as T
+                run :: () -> float { return T::helper; }
+            }
+            module B {
+                import Second as T
+                run :: () -> float { return T::helper; }
+            }
+        ''')
+        for i, member in enumerate(self.nodes(data, 'MEMBER_ACCESS')):
+            self.assertEqual(member['object']['name'], 'T')
+            self.assert_edge(data, member['object']['id'], f'MODULE:{i}', 'qualifier')
+            self.assert_edge(data, member['id'], f'FUNCTION:{i}', 'read')
+
+    def test_qualified_overload_mismatch_stays_in_its_module(self):
+        data = self.parse('''
+            module Helpers { helper :: (float value) -> float { return value; } }
+            module Main {
+                import Helpers as H
+                helper :: () -> float { return 1.0; }
+                run :: () -> float { return H::helper(); }
+            }
+        ''')
+        call = self.nodes(data, 'FUNCTION_CALL')[0]
+        self.assert_edge(data, call['qualifier']['id'], 'MODULE:0', 'qualifier')
+        self.assertEqual(self.edges(data, 'call'), [])
+
     def test_existing_fixtures(self):
         for path in sorted((ROOT / 'tests' / 'ast_json').glob('*.bwsl')):
             with self.subTest(fixture=path.name):
