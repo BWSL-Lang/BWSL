@@ -18,8 +18,8 @@
 namespace BWSL::IR {
 
 // Maximum number of registers supported for a single shader pass
-// Increased to 4096 to handle deep function inlining
-static constexpr u32 MAX_REGISTERS = 4096;
+// Stay below the 14-bit operand tag boundary while accommodating inlined PBR/IBL.
+static constexpr u32 MAX_REGISTERS = 8192;
 using BWSL::IsArray;
 using BWSL::MakeOverloadMask;
 using BWSL::MakeOverloadMaskFromTypeHash;
