@@ -225,6 +225,7 @@ struct FunctionDeclData {
     ArenaArray<ParameterSourcePositions> parameterPositions;
     CoreType returnType;
     u32 returnTypeHash;
+    u32 returnTypePosition; // Packed line/column of the written return type, 0 when synthesized
     u32 ownerStructTypeHash;
     NodeRef body;
     bool isEval;
@@ -1611,6 +1612,7 @@ namespace ASTFactory {
         data.name = ArenaString::MakeHashOnly(name);
         data.returnType = returnType;
         data.returnTypeHash = 0;
+        data.returnTypePosition = 0;
         data.ownerStructTypeHash = 0;
         data.parameters.Init(ast->arena, 4);
         data.parameterPositions.Init(ast->arena, 0);
@@ -2373,6 +2375,7 @@ namespace ASTClone {
 
         dst.isEval = src.isEval;
         dst.parameterPositions = src.parameterPositions;
+        dst.returnTypePosition = src.returnTypePosition;
 
         // Clone parameters with type substitution
         for (u32 i = 0; i < src.parameters.count; i++) {

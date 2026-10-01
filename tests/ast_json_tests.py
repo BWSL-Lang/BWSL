@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AST JSON schema and scope regressions (issues #94 and #97)."""
+"""AST JSON schema and scope regressions (issues #94, #97 and #99)."""
 import argparse
 import json
 from pathlib import Path
@@ -480,6 +480,78 @@ class AstJsonTests(unittest.TestCase):
         self.assertNotIn('type', parameter)
         box = self.nodes(data, 'STRUCT_DECL', 'Box')[0]['id']
         self.assert_edge(data, field['id'], box, 'type')
+
+    def test_return_types_have_positions_and_qualifier_edges(self):
+        source = '''
+            module Common { struct Box { float size; } }
+            module M {
+                import Common as C
+                struct Local {
+                    float size;
+                    wrap :: () -> C::Box { C::Box b; return b; }
+                }
+                plain :: () -> Local { Local l; return l; }
+                qualified :: () -> Common::Box { Common::Box b; return b; }
+                scalar :: () -> float { return 1.0; }
+            }
+        '''
+        data = self.parse(source)
+        common = self.nodes(data, 'MODULE', 'Common')[0]['id']
+        box = self.nodes(data, 'STRUCT_DECL', 'Box')[0]['id']
+        local = self.nodes(data, 'STRUCT_DECL', 'Local')[0]['id']
+
+        plain = self.nodes(data, 'FUNCTION', 'plain')[0]
+        self.assertEqual(plain['returnType'], 'Local')
+        self.assert_position(plain, self.position(source, 8, 'Local'), 'returnType')
+        self.assertNotIn('returnTypeQualifier', plain)
+        self.assert_edge(data, plain['id'], local, 'return-type')
+
+        scalar = self.nodes(data, 'FUNCTION', 'scalar')[0]
+        self.assert_position(scalar, self.position(source, 10, 'float'), 'returnType')
+
+        for name, line, written in [('qualified', 9, 'Common'), ('wrap', 6, 'C')]:
+            function = self.nodes(data, 'FUNCTION', name)[0]
+            self.assertEqual(function['returnType'], 'Common::Box')
+            self.assert_position(function, self.position(source, line, written + '::'),
+                                 'returnType')
+            qualifier = function['returnTypeQualifier']
+            self.assertEqual(qualifier['id'], function['id'] + '/return-type-qualifier')
+            self.assertEqual(qualifier['name'], written)
+            self.assert_position(qualifier, self.position(source, line, written + '::'))
+            self.assert_edge(data, function['id'], box, 'return-type')
+            self.assert_edge(data, qualifier['id'], common, 'qualifier')
+
+    def test_intrinsic_results_type_stage_values(self):
+        data = self.parse('''
+            pipeline StageValueType {
+                attributes {
+                    position: float4
+                    uv: float2
+                    n: float3
+                    bits: uint
+                }
+                pass "Main" {
+                    use attributes { position, uv, n, bits }
+                    outputs { result: float4 }
+                    vertex {
+                        output.pos = attributes.position;
+                        output.unit = normalize(attributes.uv);
+                        output.d = dot(attributes.n, attributes.n);
+                        output.s = smoothstep(0.0, 1.0, attributes.n);
+                        output.m = max(1.0, attributes.uv);
+                        output.f = asfloat(attributes.bits);
+                    }
+                    fragment {
+                        output.result = float4(input.unit, input.d, input.f);
+                    }
+                }
+            }
+        ''')
+        types = {symbol['name']: symbol.get('type')
+                 for symbol in data['referenceIndex']['symbols']
+                 if symbol['kind'] == 'stage-interface'}
+        self.assertEqual(types, {'pos': 'float4', 'unit': 'float2', 'd': 'float',
+                                 's': 'float3', 'm': 'float2', 'f': 'float'})
 
     def test_constants_are_declarations_with_navigable_uses(self):
         source = '''
