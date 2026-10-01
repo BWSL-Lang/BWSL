@@ -1187,6 +1187,9 @@ NodeRef Parser::ClonePassWithActiveVariants(NodeRef passRef) {
     for (u32 i = 0; i < srcPass.usedAttributes.count; i++) {
         dstPass.usedAttributes.Push(arena, srcPass.usedAttributes[i]);
     }
+    for (u32 i = 0; i < srcPass.usedAttributePositions.count; i++) {
+        dstPass.usedAttributePositions.Push(arena, srcPass.usedAttributePositions[i]);
+    }
     for (u32 i = 0; i < srcPass.usedResources.count; i++) {
         dstPass.usedResources.Push(arena, srcPass.usedResources[i]);
     }
@@ -1287,6 +1290,15 @@ NodeRef Parser::SpecializePipelineForVariants(NodeRef pipeline,
     }
     for (u32 i = 0; i < srcPipeline.usingImports.count; i++) {
         dstPipeline.usingImports.Push(arena, srcPipeline.usingImports[i]);
+    }
+    for (u32 i = 0; i < srcPipeline.importPositions.count; i++) {
+        dstPipeline.importPositions.Push(arena, srcPipeline.importPositions[i]);
+    }
+    for (u32 i = 0; i < srcPipeline.usingSites.count; i++) {
+        dstPipeline.usingSites.Push(arena, srcPipeline.usingSites[i]);
+    }
+    for (u32 i = 0; i < srcPipeline.consts.count; i++) {
+        dstPipeline.consts.Push(arena, srcPipeline.consts[i]);
     }
     for (u32 i = 0; i < srcPipeline.attributes.count; i++) {
         dstPipeline.attributes.Push(arena, srcPipeline.attributes[i]);

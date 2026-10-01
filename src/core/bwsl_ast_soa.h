@@ -166,6 +166,8 @@ struct FragmentOutputDeclData {
     TypeInfo typeInfo;
     u8 location;
     u8 _pad[3];
+    u32 namePosition;  // Packed line/column (AST::PackPosition); 0 when synthesized.
+    u32 typePosition;
 };
 
 // 24 bytes
@@ -235,6 +237,8 @@ struct StructFieldData {
     ArenaString name;
     TypeInfo type;
     u32 arraySize;  // 0 = not an array, >0 = fixed-size array
+    u32 namePosition = 0;  // Packed line/column (AST::PackPosition) of the
+    u32 typePosition = 0;  // field name and its type; 0 when synthesized.
 };
 
 // Struct declaration - 20 bytes + ArenaArray
@@ -282,6 +286,7 @@ struct PassBlockBindingData {
 struct PassData {
     ArenaString name;
     ArenaArray<ArenaString> usedAttributes;
+    ArenaArray<u32> usedAttributePositions; // Packed name positions, parallel to usedAttributes
     ArenaArray<ArenaString> usedResources;
     ArenaArray<FragmentOutputDeclData> fragmentOutputs;
     ArenaArray<NodeRef> consts;     // Pass-scoped constants
@@ -316,11 +321,23 @@ struct ComputeGraphData {
     ArenaArray<ComputeGraphNode> nodes;
 };
 
+// A module name as written in source (`using C`, or the `C` of a declared
+// `C::Type`). Module references are stored canonicalized (aliases resolved),
+// so this keeps the written spelling and its position for tooling.
+struct ModuleNameSite {
+    u32 position;        // Packed line/column of the written name
+    ArenaString name;    // As written (module name or alias)
+    u32 moduleNameHash;  // Resolved module name, or 0 when unresolved
+};
+
 // Module - 20 bytes + ArenaArrays
 struct ModuleNodeData {
     ArenaString name;
     ArenaArray<ArenaString> imports;  // Module dependencies
     ArenaArray<ArenaString> usingImports;
+    ArenaArray<u32> importPositions;      // Packed name positions, parallel to imports
+    ArenaArray<ModuleNameSite> usingSites; // Written names, parallel to usingImports
+    ArenaArray<NodeRef> consts;           // Module-level const declarations (VARIABLE_DECL)
     ArenaArray<NodeRef> functions;
     ArenaArray<NodeRef> structs;
     ArenaArray<NodeRef> enums;
@@ -418,6 +435,9 @@ struct PipelineData {
     ArenaString name;
     ArenaArray<ArenaString> imports;
     ArenaArray<ArenaString> usingImports;
+    ArenaArray<u32> importPositions;      // Packed name positions, parallel to imports
+    ArenaArray<ModuleNameSite> usingSites; // Written names, parallel to usingImports
+    ArenaArray<NodeRef> consts;           // Pipeline-level const declarations (VARIABLE_DECL)
     ArenaArray<NodeRef> attributes;
     ArenaArray<NodeRef> resources;
     ArenaArray<PipelineVariantDeclData> variantDecls;
@@ -428,6 +448,72 @@ struct PipelineData {
     ArenaArray<NodeRef> structs;
     ArenaArray<NodeRef> constraints;
     NodeRef computeGraph;
+};
+
+// A use of a named constant that the parser replaced by its literal value.
+// The LITERAL node keeps compilation unchanged; this record keeps the
+// written name so tooling can still navigate from the use to the constant.
+struct FoldedConstantData {
+    u32 literal;          // NodeRef::packed of the substituted LITERAL
+    NodeRef qualifier;    // IDENTIFIER of `Module` in `Module::NAME`, or null
+    ArenaString name;     // Constant name as written
+    u32 namePosition;     // Packed line/column of the name token
+    u32 moduleNameHash;   // Resolved module of a qualified use, or 0
+};
+
+
+// Arena-backed open-addressing map from NodeRef::packed to a u32 value.
+// Find returns 0 for missing keys, so stored values should be non-zero.
+struct NodeU32Map {
+    u32* keys = nullptr;
+    u32* values = nullptr;
+    u32 count = 0;
+    u32 capacity = 0;
+
+    void Init(BWSL_Arena* arena, u32 initialCapacity) {
+        capacity = initialCapacity;
+        count = 0;
+        keys = (u32*)arena->Allocate(sizeof(u32) * capacity, 64);
+        values = (u32*)arena->Allocate(sizeof(u32) * capacity, 64);
+        memset(keys, 0xFF, sizeof(u32) * capacity);
+    }
+
+    void Set(BWSL_Arena* arena, u32 key, u32 value) {
+        if ((count + 1) * 2 >= capacity) Grow(arena);
+        Insert(key, value);
+    }
+
+    u32 Find(u32 key) const {
+        if (capacity == 0) return 0;
+        u32 slot = key & (capacity - 1);
+        for (u32 probe = 0; probe < capacity; probe++) {
+            if (keys[slot] == key) return values[slot];
+            if (keys[slot] == 0xFFFFFFFFu) return 0;
+            slot = (slot + 1) & (capacity - 1);
+        }
+        return 0;
+    }
+
+private:
+    void Insert(u32 key, u32 value) {
+        u32 slot = key & (capacity - 1);
+        while (keys[slot] != 0xFFFFFFFFu && keys[slot] != key) {
+            slot = (slot + 1) & (capacity - 1);
+        }
+        if (keys[slot] == 0xFFFFFFFFu) count++;
+        keys[slot] = key;
+        values[slot] = value;
+    }
+
+    void Grow(BWSL_Arena* arena) {
+        u32 oldCapacity = capacity;
+        u32* oldKeys = keys;
+        u32* oldValues = values;
+        Init(arena, oldCapacity * 2);
+        for (u32 i = 0; i < oldCapacity; i++) {
+            if (oldKeys[i] != 0xFFFFFFFFu) Insert(oldKeys[i], oldValues[i]);
+        }
+    }
 };
 
 //==============================================================================
@@ -496,6 +582,25 @@ struct AST {
     ArenaArray<const char*> docsTexts;
     ArenaArray<u32> docsTextLengths;
 
+    // Position of the name token for named nodes, where it differs from the
+    // node's primary position (keyword, type, '.', '::', ...). Tooling only.
+    NodeU32Map namePositions;
+
+    // Source files that contributed declarations: the scanned document,
+    // imported modules, and submodule files. declarationSources records which
+    // file each top-level or member declaration was written in (as a
+    // sourceFiles index + 1), so declarations merged from a submodule keep
+    // pointing at their own file.
+    ArenaArray<const char*> sourceFiles;
+    NodeU32Map declarationSources;
+
+    // Named constant uses folded into LITERAL nodes by the parser.
+    ArenaArray<FoldedConstantData> foldedConstants;
+
+    // Written module qualifiers of declared `Module::Type` types, keyed by
+    // position (also the declaration's recorded type position).
+    ArenaArray<ModuleNameSite> typeQualifiers;
+
     // Return statements reuse AssignmentData (target unused, value is the return expr)
     // If statements reuse BlockData (first statement is condition, rest is body)
 
@@ -558,6 +663,12 @@ struct AST {
         docsNodeRefs.Init(arena, 4);        // Doc comment blocks (parallel arrays)
         docsTexts.Init(arena, 4);
         docsTextLengths.Init(arena, 4);
+
+        namePositions.Init(arena, NextPowerOfTwo(estimatedNodes));
+        sourceFiles.Init(arena, 4);
+        declarationSources.Init(arena, 64);
+        foldedConstants.Init(arena, 8);
+        typeQualifiers.Init(arena, 8);
     }
 
     //==========================================================================
@@ -671,6 +782,61 @@ struct AST {
     u32 GetEndColumn(NodeRef ref) const {
         if (ref.IsNull()) return 0;
         return FindEndPosition(ref) & 0xFFF;
+    }
+
+    //==========================================================================
+    // Tooling metadata: name positions and declaration source files
+    //==========================================================================
+
+    void SetNamePosition(NodeRef ref, u32 line, u32 column) {
+        if (ref.IsNull() || line == 0) return;
+        namePositions.Set(arena, ref.packed, PackPosition(line, column));
+    }
+
+    // Packed name position, or 0 when none was recorded.
+    u32 GetNamePosition(NodeRef ref) const {
+        return ref.IsNull() ? 0 : namePositions.Find(ref.packed);
+    }
+
+    const FoldedConstantData* FindFoldedConstant(NodeRef literal) const {
+        if (literal.Type() != ASTNodeType::LITERAL) return nullptr;
+        for (u32 i = 0; i < foldedConstants.count; i++) {
+            if (foldedConstants[i].literal == literal.packed) return &foldedConstants[i];
+        }
+        return nullptr;
+    }
+
+    const ModuleNameSite* FindTypeQualifier(u32 position) const {
+        if (position == 0) return nullptr;
+        for (u32 i = 0; i < typeQualifiers.count; i++) {
+            if (typeQualifiers[i].position == position) return &typeQualifiers[i];
+        }
+        return nullptr;
+    }
+
+    // Returns the index of `path` in sourceFiles, adding an arena copy when new.
+    u32 InternSourceFile(const char* path) {
+        if (path == nullptr) path = "";
+        for (u32 i = 0; i < sourceFiles.count; i++) {
+            if (strcmp(sourceFiles[i], path) == 0) return i;
+        }
+        size_t length = strlen(path);
+        char* copy = (char*)arena->Allocate(length + 1, 1);
+        memcpy(copy, path, length + 1);
+        sourceFiles.Push(arena, copy);
+        return sourceFiles.count - 1;
+    }
+
+    void SetDeclarationSource(NodeRef ref, u32 fileIndex) {
+        if (ref.IsNull() || fileIndex >= sourceFiles.count) return;
+        declarationSources.Set(arena, ref.packed, fileIndex + 1);
+    }
+
+    // Source file a declaration was written in, or nullptr when unrecorded.
+    const char* GetDeclarationSource(NodeRef ref) const {
+        if (ref.IsNull()) return nullptr;
+        u32 entry = declarationSources.Find(ref.packed);
+        return (entry == 0 || entry > sourceFiles.count) ? nullptr : sourceFiles[entry - 1];
     }
 
     //==========================================================================
@@ -1358,6 +1524,7 @@ namespace ASTFactory {
         data.name = ArenaString::MakeHashOnly(name);
         ReverseLookup::Register(data.name.nameHash, name.c_str());
         data.usedAttributes.Init(ast->arena, 8);
+        data.usedAttributePositions.Init(ast->arena, 8);
         data.usedResources.Init(ast->arena, 8);
         data.fragmentOutputs.Init(ast->arena, 4);
         data.consts.Init(ast->arena, 4);
@@ -1393,6 +1560,9 @@ namespace ASTFactory {
         data.name = ArenaString::MakeHashOnly(name);
         data.imports.Init(ast->arena, 4);
         data.usingImports.Init(ast->arena, 4);
+        data.importPositions.Init(ast->arena, 4);
+        data.usingSites.Init(ast->arena, 4);
+        data.consts.Init(ast->arena, 4);
         data.attributes.Init(ast->arena, 16);
         data.resources.Init(ast->arena, 16);
         data.variantDecls.Init(ast->arena, 4);
@@ -1750,6 +1920,9 @@ namespace ASTFactory {
         data.name = ArenaString::MakeHashOnly(name);
         data.imports.Init(ast->arena, 4);
         data.usingImports.Init(ast->arena, 4);
+        data.importPositions.Init(ast->arena, 4);
+        data.usingSites.Init(ast->arena, 4);
+        data.consts.Init(ast->arena, 4);
         data.functions.Init(ast->arena, 16);
         data.structs.Init(ast->arena, 8);
         data.enums.Init(ast->arena, 4);

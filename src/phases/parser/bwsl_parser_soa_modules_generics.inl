@@ -23,6 +23,81 @@ NodeRef Parser::FindModuleNodeByIndex(u32 moduleIndex) const {
     return NodeRef::Null();
 }
 
+void Parser::RecordDeclarationSource(NodeRef node) {
+    if (node.IsNull()) return;
+    ast->SetDeclarationSource(node, ast->InternSourceFile(currentSourceName.c_str()));
+}
+
+void Parser::RecordMemberSources(NodeRef container) {
+    auto recordNew = [&](const ArenaArray<NodeRef>& refs) {
+        for (u32 i = 0; i < refs.count; i++) {
+            if (ast->GetDeclarationSource(refs[i]) == nullptr) RecordDeclarationSource(refs[i]);
+        }
+    };
+    if (container.Type() == ASTNodeType::MODULE) {
+        const ModuleNodeData& module = ast->GetModule(container);
+        recordNew(module.consts);
+        recordNew(module.functions);
+        recordNew(module.structs);
+        recordNew(module.enums);
+        recordNew(module.attributes);
+        recordNew(module.resources);
+    } else if (container.Type() == ASTNodeType::PIPELINE) {
+        const PipelineData& pipeline = ast->GetPipeline(container);
+        recordNew(pipeline.consts);
+        recordNew(pipeline.functions);
+        recordNew(pipeline.structs);
+        recordNew(pipeline.enums);
+        recordNew(pipeline.attributes);
+        recordNew(pipeline.resources);
+        recordNew(pipeline.constraints);
+        recordNew(pipeline.passes);
+        for (u32 i = 0; i < pipeline.passes.count; i++) {
+            const PassData& pass = ast->GetPass(pipeline.passes[i]);
+            recordNew(pass.consts);
+            recordNew(pass.functions);
+        }
+    }
+}
+
+NodeRef Parser::RecordFoldedConstant(NodeRef literal, NodeRef qualifier, TokenRef nameToken) {
+    if (literal.IsNull()) return literal;
+    FoldedConstantData data{};
+    data.literal = literal.packed;
+    data.qualifier = qualifier;
+    data.name = ArenaString::Make(sourceBase(), stream->GetOffset(nameToken),
+                                  stream->GetLength(nameToken));
+    SourceLocation loc = getLocation(stream->GetOffset(nameToken));
+    data.namePosition = AST::PackPosition(loc.line, loc.column);
+    if (qualifier.Type() == ASTNodeType::IDENTIFIER) {
+        u32 moduleIdx = ResolveModuleIndexByWrittenName(ast->GetIdentifier(qualifier).name);
+        if (moduleIdx != INVALID_INDEX && moduleIdx < symbolTable.modules.count) {
+            data.moduleNameHash = symbolTable.modules[moduleIdx].name.nameHash;
+        }
+    }
+    ast->foldedConstants.Push(arena, data);
+    return literal;
+}
+
+void Parser::RecordTypeQualifierBeforeTypeName() {
+    if (previous < 2 ||
+        stream->GetType(previous - 1) != TokenType::DOUBLE_COLON ||
+        stream->GetType(previous - 2) != TokenType::IDENTIFIER) {
+        return;
+    }
+    const TokenRef qualifier = previous - 2;
+    ModuleNameSite data{};
+    SourceLocation loc = getLocation(stream->GetOffset(qualifier));
+    data.position = AST::PackPosition(loc.line, loc.column);
+    data.name = ArenaString::Make(sourceBase(), stream->GetOffset(qualifier),
+                                  stream->GetLength(qualifier));
+    u32 moduleIdx = ResolveModuleIndexByWrittenName(data.name);
+    if (moduleIdx != INVALID_INDEX && moduleIdx < symbolTable.modules.count) {
+        data.moduleNameHash = symbolTable.modules[moduleIdx].name.nameHash;
+    }
+    ast->typeQualifiers.Push(arena, data);
+}
+
 void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
                              const std::string& moduleName) {
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
@@ -118,12 +193,16 @@ void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
             }
         } else if (Match(TokenType::CONST)) {
             // Module constant declaration (e.g., const float PI = 3.14)
+            SourceLocation constLoc = getLocation(stream->GetOffset(previous));
             if (!MatchMask(TokenMasks::CORE_TYPES)) {
                 Error("Expected type after 'const'");
                 continue;
             }
+            std::string typeStr(stream->GetValue(previous));
+            SourceLocation typeLoc = getLocation(stream->GetOffset(previous));
 
             Consume(TokenType::IDENTIFIER, "Expected constant name");
+            SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
             std::string constName(stream->GetValue(previous));
 
             Consume(TokenType::ASSIGN, "const variables must be initialized");
@@ -135,6 +214,15 @@ void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
             }
 
             Consume(TokenType::SEMICOLON, "Expected ';'");
+
+            // Keep the declaration in the AST (like pass consts) so tooling can
+            // locate it; uses are still folded to literals while parsing.
+            NodeRef constDecl = ASTFactory::MakeVariableDecl(ast,
+                ArenaString::MakeHashOnly(constName), ArenaString::MakeHashOnly(typeStr),
+                value, true, constLoc.line, constLoc.column);
+            ast->GetVariableDecl(constDecl).typePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
+            ast->GetVariableDecl(constDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
+            ast->GetModule(module).consts.Push(arena, constDecl);
 
             // Evaluate the constant value first
             LiteralValue constValue;
@@ -169,6 +257,9 @@ void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
             Advance();
         }
     }
+    // A submodule body runs with currentSourceName set to the submodule file,
+    // so merged members keep their own file instead of the parent's.
+    RecordMemberSources(module);
 }
 
 NodeRef Parser::ParseModule() {
@@ -185,6 +276,7 @@ NodeRef Parser::ParseModule() {
 
     std::string moduleName(stream->GetValue(previous));
     ArenaString moduleNameArena = ArenaString::MakeHashOnly(moduleName);
+    SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
 
     if (!parsingEmbeddedModule && IsEmbeddedModuleName(moduleName)) {
         char msg[512];
@@ -221,6 +313,8 @@ NodeRef Parser::ParseModule() {
     // Create module AST node
     NodeRef module = ASTFactory::MakeModule(ast, moduleName, line, col);
     AttachDocComment(module, declToken);
+    ast->SetNamePosition(module, nameLoc.line, nameLoc.column);
+    RecordDeclarationSource(module);
     NodeRef previousModule = currentModule;
     NodeRef previousPipeline = currentPipeline;
     currentModule = module;

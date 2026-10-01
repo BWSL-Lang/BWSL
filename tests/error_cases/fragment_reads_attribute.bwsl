@@ -1,0 +1,22 @@
+// Error case: attributes are vertex-stage inputs; the fragment stage must read
+// the value through a varying instead of attributes.*.
+pipeline FragmentReadsAttribute {
+    attributes {
+        position: float3
+        color: float4
+    }
+
+    pass "Main" {
+        use attributes { position, color }
+        outputs { result: float4 }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.color = attributes.color;
+        }
+
+        fragment {
+            output.result = attributes.color;
+        }
+    }
+}

@@ -288,6 +288,8 @@ ERROR_CASE_TESTS = {
     "struct_as_varying.bwsl": "SPIR-V validation failed",
     "assign_to_input.bwsl": "cannot assign to input.* - stage inputs are read-only",
     "assign_to_attribute.bwsl": "cannot assign to attributes.* - vertex attributes are read-only",
+    "fragment_reads_attribute.bwsl": "Vertex attributes cannot be read in a fragment stage",
+    "varying_type_conflict.bwsl": "conflicting types for stage output 'uv': first assigned as float2, now assigned float3",
     "sample_implicit_lod_vertex.bwsl": "sample() uses implicit derivatives and is not available in vertex shaders",
     "vec_compare_to_scalar_bool.bwsl": "cannot assign a vector comparison result to a scalar bool",
     "pointer_function_param.bwsl": "Pointer-typed function parameters are not supported",
@@ -379,6 +381,9 @@ ERROR_CASE_MODULE_DIRS = {
 }
 
 ERROR_CASE_EXTRA_EXPECTATIONS = {
+    # Both stage-IO diagnostics must point at the offending source line.
+    "fragment_reads_attribute.bwsl": ["fragment_reads_attribute.bwsl:19:"],
+    "varying_type_conflict.bwsl": ["varying_type_conflict.bwsl:15:"],
     "imported_module_diagnostic_file.bwsl": [
         "diagnostic_module_file_modules/Common.bwsl",
         "float4 transformations[9];",

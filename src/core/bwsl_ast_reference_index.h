@@ -105,6 +105,11 @@ inline std::string NodeId(NodeRef ref) {
     return std::string(NodeTypeName(ref.Type())) + ":" + std::to_string(ref.Index());
 }
 
+// Synthetic occurrence of a constant name whose use was folded to `literal`.
+inline std::string FoldedConstantId(NodeRef literal) {
+    return NodeId(literal) + "/folded-constant";
+}
+
 inline std::string ResolveName(const ArenaString& value) {
     return ReverseLookup::GetString(value.nameHash);
 }
@@ -125,11 +130,26 @@ inline std::string ReturnTypeName(const FunctionDeclData& function) {
     return SourceTypeName(function.returnType);
 }
 
+// Source spelling of a struct field type, qualified when it was written as
+// `Module::Type` (TypeInfo only keeps the unqualified custom type name).
+inline std::string StructFieldTypeName(const AST& ast, const StructFieldData& field) {
+    if (field.type.customTypeHash == 0) return SourceTypeName(field.type.coreType);
+    std::string name = ReverseLookup::GetString(field.type.customTypeHash);
+    const ModuleNameSite* qualifier = ast.FindTypeQualifier(field.typePosition);
+    if (qualifier && qualifier->moduleNameHash != 0 && name.find("::") == std::string::npos) {
+        name = ReverseLookup::GetString(qualifier->moduleNameHash) + "::" + name;
+    }
+    return name;
+}
+
 class Builder {
 public:
     explicit Builder(const AST& ast) : ast_(ast) {}
 
     Index Build() {
+        for (u32 i = 0; i < ast_.foldedConstants.count; i++) {
+            foldedConstants_[ast_.foldedConstants[i].literal] = &ast_.foldedConstants[i];
+        }
         Predeclare();
 
         for (u32 i = 0; i < ast_.modules.count; i++) {
@@ -197,6 +217,9 @@ private:
     std::unordered_map<std::string, Binding> fragmentOutputs_;
     std::unordered_map<std::string, Binding> fields_;
     std::unordered_map<std::string, Binding> interfaces_;
+    // Module- and pipeline-level constants, keyed by ScopedKey(owner, name).
+    std::unordered_map<std::string, Binding> consts_;
+    std::unordered_map<u32, const FoldedConstantData*> foldedConstants_;
 
     std::vector<std::unordered_map<std::string, Binding>> scopes_;
     std::unordered_set<u32> visitedFunctions_;
@@ -327,6 +350,7 @@ private:
             AddSymbol({id, "module", name, id, {}, {}, {}});
             SetStableId(id, "module:" + name);
             modulesByName_[name] = id;
+            SetOwners(module.consts, id, name);
             SetOwners(module.functions, id, name);
             SetOwners(module.structs, id, name);
             SetOwners(module.enums, id, name);
@@ -346,6 +370,7 @@ private:
             const std::string id = NodeId(ref);
             AddSymbol({id, "pipeline", name, id, {}, {}, {}});
             SetStableId(id, "pipeline:" + name);
+            SetOwners(pipeline.consts, id, name);
             SetOwners(pipeline.functions, id, name);
             SetOwners(pipeline.structs, id, name);
             SetOwners(pipeline.enums, id, name);
@@ -413,11 +438,9 @@ private:
                 const StructFieldData& field = structure.fields[fieldIndex];
                 const std::string fieldId = id + "/field:" + std::to_string(fieldIndex);
                 const std::string fieldName = ResolveName(field.name);
-                std::string fieldType = SourceTypeName(field.type.coreType);
-                if (field.type.customTypeHash != 0) {
-                    fieldType = ReverseLookup::GetString(field.type.customTypeHash);
-                }
+                const std::string fieldType = StructFieldTypeName(ast_, field);
                 AddSymbol({fieldId, "struct-field", fieldName, fieldId, id, fieldType, {}});
+                AddQualifierReference(fieldId, field.typePosition);
                 const std::string stableStruct = StableIdOf(id);
                 if (!stableStruct.empty()) {
                     SetStableId(fieldId, stableStruct + "/field:" + fieldName);
@@ -503,6 +526,23 @@ private:
             const std::string type = ResolveName(variable.type);
             AddSymbol({NodeId(ref), variable.isConst ? "constant" : "variable", name,
                        NodeId(ref), OwnerOf(ref), type, {}});
+            const std::string stableOwner = StableIdOf(OwnerOf(ref));
+            if (variable.isConst && !stableOwner.empty()) {
+                SetStableId(NodeId(ref), stableOwner + "/const:" + name);
+            }
+        }
+        auto declareConsts = [&](const ArenaArray<NodeRef>& consts, const std::string& owner) {
+            for (u32 i = 0; i < consts.count; i++) {
+                const VariableDeclData& variable = ast_.GetVariableDecl(consts[i]);
+                consts_[ScopedKey(owner, ResolveName(variable.name))] =
+                    {NodeId(consts[i]), CanonicalType(ResolveName(variable.type), owner)};
+            }
+        };
+        for (u32 i = 0; i < ast_.modules.count; i++) {
+            declareConsts(ast_.modules[i].consts, NodeId(NodeRef(ASTNodeType::MODULE, i)));
+        }
+        for (u32 i = 0; i < ast_.pipelines.count; i++) {
+            declareConsts(ast_.pipelines[i].consts, NodeId(NodeRef(ASTNodeType::PIPELINE, i)));
         }
 
         for (u32 i = 0; i < ast_.functions.count; i++) {
@@ -659,11 +699,55 @@ private:
             auto found = scope->find(name);
             if (found != scope->end()) return found->second;
         }
-        for (const auto& scope : VisibleScopes(CurrentOwner())) {
+        const auto visible = VisibleScopes(CurrentOwner());
+        for (const auto& scope : visible) {
             auto field = fields_.find(ScopedKey(scope, name));
             if (field != fields_.end()) return field->second;
         }
+        for (const auto& scope : visible) {
+            auto constant = consts_.find(ScopedKey(scope, name));
+            if (constant != consts_.end()) return constant->second;
+        }
         return {};
+    }
+
+    std::string ModuleIdByNameHash(u32 nameHash) const {
+        if (nameHash == 0) return {};
+        auto module = modulesByName_.find(ReverseLookup::GetString(nameHash));
+        return module == modulesByName_.end() ? std::string() : module->second;
+    }
+
+    // `Module::Type` written in a declaration whose type starts at `typePosition`.
+    void AddQualifierReference(const std::string& owner, u32 typePosition) {
+        const ModuleNameSite* qualifier = ast_.FindTypeQualifier(typePosition);
+        if (!qualifier) return;
+        AddReference(owner + "/type-qualifier", ModuleIdByNameHash(qualifier->moduleNameHash),
+                     "qualifier");
+    }
+
+    ExprInfo VisitFoldedConstant(NodeRef literal, const FoldedConstantData& folded) {
+        const std::string name = ResolveName(folded.name);
+        Binding target;
+        if (folded.qualifier.IsValid()) {
+            const std::string module = ModuleIdByNameHash(folded.moduleNameHash);
+            AddReference(NodeId(folded.qualifier), module, "qualifier");
+            auto constant = consts_.find(ScopedKey(module, name));
+            if (constant != consts_.end()) target = constant->second;
+        } else {
+            target = Lookup(name);
+        }
+        AddReference(FoldedConstantId(literal), target.id, "read");
+        return {target.type, target.id};
+    }
+
+    void VisitConstDecls(const ArenaArray<NodeRef>& consts) {
+        for (u32 i = 0; i < consts.count; i++) {
+            NodeRef ref = consts[i];
+            if (!visitedVariables_.insert(ref.packed).second) continue;
+            const VariableDeclData& variable = ast_.GetVariableDecl(ref);
+            VisitExpr(variable.initializer, "read");
+            AddTypeReference(NodeId(ref), ResolveName(variable.type), "type");
+        }
     }
 
     FunctionTarget ResolveFunction(const std::string& scope, const std::string& name,
@@ -713,12 +797,19 @@ private:
         return module == modulesByName_.end() ? std::string() : module->second;
     }
 
-    void VisitImports(const std::string& owner, const ArenaArray<ArenaString>& imports) {
+    void VisitImports(const std::string& owner, const ArenaArray<ArenaString>& imports,
+                      const ArenaArray<ArenaString>& usingImports) {
         for (u32 i = 0; i < imports.count; i++) {
             const std::string name = ResolveName(imports[i]);
             auto module = modulesByName_.find(name);
             if (module != modulesByName_.end()) {
                 AddReference(owner + "/import:" + std::to_string(i), module->second, "import");
+            }
+        }
+        for (u32 i = 0; i < usingImports.count; i++) {
+            auto module = modulesByName_.find(ResolveName(usingImports[i]));
+            if (module != modulesByName_.end()) {
+                AddReference(owner + "/using:" + std::to_string(i), module->second, "using");
             }
         }
     }
@@ -727,7 +818,8 @@ private:
         const ModuleNodeData& module = ast_.GetModule(ref);
         const std::string previousModule = currentModule_;
         currentModule_ = NodeId(ref);
-        VisitImports(currentModule_, module.imports);
+        VisitImports(currentModule_, module.imports, module.usingImports);
+        VisitConstDecls(module.consts);
         for (u32 i = 0; i < module.functions.count; i++) VisitFunction(module.functions[i], currentModule_);
         for (u32 i = 0; i < module.structs.count; i++) VisitStructMethods(module.structs[i]);
         currentModule_ = previousModule;
@@ -737,7 +829,8 @@ private:
         const PipelineData& pipeline = ast_.GetPipeline(ref);
         const std::string previousPipeline = currentPipeline_;
         currentPipeline_ = NodeId(ref);
-        VisitImports(currentPipeline_, pipeline.imports);
+        VisitImports(currentPipeline_, pipeline.imports, pipeline.usingImports);
+        VisitConstDecls(pipeline.consts);
 
         for (u32 i = 0; i < pipeline.functions.count; i++) {
             VisitFunction(pipeline.functions[i], currentPipeline_);
@@ -827,6 +920,9 @@ private:
                 SetStableId(parameterId, stableFunction + "/parameter:" + std::to_string(i));
             }
             AddTypeReference(parameterId, type, "type");
+            if (i < function.parameterPositions.count) {
+                AddQualifierReference(parameterId, function.parameterPositions[i].typePosition);
+            }
             Bind(name, {parameterId, CanonicalType(type, functionId)});
         }
         VisitNode(function.body);
@@ -846,6 +942,7 @@ private:
         const std::string name = ResolveName(variable.name);
         const std::string type = ResolveName(variable.type);
         AddTypeReference(NodeId(ref), type, "type");
+        AddQualifierReference(NodeId(ref), variable.typePosition);
         Bind(name, {NodeId(ref), CanonicalType(type, CurrentOwner())});
     }
 
@@ -1017,6 +1114,11 @@ private:
                 return {binding.type, binding.id};
             }
             case ASTNodeType::LITERAL: {
+                auto folded = foldedConstants_.find(ref.packed);
+                if (folded != foldedConstants_.end()) {
+                    ExprInfo constant = VisitFoldedConstant(ref, *folded->second);
+                    if (!constant.type.empty()) return constant;
+                }
                 const LiteralValue& value = ast_.GetLiteral(ref).value;
                 switch (value.type) {
                     case LiteralValue::FLOAT: return {"float", {}};

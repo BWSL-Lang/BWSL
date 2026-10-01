@@ -1175,9 +1175,11 @@ NodeRef Parser::ParseStruct() {
 
     Consume(TokenType::IDENTIFIER, "Expected struct name");
     std::string structName(stream->GetValue(previous));
+    SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
 
     NodeRef structNode = ASTFactory::MakeStructDecl(ast, structName, line, col);
     AttachDocComment(structNode, declToken);
+    ast->SetNamePosition(structNode, nameLoc.line, nameLoc.column);
 
     Consume(TokenType::LEFT_BRACE, "Expected '{'");
 
@@ -1236,6 +1238,7 @@ NodeRef Parser::ParseStruct() {
         // Parse field type (core or custom/module-qualified)
         TypeInfo fieldType = TYPE_INFO(CoreType::INVALID, 0, false);
         std::string fieldTypeName;
+        SourceLocation fieldTypeLoc = getLocation(stream->GetOffset(current));
         if (MatchMask(TokenMasks::CORE_TYPES)) {
             fieldType = GetTypeInfoFromToken(PreviousTokenType());
             fieldTypeName = std::string(stream->GetValue(previous));
@@ -1244,6 +1247,7 @@ NodeRef Parser::ParseStruct() {
             if (Match(TokenType::DOUBLE_COLON)) {
                 std::string moduleName = fieldTypeName;
                 Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
+                RecordTypeQualifierBeforeTypeName();
                 fieldTypeName = CanonicalizeModuleQualifiedName(
                     moduleName, std::string(stream->GetValue(previous)));
             }
@@ -1285,6 +1289,7 @@ NodeRef Parser::ParseStruct() {
         }
 
         Consume(TokenType::IDENTIFIER, "Expected field name");
+        SourceLocation fieldNameLoc = getLocation(stream->GetOffset(previous));
         std::string fieldNameStr(stream->GetValue(previous));
 
         if (Match(TokenType::LEFT_BRACKET)) {
@@ -1318,6 +1323,8 @@ NodeRef Parser::ParseStruct() {
         astField.name = field.name;
         astField.type = field.type;
         astField.arraySize = field.arraySize;
+        astField.namePosition = AST::PackPosition(fieldNameLoc.line, fieldNameLoc.column);
+        astField.typePosition = AST::PackPosition(fieldTypeLoc.line, fieldTypeLoc.column);
         ast->GetStructDecl(structNode).fields.Push(arena, astField);
 
         // Add to struct data (for symbol table)

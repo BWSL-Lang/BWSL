@@ -225,6 +225,7 @@ NodeRef Parser::ParseStatement() {
             if (Match(TokenType::DOUBLE_COLON)) {
                 std::string moduleName = typeStr;
                 Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
+                RecordTypeQualifierBeforeTypeName();
                 typeStr = CanonicalizeModuleQualifiedName(
                     moduleName, std::string(stream->GetValue(previous)));
             }
@@ -546,6 +547,7 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
         std::string moduleName(stream->GetValue(previous));
         Advance(); // consume ::
         Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
+        RecordTypeQualifierBeforeTypeName();
         std::string localTypeName(stream->GetValue(previous));
         typeName = CanonicalizeModuleQualifiedName(moduleName, localTypeName);
         isModuleQualified = true;

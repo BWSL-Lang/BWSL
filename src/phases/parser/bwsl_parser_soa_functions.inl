@@ -1189,6 +1189,7 @@ void Parser::ParseFunctionParameters(NodeRef function) {
                 // Module::Type pattern
                 std::string moduleName = identifierStr;
                 Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
+                RecordTypeQualifierBeforeTypeName();
                 std::string typeName(stream->GetValue(previous));
                 paramType = CanonicalizeModuleQualifiedName(moduleName, typeName);
 
@@ -1220,6 +1221,7 @@ void Parser::ParseFunctionParameters(NodeRef function) {
                     // Check for module-qualified type after colon
                     if (Match(TokenType::DOUBLE_COLON)) {
                         Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
+                        RecordTypeQualifierBeforeTypeName();
                         paramType = CanonicalizeModuleQualifiedName(
                             typeIdent, std::string(stream->GetValue(previous)));
                     } else {

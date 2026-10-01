@@ -127,6 +127,11 @@ NodeRef Parser::ParsePipeline() {
 
     NodeRef pipeline = ASTFactory::MakePipeline(ast, std::string(stream->GetValue(previous)), line, col);
     AttachDocComment(pipeline, declToken);
+    {
+        SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
+        ast->SetNamePosition(pipeline, nameLoc.line, nameLoc.column);
+    }
+    RecordDeclarationSource(pipeline);
     currentPipeline = pipeline;
 
     Consume(TokenType::LEFT_BRACE, "Expected '{' after pipeline name");
@@ -162,6 +167,7 @@ NodeRef Parser::ParsePipeline() {
                 ast->GetPipeline(pipeline).computeGraph = graph;
             }
         } else if (Match(TokenType::CONST)) {
+            SourceLocation constLoc = getLocation(stream->GetOffset(previous));
             if (!MatchMask(TokenMasks::CORE_TYPES)) {
                 Error("Expected type after 'const'");
                 Advance();
@@ -169,7 +175,10 @@ NodeRef Parser::ParsePipeline() {
             }
 
             TokenType varType = static_cast<TokenType>(stream->GetType(previous));
+            std::string typeStr(stream->GetValue(previous));
+            SourceLocation typeLoc = getLocation(stream->GetOffset(previous));
             Consume(TokenType::IDENTIFIER, "Expected constant name");
+            SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
             std::string constName(stream->GetValue(previous));
 
             Consume(TokenType::ASSIGN, "const variables must be initialized");
@@ -184,6 +193,11 @@ NodeRef Parser::ParsePipeline() {
             Consume(TokenType::SEMICOLON, "Expected ';'");
 
             ArenaString constNameStr = ArenaString::MakeHashOnly(constName);
+            NodeRef constDecl = ASTFactory::MakeVariableDecl(ast, constNameStr,
+                ArenaString::MakeHashOnly(typeStr), value, true, constLoc.line, constLoc.column);
+            ast->GetVariableDecl(constDecl).typePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
+            ast->GetVariableDecl(constDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
+            ast->GetPipeline(pipeline).consts.Push(arena, constDecl);
             Symbol* sym = SymbolTable::AddSymbol(&symbolTable, constNameStr, SymbolKind::VARIABLE);
             if (!sym) {
                 Error("Variable already declared in this scope");
@@ -290,6 +304,7 @@ NodeRef Parser::ParsePipeline() {
     if (Consume(TokenType::RIGHT_BRACE, "Expected '}' after pipeline body")) {
         MarkNodeEndAtPreviousToken(pipeline);
     }
+    RecordMemberSources(pipeline);
     FinalizeParsedResourceBindings(pipeline, firstMemberAccess, firstFunctionCall);
 
     context->root = pipeline;
@@ -428,10 +443,14 @@ void Parser::ParseModuleImportList(NodeRef owner, bool ownerIsPipeline) {
 
         if (moduleIdx != INVALID_INDEX) {
             ArenaString moduleName = ArenaString::MakeHashOnly(moduleNameStr);
+            SourceLocation moduleLoc = getLocation(stream->GetOffset(moduleToken));
+            u32 modulePosition = AST::PackPosition(moduleLoc.line, moduleLoc.column);
             if (ownerIsPipeline) {
                 ast->GetPipeline(owner).imports.Push(arena, moduleName);
+                ast->GetPipeline(owner).importPositions.Push(arena, modulePosition);
             } else {
                 ast->GetModule(owner).imports.Push(arena, moduleName);
+                ast->GetModule(owner).importPositions.Push(arena, modulePosition);
             }
 
             if (importCount < MAX_IMPORTS) {
@@ -607,10 +626,18 @@ void Parser::ParseUsingModuleList(NodeRef owner, bool ownerIsPipeline) {
                          moduleNameStr.c_str());
                 ErrorAt(moduleToken, msg);
             } else if (!ownerHasUsing(moduleName.nameHash)) {
+                SourceLocation moduleLoc = getLocation(stream->GetOffset(moduleToken));
+                ModuleNameSite site{};
+                site.position = AST::PackPosition(moduleLoc.line, moduleLoc.column);
+                site.name = ArenaString::Make(sourceBase(), stream->GetOffset(moduleToken),
+                                              stream->GetLength(moduleToken));
+                site.moduleNameHash = moduleName.nameHash;
                 if (ownerIsPipeline) {
                     ast->GetPipeline(owner).usingImports.Push(arena, moduleName);
+                    ast->GetPipeline(owner).usingSites.Push(arena, site);
                 } else {
                     ast->GetModule(owner).usingImports.Push(arena, moduleName);
+                    ast->GetModule(owner).usingSites.Push(arena, site);
                 }
             }
         }
@@ -868,6 +895,10 @@ NodeRef Parser::ParseAttributeDecl() {
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     NodeRef attr = ASTFactory::MakeAttributeDecl(ast, name, std::string(stream->GetValue(previous)), loc.line, loc.column);
     AttachDocComment(attr, declToken);
+    {
+        SourceLocation nameLoc = getLocation(stream->GetOffset(declToken));
+        ast->SetNamePosition(attr, nameLoc.line, nameLoc.column);
+    }
 
     // Parse decorators
     while (Match(TokenType::AT)) {
@@ -987,6 +1018,11 @@ NodeRef Parser::ParsePass() {
 
     NodeRef pass = ASTFactory::MakePass(ast, passName.ToString(sourceBase()), loc.line, loc.column);
     AttachDocComment(pass, declToken);
+    {
+        // STRING token offsets start at the contents, past the opening quote.
+        SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
+        ast->SetNamePosition(pass, nameLoc.line, nameLoc.column);
+    }
 
     if (Match(TokenType::ASSIGN)) {
         NodeRef expr = ParseExpression();
@@ -1263,6 +1299,7 @@ void Parser::ParsePassOutputs(NodeRef pass) {
             continue;
         }
         ArenaString name = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
+        SourceLocation outputNameLoc = getLocation(stream->GetOffset(previous));
 
         if (!Consume(TokenType::COLON, "Expected ':' after fragment output name")) {
             if (stream->GetType(current) != TokenType::RIGHT_BRACE &&
@@ -1283,6 +1320,7 @@ void Parser::ParsePassOutputs(NodeRef pass) {
 
         TokenType typeToken = static_cast<TokenType>(stream->GetType(previous));
         ArenaString typeName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
+        SourceLocation outputTypeLoc = getLocation(stream->GetOffset(previous));
         TypeInfo typeInfo = GetTypeInfoFromToken(typeToken);
 
         if (!IsValidFragmentOutputCoreType(typeInfo.coreType)) {
@@ -1339,6 +1377,8 @@ void Parser::ParsePassOutputs(NodeRef pass) {
             decl.typeName = typeName;
             decl.typeInfo = typeInfo;
             decl.location = static_cast<u8>(location);
+            decl.namePosition = AST::PackPosition(outputNameLoc.line, outputNameLoc.column);
+            decl.typePosition = AST::PackPosition(outputTypeLoc.line, outputTypeLoc.column);
             passData.fragmentOutputs.Push(arena, decl);
         }
 
@@ -1360,6 +1400,7 @@ void Parser::ParseUseAttributes(NodeRef pass) {
         ProgressGuard _pg_(this);
         Consume(TokenType::IDENTIFIER, "Expected attribute name");
         ArenaString attrName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
+        SourceLocation attrLoc = getLocation(stream->GetOffset(previous));
         bool isOptional = Match(TokenType::QUESTION);
 
         u8 idx = 0xFF;
@@ -1383,6 +1424,8 @@ void Parser::ParseUseAttributes(NodeRef pass) {
         }
 
         ast->GetPass(pass).usedAttributes.Push(arena, attrName);
+        ast->GetPass(pass).usedAttributePositions.Push(arena,
+            AST::PackPosition(attrLoc.line, attrLoc.column));
 
         // Set the optional bit for this attribute
         if (isOptional && idx < 32) {
