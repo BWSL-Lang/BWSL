@@ -883,7 +883,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           nameStr = nameBuf;
         }
         u16 slot = (u16)ResolveOutputSlotForStore(nameHash, valueType, nameStr,
-                                             interpolation);
+                                             interpolation, target);
         CoreType declaredOutputType = GetFragmentOutputType(nameHash);
         if (currentStage == ShaderStage::Fragment &&
             declaredOutputType != CoreType::INVALID &&
@@ -2510,7 +2510,7 @@ static inline bool IsPerspectiveInterpolationType(CoreType type) {
 
 inline u32 IRLowering::ResolveOutputSlotForStore(
     u32 nameHash, CoreType valueType, const char *nameStr,
-    InterpolationMode interpolation) {
+    InterpolationMode interpolation, NodeRef diagnosticNode) {
   if (currentStage == ShaderStage::Fragment && !IsBuiltinOutput(nameHash)) {
     char msg[256];
     if (nameStr && nameStr[0] != '\0') {
@@ -2540,10 +2540,32 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
   }
   if (currentPassVaryings && currentStage == ShaderStage::Vertex) {
     bool conflict = false;
+    bool typeConflict = false;
+    CoreType existingType = CoreType::INVALID;
     u32 varyingIndex = currentPassVaryings->AddOrGetSlot(
-        nameHash, valueType, nameStr, interpolation, &conflict);
+        nameHash, valueType, nameStr, interpolation, &conflict, &typeConflict,
+        &existingType);
     if (conflict) {
-      ReportError("Error: conflicting interpolation decorators for varying\n");
+      ReportErrorAt(diagnosticNode,
+                    "Error: conflicting interpolation decorators for varying\n");
+    }
+    if (typeConflict) {
+      // The varying's type is inferred from its first assignment; a later
+      // store of another type would only fail in SPIR-V validation.
+      auto typeName = [](CoreType type) {
+        std::string name = CoreTypeToString(type);
+        for (char &c : name) {
+          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        return name;
+      };
+      char msg[256];
+      snprintf(msg, sizeof(msg),
+               "Error: conflicting types for stage output '%s': first assigned "
+               "as %s, now assigned %s\n",
+               (nameStr && nameStr[0] != '\0') ? nameStr : "<unnamed>",
+               typeName(existingType).c_str(), typeName(valueType).c_str());
+      ReportErrorAt(diagnosticNode, msg);
     }
     u32 slot = OutputSlot::VARYING0 + varyingIndex;
     if (slot < 32) {

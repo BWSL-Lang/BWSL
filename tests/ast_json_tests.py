@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AST JSON schema and scope regressions (issue #94)."""
+"""AST JSON schema and scope regressions (issues #94 and #97)."""
 import argparse
 import json
 from pathlib import Path
@@ -67,7 +67,7 @@ class AstJsonTests(unittest.TestCase):
         ''', {'Dependency.bwsl': 'module Dependency { value :: () -> float { return 0.0; } }'})
         names = {node['id']: node['name'] for node in data['modules'] + data['pipelines']}
         self.assertEqual([names[ref] for ref in data['roots']], ['First', 'Local', 'Second'])
-        self.assertEqual(data['schema'], 'bwsl.ast.v2')
+        self.assertEqual(data['schema'], 'bwsl.ast.v3')
         self.assertEqual(data['root']['name'], 'Second')
         self.assertEqual(self.parse('module M {}')['roots'], ['MODULE:0'])
 
@@ -359,6 +359,218 @@ class AstJsonTests(unittest.TestCase):
         call = self.nodes(data, 'FUNCTION_CALL')[0]
         self.assert_edge(data, call['qualifier']['id'], 'MODULE:0', 'qualifier')
         self.assertEqual(self.edges(data, 'call'), [])
+
+    def position(self, source, line, text, occurrence=0):
+        """1-based (line, column) of the n-th `text` on 1-based `line`."""
+        row = textwrap.dedent(source).lstrip('\n').splitlines()[line - 1]
+        column = -1
+        for _ in range(occurrence + 1):
+            column = row.index(text, column + 1)
+        return line, column + 1
+
+    def assert_position(self, entry, expected, prefix=''):
+        line_key, column_key = (prefix + 'Line', prefix + 'Column') if prefix else ('line', 'column')
+        self.assertEqual((entry.get(line_key), entry.get(column_key)), expected, entry)
+
+    def test_declarations_record_their_source_file(self):
+        data = self.parse('''
+            pipeline P { import Dependency import Random }
+        ''', {
+            'Dependency.bwsl': 'module Dependency { value :: () -> float { return 0.0; } }',
+            'DependencyExtra.bwsl': 'submodule DependencyExtra extends Dependency {\n'
+                                    '    extra :: () -> float { return 1.0; }\n}',
+        })
+        modules = {module['name']: module for module in data['modules']}
+        self.assertEqual(data['pipelines'][0]['sourceFile'], data['sourceFile'])
+        dependency = modules['Dependency']
+        self.assertTrue(dependency['sourceFile'].endswith('Dependency.bwsl'))
+        self.assertNotIn('sourceUrl', dependency)
+        functions = {function['name']: function for function in dependency['functions']}
+        self.assertEqual(functions['value']['sourceFile'], dependency['sourceFile'])
+        # Merged from the submodule file, with that file's positions.
+        self.assertTrue(functions['extra']['sourceFile'].endswith('DependencyExtra.bwsl'))
+        self.assertEqual(functions['extra']['line'], 2)
+        self.assertEqual(modules['Random']['sourceFile'], 'stdlib://modules/Random.bwsl')
+        self.assertRegex(modules['Random']['sourceUrl'],
+                         r'^https://github\.com/BWSL-Lang/BWSL/blob/[^/]+/modules/Random\.bwsl$')
+
+    def test_struct_fields_and_fragment_outputs_have_positions(self):
+        source = '''
+            module M {
+                struct Box { float size; float2[2] corners; }
+            }
+            pipeline P {
+                attributes {
+                    position: float3
+                }
+                pass "Main" {
+                    use attributes { position }
+                    outputs { color: float4, normal: float4 }
+                    vertex { output.position = float4(attributes.position, 1.0); }
+                    fragment {
+                        output.color = float4(1.0, 1.0, 1.0, 1.0);
+                        output.normal = float4(0.0, 0.0, 1.0, 0.0);
+                    }
+                }
+            }
+        '''
+        data = self.parse(source)
+        size, corners = self.nodes(data, 'STRUCT_DECL', 'Box')[0]['fields']
+        self.assert_position(size, self.position(source, 2, 'size'))
+        self.assert_position(size, self.position(source, 2, 'size'), 'name')
+        self.assert_position(size, self.position(source, 2, 'float'), 'type')
+        self.assert_position(corners, self.position(source, 2, 'corners'), 'name')
+        self.assertEqual((size['dataType'], corners['dataType']), ('float', 'float2'))
+        self.assertNotIn('type', size)
+        shader_pass = self.nodes(data, 'PASS')[0]
+        color, normal = shader_pass['fragmentOutputs']
+        self.assertEqual(color['id'], shader_pass['id'] + '/fragment-output:0')
+        self.assert_position(color, self.position(source, 10, 'color'))
+        self.assert_position(normal, self.position(source, 10, 'normal'), 'name')
+        self.assert_position(normal, self.position(source, 10, 'float4', 1), 'type')
+        symbols = {symbol['id'] for symbol in data['referenceIndex']['symbols']}
+        self.assertIn(normal['id'], symbols)
+        used = shader_pass['usedAttributes'][0]
+        self.assert_position(used, self.position(source, 9, 'position'))
+
+    def test_using_has_id_position_and_edge(self):
+        source = '''
+            module A { helper :: () -> float { return 1.0; } }
+            module B {
+                import A as Alias
+                using Alias
+                run :: () -> float { return helper(); }
+            }
+        '''
+        data = self.parse(source)
+        module = self.nodes(data, 'MODULE', 'B')[0]
+        using = module['usingImports'][0]
+        self.assertEqual(using['id'], module['id'] + '/using:0')
+        self.assertEqual((using['name'], using['writtenName']), ('A', 'Alias'))
+        self.assert_position(using, self.position(source, 4, 'Alias'))
+        self.assert_position(module['imports'][0], self.position(source, 3, 'A'))
+        self.assert_edge(data, using['id'], 'MODULE:0', 'using')
+
+    def test_declared_type_qualifiers_have_edges(self):
+        source = '''
+            module Common { struct Box { float size; } }
+            module Main {
+                import Common as C
+                struct Holder { C::Box box; }
+                run :: (Common::Box p) -> float {
+                    C::Box b;
+                    return b.size + p.size;
+                }
+            }
+        '''
+        data = self.parse(source)
+        common = self.nodes(data, 'MODULE', 'Common')[0]['id']
+        field = self.nodes(data, 'STRUCT_DECL', 'Holder')[0]['fields'][0]
+        parameter = self.nodes(data, 'FUNCTION', 'run')[0]['parameters'][0]
+        variable = self.nodes(data, 'VARIABLE_DECL', 'b')[0]
+        for owner, line, written, column in [(field, 4, 'C', 'C::'), (parameter, 5, 'Common', 'Common::'),
+                                             (variable, 6, 'C', 'C::')]:
+            qualifier = owner['typeQualifier']
+            self.assertEqual(qualifier['id'], owner['id'] + '/type-qualifier')
+            self.assertEqual(qualifier['name'], written)
+            self.assert_position(qualifier, self.position(source, line, column))
+            self.assert_edge(data, qualifier['id'], common, 'qualifier')
+        self.assertEqual(field['dataType'], 'Common::Box')
+        self.assertEqual(parameter['dataType'], 'Common::Box')
+        self.assertNotIn('type', parameter)
+        box = self.nodes(data, 'STRUCT_DECL', 'Box')[0]['id']
+        self.assert_edge(data, field['id'], box, 'type')
+
+    def test_constants_are_declarations_with_navigable_uses(self):
+        source = '''
+            module Common {
+                const float BASE = 2.0;
+                f :: (float x) -> float { return x + BASE; }
+            }
+            pipeline P {
+                import Common as C
+                const int COUNT = 3;
+                attributes {
+                    position: float3
+                }
+                pass "Main" {
+                    const float SCALE = 0.5;
+                    use attributes { position }
+                    vertex {
+                        const float LOCAL = 1.0;
+                        float v = C::BASE + SCALE + LOCAL + float(COUNT);
+                        output.position = float4(attributes.position, v);
+                    }
+                }
+            }
+        '''
+        data = self.parse(source)
+        base = self.nodes(data, 'MODULE', 'Common')[0]['consts'][0]
+        self.assertEqual((base['name'], base['isConst']), ('BASE', True))
+        self.assert_position(base, self.position(source, 2, 'BASE'), 'name')
+        self.assertEqual(base['sourceFile'], data['sourceFile'])
+        count = data['pipelines'][0]['consts'][0]
+        self.assertEqual(count['name'], 'COUNT')
+        stable = {s['id']: s.get('stableId') for s in data['referenceIndex']['symbols']}
+        self.assertEqual(stable[base['id']], 'module:Common/const:BASE')
+
+        folded = {}
+        for literal in self.nodes(data, 'LITERAL'):
+            if 'foldedFrom' in literal:
+                use = literal['foldedFrom']
+                self.assertEqual((use['type'], use['id']), ('IDENTIFIER', literal['id'] + '/folded-constant'))
+                folded[(use['name'], use['line'])] = use
+        # The unqualified use inside the module, then each use in the stage.
+        targets = {('BASE', 3): base['id'], ('BASE', 16): base['id'], ('COUNT', 16): count['id'],
+                   ('SCALE', 16): self.nodes(data, 'VARIABLE_DECL', 'SCALE')[0]['id'],
+                   ('LOCAL', 16): self.nodes(data, 'VARIABLE_DECL', 'LOCAL')[0]['id']}
+        for key, target in targets.items():
+            self.assertIn(key, folded)
+            self.assert_edge(data, folded[key]['id'], target, 'read')
+        self.assert_position(folded[('BASE', 3)], self.position(source, 3, 'BASE'))
+        qualified = folded[('BASE', 16)]
+        self.assert_position(qualified, self.position(source, 16, 'BASE'))
+        self.assertEqual(qualified['qualifier']['name'], 'C')
+        self.assert_edge(data, qualified['qualifier']['id'], 'MODULE:0', 'qualifier')
+
+    def test_named_nodes_report_name_positions(self):
+        source = '''
+            module Dep { helper :: () -> float { return 1.0; } }
+            module M {
+                struct Box { float size; area :: () -> float { return size; } }
+            }
+            pipeline Names {
+                import Dep
+                import M
+                attributes {
+                    position: float3
+                }
+                pass "Main" {
+                    use attributes { position }
+                    vertex {
+                        M::Box b;
+                        float a = b.area() + Dep::helper() + b.size;
+                        output.position = float4(attributes.position, a);
+                    }
+                }
+            }
+        '''
+        data = self.parse(source)
+        expected = [
+            ('MODULE', 'M', self.position(source, 2, 'M')),
+            ('STRUCT_DECL', 'Box', self.position(source, 3, 'Box')),
+            ('PIPELINE', 'Names', self.position(source, 5, 'Names')),
+            ('PASS', 'Main', self.position(source, 11, 'Main')),
+            ('ATTRIBUTE_DECL', 'position', self.position(source, 9, 'position')),
+            ('FUNCTION', 'area', self.position(source, 3, 'area')),
+            ('FUNCTION_CALL', 'area', self.position(source, 15, 'area')),
+            ('FUNCTION_CALL', 'helper', self.position(source, 15, 'helper')),
+        ]
+        for kind, name, position in expected:
+            with self.subTest(kind=kind, name=name):
+                self.assert_position(self.nodes(data, kind, name)[0], position, 'name')
+        member = next(node for node in self.nodes(data, 'MEMBER_ACCESS') if node['member'] == 'size')
+        self.assert_position(member, self.position(source, 15, 'size'), 'name')
 
     def test_existing_fixtures(self):
         for path in sorted((ROOT / 'tests' / 'ast_json').glob('*.bwsl')):

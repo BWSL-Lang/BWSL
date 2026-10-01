@@ -339,6 +339,14 @@ private:
     TokenRef Peek3();  // Look 3 tokens ahead (for distinguishing IDENTIFIER :: ( from IDENTIFIER :: IDENTIFIER)
     bool IsFunctionDeclStart();  // Check if current position starts a function declaration
     void AttachDocComment(NodeRef node, TokenRef firstToken);  // Attach lexer doc block preceding firstToken
+    // Tooling metadata: the file each declaration was written in.
+    void RecordDeclarationSource(NodeRef node);
+    void RecordMemberSources(NodeRef container);  // Records members that have no source yet
+    // Records that `literal` replaced the constant named by `nameToken`
+    // (optionally `qualifier::name`) and returns `literal`.
+    NodeRef RecordFoldedConstant(NodeRef literal, NodeRef qualifier, TokenRef nameToken);
+    // Call right after consuming the type name of a declared `Module::Type`.
+    void RecordTypeQualifierBeforeTypeName();
 
     //----------------- Error handling -----------------------------//
     void Error(const char* message);

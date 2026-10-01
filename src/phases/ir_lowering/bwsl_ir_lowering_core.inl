@@ -5,6 +5,10 @@
 namespace BWSL::IR {
 
 inline void IRLowering::ReportError(const char *message) {
+  ReportErrorAt(NodeRef::Null(), message);
+}
+
+inline void IRLowering::ReportErrorAt(NodeRef node, const char *message) {
   if (message) {
     diagnostics.emplace_back(message);
     if (diagnosticStream) {
@@ -28,10 +32,18 @@ inline void IRLowering::ReportError(const char *message) {
       } else if (currentPassData) {
         passName = currentPassData->name.ToString(sourceBase);
       }
+      DiagnosticSpan span{};
+      if (node.IsValid() && ast) {
+        // Prefer the name token (e.g. `uv` of `output.uv`) over the '.'.
+        u32 position = ast->GetNamePosition(node);
+        if (position == 0) position = ast->FindPosition(node);
+        AST::UnpackPosition(position, span.line, span.column);
+        if (span.line != 0) span.SetLocation();
+      }
       diagnosticStream->AddRaw(DiagnosticSeverity::Error,
                                DiagnosticPhase::Lowering,
                                message,
-                               DiagnosticSpan{},
+                               span,
                                "",
                                passName,
                                stageName,

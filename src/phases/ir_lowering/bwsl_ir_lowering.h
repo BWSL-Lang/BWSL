@@ -9,6 +9,7 @@
 #include "core/bwsl_mem_pool.h"
 #include "core/bwsl_resource_reflection.h"
 #include "core/bwsl_symbol_table.h"
+#include <cctype>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -50,15 +51,28 @@ struct PassVaryingContext {
   bool varyingLimitDiagnosed = false;
 
   // Add a new varying or return existing slot
+  // `typeConflict` reports a store whose type differs from the varying's
+  // first-assigned type; `existingType` receives that first type.
   u32 AddOrGetSlot(u32 nameHash, CoreType type, const char *nameStr = nullptr,
                    InterpolationMode interpolation = InterpolationMode::Default,
-                   bool *conflict = nullptr) {
+                   bool *conflict = nullptr, bool *typeConflict = nullptr,
+                   CoreType *existingType = nullptr) {
     if (conflict) {
       *conflict = false;
+    }
+    if (typeConflict) {
+      *typeConflict = false;
     }
     // Check if already exists
     for (u32 i = 0; i < count; i++) {
       if (varyings[i].nameHash == nameHash) {
+        if (existingType) {
+          *existingType = varyings[i].type;
+        }
+        if (typeConflict && type != CoreType::INVALID &&
+            varyings[i].type != CoreType::INVALID && varyings[i].type != type) {
+          *typeConflict = true;
+        }
         if (interpolation != InterpolationMode::Default) {
           if (varyings[i].interpolation == InterpolationMode::Default) {
             varyings[i].interpolation = interpolation;
@@ -258,6 +272,7 @@ struct IRLowering {
   const char *sourceBase = nullptr;
 
   void ReportError(const char *message);
+  void ReportErrorAt(NodeRef node, const char *message);
   NamespaceKind AliasOwnerKind() const;
   u32 AliasOwnerModuleIndex() const;
 
@@ -463,7 +478,8 @@ struct IRLowering {
 
   u32 ResolveOutputSlotForStore(u32 nameHash, CoreType valueType,
                                 const char *nameStr,
-                                InterpolationMode interpolation);
+                                InterpolationMode interpolation,
+                                NodeRef diagnosticNode = NodeRef::Null());
 
   u32 ResolveOutputSlotForLoad(u32 nameHash);
 

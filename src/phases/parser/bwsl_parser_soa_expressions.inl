@@ -172,6 +172,7 @@ NodeRef Parser::ParsePostfix() {
 
                 // Get the qualified member name
                 Consume(TokenType::IDENTIFIER, "Expected identifier after '::'");
+                TokenRef memberToken = previous;
                 std::string memberName(stream->GetValue(previous));
                 ArenaString memberArena = ArenaString::MakeHashOnly(memberName);
 
@@ -215,13 +216,21 @@ NodeRef Parser::ParsePostfix() {
                         const LiteralValue& constVal = symbolTable.evalConstants[sym->index];
                         switch (constVal.type) {
                             case LiteralValue::FLOAT:
-                                return ASTFactory::MakeLiteralFloat(ast, constVal.floatValue, loc.line, loc.column);
+                                return RecordFoldedConstant(
+                                    ASTFactory::MakeLiteralFloat(ast, constVal.floatValue, loc.line, loc.column),
+                                    expr, memberToken);
                             case LiteralValue::INT:
-                                return ASTFactory::MakeLiteralInt(ast, constVal.intValue, loc.line, loc.column);
+                                return RecordFoldedConstant(
+                                    ASTFactory::MakeLiteralInt(ast, constVal.intValue, loc.line, loc.column),
+                                    expr, memberToken);
                             case LiteralValue::UINT:
-                                return ASTFactory::MakeLiteralUint(ast, constVal.uintValue, loc.line, loc.column);
+                                return RecordFoldedConstant(
+                                    ASTFactory::MakeLiteralUint(ast, constVal.uintValue, loc.line, loc.column),
+                                    expr, memberToken);
                             case LiteralValue::BOOL:
-                                return ASTFactory::MakeLiteralBool(ast, constVal.boolValue, loc.line, loc.column);
+                                return RecordFoldedConstant(
+                                    ASTFactory::MakeLiteralBool(ast, constVal.boolValue, loc.line, loc.column),
+                                    expr, memberToken);
                             default:
                                 break;
                         }
@@ -233,13 +242,21 @@ NodeRef Parser::ParsePostfix() {
                             // Replace with literal value
                             switch (varData.evalValue.type) {
                                 case LiteralValue::FLOAT:
-                                    return ASTFactory::MakeLiteralFloat(ast, varData.evalValue.floatValue, loc.line, loc.column);
+                                    return RecordFoldedConstant(
+                                        ASTFactory::MakeLiteralFloat(ast, varData.evalValue.floatValue, loc.line, loc.column),
+                                        expr, memberToken);
                                 case LiteralValue::INT:
-                                    return ASTFactory::MakeLiteralInt(ast, varData.evalValue.intValue, loc.line, loc.column);
+                                    return RecordFoldedConstant(
+                                        ASTFactory::MakeLiteralInt(ast, varData.evalValue.intValue, loc.line, loc.column),
+                                        expr, memberToken);
                                 case LiteralValue::UINT:
-                                    return ASTFactory::MakeLiteralUint(ast, varData.evalValue.uintValue, loc.line, loc.column);
+                                    return RecordFoldedConstant(
+                                        ASTFactory::MakeLiteralUint(ast, varData.evalValue.uintValue, loc.line, loc.column),
+                                        expr, memberToken);
                                 case LiteralValue::BOOL:
-                                    return ASTFactory::MakeLiteralBool(ast, varData.evalValue.boolValue, loc.line, loc.column);
+                                    return RecordFoldedConstant(
+                                        ASTFactory::MakeLiteralBool(ast, varData.evalValue.boolValue, loc.line, loc.column),
+                                        expr, memberToken);
                                 default:
                                     break;
                             }
@@ -250,6 +267,10 @@ NodeRef Parser::ParsePostfix() {
                 // Create a member access node representing module::member
                 // The object is the module identifier, member is the accessed name
                 expr = ASTFactory::MakeMemberAccess(ast, expr, memberArena, loc.line, loc.column);
+                {
+                    SourceLocation memberLoc = getLocation(stream->GetOffset(memberToken));
+                    ast->SetNamePosition(expr, memberLoc.line, memberLoc.column);
+                }
                 MemberAccessData& access = ast->GetMemberAccess(expr);
                 access.isModuleQualified = true;
                 // Pre-compute the qualified hash since memberArena is hash-only and ToString() won't work later
@@ -522,13 +543,21 @@ NodeRef Parser::ParsePrimary() {
             const LiteralValue& constVal = symbolTable.evalConstants[sym->index];
             switch (constVal.type) {
                 case LiteralValue::FLOAT:
-                    return ASTFactory::MakeLiteralFloat(ast, constVal.floatValue, line, col);
+                    return RecordFoldedConstant(
+                        ASTFactory::MakeLiteralFloat(ast, constVal.floatValue, line, col),
+                        NodeRef::Null(), previous);
                 case LiteralValue::INT:
-                    return ASTFactory::MakeLiteralInt(ast, constVal.intValue, line, col);
+                    return RecordFoldedConstant(
+                        ASTFactory::MakeLiteralInt(ast, constVal.intValue, line, col),
+                        NodeRef::Null(), previous);
                 case LiteralValue::UINT:
-                    return ASTFactory::MakeLiteralUint(ast, constVal.uintValue, line, col);
+                    return RecordFoldedConstant(
+                        ASTFactory::MakeLiteralUint(ast, constVal.uintValue, line, col),
+                        NodeRef::Null(), previous);
                 case LiteralValue::BOOL:
-                    return ASTFactory::MakeLiteralBool(ast, constVal.boolValue, line, col);
+                    return RecordFoldedConstant(
+                        ASTFactory::MakeLiteralBool(ast, constVal.boolValue, line, col),
+                        NodeRef::Null(), previous);
                 default:
                     break;
             }
@@ -540,13 +569,21 @@ NodeRef Parser::ParsePrimary() {
             if (varData.hasEvalValue) {
                 switch (varData.evalValue.type) {
                     case LiteralValue::FLOAT:
-                        return ASTFactory::MakeLiteralFloat(ast, varData.evalValue.floatValue, line, col);
+                        return RecordFoldedConstant(
+                            ASTFactory::MakeLiteralFloat(ast, varData.evalValue.floatValue, line, col),
+                            NodeRef::Null(), previous);
                     case LiteralValue::INT:
-                        return ASTFactory::MakeLiteralInt(ast, varData.evalValue.intValue, line, col);
+                        return RecordFoldedConstant(
+                            ASTFactory::MakeLiteralInt(ast, varData.evalValue.intValue, line, col),
+                            NodeRef::Null(), previous);
                     case LiteralValue::UINT:
-                        return ASTFactory::MakeLiteralUint(ast, varData.evalValue.uintValue, line, col);
+                        return RecordFoldedConstant(
+                            ASTFactory::MakeLiteralUint(ast, varData.evalValue.uintValue, line, col),
+                            NodeRef::Null(), previous);
                     case LiteralValue::BOOL:
-                        return ASTFactory::MakeLiteralBool(ast, varData.evalValue.boolValue, line, col);
+                        return RecordFoldedConstant(
+                            ASTFactory::MakeLiteralBool(ast, varData.evalValue.boolValue, line, col),
+                            NodeRef::Null(), previous);
                     default:
                         break;
                 }
@@ -607,6 +644,7 @@ NodeRef Parser::ParseFunctionCall(NodeRef function) {
     } else if (function.Type() == ASTNodeType::MEMBER_ACCESS) {
         const MemberAccessData& access = ast->GetMemberAccess(function);
         funcName = access.member;
+        const u32 calleeNamePosition = ast->GetNamePosition(function);
 
         if (access.isModuleQualified) {
             // Module-qualified function call: Module::functionName(args)
@@ -629,6 +667,11 @@ NodeRef Parser::ParseFunctionCall(NodeRef function) {
             call = ASTFactory::MakeFunctionCall(ast, funcName, loc.line, loc.column);
             ast->GetFunctionCall(call).flags |= FunctionCallFlags::IS_METHOD_CALL;
             ast->GetFunctionCall(call).moduleObject = access.object;  // Store receiver object
+        }
+        if (calleeNamePosition != 0) {
+            u32 nameLine = 0, nameColumn = 0;
+            AST::UnpackPosition(calleeNamePosition, nameLine, nameColumn);
+            ast->SetNamePosition(call, nameLine, nameColumn);
         }
     } else {
         Error("Can only call functions by name");
@@ -722,6 +765,7 @@ NodeRef Parser::ParseMemberAccess(NodeRef object) {
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     Consume(TokenType::IDENTIFIER, "Expected member name after '.'");
     ArenaString memberName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
+    SourceLocation memberLoc = getLocation(stream->GetOffset(previous));
 
     // Validate resource/attribute access
     if (object.Type() == ASTNodeType::IDENTIFIER) {
@@ -748,7 +792,13 @@ NodeRef Parser::ParseMemberAccess(NodeRef object) {
                 break;
 
             case SpecialIdentifier::ATTRIBUTES:
-                if (inShaderStage && !ValidateAttributeInUse(memberName)) {
+                if (inShaderStage && currentShaderStage == ShaderStage::Fragment) {
+                    // Attributes are per-vertex inputs; SPIR-V would otherwise
+                    // fail later with an unlocated "Id is 0" validation error.
+                    ErrorAtPrevious("Vertex attributes cannot be read in a fragment stage; "
+                                    "write the value to 'output' in the vertex stage and read it "
+                                    "through 'input' in the fragment stage");
+                } else if (inShaderStage && !ValidateAttributeInUse(memberName)) {
                     ErrorAtPrevious("Attribute not declared in 'use attributes' for this pass");
                 }
                 break;
@@ -769,7 +819,9 @@ NodeRef Parser::ParseMemberAccess(NodeRef object) {
         }
     }
 
-    return ASTFactory::MakeMemberAccess(ast, object, memberName, loc.line, loc.column);
+    NodeRef access = ASTFactory::MakeMemberAccess(ast, object, memberName, loc.line, loc.column);
+    ast->SetNamePosition(access, memberLoc.line, memberLoc.column);
+    return access;
 }
 
 NodeRef Parser::ParseArrayAccess(NodeRef array) {
