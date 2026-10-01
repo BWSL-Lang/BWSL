@@ -875,6 +875,11 @@ NodeRef Parser::ParseEnumMethod() {
     Consume(TokenType::RIGHT_PAREN, "Expected ')' after parameters");
 
     Consume(TokenType::ARROW, "Expected '->' after parameters");
+    {
+        const SourceLocation returnTypeLoc = getLocation(stream->GetOffset(current));
+        ast->GetFunction(method).returnTypePosition =
+            AST::PackPosition(returnTypeLoc.line, returnTypeLoc.column);
+    }
 
     if (Check(TokenType::IDENTIFIER)) {
         Advance();
@@ -882,6 +887,7 @@ NodeRef Parser::ParseEnumMethod() {
         if (Match(TokenType::DOUBLE_COLON)) {
             std::string moduleName = returnTypeName;
             Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
+            RecordTypeQualifierBeforeTypeName();
             returnTypeName = CanonicalizeModuleQualifiedName(
                 moduleName, std::string(stream->GetValue(previous)));
         }
@@ -1128,6 +1134,11 @@ NodeRef Parser::ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime) {
     }
 
     Consume(TokenType::ARROW, "Expected '->' after parameters");
+    {
+        const SourceLocation returnTypeLoc = getLocation(stream->GetOffset(current));
+        ast->GetFunction(method).returnTypePosition =
+            AST::PackPosition(returnTypeLoc.line, returnTypeLoc.column);
+    }
 
     if (Check(TokenType::IDENTIFIER)) {
         Advance();
@@ -1135,6 +1146,7 @@ NodeRef Parser::ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime) {
         if (Match(TokenType::DOUBLE_COLON)) {
             std::string moduleName = returnTypeName;
             Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
+            RecordTypeQualifierBeforeTypeName();
             returnTypeName = CanonicalizeModuleQualifiedName(
                 moduleName, std::string(stream->GetValue(previous)));
         }

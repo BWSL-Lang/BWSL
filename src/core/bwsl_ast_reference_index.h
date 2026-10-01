@@ -3,6 +3,7 @@
 #include "bwsl_ast_soa.h"
 #include <algorithm>
 #include <cctype>
+#include <iterator>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -122,24 +123,92 @@ inline std::string SourceTypeName(CoreType type) {
     return result;
 }
 
-inline std::string ReturnTypeName(const FunctionDeclData& function) {
+inline bool IsBuiltinValueType(CoreType type) {
+    return type != CoreType::INVALID && type != CoreType::CUSTOM &&
+           type != CoreType::ENUM && type != CoreType::CONSTRAINT;
+}
+
+inline CoreType BuiltinTypeFromName(const std::string& name) {
+    for (u32 i = 1; i < static_cast<u32>(CoreType::COUNT); i++) {
+        CoreType core = static_cast<CoreType>(i);
+        if (IsBuiltinValueType(core) && SourceTypeName(core) == name) return core;
+    }
+    return CoreType::INVALID;
+}
+
+// Result type of an intrinsic call from its stdlib entry: the fixed return
+// type when there is one, else the widest argument the return mask accepts
+// (normalize, lerp, smoothstep), else the mask's type of that argument's width
+// (asfloat, isnan). Empty when the arguments are untyped.
+inline std::string IntrinsicResultType(const StdLib::IntrinsicData& intrinsic,
+                                       const std::vector<std::string>& argumentTypes) {
+    const TypeMask returns = intrinsic.returnTypes;
+    if (returns == 0) return {};
+    if ((returns & (returns - 1)) == 0) {
+        for (u32 i = 1; i < static_cast<u32>(CoreType::COUNT); i++) {
+            CoreType core = static_cast<CoreType>(i);
+            if (mask(core) == returns) {
+                return IsBuiltinValueType(core) ? SourceTypeName(core) : std::string();
+            }
+        }
+        return {};
+    }
+
+    CoreType widest = CoreType::INVALID;
+    CoreType widestAccepted = CoreType::INVALID;
+    for (const std::string& name : argumentTypes) {
+        const CoreType type = BuiltinTypeFromName(name);
+        if (type == CoreType::INVALID) continue;
+        if (widest == CoreType::INVALID ||
+            CoreTypeComponentCount(type) > CoreTypeComponentCount(widest)) {
+            widest = type;
+        }
+        if ((returns & mask(type)) != 0 &&
+            (widestAccepted == CoreType::INVALID ||
+             CoreTypeComponentCount(type) > CoreTypeComponentCount(widestAccepted))) {
+            widestAccepted = type;
+        }
+    }
+    if (widestAccepted != CoreType::INVALID) return SourceTypeName(widestAccepted);
+    if (widest == CoreType::INVALID) return {};
+
+    const TypeMask shapes = returns & ~TypeMasks::MATRIX_TYPES;
+    for (u32 i = 1; i < static_cast<u32>(CoreType::COUNT); i++) {
+        CoreType core = static_cast<CoreType>(i);
+        if ((shapes & mask(core)) != 0 &&
+            CoreTypeComponentCount(core) == CoreTypeComponentCount(widest)) {
+            return SourceTypeName(core);
+        }
+    }
+    return {};
+}
+
+// Prefixes the module of a `Module::Type` written at `typePosition`; resolved
+// type hashes only keep the unqualified custom type name.
+inline std::string QualifiedTypeName(const AST& ast, std::string name, u32 typePosition) {
+    const ModuleNameSite* qualifier = ast.FindTypeQualifier(typePosition);
+    if (qualifier && qualifier->moduleNameHash != 0 && name.find("::") == std::string::npos) {
+        name = ReverseLookup::GetString(qualifier->moduleNameHash) + "::" + name;
+    }
+    return name;
+}
+
+inline std::string ReturnTypeName(const AST& ast, const FunctionDeclData& function) {
     if (function.returnTypeHash != 0) {
         std::string result = ReverseLookup::GetString(function.returnTypeHash);
-        if (result.find("<hash:") == std::string::npos) return result;
+        if (result.find("<hash:") == std::string::npos) {
+            return QualifiedTypeName(ast, result, function.returnTypePosition);
+        }
     }
     return SourceTypeName(function.returnType);
 }
 
 // Source spelling of a struct field type, qualified when it was written as
-// `Module::Type` (TypeInfo only keeps the unqualified custom type name).
+// `Module::Type`.
 inline std::string StructFieldTypeName(const AST& ast, const StructFieldData& field) {
     if (field.type.customTypeHash == 0) return SourceTypeName(field.type.coreType);
-    std::string name = ReverseLookup::GetString(field.type.customTypeHash);
-    const ModuleNameSite* qualifier = ast.FindTypeQualifier(field.typePosition);
-    if (qualifier && qualifier->moduleNameHash != 0 && name.find("::") == std::string::npos) {
-        name = ReverseLookup::GetString(qualifier->moduleNameHash) + "::" + name;
-    }
-    return name;
+    return QualifiedTypeName(ast, ReverseLookup::GetString(field.type.customTypeHash),
+                             field.typePosition);
 }
 
 class Builder {
@@ -314,7 +383,7 @@ private:
         const std::string name = ResolveName(function.name);
         FunctionTarget target;
         target.id = NodeId(ref);
-        target.returnType = CanonicalType(ReturnTypeName(function), owner);
+        target.returnType = CanonicalType(ReturnTypeName(ast_, function), owner);
         for (u32 i = 0; i < function.parameters.count; i++) {
             target.parameterTypes.push_back(CanonicalType(ResolveName(function.parameters[i].second), owner));
         }
@@ -332,7 +401,7 @@ private:
             if (i > 0) result += ",";
             result += ResolveName(function.parameters[i].second);
         }
-        result += ")->" + ReturnTypeName(function);
+        result += ")->" + ReturnTypeName(ast_, function);
         return result;
     }
 
@@ -551,7 +620,7 @@ private:
             const std::string owner = OwnerOf(ref);
             AddSymbol({NodeId(ref), function.isStructMethod ? "method" : "function",
                        ResolveName(function.name), NodeId(ref), owner,
-                       ReturnTypeName(function), {}});
+                       ReturnTypeName(ast_, function), {}});
             SetStableId(NodeId(ref), FunctionStableId(ref, owner));
             AddFunctionTarget(ref, owner);
         }
@@ -718,10 +787,13 @@ private:
     }
 
     // `Module::Type` written in a declaration whose type starts at `typePosition`.
-    void AddQualifierReference(const std::string& owner, u32 typePosition) {
+    // The qualifier occurrence is `<owner>/type-qualifier`, or
+    // `<function>/return-type-qualifier` for a function's return type.
+    void AddQualifierReference(const std::string& owner, u32 typePosition,
+                               const char* suffix = "/type-qualifier") {
         const ModuleNameSite* qualifier = ast_.FindTypeQualifier(typePosition);
         if (!qualifier) return;
-        AddReference(owner + "/type-qualifier", ModuleIdByNameHash(qualifier->moduleNameHash),
+        AddReference(owner + suffix, ModuleIdByNameHash(qualifier->moduleNameHash),
                      "qualifier");
     }
 
@@ -908,7 +980,8 @@ private:
         if (owner.rfind("PIPELINE:", 0) == 0) currentPipeline_ = owner;
         if (owner.rfind("PASS:", 0) == 0) currentPass_ = owner;
 
-        AddTypeReference(functionId, ReturnTypeName(function), "return-type");
+        AddTypeReference(functionId, ReturnTypeName(ast_, function), "return-type");
+        AddQualifierReference(functionId, function.returnTypePosition, "/return-type-qualifier");
         PushScope();
         for (u32 i = 0; i < function.parameters.count; i++) {
             const std::string parameterId = functionId + "/parameter:" + std::to_string(i);
@@ -1100,7 +1173,12 @@ private:
         AddSymbol({builtinId, "intrinsic", name, builtinId, "builtin", {}, {}});
         SetStableId(builtinId, builtinId);
         AddReference(NodeId(ref), builtinId, "call");
-        return {};
+        if (call.intrinsicIndex >= std::size(StdLib::INTRINSICS)) return {};
+        std::vector<std::string> argumentTypes;
+        argumentTypes.reserve(arguments.size());
+        for (const ExprInfo& argument : arguments) argumentTypes.push_back(argument.type);
+        return {IntrinsicResultType(StdLib::INTRINSICS[call.intrinsicIndex], argumentTypes),
+                builtinId};
     }
 
     ExprInfo VisitExpr(NodeRef ref, const std::string& role) {

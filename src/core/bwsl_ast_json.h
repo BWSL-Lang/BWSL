@@ -182,11 +182,11 @@ inline std::string CoreTypeToSourceString(CoreType type) {
     return value;
 }
 
-inline std::string FunctionReturnTypeToString(const FunctionDeclData& function) {
+inline std::string FunctionReturnTypeToString(const AST& ast, const FunctionDeclData& function) {
     if (function.returnTypeHash != 0) {
         std::string resolved = ReverseLookup::GetString(function.returnTypeHash);
         if (resolved.find("<hash:") == std::string::npos) {
-            return resolved;
+            return AstReferenceIndex::QualifiedTypeName(ast, resolved, function.returnTypePosition);
         }
     }
     return CoreTypeToSourceString(function.returnType);
@@ -463,16 +463,19 @@ inline void AppendUsingImports(std::ostringstream& json,
 }
 
 // `Module::Type` in a declaration: the written qualifier as a positioned
-// IDENTIFIER-like occurrence with its own id (`<owner>/type-qualifier`).
+// IDENTIFIER-like occurrence with its own id (`<owner>/type-qualifier`, or
+// `<function>/return-type-qualifier` under "returnTypeQualifier").
 inline void AppendTypeQualifierField(std::ostringstream& json, bool& first,
                                      const AST& ast, u32 typePosition,
-                                     const std::string& owner) {
+                                     const std::string& owner,
+                                     const char* field = "typeQualifier",
+                                     const char* suffix = "/type-qualifier") {
     const ModuleNameSite* qualifier = ast.FindTypeQualifier(typePosition);
     if (!qualifier) return;
-    AppendFieldName(json, first, "typeQualifier");
+    AppendFieldName(json, first, field);
     bool qualifierFirst = true;
     json << "{";
-    AppendStringField(json, qualifierFirst, "id", owner + "/type-qualifier");
+    AppendStringField(json, qualifierFirst, "id", owner + suffix);
     AppendStringField(json, qualifierFirst, "type", "IDENTIFIER");
     AppendPackedPosition(json, qualifierFirst, qualifier->position, "line", "column");
     AppendPackedPosition(json, qualifierFirst, qualifier->position, "nameLine", "nameColumn");
@@ -1060,7 +1063,11 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             AppendFieldName(json, first, "parameters");
             AppendFunctionParameters(json, ast, node.parameters, NodeRefId(ref) + "/parameter:",
                                      &node.parameterPositions);
-            AppendStringField(json, first, "returnType", FunctionReturnTypeToString(node));
+            AppendStringField(json, first, "returnType", FunctionReturnTypeToString(ast, node));
+            AppendPackedPosition(json, first, node.returnTypePosition,
+                                 "returnTypeLine", "returnTypeColumn");
+            AppendTypeQualifierField(json, first, ast, node.returnTypePosition, NodeRefId(ref),
+                                     "returnTypeQualifier", "/return-type-qualifier");
             AppendNodeField(json, first, "body", ast, node.body, depth);
             AppendBoolField(json, first, "isEval", node.isEval);
             AppendBoolField(json, first, "isStructMethod", node.isStructMethod);

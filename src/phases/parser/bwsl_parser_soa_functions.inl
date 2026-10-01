@@ -843,6 +843,12 @@ NodeRef Parser::ParseFunction() {
     // Parse return type
     Consume(TokenType::ARROW, "Expected '->' after parameters");
 
+    {
+        const SourceLocation returnTypeLoc = getLocation(stream->GetOffset(current));
+        ast->GetFunction(function).returnTypePosition =
+            AST::PackPosition(returnTypeLoc.line, returnTypeLoc.column);
+    }
+
     // Check all possible return types
     std::string customReturnTypeName;
     if (Check(TokenType::IDENTIFIER)) {
@@ -853,6 +859,7 @@ NodeRef Parser::ParseFunction() {
         // Check for module-qualified type: Module::Type
         if (Match(TokenType::DOUBLE_COLON)) {
             Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
+            RecordTypeQualifierBeforeTypeName();
             customReturnTypeName = CanonicalizeModuleQualifiedName(
                 returnTypeName, std::string(stream->GetValue(previous)));
         } else {

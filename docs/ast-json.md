@@ -67,6 +67,11 @@ Positions are one-based.
   struct field) has a `typeQualifier` identifier object with its own `id`,
   position, and the qualifier as written; it is the source of a `qualifier`
   edge to the module.
+- Functions and methods include `returnTypeLine`/`returnTypeColumn`, the first
+  token of the written return type (the source of the function's
+  `return-type` edge). `returnType` keeps a `Module::Type` qualification, and
+  such a return type also has a `returnTypeQualifier` object, shaped like
+  `typeQualifier`, with its own `qualifier` edge.
 - The parser folds uses of named constants into literals. Such a `LITERAL`
   node has a `foldedFrom` identifier object with the written name and its
   position (plus a `qualifier` node for `Module::NAME`), which is the source
@@ -79,7 +84,8 @@ Positions are one-based.
 Parameter IDs use `FUNCTION:n/parameter:i`; field IDs use
 `STRUCT_DECL:n/field:i`; attribute-use IDs use `PASS:n/used-attribute:i`;
 `using` IDs use `<owner>/using:i`; type qualifiers use
-`<declaration-id>/type-qualifier`; folded constant uses use
+`<declaration-id>/type-qualifier` (`FUNCTION:n/return-type-qualifier` for
+return types); folded constant uses use
 `LITERAL:n/folded-constant`. These IDs are local to an export. Externally
 addressable symbols also have `stableId` values for cross-invocation identity.
 
@@ -91,6 +97,12 @@ receiver restricts lookup to that declaration's scope. Struct identities are
 preserved through parameters, variables, fields, and function returns even
 when different modules declare the same short name. Bare field names in methods
 respect local and parameter shadowing.
+
+Stage-interface symbols take their `type` from the first value assigned to
+them. Intrinsic calls are typed from the standard-library table: a fixed
+result type (`dot` gives `float`), otherwise the widest argument the intrinsic
+returns (`normalize(float2)` gives `float2`, `smoothstep(0.0, 1.0, float3)`
+gives `float3`).
 
 The index is built from the parsed AST, before shader lowering. Missing or
 ambiguous targets can have no reference edge; consumers must not treat the
