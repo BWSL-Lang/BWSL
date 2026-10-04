@@ -10,8 +10,8 @@ relevant for the maintainers (that's what the git history is for)
 
 ## Structure
 
-The latest version is on top of the file. 
-Before that, any unreleased changes should be listed in a placeholder section
+Place an `Unreleased` placeholder section at the top of the file.
+List released version sections below it, newest first.
 
 ### Version section
 
