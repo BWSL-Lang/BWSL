@@ -4,9 +4,8 @@ on:
   push:
     branches: [master]
     paths:
-      - 'core/**'
-      - 'phases/**'
-      - 'tools/**'
+      - 'src/**'
+      - 'scripts/**'
       - 'modules/**'
       - 'tests/**'
       - 'vendor/**'
@@ -16,9 +15,8 @@ on:
       - '.github/workflows/ci.yml'
   pull_request:
     paths:
-      - 'core/**'
-      - 'phases/**'
-      - 'tools/**'
+      - 'src/**'
+      - 'scripts/**'
       - 'modules/**'
       - 'tests/**'
       - 'vendor/**'
@@ -82,6 +80,30 @@ jobs:
 
       - name: Run numerical equivalence tests
         run: python3 tests/run_tests.py --equivalence --no-spirv-val
+
+  windows-cross:
+    # Same Linux->Windows cross build the release workflow uses for the
+    # Windows binary, so toolchain breakage shows up before a release.
+    name: windows-cross (from linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ubuntu-latest-windows-cross
+
+      - name: Install cross-compilation toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld mingw-w64
+
+      - name: Build bwslc (cross windows/x64)
+        run: make build TARGET_OS=windows TARGET_ARCH=x86_64
 
   macos:
     name: macos-latest
