@@ -104,6 +104,19 @@ else
 TARGET_LDFLAGS =
 endif
 
+# Cross-compiling to Windows from Linux/macOS links GCC's mingw-w64
+# libstdc++, which stores thread_local variables with emulated TLS. Clang
+# defaults to native TLS for mingw, so libstdc++'s TLS symbols (e.g. the
+# std::call_once state behind std::async) fail to link. Match libstdc++.
+# Native Windows builds (MSYS2 CLANG64) use libc++ with native TLS and must
+# not get this flag.
+TARGET_TLS_FLAGS =
+ifeq ($(TARGET_OS),windows)
+ifneq ($(HOST_OS),windows)
+TARGET_TLS_FLAGS = -femulated-tls
+endif
+endif
+
 ifeq ($(TARGET_OS),windows)
 CMAKE_TARGET_SYSTEM_NAME = Windows
 else ifeq ($(TARGET_OS),macos)
@@ -203,7 +216,10 @@ SPIRV_TOOLS_CMAKE_TARGET_FLAGS = \
 	-DCMAKE_C_COMPILER=clang \
 	-DCMAKE_CXX_COMPILER=clang++ \
 	-DCMAKE_C_COMPILER_TARGET=$(TARGET_TRIPLE) \
-	-DCMAKE_CXX_COMPILER_TARGET=$(TARGET_TRIPLE)
+	-DCMAKE_CXX_COMPILER_TARGET=$(TARGET_TRIPLE) \
+	$(if $(TARGET_TLS_FLAGS),\
+		"-DCMAKE_C_FLAGS=$(TARGET_TLS_FLAGS)" \
+		"-DCMAKE_CXX_FLAGS=$(TARGET_TLS_FLAGS)",)
 
 USE_LINKED_SPIRV_TOOLS ?= 1
 NATIVE_SPIRV_TOOLS_PREREQS =
@@ -248,8 +264,8 @@ ifeq ($(findstring $(COMPILER_LAUNCHER_NAME),$(firstword $(CXX))),)
 CXX := $(COMPILER_LAUNCHER) $(CXX)
 endif
 endif
-CXXFLAGS ?= -O3 -target $(TARGET_TRIPLE) $(TARGET_ARCH_FLAGS) -std=c++20 -Wall -Wextra
-CXXFLAGS_DEBUG ?= -g -O0 -target $(TARGET_TRIPLE) $(TARGET_ARCH_FLAGS) -std=c++20 -Wall -Wextra
+CXXFLAGS ?= -O3 -target $(TARGET_TRIPLE) $(TARGET_ARCH_FLAGS) $(TARGET_TLS_FLAGS) -std=c++20 -Wall -Wextra
+CXXFLAGS_DEBUG ?= -g -O0 -target $(TARGET_TRIPLE) $(TARGET_ARCH_FLAGS) $(TARGET_TLS_FLAGS) -std=c++20 -Wall -Wextra
 
 # Override the compiled-in VERSION string (e.g. BWSL_VERSION=1.2.3 make build).
 BWSL_VERSION ?=
