@@ -169,8 +169,13 @@ Defined in `core/bwsl_defs.h`: `u8`, `u16`, `u32`, `u64`, `s8`, `s16`, `s32`, `s
 
 ## Coding Style
 
-See [CODING_STANDARDS.md](CODING_STANDARDS.md). The codebase is data-oriented: data lives in plain structs (frequently SoA), operations live in free functions inside namespaces, and all allocation routes through the arena. Prefer that style when adding code.
+See [coding-conventions.md](docs/conventions/coding-conventions.md). 
+TLDR: 
+The codebase is data-oriented: data lives in plain structs (frequently SoA), 
+operations live in free functions inside namespaces,
+and all allocation routes through the arena. 
+Prefer that style when adding code.
 
 ## Writing changelogs
 
-See [changelog-conventions.md](docs/conventions/changelog-conventions.md)
+See [changelog-conventions.md](docs/conventions/changelog-conventions.md).
