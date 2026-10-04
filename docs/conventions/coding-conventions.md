@@ -175,14 +175,12 @@ Intrinsics are defined by parallel, position-indexed lists in
 
 ## Formatting
 
-- Formatting is currently split, and there is no `.clang-format`:
-  - Most files use 4-space indentation, K&R braces, `T* p` and indented
-    `case` labels.
-  - Some files use 2 spaces, `T *p`, unindented `case` and 80-column
-    wrapping: parts of the SPIR-V backend and IR lowering, and
-    `equiv_runner.cpp`. A few shards mix both.
-- Match the style of the file you're editing. New files use the 4-space
-  style.
+- Use 4-space indentation everywhere, with K&R braces, `T* p` and indented
+  `case` labels.
+- Some files still use 2 spaces, `T *p` and unindented `case`: parts of the
+  SPIR-V backend and IR lowering, and `equiv_runner.cpp`. Write new code in
+  them with 4 spaces too. Convert a whole file in a separate, formatting-only
+  commit rather than mixing reformatting into a functional change.
 
 ## Comments
 
