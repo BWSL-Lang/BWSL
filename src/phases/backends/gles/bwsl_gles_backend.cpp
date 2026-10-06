@@ -184,8 +184,7 @@ void GLESBuilder::EmitRegisterType(u16 reg) {
 
 void GLESBuilder::EmitAttributeName(u32 attributeIndex) {
     if (attributeIndex < 16 && !attributeNames[attributeIndex].empty()) {
-        out.Lit("a_");
-        out.Str(attributeNames[attributeIndex].c_str());
+        out.Str(GLNames::AttributeName(attributeNames[attributeIndex]).c_str());
         return;
     }
     out.Lit("attr");
@@ -262,8 +261,8 @@ void GLESBuilder::EmitInputs() {
                 out.Str(InterpolationQualifier(varyings->varyings[i].interpolation));
                 out.Lit("in ");
                 EmitType(static_cast<u16>(varyings->varyings[i].type));
-                out.Lit(" v_");
-                out.Str(varyings->varyings[i].name);
+                out.Chr(' ');
+                out.Str(GLNames::VaryingName(varyings->varyings[i].name).c_str());
                 out.Lit(";\n");
             }
         }
@@ -318,8 +317,8 @@ void GLESBuilder::EmitOutputs() {
                 out.Str(InterpolationQualifier(varyings->varyings[i].interpolation));
                 out.Lit("out ");
                 EmitType(static_cast<u16>(varyings->varyings[i].type));
-                out.Lit(" v_");
-                out.Str(varyings->varyings[i].name);
+                out.Chr(' ');
+                out.Str(GLNames::VaryingName(varyings->varyings[i].name).c_str());
                 out.Lit(";\n");
             }
         }
@@ -425,10 +424,10 @@ void GLESBuilder::EmitUniforms() {
 
             // Emit as std140 uniform block. Names match the SPIR-V backend
             // so passes mixing both GLES emitters bind the same blocks:
-            //   uniform <name>_block { <type> <name>; } bwsl_<name>;
+            //   uniform ub_<name> { <type> <name>; } bwsl_ub_<name>;
             out.Lit("layout(std140) uniform ");
-            out.Str(ub.name.c_str());
-            out.Lit("_block {\n");
+            out.Str(GLNames::UniformBlockName(ub.name).c_str());
+            out.Lit(" {\n");
             out.Lit("    ");
 
             // Map type name to GLSL type
@@ -444,8 +443,8 @@ void GLESBuilder::EmitUniforms() {
             out.Str(glslType);
             out.Chr(' ');
             out.Str(ub.name.c_str());
-            out.Lit(";\n} bwsl_");
-            out.Str(ub.name.c_str());
+            out.Lit(";\n} ");
+            out.Str(GLNames::UniformInstanceName(ub.name).c_str());
             out.Lit(";\n");
         }
 
@@ -845,8 +844,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
                     bool found = false;
                     for (u32 i = 0; i < varyings->count; i++) {
                         if (varyings->varyings[i].slot == varyingSlot) {
-                            out.Lit("v_");
-                            out.Str(varyings->varyings[i].name);
+                            out.Str(GLNames::VaryingName(varyings->varyings[i].name).c_str());
                             out.Lit(" = ");
                             found = true;
                             break;
@@ -903,8 +901,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
                 bool found = false;
                 for (u32 i = 0; i < varyings->count; i++) {
                     if (varyings->varyings[i].slot == varyingSlot) {
-                        out.Lit("v_");
-                        out.Str(varyings->varyings[i].name);
+                        out.Str(GLNames::VaryingName(varyings->varyings[i].name).c_str());
                         found = true;
                         break;
                     }
@@ -2036,8 +2033,7 @@ void GLESBuilder::EmitLoadExpr(u32 instIdx) {
             if (varyings) {
                 for (u32 i = 0; i < varyings->count; i++) {
                     if (varyings->varyings[i].slot == varyingSlot) {
-                        out.Lit("v_");
-                        out.Str(varyings->varyings[i].name);
+                        out.Str(GLNames::VaryingName(varyings->varyings[i].name).c_str());
                         return;
                     }
                 }
@@ -2054,7 +2050,7 @@ void GLESBuilder::EmitLoadExpr(u32 instIdx) {
             if (renderConfig) {
                 for (const auto& ub : renderConfig->uniformBuffers) {
                     if (ub.bindingIndex != uniformIdx) continue;
-                    out.Lit("bwsl_"); out.Str(ub.name.c_str());
+                    out.Str(GLNames::UniformInstanceName(ub.name).c_str());
                     out.Chr('.'); out.Str(ub.name.c_str());
                     return;
                 }
@@ -2211,7 +2207,7 @@ void GLESBuilder::EmitTexture(u16 reg, u32 metadata) {
                 out.Lit("_sampler_2_"); out.Uint(binding);
                 return;
             }
-            out.Lit("t_"); out.Str(texture.name.c_str());
+            out.Str(GLNames::CombinedTextureName(texture.name).c_str());
             return;
         }
     }

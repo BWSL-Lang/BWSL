@@ -160,16 +160,16 @@ void SPIRVBuilder::DeclareResources() {
     EmitDecoration(var_id, spv::DecorationDescriptorSet, set_val, 1);
     EmitDecoration(var_id, spv::DecorationBinding, bind_val, 1);
 
-    // Name the block after its resource. The block name gets a suffix and
-    // the instance a prefix because GLSL puts block names, struct type names
-    // and variables in one namespace, and the member keeps the plain name:
-    //   uniform render_block { Render render; } bwsl_render;
+    // Name the block after its resource. Block and instance get prefixes
+    // because GLSL puts block names, struct type names and variables in one
+    // namespace, and the member keeps the plain name:
+    //   uniform ub_render { Render render; } bwsl_ub_render;
     std::string resourceName =
         GetResourceName(ResourceBinding::UniformBuffer, binding);
     if (!resourceName.empty()) {
-      EmitName(struct_type_id, (resourceName + "_block").c_str());
+      EmitName(struct_type_id, GLNames::UniformBlockName(resourceName).c_str());
       EmitMemberName(struct_type_id, 0, resourceName.c_str());
-      EmitName(var_id, ("bwsl_" + resourceName).c_str());
+      EmitName(var_id, GLNames::UniformInstanceName(resourceName).c_str());
     }
 
     uniformBufferIds[binding] = var_id;
@@ -211,7 +211,7 @@ void SPIRVBuilder::DeclareResources() {
     // build_combined_image_samplers().
     std::string textureName = GetResourceName(ResourceBinding::Texture, binding);
     if (!textureName.empty())
-      EmitName(variable, ("t_" + textureName).c_str());
+      EmitName(variable, GLNames::CombinedTextureName(textureName).c_str());
     textureIds[binding] = variable;
     bindingSets[resourceCount] = 0;
     bindingIndices[resourceCount++] = static_cast<u8>(resolved);
@@ -237,7 +237,7 @@ void SPIRVBuilder::DeclareResources() {
       std::string textureName = GetResourceName(ResourceBinding::Texture, binding);
       defaultSamplerIds[binding] = declareSampler(
           ResolveDefaultSamplerBinding(*symbols, binding),
-          textureName.empty() ? std::string() : "bwsl_" + textureName + "_sampler");
+          textureName.empty() ? std::string() : GLNames::DefaultSamplerName(textureName));
     }
   }
 

@@ -3614,6 +3614,24 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                       sourceBase,
                                                       "Pipeline");
 
+    // Interface names are API on GL (see core/bwsl_gl_names.h), so two
+    // declarations that would produce the same one are an error.
+    std::vector<GLReservedName> glReservedNames;
+    std::string glNameError;
+    u32 glNamePosition = 0;
+    if (!GLNames::CheckPipelineNames(context.ast, pipeline, parser.symbolTable, sourceBase,
+                                     &glReservedNames, &glNameError, &glNamePosition)) {
+        DiagnosticSpan span{};
+        AST::UnpackPosition(glNamePosition, span.line, span.column);
+        if (span.line != 0) span.SetLocation();
+        diagnostics.AddRaw(DiagnosticSeverity::Error,
+                           DiagnosticPhase::Compile,
+                           glNameError,
+                           span,
+                           config.inputFile);
+        return fail(&stream, &sourceLines);
+    }
+
     ComputeGraphCompileResult graphResult = CompileComputeGraph(
         context.ast, context.ast.GetPipeline(originalPipelineRef), config.renderConfig, sourceBase);
     if (!graphResult.success) {
@@ -3696,6 +3714,7 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
         passVaryings.diagnosticStream = &diagnostics;
         passVaryings.diagnosticPassName = passName;
         passVaryings.diagnosticStageName = "vertex";
+        passVaryings.reservedGLNames = &glReservedNames;
         IRAnalysis vertexReflectionAnalysis{};
         IRAnalysis fragmentReflectionAnalysis{};
         IRAnalysis computeReflectionAnalysis{};

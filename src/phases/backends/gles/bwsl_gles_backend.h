@@ -20,6 +20,7 @@
 #include "phases/control_flow/bwsl_cfg.h"
 #include "core/bwsl_render_config.h"
 #include "core/bwsl_ast_soa.h"
+#include "core/bwsl_gl_names.h"
 #include "core/bwsl_resource_reflection.h"
 #include "phases/ir_lowering/bwsl_ir_lowering.h"  // For PassVaryingContext, VaryingInfo
 #include "phases/ir_generation/bwsl_ir_analysis.h"  // For IRAnalysis

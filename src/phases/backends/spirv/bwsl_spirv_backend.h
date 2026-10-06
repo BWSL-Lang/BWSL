@@ -8,6 +8,7 @@
 #include "core/bwsl_defs.h"
 #include "core/bwsl_compiler_types.h"  // For ShaderStage, VertexAttributeType
 #include "core/bwsl_arena.h"
+#include "core/bwsl_gl_names.h"
 #include "SPIRV-Headers/include/spirv/unified1/spirv.hpp"
 #include <string>
 #include <vector>

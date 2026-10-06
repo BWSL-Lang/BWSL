@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bwsl_gl_names.h"
 #include "bwsl_resource_reflection.h"
 #include <cstdio>
 #include <sstream>
@@ -112,9 +113,9 @@ inline void AppendHLSLResourcesJson(std::ostringstream& json,
 // instead, and plain samplers have no GL declaration of their own.
 inline std::string GLNameForResource(const ReflectedResourceBinding& resource) {
     if (resource.type == ::ResourceBinding::UniformBuffer)
-        return resource.name + "_block";
+        return BWSL::GLNames::UniformBlockName(resource.name);
     if (resource.type == ::ResourceBinding::Texture && !resource.separateImageSampler)
-        return "t_" + resource.name;
+        return BWSL::GLNames::CombinedTextureName(resource.name);
     return {};
 }
 

@@ -1,0 +1,17 @@
+// Attribute `position` is emitted as a_position, so a struct with that name
+// would clash with it at GLSL global scope.
+pipeline GLNameStructVsAttribute {
+    struct a_position {
+        float x;
+    };
+
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+        vertex { output.position = float4(attributes.position, 1.0); }
+        fragment { output.color = float4(1.0); }
+    }
+}

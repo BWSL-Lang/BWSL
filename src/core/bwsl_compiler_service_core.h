@@ -4,6 +4,7 @@
 #include "bwsl_ir_lowering.h"
 #include "bwsl_ir_analysis.h"
 #include "bwsl_cfg.h"
+#include "bwsl_gl_names.h"
 #include "bwsl_ssa.h"
 #include "bwsl_parser_soa.h"
 #include "bwsl_comptime_interpreter.h"
@@ -505,6 +506,23 @@ private:
             return false;
         }
         shaderSet.cachedParser->ResolveShaderStages(shaderSet.cachedContext->root);
+
+        AST& ast = shaderSet.cachedContext->ast;
+        if (ast.pipelines.count > 0) {
+            std::vector<GLReservedName> glNames;
+            std::string glNameError;
+            u32 glNamePosition = 0;
+            if (!GLNames::CheckPipelineNames(ast, ast.pipelines[0],
+                                             shaderSet.cachedParser->symbolTable,
+                                             shaderSet.cachedSource.data(), &glNames,
+                                             &glNameError, &glNamePosition)) {
+                u32 line = 0, column = 0;
+                AST::UnpackPosition(glNamePosition, line, column);
+                fprintf(stderr, "BWSL Compiler Error: %s:%u:%u: %s\n",
+                        shaderSet.pipelineName.c_str(), line, column, glNameError.c_str());
+                return false;
+            }
+        }
         
         shaderSet.astCached = true;
         return true;

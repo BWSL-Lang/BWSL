@@ -124,7 +124,7 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
                 if missing:
                     row["errors"].append("Fragment inputs not written by the vertex stage: " + ", ".join(sorted(missing)))
             if name == "gl_interface_names":
-                for expected in ("render_block", "bwsl_render", "input_block", "t_texture",
+                for expected in ("ub_render", "bwsl_ub_render", "ub_input", "t_texture",
                                  "a_position", "a_sample", "v_output", "v_tint"):
                     if not re.search(r"\b" + expected + r"\b", text):
                         row["errors"].append("Missing GL interface name: " + expected)

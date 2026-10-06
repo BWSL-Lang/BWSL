@@ -1,0 +1,15 @@
+// Varying `uv` is emitted as v_uv, and struct names are emitted as written,
+// so a struct named `v_uv` would clash with it.
+pipeline GLNameVaryingVsStruct {
+    struct v_uv {
+        float x;
+    };
+
+    pass "Main" {
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+            output.uv = float2(0.5, 0.5);
+        }
+        fragment { output.color = float4(input.uv, 0.0, 1.0); }
+    }
+}

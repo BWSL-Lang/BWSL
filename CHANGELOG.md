@@ -6,13 +6,18 @@
 - **GL and GLES output use source names for interface objects.** Hosts that
   bind by name must update their lookups. Read `glName` from
   `bindings.json` instead of hard-coding names:
-  - uniform block `<resource>_block`, instance `bwsl_<resource>`
+  - uniform block `ub_<resource>`, instance `bwsl_ub_<resource>`
     (was `_12_14`, or `UB_<resource>` with `-gles-direct`)
   - combined sampler `t_<texture>` (was `_18`, or `u_<texture>`)
   - vertex input `a_<attribute>` (was `_6`, or `attr0`)
   - varying `v_<name>` (was `varying0` in the CLI)
 
   Metal and HLSL output now carry the same names.
+- **Struct and sampler names that clash with an interface name are
+  rejected.** These names are emitted as written, so a struct named
+  `a_position` would clash with attribute `position`, and a sampler named
+  `t_atlas` with texture `atlas`. Varying names must also differ within
+  their first 31 characters.
 
 ### Backends
 - A pass whose fragment stage falls back to the direct GLES emitter (for
@@ -23,6 +28,7 @@
 - `bindings.json` reports `glName` for uniform buffers and combined
   textures: the name to pass to `glGetUniformBlockIndex` or
   `glGetUniformLocation`.
+- The WASM build runs the same GLSL ES compatibility checks as the CLI.
 - The compiler service no longer reads an uninitialized value when
   specializing a variant, which could crash it.
 

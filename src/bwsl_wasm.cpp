@@ -34,17 +34,10 @@
 
 // SPIRV-Cross wrapper (compiled separately to avoid macro conflicts)
 #ifdef USE_SPIRV_CROSS_LIB
-#include <unordered_map>
 namespace spirv_cross_wrapper {
     std::string CompileToMSL(const std::vector<uint32_t>& spirv);
     std::string CompileToHLSL(const std::vector<uint32_t>& spirv, int shaderModel);
     std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, bool es);
-    std::string CompileToGLSLWithVaryings(
-        const std::vector<uint32_t>& spirv,
-        int glslVersion,
-        bool es,
-        const std::unordered_map<uint32_t, std::string>& varyingNames,
-        bool isVertex);
 }
 #endif
 
@@ -659,20 +652,8 @@ static ShaderOutput CompileShaderStage(
         std::vector<uint32_t> spirvData(spirv.begin(), spirv.end());
 
         if (stage == ShaderStage::Vertex || stage == ShaderStage::Fragment) {
-            // Build varying name map for clean output names
-            std::unordered_map<uint32_t, std::string> varyingNames;
-            if (varyingContext) {
-                for (u32 i = 0; i < varyingContext->count; i++) {
-                    const auto& varying = varyingContext->varyings[i];
-                    if (varying.name[0] != '\0') {
-                        varyingNames[varying.slot] = std::string("v_") + varying.name;
-                    }
-                }
-            }
-
-            bool isVertex = (stage == ShaderStage::Vertex);
-            glslSource = spirv_cross_wrapper::CompileToGLSLWithVaryings(
-                spirvData, 300, true, varyingNames, isVertex);
+            // Varyings carry their v_<name> OpNames from the SPIR-V backend.
+            glslSource = spirv_cross_wrapper::CompileToGLSL(spirvData, 300, true);
         } else if (stage == ShaderStage::Compute) {
             glslSource = spirv_cross_wrapper::CompileToGLSL(spirvData, 310, true);
         }
@@ -832,6 +813,17 @@ static std::string CompileToJson(const char* bwslSource,
                                                             parser.symbolTable,
                                                             sourceBase,
                                                             "Demo");
+    std::vector<GLReservedName> glReservedNames;
+    std::string glNameError;
+    u32 glNamePosition = 0;
+    if (!GLNames::CheckPipelineNames(context.ast, pipeline, parser.symbolTable, sourceBase,
+                                     &glReservedNames, &glNameError, &glNamePosition)) {
+        u32 line = 0, column = 0;
+        AST::UnpackPosition(glNamePosition, line, column);
+        return "{\"success\":false,\"errors\":[{\"line\":" + std::to_string(line) +
+               ",\"column\":" + std::to_string(column) +
+               ",\"message\":\"" + EscapeJsonString(glNameError) + "\"}]}";
+    }
     const ComputeGraphData* graphData = nullptr;
     ComputeGraphCompileResult graphResult = CompileComputeGraph(context.ast,
                                                                pipeline,
@@ -864,6 +856,7 @@ static std::string CompileToJson(const char* bwslSource,
 
         // Create varying context for vertex->fragment data flow
         PassVaryingContext passVaryings;
+        passVaryings.reservedGLNames = &glReservedNames;
 
         ShaderOutput vertResult;
         ShaderOutput fragResult;
