@@ -2,7 +2,10 @@
 
 ## unreleased
 
-Nothing so far.
+### Tooling
+- `make wasm` and `make wasm-debug` link with `em++`, so they build with
+  current Emscripten (6.x). `em++` must be on `PATH` instead of
+  `emcc`.
 
 ## v0.10.0
 
