@@ -44,12 +44,13 @@ struct IRProgram {
     u32 int64Count;
     u32 boolCount;
     
-    // Variant branches
-    alignas(64) u32* variantInstructionIndices;
-    alignas(64) u32* variantAttributeMasks;
-    alignas(64) u32* variantTrueBranches;
-    alignas(64) u32* variantFalseBranches;
-    u32 variantBranchCount;
+    // Variant branches. Nothing records any yet, but
+    // OptimizationPass::SpecializeForVariant reads them.
+    alignas(64) u32* variantInstructionIndices = nullptr;
+    alignas(64) u32* variantAttributeMasks = nullptr;
+    alignas(64) u32* variantTrueBranches = nullptr;
+    alignas(64) u32* variantFalseBranches = nullptr;
+    u32 variantBranchCount = 0;
     
     // Module call sites
     alignas(64) u32* callInstructionIndices;

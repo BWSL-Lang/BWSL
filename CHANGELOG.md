@@ -23,6 +23,8 @@
 - `bindings.json` reports `glName` for uniform buffers and combined
   textures: the name to pass to `glGetUniformBlockIndex` or
   `glGetUniformLocation`.
+- The compiler service no longer reads an uninitialized value when
+  specializing a variant, which could crash it.
 
 ## v0.10.0
 
