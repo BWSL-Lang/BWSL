@@ -52,7 +52,7 @@ void SPIRVBuilder::EmitVaryingName(u32 varId, u32 varyingSlot,
                                    u32 fallbackIndex) {
   const char *sourceName = varyingSlot < 16 ? varyingNames[varyingSlot] : nullptr;
   if (sourceName && sourceName[0]) {
-    EmitName(varId, GLNames::VaryingName(sourceName).c_str());
+    EmitGLName(varId, GLNameKind::VARYING, ArenaString::MakeHashOnly(sourceName));
     return;
   }
   char varyingName[16];
@@ -132,8 +132,8 @@ void SPIRVBuilder::DeclareInputOutput() {
 
         u32 var_id = CreateInterfaceVariable(type, spv::StorageClassInput,
                                              attrIdx, spv::BuiltInMax);
-        if (!attributeNames[attrIdx].empty())
-          EmitName(var_id, GLNames::AttributeName(attributeNames[attrIdx]).c_str());
+        if (attributeNameMask & (1u << attrIdx))
+          EmitGLName(var_id, GLNameKind::ATTRIBUTE, attributeNames[attrIdx]);
         inputIds[inputCount] = var_id;
         inputLocations[inputCount] = attrIdx;
         inputCount++;

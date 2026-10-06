@@ -513,8 +513,7 @@ private:
             std::string glNameError;
             u32 glNamePosition = 0;
             if (!GLNames::CheckPipelineNames(ast, ast.pipelines[0],
-                                             shaderSet.cachedParser->symbolTable,
-                                             shaderSet.cachedSource.data(), &glNames,
+                                             shaderSet.cachedParser->symbolTable, &glNames,
                                              &glNameError, &glNamePosition)) {
                 u32 line = 0, column = 0;
                 AST::UnpackPosition(glNamePosition, line, column);

@@ -19,45 +19,62 @@
 #include "core/bwsl_ast_soa.h"
 #include "core/bwsl_symbol_table.h"
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace BWSL {
 
+enum class GLNameKind : u8 {
+    UNIFORM_BLOCK,     // uniform ub_<resource> { T <resource>; } ...
+    UNIFORM_INSTANCE,  // ... bwsl_ub_<resource>;
+    COMBINED_TEXTURE,  // texture used one-to-one with its sampler
+    DEFAULT_SAMPLER,   // sampler synthesized for a texture sampled without one (Metal/HLSL)
+    SAMPLER,
+    ATTRIBUTE,
+    VARYING,
+    STRUCT,
+    COUNT,
+};
+
+// Indexed by GLNameKind. The block name is what the host passes to
+// glGetUniformBlockIndex; the instance name only scopes the member inside the
+// shader. Sampler and struct names are emitted as written.
+static constexpr struct {
+    const char* prefix;
+    const char* owner;  // Diagnostic text, followed by the source name
+} GL_NAME_KINDS[] = {
+    {"ub_",      "the uniform block of resource"},
+    {"bwsl_ub_", "the uniform block instance of resource"},
+    {"t_",       "texture"},
+    {"bwsl_s_",  "the default sampler of texture"},
+    {"",         "sampler"},
+    {"a_",       "attribute"},
+    {"v_",       "varying"},
+    {"",         "struct"},
+};
+static_assert(sizeof(GL_NAME_KINDS) / sizeof(GL_NAME_KINDS[0]) ==
+              static_cast<size_t>(GLNameKind::COUNT));
+
 struct GLReservedName {
-    std::string name;   // Identifier as emitted
-    std::string owner;  // What produces it, for diagnostics
-    u32 position = 0;   // Packed AST line/column of the declaration, 0 if unknown
+    ArenaString name;    // Identifier as emitted
+    ArenaString source;  // Name of the declaration that produces it
+    GLNameKind kind;
+    u32 position = 0;    // Packed AST line/column of the declaration, 0 if unknown
 };
 
 namespace GLNames {
 
-//   uniform ub_<resource> { T <resource>; } bwsl_ub_<resource>;
-// The block name is what the host passes to glGetUniformBlockIndex; the
-// instance name only scopes the member inside the shader.
-inline std::string UniformBlockName(std::string_view resource) {
-    return "ub_" + std::string(resource);
-}
-inline std::string UniformInstanceName(std::string_view resource) {
-    return "bwsl_ub_" + std::string(resource);
-}
-// A texture used one-to-one with its sampler stays a combined image.
-inline std::string CombinedTextureName(std::string_view texture) {
-    return "t_" + std::string(texture);
-}
-// Separate sampler synthesized for a texture sampled without one (Metal/HLSL).
-inline std::string DefaultSamplerName(std::string_view texture) {
-    return "bwsl_s_" + std::string(texture);
-}
-inline std::string AttributeName(std::string_view attribute) {
-    return "a_" + std::string(attribute);
-}
-inline std::string VaryingName(std::string_view varying) {
-    return "v_" + std::string(varying);
+// The name a declaration called `source` is emitted under. Interned, so it
+// compares equal (by nameHash) to a source identifier with the same spelling.
+// Text is looked up by hash rather than through a source buffer: after
+// pass-block instantiation a name can point into a module's source.
+inline ArenaString MakeName(GLNameKind kind, ArenaString source) {
+    const char* prefix = GL_NAME_KINDS[static_cast<u32>(kind)].prefix;
+    if (prefix[0] == '\0') return source;
+    return ArenaString::MakeHashOnly(prefix + source.ToString());
 }
 
 inline const GLReservedName* FindName(const std::vector<GLReservedName>& names,
-                                      std::string_view name) {
+                                      ArenaString name) {
     for (const GLReservedName& entry : names) {
         if (entry.name == name) return &entry;
     }
@@ -65,18 +82,14 @@ inline const GLReservedName* FindName(const std::vector<GLReservedName>& names,
 }
 
 // Gathers the names the pipeline's own resources, attributes and structs
-// produce. Sampler and struct names are emitted as written.
+// produce.
 inline void CollectPipelineNames(const AST& ast, const PipelineData& pipeline,
                                  const SymbolTableData& symbols,
-                                 const char* sourceBase,
                                  std::vector<GLReservedName>* out) {
-    auto add = [&](std::string name, std::string owner, NodeRef decl) {
+    auto add = [&](GLNameKind kind, ArenaString source, NodeRef decl) {
         u32 position = ast.GetNamePosition(decl);
         if (position == 0) position = ast.FindPosition(decl);
-        out->push_back({std::move(name), std::move(owner), position});
-    };
-    auto quoted = [](const char* kind, const std::string& name) {
-        return std::string(kind) + " '" + name + "'";
+        out->push_back({MakeName(kind, source), source, kind, position});
     };
 
     for (u32 i = 0; i < pipeline.resources.count; i++) {
@@ -86,18 +99,17 @@ inline void CollectPipelineNames(const AST& ast, const PipelineData& pipeline,
         const Symbol* sym = SymbolTable::LookupResource(
             const_cast<SymbolTableData*>(&symbols), decl.name);
         if (!sym || sym->index >= symbols.resources.count) continue;
-        std::string name = decl.name.ToString(sourceBase);
         switch (symbols.resources[sym->index].type) {
             case ResourceBinding::UniformBuffer:
-                add(UniformBlockName(name), "the uniform block of " + quoted("resource", name), ref);
-                add(UniformInstanceName(name), "the uniform block instance of " + quoted("resource", name), ref);
+                add(GLNameKind::UNIFORM_BLOCK, decl.name, ref);
+                add(GLNameKind::UNIFORM_INSTANCE, decl.name, ref);
                 break;
             case ResourceBinding::Texture:
-                add(CombinedTextureName(name), quoted("texture", name), ref);
-                add(DefaultSamplerName(name), "the default sampler of " + quoted("texture", name), ref);
+                add(GLNameKind::COMBINED_TEXTURE, decl.name, ref);
+                add(GLNameKind::DEFAULT_SAMPLER, decl.name, ref);
                 break;
             case ResourceBinding::Sampler:
-                add(name, quoted("sampler", name), ref);
+                add(GLNameKind::SAMPLER, decl.name, ref);
                 break;
             default:
                 break;
@@ -107,15 +119,13 @@ inline void CollectPipelineNames(const AST& ast, const PipelineData& pipeline,
     for (u32 i = 0; i < pipeline.attributes.count; i++) {
         NodeRef ref = pipeline.attributes[i];
         if (ref.Type() != ASTNodeType::ATTRIBUTE_DECL) continue;
-        std::string name = ast.GetAttributeDecl(ref).name.ToString(sourceBase);
-        add(AttributeName(name), quoted("attribute", name), ref);
+        add(GLNameKind::ATTRIBUTE, ast.GetAttributeDecl(ref).name, ref);
     }
 
     for (u32 i = 0; i < pipeline.structs.count; i++) {
         NodeRef ref = pipeline.structs[i];
         if (ref.Type() != ASTNodeType::STRUCT_DECL) continue;
-        std::string name = ast.GetStructDecl(ref).name.ToString(sourceBase);
-        add(name, quoted("struct", name), ref);
+        add(GLNameKind::STRUCT, ast.GetStructDecl(ref).name, ref);
     }
 }
 
@@ -133,27 +143,33 @@ inline s32 FindNameCollision(const std::vector<GLReservedName>& names, u32* earl
     return -1;
 }
 
+// "texture 'atlas'", "the uniform block of resource 'render'"
+inline std::string DescribeOwner(const GLReservedName& entry) {
+    return std::string(GL_NAME_KINDS[static_cast<u32>(entry.kind)].owner) + " '" +
+           entry.source.ToString() + "'";
+}
+
 // "GL name 't_atlas' of sampler 't_atlas' collides with texture 'atlas';
 // rename one of them"
-inline std::string DescribeCollision(const std::string& name, const std::string& owner,
+inline std::string DescribeCollision(const GLReservedName& later,
                                      const GLReservedName& earlier) {
-    return "GL name '" + name + "' of " + owner + " collides with " + earlier.owner +
-           "; rename one of them";
+    return "GL name '" + later.name.ToString() + "' of " + DescribeOwner(later) +
+           " collides with " + DescribeOwner(earlier) + "; rename one of them";
 }
 
 // Collects the pipeline-level names into *names. On a collision, returns
 // false with the message and the packed position of the later declaration.
 inline bool CheckPipelineNames(const AST& ast, const PipelineData& pipeline,
-                               const SymbolTableData& symbols, const char* sourceBase,
+                               const SymbolTableData& symbols,
                                std::vector<GLReservedName>* names,
                                std::string* error, u32* position) {
     names->clear();
-    CollectPipelineNames(ast, pipeline, symbols, sourceBase, names);
+    CollectPipelineNames(ast, pipeline, symbols, names);
     u32 earlier = 0;
     s32 clash = FindNameCollision(*names, &earlier);
     if (clash < 0) return true;
     const GLReservedName& entry = (*names)[static_cast<u32>(clash)];
-    *error = DescribeCollision(entry.name, entry.owner, (*names)[earlier]);
+    *error = DescribeCollision(entry, (*names)[earlier]);
     *position = entry.position;
     return false;
 }

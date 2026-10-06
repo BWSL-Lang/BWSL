@@ -2586,21 +2586,25 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
 inline void IRLowering::CheckVaryingGLName(u32 varyingIndex,
                                            NodeRef diagnosticNode) {
   const VaryingInfo &varying = currentPassVaryings->varyings[varyingIndex];
-  std::string name = GLNames::VaryingName(varying.name);
-  std::string sourceName = ReverseLookup::GetString(varying.nameHash);
-  std::string owner =
-      "varying '" + (sourceName.empty() ? std::string(varying.name) : sourceName) + "'";
+  // The emitted name uses the stored (possibly truncated) text; the
+  // diagnostic names the varying as written.
+  GLReservedName entry{};
+  entry.kind = GLNameKind::VARYING;
+  entry.name = GLNames::MakeName(GLNameKind::VARYING,
+                                 ArenaString::MakeHashOnly(varying.name));
+  entry.source = ArenaString::MakeHashOnly(varying.nameHash);
   std::string collision;
   if (currentPassVaryings->reservedGLNames) {
     if (const GLReservedName *earlier = GLNames::FindName(
-            *currentPassVaryings->reservedGLNames, name)) {
-      collision = GLNames::DescribeCollision(name, owner, *earlier);
+            *currentPassVaryings->reservedGLNames, entry.name)) {
+      collision = GLNames::DescribeCollision(entry, *earlier);
     }
   }
   for (u32 i = 0; i < currentPassVaryings->count && collision.empty(); i++) {
     const VaryingInfo &other = currentPassVaryings->varyings[i];
     if (i != varyingIndex && strcmp(other.name, varying.name) == 0) {
-      collision = "GL name '" + name + "' of " + owner +
+      collision = "GL name '" + entry.name.ToString() + "' of " +
+                  GLNames::DescribeOwner(entry) +
                   " collides with another varying; varying names must "
                   "differ within their first 31 characters";
     }

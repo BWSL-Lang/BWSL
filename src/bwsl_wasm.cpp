@@ -612,7 +612,7 @@ static ShaderOutput CompileShaderStage(
         for (u32 i = 0; i < pipelineData.attributes.count; i++) {
             if (pipelineData.attributes[i].Type() != ASTNodeType::ATTRIBUTE_DECL) continue;
             const AttributeDeclData& attr = context.ast.GetAttributeDecl(pipelineData.attributes[i]);
-            builder.SetAttributeName(attr.attributeIndex, ReverseLookup::GetString(attr.name.nameHash));
+            builder.SetAttributeName(attr.attributeIndex, attr.name);
         }
     }
 
@@ -816,7 +816,7 @@ static std::string CompileToJson(const char* bwslSource,
     std::vector<GLReservedName> glReservedNames;
     std::string glNameError;
     u32 glNamePosition = 0;
-    if (!GLNames::CheckPipelineNames(context.ast, pipeline, parser.symbolTable, sourceBase,
+    if (!GLNames::CheckPipelineNames(context.ast, pipeline, parser.symbolTable,
                                      &glReservedNames, &glNameError, &glNamePosition)) {
         u32 line = 0, column = 0;
         AST::UnpackPosition(glNamePosition, line, column);

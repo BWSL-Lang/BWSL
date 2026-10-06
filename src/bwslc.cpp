@@ -1697,7 +1697,7 @@ static void SetAttributeNames(Builder& builder, const AST& ast, NodeRef pipeline
     for (u32 i = 0; i < pipeline.attributes.count; i++) {
         if (pipeline.attributes[i].Type() != ASTNodeType::ATTRIBUTE_DECL) continue;
         const AttributeDeclData& attr = ast.GetAttributeDecl(pipeline.attributes[i]);
-        builder.SetAttributeName(attr.attributeIndex, ReverseLookup::GetString(attr.name.nameHash));
+        builder.SetAttributeName(attr.attributeIndex, attr.name);
     }
 }
 
@@ -3619,7 +3619,7 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
     std::vector<GLReservedName> glReservedNames;
     std::string glNameError;
     u32 glNamePosition = 0;
-    if (!GLNames::CheckPipelineNames(context.ast, pipeline, parser.symbolTable, sourceBase,
+    if (!GLNames::CheckPipelineNames(context.ast, pipeline, parser.symbolTable,
                                      &glReservedNames, &glNameError, &glNamePosition)) {
         DiagnosticSpan span{};
         AST::UnpackPosition(glNamePosition, span.line, span.column);

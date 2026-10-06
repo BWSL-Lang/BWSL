@@ -10,7 +10,6 @@
 #include "core/bwsl_arena.h"
 #include "core/bwsl_gl_names.h"
 #include "SPIRV-Headers/include/spirv/unified1/spirv.hpp"
-#include <string>
 #include <vector>
 #include <unordered_map>
 
@@ -225,7 +224,9 @@ struct SPIRVBuilder {
     // to "varying<N>".
     const char* varyingNames[16] = {};
     // Source names of vertex attributes, indexed by attribute location.
-    std::string attributeNames[16];
+    // Bit i of attributeNameMask says whether attributeNames[i] is set.
+    ArenaString attributeNames[16] = {};
+    u16 attributeNameMask = 0;
 
     // ============= Layout Options =============
     bool useStd430Padding = true;   // Use 16-byte stride for vec3[] in SSBOs.
@@ -377,10 +378,14 @@ struct SPIRVBuilder {
     void SetVaryingName(u32 slot, const char* name) {
         if (slot < 16) varyingNames[slot] = name;
     }
-    void SetAttributeName(u32 attributeIndex, std::string name) {
-        if (attributeIndex < 16) attributeNames[attributeIndex] = std::move(name);
+    void SetAttributeName(u32 attributeIndex, ArenaString name) {
+        if (attributeIndex >= 16) return;
+        attributeNames[attributeIndex] = name;
+        attributeNameMask |= static_cast<u16>(1u << attributeIndex);
     }
-    std::string GetResourceName(ResourceBinding::Type type, u32 bindingIndex) const;
+    bool FindResourceName(ResourceBinding::Type type, u32 bindingIndex,
+                          ArenaString* name) const;
+    void EmitGLName(u32 id, GLNameKind kind, ArenaString source);
     void EmitVaryingName(u32 varId, u32 varyingSlot, u32 fallbackIndex);
 
     // Layout options
