@@ -41,6 +41,21 @@ static u32 ResolveVertexPullingCollisionBinding(
   return binding;
 }
 
+std::string SPIRVBuilder::GetResourceName(ResourceBinding::Type type,
+                                          u32 bindingIndex) const {
+  if (!symbols)
+    return {};
+  for (u32 s = 0; s < symbols->symbols.count; s++) {
+    const Symbol &sym = symbols->symbols[s];
+    if (sym.kind != SymbolKind::RESOURCE || sym.index >= symbols->resources.count)
+      continue;
+    const ResourceData &resource = symbols->resources[sym.index];
+    if (resource.type == type && resource.bindingIndex == bindingIndex)
+      return ReverseLookup::GetString(sym.name.nameHash);
+  }
+  return {};
+}
+
 void SPIRVBuilder::DeclareResources() {
   // Declare resources based on IR analysis results
   // Each uniform binding in BWSL is a single typed value
@@ -145,6 +160,18 @@ void SPIRVBuilder::DeclareResources() {
     EmitDecoration(var_id, spv::DecorationDescriptorSet, set_val, 1);
     EmitDecoration(var_id, spv::DecorationBinding, bind_val, 1);
 
+    // Name the block after its resource. The block name gets a suffix and
+    // the instance a prefix because GLSL puts block names, struct type names
+    // and variables in one namespace, and the member keeps the plain name:
+    //   uniform render_block { Render render; } bwsl_render;
+    std::string resourceName =
+        GetResourceName(ResourceBinding::UniformBuffer, binding);
+    if (!resourceName.empty()) {
+      EmitName(struct_type_id, (resourceName + "_block").c_str());
+      EmitMemberName(struct_type_id, 0, resourceName.c_str());
+      EmitName(var_id, ("bwsl_" + resourceName).c_str());
+    }
+
     uniformBufferIds[binding] = var_id;
     bindingSets[resourceCount] = 0;
     bindingIndices[resourceCount] = (u8)actualBinding;
@@ -177,15 +204,24 @@ void SPIRVBuilder::DeclareResources() {
     u32 resolved = ResolveVertexPullingCollisionBinding(vertexPullingConfig, set, binding);
     EmitDecoration(variable, spv::DecorationDescriptorSet, &set, 1);
     EmitDecoration(variable, spv::DecorationBinding, &resolved, 1);
+    // A one-to-one pair stays a combined image, so GLSL declares it under
+    // this name. The prefix keeps it clear of GLSL keywords and builtins
+    // (a resource named "texture" would otherwise be renamed by
+    // SPIRV-Cross). Separate pairs are renamed by the GLSL wrapper after
+    // build_combined_image_samplers().
+    std::string textureName = GetResourceName(ResourceBinding::Texture, binding);
+    if (!textureName.empty())
+      EmitName(variable, ("t_" + textureName).c_str());
     textureIds[binding] = variable;
     bindingSets[resourceCount] = 0;
     bindingIndices[resourceCount++] = static_cast<u8>(resolved);
   }
-  auto declareSampler = [&](u32 binding) {
+  auto declareSampler = [&](u32 binding, const std::string& name) {
     u32 variable = AllocateId();
     u32 pointer = GetPointerTypeId(GetSamplerTypeId(), spv::StorageClassUniformConstant);
     u32 ops[] = {pointer, variable, spv::StorageClassUniformConstant};
     EmitToSection(&globals, spv::OpVariable, ops, 3);
+    EmitName(variable, name.c_str());
     u32 set = 2;
     EmitDecoration(variable, spv::DecorationDescriptorSet, &set, 1);
     EmitDecoration(variable, spv::DecorationBinding, &binding, 1);
@@ -195,9 +231,14 @@ void SPIRVBuilder::DeclareResources() {
   };
   if (symbols) for (u32 binding = 0; binding < 32; ++binding) {
     if (samplerPlan.samplers & (1u << binding))
-      samplerIds[binding] = declareSampler(ResolveSeparateSamplerBinding(*symbols, binding));
-    if (samplerPlan.defaults & (1u << binding))
-      defaultSamplerIds[binding] = declareSampler(ResolveDefaultSamplerBinding(*symbols, binding));
+      samplerIds[binding] = declareSampler(ResolveSeparateSamplerBinding(*symbols, binding),
+                                           GetResourceName(ResourceBinding::Sampler, binding));
+    if (samplerPlan.defaults & (1u << binding)) {
+      std::string textureName = GetResourceName(ResourceBinding::Texture, binding);
+      defaultSamplerIds[binding] = declareSampler(
+          ResolveDefaultSamplerBinding(*symbols, binding),
+          textureName.empty() ? std::string() : "bwsl_" + textureName + "_sampler");
+    }
   }
 
   // ============= Storage Buffers =============

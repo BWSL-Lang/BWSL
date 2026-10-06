@@ -579,44 +579,44 @@ TRANSLATION_EXPECTATION_TESTS = {
     "interpolation_decorators": {
         "vert": {
             "spirv_contains": [
-                "OpDecorate %varying0 Flat",
-                "OpDecorate %varying1 NoPerspective",
+                "OpDecorate %v_materialIndex Flat",
+                "OpDecorate %v_screenUV NoPerspective",
             ],
             "hlsl_contains": [
-                "nointerpolation float varying0 : TEXCOORD0",
-                "noperspective float2 varying1 : TEXCOORD1",
+                "nointerpolation float v_materialIndex : TEXCOORD0",
+                "noperspective float2 v_screenUV : TEXCOORD1",
             ],
             "glsl_contains": [
-                "layout(location = 0) flat out float varying0",
-                "layout(location = 1) noperspective out vec2 varying1",
+                "layout(location = 0) flat out float v_materialIndex",
+                "layout(location = 1) noperspective out vec2 v_screenUV",
             ],
             "gles_contains": [
                 "#extension GL_NV_shader_noperspective_interpolation : require",
-                "flat out float varying0",
-                "noperspective out vec2 varying1",
+                "flat out float v_materialIndex",
+                "noperspective out vec2 v_screenUV",
             ],
         },
         "frag": {
             "spirv_contains": [
-                "OpDecorate %varying0 Flat",
-                "OpDecorate %varying1 NoPerspective",
+                "OpDecorate %v_materialIndex Flat",
+                "OpDecorate %v_screenUV NoPerspective",
             ],
             "metal_contains": [
-                "float varying0 [[user(locn0), flat]]",
-                "float2 varying1 [[user(locn1), center_no_perspective]]",
+                "float v_materialIndex [[user(locn0), flat]]",
+                "float2 v_screenUV [[user(locn1), center_no_perspective]]",
             ],
             "hlsl_contains": [
-                "nointerpolation float varying0 : TEXCOORD0",
-                "noperspective float2 varying1 : TEXCOORD1",
+                "nointerpolation float v_materialIndex : TEXCOORD0",
+                "noperspective float2 v_screenUV : TEXCOORD1",
             ],
             "glsl_contains": [
-                "layout(location = 0) flat in float varying0",
-                "layout(location = 1) noperspective in vec2 varying1",
+                "layout(location = 0) flat in float v_materialIndex",
+                "layout(location = 1) noperspective in vec2 v_screenUV",
             ],
             "gles_contains": [
                 "#extension GL_NV_shader_noperspective_interpolation : require",
-                "flat in highp float varying0",
-                "noperspective in highp vec2 varying1",
+                "flat in highp float v_materialIndex",
+                "noperspective in highp vec2 v_screenUV",
             ],
         },
     },

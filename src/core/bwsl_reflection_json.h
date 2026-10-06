@@ -106,6 +106,18 @@ inline void AppendHLSLResourcesJson(std::ostringstream& json,
     if (!first) json << "]";
 }
 
+// Name the GL/GLES output declares a resource under. GL hosts without
+// layout(binding) need it for glGetUniformBlockIndex/glGetUniformLocation.
+// Separate texture/sampler pairs are listed in combinedSamplerUniforms
+// instead, and plain samplers have no GL declaration of their own.
+inline std::string GLNameForResource(const ReflectedResourceBinding& resource) {
+    if (resource.type == ::ResourceBinding::UniformBuffer)
+        return resource.name + "_block";
+    if (resource.type == ::ResourceBinding::Texture && !resource.separateImageSampler)
+        return "t_" + resource.name;
+    return {};
+}
+
 inline void AppendCompactResourceReflectionJson(
     std::ostringstream& json,
     const std::vector<ReflectedResourceBinding>& resources) {
@@ -123,6 +135,9 @@ inline void AppendCompactResourceReflectionJson(
         json << "\"binding\":" << resource.binding << ",";
         json << "\"stages\":" << StageFlagsToJsonArray(resource.stages) << ",";
         json << "\"access\":\"" << ResourceAccessToString(resource.access) << "\"";
+        const std::string glName = GLNameForResource(resource);
+        if (!glName.empty())
+            json << ",\"glName\":\"" << EscapeJsonString(glName) << "\"";
         if (resource.combinedSampledImage) {
             json << ",\"abi\":\"combined_sampled_image\"";
             if (!resource.combinedWith.empty()) {
@@ -159,6 +174,9 @@ inline std::string BuildPrettyResourceBindingsJson(
         json += "      \"binding\": " + std::to_string(binding.binding) + ",\n";
         json += "      \"stages\": " + StageFlagsToJsonArray(binding.stages, true) + ",\n";
         json += "      \"access\": \"" + std::string(ResourceAccessToString(binding.access)) + "\"";
+        const std::string glName = GLNameForResource(binding);
+        if (!glName.empty())
+            json += ",\n      \"glName\": \"" + EscapeJsonString(glName) + "\"";
         if (binding.combinedSampledImage) {
             json += ",\n      \"abi\": \"combined_sampled_image\"";
             if (!binding.combinedWith.empty()) {

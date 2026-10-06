@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 #include <stdexcept>
 
@@ -276,6 +277,7 @@ struct GLESBuilder {
     const RenderConfig* renderConfig;
     const IRAnalysis* analysis;              // For attribute/output types
     IR::PassVaryingContext* varyings;        // Vertex→Fragment varyings
+    std::string attributeNames[16];          // Source names by attribute location
     u32 workgroupSizeX;
     u32 workgroupSizeY;
     u32 workgroupSizeZ;
@@ -319,6 +321,12 @@ struct GLESBuilder {
 
     std::string_view Emit();
 
+    // Vertex inputs are emitted as "a_<name>" to match the SPIR-V path;
+    // locations without a name fall back to "attr<N>".
+    void SetAttributeName(u32 attributeIndex, std::string name) {
+        if (attributeIndex < 16) attributeNames[attributeIndex] = std::move(name);
+    }
+
     void SetComputeWorkgroupSize(u32 x, u32 y, u32 z) {
         workgroupSizeX = x;
         workgroupSizeY = y;
@@ -355,6 +363,7 @@ private:
     void EmitStructFieldName(u32 fieldHash);
     void EmitStructFieldNameByIndex(u32 structHash, u16 fieldIdx);
     void EmitRegisterType(u16 reg);
+    void EmitAttributeName(u32 attributeIndex);
     void EmitTextureLevelsUniformName(u16 texReg);
 
     // ===== Expression Emission =====

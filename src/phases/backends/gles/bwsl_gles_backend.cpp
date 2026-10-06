@@ -182,6 +182,16 @@ void GLESBuilder::EmitRegisterType(u16 reg) {
     EmitType(static_cast<u16>(regType));
 }
 
+void GLESBuilder::EmitAttributeName(u32 attributeIndex) {
+    if (attributeIndex < 16 && !attributeNames[attributeIndex].empty()) {
+        out.Lit("a_");
+        out.Str(attributeNames[attributeIndex].c_str());
+        return;
+    }
+    out.Lit("attr");
+    out.Uint(attributeIndex);
+}
+
 void GLESBuilder::EmitTextureLevelsUniformName(u16 texReg) {
     out.Lit("bwsl_texture_levels_");
     if ((texReg & 0xF000) == 0x2000) {
@@ -239,8 +249,8 @@ void GLESBuilder::EmitInputs() {
                     out.Uint(i);
                     out.Lit(") in ");
                     EmitType(static_cast<u16>(type));
-                    out.Lit(" attr");
-                    out.Uint(i);
+                    out.Chr(' ');
+                    EmitAttributeName(i);
                     out.Lit(";\n");
                 }
             }
@@ -413,10 +423,12 @@ void GLESBuilder::EmitUniforms() {
 
             if (!stageMatch) continue;
 
-            // Emit as std140 uniform block
-            out.Lit("layout(std140) uniform UB_");
+            // Emit as std140 uniform block. Names match the SPIR-V backend
+            // so passes mixing both GLES emitters bind the same blocks:
+            //   uniform <name>_block { <type> <name>; } bwsl_<name>;
+            out.Lit("layout(std140) uniform ");
             out.Str(ub.name.c_str());
-            out.Lit(" {\n");
+            out.Lit("_block {\n");
             out.Lit("    ");
 
             // Map type name to GLSL type
@@ -430,9 +442,9 @@ void GLESBuilder::EmitUniforms() {
             else if (ub.typeName == "uint") glslType = "uint";
 
             out.Str(glslType);
-            out.Lit(" u_");
+            out.Chr(' ');
             out.Str(ub.name.c_str());
-            out.Lit(";\n} ub_");
+            out.Lit(";\n} bwsl_");
             out.Str(ub.name.c_str());
             out.Lit(";\n");
         }
@@ -1996,9 +2008,7 @@ void GLESBuilder::EmitLoadExpr(u32 instIdx) {
         }
 
         case IR::OP_LOAD_ATTR: {
-            u16 attrIdx = Op(instIdx, 0);
-            out.Lit("attr");
-            out.Uint(attrIdx);
+            EmitAttributeName(Op(instIdx, 0));
             return;
         }
 
@@ -2044,8 +2054,8 @@ void GLESBuilder::EmitLoadExpr(u32 instIdx) {
             if (renderConfig) {
                 for (const auto& ub : renderConfig->uniformBuffers) {
                     if (ub.bindingIndex != uniformIdx) continue;
-                    out.Lit("ub_"); out.Str(ub.name.c_str());
-                    out.Lit(".u_"); out.Str(ub.name.c_str());
+                    out.Lit("bwsl_"); out.Str(ub.name.c_str());
+                    out.Chr('.'); out.Str(ub.name.c_str());
                     return;
                 }
             }
@@ -2201,7 +2211,7 @@ void GLESBuilder::EmitTexture(u16 reg, u32 metadata) {
                 out.Lit("_sampler_2_"); out.Uint(binding);
                 return;
             }
-            out.Lit("u_"); out.Str(texture.name.c_str());
+            out.Lit("t_"); out.Str(texture.name.c_str());
             return;
         }
     }

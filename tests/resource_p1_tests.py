@@ -87,7 +87,7 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
     for name in ("texture3d_drops_z", "texture_slot_32", "resource_slot_32_mixed", "sampler_gpu", "sampler_shared",
                  "sampler_mixed_default", "sampler_cross_stage", "sampler_helper", "pipeline_scope",
                  "sampler_operations", "texture_query_size_levels", "pointer_address_taken_control_flow",
-                 "texture_sample_grad_cmp_gather"):
+                 "texture_sample_grad_cmp_gather", "gl_interface_names", "gl_interface_names_mixed"):
         for mode in ("-gles", "-gles-direct"):
             directory = out / (name + mode)
             directory.mkdir(exist_ok=True)
@@ -111,9 +111,26 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
                     for pair in resource.get("combinedSamplerUniforms", []):
                         if pair["name"] not in text:
                             row["errors"].append("Reflected sampler pair uniform is missing: " + pair["name"])
+                    gl_name = resource.get("glName")
+                    if gl_name and not re.search(r"\b" + re.escape(gl_name) + r"\b", text):
+                        row["errors"].append("Reflected glName is not declared: " + gl_name)
+            # ES 3.00 links varyings by name, so every fragment input must be a
+            # vertex output, even when the stages come from different emitters.
+            def interface_names(path: Path, qualifier: str) -> set[str]:
+                pattern = r"\b" + qualifier + r"\s+(?:\w+\s+)*?(v_\w+|varying\d+)\s*;"
+                return set(re.findall(pattern, path.read_text())) if path.exists() else set()
+            for shader in [p for p in shaders if p.suffix == ".frag"]:
+                missing = interface_names(shader, "in") - interface_names(shader.with_suffix(".vert"), "out")
+                if missing:
+                    row["errors"].append("Fragment inputs not written by the vertex stage: " + ", ".join(sorted(missing)))
+            if name == "gl_interface_names":
+                for expected in ("render_block", "bwsl_render", "input_block", "t_texture",
+                                 "a_position", "a_sample", "v_output", "v_tint"):
+                    if not re.search(r"\b" + expected + r"\b", text):
+                        row["errors"].append("Missing GL interface name: " + expected)
             if name == "texture3d_drops_z" and "sampler3D" not in text:
                 row["errors"].append("GLES lost the 3D texture type")
-            if name in {"texture_slot_32", "resource_slot_32_mixed"} and mode == "-gles-direct" and "u_tex32" not in text:
+            if name in {"texture_slot_32", "resource_slot_32_mixed"} and mode == "-gles-direct" and "t_tex32" not in text:
                 row["errors"].append("Direct GLES selected the wrong compacted resource name")
             good = not row["errors"]
             passed += int(good)

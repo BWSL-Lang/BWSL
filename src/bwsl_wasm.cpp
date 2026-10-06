@@ -608,6 +608,20 @@ static ShaderOutput CompileShaderStage(
     vpConfig.descriptorSet = 0;
     builder.SetVertexPullingConfig(vpConfig);
     builder.SetUseStd430Padding(true);  // For GLSL ES compatibility
+    if (varyingContext) {
+        for (u32 i = 0; i < varyingContext->count; i++) {
+            builder.SetVaryingName(varyingContext->varyings[i].slot,
+                                   varyingContext->varyings[i].name);
+        }
+    }
+    if (!pipelineRef.IsNull()) {
+        const PipelineData& pipelineData = context.ast.GetPipeline(pipelineRef);
+        for (u32 i = 0; i < pipelineData.attributes.count; i++) {
+            if (pipelineData.attributes[i].Type() != ASTNodeType::ATTRIBUTE_DECL) continue;
+            const AttributeDeclData& attr = context.ast.GetAttributeDecl(pipelineData.attributes[i]);
+            builder.SetAttributeName(attr.attributeIndex, ReverseLookup::GetString(attr.name.nameHash));
+        }
+    }
 
     builder.EmitFunction();
     std::vector<u32> spirv = builder.Finalize();
