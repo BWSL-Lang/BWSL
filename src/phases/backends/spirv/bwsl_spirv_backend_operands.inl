@@ -38,47 +38,47 @@ u32 SPIRVBuilder::GetResultType(u16 dest_reg, u16 op1_reg) {
     }
   }
 
-  // Fallback: use first operand's type
-  if (op1_reg & 0x8000) {
-    // Float constant
-    return GetTypeId(CoreType::FLOAT);
-  } else if (op1_reg & 0x4000) {
-    // Int constant
-    return GetTypeId(CoreType::INT);
-  } else if (op1_reg & 0x2000) {
-    // Uint constant
-    return GetTypeId(CoreType::UINT);
-  } else if (ir->registerTypes && op1_reg < ir->registerCount) {
-    CoreType op1Type = static_cast<CoreType>(ir->registerTypes[op1_reg]);
-    if (op1Type == CoreType::CUSTOM || op1Type == CoreType::ENUM) {
-      if (ir->registerStructTypes) {
-        u32 structHash = ir->registerStructTypes[op1_reg];
-        if (structHash != 0) {
-          typeId = GetStructTypeId(structHash);
-          if (typeId != 0)
-            return typeId;
+    // Fallback: use first operand's type
+    if (op1_reg & 0x8000) {
+        // Float constant
+        return GetTypeId(CoreType::FLOAT);
+    } else if (IR::IsIntConstant(op1_reg)) {
+        // Int constant
+        return GetTypeId(CoreType::INT);
+    } else if (IR::IsUintConstant(op1_reg)) {
+        // Uint constant
+        return GetTypeId(CoreType::UINT);
+    } else if (ir->registerTypes && op1_reg < ir->registerCount) {
+        CoreType op1Type = static_cast<CoreType>(ir->registerTypes[op1_reg]);
+        if (op1Type == CoreType::CUSTOM || op1Type == CoreType::ENUM) {
+            if (ir->registerStructTypes) {
+                u32 structHash = ir->registerStructTypes[op1_reg];
+                if (structHash != 0) {
+                    typeId = GetStructTypeId(structHash);
+                    if (typeId != 0)
+                        return typeId;
+                }
+            }
+        } else {
+            typeId = GetTypeId(op1Type);
+            if (typeId != 0)
+                return typeId;
         }
-      }
-    } else {
-      typeId = GetTypeId(op1Type);
-      if (typeId != 0)
-        return typeId;
     }
-  }
 
   // Ultimate fallback: float is the most common type in shaders
   return GetTypeId(CoreType::FLOAT);
 }
 
 CoreType SPIRVBuilder::GetOperandType(u16 reg) {
-  if ((reg & 0xC000) == 0xC000)
-    return CoreType::BOOL; // Bool constant
-  if (reg & 0x8000)
-    return CoreType::FLOAT; // Float constant
-  if (reg & 0x4000)
-    return CoreType::INT; // Int constant
-  if (reg & 0x2000)
-    return CoreType::UINT; // Uint constant
+    if ((reg & 0xC000) == 0xC000)
+        return CoreType::BOOL; // Bool constant
+    if (reg & 0x8000)
+        return CoreType::FLOAT; // Float constant
+    if (IR::IsIntConstant(reg))
+        return CoreType::INT; // Int constant
+    if (IR::IsUintConstant(reg))
+        return CoreType::UINT; // Uint constant
 
   if (ir->registerTypes && reg < ir->registerCount) {
     return static_cast<CoreType>(ir->registerTypes[reg]);

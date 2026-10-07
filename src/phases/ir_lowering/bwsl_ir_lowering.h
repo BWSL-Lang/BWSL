@@ -21,7 +21,7 @@ namespace BWSL::IR {
 
 // Maximum number of registers supported for a single shader pass
 // Stay below the 14-bit operand tag boundary while accommodating inlined PBR/IBL.
-static constexpr u32 MAX_REGISTERS = 8192;
+static constexpr u32 MAX_REGISTERS = IR::RegisterLimit;
 using BWSL::IsArray;
 using BWSL::MakeOverloadMask;
 using BWSL::MakeOverloadMaskFromTypeHash;
@@ -155,6 +155,17 @@ struct IRLowering {
   // binary/function-call trees from fuzzer inputs) blows the thread stack
   // without a cap. Guarded in LowerExpression with MAX_LOWER_DEPTH.
   u32 lowerDepth = 0;
+
+    struct SourceNodeGuard {
+        IRBuilder& builder;
+        u32 savedNode;
+        SourceNodeGuard(IRBuilder& target, NodeRef node)
+            : builder(target), savedNode(target.currentSourceNode) {
+            builder.currentSourceNode = node.packed;
+        }
+        ~SourceNodeGuard() { builder.currentSourceNode = savedNode; }
+    };
+
 
   // Map AST node refs to registers (keyed by packed NodeRef value)
   std::unordered_map<u32, u16> nodeRegisters;

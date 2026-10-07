@@ -5,6 +5,7 @@
 namespace BWSL::IR {
 
 inline void IRLowering::LowerStatement(NodeRef ref) {
+    SourceNodeGuard sourceGuard(builder, ref);
   switch (ref.Type()) {
   case ASTNodeType::ASSIGNMENT:
     LowerAssignment(ref);

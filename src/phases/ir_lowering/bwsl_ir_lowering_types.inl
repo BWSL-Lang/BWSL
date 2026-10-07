@@ -808,29 +808,38 @@ inline u32 IRLowering::GetCoreTypeNameHash(CoreType type) {
 }
 
 inline u16 IRLowering::AllocateRegister() {
-  // Cap at MAX_REGISTERS - 1. Pathological inputs can exhaust u16 register
-  // space; once past MAX_REGISTERS, registerStorageInfo / registerTypes
-  // indexing OOBs. Returning the same sentinel repeatedly produces bad
-  // SPIR-V (SPIR-V validation will reject it) but avoids the crash.
-  if (builder.nextRegister >= MAX_REGISTERS - 1) {
-    return MAX_REGISTERS - 1;
-  }
-  u16 reg = builder.nextRegister++;
-  if (reg >= program.registerCount) {
-    program.registerCount = reg + 1;
-  }
-  return reg;
+    // Do not enter the tagged-constant range or return the invalid marker.
+    if (builder.nextRegister >= MAX_REGISTERS) {
+        NodeRef node;
+        node.packed = builder.currentSourceNode;
+        if (!hadError) ReportErrorAt(node, "Shader register limit exceeded (16383 registers). Split or simplify the shader.\n");
+        return 0;
+    }
+    u16 reg = builder.nextRegister++;
+    if (reg >= program.registerCount) {
+        program.registerCount = reg + 1;
+    }
+    return reg;
 }
 
 inline u16 IRLowering::EmitConstantInt(u32 value) {
-  for (u16 i = 0; i < program.intCount; i++) {
-    if (program.intConstants[i] == value) {
-      return 0x4000 | i;
+    for (u32 i = 0; i < program.intCount; i++) {
+        if (program.intConstants[i] == value) return 0x4000 | (u16)i;
     }
-  }
-  u32 slot = program.intCount++;
-  program.intConstants[slot] = value;
-  return 0x4000 | (u16)slot;
+    if (program.intCount >= IntegerConstantLimit) {
+        NodeRef node;
+        node.packed = builder.currentSourceNode;
+        if (!hadError) ReportErrorAt(node, "Signed integer constant limit exceeded (8192 values). Split or simplify the shader.\n");
+        return 0x4000;
+    }
+    if (program.intCount == program.intCapacity) {
+        program.intCapacity = std::min(program.intCapacity * 2, IntegerConstantLimit);
+        program.intConstants = (u32*)pool->Reallocate(
+            program.intConstants, program.intCapacity * sizeof(u32), 64);
+    }
+    u32 slot = program.intCount++;
+    program.intConstants[slot] = value;
+    return 0x4000 | (u16)slot;
 }
 
 // Fold only pure integer ASTs. In particular, do not infer constants from a
@@ -943,19 +952,19 @@ inline bool IRLowering::CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
   u32 length = program.localArraySizes[arrayIdx];
   if (length == 0) return true;
 
-  s64 indexValue;
-  if ((indexReg & 0xC000) == 0x4000) {
-    u16 slot = indexReg & 0x3FFF;
-    if (slot >= program.intCount) return true;
-    indexValue = static_cast<s32>(program.intConstants[slot]);
-  } else if ((indexReg & 0xE000) == 0x2000) {
-    u16 slot = indexReg & 0x1FFF;
-    if (slot >= program.uintCount) return true;
-    indexValue = program.uintConstants[slot];
-  } else {
-    bool isUnsigned;
-    if (!TryFoldArrayIndex(ast, indexExpr, &indexValue, &isUnsigned)) return true;
-  }
+    s64 indexValue;
+    if (IR::IsIntConstant(indexReg)) {
+        u16 slot = indexReg & 0x3FFF;
+        if (slot >= program.intCount) return true;
+        indexValue = static_cast<s32>(program.intConstants[slot]);
+    } else if (IR::IsUintConstant(indexReg)) {
+        u16 slot = indexReg & 0x1FFF;
+        if (slot >= program.uintCount) return true;
+        indexValue = program.uintConstants[slot];
+    } else {
+        bool isUnsigned;
+        if (!TryFoldArrayIndex(ast, indexExpr, &indexValue, &isUnsigned)) return true;
+    }
 
   if (indexValue < 0 || indexValue >= static_cast<s64>(length)) {
     char msg[160];
@@ -970,14 +979,23 @@ inline bool IRLowering::CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
 }
 
 inline u16 IRLowering::EmitConstantUint(u32 value) {
-  for (u16 i = 0; i < program.uintCount; i++) {
-    if (program.uintConstants[i] == value) {
-      return 0x2000 | i;
+    for (u32 i = 0; i < program.uintCount; i++) {
+        if (program.uintConstants[i] == value) return 0x6000 | (u16)i;
     }
-  }
-  u32 slot = program.uintCount++;
-  program.uintConstants[slot] = value;
-  return 0x2000 | (u16)slot;
+    if (program.uintCount >= IntegerConstantLimit) {
+        NodeRef node;
+        node.packed = builder.currentSourceNode;
+        if (!hadError) ReportErrorAt(node, "Unsigned integer constant limit exceeded (8192 values). Split or simplify the shader.\n");
+        return 0x6000;
+    }
+    if (program.uintCount == program.uintCapacity) {
+        program.uintCapacity = std::min(program.uintCapacity * 2, IntegerConstantLimit);
+        program.uintConstants = (u32*)pool->Reallocate(
+            program.uintConstants, program.uintCapacity * sizeof(u32), 64);
+    }
+    u32 slot = program.uintCount++;
+    program.uintConstants[slot] = value;
+    return 0x6000 | (u16)slot;
 }
 
 inline u16 IRLowering::ConvertRegisterToType(u16 reg, CoreType targetType) {
@@ -1022,21 +1040,21 @@ inline u16 IRLowering::GetOrAllocateVariable(u32 nameHash) {
 }
 
 inline CoreType IRLowering::GetRegisterType(u16 reg) {
-  // Constants have type encoded in high bits
-  // Check order matters: bool (0xC000) must be checked before float (0x8000)
-  if ((reg & 0xC000) == 0xC000)
-    return CoreType::BOOL; // Bool constant (0xC000 prefix)
-  if (reg & 0x8000)
-    return CoreType::FLOAT; // Float constant (0x8000 prefix)
-  if (reg & 0x4000)
-    return CoreType::INT; // Int constant (0x4000 prefix)
-  if (reg & 0x2000)
-    return CoreType::UINT; // Uint constant (0x2000 prefix)
+    // Constants have type encoded in high bits
+    // Check order matters: bool (0xC000) must be checked before float (0x8000)
+    if ((reg & 0xC000) == 0xC000)
+        return CoreType::BOOL; // Bool constant (0xC000 prefix)
+    if (reg & 0x8000)
+        return CoreType::FLOAT; // Float constant (0x8000 prefix)
+    if (IR::IsIntConstant(reg))
+        return CoreType::INT; // Int constant (0x4000 prefix)
+    if (IR::IsUintConstant(reg))
+        return CoreType::UINT; // Uint constant (0x6000 prefix)
 
-  if (reg < program.registerCount) {
-    return static_cast<CoreType>(program.registerTypes[reg]);
-  }
-  return CoreType::FLOAT; // Default
+    if (reg < program.registerCount) {
+        return static_cast<CoreType>(program.registerTypes[reg]);
+    }
+    return CoreType::FLOAT; // Default
 }
 
 inline void IRLowering::SetRegisterType(u16 reg, CoreType type) {

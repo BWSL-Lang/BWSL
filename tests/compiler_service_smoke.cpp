@@ -17,7 +17,8 @@ int main(int argc, char** argv) {
     std::ofstream(dir / "Varyings.bwsl") << "pipeline Varyings { pass \"Main\" { vertex { output.position=float4(1.0); output.uv=float2(0.5); output.tint=float4(0.25); } fragment { output.color=input.tint+float4(input.uv,0.0,1.0); } } }";
     std::ofstream(dir / "VaryingNameClash.bwsl") << "pipeline VaryingNameClash { struct v_uv { float x; } pass \"Main\" { vertex { output.position=float4(1.0); output.uv=float2(0.5); } fragment { output.color=float4(input.uv,0.0,1.0); } } }";
     RenderConfig config;
-    for (auto name : {"Good", "Bad", "UnknownName", "GLNameClash", "Varyings", "VaryingNameClash"}) {
+    for (auto name : {"Good", "Bad", "UnknownName", "GLNameClash", "Varyings", "VaryingNameClash",
+                      "LoweringOverflow", "SSAOverflow"}) {
         RenderConfig::PassData pass;
         pass.name = "Main";
         pass.descriptor.pipelineName = name;
@@ -48,6 +49,8 @@ int main(int argc, char** argv) {
         assert(hasName(varyings->fragmentSpirv, name));
     }
     assert(service.GetOrCompileVariant("VaryingNameClash", "Main", 0) == nullptr);
+    assert(service.GetOrCompileVariant("LoweringOverflow", "Main", 0) == nullptr);
+    assert(service.GetOrCompileVariant("SSAOverflow", "Main", 0) == nullptr);
     service.HandleFileChange((dir / "Good.bwsl").string());
     assert(service.GetOrCompileVariant("Good", "Main", 0));
     std::puts("Compiler service valid/cache/reload/lowering-error/gl-name checks: PASS");

@@ -376,7 +376,7 @@ inline std::vector<ExplicitSamplerUse> CollectExplicitSamplerUses(const IR::IRPr
                 const u32 metadata = ir.metadata[i];
 
                 const u16 texReg = ir.GetOperand(i, 0);
-                if ((texReg & 0xF000) != 0x2000) {
+                if ((texReg & 0xF000) != 0x6000) {
                     break;
                 }
 

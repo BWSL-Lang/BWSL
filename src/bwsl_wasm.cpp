@@ -240,8 +240,11 @@ static std::string EmitDirectGLES(IRProgram& program,
     }
 
     Memory::BWEMemoryArena glesArena;
-    char glesMem[128 * 1024];
-    glesArena.Initialize(glesMem, sizeof(glesMem));
+    const size_t glesScratchBytes = std::max<size_t>(128 * 1024,
+        static_cast<size_t>(program.registerCount) * sizeof(GLES::RegInfo) +
+        program.structTypeCount + 128);
+    std::vector<char> glesMem(glesScratchBytes);
+    glesArena.Initialize(glesMem.data(), glesMem.size());
 
     GLES::GLESBuilder glesBuilder;
     glesBuilder.Initialize(&glesArena, sourceBase, &program, cfgPtr, stage,
@@ -564,7 +567,9 @@ static ShaderOutput CompileShaderStage(
     Memory::BWEMemoryArena cfgArena;
     // Match the native compiler's CFG/SSA budget without consuming the
     // constrained WebAssembly stack. Selected-arm expressions add blocks.
-    std::vector<char> cfgMem(512 * 1024);
+    const size_t stageScratchBytes = std::max<size_t>(512 * 1024,
+        static_cast<size_t>(lowering.program.instructionCount) * 512);
+    std::vector<char> cfgMem(stageScratchBytes);
     cfgArena.Initialize(cfgMem.data(), cfgMem.size());
 
     CFGBuilder cfgBuilder;
@@ -585,13 +590,19 @@ static ShaderOutput CompileShaderStage(
         cfgPtr = &cfgBuilder.cfg;
 
         if (cfgBuilder.cfg.blockCount > 1) {
-            SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena);
+            if (!SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena)) {
+                NodeRef node;
+                node.packed = lowering.program.ssaFailureSourceNode;
+                lowering.ReportErrorAt(node, "SSA register limit exceeded (16383 registers). Split or simplify the shader.\n");
+                output.error = lowering.diagnostics.back();
+                return output;
+            }
         }
     }
 
     // Generate SPIR-V
     Memory::BWEMemoryArena spirvArena;
-    std::vector<char> spirvMem(512 * 1024);
+    std::vector<char> spirvMem(stageScratchBytes);
     spirvArena.Initialize(spirvMem.data(), spirvMem.size());
 
     SPIRVBuilder builder;

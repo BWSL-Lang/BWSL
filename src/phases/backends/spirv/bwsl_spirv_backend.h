@@ -451,12 +451,12 @@ inline u32 SPIRVBuilder::GetSpirvId(u16 ir_register, bool readValue) {
         if (idx >= ir->floatCount) return 0;
         return GetFloatConstantId(ir->floatConstants[idx]);
     }
-    if (ir_register & 0x4000) {
+    if (IR::IsIntConstant(ir_register)) {
         u32 idx = ir_register & 0x3FFF;
         if (idx >= ir->intCount) return 0;
         return GetIntConstantId(ir->intConstants[idx], false);
     }
-    if (ir_register & 0x2000) {
+    if (IR::IsUintConstant(ir_register)) {
         u32 idx = ir_register & 0x1FFF;
         if (idx >= ir->uintCount) return 0;
         return GetIntConstantId(ir->uintConstants[idx], true);
@@ -537,12 +537,12 @@ inline u32 SPIRVBuilder::GetSpirvIdForBitwise(u16 ir_register, bool useUint) {
         u32 idx = ir_register & 0x7FFF;
         return GetFloatConstantId(ir->floatConstants[idx]);
     }
-    if (ir_register & 0x4000) {
+    if (IR::IsIntConstant(ir_register)) {
         // Int constant - use the appropriate signedness
         u32 idx = ir_register & 0x3FFF;
         return GetIntConstantId(ir->intConstants[idx], useUint);
     }
-    if (ir_register & 0x2000) {
+    if (IR::IsUintConstant(ir_register)) {
         // Uint constant - always unsigned
         u32 idx = ir_register & 0x1FFF;
         return GetIntConstantId(ir->uintConstants[idx], true);

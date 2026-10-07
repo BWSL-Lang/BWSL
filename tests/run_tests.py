@@ -3481,6 +3481,13 @@ def main() -> int:
     passed += p1_passed
     failed += p1_failed
 
+    from register_namespace_tests import run_register_namespace_tests
+    register_passed, register_failed = run_register_namespace_tests(
+        bwslc, output_dir / "register_namespace",
+        equiv_runner_path(root) if args.equivalence else None)
+    passed += register_passed
+    failed += register_failed
+
     if metal_validation:
         from resource_p1_tests import run_resource_p1_suite
         resource_passed, resource_failed = run_resource_p1_suite(bwslc, output_dir, verbose)
