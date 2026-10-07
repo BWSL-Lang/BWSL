@@ -161,6 +161,9 @@ resources {
 
 Notes:
 
+- Module-defined payloads use `Module::Type`, including `buffer<Module::Type>`
+  and `cbuffer<Module::Type>`. The legacy `Module.Type` resource spelling is
+  deprecated but remains accepted as an alias. Unknown payload types are errors.
 - Resources are declared once per pipeline.
 - Resources are used per pass via `use resources { ... }`.
 - Resources are read in shaders through `resources.<name>`.

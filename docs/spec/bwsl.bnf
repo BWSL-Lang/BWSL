@@ -18,9 +18,8 @@
 # - The lexer recognizes 'void', but the parser's current declaration/return
 #   type masks do not accept it in normal type positions. It is therefore not
 #   included in <core-type> below.
-# - Resource declarations parse their type text until ';', '}', or the next
-#   resource-name ':' pair. The productions below describe the supported type
-#   text used by the compiler.
+# - Module members use '::'. Resource payload types also accept the deprecated
+#   '.' qualifier as a compatibility alias.
 
 <document> ::= <file-item-list>
 
@@ -121,9 +120,13 @@
                   | 'image2D'
                   | 'buffer' '<' <resource-element-type> '>'
                   | 'cbuffer' '<' <resource-element-type> '>'
-                  | <qualified-type-name> <fixed-array-suffix-list>
+                  | <resource-element-type>
 
-<resource-element-type> ::= <type-ref> <fixed-array-suffix-list>
+<resource-element-type> ::= <resource-payload-type> <fixed-array-suffix-list>
+
+<resource-payload-type> ::= <core-type>
+                        | <qualified-type-name>
+                        | <identifier> '.' <identifier>
 
 <variants-block> ::= 'variants' '{' <variant-item-list> '}'
 
@@ -680,7 +683,6 @@
 
 <qualified-type-name> ::= <identifier>
                         | <identifier> '::' <identifier>
-                        | <identifier> '.' <identifier>
 
 <core-type> ::= <scalar-type>
               | <vector-type>

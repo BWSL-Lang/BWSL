@@ -197,6 +197,18 @@ inline std::string QualifiedTypeName(const AST& ast, std::string name, u32 typeP
     return name;
 }
 
+inline ArenaString GetResourcePayloadTypeName(ArenaString typeName) {
+    std::string name = typeName.ToString();
+    if ((name.rfind("buffer<", 0) == 0 || name.rfind("cbuffer<", 0) == 0) &&
+        name.back() == '>') {
+        size_t start = name.find('<') + 1;
+        name = name.substr(start, name.size() - start - 1);
+    }
+    size_t array = name.find('[');
+    if (array != std::string::npos) name.resize(array);
+    return ArenaString::MakeHashOnly(name);
+}
+
 inline std::string ReturnTypeName(const AST& ast, const FunctionDeclData& function,
                                   const char* sourceFile = nullptr) {
     if (function.returnTypeHash != 0) {
@@ -749,6 +761,8 @@ private:
                 SetStableId(binding.id, stableOwner + "/resource:" + ResolveName(resource.name));
             }
             resources_[ScopedKey(OwnerOf(ref), ResolveName(resource.name))] = binding;
+            AddQualifierReference(binding.id, resource.payloadTypePosition,
+                                  "/type-qualifier", ast_.GetDeclarationSource(ref));
         }
 
         for (u32 i = 0; i < ast_.variableDecls.count; i++) {
@@ -871,7 +885,9 @@ private:
             // Locals need their lexical context, which is only available when visited.
             if (!symbol.type.empty() && symbol.kind != "function" && symbol.kind != "method" &&
                 symbol.kind != "variable" && symbol.kind != "constant") {
-                AddReference(symbol.id, EnsureType(symbol.type, symbol.owner).id, "type");
+                const std::string type = symbol.kind == "resource"
+                    ? GetResourcePayloadTypeName(ArenaString::MakeHashOnly(symbol.type)).ToString() : symbol.type;
+                AddReference(symbol.id, EnsureType(type, symbol.owner).id, "type");
             }
         }
         for (auto& entry : fields_) {
@@ -1020,8 +1036,9 @@ private:
     // The qualifier occurrence is `<owner>/type-qualifier`, or
     // `<function>/return-type-qualifier` for a function's return type.
     void AddQualifierReference(const std::string& owner, u32 typePosition,
-                               const char* suffix = "/type-qualifier") {
-        const ModuleNameSite* qualifier = ast_.FindTypeQualifier(typePosition);
+                               const char* suffix = "/type-qualifier",
+                               const char* sourceFile = nullptr) {
+        const ModuleNameSite* qualifier = ast_.FindTypeQualifier(typePosition, sourceFile);
         if (!qualifier) return;
         AddReference(owner + suffix, ModuleIdByNameHash(qualifier->moduleNameHash),
                      "qualifier");

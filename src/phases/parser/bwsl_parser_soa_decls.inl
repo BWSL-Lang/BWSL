@@ -305,6 +305,7 @@ NodeRef Parser::ParsePipeline() {
         MarkNodeEndAtPreviousToken(pipeline);
     }
     RecordMemberSources(pipeline);
+    ValidateResourceTypes(pipeline, true);
     FinalizeParsedResourceBindings(pipeline, firstMemberAccess, firstFunctionCall);
 
     context->root = pipeline;
@@ -966,30 +967,115 @@ NodeRef Parser::ParseResourceDecl() {
         return NodeRef::Null();
     }
 
-    std::string typeName;
-    while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
-        if (Check(TokenType::SEMICOLON)) {
-            Advance();
-            break;
+    const SourceLocation typeLoc = getLocation(stream->GetOffset(current));
+    std::string wrapper;
+    if (Match(TokenType::BUFFER) || Match(TokenType::CBUFFER)) {
+        wrapper = std::string(stream->GetValue(previous));
+        if (!Consume(TokenType::LESS, "Expected '<' after buffer resource type")) {
+            return NodeRef::Null();
         }
-        if (!typeName.empty() && Check(TokenType::IDENTIFIER) && stream->GetType(PeekNext()) == TokenType::COLON) {
-            break;
-        }
-        std::string_view segment = stream->GetValue(current);
-        typeName.append(segment.data(), segment.size());
-        Advance();
     }
 
-    if (typeName.empty()) {
-        Error("Expected resource type after ':'");
+    const TokenRef payloadToken = current;
+    const SourceLocation payloadLoc = getLocation(stream->GetOffset(current));
+    const TokenType payloadTokenType = CurrentTokenType();
+    const bool customType = payloadTokenType == TokenType::IDENTIFIER ||
+        payloadTokenType == TokenType::T || payloadTokenType == TokenType::U || payloadTokenType == TokenType::V;
+    const bool builtinType = payloadTokenType <= TokenType::VOID ||
+        (payloadTokenType >= TokenType::SAMPLER && payloadTokenType <= TokenType::TEXTURE2DARRAY) ||
+        (payloadTokenType >= TokenType::DOUBLE && payloadTokenType <= TokenType::DMAT4);
+    if (!customType && !builtinType) {
+        ErrorAtCurrent("Expected resource type after ':'");
         return NodeRef::Null();
     }
+    Advance();
+    std::string payloadType(stream->GetValue(previous));
+    u32 qualifierIndex = INVALID_INDEX;
+    if (customType && (Match(TokenType::DOUBLE_COLON) || Match(TokenType::DOT))) {
+        std::string moduleName = payloadType;
+        if (!Consume(TokenType::IDENTIFIER, "Expected resource type name after module qualifier")) {
+            return NodeRef::Null();
+        }
+        RecordTypeQualifierBeforeTypeName();
+        qualifierIndex = ast->typeQualifiers.count - 1;
+        payloadType = CanonicalizeModuleQualifiedName(moduleName, std::string(stream->GetValue(previous)));
+    }
+
+    while (Match(TokenType::LEFT_BRACKET)) {
+        u32 size = 0;
+        if (!ParseArraySizeValue(&size) ||
+            !Consume(TokenType::RIGHT_BRACKET, "Expected ']' after resource array size")) {
+            return NodeRef::Null();
+        }
+        payloadType += "[" + std::to_string(size) + "]";
+    }
+    if (!wrapper.empty() && !Consume(TokenType::GREATER, "Expected '>' after buffer element type")) {
+        return NodeRef::Null();
+    }
+    std::string typeName = wrapper.empty() ? payloadType : wrapper + "<" + payloadType + ">";
+    Match(TokenType::SEMICOLON);
 
     ReverseLookup::Register(Utils::HashStr(name.c_str()), name.c_str());
     ReverseLookup::Register(Utils::HashStr(typeName.c_str()), typeName.c_str());
     NodeRef resource = ASTFactory::MakeResourceDecl(ast, name, typeName, loc.line, loc.column);
+    ast->GetResourceDecl(resource).typePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
+    ast->GetResourceDecl(resource).payloadTypePosition = AST::PackPosition(payloadLoc.line, payloadLoc.column);
+    resourceTypeSites[resource.packed] = {payloadToken, qualifierIndex};
     AttachDocComment(resource, declToken);
     return resource;
+}
+
+void Parser::ValidateResourceTypes(NodeRef owner, bool ownerIsPipeline, u32 firstResource) {
+    // Resource payloads may refer to structs or imports declared later in the
+    // owner's body. Check them once that body is complete, in its own scope.
+    const auto& declarations = ownerIsPipeline ? ast->GetPipeline(owner).resources : ast->GetModule(owner).resources;
+    typeCache.Clear();
+    for (u32 i = firstResource; i < declarations.count; i++) {
+        NodeRef ref = declarations[i];
+        auto site = resourceTypeSites.find(ref.packed);
+        if (site == resourceTypeSites.end()) continue;
+        ResourceDeclData& declaration = ast->GetResourceDecl(ref);
+        std::string typeName = declaration.typeName.ToString(sourceBase());
+        std::string wrapper;
+        std::string payload = ParseInnerResourceType(typeName, "buffer<");
+        if (!payload.empty()) wrapper = "buffer";
+        else {
+            payload = ParseInnerResourceType(typeName, "cbuffer<");
+            if (!payload.empty()) wrapper = "cbuffer";
+            else payload = typeName;
+        }
+        std::string base = StripFixedArraySuffixes(payload);
+        std::string canonicalBase = CanonicalizeTypeName(base);
+        payload = canonicalBase + payload.substr(base.size());
+        typeName = wrapper.empty() ? payload : wrapper + "<" + payload + ">";
+        ReverseLookup::Register(Utils::HashStr(typeName.c_str()), typeName.c_str());
+        declaration.typeName = ArenaString::MakeHashOnly(typeName);
+
+        if (site->second.qualifierIndex != INVALID_INDEX) {
+            ModuleNameSite& qualifier = ast->typeQualifiers[site->second.qualifierIndex];
+            u32 moduleIdx = ResolveModuleIndexByWrittenName(qualifier.name);
+            if (moduleIdx != INVALID_INDEX && moduleIdx < symbolTable.modules.count) {
+                qualifier.moduleNameHash = symbolTable.modules[moduleIdx].name.nameHash;
+            }
+        }
+
+        // Resource handles include spellings outside ResolveType's value-type table.
+        const bool resourceHandle = canonicalBase == "sampler" || canonicalBase == "texture2D" ||
+            canonicalBase == "texture3D" || canonicalBase == "textureCube" ||
+            canonicalBase == "texture2DArray" || canonicalBase == "image2D";
+        TypeInfo info = ResolveType(canonicalBase);
+        if (!ownerIsPipeline && !resourceHandle && canonicalBase.find("::") == std::string::npos) {
+            TypeInfo local = ResolveType(ast->GetModule(owner).name.ToString(sourceBase()) + "::" + canonicalBase);
+            if (local.coreType != CoreType::INVALID) info = local;
+        }
+        if (!resourceHandle && (info.coreType == CoreType::INVALID || info.coreType == CoreType::VOID ||
+            info.coreType == CoreType::GENERIC_T || info.coreType == CoreType::GENERIC_U || info.coreType == CoreType::GENERIC_V)) {
+            panicMode = false;
+            ErrorAt(site->second.token, "Unknown resource type '" + canonicalBase + "'");
+        } else if (ownerIsPipeline) {
+            RegisterParsedResource(declaration.name.ToString(sourceBase()), typeName, declaration.resourceIndex);
+        }
+    }
 }
 
 //==============================================================================

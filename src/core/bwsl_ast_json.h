@@ -508,8 +508,9 @@ inline void AppendTypeQualifierField(std::ostringstream& json, bool& first,
                                      const AST& ast, u32 typePosition,
                                      const std::string& owner,
                                      const char* field = "typeQualifier",
-                                     const char* suffix = "/type-qualifier") {
-    const ModuleNameSite* qualifier = ast.FindTypeQualifier(typePosition);
+                                     const char* suffix = "/type-qualifier",
+                                     const char* sourceFile = nullptr) {
+    const ModuleNameSite* qualifier = ast.FindTypeQualifier(typePosition, sourceFile);
     if (!qualifier) return;
     AppendFieldName(json, first, field);
     bool qualifierFirst = true;
@@ -1065,6 +1066,9 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             const ResourceDeclData& node = ast.GetResourceDecl(ref);
             AppendArenaStringFields(json, first, "name", node.name);
             AppendArenaStringFields(json, first, "typeName", node.typeName);
+            AppendPackedPosition(json, first, node.typePosition, "typeLine", "typeColumn");
+            AppendTypeQualifierField(json, first, ast, node.payloadTypePosition, NodeRefId(ref),
+                                     "typeQualifier", "/type-qualifier", ast.GetDeclarationSource(ref));
             AppendUIntField(json, first, "resourceIndex", node.resourceIndex);
             break;
         }

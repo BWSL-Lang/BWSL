@@ -85,8 +85,12 @@ NodeRef Parser::RecordFoldedConstant(NodeRef literal, NodeRef qualifier, TokenRe
 
 void Parser::RecordTypeQualifierBeforeTypeName() {
     if (previous < 2 ||
-        stream->GetType(previous - 1) != TokenType::DOUBLE_COLON ||
-        stream->GetType(previous - 2) != TokenType::IDENTIFIER) {
+        (stream->GetType(previous - 1) != TokenType::DOUBLE_COLON &&
+         stream->GetType(previous - 1) != TokenType::DOT) ||
+        (stream->GetType(previous - 2) != TokenType::IDENTIFIER &&
+         stream->GetType(previous - 2) != TokenType::T &&
+         stream->GetType(previous - 2) != TokenType::U &&
+         stream->GetType(previous - 2) != TokenType::V)) {
         return;
     }
     const TokenRef qualifier = previous - 2;
@@ -105,6 +109,7 @@ void Parser::RecordTypeQualifierBeforeTypeName() {
 
 void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
                              const std::string& moduleName) {
+    const u32 firstResource = ast->GetModule(module).resources.count;
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
         ProgressGuard _pg_(this);
         if (Match(TokenType::IMPORT)) {
@@ -265,6 +270,7 @@ void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
     // A submodule body runs with currentSourceName set to the submodule file,
     // so merged members keep their own file instead of the parent's.
     RecordMemberSources(module);
+    ValidateResourceTypes(module, false, firstResource);
 }
 
 NodeRef Parser::ParseModule() {
