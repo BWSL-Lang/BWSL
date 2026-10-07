@@ -952,19 +952,19 @@ inline bool IRLowering::CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
   u32 length = program.localArraySizes[arrayIdx];
   if (length == 0) return true;
 
-  s64 indexValue;
-  if (IR::IsIntConstant(indexReg)) {
-    u16 slot = indexReg & 0x3FFF;
-    if (slot >= program.intCount) return true;
-    indexValue = static_cast<s32>(program.intConstants[slot]);
-  } else if (IR::IsUintConstant(indexReg)) {
-    u16 slot = indexReg & 0x1FFF;
-    if (slot >= program.uintCount) return true;
-    indexValue = program.uintConstants[slot];
-  } else {
-    bool isUnsigned;
-    if (!TryFoldArrayIndex(ast, indexExpr, &indexValue, &isUnsigned)) return true;
-  }
+    s64 indexValue;
+    if (IR::IsIntConstant(indexReg)) {
+        u16 slot = indexReg & 0x3FFF;
+        if (slot >= program.intCount) return true;
+        indexValue = static_cast<s32>(program.intConstants[slot]);
+    } else if (IR::IsUintConstant(indexReg)) {
+        u16 slot = indexReg & 0x1FFF;
+        if (slot >= program.uintCount) return true;
+        indexValue = program.uintConstants[slot];
+    } else {
+        bool isUnsigned;
+        if (!TryFoldArrayIndex(ast, indexExpr, &indexValue, &isUnsigned)) return true;
+    }
 
   if (indexValue < 0 || indexValue >= static_cast<s64>(length)) {
     char msg[160];
@@ -1040,21 +1040,21 @@ inline u16 IRLowering::GetOrAllocateVariable(u32 nameHash) {
 }
 
 inline CoreType IRLowering::GetRegisterType(u16 reg) {
-  // Constants have type encoded in high bits
-  // Check order matters: bool (0xC000) must be checked before float (0x8000)
-  if ((reg & 0xC000) == 0xC000)
-    return CoreType::BOOL; // Bool constant (0xC000 prefix)
-  if (reg & 0x8000)
-    return CoreType::FLOAT; // Float constant (0x8000 prefix)
-  if (IR::IsIntConstant(reg))
-    return CoreType::INT; // Int constant (0x4000 prefix)
-  if (IR::IsUintConstant(reg))
-    return CoreType::UINT; // Uint constant (0x6000 prefix)
+    // Constants have type encoded in high bits
+    // Check order matters: bool (0xC000) must be checked before float (0x8000)
+    if ((reg & 0xC000) == 0xC000)
+        return CoreType::BOOL; // Bool constant (0xC000 prefix)
+    if (reg & 0x8000)
+        return CoreType::FLOAT; // Float constant (0x8000 prefix)
+    if (IR::IsIntConstant(reg))
+        return CoreType::INT; // Int constant (0x4000 prefix)
+    if (IR::IsUintConstant(reg))
+        return CoreType::UINT; // Uint constant (0x6000 prefix)
 
-  if (reg < program.registerCount) {
-    return static_cast<CoreType>(program.registerTypes[reg]);
-  }
-  return CoreType::FLOAT; // Default
+    if (reg < program.registerCount) {
+        return static_cast<CoreType>(program.registerTypes[reg]);
+    }
+    return CoreType::FLOAT; // Default
 }
 
 inline void IRLowering::SetRegisterType(u16 reg, CoreType type) {
