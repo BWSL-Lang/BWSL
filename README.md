@@ -150,6 +150,27 @@ Native build:
 
     sudo apt install clang lld cmake
 
+Running the full test suite (`--all-validators --equivalence`, WASM and
+compiler-service smoke tests), additionally:
+
+    sudo apt install python3 nodejs glslang-tools spirv-tools libvulkan-dev mesa-vulkan-drivers vulkan-tools
+
+- `libvulkan-dev` is needed to build `build/equiv_runner` (`make equiv_runner`).
+  `mesa-vulkan-drivers` provides a Vulkan driver; without a GPU (e.g. WSL),
+  its llvmpipe software driver works. `vulkaninfo --summary` shows which
+  device is used.
+- DXC isn't packaged. Download `linux_dxc_*.x86_x64.tar.gz` from the
+  [DXC releases](https://github.com/microsoft/DirectXShaderCompiler/releases),
+  extract it anywhere, and put its `bin/` on `PATH` or set `BWSL_DXC` to
+  `bin/dxc`. With DXC 1.9, pass `--hlsl-spirv-opt "$(command -v spirv-opt)"`
+  to the equivalence runs (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+- For `make wasm`, install the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html)
+  (no apt package needed):
+
+      git clone https://github.com/emscripten-core/emsdk.git ~/emsdk
+      ~/emsdk/emsdk install latest && ~/emsdk/emsdk activate latest
+      source ~/emsdk/emsdk_env.sh
+
 Cross-compilation, additionally:
 
 | Target | Package |

@@ -19,6 +19,7 @@
 #include "phases/control_flow/bwsl_cfg.h"
 #include "core/bwsl_render_config.h"
 #include "core/bwsl_ast_soa.h"
+#include "core/bwsl_gl_names.h"
 #include "core/bwsl_resource_reflection.h"
 #include "phases/ir_lowering/bwsl_ir_lowering.h"  // For PassVaryingContext, VaryingInfo
 #include "phases/ir_generation/bwsl_ir_analysis.h"  // For IRAnalysis
@@ -276,6 +277,8 @@ struct GLESBuilder {
     const RenderConfig* renderConfig;
     const IRAnalysis* analysis;              // For attribute/output types
     IR::PassVaryingContext* varyings;        // Vertex→Fragment varyings
+    ArenaString attributeNames[16] = {};     // Source names by attribute location
+    u16 attributeNameMask = 0;               // Bit i: attributeNames[i] is set
     u32 workgroupSizeX;
     u32 workgroupSizeY;
     u32 workgroupSizeZ;
@@ -319,6 +322,14 @@ struct GLESBuilder {
 
     std::string_view Emit();
 
+    // Vertex inputs are emitted as "a_<name>" to match the SPIR-V path;
+    // locations without a name fall back to "attr<N>".
+    void SetAttributeName(u32 attributeIndex, ArenaString name) {
+        if (attributeIndex >= 16) return;
+        attributeNames[attributeIndex] = name;
+        attributeNameMask |= static_cast<u16>(1u << attributeIndex);
+    }
+
     void SetComputeWorkgroupSize(u32 x, u32 y, u32 z) {
         workgroupSizeX = x;
         workgroupSizeY = y;
@@ -355,6 +366,8 @@ private:
     void EmitStructFieldName(u32 fieldHash);
     void EmitStructFieldNameByIndex(u32 structHash, u16 fieldIdx);
     void EmitRegisterType(u16 reg);
+    void EmitAttributeName(u32 attributeIndex);
+    void EmitGLName(GLNameKind kind, const char* source);
     void EmitTextureLevelsUniformName(u16 texReg);
 
     // ===== Expression Emission =====

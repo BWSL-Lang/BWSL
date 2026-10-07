@@ -8,6 +8,7 @@
 #include "core/bwsl_defs.h"
 #include "core/bwsl_compiler_types.h"  // For ShaderStage, VertexAttributeType
 #include "core/bwsl_arena.h"
+#include "core/bwsl_gl_names.h"
 #include "SPIRV-Headers/include/spirv/unified1/spirv.hpp"
 #include <vector>
 #include <unordered_map>
@@ -216,6 +217,17 @@ struct SPIRVBuilder {
     // ============= Debug Options =============
     bool emitDebugNames = false;  // Emit OpName/OpMemberName for debugging
 
+    // ============= Interface Names =============
+    // Source names of vertex->fragment varyings, indexed by 0-based varying
+    // slot. Both stages of a pass must receive the same names, so the driver
+    // fills them from the shared PassVaryingContext. Unset slots fall back
+    // to "varying<N>".
+    const char* varyingNames[16] = {};
+    // Source names of vertex attributes, indexed by attribute location.
+    // Bit i of attributeNameMask says whether attributeNames[i] is set.
+    ArenaString attributeNames[16] = {};
+    u16 attributeNameMask = 0;
+
     // ============= Layout Options =============
     bool useStd430Padding = true;   // Use 16-byte stride for vec3[] in SSBOs.
                                     // REQUIRED for Vulkan: std140/std430/relaxed
@@ -359,6 +371,22 @@ struct SPIRVBuilder {
     
     // Debug options
     void SetEmitDebugNames(bool emit) { emitDebugNames = emit; }
+
+    // Interface names. These are emitted regardless of emitDebugNames:
+    // GL hosts without layout(binding) look blocks and samplers up by name,
+    // and ES 3.00 links varyings by name.
+    void SetVaryingName(u32 slot, const char* name) {
+        if (slot < 16) varyingNames[slot] = name;
+    }
+    void SetAttributeName(u32 attributeIndex, ArenaString name) {
+        if (attributeIndex >= 16) return;
+        attributeNames[attributeIndex] = name;
+        attributeNameMask |= static_cast<u16>(1u << attributeIndex);
+    }
+    bool FindResourceName(ResourceBinding::Type type, u32 bindingIndex,
+                          ArenaString* name) const;
+    void EmitGLName(u32 id, GLNameKind kind, ArenaString source);
+    void EmitVaryingName(u32 varId, u32 varyingSlot, u32 fallbackIndex);
 
     // Layout options
     void SetUseStd430Padding(bool use) { useStd430Padding = use; }

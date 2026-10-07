@@ -4,6 +4,7 @@
 #include "core/bwsl_custom_type_registry.h"
 #include "core/bwsl_defs.h"
 #include "core/bwsl_diagnostics.h"
+#include "core/bwsl_gl_names.h"
 #include "phases/ir_generation/bwsl_ir_analysis.h" // For OutputSlot constants
 #include "phases/ir_generation/bwsl_ir_gen.h"
 #include "core/bwsl_mem_pool.h"
@@ -49,6 +50,8 @@ struct PassVaryingContext {
   std::string diagnosticPassName;
   const char *diagnosticStageName = "vertex";
   bool varyingLimitDiagnosed = false;
+  // Pipeline-level GL names a new varying's v_<name> must not repeat.
+  const std::vector<GLReservedName> *reservedGLNames = nullptr;
 
   // Add a new varying or return existing slot
   // `typeConflict` reports a store whose type differs from the varying's
@@ -476,6 +479,7 @@ struct IRLowering {
   bool IsAllowedFragmentOutput(u32 nameHash) const;
   CoreType GetFragmentOutputType(u32 nameHash) const;
 
+  void CheckVaryingGLName(u32 varyingIndex, NodeRef diagnosticNode);
   u32 ResolveOutputSlotForStore(u32 nameHash, CoreType valueType,
                                 const char *nameStr,
                                 InterpolationMode interpolation,

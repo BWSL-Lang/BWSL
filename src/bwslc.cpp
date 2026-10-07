@@ -1686,6 +1686,21 @@ static void PrintDiagnosticsJson(const CompilerConfig& config,
                                       stream, sourceLines).c_str());
 }
 
+// Gives a backend the source name of every pipeline attribute so vertex
+// inputs are emitted as "a_<name>" (SPIRVBuilder and GLES::GLESBuilder).
+template <typename Builder>
+static void SetAttributeNames(Builder& builder, const AST& ast, NodeRef pipelineRef) {
+    if (pipelineRef.IsNull()) {
+        return;
+    }
+    const PipelineData& pipeline = ast.GetPipeline(pipelineRef);
+    for (u32 i = 0; i < pipeline.attributes.count; i++) {
+        if (pipeline.attributes[i].Type() != ASTNodeType::ATTRIBUTE_DECL) continue;
+        const AttributeDeclData& attr = ast.GetAttributeDecl(pipeline.attributes[i]);
+        builder.SetAttributeName(attr.attributeIndex, attr.name);
+    }
+}
+
 static u8 BuildPassAttributeMask(const AST& ast, NodeRef pipelineRef, NodeRef passRef) {
     if (pipelineRef.IsNull() || passRef.IsNull()) {
         return 0;
@@ -2242,6 +2257,7 @@ CompileResult CompileShaderStage(
         glesBuilder.Initialize(&glesArena, parser.sourceBase(),
                                &lowering.program, cfgPtr, stage,
                                &pass, renderConfig, &glesAnalysis, varyingContext);
+        SetAttributeNames(glesBuilder, context.ast, pipelineRef);
         if (stage == ShaderStage::Compute && shaderStageData) {
             glesBuilder.SetComputeWorkgroupSize(shaderStageData->workgroupSizeX,
                                                 shaderStageData->workgroupSizeY,
@@ -2290,6 +2306,13 @@ CompileResult CompileShaderStage(
     vpConfig.descriptorSet = 0;
     builder.SetVertexPullingConfig(vpConfig);
     builder.SetEmitDebugNames(debugNames);
+    if (varyingContext) {
+        for (u32 i = 0; i < varyingContext->count; i++) {
+            builder.SetVaryingName(varyingContext->varyings[i].slot,
+                                   varyingContext->varyings[i].name);
+        }
+    }
+    SetAttributeNames(builder, context.ast, pipelineRef);
     builder.SetUseStd430Padding(useStd430Padding);
 
     builder.EmitFunction();
@@ -3591,6 +3614,24 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                       sourceBase,
                                                       "Pipeline");
 
+    // Interface names are API on GL (see core/bwsl_gl_names.h), so two
+    // declarations that would produce the same one are an error.
+    std::vector<GLReservedName> glReservedNames;
+    std::string glNameError;
+    u32 glNamePosition = 0;
+    if (!GLNames::CheckPipelineNames(context.ast, pipeline, parser.symbolTable,
+                                     &glReservedNames, &glNameError, &glNamePosition)) {
+        DiagnosticSpan span{};
+        AST::UnpackPosition(glNamePosition, span.line, span.column);
+        if (span.line != 0) span.SetLocation();
+        diagnostics.AddRaw(DiagnosticSeverity::Error,
+                           DiagnosticPhase::Compile,
+                           glNameError,
+                           span,
+                           config.inputFile);
+        return fail(&stream, &sourceLines);
+    }
+
     ComputeGraphCompileResult graphResult = CompileComputeGraph(
         context.ast, context.ast.GetPipeline(originalPipelineRef), config.renderConfig, sourceBase);
     if (!graphResult.success) {
@@ -3673,6 +3714,7 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
         passVaryings.diagnosticStream = &diagnostics;
         passVaryings.diagnosticPassName = passName;
         passVaryings.diagnosticStageName = "vertex";
+        passVaryings.reservedGLNames = &glReservedNames;
         IRAnalysis vertexReflectionAnalysis{};
         IRAnalysis fragmentReflectionAnalysis{};
         IRAnalysis computeReflectionAnalysis{};

@@ -1,0 +1,15 @@
+// Varying names are kept to their first 31 characters, so these two would
+// both be emitted as v_aVeryLongVaryingNameThatIsTooLo.
+pipeline GLNameVaryingTruncated {
+    pass "Main" {
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+            output.aVeryLongVaryingNameThatIsTooLong_A = 1.0;
+            output.aVeryLongVaryingNameThatIsTooLong_B = 2.0;
+        }
+        fragment {
+            output.color = float4(input.aVeryLongVaryingNameThatIsTooLong_A,
+                                  input.aVeryLongVaryingNameThatIsTooLong_B, 0.0, 1.0);
+        }
+    }
+}

@@ -45,6 +45,21 @@ u32 SPIRVBuilder::CreateInterfaceVariable(CoreType type,
   return var_id;
 }
 
+// Names a varying "v_<source name>" when the driver supplied one, otherwise
+// "varying<fallbackIndex>". Both stages derive the name from the same slot,
+// so the vertex output and fragment input always match.
+void SPIRVBuilder::EmitVaryingName(u32 varId, u32 varyingSlot,
+                                   u32 fallbackIndex) {
+  const char *sourceName = varyingSlot < 16 ? varyingNames[varyingSlot] : nullptr;
+  if (sourceName && sourceName[0]) {
+    EmitGLName(varId, GLNameKind::VARYING, ArenaString::MakeHashOnly(sourceName));
+    return;
+  }
+  char varyingName[16];
+  snprintf(varyingName, sizeof(varyingName), "varying%u", fallbackIndex);
+  EmitName(varId, varyingName);
+}
+
 // Helper: Get fallback attribute type by index
 // With user-defined attributes, only position (index 0) is known to be float3
 static CoreType GetFallbackAttributeType(u8 attrIdx) {
@@ -117,6 +132,8 @@ void SPIRVBuilder::DeclareInputOutput() {
 
         u32 var_id = CreateInterfaceVariable(type, spv::StorageClassInput,
                                              attrIdx, spv::BuiltInMax);
+        if (attributeNameMask & (1u << attrIdx))
+          EmitGLName(var_id, GLNameKind::ATTRIBUTE, attributeNames[attrIdx]);
         inputIds[inputCount] = var_id;
         inputLocations[inputCount] = attrIdx;
         inputCount++;
@@ -153,11 +170,8 @@ void SPIRVBuilder::DeclareInputOutput() {
           *this, var_id,
           static_cast<InterpolationMode>(analysis.outputInterpolations[slot]));
 
-      // Emit consistent varying names for WebGL compatibility
-      // (GLSL ES 300 matches varyings by name, not location)
-      char varyingName[16];
-      snprintf(varyingName, sizeof(varyingName), "varying%u", locationCounter);
-      EmitName(var_id, varyingName);
+      // GLSL ES 300 matches varyings by name, not location
+      EmitVaryingName(var_id, slot - OutputSlot::VARYING0, locationCounter);
 
       locationCounter++;
       outputIds[outputCount] = var_id;
@@ -199,11 +213,8 @@ void SPIRVBuilder::DeclareInputOutput() {
           *this, var_id,
           static_cast<InterpolationMode>(analysis.inputInterpolations[slot]));
 
-      // Emit consistent varying names for WebGL compatibility
-      // (GLSL ES 300 matches varyings by name, not location)
-      char varyingName[16];
-      snprintf(varyingName, sizeof(varyingName), "varying%u", location);
-      EmitName(var_id, varyingName);
+      // GLSL ES 300 matches varyings by name, not location
+      EmitVaryingName(var_id, location, location);
 
       inputIds[inputCount] = var_id;
       inputLocations[inputCount] =

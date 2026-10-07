@@ -2542,9 +2542,13 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
     bool conflict = false;
     bool typeConflict = false;
     CoreType existingType = CoreType::INVALID;
+    u32 varyingCount = currentPassVaryings->count;
     u32 varyingIndex = currentPassVaryings->AddOrGetSlot(
         nameHash, valueType, nameStr, interpolation, &conflict, &typeConflict,
         &existingType);
+    if (currentPassVaryings->count > varyingCount) {
+      CheckVaryingGLName(varyingIndex, diagnosticNode);
+    }
     if (conflict) {
       ReportErrorAt(diagnosticNode,
                     "Error: conflicting interpolation decorators for varying\n");
@@ -2575,6 +2579,39 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
     return slot;
   }
   return OutputSlot::VARYING0;
+}
+
+// A varying is emitted as v_<name> (stored truncated to 31 characters), which
+// must not repeat a pipeline-level GL name or another varying's name.
+inline void IRLowering::CheckVaryingGLName(u32 varyingIndex,
+                                           NodeRef diagnosticNode) {
+  const VaryingInfo &varying = currentPassVaryings->varyings[varyingIndex];
+  // The emitted name uses the stored (possibly truncated) text; the
+  // diagnostic names the varying as written.
+  GLReservedName entry{};
+  entry.kind = GLNameKind::VARYING;
+  entry.name = GLNames::MakeName(GLNameKind::VARYING,
+                                 ArenaString::MakeHashOnly(varying.name));
+  entry.source = ArenaString::MakeHashOnly(varying.nameHash);
+  std::string collision;
+  if (currentPassVaryings->reservedGLNames) {
+    if (const GLReservedName *earlier = GLNames::FindName(
+            *currentPassVaryings->reservedGLNames, entry.name)) {
+      collision = GLNames::DescribeCollision(entry, *earlier);
+    }
+  }
+  for (u32 i = 0; i < currentPassVaryings->count && collision.empty(); i++) {
+    const VaryingInfo &other = currentPassVaryings->varyings[i];
+    if (i != varyingIndex && strcmp(other.name, varying.name) == 0) {
+      collision = "GL name '" + entry.name.ToString() + "' of " +
+                  GLNames::DescribeOwner(entry) +
+                  " collides with another varying; varying names must "
+                  "differ within their first 31 characters";
+    }
+  }
+  if (!collision.empty()) {
+    ReportErrorAt(diagnosticNode, ("Error: " + collision + "\n").c_str());
+  }
 }
 
 inline u32 IRLowering::ResolveOutputSlotForLoad(u32 nameHash) {

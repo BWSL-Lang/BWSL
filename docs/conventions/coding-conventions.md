@@ -8,7 +8,8 @@ The TLDR is the direction for new code. It holds most strictly in the hot
 back-end passes (CFG, SSA, SPIR-V). The parser, diagnostics, AST reference
 index and CLI tools are looser: they use `std::` containers and structs with
 member functions. When editing those, match the surrounding code rather than
-rewriting it.
+rewriting it. Strings are the exception: new code everywhere uses
+`ArenaString` (see [Types](#types)).
 
 ## Layout and build
 
@@ -89,9 +90,28 @@ rewriting it.
 - Refer to AST nodes with `NodeRef` (a packed type + index), not pointers.
   Prefer indices over pointers in general, so data stays relocatable and
   compact.
-- Identifiers are `ArenaString`s. Compare them by their interned `nameHash`,
-  not by string contents. Use `view()`/`ToString()` only when you need text,
-  e.g. for diagnostics.
+- **Strings are `ArenaString`s.** Use them in place of `std::string` for
+  identifiers, names and any other string a struct stores or a function
+  takes or returns, in every part of the compiler, the CLI and tools
+  included.
+  - Make one with `ArenaString::Make` (text in a source buffer) or
+    `MakeHashOnly` (generated text, e.g. `"ub_" + name`). Both intern the
+    text, so a generated name and a source identifier with the same
+    spelling compare equal.
+  - Compare by the interned `nameHash` (`==` does that), never by string
+    contents. An `ArenaString` has no empty state; return a `bool` and
+    write it through an out-parameter instead (`bool FindX(..., ArenaString*
+    out)`), or keep a bitmask of which slots of an array are set.
+  - Get text only at the edges, where something has to be written out: an
+    `OpName`, GLSL text, JSON, or a diagnostic message. `ToString()` without
+    a source buffer looks the text up by hash and is always correct.
+    `view(sourceBase)` and `ToString(sourceBase)` need the buffer the string
+    came from, which isn't the main file for names declared in a module.
+- `std::string` is only for those edges: building a message or output text,
+  or a temporary while composing a name to intern. Existing code still uses
+  `std::string` widely (`RenderConfig`, reflection, the CLI). Don't convert
+  it as part of unrelated work; convert at the boundary instead
+  (`ArenaString::MakeHashOnly(config.name)`).
 
 ## Data layout
 
@@ -132,9 +152,10 @@ rewriting it.
 - **IR memory** comes from `IRMemoryPool` (`core/bwsl_mem_pool.h`), created
   per stage and passed into `IRLowering::Initialize`.
 - **Avoid in new compiler code:** raw `new`/`delete`, `malloc` (except for
-  arena backing buffers), and `std::` containers in CFG/SSA/SPIR-V.
-  `std::string`/`std::vector` are acceptable in the CLI, diagnostics, AST
-  JSON/reference index and other code that isn't on the hot path.
+  arena backing buffers), `std::string` in place of `ArenaString` (see
+  [Types](#types)), and `std::` containers in CFG/SSA/SPIR-V. `std::vector`
+  is acceptable in the CLI, diagnostics, AST JSON/reference index and other
+  code that isn't on the hot path.
 
 ## Errors and diagnostics
 
