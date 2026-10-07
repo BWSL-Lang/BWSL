@@ -368,6 +368,44 @@ void SPIRVBuilder::SimplifyTrivialPhis() {
   }
 }
 
+void SPIRVBuilder::EmitLocalNames() {
+  if (!emitDebugNames) return;
+
+  // Wait until body emission has resolved copies and trivial PHIs. Never
+  // allocate IDs for debug metadata: unused locals must stay unused, and the
+  // default binary must not change. Several registers can alias a single ID.
+  std::vector<bool> named(nextId, false);
+  for (u32 offset = 0; offset < debugNames.count;) {
+    u32 header = debugNames.words[offset];
+    u32 count = header >> 16;
+    if ((header & 0xFFFF) == spv::OpName && count >= 3) {
+      u32 id = debugNames.words[offset + 1];
+      if (id < named.size()) named[id] = true;
+    }
+    offset += count;
+  }
+  auto nameId = [&](u32 id, u32 hash) {
+    if (id == 0 || id >= named.size() || named[id] || hash == 0) return;
+    std::string name = ReverseLookup::GetString(hash);
+    if (!name.empty()) {
+      EmitName(id, name.c_str());
+      named[id] = true;
+    }
+  };
+
+  if (ir->registerNameHashes) {
+    u32 count = std::min(ir->registerCount, IR::RegisterLimit);
+    for (u32 reg = 0; reg < count && reg < idCapacity; reg++) {
+      nameId(spirvIds[reg], ir->registerNameHashes[reg]);
+    }
+  }
+  if (ir->localArrayNameHashes) {
+    for (u32 i = 0; i < ir->localArrayCount; i++) {
+      nameId(localArrayVarIds[i], ir->localArrayNameHashes[i]);
+    }
+  }
+}
+
 void SPIRVBuilder::EmitFunction() {
   // Emit the main shader function
   // 1. Declare interface variables
@@ -394,6 +432,7 @@ void SPIRVBuilder::EmitFunction() {
 
   // 6. Emit function body
   EmitFunctionBody();
+  EmitLocalNames();
 
   // 7. OpFunctionEnd
   Emit(spv::OpFunctionEnd);

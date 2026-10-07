@@ -41,6 +41,9 @@ struct IRProgram {
     
     // Register allocation info
     alignas(64) u16* registerTypes;        // CoreType for each register
+    // Source local identity, independent of per-instruction diagnostic nodes.
+    // Zero means unnamed. SSA copies this table when growing register metadata.
+    u32* registerNameHashes = nullptr;
     alignas(64) u32* registerLifetimes;    // Packed first:16|last:16 instruction
     alignas(64) u32* registerSpillSlots;   // 0xFFFFFFFF if not spilled
     u32 registerCount;
@@ -164,6 +167,16 @@ struct IRProgram {
     alignas(64) u16* localArrayRegisters;
     u32 localArrayCount;
     u32 localArrayCapacity;
+
+    void InheritRegisterName(u16 dest, u16 source) {
+        // STORE_REG can alias an existing SSA value. Keep that value's first
+        // name rather than relabeling another local (or a tagged constant).
+        if (registerNameHashes && !IsConstant(dest) && !IsConstant(source) &&
+            dest < registerCount && source < registerCount &&
+            registerNameHashes[dest] == 0) {
+            registerNameHashes[dest] = registerNameHashes[source];
+        }
+    }
 
     // Buffer element types
     // Index by binding slot (0-31)
@@ -667,6 +680,10 @@ struct IRBuilder {
         program->structureInfo[idx] = 0;
         program->continueInfo[idx] = NO_BLOCK;
         program->ClearBranchTargets(idx);
+
+        // Preserve every assigned result, including straight-line stages that
+        // skip SSA entirely. Register copies may already have a source name.
+        if (opcode == OP_STORE_REG) program->InheritRegisterName(s0, dest);
         
         program->instructionCount = currentInstruction;
     }
