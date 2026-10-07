@@ -222,6 +222,26 @@ def run_local_debug_names_tests(compiler: Path) -> tuple[int, int]:
             glsl = (target / "locals.glsl.frag").read_text()
             self.assertNotRegex(glsl, r"\bfloat\s+gl_local\b")
 
+        def test_address_taken_local_keeps_its_storage_name(self):
+            body = '''
+                int value = int(input.uv.x * 10.0);
+                int^ cursor = ^value;
+                cursor^ += 2;
+                output.color = float4(float(value), float(cursor^), 0.0, 1.0);
+            '''
+            target, debug = self.compile(body)
+            debug_names = names(debug)
+            storage = [args[1] for op, args in debug if op == 59 and args[2] == 7]
+            self.assertTrue(any(debug_names.get(id) == "value" for id in storage))
+            self.assertTrue(all(debug_names.get(id) != "cursor" for id in storage))
+            for suffix in ("glsl.frag", "gles.frag", "frag.metal", "frag.hlsl"):
+                self.assertRegex((target / f"locals.{suffix}").read_text(),
+                                 r"\bint\s+value(?:_\d+)?\b")
+            _, plain = self.compile(body, debug=False)
+            self.assertTrue({"value", "cursor"}.isdisjoint(names(plain).values()))
+            self.assertEqual([inst for inst in plain if inst[0] != 5],
+                             [inst for inst in debug if inst[0] != 5])
+
         def test_debug_names_off_and_semantics_unchanged(self):
             _, plain = self.compile(EXAMPLE, debug=False)
             _, debug = self.compile(EXAMPLE, debug=True)

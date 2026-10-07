@@ -395,6 +395,11 @@ void SPIRVBuilder::EmitLocalNames() {
 
   if (ir->registerNameHashes) {
     u32 count = std::min(ir->registerCount, IR::RegisterLimit);
+    // Address-taken locals have a separate Function-storage variable. Name
+    // those slots first so a pointer alias cannot rename the pointee's storage.
+    for (u32 reg = 0; reg < count && reg < idCapacity; reg++) {
+      nameId(localVarIds[reg], ir->registerNameHashes[reg]);
+    }
     for (u32 reg = 0; reg < count && reg < idCapacity; reg++) {
       nameId(spirvIds[reg], ir->registerNameHashes[reg]);
     }
