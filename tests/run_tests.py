@@ -3471,15 +3471,15 @@ def main() -> int:
     passed += module_passed
     failed += module_failed
 
-    from p1_regression_tests import run_p1_regression_tests
-    p1_passed, p1_failed = run_p1_regression_tests(bwslc, output_dir / "p1_validation")
-    passed += p1_passed
-    failed += p1_failed
-
     from name_validation_tests import run_name_validation_suite
     names_passed, names_failed = run_name_validation_suite(bwslc)
     passed += names_passed
     failed += names_failed
+
+    from p1_regression_tests import run_p1_regression_tests
+    p1_passed, p1_failed = run_p1_regression_tests(bwslc, output_dir / "p1_validation")
+    passed += p1_passed
+    failed += p1_failed
 
     if metal_validation:
         from resource_p1_tests import run_resource_p1_suite
