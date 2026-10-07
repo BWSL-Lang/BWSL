@@ -3515,6 +3515,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
         return fail(&stream, &sourceLines);
     }
 
+    if (!parser.ValidateNames()) return fail(&stream, &sourceLines);
+
     // Handle module files differently - they don't have pipelines to compile
     if (isModule) {
         if (config.errorsJson) {

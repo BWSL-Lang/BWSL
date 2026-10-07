@@ -486,6 +486,7 @@ private:
         shaderSet.cachedParser->Init(shaderSet.cachedLexer.get(), shaderSet.cachedTokens.get(),
                                     shaderSet.cachedContext.get());
         
+        shaderSet.cachedParser->currentSourceName = shaderSet.bwslPath;
         shaderSet.cachedParser->ParseDocument();
         
         if (shaderSet.cachedParser->hadError) {
@@ -503,6 +504,15 @@ private:
                                               shaderSet.cachedParser.get(),
                                               shaderSet.cachedContext->root,
                                               &comptimeError)) {
+            return false;
+        }
+        if (!shaderSet.cachedParser->ValidateNames()) {
+            const DiagnosticStream& diagnostics = shaderSet.cachedContext->Diag();
+            for (u32 i = 0; i < diagnostics.Count(); i++) {
+                fprintf(stderr, "%s:%u:%u: %s\n", diagnostics.GetFile(i).c_str(),
+                        diagnostics.lines[i], diagnostics.columns[i],
+                        diagnostics.FormatMessage(i).c_str());
+            }
             return false;
         }
         shaderSet.cachedParser->ResolveShaderStages(shaderSet.cachedContext->root);

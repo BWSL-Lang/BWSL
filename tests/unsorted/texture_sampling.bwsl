@@ -8,38 +8,38 @@ pipeline TextureSampling {
     }
 
     // Function that takes texture and sampler as parameters
-    sampleTexture2D :: (sampler2D tex, float2 uv) -> float4 {
-        return texture2D(tex, uv);
+    sampleTexture2D :: (texture2D tex, float2 uv) -> float4 {
+        return sample(tex, uv);
     }
 
     // Sample with explicit LOD
-    sampleWithLod :: (sampler2D tex, float2 uv, float lod) -> float4 {
+    sampleWithLod :: (texture2D tex, float2 uv, float lod) -> float4 {
         return sample_lod(tex, uv, lod);
     }
 
     // Sample with gradients
-    sampleWithGrad :: (sampler2D tex, float2 uv, float2 ddxUV, float2 ddyUV) -> float4 {
+    sampleWithGrad :: (texture2D tex, float2 uv, float2 ddxUV, float2 ddyUV) -> float4 {
         return sample_grad(tex, uv, ddxUV, ddyUV);
     }
 
     // Cubemap sampling
-    sampleCubemap :: (samplerCube cube, float3 direction) -> float4 {
-        return textureCube(cube, direction);
+    sampleCubemap :: (textureCube cube, float3 direction) -> float4 {
+        return sample(cube, direction);
     }
 
     // Cubemap with LOD
-    sampleCubemapLod :: (samplerCube cube, float3 direction, float lod) -> float4 {
+    sampleCubemapLod :: (textureCube cube, float3 direction, float lod) -> float4 {
         return sample_lod(cube, direction, lod);
     }
 
     // 3D texture sampling
-    sampleTexture3D :: (sampler3D vol, float3 uvw) -> float4 {
-        return texture3D(vol, uvw);
+    sampleTexture3D :: (texture3D vol, float3 uvw) -> float4 {
+        return sample(vol, uvw);
     }
 
     // Texture array sampling
-    sampleTextureArray :: (sampler2DArray arr, float3 uvLayer) -> float4 {
-        return texture2DArray(arr, uvLayer);
+    sampleTextureArray :: (texture2DArray arr, float3 uvLayer) -> float4 {
+        return sample(arr, uvLayer);
     }
 
     pass "Main" {

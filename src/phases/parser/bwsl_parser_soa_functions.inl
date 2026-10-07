@@ -1158,7 +1158,9 @@ void Parser::ParseFunctionParameters(NodeRef function) {
         };
 
         // Check for type-first syntax: "type name" (C-style)
-        if (CheckMask(TokenMasks::CORE_TYPES)) {
+        if (CheckMask(TokenMasks::CORE_TYPES) || Check(TokenType::TEXTURE2D) ||
+            Check(TokenType::TEXTURE3D) || Check(TokenType::TEXTURECUBE) ||
+            Check(TokenType::TEXTURE2DARRAY) || Check(TokenType::SAMPLER)) {
             Advance();
             paramType = std::string(stream->GetValue(previous));
 
@@ -1221,7 +1223,9 @@ void Parser::ParseFunctionParameters(NodeRef function) {
                 positions.typePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
 
                 // Parse type (could be core type, custom type, or module-qualified type)
-                if (MatchMask(TokenMasks::CORE_TYPES)) {
+                if (MatchMask(TokenMasks::CORE_TYPES) || Match(TokenType::TEXTURE2D) ||
+                    Match(TokenType::TEXTURE3D) || Match(TokenType::TEXTURECUBE) ||
+                    Match(TokenType::TEXTURE2DARRAY) || Match(TokenType::SAMPLER)) {
                     paramType = std::string(stream->GetValue(previous));
                     // Check for pointer type: int^ means pointer to int
                     while (Match(TokenType::BITWISE_XOR)) {

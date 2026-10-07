@@ -3,6 +3,8 @@
 ## unreleased
 
 ### Breaking changes
+- Unresolved names now fail checking in unused functions and standalone
+  modules, with diagnostics pointing to the original source token.
 - Function and method names matching a built-in intrinsic are rejected at
   their declaration, including unused and module functions. Rename such
   functions; the bundled SDF method `distance` is now `signed_distance`.

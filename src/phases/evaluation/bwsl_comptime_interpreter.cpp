@@ -349,7 +349,28 @@ static NodeRef CloneBlockLike(ComptimeState* state, NodeRef node, bool evalBlock
     return cloned;
 }
 
+static NodeRef CloneNodeImpl(ComptimeState* state, NodeRef node);
+
 static NodeRef CloneNode(ComptimeState* state, NodeRef node) {
+    NodeRef cloned = CloneNodeImpl(state, node);
+    if (cloned.IsNull() || cloned == node) return cloned;
+    AST& ast = *state->ast;
+    const u32 namePosition = ast.GetNamePosition(node);
+    if (namePosition != 0) ast.namePositions.Set(state->arena, cloned.packed, namePosition);
+    if (ast.FindEndPosition(node) != 0) {
+        ast.SetEndPosition(cloned, ast.GetEndLine(node), ast.GetEndColumn(node));
+    }
+    if (const char* file = ast.GetDeclarationSource(node)) {
+        ast.SetDeclarationSource(cloned, ast.InternSourceFile(file));
+    }
+    if (node.Type() == ASTNodeType::VARIABLE_DECL && cloned.Type() == node.Type()) {
+        ast.GetVariableDecl(cloned).typePosition = ast.GetVariableDecl(node).typePosition;
+        ast.GetVariableDecl(cloned).namePosition = ast.GetVariableDecl(node).namePosition;
+    }
+    return cloned;
+}
+
+static NodeRef CloneNodeImpl(ComptimeState* state, NodeRef node) {
     if (node.IsNull()) return NodeRef::Null();
     if (state->budget.cloneDepth >= state->budget.maxCloneDepth) {
         Report(state, node, "Comptime clone depth exceeded");
