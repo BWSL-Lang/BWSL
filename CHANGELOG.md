@@ -45,6 +45,12 @@
   example with `ddx_fine`) now links. Both stages use the same varying
   names.
 
+### Diagnostics
+- Shadowed local, parameter, and loop-variable declarations produce a note
+  with both source locations. Compilation still succeeds; errors and
+  warnings take priority over notes in the CLI's limited text display.
+- WASM results include non-blocking notes in a `diagnostics` array.
+
 ### Tooling
 - `make wasm` and `make wasm-debug` link with `em++`, so they build with
   current Emscripten (6.x). `em++` must be on `PATH` instead of

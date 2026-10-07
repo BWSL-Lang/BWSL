@@ -493,6 +493,8 @@ private:
             return false;
         }
 
+        shaderSet.cachedParser->DiagnoseShadowing();
+
         std::string variantResolveError;
         if (!shaderSet.cachedParser->ResolveVariants(shaderSet.cachedContext->root,
                                                      &variantResolveError)) {
@@ -506,15 +508,17 @@ private:
                                               &comptimeError)) {
             return false;
         }
-        if (!shaderSet.cachedParser->ValidateNames()) {
+        const bool namesValid = shaderSet.cachedParser->ValidateNames();
+        {
             const DiagnosticStream& diagnostics = shaderSet.cachedContext->Diag();
             for (u32 i = 0; i < diagnostics.Count(); i++) {
-                fprintf(stderr, "%s:%u:%u: %s\n", diagnostics.GetFile(i).c_str(),
+                fprintf(stderr, "%s:%u:%u: %s: %s\n", diagnostics.GetFile(i).c_str(),
                         diagnostics.lines[i], diagnostics.columns[i],
+                        DiagnosticStream::SeverityName(diagnostics.GetSeverity(i)),
                         diagnostics.FormatMessage(i).c_str());
             }
-            return false;
         }
+        if (!namesValid) return false;
         shaderSet.cachedParser->ResolveShaderStages(shaderSet.cachedContext->root);
 
         AST& ast = shaderSet.cachedContext->ast;

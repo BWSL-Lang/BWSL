@@ -288,6 +288,7 @@ struct Parser {
     // Main parse functions
     NodeRef ParseDocument();
     bool ValidateNames();
+    void DiagnoseShadowing();
     NodeRef ParsePipeline();
 
     // Parse a standalone module or submodule file

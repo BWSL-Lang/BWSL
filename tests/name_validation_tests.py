@@ -1,4 +1,4 @@
-"""Unresolved names must fail before lowering, including unused declarations."""
+"""Name diagnostics: unresolved names fail; variable shadowing emits notes."""
 import argparse
 import json
 from pathlib import Path
@@ -49,6 +49,167 @@ class NameValidationTests(unittest.TestCase):
             self.assertEqual(error["sourceToken"], token, error)
             self.assertEqual(Path(error["file"]).name, file)
             self.assertEqual(error["endColumn"] - error["column"], len(token), error)
+
+    def assert_notes(self, data, names):
+        self.assertTrue(data['success'], data)
+        self.assertEqual(data['errorCount'], 0)
+        self.assertEqual(data['warningCount'], 0)
+        notes = data['diagnostics']
+        self.assertEqual([note['severity'] for note in notes], ['note'] * len(names), notes)
+        self.assertEqual([note['sourceToken'] for note in notes], names, notes)
+        for note in notes:
+            self.assertIn(' shadows ', note['message'])
+            self.assertIn(' declared at ', note['message'])
+        return notes
+
+    def test_nested_shadowing_reports_nearest_declaration_once(self):
+        data = self.compile('''module M {
+            unused :: (float value) -> float {
+                { float value = 2.0; { float value = 3.0; } }
+                return value;
+            }
+        }''')
+        notes = self.assert_notes(data, ['value', 'value'])
+        self.assertIn('shadows parameter', notes[0]['message'])
+        self.assertIn('shadows variable', notes[1]['message'])
+        self.assertTrue(notes[1]['message'].endswith(f":{notes[0]['line']}:{notes[0]['column']}"))
+
+    def test_parameter_and_local_shadow_fields_and_constants(self):
+        data = self.compile('''module M {
+            const float scale = 2.0;
+            struct Box {
+                float size;
+                read :: (float size, float scale) -> float {
+                    { float size = 1.0; }
+                    return size * scale;
+                }
+            }
+        }''')
+        notes = self.assert_notes(data, ['size', 'scale', 'size'])
+        self.assertIn('Parameter', notes[0]['message'])
+        self.assertIn('shadows field', notes[0]['message'])
+        self.assertIn('shadows constant', notes[1]['message'])
+        self.assertIn('shadows parameter', notes[2]['message'])
+
+    def test_loop_declarations_report_shadowing(self):
+        data = self.compile('''module M {
+            unused :: () -> void {
+                int i = 9;
+                float[2] values;
+                for (int i = 0; i < 2; i++) {}
+                for (i in 0..2) {}
+                foreach (i in 0..2) {}
+                for (i in values) {}
+            }
+        }''')
+        self.assert_notes(data, ['i'] * 4)
+
+    def test_comptime_unrolling_keeps_single_written_note(self):
+        data = self.compile('''pipeline P {
+            pass "Main" { vertex {
+                float value = 1.0;
+                int i = 9;
+                eval foreach (i in 0..3) { float value = float(i); }
+                output.position = float4(value);
+            } }
+        }''')
+        self.assert_notes(data, ['i', 'value'])
+
+    def test_sibling_scopes_functions_modules_and_stages_do_not_shadow(self):
+        data = self.compile('''module A {
+            const float value = 1.0;
+            first :: (float arg) -> float { return arg; }
+            second :: (float arg) -> float { return arg; }
+        }
+        module B { const float value = 2.0; }
+        pipeline P {
+            pass "Main" {
+                vertex {
+                    { float value = 1.0; }
+                    { float value = 2.0; }
+                    for (int i = 0; i < 2; i++) {}
+                    for (int i = 0; i < 2; i++) {}
+                    output.position = float4(1.0);
+                }
+                fragment { float value = 3.0; output.color = float4(value); }
+            }
+        }''')
+        self.assert_notes(data, [])
+
+    def test_imported_shadowing_uses_original_file_and_token(self):
+        data = self.compile('''pipeline P { import Geometry
+            pass "Main" { vertex { output.position = float4(1.0); } }
+        }''', {'Geometry.bwsl': '''module Geometry {
+            unused :: (float value) -> float { { float value = 2.0; } return value; }
+        }'''})
+        notes = self.assert_notes(data, ['value'])
+        self.assertEqual(Path(notes[0]['file']).name, 'Geometry.bwsl')
+        self.assertIn('Geometry.bwsl:2:', notes[0]['message'])
+
+    def test_repeated_calls_do_not_duplicate_function_shadow_note(self):
+        data = self.compile('''pipeline P {
+            helper :: (float value) -> float { { float value = 2.0; } return value; }
+            pass "Main" { vertex {
+                output.position = float4(helper(1.0) + helper(2.0));
+            } }
+        }''')
+        self.assert_notes(data, ['value'])
+
+    def test_shadow_note_does_not_hide_unresolved_name_error(self):
+        data = self.compile('''module M {
+            unused :: (float value) -> float {
+                { float value = 2.0; }
+                return missingName;
+            }
+        }''')
+        self.assertFalse(data['success'])
+        self.assertEqual(data['errorCount'], 1)
+        self.assertEqual([d['severity'] for d in data['diagnostics']], ['note', 'error'])
+        self.assertEqual([d['sourceToken'] for d in data['diagnostics']], ['value', 'missingName'])
+
+    def test_implicit_collection_iterator_has_no_invented_name_span(self):
+        data = self.compile('''module M {
+            unused :: () -> void {
+                int it = 0;
+                float[2] values;
+                for (values) {}
+            }
+        }''')
+        self.assert_notes(data, [])
+
+    def test_shadowing_is_visible_in_module_text_and_still_generates_shaders(self):
+        with tempfile.TemporaryDirectory() as directory:
+            module = Path(directory) / 'M.bwsl'
+            module.write_text('module M { f :: (float x) -> float { { float x=2.0; } return x; } }')
+            result = subprocess.run([str(COMPILER), str(module), '-check'], capture_output=True,
+                                    text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('Note', result.stderr)
+            self.assertIn("Variable 'x' shadows parameter", result.stderr)
+            pipeline = Path(directory) / 'P.bwsl'
+            pipeline.write_text('''pipeline P { pass "Main" { vertex {
+                float x=1.0; { float x=2.0; } output.position=float4(x);
+            } } }''')
+            output = Path(directory) / 'out'
+            result = subprocess.run([str(COMPILER), str(pipeline), '-spv', '-errors-json', '-o', str(output)],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            data = json.loads(result.stdout)
+            self.assertTrue(data['success'], data)
+            self.assertEqual([d['severity'] for d in data['diagnostics']], ['note'])
+            self.assertTrue(list(output.glob('*.spv')))
+
+    def test_many_shadow_notes_do_not_hide_text_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'M.bwsl'
+            path.write_text('module M { f :: (float value) -> float {' +
+                            '{ float value=2.0; }\n' * 12 + 'return missingName; } }')
+            result = subprocess.run([str(COMPILER), str(path), '-check'], capture_output=True,
+                                    text=True, timeout=30)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("Unknown identifier 'missingName'", result.stderr)
+            self.assertLess(result.stderr.index("Unknown identifier 'missingName'"),
+                            result.stderr.index("Variable 'value' shadows parameter"))
 
     def test_standalone_module_all_name_kinds(self):
         source = """

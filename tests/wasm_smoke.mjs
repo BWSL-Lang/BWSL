@@ -212,3 +212,41 @@ const gatherResult = JSON.parse(compile(highGather, '', '-spv'));
 assert.equal(gatherResult.success, true, JSON.stringify(gatherResult.errors));
 assert.ok(gatherResult.shaders.Main.fragment.includes('bwsl_gather'));
 console.log('high-register gather and direct GLES scratch: PASS');
+
+const shadowSource = `pipeline Shadows {
+  helper :: (float value) -> float { { float value = 2.0; } return value; }
+  pass "Main" { vertex { output.position = float4(helper(1.0)); } fragment { output.color = float4(1.0); } }
+}`;
+const shadows = JSON.parse(compile(shadowSource, '', '-source-file /Shadows.bwsl -spv'));
+assert.equal(shadows.success, true, JSON.stringify(shadows));
+assert.equal(shadows.diagnostics.length, 1);
+const shadow = shadows.diagnostics[0];
+assert.equal(shadow.severity, 'note');
+assert.equal(shadow.file, '/Shadows.bwsl');
+assert.equal(shadow.line, 2);
+assert.equal(shadow.token, 'value');
+assert.equal(shadow.endColumn - shadow.column, 5);
+assert.match(shadow.message, /shadows parameter declared at \/Shadows.bwsl:2:/);
+assert.ok(shadows.files.some(file => file.name.endsWith('.spv')));
+console.log('shadowing notes preserve successful WASM compilation: PASS');
+
+wasm.FS.writeFile('/ShadowDependency.bwsl', `module ShadowDependency {
+  helper :: (float value) -> float { { float value = 2.0; } return value; }
+}`);
+const importedShadows = JSON.parse(compile(`pipeline ImportedShadows { import ShadowDependency
+  pass "Main" { vertex { output.position = float4(1.0); } fragment { output.color = float4(1.0); } }
+}`, '', '-source-file /Shadows.bwsl -modules / -spv'));
+assert.equal(importedShadows.success, true, JSON.stringify(importedShadows));
+assert.equal(importedShadows.diagnostics.length, 1);
+assert.equal(importedShadows.diagnostics[0].file, '/ShadowDependency.bwsl');
+assert.equal(importedShadows.diagnostics[0].token, 'value');
+assert.ok(importedShadows.diagnostics[0].context.some(line => line.includes('float value = 2.0')));
+console.log('imported shadowing note source/context: PASS');
+
+const shadowError = JSON.parse(compile(shadowSource.replace('return value;', 'return missingName;'),
+  '', '-source-file /Shadows.bwsl'));
+assert.equal(shadowError.success, false);
+assert.equal(shadowError.errors.length, 1);
+assert.equal(shadowError.errors[0].severity, 'error');
+assert.deepEqual(shadowError.diagnostics.map(item => item.severity), ['note', 'error']);
+console.log('shadowing note stays separate from WASM errors: PASS');

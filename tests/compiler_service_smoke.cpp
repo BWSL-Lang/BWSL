@@ -16,9 +16,10 @@ int main(int argc, char** argv) {
     std::ofstream(dir / "GLNameClash.bwsl") << "pipeline GLNameClash { struct t_atlas { float x; }; resources { atlas: texture2D } pass \"Main\" { use resources { atlas } vertex { output.position=float4(1.0); } fragment { output.color=sample(resources.atlas, float2(0.5)); } } }";
     std::ofstream(dir / "Varyings.bwsl") << "pipeline Varyings { pass \"Main\" { vertex { output.position=float4(1.0); output.uv=float2(0.5); output.tint=float4(0.25); } fragment { output.color=input.tint+float4(input.uv,0.0,1.0); } } }";
     std::ofstream(dir / "VaryingNameClash.bwsl") << "pipeline VaryingNameClash { struct v_uv { float x; } pass \"Main\" { vertex { output.position=float4(1.0); output.uv=float2(0.5); } fragment { output.color=float4(input.uv,0.0,1.0); } } }";
+    std::ofstream(dir / "Shadowing.bwsl") << "pipeline Shadowing { helper :: (float value) -> float { { float value=2.0; } return value; } pass \"Main\" { vertex { output.position=float4(helper(1.0)); } fragment { output.color=float4(1.0); } } }";
     RenderConfig config;
     for (auto name : {"Good", "Bad", "UnknownName", "GLNameClash", "Varyings", "VaryingNameClash",
-                      "LoweringOverflow", "SSAOverflow"}) {
+                      "LoweringOverflow", "SSAOverflow", "Shadowing"}) {
         RenderConfig::PassData pass;
         pass.name = "Main";
         pass.descriptor.pipelineName = name;
@@ -26,6 +27,9 @@ int main(int argc, char** argv) {
     }
     BWSL::BWSLCompilerServiceCore service;
     service.Initialize(config, 32 * 1024 * 1024, dir.string());
+    auto* shadowing = service.GetOrCompileVariant("Shadowing", "Main", 0);
+    assert(shadowing && !shadowing->vertexSpirv.empty() && !shadowing->fragmentSpirv.empty());
+    assert(service.GetOrCompileVariant("Shadowing", "Main", 0) == shadowing);
     auto* valid = service.GetOrCompileVariant("Good", "Main", 0);
     assert(valid && !valid->vertexSpirv.empty() && !valid->fragmentSpirv.empty());
     assert(service.GetOrCompileVariant("Good", "Main", 0) == valid);

@@ -713,17 +713,19 @@ static ShaderOutput CompileShaderStage(
 
 // Keep parser and semantic diagnostics tied to the file that supplied the
 // token. Imported module offsets do not belong to the main source buffer.
-static std::string BuildNameDiagnosticsJson(const DiagnosticStream& diagnostics,
-                                           const std::string& source,
-                                           const std::string& sourceFileName) {
-    std::string json = "{\"success\":false,\"errors\":[";
+static std::string BuildNameDiagnosticsArrayJson(const DiagnosticStream& diagnostics,
+                                                const std::string& source,
+                                                const std::string& sourceFileName,
+                                                bool errorsOnly = false) {
+    std::string json = "[";
     bool first = true;
     for (u32 i = 0; i < diagnostics.Count(); i++) {
-        if (diagnostics.GetSeverity(i) != DiagnosticSeverity::Error) continue;
+        if (errorsOnly && diagnostics.GetSeverity(i) != DiagnosticSeverity::Error) continue;
         if (!first) json += ",";
         first = false;
         const std::string file = diagnostics.GetFile(i);
-        json += "{\"message\":\"" + EscapeJsonString(diagnostics.FormatMessage(i)) +
+        json += "{\"severity\":\"" + std::string(DiagnosticStream::SeverityName(diagnostics.GetSeverity(i))) +
+                "\",\"message\":\"" + EscapeJsonString(diagnostics.FormatMessage(i)) +
                 "\",\"file\":\"" + EscapeJsonString(file) + "\"";
         if (DiagnosticSpan::HasAll(diagnostics.spanFlags[i], DiagnosticSpan::HasLocationFlag)) {
             json += ",\"line\":" + std::to_string(diagnostics.lines[i]) +
@@ -758,7 +760,15 @@ static std::string BuildNameDiagnosticsJson(const DiagnosticStream& diagnostics,
         }
         json += "}";
     }
-    return json + "]}";
+    return json + "]";
+}
+
+static std::string BuildNameDiagnosticsJson(const DiagnosticStream& diagnostics,
+                                           const std::string& source,
+                                           const std::string& sourceFileName) {
+    return "{\"success\":false,\"errors\":" +
+        BuildNameDiagnosticsArrayJson(diagnostics, source, sourceFileName, true) +
+        ",\"diagnostics\":" + BuildNameDiagnosticsArrayJson(diagnostics, source, sourceFileName) + "}";
 }
 
 static std::string CompileToJson(const char* bwslSource,
@@ -793,6 +803,8 @@ static std::string CompileToJson(const char* bwslSource,
     if (parser.hadError) {
         return BuildNameDiagnosticsJson(context.Diag(), source, sourceFileName);
     }
+
+    parser.DiagnoseShadowing();
 
     if (context.root.IsValid()) {
         std::string variantResolveError;
@@ -878,7 +890,9 @@ static std::string CompileToJson(const char* bwslSource,
     bool firstFile = true;
     std::string baseName = StemFromPath(sourceFileName);
 
-    json << "{\"success\":true,\"shaders\":{";
+    json << "{\"success\":true,\"diagnostics\":"
+         << BuildNameDiagnosticsArrayJson(context.Diag(), source, sourceFileName)
+         << ",\"shaders\":{";
 
     bool firstPass = true;
     for (u32 passIdx = 0; passIdx < pipeline.passes.count; passIdx++) {
