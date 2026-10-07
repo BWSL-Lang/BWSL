@@ -646,6 +646,134 @@ class AstJsonTests(unittest.TestCase):
         box = self.nodes(data, 'STRUCT_DECL', 'Box')[0]['id']
         self.assert_edge(data, field['id'], box, 'type')
 
+    def test_resource_payload_positions_and_references(self):
+        for owner in ('module', 'pipeline'):
+            for spelling in ('Lib::Item', 'Lib.Item', 'L::Item', 'L.Item'):
+                for form in ('{}', '{}[2]', 'buffer<{}>', 'cbuffer<{}[2]>'):
+                    with self.subTest(owner=owner, spelling=spelling, form=form):
+                        resource_type = form.format(spelling)
+                        source = f'''{owner} Main {{
+    import Lib as L
+    resources {{
+        item: {resource_type};
+        scale: float
+    }}
+}}'''
+                        data = self.parse(source, {'Lib.bwsl':
+                            'module Lib { struct Item { float4 mask; float w; } }'})
+                        resource = self.nodes(data, 'RESOURCE_DECL', 'item')[0]
+                        self.assertEqual(resource['typeName'], form.format('Lib::Item'))
+                        self.assert_position(resource, self.position(source, 4, resource_type), 'type')
+                        qualifier = resource['typeQualifier']
+                        self.assertEqual(qualifier['name'], spelling.split('::')[0].split('.')[0])
+                        self.assert_position(qualifier, self.position(source, 4, spelling))
+                        self.assert_edge(data, qualifier['id'],
+                                         self.nodes(data, 'MODULE', 'Lib')[0]['id'], 'qualifier')
+                        self.assert_edge(data, resource['id'],
+                                         self.nodes(data, 'STRUCT_DECL', 'Item')[0]['id'], 'type')
+                        scale = self.nodes(data, 'RESOURCE_DECL', 'scale')[0]
+                        self.assert_edge(data, scale['id'], 'builtin:type:float', 'type')
+
+    def test_resource_builtin_and_local_payload_types(self):
+        data = self.parse('''pipeline Main {
+            struct Item { float value; }
+            resources {
+                item: Item
+                items: buffer<Item>
+                constants: cbuffer<float4[2]>
+                tex2: texture2D
+                tex3: texture3D
+                cube: textureCube
+                layers: texture2DArray
+                samp: sampler
+                image: image2D
+                wide: double
+            }
+        }''')
+        item = self.nodes(data, 'STRUCT_DECL', 'Item')[0]['id']
+        for name in ('item', 'items'):
+            self.assert_edge(data, self.nodes(data, 'RESOURCE_DECL', name)[0]['id'], item, 'type')
+        self.assertEqual(len(self.nodes(data, 'RESOURCE_DECL')), 10)
+
+    def test_resource_forward_payload_declarations(self):
+        for owner in ('pipeline', 'module'):
+            with self.subTest(owner=owner):
+                data = self.parse(f'''{owner} Main {{
+                    resources {{ local: Local external: L.Item buffered: buffer<L::Item> }}
+                    struct Local {{ float value; }}
+                    import Lib as L
+                }}''', {'Lib.bwsl': 'module Lib { struct Item { float value; } }'})
+                local = self.nodes(data, 'RESOURCE_DECL', 'local')[0]
+                self.assert_edge(data, local['id'],
+                                 self.nodes(data, 'STRUCT_DECL', 'Local')[0]['id'], 'type')
+                for name, expected in (('external', 'Lib::Item'), ('buffered', 'buffer<Lib::Item>')):
+                    resource = self.nodes(data, 'RESOURCE_DECL', name)[0]
+                    self.assertEqual(resource['typeName'], expected)
+                    self.assert_edge(data, resource['id'],
+                                     self.nodes(data, 'STRUCT_DECL', 'Item')[0]['id'], 'type')
+                    self.assert_edge(data, resource['typeQualifier']['id'],
+                                     self.nodes(data, 'MODULE', 'Lib')[0]['id'], 'qualifier')
+
+    def test_unknown_resource_payloads_are_diagnosed(self):
+        with tempfile.TemporaryDirectory(prefix='bwsl-resource-types-') as directory:
+            folder = Path(directory)
+            (folder / 'Lib.bwsl').write_text('module Lib { struct Item { float w; } }')
+            for owner in ('pipeline', 'module'):
+                for spelling in ('Lib.Missing', 'Lib::Missing', 'L.Missing', 'L::Missing',
+                                 'Nope::Item', 'Nope.Item', 'Missing', 'T'):
+                    for form in ('{}', '{}[2]', 'buffer<{}>', 'cbuffer<{}>'):
+                        with self.subTest(owner=owner, spelling=spelling, form=form):
+                            path = folder / 'main.bwsl'
+                            path.write_text(f'''{owner} Main {{
+    import Lib as L
+    resources {{ item: {form.format(spelling)} }}
+}}''')
+                            result = subprocess.run(
+                                [str(COMPILER), str(path), '-modules', directory,
+                                 '-errors-json', '-no-validate', '-check'],
+                                capture_output=True, text=True, timeout=30)
+                            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                            diagnostics = json.loads(result.stdout)
+                            error = next(d for d in diagnostics['diagnostics']
+                                         if 'Unknown resource type' in d['message'])
+                            self.assertEqual(error['severity'], 'error')
+                            self.assertEqual(error['line'], 3)
+                            self.assertEqual(error['column'],
+                                             path.read_text().splitlines()[2].index(spelling) + 1)
+
+    def test_resource_qualifier_spellings_generate_identical_shaders(self):
+        with tempfile.TemporaryDirectory(prefix='bwsl-resource-codegen-') as directory:
+            folder = Path(directory)
+            (folder / 'Lib.bwsl').write_text(
+                'module Lib { struct Item { float4 mask; float w; } }')
+            outputs = []
+            for spelling in ('Lib.Item', 'Lib::Item', 'L.Item', 'L::Item'):
+                path = folder / 'main.bwsl'
+                path.write_text(f'''pipeline Main {{
+    import Lib as L
+    resources {{ item: {spelling} }}
+    attributes {{ position: float4 }}
+    pass "Main" {{
+        use attributes {{ position }}
+        use resources {{ item }}
+        outputs {{ c: float4 }}
+        vertex {{ output.pos = attributes.position; }}
+        fragment {{ output.c = float4(resources.item.w) * resources.item.mask; }}
+    }}
+}}''')
+                out = folder / str(len(outputs))
+                result = subprocess.run(
+                    [str(COMPILER), str(path), '-modules', directory,
+                     '-glsl', '-spv', '-validation', 'strict', '-o', str(out)],
+                    capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                shaders = {p.name: p.read_bytes() for p in out.iterdir()
+                           if p.suffix in ('.spv', '.vert', '.frag')}
+                self.assertEqual(len(shaders), 4)
+                outputs.append(shaders)
+            for output in outputs[1:]:
+                self.assertEqual(output, outputs[0])
+
     def test_return_types_have_positions_and_qualifier_edges(self):
         source = '''
             module Common { struct Box { float size; } }

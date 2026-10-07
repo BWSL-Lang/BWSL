@@ -10,7 +10,6 @@ pipeline BugMat3Multiply {
         modelMatrix: mat4
         viewProjMatrix: mat4
         lightViewProjMatrix: mat4
-        particles: buffer<Particle>
     }
 
 attributes {
@@ -20,7 +19,7 @@ attributes {
 }
 
 pass "Test" {
-        use resources { viewMatrix, projectionMatrix, modelMatrix, viewProjMatrix, lightViewProjMatrix, particles }
+        use resources { viewMatrix, projectionMatrix, modelMatrix, viewProjMatrix, lightViewProjMatrix }
     use attributes { position, normal, tangent }
 
     vertex {

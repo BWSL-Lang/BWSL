@@ -205,6 +205,11 @@ struct Parser {
     NodeRef currentPipeline;
     std::unordered_map<std::string, u16> variableRegisters;
     std::unordered_map<u32, std::vector<u32>> multiDimArrayDims;
+    struct ResourceTypeSite {
+        TokenRef token;
+        u32 qualifierIndex;
+    };
+    std::unordered_map<u32, ResourceTypeSite> resourceTypeSites;
 
     struct TypeCache {
         static constexpr u32 CACHE_SIZE = 128;
@@ -260,6 +265,7 @@ struct Parser {
         hasLookahead = false;
         has3TokenLookahead = false;
         multiDimArrayDims.clear();
+        resourceTypeSites.clear();
         evalBindings.clear();
         evalBindingScopeStarts.clear();
         activeVariantBindings.clear();
@@ -394,6 +400,7 @@ private:
     void ParsePassOutputs(NodeRef pass);
     NodeRef ParseAttributeDecl();
     NodeRef ParseResourceDecl();
+    void ValidateResourceTypes(NodeRef owner, bool ownerIsPipeline, u32 firstResource = 0);
     NodeRef ParseBlock(bool createScope = true);
     NodeRef ParseStatement();
     NodeRef ParseCustomTypeVarDecl();

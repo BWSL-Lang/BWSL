@@ -63,10 +63,16 @@ Positions are one-based.
   module; `writtenName` is present when the source used an import alias.
 - Module-qualified function calls retain `moduleName` and include a `qualifier`
   identifier node, which is the source of the module's `qualifier` edge.
-- A declaration written with a `Module::Type` type (variable, parameter, or
-  struct field) has a `typeQualifier` identifier object with its own `id`,
+- Resource declarations include `typeLine`/`typeColumn` for the first token of
+  their type. Their `type` reference targets the payload type, including inside
+  `buffer<...>`, `cbuffer<...>`, and fixed arrays. Resource `typeName` uses
+  canonical `Module::Type` spelling, including when an import alias was written.
+- A declaration written with a `Module::Type` type (variable, parameter,
+  resource, or struct field) has a `typeQualifier` identifier object with its own `id`,
   position, and the qualifier as written; it is the source of a `qualifier`
   edge to the module.
+  Resource declarations also retain this occurrence for the legacy `Module.Type`
+  spelling and for qualified buffer element types.
 - Functions and methods include `returnTypeLine`/`returnTypeColumn`, the first
   token of the written return type (the source of the function's
   `return-type` edge). `returnType` keeps a `Module::Type` qualification, and

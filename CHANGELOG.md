@@ -3,6 +3,8 @@
 ## unreleased
 
 ### Breaking changes
+- Unknown resource payload types now produce source errors, including unused
+  resources and `buffer`/`cbuffer` element types.
 - AST JSON now preserves array parameter dimensions and local element types.
   Declaration/reference `typeInfo` includes `elementType`, `arraySizes`, rank,
   and total length; field vector types no longer appear as arrays. Function
@@ -29,6 +31,8 @@
   their first 31 characters.
 
 ### Language
+- Imported resource payloads use `Module::Type`; `Module.Type` remains a
+  deprecated compatibility alias.
 - Struct fields can use a previously declared type in the same module.
 - Vertex attributes beyond the supported 16 slots produce a source error.
 - `.length` works on local arrays and array function parameters. It was
@@ -69,6 +73,11 @@
 - The WASM build runs the same GLSL ES compatibility checks as the CLI.
 - The compiler service no longer reads an uninitialized value when
   specializing a variant, which could crash it.
+
+### AST JSON
+- Resource declarations include type positions and references to payload types
+  and module qualifiers. Their `typeName` uses canonical module qualification,
+  including when the source uses an import alias or the legacy dot spelling.
 
 ## v0.10.0
 

@@ -153,12 +153,13 @@ struct AttributeDeclData {
     u8 _pad[2];
 };
 
-// 24 bytes
 struct ResourceDeclData {
     ArenaString name;
     ArenaString typeName;
     u8 resourceIndex;
     u8 _pad[3];
+    u32 typePosition;  // First token of the resource type.
+    u32 payloadTypePosition;  // Element type inside buffer/cbuffer, otherwise typePosition.
 };
 
 struct FragmentOutputDeclData {
@@ -1521,7 +1522,7 @@ namespace ASTFactory {
     inline NodeRef MakeResourceDecl(AST* ast, const std::string& name, const std::string& type,
                                     u32 line = 0, u32 col = 0) {
         u32 index = ast->resourceDecls.count;
-        ResourceDeclData data;
+        ResourceDeclData data{};
         data.name = ArenaString::MakeHashOnly(name);
         data.typeName = ArenaString::MakeHashOnly(type);
         data.resourceIndex = 0xFF;
