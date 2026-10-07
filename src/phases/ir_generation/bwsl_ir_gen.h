@@ -12,6 +12,16 @@ constexpr u32 NO_BLOCK = 0xFFFFFFFF;
 
 namespace IR {
 
+// Internal 16-bit operand layout. Keep the legacy 0x3fff invalid marker and
+// 0xffff unused-operand sentinel outside the register range. Uint constants and
+// texture handles previously used 0x2000, which aliased live SSA registers once
+// a shader exceeded 8192 registers. The external instruction widths do not change.
+constexpr u32 RegisterLimit = 0x3FFF;
+constexpr u32 IntegerConstantLimit = 0x2000;
+constexpr bool IsConstant(u16 value) { return (value & 0xC000) != 0; }
+constexpr bool IsIntConstant(u16 value) { return (value & 0xE000) == 0x4000; }
+constexpr bool IsUintConstant(u16 value) { return (value & 0xE000) == 0x6000; }
+
 
 struct IRProgram {
     // Hot instruction data - separate arrays for better cache usage
@@ -23,6 +33,9 @@ struct IRProgram {
     alignas(64) u32* metadata;         // Variable per-instruction data
     alignas(64) u32* branchTrueTargets;
     alignas(64) u32* branchFalseTargets;
+    // Packed AST node references survive lowering for located SSA failures.
+    u32* sourceNodes = nullptr;
+    u32 ssaFailureSourceNode = 0xFFFFFFFF;
     u32 instructionCount;
     u32 instructionCapacity;
     
@@ -39,6 +52,8 @@ struct IRProgram {
     alignas(64) u64* int64Constants;
     alignas(64) u8* boolConstants;      // Bool constants (0=false, 1=true)
     u32 floatCount;
+    u32 intCapacity;
+    u32 uintCapacity;
     u32 intCount;
     u32 uintCount;
     u32 int64Count;
@@ -607,6 +622,7 @@ struct IRBuilder {
     
     // Working set
     u32 currentInstruction;
+    u32 currentSourceNode = 0xFFFFFFFF;
     u16 nextRegister;
     
     // Symbol mapping
@@ -638,6 +654,7 @@ struct IRBuilder {
         }
         
         u32 idx = currentInstruction++;
+        if (program->sourceNodes) program->sourceNodes[idx] = currentSourceNode;
         program->opcodes[idx] = opcode;
         program->destinations[idx] = dest;
         program->operands[idx * 4] = s0;
@@ -690,6 +707,11 @@ struct IRBuilder {
         u32 oldCapacity = program->instructionCapacity;
         u32 newCapacity = program->instructionCapacity * 2;
         
+        if (program->sourceNodes) {
+            program->sourceNodes = (u32*)pool->Reallocate(
+                program->sourceNodes, newCapacity * sizeof(u32), 64);
+        }
+
         // Reallocate all instruction arrays
         program->opcodes = (u16*)pool->Reallocate(
             program->opcodes, 

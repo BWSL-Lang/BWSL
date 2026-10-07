@@ -56,23 +56,23 @@ void SPIRVBuilder::EmitBranch(u32 ir_idx) {
       return;
     }
 
-    // Pre-convert condition to bool if needed (before merge instruction)
-    u16 cond_reg = ir->GetOperand(ir_idx, 0);
-    CoreType condType = CoreType::BOOL;
-    if (cond_reg & 0xC000) {
-      // Constant-encoded condition
-      if ((cond_reg & 0xC000) == 0xC000) {
-        condType = CoreType::BOOL;
-      } else if (cond_reg & 0x8000) {
-        condType = CoreType::FLOAT;
-      } else if (cond_reg & 0x4000) {
-        condType = CoreType::INT;
-      } else if (cond_reg & 0x2000) {
-        condType = CoreType::UINT;
-      }
-    } else if (cond_reg < ir->registerCount && ir->registerTypes) {
-      condType = static_cast<CoreType>(ir->registerTypes[cond_reg]);
-    }
+        // Pre-convert condition to bool if needed (before merge instruction)
+        u16 cond_reg = ir->GetOperand(ir_idx, 0);
+        CoreType condType = CoreType::BOOL;
+        if (cond_reg & 0xC000) {
+            // Constant-encoded condition
+            if ((cond_reg & 0xC000) == 0xC000) {
+                condType = CoreType::BOOL;
+            } else if (cond_reg & 0x8000) {
+                condType = CoreType::FLOAT;
+            } else if (IR::IsIntConstant(cond_reg)) {
+                condType = CoreType::INT;
+            } else if (IR::IsUintConstant(cond_reg)) {
+                condType = CoreType::UINT;
+            }
+        } else if (cond_reg < ir->registerCount && ir->registerTypes) {
+            condType = static_cast<CoreType>(ir->registerTypes[cond_reg]);
+        }
 
     if (condType != CoreType::BOOL) {
       // Convert non-bool to bool: condition != 0
@@ -435,47 +435,47 @@ void SPIRVBuilder::EmitFunctionBody() {
     }
   }
 
-  // Phase 2: Pre-allocate IDs for PHI OPERANDS (that aren't PHI results)
-  // This handles cases where a PHI references a value from a block that comes
-  // later in CFG order (e.g., back edges in loops).
-  //
-  // We also need to check if the register is an "undef" register (from SSA when
-  // a variable isn't defined on some path to a PHI) and emit OpUndef for it.
-  if (ir->phiCount > 0 && ir->phiOperandValues) {
-    for (u32 phi_idx = 0; phi_idx < ir->phiCount; phi_idx++) {
-      u32 operandCount = ir->GetPhiOperandCount(phi_idx);
-      for (u32 op = 0; op < operandCount; op++) {
-        u16 valueReg = ir->GetPhiOperandValue(phi_idx, op);
-        // Skip constants (they have special encoding and are handled
-        // differently) 0x8000=float, 0x4000=int, 0x2000=uint, 0xC000=bool
-        if (valueReg & 0xE000)
-          continue;
-        // Pre-allocate an ID for this register if it doesn't have one
-        // Use GetSpirvId which handles undef registers properly
-        if (valueReg < idCapacity && spirvIds[valueReg] == 0) {
-          // Check if this is an undef register first
-          bool isUndef = false;
-          if (ir->undefRegs && ir->undefRegCount > 0) {
-            for (u32 i = 0; i < ir->undefRegCount; i++) {
-              if (ir->undefRegs[i] == valueReg) {
-                isUndef = true;
-                break;
-              }
+    // Phase 2: Pre-allocate IDs for PHI OPERANDS (that aren't PHI results)
+    // This handles cases where a PHI references a value from a block that comes
+    // later in CFG order (e.g., back edges in loops).
+    //
+    // We also need to check if the register is an "undef" register (from SSA when
+    // a variable isn't defined on some path to a PHI) and emit OpUndef for it.
+    if (ir->phiCount > 0 && ir->phiOperandValues) {
+        for (u32 phi_idx = 0; phi_idx < ir->phiCount; phi_idx++) {
+            u32 operandCount = ir->GetPhiOperandCount(phi_idx);
+            for (u32 op = 0; op < operandCount; op++) {
+                u16 valueReg = ir->GetPhiOperandValue(phi_idx, op);
+                // Skip constants (they have special encoding and are handled
+                // differently) 0x8000=float, 0x4000=int, 0x6000=uint, 0xC000=bool
+                if (valueReg & 0xC000)
+                    continue;
+                // Pre-allocate an ID for this register if it doesn't have one
+                // Use GetSpirvId which handles undef registers properly
+                if (valueReg < idCapacity && spirvIds[valueReg] == 0) {
+                    // Check if this is an undef register first
+                    bool isUndef = false;
+                    if (ir->undefRegs && ir->undefRegCount > 0) {
+                        for (u32 i = 0; i < ir->undefRegCount; i++) {
+                            if (ir->undefRegs[i] == valueReg) {
+                                isUndef = true;
+                                break;
+                            }
+                        }
+                    }
+                    // Call GetSpirvId - it will check for undef registers and emit
+                    // OpUndef if needed
+                    (void)GetSpirvId(valueReg);
+                    // Mark as pre-allocated if NOT an undef (undef already has
+                    // definition) This flag tells STORE_REG to emit OpCopyObject to
+                    // define this ID
+                    if (!isUndef && valueReg < idCapacity) {
+                        hasPreAllocatedId[valueReg] = true;
+                    }
+                }
             }
-          }
-          // Call GetSpirvId - it will check for undef registers and emit
-          // OpUndef if needed
-          (void)GetSpirvId(valueReg);
-          // Mark as pre-allocated if NOT an undef (undef already has
-          // definition) This flag tells STORE_REG to emit OpCopyObject to
-          // define this ID
-          if (!isUndef && valueReg < idCapacity) {
-            hasPreAllocatedId[valueReg] = true;
-          }
         }
-      }
     }
-  }
 
   localPointerTargets.assign(idCapacity, {});
   localPointerTagVars.assign(idCapacity, 0);
@@ -654,42 +654,42 @@ void SPIRVBuilder::EmitFunctionBody() {
       }
     }
 
-    // Pre-declare scratch variables for dynamically-indexed struct array
-    // fields. OP_STRUCT_ARRAY_EXTRACT/INSERT with a runtime element index
-    // spill the struct value into one of these Function-storage variables
-    // and address the element with OpAccessChain. OpVariable must appear in
-    // the entry block, so scan the IR up front and declare one scratch
-    // variable per distinct struct type.
-    if (ir) {
-      for (u32 i = 0; i < ir->instructionCount; i++) {
-        IR::OpCode scanOp = static_cast<IR::OpCode>(ir->opcodes[i]);
-        if (scanOp != IR::OP_STRUCT_ARRAY_EXTRACT &&
-            scanOp != IR::OP_STRUCT_ARRAY_INSERT) {
-          continue;
+        // Pre-declare scratch variables for dynamically-indexed struct array
+        // fields. OP_STRUCT_ARRAY_EXTRACT/INSERT with a runtime element index
+        // spill the struct value into one of these Function-storage variables
+        // and address the element with OpAccessChain. OpVariable must appear in
+        // the entry block, so scan the IR up front and declare one scratch
+        // variable per distinct struct type.
+        if (ir) {
+            for (u32 i = 0; i < ir->instructionCount; i++) {
+                IR::OpCode scanOp = static_cast<IR::OpCode>(ir->opcodes[i]);
+                if (scanOp != IR::OP_STRUCT_ARRAY_EXTRACT &&
+                        scanOp != IR::OP_STRUCT_ARRAY_INSERT) {
+                    continue;
+                }
+                u16 indexReg = ir->GetOperand(i, 2);
+                if (IR::IsIntConstant(indexReg)) {
+                    continue; // Constant index uses OpCompositeExtract/Insert directly
+                }
+                u32 structHash = ir->metadata[i];
+                if (structHash == 0) {
+                    continue;
+                }
+                u32 structTypeId = GetStructTypeId(structHash);
+                if (structTypeId != 0 &&
+                        GetStructArrayScratchVar(structTypeId) == 0 &&
+                        structArrayScratchCount < MAX_STRUCT_ARRAY_SCRATCH) {
+                    u32 ptrTypeId =
+                            GetPointerTypeId(structTypeId, spv::StorageClassFunction);
+                    u32 varId = AllocateId();
+                    Emit(spv::OpVariable, ptrTypeId, varId, spv::StorageClassFunction);
+                    structArrayScratchTypeIds[structArrayScratchCount] = structTypeId;
+                    structArrayScratchVarIds[structArrayScratchCount] = varId;
+                    structArrayScratchCount++;
+                }
+            }
         }
-        u16 indexReg = ir->GetOperand(i, 2);
-        if ((indexReg & 0xC000) == 0x4000) {
-          continue; // Constant index uses OpCompositeExtract/Insert directly
-        }
-        u32 structHash = ir->metadata[i];
-        if (structHash == 0) {
-          continue;
-        }
-        u32 structTypeId = GetStructTypeId(structHash);
-        if (structTypeId != 0 &&
-            GetStructArrayScratchVar(structTypeId) == 0 &&
-            structArrayScratchCount < MAX_STRUCT_ARRAY_SCRATCH) {
-          u32 ptrTypeId =
-              GetPointerTypeId(structTypeId, spv::StorageClassFunction);
-          u32 varId = AllocateId();
-          Emit(spv::OpVariable, ptrTypeId, varId, spv::StorageClassFunction);
-          structArrayScratchTypeIds[structArrayScratchCount] = structTypeId;
-          structArrayScratchVarIds[structArrayScratchCount] = varId;
-          structArrayScratchCount++;
-        }
-      }
-    }
-  };
+    };
 
   if (!cfg || cfg->blockCount == 0) {
     // Fallback for trivial shaders without CFG

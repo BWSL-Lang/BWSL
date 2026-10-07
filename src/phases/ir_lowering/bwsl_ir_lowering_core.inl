@@ -9,51 +9,52 @@ inline void IRLowering::ReportError(const char *message) {
 }
 
 inline void IRLowering::ReportErrorAt(NodeRef node, const char *message) {
-  if (message) {
-    diagnostics.emplace_back(message);
-    if (diagnosticStream) {
-      const char *stageName = "unknown";
-      switch (currentStage) {
-      case ShaderStage::Vertex:
-        stageName = "vertex";
-        break;
-      case ShaderStage::Fragment:
-        stageName = "fragment";
-        break;
-      case ShaderStage::Compute:
-        stageName = "compute";
-        break;
-      default:
-        break;
-      }
-      std::string passName;
-      if (!diagnosticPassName.empty()) {
-        passName = diagnosticPassName;
-      } else if (currentPassData) {
-        passName = currentPassData->name.ToString(sourceBase);
-      }
-      DiagnosticSpan span{};
-      if (node.IsValid() && ast) {
-        // Prefer the name token (e.g. `uv` of `output.uv`) over the '.'.
-        u32 position = ast->GetNamePosition(node);
-        if (position == 0) position = ast->FindPosition(node);
-        AST::UnpackPosition(position, span.line, span.column);
-        if (span.line != 0) span.SetLocation();
-      }
-      diagnosticStream->AddRaw(DiagnosticSeverity::Error,
-                               DiagnosticPhase::Lowering,
-                               message,
-                               span,
-                               "",
-                               passName,
-                               stageName,
-                               DiagnosticMessageId::LoweringError);
+    if (message) {
+        DiagnosticSpan span{};
+        if (node.IsValid() && ast) {
+            u32 position = ast->GetNamePosition(node);
+            if (position == 0)
+                position = ast->FindPosition(node);
+            AST::UnpackPosition(position, span.line, span.column);
+            if (span.line != 0)
+                span.SetLocation();
+        }
+        std::string locatedMessage = message;
+        if (span.HasLocation()) {
+            locatedMessage = "line " + std::to_string(span.line) + ":" +
+                             std::to_string(span.column) + ": " + locatedMessage;
+        }
+        diagnostics.emplace_back(locatedMessage);
+        if (diagnosticStream) {
+            const char *stageName = "unknown";
+            switch (currentStage) {
+            case ShaderStage::Vertex:
+                stageName = "vertex";
+                break;
+            case ShaderStage::Fragment:
+                stageName = "fragment";
+                break;
+            case ShaderStage::Compute:
+                stageName = "compute";
+                break;
+            default:
+                break;
+            }
+            std::string passName;
+            if (!diagnosticPassName.empty()) {
+                passName = diagnosticPassName;
+            } else if (currentPassData) {
+                passName = currentPassData->name.ToString(sourceBase);
+            }
+            diagnosticStream->AddRaw(DiagnosticSeverity::Error, DiagnosticPhase::Lowering, message,
+                                     span, "", passName, stageName,
+                                     DiagnosticMessageId::LoweringError);
+        }
+        if (!suppressErrorOutput) {
+            fprintf(stderr, "%s", locatedMessage.c_str());
+        }
     }
-    if (!suppressErrorOutput) {
-      fprintf(stderr, "%s", message);
-    }
-  }
-  hadError = true;
+    hadError = true;
 }
 
 inline NamespaceKind IRLowering::AliasOwnerKind() const {
@@ -77,6 +78,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   builder.pool = pool;
   builder.program = &program;
   builder.currentInstruction = 0;
+    builder.currentSourceNode = 0xFFFFFFFF;
   builder.nextRegister = 0;
   recursionDiagnosed = false;
   hadError = false;
@@ -96,6 +98,8 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   u32 initialSize = 1024;
   program.instructionCount = 0;
   program.instructionCapacity = initialSize;
+    program.sourceNodes = (u32*)pool->Allocate(initialSize * sizeof(u32), 64);
+    program.ssaFailureSourceNode = 0xFFFFFFFF;
   program.opcodes = (u16 *)pool->Allocate(initialSize * sizeof(u16), 64);
   program.types = (u16 *)pool->Allocate(initialSize * sizeof(u16), 64);
   program.flags = (u16 *)pool->Allocate(initialSize * sizeof(u16), 64);
@@ -149,6 +153,8 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   program.boolConstants =
       (u8 *)pool->Allocate(8 * sizeof(u8), 64); // Only need 2 (true/false)
   program.floatCount = 0;
+    program.intCapacity = 256;
+    program.uintCapacity = 256;
   program.intCount = 0;
   program.uintCount = 0;
   program.boolCount = 0;

@@ -18,6 +18,7 @@ inline std::string IdentifierNameForDiagnostic(const IdentifierData &ident,
 } // namespace
 
 inline u16 IRLowering::LowerExpression(NodeRef ref) {
+    SourceNodeGuard sourceGuard(builder, ref);
   if (ref.IsNull())
     return 0;
 

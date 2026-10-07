@@ -201,7 +201,7 @@ void GLESBuilder::EmitAttributeName(u32 attributeIndex) {
 
 void GLESBuilder::EmitTextureLevelsUniformName(u16 texReg) {
     out.Lit("bwsl_texture_levels_");
-    if ((texReg & 0xF000) == 0x2000) {
+    if ((texReg & 0xF000) == 0x6000) {
         out.Uint(texReg & 0x0FFF);
     } else {
         out.Lit("dynamic");
@@ -428,7 +428,7 @@ void GLESBuilder::EmitUniforms() {
     for (u32 i = 0; i < ir->instructionCount; i++) {
         if (!IR::IsTextureOp(static_cast<IR::OpCode>(ir->opcodes[i]))) continue;
         u16 texReg = ir->GetOperand(i, 0);
-        if ((texReg & 0xF000) != 0x2000) continue;
+        if ((texReg & 0xF000) != 0x6000) continue;
         u16 texSlot = texReg & 0x0FFF;
         if (texSlot < 32) {
             usedTextures[texSlot] = true;
@@ -497,7 +497,7 @@ void GLESBuilder::EmitUniforms() {
                 else if (tex.isArray) out.Str(shadowTextures[texSlot] ? "sampler2DArrayShadow" : "sampler2DArray");
                 else if (tex.isVolume) out.Lit("sampler3D");
                 else out.Str(shadowTextures[texSlot] ? "sampler2DShadow" : "sampler2D");
-                out.Chr(' '); EmitTexture(static_cast<u16>(0x2000 | texSlot), metadata);
+                out.Chr(' '); EmitTexture(static_cast<u16>(0x6000 | texSlot), metadata);
                 out.Lit(";\n");
             };
             if (tex.separateSampler) {
@@ -517,7 +517,7 @@ void GLESBuilder::EmitUniforms() {
             } else emitSampler(0);
             if (texSlot < 32 && usedTextureLevels[texSlot]) {
                 out.Lit("uniform int ");
-                EmitTextureLevelsUniformName(static_cast<u16>(0x2000 | texSlot));
+                EmitTextureLevelsUniformName(static_cast<u16>(0x6000 | texSlot));
                 out.Lit(";\n");
             }
             if (texSlot < 32) emittedTextures[texSlot] = true;
@@ -546,7 +546,7 @@ void GLESBuilder::EmitUniforms() {
         out.Lit(";\n");
         if (usedTextureLevels[i]) {
             out.Lit("uniform int ");
-            EmitTextureLevelsUniformName(static_cast<u16>(0x2000 | i));
+            EmitTextureLevelsUniformName(static_cast<u16>(0x6000 | i));
             out.Lit(";\n");
         }
         emittedFallbackTexture = true;
@@ -2038,12 +2038,12 @@ void GLESBuilder::EmitExpr(u16 reg) {
         out.Flt(idx < ir->floatCount ? ir->floatConstants[idx] : 0.0f);
         return;
     }
-    if (reg & 0x4000) {
+    if (IR::IsIntConstant(reg)) {
         u16 idx = reg & 0x3FFF;
         out.Int(idx < ir->intCount ? static_cast<s32>(ir->intConstants[idx]) : 0);
         return;
     }
-    if ((reg & 0xE000) == 0x2000) {
+    if (IR::IsUintConstant(reg)) {
         u16 idx = reg & 0x1FFF;
         out.Uint(idx < ir->uintCount ? ir->uintConstants[idx] : 0u);
         out.Chr('u');
@@ -2196,7 +2196,7 @@ static u32 GLESComponentCount(u16 type) {
 
 bool GLESBuilder::EmitConstantExpr(u16 reg, u32 depth) {
     if (depth > 32 || reg == 0x3FFF) return false;
-    if (reg >= 0x2000) { EmitExpr(reg); return true; }
+    if (reg >= 0x4000) { EmitExpr(reg); return true; }
     u32 definition = NO_BLOCK;
     for (u32 i = 0; i < ir->instructionCount; ++i) {
         u16 op = ir->opcodes[i];
@@ -2347,8 +2347,8 @@ bool GLESBuilder::IsValidOperand(u16 op) const {
 
     if ((op & 0xC000) == 0xC000) return (op & 0x3FFF) < ir->boolCount;
     if (op & 0x8000) return (op & 0x7FFF) < ir->floatCount;
-    if (op & 0x4000) return (op & 0x3FFF) < ir->intCount;
-    if ((op & 0xE000) == 0x2000) return (op & 0x1FFF) < ir->uintCount;
+    if (IR::IsIntConstant(op)) return (op & 0x3FFF) < ir->intCount;
+    if (IR::IsUintConstant(op)) return (op & 0x1FFF) < ir->uintCount;
 
     // Register reference - always valid (r0 is valid!)
     return true;
@@ -2401,7 +2401,7 @@ void GLESBuilder::EmitVecConstruct(u32 instIdx) {
         bool isUint = false;
 
         // Check if first operand is an int constant (0x4000 prefix)
-        if ((firstOp & 0x4000) && !(firstOp & 0x8000)) {
+        if (IR::IsIntConstant(firstOp)) {
             isInt = true;
         }
 
@@ -2561,7 +2561,7 @@ void GLESBuilder::DebugDumpRegisterInfo() {
             continue;
         }
         u16 dest = ir->destinations[i];
-        if ((dest & 0xE000) == 0 && dest < ir->registerCount) {
+        if ((dest & 0xC000) == 0 && dest < ir->registerCount) {
             definedByInst[dest] = true;
         }
     }
@@ -2590,7 +2590,7 @@ void GLESBuilder::DebugDumpRegisterInfo() {
     for (u32 i = 0; i < ir->instructionCount; i++) {
         for (u32 j = 0; j < 4; j++) {
             u16 opReg = ir->GetOperand(i, j);
-            if ((opReg & 0xE000) == 0 && opReg < ir->registerCount) {
+            if ((opReg & 0xC000) == 0 && opReg < ir->registerCount) {
                 if (!definedByInst[opReg]) {
                     fprintf(stderr, "  Inst[%u] operand[%u] uses r%u - NOT DEFINED\n", 
                             i, j, opReg);
@@ -2605,7 +2605,7 @@ void GLESBuilder::DebugDumpRegisterInfo() {
             u32 opCount = ir->GetPhiOperandCount(i);
             for (u32 j = 0; j < opCount; j++) {
                 u16 val = ir->GetPhiOperandValue(i, j);
-                if ((val & 0xE000) == 0 && val < ir->registerCount) {
+                if ((val & 0xC000) == 0 && val < ir->registerCount) {
                     if (!definedByInst[val]) {
                         fprintf(stderr, "  PHI[%u] operand[%u] uses r%u - NOT DEFINED\n",
                                 i, j, val);
