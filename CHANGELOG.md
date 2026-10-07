@@ -30,6 +30,8 @@
 - Large shaders keep live registers separate from constant and texture tags.
   Integer constant pools grow safely up to 8192 values per signedness, and
   register or integer-constant exhaustion reports a source location.
+- WebAssembly compilation routes GLES 3.00 gathers through the direct
+  fallback before SPIRV-Cross can abort.
 - Direct GLES output preserves array resource lengths and supports constant
   and dynamic reads. Arrays of structs use the correct uniform-buffer stride.
 - The compiler service shares varying types and locations between stages.

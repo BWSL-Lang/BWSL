@@ -206,12 +206,11 @@ static std::string CheckGLSLESSPIRVCompatRaw(const std::vector<uint32_t>& spirv,
             return "error: GLSL ES does not support fine/coarse derivative opcodes; use the direct GLES derivative fallback";
         } else if (glslVersion < 310 && op == spv::OpImageQueryLevels) {
             return "error: GLSL ES 300 does not support textureQueryLevels";
-        } else if (glslVersion < 310 && op == spv::OpImageGather &&
-                   wordCount >= 7) {
-            uint32_t imageOperands = spirv[offset + 6];
-            if ((imageOperands & spv::ImageOperandsOffsetMask) != 0) {
-                return "error: GLSL ES 300 does not support textureGatherOffset";
-            }
+        } else if (glslVersion < 310 && op == spv::OpImageGather) {
+            // SPIRV-Cross asserts for every gather on ESSL 300 in WASM builds,
+            // including the form without optional image operands. Return to
+            // the direct GLES fallback before invoking compiler.compile().
+            return "error: GLSL ES 300 does not support textureGather; use the direct GLES gather fallback";
         }
 
         offset += wordCount;
