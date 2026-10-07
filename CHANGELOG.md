@@ -3,6 +3,10 @@
 ## unreleased
 
 ### Breaking changes
+- AST JSON now preserves array parameter dimensions and local element types.
+  Declaration/reference `typeInfo` includes `elementType`, `arraySizes`, rank,
+  and total length; field vector types no longer appear as arrays. Function
+  stable IDs include array parameter dimensions.
 - Unresolved names now fail checking in unused functions and standalone
   modules, with diagnostics pointing to the original source token.
 - Function and method names matching a built-in intrinsic are rejected at

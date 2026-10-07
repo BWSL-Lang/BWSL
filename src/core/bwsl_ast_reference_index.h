@@ -28,6 +28,7 @@ struct Symbol {
     // sidecar mapping for caches spanning compiler invocations; local syntax
     // continues to use the compact TYPE:index ID above.
     std::string stableId;
+    std::vector<u32> arraySizes;
 
     Symbol() = default;
     Symbol(std::string symbolId, std::string symbolKind, std::string symbolName,
@@ -485,6 +486,10 @@ private:
         for (u32 i = 0; i < function.parameters.count; i++) {
             if (i > 0) result += ",";
             result += ResolveName(function.parameters[i].second);
+            if (i < function.parameterArraySizes.count) {
+                const auto& sizes = function.parameterArraySizes[i];
+                for (u32 j = 0; j < sizes.count; j++) result += "[" + std::to_string(sizes[j]) + "]";
+            }
         }
         result += ")->" + FunctionReturnType(ref);
         return result;
@@ -594,6 +599,7 @@ private:
                 const std::string fieldName = ResolveName(field.name);
                 const std::string fieldType = FieldTypeName(ref, field);
                 AddSymbol({fieldId, "struct-field", fieldName, fieldId, id, fieldType, {}});
+                if (field.arraySize != 0) FindSymbol(fieldId)->arraySizes = {field.arraySize};
                 AddQualifierReference(fieldId, field.typePosition);
                 const std::string stableStruct = StableIdOf(id);
                 if (!stableStruct.empty()) {
@@ -689,9 +695,13 @@ private:
             NodeRef ref(ASTNodeType::VARIABLE_DECL, i);
             const VariableDeclData& variable = ast_.GetVariableDecl(ref);
             const std::string name = ResolveName(variable.name);
-            const std::string type = ResolveName(variable.type);
+            const std::string type = QualifiedTypeName(ast_, ResolveName(variable.type),
+                variable.typePosition, ast_.GetDeclarationSource(ref));
             AddSymbol({NodeId(ref), variable.isConst ? "constant" : "variable", name,
                        NodeId(ref), OwnerOf(ref), type, {}});
+            for (u32 j = 0; j < variable.arraySizes.count; j++) {
+                FindSymbol(NodeId(ref))->arraySizes.push_back(variable.arraySizes[j]);
+            }
             const std::string stableOwner = StableIdOf(OwnerOf(ref));
             if (variable.isConst && !stableOwner.empty()) {
                 SetStableId(NodeId(ref), stableOwner + "/const:" + name);
@@ -1187,6 +1197,10 @@ private:
             const std::string name = ResolveName(function.parameters[i].first);
             const std::string type = ResolveName(function.parameters[i].second);
             AddSymbol({parameterId, "parameter", name, parameterId, functionId, type, {}});
+            if (i < function.parameterArraySizes.count) {
+                const auto& sizes = function.parameterArraySizes[i];
+                for (u32 j = 0; j < sizes.count; j++) FindSymbol(parameterId)->arraySizes.push_back(sizes[j]);
+            }
             const std::string stableFunction = StableIdOf(functionId);
             if (!stableFunction.empty()) {
                 SetStableId(parameterId, stableFunction + "/parameter:" + std::to_string(i));
@@ -1214,8 +1228,8 @@ private:
         const VariableDeclData& variable = ast_.GetVariableDecl(ref);
         VisitExpr(variable.initializer, "read");
         const std::string name = ResolveName(variable.name);
-        const std::string type = variable.arrayElementTypeHash != 0
-            ? ReverseLookup::GetString(variable.arrayElementTypeHash) : ResolveName(variable.type);
+        const std::string type = QualifiedTypeName(ast_, ResolveName(variable.type),
+            variable.typePosition, ast_.GetDeclarationSource(ref));
         CheckType(ref, type, variable.typePosition);
         AddTypeReference(NodeId(ref), type, "type");
         AddQualifierReference(NodeId(ref), variable.typePosition);

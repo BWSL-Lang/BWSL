@@ -452,13 +452,14 @@ static NodeRef CloneNodeImpl(ComptimeState* state, NodeRef node) {
         case ASTNodeType::EVAL_BLOCK:
             return CloneBlockLike(state, node, true);
         case ASTNodeType::VARIABLE_DECL: {
-            const VariableDeclData& src = state->ast->GetVariableDecl(node);
+            const VariableDeclData src = state->ast->GetVariableDecl(node);
             NodeRef cloned = ASTFactory::MakeVariableDecl(state->ast, src.name, src.type,
                                                           CloneNode(state, src.initializer),
                                                           src.isConst, line, col, src.storageClass,
                                                           src.arrayDimensions, src.arrayLength,
                                                           src.arrayElementTypeHash);
             state->ast->GetVariableDecl(cloned).isEval = src.isEval;
+            state->ast->GetVariableDecl(cloned).arraySizes = src.arraySizes;
             return cloned;
         }
         case ASTNodeType::FUNCTION_CALL: {

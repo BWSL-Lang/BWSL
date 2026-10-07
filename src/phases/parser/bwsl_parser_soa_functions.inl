@@ -1143,177 +1143,78 @@ NodeRef Parser::ParseFunction() {
 }
 
 void Parser::ParseFunctionParameters(NodeRef function) {
-    // Handle empty parameter list
-    if (Check(TokenType::RIGHT_PAREN)) {
-        return;
-    }
-
+    if (Check(TokenType::RIGHT_PAREN)) return;
     do {
         std::string paramName;
         std::string paramType;
-        const SourceLocation firstLoc = getLocation(stream->GetOffset(current));
         ParameterSourcePositions positions;
-        positions.typePosition = AST::PackPosition(firstLoc.line, firstLoc.column);
-        auto recordName = [&]() {
-            const SourceLocation loc = getLocation(stream->GetOffset(previous));
-            positions.namePosition = AST::PackPosition(loc.line, loc.column);
-        };
+        ArenaArray<u32> arraySizes{};
+        SourceLocation typeLoc = getLocation(stream->GetOffset(current));
 
-        // Check for type-first syntax: "type name" (C-style)
-        if (CheckMask(TokenMasks::CORE_TYPES) || Check(TokenType::TEXTURE2D) ||
-            Check(TokenType::TEXTURE3D) || Check(TokenType::TEXTURECUBE) ||
-            Check(TokenType::TEXTURE2DARRAY) || Check(TokenType::SAMPLER)) {
+        // Both Type name and name: Type share the same type/suffix parser.
+        if (Check(TokenType::IDENTIFIER) &&
+            stream->GetType(PeekNext()) == TokenType::COLON) {
             Advance();
-            paramType = std::string(stream->GetValue(previous));
-
-            // Check for pointer type: int^ means pointer to int
-            while (Match(TokenType::BITWISE_XOR)) {
-                paramType += "^";
-            }
-
-            // Check for array type suffix: type[size]
-            if (Match(TokenType::LEFT_BRACKET)) {
-                u32 paramArraySize = 0;
-                if (!ParseArraySizeValue(&paramArraySize)) {
-                    return;
-                }
-                Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
-            }
-
-            // Expect parameter name after type
-            if (Check(TokenType::IDENTIFIER)) {
-                Advance();
-                paramName = std::string(stream->GetValue(previous));
-                recordName();
-            } else {
-                // Anonymous parameter (just type)
-                paramName = "";
-            }
+            paramName = std::string(stream->GetValue(previous));
+            positions.namePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
+            Advance(); // ':'
+            typeLoc = getLocation(stream->GetOffset(current));
         }
-        // Check for identifier - could be:
-        // - "name: type" (Rust/Swift style)
-        // - "CustomType name" (C-style with custom type)
-        // - "CustomType" (anonymous parameter with custom type)
-        // - "Module::Type name" (module-qualified custom type)
-        else if (Check(TokenType::IDENTIFIER)) {
-            Advance();
-            std::string identifierStr(stream->GetValue(previous));
-
-            // Check for module-qualified type: Module::Type
+        positions.typePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
+        if (MatchMask(TokenMasks::CORE_TYPES) || Match(TokenType::TEXTURE2D) ||
+            Match(TokenType::TEXTURE3D) || Match(TokenType::TEXTURECUBE) ||
+            Match(TokenType::TEXTURE2DARRAY) || Match(TokenType::SAMPLER)) {
+            paramType = std::string(stream->GetValue(previous));
+        } else if (Match(TokenType::IDENTIFIER)) {
+            paramType = std::string(stream->GetValue(previous));
             if (Match(TokenType::DOUBLE_COLON)) {
-                // Module::Type pattern
-                std::string moduleName = identifierStr;
-                Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
+                if (!Consume(TokenType::IDENTIFIER, "Expected type name after '::'")) return;
                 RecordTypeQualifierBeforeTypeName();
-                std::string typeName(stream->GetValue(previous));
-                paramType = CanonicalizeModuleQualifiedName(moduleName, typeName);
-
-                // Now expect parameter name
-                if (Check(TokenType::IDENTIFIER)) {
-                    Advance();
-                    paramName = std::string(stream->GetValue(previous));
-                    recordName();
-                } else {
-                    // Anonymous parameter with module-qualified type
-                    paramName = "";
-                }
-            } else if (Match(TokenType::COLON)) {
-                // We have name: type
-                paramName = identifierStr;
-                positions.namePosition = AST::PackPosition(firstLoc.line, firstLoc.column);
-                const SourceLocation typeLoc = getLocation(stream->GetOffset(current));
-                positions.typePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
-
-                // Parse type (could be core type, custom type, or module-qualified type)
-                if (MatchMask(TokenMasks::CORE_TYPES) || Match(TokenType::TEXTURE2D) ||
-                    Match(TokenType::TEXTURE3D) || Match(TokenType::TEXTURECUBE) ||
-                    Match(TokenType::TEXTURE2DARRAY) || Match(TokenType::SAMPLER)) {
-                    paramType = std::string(stream->GetValue(previous));
-                    // Check for pointer type: int^ means pointer to int
-                    while (Match(TokenType::BITWISE_XOR)) {
-                        paramType += "^";
-                    }
-                } else if (Match(TokenType::IDENTIFIER)) {
-                    std::string typeIdent(stream->GetValue(previous));
-                    // Check for module-qualified type after colon
-                    if (Match(TokenType::DOUBLE_COLON)) {
-                        Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
-                        RecordTypeQualifierBeforeTypeName();
-                        paramType = CanonicalizeModuleQualifiedName(
-                            typeIdent, std::string(stream->GetValue(previous)));
-                    } else {
-                        paramType = typeIdent;
-                    }
-                    // Check for pointer type on custom types
-                    while (Match(TokenType::BITWISE_XOR)) {
-                        paramType += "^";
-                    }
-                } else {
-                    Error("Expected parameter type after ':'");
-                    return;
-                }
-            } else if (Check(TokenType::LEFT_BRACKET)) {
-                // CustomType[size] name - array of custom type
-                paramType = identifierStr;
-                Match(TokenType::LEFT_BRACKET);
-                u32 paramArraySize = 0;
-                if (!ParseArraySizeValue(&paramArraySize)) {
-                    return;
-                }
-                Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
-
-                // Now expect parameter name
-                if (Check(TokenType::IDENTIFIER)) {
-                    Advance();
-                    paramName = std::string(stream->GetValue(previous));
-                    recordName();
-                } else {
-                    paramName = "";
-                }
-            } else if (Check(TokenType::IDENTIFIER)) {
-                // CustomType name - identifier followed by another identifier
-                paramType = identifierStr;
-                Advance();
-                paramName = std::string(stream->GetValue(previous));
-                recordName();
-            } else {
-                // Just identifier, treat as custom type with anonymous parameter
-                paramType = identifierStr;
-                paramName = "";
+                paramType = CanonicalizeModuleQualifiedName(
+                    paramType, std::string(stream->GetValue(previous)));
             }
         } else {
-            Error("Expected parameter type or name");
+            Error("Expected parameter type");
             return;
         }
-
-        // Pointer-typed parameters parse but cannot be matched by overload
-        // resolution, so every call site would fail with a misleading
-        // "Function not found". Reject them at the declaration instead.
-        if (!paramType.empty() && paramType.back() == '^') {
+        // Pointer parameters have no supported overload representation.
+        if (Match(TokenType::BITWISE_XOR)) {
             Error("Pointer-typed function parameters are not supported");
             return;
         }
-
-        // A repeated parameter name would silently shadow the earlier one.
+        u32 totalSize = 1;
+        while (Match(TokenType::LEFT_BRACKET)) {
+            u32 size = 0;
+            if (!ParseArraySizeValue(&size) ||
+                !Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size")) return;
+            if (arraySizes.count == UINT8_MAX || totalSize > MAX_ARRAY_SIZE / size) {
+                Error("Invalid array size. Max 256k elements");
+                return;
+            }
+            totalSize *= size;
+            arraySizes.Push(arena, size);
+        }
+        if (paramName.empty() && Match(TokenType::IDENTIFIER)) {
+            paramName = std::string(stream->GetValue(previous));
+            const SourceLocation loc = getLocation(stream->GetOffset(previous));
+            positions.namePosition = AST::PackPosition(loc.line, loc.column);
+        }
         if (!paramName.empty()) {
             u32 newParamHash = ArenaString::MakeHashOnly(paramName).nameHash;
-            const auto &existingParams = ast->GetFunction(function).parameters;
-            for (u32 i = 0; i < existingParams.count; i++) {
-                if (existingParams[i].first.nameHash == newParamHash) {
+            const auto& existing = ast->GetFunction(function).parameters;
+            for (u32 i = 0; i < existing.count; i++) {
+                if (existing[i].first.nameHash == newParamHash) {
                     Error("Duplicate parameter name in function declaration");
                     return;
                 }
             }
         }
-
-        // Add parameter to function
-        ast->GetFunction(function).parameters.Push(arena,
-            std::make_pair(ArenaString::MakeHashOnly(paramName),
-                          ArenaString::MakeHashOnly(paramType)));
-        ast->GetFunction(function).parameterPositions.Push(arena, positions);
-
-    } while (Match(TokenType::COMMA) &&
-             !Check(TokenType::RIGHT_PAREN));
+        auto& declaration = ast->GetFunction(function);
+        declaration.parameters.Push(arena,
+            std::make_pair(ArenaString::MakeHashOnly(paramName), ArenaString::MakeHashOnly(paramType)));
+        declaration.parameterPositions.Push(arena, positions);
+        declaration.parameterArraySizes.Push(arena, arraySizes);
+    } while (Match(TokenType::COMMA) && !Check(TokenType::RIGHT_PAREN));
 }
 
 void Parser::ParseComputeBody(NodeRef compute) {

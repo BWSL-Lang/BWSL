@@ -1,8 +1,8 @@
 # AST JSON for editor integrations
 
 Run `bwslc source.bwsl -ast-json` to export the parsed AST as `bwsl.ast.v3`.
-This export includes a `referenceIndex` (`bwsl.references.v1`); normal shader
-compilation does not build that index.
+This export includes a `referenceIndex` (`bwsl.references.v1`). Its declaration
+walk is also used to validate names during normal compilation.
 
 ## Changes from v2
 
@@ -88,6 +88,44 @@ Parameter IDs use `FUNCTION:n/parameter:i`; field IDs use
 return types); folded constant uses use
 `LITERAL:n/folded-constant`. These IDs are local to an export. Externally
 addressable symbols also have `stableId` values for cross-invocation identity.
+
+## Array and declaration types
+
+Parameters, local/constant declarations, and struct fields include the same
+`typeInfo` shape. Functions have `returnTypeInfo` with that shape. Corresponding
+`parameter`, `variable`, `constant`, `struct-field`, `function`, and `method`
+symbols in `referenceIndex` include `typeInfo` too (a function symbol describes
+its return type).
+
+```json
+{
+  "elementType": "float3",
+  "coreType": "FLOAT3",
+  "componentCount": 3,
+  "arrayDimensions": 2,
+  "arrayLength": 6,
+  "arraySizes": [2, 3],
+  "arrayStride": 0
+}
+```
+
+This describes `float3[2][3]`. `arraySizes` preserves dimensions in source
+order; `arrayDimensions` is their count and `arrayLength` is their product.
+Non-arrays, including vectors and matrices, have `arraySizes: []`,
+`arrayDimensions: 0`, and `arrayLength: 0`. Sizes are resolved integer values,
+including when written using named constants. `arrayStride: 0` means no storage
+stride has been computed; this parsed type metadata is not a buffer layout.
+
+`dataType` on parameters/fields, `declaredType` on locals, and `type` on reference
+symbols keep the element type, including module qualification. An array local
+therefore reports `float` or `Light`, never the placeholder `array`. Existing
+local `arrayDimensions`/`arrayLength` and field `arraySize` properties remain
+for compatibility; use `typeInfo` for a consistent representation. Field
+`typeInfo.arrayDimensions` now describes actual arrays instead of marking
+vectors as arrays. Function stable IDs include parameter dimensions.
+
+This export describes supported syntax; it does not add array return types or
+change array argument/overload checking.
 
 ## Reference resolution
 

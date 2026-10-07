@@ -351,6 +351,7 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
             clonedData.isEval = src.isEval;
             clonedData.typePosition = src.typePosition;
             clonedData.namePosition = src.namePosition;
+            clonedData.arraySizes = src.arraySizes;
             return cloned;
         }
 
@@ -652,6 +653,7 @@ NodeRef Parser::ClonePassWithParamsAndRemap(NodeRef passRef, const ParamSubstitu
             dstFn.parameters.Push(arena, srcFn.parameters[j]);
         }
         dstFn.parameterPositions = srcFn.parameterPositions;
+        dstFn.parameterArraySizes = srcFn.parameterArraySizes;
         dstFn.returnTypePosition = srcFn.returnTypePosition;
         dstFn.returnTypeNameHash = srcFn.returnTypeNameHash;
         dstFn.isEval = srcFn.isEval;
@@ -1219,6 +1221,7 @@ NodeRef Parser::ClonePassWithActiveVariants(NodeRef passRef) {
             dstFn.parameters.Push(arena, srcFn.parameters[j]);
         }
         dstFn.parameterPositions = srcFn.parameterPositions;
+        dstFn.parameterArraySizes = srcFn.parameterArraySizes;
         dstFn.returnTypePosition = srcFn.returnTypePosition;
         dstFn.returnTypeNameHash = srcFn.returnTypeNameHash;
         dstFn.isEval = srcFn.isEval;
@@ -1337,6 +1340,7 @@ NodeRef Parser::SpecializePipelineForVariants(NodeRef pipeline,
             dstFn.parameters.Push(arena, srcFn.parameters[j]);
         }
         dstFn.parameterPositions = srcFn.parameterPositions;
+        dstFn.parameterArraySizes = srcFn.parameterArraySizes;
         dstFn.returnTypePosition = srcFn.returnTypePosition;
         dstFn.returnTypeNameHash = srcFn.returnTypeNameHash;
         dstFn.isEval = srcFn.isEval;
