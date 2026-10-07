@@ -36,6 +36,8 @@ struct RenameState {
     // For PHI result registers
     u16 nextNewReg;        // Next available register ID for new allocations
     bool registerLimitExceeded = false;
+    u32 currentSourceNode = 0xFFFFFFFF;
+    u32 failureSourceNode = 0xFFFFFFFF;
     
     u32 variableCount;
     BWSL_Arena* arena;
@@ -88,6 +90,7 @@ struct RenameState {
     
     u16 AllocateNewRegister() {
         if (nextNewReg >= IR::RegisterLimit) {
+            if (!registerLimitExceeded) failureSourceNode = currentSourceNode;
             registerLimitExceeded = true;
             return 0; // Keep scratch indexing safe; the caller rejects this IR.
         }
@@ -120,7 +123,13 @@ struct SSAConstructor {
     u32 variableCapacity;
     
     // Original register -> variable index mapping
-    u16* regToVariable;    // [registerCount], 0xFFFF if not a variable
+    u16* regToVariable;    // [originalRegisterCount], 0xFFFF if not a variable
+    u32 originalRegisterCount;
+
+    u16 GetVariable(u16 reg) const {
+        return reg < originalRegisterCount && reg < IR::RegisterLimit
+                   ? regToVariable[reg] : 0xFFFF;
+    }
     
     // PHI insertion results (before renaming)
     u32* phiBlocks;        // Block indices where PHIs inserted

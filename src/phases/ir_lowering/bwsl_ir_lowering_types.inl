@@ -808,27 +808,38 @@ inline u32 IRLowering::GetCoreTypeNameHash(CoreType type) {
 }
 
 inline u16 IRLowering::AllocateRegister() {
-  // Do not enter the tagged-constant range or return the legacy invalid marker.
-  if (builder.nextRegister >= MAX_REGISTERS) {
-    if (!hadError) ReportError("Shader register limit exceeded (16383 registers).\n");
-    return 0;
-  }
-  u16 reg = builder.nextRegister++;
-  if (reg >= program.registerCount) {
-    program.registerCount = reg + 1;
-  }
-  return reg;
+    // Do not enter the tagged-constant range or return the invalid marker.
+    if (builder.nextRegister >= MAX_REGISTERS) {
+        NodeRef node;
+        node.packed = builder.currentSourceNode;
+        if (!hadError) ReportErrorAt(node, "Shader register limit exceeded (16383 registers). Split or simplify the shader.\n");
+        return 0;
+    }
+    u16 reg = builder.nextRegister++;
+    if (reg >= program.registerCount) {
+        program.registerCount = reg + 1;
+    }
+    return reg;
 }
 
 inline u16 IRLowering::EmitConstantInt(u32 value) {
-  for (u16 i = 0; i < program.intCount; i++) {
-    if (program.intConstants[i] == value) {
-      return 0x4000 | i;
+    for (u32 i = 0; i < program.intCount; i++) {
+        if (program.intConstants[i] == value) return 0x4000 | (u16)i;
     }
-  }
-  u32 slot = program.intCount++;
-  program.intConstants[slot] = value;
-  return 0x4000 | (u16)slot;
+    if (program.intCount >= IntegerConstantLimit) {
+        NodeRef node;
+        node.packed = builder.currentSourceNode;
+        if (!hadError) ReportErrorAt(node, "Signed integer constant limit exceeded (8192 values). Split or simplify the shader.\n");
+        return 0x4000;
+    }
+    if (program.intCount == program.intCapacity) {
+        program.intCapacity = std::min(program.intCapacity * 2, IntegerConstantLimit);
+        program.intConstants = (u32*)pool->Reallocate(
+            program.intConstants, program.intCapacity * sizeof(u32), 64);
+    }
+    u32 slot = program.intCount++;
+    program.intConstants[slot] = value;
+    return 0x4000 | (u16)slot;
 }
 
 // Fold only pure integer ASTs. In particular, do not infer constants from a
@@ -968,14 +979,23 @@ inline bool IRLowering::CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
 }
 
 inline u16 IRLowering::EmitConstantUint(u32 value) {
-  for (u16 i = 0; i < program.uintCount; i++) {
-    if (program.uintConstants[i] == value) {
-      return 0x6000 | i;
+    for (u32 i = 0; i < program.uintCount; i++) {
+        if (program.uintConstants[i] == value) return 0x6000 | (u16)i;
     }
-  }
-  u32 slot = program.uintCount++;
-  program.uintConstants[slot] = value;
-  return 0x6000 | (u16)slot;
+    if (program.uintCount >= IntegerConstantLimit) {
+        NodeRef node;
+        node.packed = builder.currentSourceNode;
+        if (!hadError) ReportErrorAt(node, "Unsigned integer constant limit exceeded (8192 values). Split or simplify the shader.\n");
+        return 0x6000;
+    }
+    if (program.uintCount == program.uintCapacity) {
+        program.uintCapacity = std::min(program.uintCapacity * 2, IntegerConstantLimit);
+        program.uintConstants = (u32*)pool->Reallocate(
+            program.uintConstants, program.uintCapacity * sizeof(u32), 64);
+    }
+    u32 slot = program.uintCount++;
+    program.uintConstants[slot] = value;
+    return 0x6000 | (u16)slot;
 }
 
 inline u16 IRLowering::ConvertRegisterToType(u16 reg, CoreType targetType) {

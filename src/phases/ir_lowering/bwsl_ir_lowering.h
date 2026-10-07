@@ -156,6 +156,17 @@ struct IRLowering {
   // without a cap. Guarded in LowerExpression with MAX_LOWER_DEPTH.
   u32 lowerDepth = 0;
 
+    struct SourceNodeGuard {
+        IRBuilder& builder;
+        u32 savedNode;
+        SourceNodeGuard(IRBuilder& target, NodeRef node)
+            : builder(target), savedNode(target.currentSourceNode) {
+            builder.currentSourceNode = node.packed;
+        }
+        ~SourceNodeGuard() { builder.currentSourceNode = savedNode; }
+    };
+
+
   // Map AST node refs to registers (keyed by packed NodeRef value)
   std::unordered_map<u32, u16> nodeRegisters;
 

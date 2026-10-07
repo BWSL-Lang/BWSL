@@ -645,6 +645,8 @@ private:
                     pass.fragmentShader == stageRef ||
                     pass.computeShader == stageRef) {
                     owningPass = &pass;
+                    lowering.currentPipeline = NodeRef(ASTNodeType::PIPELINE, 0);
+                    lowering.currentPass = pipeline.passes[i];
                     break;
                 }
             }
@@ -676,8 +678,10 @@ private:
         
         // --- CFG Construction ---
         Memory::BWEMemoryArena cfgArena;
-        char cfgMem[512 * 1024];
-        cfgArena.Initialize(cfgMem, sizeof(cfgMem));
+        const size_t stageScratchBytes = std::max<size_t>(512 * 1024,
+            static_cast<size_t>(lowering.program.instructionCount) * 512);
+        std::vector<char> cfgMem(stageScratchBytes);
+        cfgArena.Initialize(cfgMem.data(), cfgMem.size());
         
         CFGBuilder cfgBuilder;
         cfgBuilder.Init(&lowering.program, &cfgArena);
@@ -688,7 +692,9 @@ private:
         // actual value producer. SSA handles unreachable blocks after specialization.
         if (cfgBuilder.cfg.blockCount > 1 &&
             !SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena)) {
-            fprintf(stderr, "BWSL Compiler Error: SSA register limit exceeded (16383 registers).\n");
+            NodeRef node;
+            node.packed = lowering.program.ssaFailureSourceNode;
+            lowering.ReportErrorAt(node, "SSA register limit exceeded (16383 registers). Split or simplify the shader.\n");
             return false;
         }
 
@@ -701,8 +707,8 @@ private:
         
         // --- Generate SPIR-V ---
         Memory::BWEMemoryArena spirvArena;
-        char spirvMem[512 * 1024];
-        spirvArena.Initialize(spirvMem, sizeof(spirvMem));
+        std::vector<char> spirvMem(stageScratchBytes);
+        spirvArena.Initialize(spirvMem.data(), spirvMem.size());
         
         SPIRVBuilder builder;
         builder.Initialize(&spirvArena, &lowering.program, stage,

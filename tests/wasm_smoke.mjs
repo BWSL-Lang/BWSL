@@ -97,3 +97,65 @@ const reserved = JSON.parse(compile(
 assert.equal(reserved.success, false);
 assert.match(JSON.stringify(reserved.errors), /reserved for a built-in intrinsic/);
 console.log('intrinsic function name diagnostic: PASS');
+
+// Exercise allocation boundaries through the exported API, including locations
+// in stage errors (which do not use the CLI's DiagnosticStream renderer).
+const computeLimits = (helper, body) => `pipeline RegisterLimits {
+  resources { inbuf: buffer<float> output: buffer<float> }
+  ${helper}
+  pass "Main" { use resources {inbuf, output} compute "Main" [8,1,1] {
+    uint idx=input.global_id.x; float delta=resources.inbuf[idx]; float acc=delta;
+    ${body}
+    resources.output[idx]=acc;
+  }}
+}`;
+const lowerLimit = computeLimits(
+  `burst :: (float x, float delta) -> float { ${'x=x+delta;\n'.repeat(64)} return x; }`,
+  'acc=burst(acc,delta);\n'.repeat(260));
+const variables = Array.from({length: 32}, (_, i) => `v${i}`);
+const ssaLimit = computeLimits(`burst :: (float delta, bool flip) -> float {
+  ${variables.map(v => `float ${v}=delta;`).join('\n')}
+  for(uint j=0u;j<2u;j=j+1u){if(flip){
+    ${variables.map((v, i) => `${v}=${variables[(i+1)%32]};`).join('\n')}
+  }else{${variables.map(v => `${v}=delta;`).join('\n')}}}
+  return ${variables.join('+')};
+}`, 'bool flip=(idx&1u)==0u;\n' + 'acc=burst(acc,flip);\n'.repeat(120));
+for (const [name, source, diagnostic] of [
+  ['lowering register limit', lowerLimit, 'Shader register limit exceeded'],
+  ['SSA register limit', ssaLimit, 'SSA register limit exceeded'],
+]) {
+  const result = JSON.parse(compile(source, '', '-spv'));
+  assert.equal(result.success, false, name);
+  const errors = JSON.stringify(result.errors);
+  assert.ok(errors.includes(diagnostic), errors);
+  assert.match(errors, /line [1-9]\d*:[1-9]\d*:/);
+  console.log(`${name} located diagnostic: PASS`);
+}
+for (const unsigned of [false, true]) {
+  const kind = unsigned ? 'uint' : 'int';
+  for (const count of [600, 8193]) {
+    const body = `${kind} value=${kind}(delta);\n` +
+      Array.from({length: count}, (_, i) => `value=value+${i}${unsigned ? 'u' : ''};`).join('\n') +
+      '\nacc=float(value);';
+    const result = JSON.parse(compile(computeLimits('', body), '', '-spv'));
+    assert.equal(result.success, count === 600, JSON.stringify(result.errors));
+    if (count > 8192) {
+      assert.ok(JSON.stringify(result.errors).includes('integer constant limit exceeded'));
+      assert.match(JSON.stringify(result.errors), /line [1-9]\d*:[1-9]\d*:/);
+    }
+    console.log(`${kind} constant pool (${count} values): PASS`);
+  }
+}
+const highGather = `pipeline HighGather { resources {tex: texture2D}
+  pass "Main" {use resources {tex} vertex {output.position=float4(1.0);}
+    fragment {float delta=input.position.x;float acc=delta;
+      ${'acc=acc+delta;\n'.repeat(9000)}
+      if(delta>0.0){acc=acc+delta;}else{acc=acc-delta;}
+      output.color=gather(resources.tex,float2(acc),0);
+    }
+  }
+}`;
+const gatherResult = JSON.parse(compile(highGather, '', '-spv'));
+assert.equal(gatherResult.success, true, JSON.stringify(gatherResult.errors));
+assert.ok(gatherResult.shaders.Main.fragment.includes('bwsl_gather'));
+console.log('high-register gather and direct GLES scratch: PASS');

@@ -2203,7 +2203,11 @@ CompileResult CompileShaderStage(
 
         if (cfgBuilder.cfg.blockCount > 1) {
             if (!SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena)) {
-                result.error = "SSA register limit exceeded (16383 registers). Split or simplify the shader.";
+                NodeRef node;
+                node.packed = lowering.program.ssaFailureSourceNode;
+                lowering.ReportErrorAt(node, "SSA register limit exceeded (16383 registers). Split or simplify the shader.\n");
+                result.error = lowering.diagnostics.back();
+                result.diagnosticsAlreadyReported = diagnosticStream != nullptr;
                 return result;
             }
         }
@@ -2252,7 +2256,10 @@ CompileResult CompileShaderStage(
 
         // Create GLES arena
         Memory::BWEMemoryArena glesArena;
-        std::vector<char> glesMem(128 * 1024);
+        const size_t glesScratchBytes = std::max<size_t>(128 * 1024,
+            static_cast<size_t>(lowering.program.registerCount) * sizeof(GLES::RegInfo) +
+            lowering.program.structTypeCount + 128);
+        std::vector<char> glesMem(glesScratchBytes);
         glesArena.Initialize(glesMem.data(), glesMem.size());
 
         // Initialize and emit GLES
