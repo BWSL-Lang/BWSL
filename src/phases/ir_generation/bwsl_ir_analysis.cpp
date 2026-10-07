@@ -146,7 +146,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
         // STORE_OUTPUT) Note: EmitInstruction(OP_STORE_OUTPUT, valueReg, slot)
         // puts value in destinations
         u16 srcReg = ir->destinations[i];
-        if (srcReg & 0xE000) {
+        if (srcReg & 0xC000) {
           // Constant pseudo-register: type lives in the high-bit encoding
           // (see IRLowering::GetRegisterType), not in registerTypes. Without
           // this, a scalar store like `output.brightness = 0.75;` leaves the
@@ -155,7 +155,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
             analysis->outputTypes[slot] = (u8)CoreType::BOOL;
           } else if (srcReg & 0x8000) {
             analysis->outputTypes[slot] = (u8)CoreType::FLOAT;
-          } else if (srcReg & 0x4000) {
+          } else if (IR::IsIntConstant(srcReg)) {
             analysis->outputTypes[slot] = (u8)CoreType::INT;
           } else {
             analysis->outputTypes[slot] = (u8)CoreType::UINT;
@@ -301,9 +301,9 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
           op == IR::OP_TEX_FETCH_OFFSET) {
         analysis->capabilityFlags |= IRAnalysis::CAP_IMAGE_GATHER_EXT;
       }
-      // Texture register is encoded as 0x2000 | bindingIndex
+      // Texture register is encoded as 0x6000 | bindingIndex
       u16 texReg = ir->GetOperand(i, 0);
-      if ((texReg & 0xF000) == 0x2000) {
+      if ((texReg & 0xF000) == 0x6000) {
         u16 binding = texReg & 0x0FFF;
         if (binding < 32) {
           analysis->usedTextureMask |= (1 << binding);
@@ -338,20 +338,20 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
 
     // ========== Image Operations ==========
     case IR::OP_IMG_LOAD: {
-      // Storage image register is encoded as 0x2000 | bindingIndex (same as
+      // Storage image register is encoded as 0x6000 | bindingIndex (same as
       // textures)
       u16 imgReg = ir->GetOperand(i, 0);
-      if ((imgReg & 0xF000) == 0x2000) {
+      if ((imgReg & 0xF000) == 0x6000) {
         MarkStorageImageRead(analysis, static_cast<u16>(imgReg & 0x0FFF));
       }
       break;
     }
 
     case IR::OP_IMG_STORE: {
-      // Storage image register is encoded as 0x2000 | bindingIndex (same as
+      // Storage image register is encoded as 0x6000 | bindingIndex (same as
       // textures)
       u16 imgReg = ir->GetOperand(i, 0);
-      if ((imgReg & 0xF000) == 0x2000) {
+      if ((imgReg & 0xF000) == 0x6000) {
         MarkStorageImageWrite(analysis, static_cast<u16>(imgReg & 0x0FFF));
       }
       break;

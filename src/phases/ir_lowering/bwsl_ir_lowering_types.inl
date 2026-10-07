@@ -808,12 +808,10 @@ inline u32 IRLowering::GetCoreTypeNameHash(CoreType type) {
 }
 
 inline u16 IRLowering::AllocateRegister() {
-  // Cap at MAX_REGISTERS - 1. Pathological inputs can exhaust u16 register
-  // space; once past MAX_REGISTERS, registerStorageInfo / registerTypes
-  // indexing OOBs. Returning the same sentinel repeatedly produces bad
-  // SPIR-V (SPIR-V validation will reject it) but avoids the crash.
-  if (builder.nextRegister >= MAX_REGISTERS - 1) {
-    return MAX_REGISTERS - 1;
+  // Do not enter the tagged-constant range or return the legacy invalid marker.
+  if (builder.nextRegister >= MAX_REGISTERS) {
+    if (!hadError) ReportError("Shader register limit exceeded (16383 registers).\n");
+    return 0;
   }
   u16 reg = builder.nextRegister++;
   if (reg >= program.registerCount) {
@@ -944,11 +942,11 @@ inline bool IRLowering::CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
   if (length == 0) return true;
 
   s64 indexValue;
-  if ((indexReg & 0xC000) == 0x4000) {
+  if (IR::IsIntConstant(indexReg)) {
     u16 slot = indexReg & 0x3FFF;
     if (slot >= program.intCount) return true;
     indexValue = static_cast<s32>(program.intConstants[slot]);
-  } else if ((indexReg & 0xE000) == 0x2000) {
+  } else if (IR::IsUintConstant(indexReg)) {
     u16 slot = indexReg & 0x1FFF;
     if (slot >= program.uintCount) return true;
     indexValue = program.uintConstants[slot];
@@ -972,12 +970,12 @@ inline bool IRLowering::CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
 inline u16 IRLowering::EmitConstantUint(u32 value) {
   for (u16 i = 0; i < program.uintCount; i++) {
     if (program.uintConstants[i] == value) {
-      return 0x2000 | i;
+      return 0x6000 | i;
     }
   }
   u32 slot = program.uintCount++;
   program.uintConstants[slot] = value;
-  return 0x2000 | (u16)slot;
+  return 0x6000 | (u16)slot;
 }
 
 inline u16 IRLowering::ConvertRegisterToType(u16 reg, CoreType targetType) {
@@ -1028,10 +1026,10 @@ inline CoreType IRLowering::GetRegisterType(u16 reg) {
     return CoreType::BOOL; // Bool constant (0xC000 prefix)
   if (reg & 0x8000)
     return CoreType::FLOAT; // Float constant (0x8000 prefix)
-  if (reg & 0x4000)
+  if (IR::IsIntConstant(reg))
     return CoreType::INT; // Int constant (0x4000 prefix)
-  if (reg & 0x2000)
-    return CoreType::UINT; // Uint constant (0x2000 prefix)
+  if (IR::IsUintConstant(reg))
+    return CoreType::UINT; // Uint constant (0x6000 prefix)
 
   if (reg < program.registerCount) {
     return static_cast<CoreType>(program.registerTypes[reg]);

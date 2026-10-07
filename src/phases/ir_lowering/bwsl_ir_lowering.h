@@ -21,7 +21,7 @@ namespace BWSL::IR {
 
 // Maximum number of registers supported for a single shader pass
 // Stay below the 14-bit operand tag boundary while accommodating inlined PBR/IBL.
-static constexpr u32 MAX_REGISTERS = 8192;
+static constexpr u32 MAX_REGISTERS = IR::RegisterLimit;
 using BWSL::IsArray;
 using BWSL::MakeOverloadMask;
 using BWSL::MakeOverloadMaskFromTypeHash;

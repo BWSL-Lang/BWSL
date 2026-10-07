@@ -41,10 +41,11 @@ void SSAConstructor::Init(IR::IRProgram* program, CFG* controlFlow, CFGBuilder* 
 // Full SSA Conversion
 //==============================================================================
 
-void SSAConstructor::ConvertToSSA() {
+bool SSAConstructor::ConvertToSSA() {
     IdentifyVariables();
     PlacePhis();
     Rename();
+    return !registerLimitExceeded;
 }
 
 //==============================================================================
@@ -89,9 +90,7 @@ void SSAConstructor::IdentifyVariables() {
         u16 dest = ir->destinations[i];
 
         // Skip constant references (high bits set)
-        if ((dest & 0x8000) != 0) continue;  // 0x8000 = float constant reference
-        if ((dest & 0x4000) != 0) continue;  // 0x4000 = int constant reference
-        if ((dest & 0x2000) != 0) continue;  // 0x2000 = uint constant reference
+        if (IR::IsConstant(dest)) continue;
         if (dest >= ir->registerCount) continue;
 
         u32 block = cfg->instToBlock[i];
@@ -168,7 +167,7 @@ void SSAConstructor::IdentifyVariables() {
             }
             u16 operand = ir->GetOperand(i, opIdx);
             if (operand == 0 || operand == 0xFFFF) continue;
-            if (operand & 0xE000) continue;  // Skip constants (0x8000=float, 0x4000=int, 0x2000=uint)
+            if (operand & 0xC000) continue;  // Skip constants (0x8000=float, 0x4000=int, 0x6000=uint)
             if (operand >= ir->registerCount) continue;
 
             // Check if this use is in a block different from ALL definition blocks
@@ -392,7 +391,7 @@ void SSAConstructor::Rename() {
         memset(newStructTypes + oldRegisterCount, 0, estimatedNewRegs * sizeof(u32));
         ir->registerStructTypes = newStructTypes;
     }
-    ir->registerCount = static_cast<u16>(newCapacity);
+    ir->registerCount = newCapacity;
 
     // SSA can introduce one undef per variable without an entry definition,
     // plus more for unfilled PHI operands. The IR starts with a small fixed
@@ -636,7 +635,7 @@ void SSAConstructor::Rename() {
                 // unreachable.
                 if (op == IR::OP_BRANCH || op == IR::OP_SWITCH) {
                     u16 condReg = ir->GetOperand(i, 0);
-                    if (condReg != 0xFFFF && (condReg & 0xE000) == 0) {
+                    if (condReg != 0xFFFF && (condReg & 0xC000) == 0) {
                         u16 undefReg =
                             (op == IR::OP_BRANCH)
                                 ? getUnreachableUndef(
@@ -659,6 +658,7 @@ void SSAConstructor::Rename() {
     // Update IR register count with new SSA registers
     // Note: We're keeping original registers and adding new ones for PHI results
     // A more complete implementation would remap all registers
+    registerLimitExceeded = state.registerLimitExceeded;
 }
 
 void SSAConstructor::RenameBlock(u32 block, RenameState& state,
@@ -727,7 +727,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
         // We need to rename the destination to the current version of the variable
         if (op == IR::OP_STORE_OUTPUT) {
             u16 destReg = ir->destinations[i];
-            if ((destReg & 0xE000) == 0 && destReg < ir->registerCount) {
+            if ((destReg & 0xC000) == 0 && destReg < ir->registerCount) {
                 u16 varIdx = regToVariable[destReg];
                 if (varIdx != 0xFFFF) {
                     u16 currentReg = state.GetCurrentRegister(varIdx);
@@ -808,7 +808,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                 // Skip unused operand slots (0xFFFF sentinel)
                 if (opReg == 0xFFFF) continue;
                 // Skip constants and invalid registers
-                if (opReg & 0xE000) continue;  // Skip constants
+                if (opReg & 0xC000) continue;  // Skip constants
                 if (opReg >= ir->registerCount) continue;
 
                 // Check if this operand is a tracked variable
@@ -830,14 +830,14 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
         // For definitions: allocate a new SSA register and update the instruction
         u16 dest = ir->destinations[i];
         // Skip constant references, but allow register 0
-        if ((dest & 0xE000) == 0 && dest < ir->registerCount) {
+        if ((dest & 0xC000) == 0 && dest < ir->registerCount) {
             u16 varIdx = regToVariable[dest];
 
             // Special case: STORE_REG where dest is NOT a tracked variable
             // We still need to rename the source operand if it's a variable
             if (varIdx == 0xFFFF && op == IR::OP_STORE_REG) {
                 u16 srcReg = ir->GetOperand(i, 0);
-                if ((srcReg & 0xE000) == 0 && srcReg < ir->registerCount) {
+                if ((srcReg & 0xC000) == 0 && srcReg < ir->registerCount) {
                     u16 srcVarIdx = regToVariable[srcReg];
                     if (srcVarIdx != 0xFFFF) {
                         u16 currentSrc = state.GetCurrentRegister(srcVarIdx);
@@ -858,7 +858,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                 u16 srcReg = ir->GetOperand(i, 0);
                 
                 // Check if source is a constant reference
-                bool srcIsConstant = (srcReg & 0xE000) != 0;
+                bool srcIsConstant = (srcReg & 0xC000) != 0;
                 
                 if (srcIsConstant) {
                     // Source is a constant - allocate a new SSA register for this definition.

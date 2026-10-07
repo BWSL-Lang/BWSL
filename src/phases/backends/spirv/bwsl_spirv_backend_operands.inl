@@ -42,10 +42,10 @@ u32 SPIRVBuilder::GetResultType(u16 dest_reg, u16 op1_reg) {
   if (op1_reg & 0x8000) {
     // Float constant
     return GetTypeId(CoreType::FLOAT);
-  } else if (op1_reg & 0x4000) {
+  } else if (IR::IsIntConstant(op1_reg)) {
     // Int constant
     return GetTypeId(CoreType::INT);
-  } else if (op1_reg & 0x2000) {
+  } else if (IR::IsUintConstant(op1_reg)) {
     // Uint constant
     return GetTypeId(CoreType::UINT);
   } else if (ir->registerTypes && op1_reg < ir->registerCount) {
@@ -75,9 +75,9 @@ CoreType SPIRVBuilder::GetOperandType(u16 reg) {
     return CoreType::BOOL; // Bool constant
   if (reg & 0x8000)
     return CoreType::FLOAT; // Float constant
-  if (reg & 0x4000)
+  if (IR::IsIntConstant(reg))
     return CoreType::INT; // Int constant
-  if (reg & 0x2000)
+  if (IR::IsUintConstant(reg))
     return CoreType::UINT; // Uint constant
 
   if (ir->registerTypes && reg < ir->registerCount) {

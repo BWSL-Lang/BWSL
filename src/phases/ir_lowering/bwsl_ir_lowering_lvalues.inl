@@ -2104,12 +2104,12 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
 
     case ResourceBinding::Texture:
       // Traditional bound texture - encode slot in register
-      dest = 0x2000 | (u16)resData.bindingIndex;
+      dest = 0x6000 | (u16)resData.bindingIndex;
       break;
 
     case ResourceBinding::StorageImage:
       // Storage image (read/write texture) - encode slot same as texture
-      dest = 0x2000 | (u16)resData.bindingIndex;
+      dest = 0x6000 | (u16)resData.bindingIndex;
       break;
 
     case ResourceBinding::Sampler:

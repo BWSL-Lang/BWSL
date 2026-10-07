@@ -584,7 +584,10 @@ static ShaderOutput CompileShaderStage(
         cfgPtr = &cfgBuilder.cfg;
 
         if (cfgBuilder.cfg.blockCount > 1) {
-            SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena);
+            if (!SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena)) {
+                output.error = "SSA register limit exceeded (16383 registers). Split or simplify the shader.";
+                return output;
+            }
         }
     }
 

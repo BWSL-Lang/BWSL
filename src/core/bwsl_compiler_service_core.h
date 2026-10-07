@@ -686,8 +686,11 @@ private:
         // Use the same CFG/SSA path as the CLI. The legacy pre-SSA DCE pass
         // treats output-store destinations as definitions and can delete the
         // actual value producer. SSA handles unreachable blocks after specialization.
-        if (cfgBuilder.cfg.blockCount > 1)
-            SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena);
+        if (cfgBuilder.cfg.blockCount > 1 &&
+            !SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena)) {
+            fprintf(stderr, "BWSL Compiler Error: SSA register limit exceeded (16383 registers).\n");
+            return false;
+        }
 
         if (outExplicitSamplerUses) {
             std::vector<ExplicitSamplerUse> stageUses =

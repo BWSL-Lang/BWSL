@@ -12,6 +12,15 @@ constexpr u32 NO_BLOCK = 0xFFFFFFFF;
 
 namespace IR {
 
+// Internal 16-bit operand layout. Keep the legacy 0x3fff invalid marker and
+// 0xffff unused-operand sentinel outside the register range. Uint constants and
+// texture handles previously used 0x2000, which aliased live SSA registers once
+// a shader exceeded 8192 registers. The external instruction widths do not change.
+constexpr u32 RegisterLimit = 0x3FFF;
+constexpr bool IsConstant(u16 value) { return (value & 0xC000) != 0; }
+constexpr bool IsIntConstant(u16 value) { return (value & 0xE000) == 0x4000; }
+constexpr bool IsUintConstant(u16 value) { return (value & 0xE000) == 0x6000; }
+
 
 struct IRProgram {
     // Hot instruction data - separate arrays for better cache usage
