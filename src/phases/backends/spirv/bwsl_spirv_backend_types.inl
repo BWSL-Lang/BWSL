@@ -201,13 +201,12 @@ u32 SPIRVBuilder::GetStructTypeId(u32 structTypeHash) {
 
   EmitToSection(&typesConstants, spv::OpTypeStruct, ops, 1 + fieldCount);
 
-  // Emit struct name for debugging (use ReverseLookup to convert hash back to
-  // string)
-  if (emitDebugNames) {
-    std::string structName = ReverseLookup::GetString(structTypeHash);
-    if (!structName.empty()) {
-      EmitName(struct_type_id, structName.c_str());
-    }
+  // Struct names are part of the GL interface too: nested uniform member
+  // types must have the same name in independently compiled shader stages.
+  // SPIR-V IDs differ between stages, so anonymous names cannot link reliably.
+  std::string structName = ReverseLookup::GetString(structTypeHash);
+  if (!structName.empty()) {
+    EmitName(struct_type_id, structName.c_str());
   }
 
   // Emit member offset decorations and member names for std140 layout
@@ -229,8 +228,9 @@ u32 SPIRVBuilder::GetStructTypeId(u32 structTypeHash) {
       EmitToSection(&decorations, spv::OpMemberDecorate, matrix_stride_ops, 4);
     }
 
-    // Emit member name for debugging
-    if (emitDebugNames && ir->structFieldNameHashes) {
+    // Match member names in the direct GLES emitter, including when only
+    // one stage of a pass falls back to it.
+    if (ir->structFieldNameHashes) {
       u32 fieldNameHash =
           ir->structFieldNameHashes[structInfo->fieldOffset + i];
       std::string fieldName = ReverseLookup::GetString(fieldNameHash);
