@@ -287,6 +287,7 @@ struct Parser {
 
     // Main parse functions
     NodeRef ParseDocument();
+    bool ValidateNames();
     NodeRef ParsePipeline();
 
     // Parse a standalone module or submodule file
@@ -364,7 +365,7 @@ private:
     void ParseModuleImportList(NodeRef owner, bool ownerIsPipeline);
     void ParseUsingDeclaration(NodeRef owner, bool ownerIsPipeline);
     void ParseUsingModuleList(NodeRef owner, bool ownerIsPipeline);
-    void ParseUsingTypeAliasList();
+    void ParseUsingTypeAliasList(NodeRef owner);
     void ParseAttributes(NodeRef owner, bool ownerIsPipeline = true);
     void ParseResources(NodeRef owner, bool ownerIsPipeline = true);
     void RegisterParsedResource(const std::string& resourceName,

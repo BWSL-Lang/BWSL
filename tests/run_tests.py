@@ -189,14 +189,14 @@ ERROR_CASE_TESTS = {
     'remaining_float_bitwise.bwsl': 'Bitwise operators require integer operands',
     'remaining_float_bitwise_not.bwsl': 'Bitwise operators require integer operands',
     'remaining_float_shift.bwsl': 'Bitwise operators require integer operands',
-    "backend_spelling_alias_rejected.bwsl": "Function not found: mix",
+    "backend_spelling_alias_rejected.bwsl": "Unknown function 'mix'",
     "invalid_intrinsic_arity.bwsl": "'sin' accepts at most 1 arguments, got 2",
     "missing_semicolon.bwsl": "Expected ';' after expression",
     "unknown_module_import.bwsl": "Unknown module 'DoesNotExist'",
     "import_alias_conflict.bwsl": "Module alias 'Tools' conflicts",
     "using_without_import.bwsl": "Module 'Debug' must be imported before it can be used",
-    "import_without_using_unqualified.bwsl": "Function not found",
-    "module_alias_scope_isolation.bwsl": "Unknown module or enum: M",
+    "import_without_using_unqualified.bwsl": "Unknown function",
+    "module_alias_scope_isolation.bwsl": "Unknown module 'M'",
     "submodule_duplicate_different_parent.bwsl": "Duplicate submodule declaration for 'DuplicateSubmoduleCrossParent'",
     "submodule_duplicate_same_parent.bwsl": "Duplicate submodule declaration for 'DuplicateSubmodule'",
     "submodule_extends_unknown_parent.bwsl": "Unknown parent module 'DoesNotExist'",
@@ -242,7 +242,7 @@ ERROR_CASE_TESTS = {
     "pass_block_ternary_instantiation.bwsl": "pass_block instantiation must use a direct function call",
     "pass_block_type_mismatch.bwsl": "pass_block attribute mapping type mismatch",
     "pass_block_variant_type_mismatch.bwsl": "pass_block variant mapping type mismatch",
-    "struct_method_unknown.bwsl": "unknown struct method",
+    "struct_method_unknown.bwsl": "Unknown method",
     "struct_method_duplicate_const.bwsl": "Struct method overload already declared",
     "struct_method_nonconst_on_const.bwsl": "cannot call non-const struct method on const receiver",
     "struct_method_assign_in_const.bwsl": "cannot assign to receiver field inside const method",
@@ -276,7 +276,7 @@ ERROR_CASE_TESTS = {
     "num_workgroups_wrong_stage.bwsl": "input.num_workgroups is only available in compute shaders",
     "vertex_function_wrong_block.bwsl": "Expected 'vertex' block in vertex_function",
     "use_before_declaration.bwsl": "Unknown identifier 'lateVar'",
-    "unknown_function_call.bwsl": "Function not found: notAFunction",
+    "unknown_function_call.bwsl": "Unknown function 'notAFunction'",
     "mutual_recursion.bwsl": "recursion is not supported",
     "derivative_in_vertex_stage.bwsl": "Intrinsic not available in this shader stage",
     "pipeline_scope_mutable_var.bwsl": "Expected 'import', 'using', 'attributes', 'resources'",
@@ -285,7 +285,7 @@ ERROR_CASE_TESTS = {
     "swizzle_component_out_of_range.bwsl": "SPIR-V validation failed",
     "ternary_branch_type_mismatch.bwsl": "SPIR-V validation failed",
     "bool_assigned_to_float.bwsl": "SPIR-V validation failed",
-    "unknown_struct_field.bwsl": "SPIR-V validation failed",
+    "unknown_struct_field.bwsl": "Unknown field 'missing'",
     "shared_in_fragment.bwsl": "shared variables are only allowed in compute shaders",
     "struct_unknown_field_type.bwsl": "Unknown field type 'Missing'",
     "unknown_enum_variant.bwsl": "Unknown enum variant 'Missing'",
@@ -3470,6 +3470,11 @@ def main() -> int:
     module_passed, module_failed = run_parser_module_tests(bwslc)
     passed += module_passed
     failed += module_failed
+
+    from name_validation_tests import run_name_validation_suite
+    names_passed, names_failed = run_name_validation_suite(bwslc)
+    passed += names_passed
+    failed += names_failed
 
     from p1_regression_tests import run_p1_regression_tests
     p1_passed, p1_failed = run_p1_regression_tests(bwslc, output_dir / "p1_validation")

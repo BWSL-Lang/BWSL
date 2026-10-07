@@ -497,14 +497,14 @@ void Parser::ParseModuleImportList(NodeRef owner, bool ownerIsPipeline) {
 void Parser::ParseUsingDeclaration(NodeRef owner, bool ownerIsPipeline) {
     if (Check(TokenType::IDENTIFIER) &&
         stream->GetType(PeekNext()) == TokenType::ASSIGN) {
-        ParseUsingTypeAliasList();
+        ParseUsingTypeAliasList(owner);
         return;
     }
 
     ParseUsingModuleList(owner, ownerIsPipeline);
 }
 
-void Parser::ParseUsingTypeAliasList() {
+void Parser::ParseUsingTypeAliasList(NodeRef owner) {
     auto parseTypeAliasTarget = [&]() -> std::string {
         if (MatchMask(TokenMasks::CORE_TYPES)) {
             return std::string(stream->GetValue(previous));
@@ -515,6 +515,7 @@ void Parser::ParseUsingTypeAliasList() {
         if (Match(TokenType::DOUBLE_COLON)) {
             std::string moduleName = typeName;
             Consume(TokenType::IDENTIFIER, "Expected type name after '::'");
+            RecordTypeQualifierBeforeTypeName();
             typeName = CanonicalizeModuleQualifiedName(
                 moduleName, std::string(stream->GetValue(previous)));
         }
@@ -554,6 +555,11 @@ void Parser::ParseUsingTypeAliasList() {
                          "Type alias '%s' conflicts with an existing name",
                          aliasNameStr.c_str());
                 ErrorAt(aliasToken, msg);
+            } else {
+                const SourceLocation loc = getLocation(stream->GetOffset(targetToken));
+                ast->typeAliases.Push(arena, {owner, aliasName, targetName,
+                    AST::PackPosition(loc.line, loc.column),
+                    ast->InternSourceFile(currentSourceName.c_str())});
             }
             typeCache.Clear();
         }

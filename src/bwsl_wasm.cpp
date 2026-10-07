@@ -30,6 +30,7 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <fstream>
 #include <algorithm>
 
 // SPIRV-Cross wrapper (compiled separately to avoid macro conflicts)
@@ -710,6 +711,56 @@ static ShaderOutput CompileShaderStage(
 
 // ============= Main Compile Function =============
 
+// Keep parser and semantic diagnostics tied to the file that supplied the
+// token. Imported module offsets do not belong to the main source buffer.
+static std::string BuildNameDiagnosticsJson(const DiagnosticStream& diagnostics,
+                                           const std::string& source,
+                                           const std::string& sourceFileName) {
+    std::string json = "{\"success\":false,\"errors\":[";
+    bool first = true;
+    for (u32 i = 0; i < diagnostics.Count(); i++) {
+        if (diagnostics.GetSeverity(i) != DiagnosticSeverity::Error) continue;
+        if (!first) json += ",";
+        first = false;
+        const std::string file = diagnostics.GetFile(i);
+        json += "{\"message\":\"" + EscapeJsonString(diagnostics.FormatMessage(i)) +
+                "\",\"file\":\"" + EscapeJsonString(file) + "\"";
+        if (DiagnosticSpan::HasAll(diagnostics.spanFlags[i], DiagnosticSpan::HasLocationFlag)) {
+            json += ",\"line\":" + std::to_string(diagnostics.lines[i]) +
+                    ",\"column\":" + std::to_string(diagnostics.columns[i]);
+            if (DiagnosticSpan::HasAll(diagnostics.spanFlags[i], DiagnosticSpan::HasEndLocationFlag)) {
+                json += ",\"endLine\":" + std::to_string(diagnostics.endLines[i]) +
+                        ",\"endColumn\":" + std::to_string(diagnostics.endColumns[i]);
+            }
+            std::string contents = source;
+            if (!file.empty() && file != sourceFileName) {
+                std::ifstream input(file);
+                contents.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+            }
+            std::istringstream input(contents);
+            std::vector<std::string> lines;
+            for (std::string line; std::getline(input, line);) lines.push_back(line);
+            const u32 line = diagnostics.lines[i];
+            const u32 column = diagnostics.columns[i];
+            if (line > 0 && line <= lines.size() && column > 0 && column <= lines[line - 1].size() &&
+                diagnostics.endLines[i] == line && diagnostics.endColumns[i] >= column) {
+                json += ",\"token\":\"" + EscapeJsonString(lines[line - 1].substr(
+                    column - 1, diagnostics.endColumns[i] - column)) + "\"";
+            }
+            json += ",\"context\":[";
+            bool firstLine = true;
+            for (u32 n = line > 1 ? line - 1 : 1; n <= line + 1 && n <= lines.size(); n++) {
+                if (!firstLine) json += ",";
+                firstLine = false;
+                json += "\"" + EscapeJsonString(lines[n - 1]) + "\"";
+            }
+            json += "]";
+        }
+        json += "}";
+    }
+    return json + "]}";
+}
+
 static std::string CompileToJson(const char* bwslSource,
                                  const char* rcfgSource,
                                  bool emitInternals = false,
@@ -735,50 +786,12 @@ static std::string CompileToJson(const char* bwslSource,
     lexer.Tokenize();
     Parser parser;
     parser.Init(&lexer, &stream, &context);
+    parser.currentSourceName = sourceFileName;
 
     parser.ParseDocument();
 
     if (parser.hadError) {
-        std::string errorJson = "{\"success\":false,\"errors\":[";
-        for (u32 i = 0; i < parser.errors.count && i < 10; i++) {
-            if (i > 0) errorJson += ",";
-            const ParseError& err = parser.errors[i];
-            std::string msg = err.message ? err.message : "Parse error";
-
-            // Get token text for the error
-            std::string tokenText;
-            if (err.token != INVALID_TOKEN) {
-                std::string_view tokenView = stream.GetValue(err.token);
-                tokenText = std::string(tokenView);
-            }
-
-            // Get context lines (1 before, error line, 1 after)
-            std::string lineBefore = err.line > 1 ? lexer.GetLine(err.line - 1) : "";
-            std::string sourceLine = lexer.GetLine(err.line);
-            std::string lineAfter = lexer.GetLine(err.line + 1);
-
-            errorJson += "{\"line\":" + std::to_string(err.line) +
-                         ",\"column\":" + std::to_string(err.column) +
-                         ",\"message\":\"" + EscapeJsonString(msg) + "\"";
-            if (!tokenText.empty()) {
-                errorJson += ",\"token\":\"" + EscapeJsonString(tokenText) + "\"";
-            }
-
-            // Add context array with line before, error line, and line after
-            errorJson += ",\"context\":[";
-            if (!lineBefore.empty()) {
-                errorJson += "\"" + EscapeJsonString(lineBefore) + "\",";
-            }
-            errorJson += "\"" + EscapeJsonString(sourceLine) + "\"";
-            if (!lineAfter.empty()) {
-                errorJson += ",\"" + EscapeJsonString(lineAfter) + "\"";
-            }
-            errorJson += "]";
-
-            errorJson += "}";
-        }
-        errorJson += "]}";
-        return errorJson;
+        return BuildNameDiagnosticsJson(context.Diag(), source, sourceFileName);
     }
 
     if (context.root.IsValid()) {
@@ -793,6 +806,10 @@ static std::string CompileToJson(const char* bwslSource,
     if (!BWSL::Comptime::RunComptimeInterpreter(&context, &parser, context.root, &comptimeError)) {
         std::string msg = !comptimeError.empty() ? comptimeError : "Comptime interpretation failed";
         return "{\"success\":false,\"errors\":[\"" + EscapeJsonString(msg) + "\"]}";
+    }
+
+    if (!parser.ValidateNames()) {
+        return BuildNameDiagnosticsJson(context.Diag(), source, sourceFileName);
     }
 
     if (context.ast.pipelines.count == 0) {

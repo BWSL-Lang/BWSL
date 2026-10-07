@@ -11,12 +11,13 @@ int main(int argc, char** argv) {
     std::filesystem::create_directories(dir);
     std::ofstream(dir / "Good.bwsl") << "pipeline Good { pass \"Main\" { vertex { output.position=float4(1.0); } fragment { output.color=float4(2.0); } } }";
     std::ofstream(dir / "Bad.bwsl") << "pipeline Bad { pass \"Main\" { vertex { int[2] a; output.position=float4(a[1+2]); } } }";
+    std::ofstream(dir / "UnknownName.bwsl") << "pipeline UnknownName { unused :: () -> float { return missingName; } pass \"Main\" { vertex { output.position=float4(1.0); } } }";
     // Struct `t_atlas` clashes with t_atlas, the GL name of texture `atlas`.
     std::ofstream(dir / "GLNameClash.bwsl") << "pipeline GLNameClash { struct t_atlas { float x; }; resources { atlas: texture2D } pass \"Main\" { use resources { atlas } vertex { output.position=float4(1.0); } fragment { output.color=sample(resources.atlas, float2(0.5)); } } }";
     std::ofstream(dir / "Varyings.bwsl") << "pipeline Varyings { pass \"Main\" { vertex { output.position=float4(1.0); output.uv=float2(0.5); output.tint=float4(0.25); } fragment { output.color=input.tint+float4(input.uv,0.0,1.0); } } }";
     std::ofstream(dir / "VaryingNameClash.bwsl") << "pipeline VaryingNameClash { struct v_uv { float x; } pass \"Main\" { vertex { output.position=float4(1.0); output.uv=float2(0.5); } fragment { output.color=float4(input.uv,0.0,1.0); } } }";
     RenderConfig config;
-    for (auto name : {"Good", "Bad", "GLNameClash", "Varyings", "VaryingNameClash",
+    for (auto name : {"Good", "Bad", "UnknownName", "GLNameClash", "Varyings", "VaryingNameClash",
                       "LoweringOverflow", "SSAOverflow"}) {
         RenderConfig::PassData pass;
         pass.name = "Main";
@@ -29,6 +30,7 @@ int main(int argc, char** argv) {
     assert(valid && !valid->vertexSpirv.empty() && !valid->fragmentSpirv.empty());
     assert(service.GetOrCompileVariant("Good", "Main", 0) == valid);
     for (int i=0; i<2; ++i) assert(service.GetOrCompileVariant("Bad", "Main", 0) == nullptr);
+    for (int i=0; i<2; ++i) assert(service.GetOrCompileVariant("UnknownName", "Main", 0) == nullptr);
     assert(service.GetOrCompileVariant("GLNameClash", "Main", 0) == nullptr);
     auto* varyings = service.GetOrCompileVariant("Varyings", "Main", 0);
     assert(varyings && !varyings->vertexSpirv.empty() && !varyings->fragmentSpirv.empty());

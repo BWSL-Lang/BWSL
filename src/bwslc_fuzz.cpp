@@ -181,6 +181,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     if (!parser.ResolveVariants(pipelineRef, &variantResolveError)) return 0;
     std::string comptimeError;
     if (!BWSL::Comptime::RunComptimeInterpreter(&context, &parser, pipelineRef, &comptimeError)) return 0;
+    if (!parser.ValidateNames()) return 0;
     parser.ResolveShaderStages(pipelineRef);
 
     const PipelineData& pipeline = context.ast.GetPipeline(pipelineRef);

@@ -42,6 +42,8 @@ void Parser::RecordMemberSources(NodeRef container) {
         recordNew(module.enums);
         recordNew(module.attributes);
         recordNew(module.resources);
+        for (u32 i = 0; i < module.structs.count; i++) recordNew(ast->GetStructDecl(module.structs[i]).methods);
+        for (u32 i = 0; i < module.enums.count; i++) recordNew(ast->GetEnumDecl(module.enums[i]).methods);
     } else if (container.Type() == ASTNodeType::PIPELINE) {
         const PipelineData& pipeline = ast->GetPipeline(container);
         recordNew(pipeline.consts);
@@ -50,6 +52,8 @@ void Parser::RecordMemberSources(NodeRef container) {
         recordNew(pipeline.enums);
         recordNew(pipeline.attributes);
         recordNew(pipeline.resources);
+        for (u32 i = 0; i < pipeline.structs.count; i++) recordNew(ast->GetStructDecl(pipeline.structs[i]).methods);
+        for (u32 i = 0; i < pipeline.enums.count; i++) recordNew(ast->GetEnumDecl(pipeline.enums[i]).methods);
         recordNew(pipeline.constraints);
         recordNew(pipeline.passes);
         for (u32 i = 0; i < pipeline.passes.count; i++) {
@@ -95,6 +99,7 @@ void Parser::RecordTypeQualifierBeforeTypeName() {
     if (moduleIdx != INVALID_INDEX && moduleIdx < symbolTable.modules.count) {
         data.moduleNameHash = symbolTable.modules[moduleIdx].name.nameHash;
     }
+    data.sourceFile = ast->InternSourceFile(currentSourceName.c_str()) + 1;
     ast->typeQualifiers.Push(arena, data);
 }
 

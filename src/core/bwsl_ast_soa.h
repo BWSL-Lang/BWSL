@@ -225,6 +225,7 @@ struct FunctionDeclData {
     ArenaArray<ParameterSourcePositions> parameterPositions;
     CoreType returnType;
     u32 returnTypeHash;
+    u32 returnTypeNameHash = 0; // Written custom type/alias before resolution
     u32 returnTypePosition; // Packed line/column of the written return type, 0 when synthesized
     u32 ownerStructTypeHash;
     NodeRef body;
@@ -240,6 +241,7 @@ struct StructFieldData {
     u32 arraySize;  // 0 = not an array, >0 = fixed-size array
     u32 namePosition = 0;  // Packed line/column (AST::PackPosition) of the
     u32 typePosition = 0;  // field name and its type; 0 when synthesized.
+    u32 typeNameHash = 0; // Written type/alias before resolution
 };
 
 // Struct declaration - 20 bytes + ArenaArray
@@ -329,6 +331,15 @@ struct ModuleNameSite {
     u32 position;        // Packed line/column of the written name
     ArenaString name;    // As written (module name or alias)
     u32 moduleNameHash;  // Resolved module name, or 0 when unresolved
+    u32 sourceFile = 0;  // sourceFiles index + 1 for file-local positions
+};
+
+struct TypeAliasSite {
+    NodeRef owner;
+    ArenaString name;
+    ArenaString target;
+    u32 targetPosition;
+    u32 sourceFile;
 };
 
 // Module - 20 bytes + ArenaArrays
@@ -584,7 +595,8 @@ struct AST {
     ArenaArray<u32> docsTextLengths;
 
     // Position of the name token for named nodes, where it differs from the
-    // node's primary position (keyword, type, '.', '::', ...). Tooling only.
+    // node's primary position (keyword, type, '.', '::', ...). Used by
+    // diagnostics and tooling.
     NodeU32Map namePositions;
 
     // Source files that contributed declarations: the scanned document,
@@ -601,6 +613,7 @@ struct AST {
     // Written module qualifiers of declared `Module::Type` types, keyed by
     // position (also the declaration's recorded type position).
     ArenaArray<ModuleNameSite> typeQualifiers;
+    ArenaArray<TypeAliasSite> typeAliases;
 
     // Return statements reuse AssignmentData (target unused, value is the return expr)
     // If statements reuse BlockData (first statement is condition, rest is body)
@@ -667,6 +680,7 @@ struct AST {
 
         namePositions.Init(arena, NextPowerOfTwo(estimatedNodes));
         sourceFiles.Init(arena, 4);
+        typeAliases.Init(arena, 4);
         declarationSources.Init(arena, 64);
         foldedConstants.Init(arena, 8);
         typeQualifiers.Init(arena, 8);
@@ -807,10 +821,14 @@ struct AST {
         return nullptr;
     }
 
-    const ModuleNameSite* FindTypeQualifier(u32 position) const {
+    const ModuleNameSite* FindTypeQualifier(u32 position, const char* sourceFile = nullptr) const {
         if (position == 0) return nullptr;
         for (u32 i = 0; i < typeQualifiers.count; i++) {
-            if (typeQualifiers[i].position == position) return &typeQualifiers[i];
+            const ModuleNameSite& site = typeQualifiers[i];
+            if (site.position != position) continue;
+            if (sourceFile && site.sourceFile != 0 &&
+                strcmp(sourceFiles[site.sourceFile - 1], sourceFile) != 0) continue;
+            return &site;
         }
         return nullptr;
     }

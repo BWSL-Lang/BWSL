@@ -895,6 +895,8 @@ NodeRef Parser::ParseEnumMethod() {
             returnTypeName = CanonicalizeModuleQualifiedName(
                 moduleName, std::string(stream->GetValue(previous)));
         }
+        ast->GetFunction(method).returnTypeNameHash =
+            ArenaString::MakeHashOnly(returnTypeName).nameHash;
         TypeInfo resolved = ResolveType(returnTypeName);
         if (resolved.coreType != CoreType::INVALID) {
             ast->GetFunction(method).returnType = resolved.coreType;
@@ -1158,6 +1160,8 @@ NodeRef Parser::ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime) {
             returnTypeName = CanonicalizeModuleQualifiedName(
                 moduleName, std::string(stream->GetValue(previous)));
         }
+        ast->GetFunction(method).returnTypeNameHash =
+            ArenaString::MakeHashOnly(returnTypeName).nameHash;
         TypeInfo resolved = ResolveType(returnTypeName);
         if (resolved.coreType != CoreType::INVALID) {
             ast->GetFunction(method).returnType = resolved.coreType;
@@ -1342,6 +1346,7 @@ NodeRef Parser::ParseStruct() {
         StructFieldData astField;
         astField.name = field.name;
         astField.type = field.type;
+        astField.typeNameHash = ArenaString::MakeHashOnly(fieldTypeName).nameHash;
         astField.arraySize = field.arraySize;
         astField.namePosition = AST::PackPosition(fieldNameLoc.line, fieldNameLoc.column);
         astField.typePosition = AST::PackPosition(fieldTypeLoc.line, fieldTypeLoc.column);

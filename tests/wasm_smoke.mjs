@@ -98,6 +98,59 @@ assert.equal(reserved.success, false);
 assert.match(JSON.stringify(reserved.errors), /reserved for a built-in intrinsic/);
 console.log('intrinsic function name diagnostic: PASS');
 
+const unusedNames = JSON.parse(compile(`pipeline Names {
+  unused :: () -> float { MissingType value; return missingName; }
+  pass "Main" { vertex { output.position = float4(1.0); } }
+}`, '', '-source-file /Names.bwsl'));
+assert.equal(unusedNames.success, false);
+assert.equal(unusedNames.errors.length, 2);
+for (const [error, token] of unusedNames.errors.map((error, i) =>
+  [error, ['MissingType', 'missingName'][i]])) {
+  assert.match(error.message, new RegExp(token));
+  assert.equal(error.file, '/Names.bwsl');
+  assert.equal(error.line, 2);
+  assert.equal(error.endLine, error.line);
+  assert.equal(error.endColumn - error.column, token.length);
+  assert.equal(error.token, token);
+}
+console.log('unused names and source spans: PASS');
+
+wasm.FS.writeFile('/NameDependency.bwsl', `module NameDependency {
+  unused :: () -> float { return dependencyTypo; }
+}`);
+const importedNames = JSON.parse(compile(`pipeline Names { import NameDependency
+  pass "Main" { vertex { output.position = float4(1.0); } }
+}`, '', '-source-file /Names.bwsl -modules /'));
+assert.equal(importedNames.success, false);
+assert.equal(importedNames.errors.length, 1);
+assert.match(importedNames.errors[0].message, /dependencyTypo/);
+assert.equal(importedNames.errors[0].file, '/NameDependency.bwsl');
+assert.equal(importedNames.errors[0].endColumn - importedNames.errors[0].column, 14);
+assert.equal(importedNames.errors[0].token, 'dependencyTypo');
+assert.ok(importedNames.errors[0].context.some(line => line.includes('dependencyTypo')));
+console.log('imported module name diagnostic: PASS');
+
+const unknownImport = JSON.parse(compile('pipeline Names { import MissingModule }', '',
+  '-source-file /Names.bwsl'));
+assert.equal(unknownImport.success, false);
+assert.equal(unknownImport.errors[0].token, 'MissingModule');
+assert.equal(unknownImport.errors[0].endColumn - unknownImport.errors[0].column, 13);
+console.log('unknown import source span: PASS');
+
+const aliasTypes = JSON.parse(compile(`module Geometry { struct Point { float x; } }
+pipeline Aliases { import Geometry
+  using Position = Geometry::Point
+  struct Container { Position value; }
+  identityPosition :: (Position value) -> Position { return value; }
+  field :: (Container value) -> float { return value.value.x; }
+  pass "Main" {
+    vertex { Position p; p.x = 1.0; output.position = float4(identityPosition(p).x); }
+    fragment { output.color = float4(1.0); }
+  }
+}`, '', ''));
+assert.equal(aliasTypes.success, true, JSON.stringify(aliasTypes));
+console.log('type aliases in fields and return types: PASS');
+
 // Exercise allocation boundaries through the exported API, including locations
 // in stage errors (which do not use the CLI's DiagnosticStream renderer).
 const computeLimits = (helper, body) => `pipeline RegisterLimits {
