@@ -134,58 +134,58 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
       break;
     }
 
-    // ========== Output Storage ==========
-    case IR::OP_STORE_OUTPUT: {
-      // Slot is now stored in operand[0] (set during IR lowering)
-      // This enables dynamic vertex-to-fragment varying resolution
-      u32 slot = ir->GetOperand(i, 0);
-      if (slot < 32) {
-        analysis->usedOutputMask |= (1 << slot);
-        analysis->outputInterpolations[slot] = ir->outputInterpolations[slot];
-        // Capture type from destination register (value is in dest for
-        // STORE_OUTPUT) Note: EmitInstruction(OP_STORE_OUTPUT, valueReg, slot)
-        // puts value in destinations
-        u16 srcReg = ir->destinations[i];
-        if (srcReg & 0xC000) {
-          // Constant pseudo-register: type lives in the high-bit encoding
-          // (see IRLowering::GetRegisterType), not in registerTypes. Without
-          // this, a scalar store like `output.brightness = 0.75;` leaves the
-          // varying typed by the FLOAT4 fallback while the store is scalar.
-          if ((srcReg & 0xC000) == 0xC000) {
-            analysis->outputTypes[slot] = (u8)CoreType::BOOL;
-          } else if (srcReg & 0x8000) {
-            analysis->outputTypes[slot] = (u8)CoreType::FLOAT;
-          } else if (IR::IsIntConstant(srcReg)) {
-            analysis->outputTypes[slot] = (u8)CoreType::INT;
-          } else {
-            analysis->outputTypes[slot] = (u8)CoreType::UINT;
-          }
-        } else if (srcReg < ir->registerCount && ir->registerTypes) {
-          analysis->outputTypes[slot] = (u8)ir->registerTypes[srcReg];
-        } else if (ir->phiCount > 0 && ir->phiResultRegs) {
-          // Check if this is a PHI result register (SSA renaming assigns high
-          // IDs)
-          for (u32 p = 0; p < ir->phiCount; p++) {
-            if (ir->phiResultRegs[p] == srcReg) {
-              analysis->outputTypes[slot] = (u8)ir->phiTypes[p];
-              break;
+        // ========== Output Storage ==========
+        case IR::OP_STORE_OUTPUT: {
+            // Slot is now stored in operand[0] (set during IR lowering)
+            // This enables dynamic vertex-to-fragment varying resolution
+            u32 slot = ir->GetOperand(i, 0);
+            if (slot < 32) {
+                analysis->usedOutputMask |= (1 << slot);
+                analysis->outputInterpolations[slot] = ir->outputInterpolations[slot];
+                // Capture type from destination register (value is in dest for
+                // STORE_OUTPUT) Note: EmitInstruction(OP_STORE_OUTPUT, valueReg, slot)
+                // puts value in destinations
+                u16 srcReg = ir->destinations[i];
+                if (srcReg & 0xC000) {
+                    // Constant pseudo-register: type lives in the high-bit encoding
+                    // (see IRLowering::GetRegisterType), not in registerTypes. Without
+                    // this, a scalar store like `output.brightness = 0.75;` leaves the
+                    // varying typed by the FLOAT4 fallback while the store is scalar.
+                    if ((srcReg & 0xC000) == 0xC000) {
+                        analysis->outputTypes[slot] = (u8)CoreType::BOOL;
+                    } else if (srcReg & 0x8000) {
+                        analysis->outputTypes[slot] = (u8)CoreType::FLOAT;
+                    } else if (IR::IsIntConstant(srcReg)) {
+                        analysis->outputTypes[slot] = (u8)CoreType::INT;
+                    } else {
+                        analysis->outputTypes[slot] = (u8)CoreType::UINT;
+                    }
+                } else if (srcReg < ir->registerCount && ir->registerTypes) {
+                    analysis->outputTypes[slot] = (u8)ir->registerTypes[srcReg];
+                } else if (ir->phiCount > 0 && ir->phiResultRegs) {
+                    // Check if this is a PHI result register (SSA renaming assigns high
+                    // IDs)
+                    for (u32 p = 0; p < ir->phiCount; p++) {
+                        if (ir->phiResultRegs[p] == srcReg) {
+                            analysis->outputTypes[slot] = (u8)ir->phiTypes[p];
+                            break;
+                        }
+                    }
+                }
             }
-          }
+            break;
         }
-      }
-      break;
-    }
-    case IR::OP_LOAD_OUTPUT: {
-      u32 slot = ir->GetOperand(i, 0);
-      if (slot < 32) {
-        analysis->usedOutputMask |= (1 << slot);
-        u16 destReg = ir->destinations[i];
-        if (destReg < ir->registerCount && ir->registerTypes) {
-          analysis->outputTypes[slot] = (u8)ir->registerTypes[destReg];
+        case IR::OP_LOAD_OUTPUT: {
+            u32 slot = ir->GetOperand(i, 0);
+            if (slot < 32) {
+                analysis->usedOutputMask |= (1 << slot);
+                u16 destReg = ir->destinations[i];
+                if (destReg < ir->registerCount && ir->registerTypes) {
+                    analysis->outputTypes[slot] = (u8)ir->registerTypes[destReg];
+                }
+            }
+            break;
         }
-      }
-      break;
-    }
 
     // ========== Uniform/Buffer Loading ==========
     case IR::OP_LOAD_UNIFORM: {
@@ -276,54 +276,54 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
       break;
     }
 
-    // ========== Texture Operations ==========
-    case IR::OP_TEX_SAMPLE:
-    case IR::OP_TEX_SAMPLE_LOD:
-    case IR::OP_TEX_SAMPLE_BIAS:
-    case IR::OP_TEX_SAMPLE_GRAD:
-    case IR::OP_TEX_SAMPLE_CMP:
-    case IR::OP_TEX_SAMPLE_OFFSET:
-    case IR::OP_TEX_SAMPLE_LOD_OFFSET:
-    case IR::OP_TEX_SAMPLE_BIAS_OFFSET:
-    case IR::OP_TEX_GATHER:
-    case IR::OP_TEX_GATHER_OFFSET:
-    case IR::OP_TEX_FETCH:
-    case IR::OP_TEX_FETCH_OFFSET:
-    case IR::OP_TEX_SIZE:
-    case IR::OP_TEX_LEVELS: {
-      if (op == IR::OP_TEX_SIZE || op == IR::OP_TEX_LEVELS) {
-        analysis->capabilityFlags |= IRAnalysis::CAP_IMAGE_QUERY;
-      }
-      if (op == IR::OP_TEX_SAMPLE_OFFSET ||
-          op == IR::OP_TEX_SAMPLE_LOD_OFFSET ||
-          op == IR::OP_TEX_SAMPLE_BIAS_OFFSET ||
-          op == IR::OP_TEX_GATHER_OFFSET ||
-          op == IR::OP_TEX_FETCH_OFFSET) {
-        analysis->capabilityFlags |= IRAnalysis::CAP_IMAGE_GATHER_EXT;
-      }
-      // Texture register is encoded as 0x6000 | bindingIndex
-      u16 texReg = ir->GetOperand(i, 0);
-      if ((texReg & 0xF000) == 0x6000) {
-        u16 binding = texReg & 0x0FFF;
-        if (binding < 32) {
-          analysis->usedTextureMask |= (1 << binding);
+        // ========== Texture Operations ==========
+        case IR::OP_TEX_SAMPLE:
+        case IR::OP_TEX_SAMPLE_LOD:
+        case IR::OP_TEX_SAMPLE_BIAS:
+        case IR::OP_TEX_SAMPLE_GRAD:
+        case IR::OP_TEX_SAMPLE_CMP:
+        case IR::OP_TEX_SAMPLE_OFFSET:
+        case IR::OP_TEX_SAMPLE_LOD_OFFSET:
+        case IR::OP_TEX_SAMPLE_BIAS_OFFSET:
+        case IR::OP_TEX_GATHER:
+        case IR::OP_TEX_GATHER_OFFSET:
+        case IR::OP_TEX_FETCH:
+        case IR::OP_TEX_FETCH_OFFSET:
+        case IR::OP_TEX_SIZE:
+        case IR::OP_TEX_LEVELS: {
+            if (op == IR::OP_TEX_SIZE || op == IR::OP_TEX_LEVELS) {
+                analysis->capabilityFlags |= IRAnalysis::CAP_IMAGE_QUERY;
+            }
+            if (op == IR::OP_TEX_SAMPLE_OFFSET ||
+                    op == IR::OP_TEX_SAMPLE_LOD_OFFSET ||
+                    op == IR::OP_TEX_SAMPLE_BIAS_OFFSET ||
+                    op == IR::OP_TEX_GATHER_OFFSET ||
+                    op == IR::OP_TEX_FETCH_OFFSET) {
+                analysis->capabilityFlags |= IRAnalysis::CAP_IMAGE_GATHER_EXT;
+            }
+            // Texture register is encoded as 0x6000 | bindingIndex
+            u16 texReg = ir->GetOperand(i, 0);
+            if ((texReg & 0xF000) == 0x6000) {
+                u16 binding = texReg & 0x0FFF;
+                if (binding < 32) {
+                    analysis->usedTextureMask |= (1 << binding);
+                }
+            }
+            u16 binding = 0xFFFF;
+            if (TextureOpHasExplicitSampler(ir->metadata[i])) {
+                binding = GetTextureOpExplicitSamplerBinding(ir->metadata[i]);
+            } else {
+                // Legacy IR used operand 1 for explicit samplers.
+                u16 samplerReg = ir->GetOperand(i, 1);
+                if ((samplerReg & 0xF000) == 0x3000) {
+                    binding = samplerReg & 0x0FFF;
+                }
+            }
+            if (binding < 32) {
+                analysis->usedSamplerMask |= (1 << binding);
+            }
+            break;
         }
-      }
-      u16 binding = 0xFFFF;
-      if (TextureOpHasExplicitSampler(ir->metadata[i])) {
-        binding = GetTextureOpExplicitSamplerBinding(ir->metadata[i]);
-      } else {
-        // Legacy IR used operand 1 for explicit samplers.
-        u16 samplerReg = ir->GetOperand(i, 1);
-        if ((samplerReg & 0xF000) == 0x3000) {
-          binding = samplerReg & 0x0FFF;
-        }
-      }
-      if (binding < 32) {
-        analysis->usedSamplerMask |= (1 << binding);
-      }
-      break;
-    }
 
     // ========== Bindless Texture Handle ==========
     case IR::OP_LOAD_TEX_HANDLE: {
@@ -336,26 +336,26 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
       break;
     }
 
-    // ========== Image Operations ==========
-    case IR::OP_IMG_LOAD: {
-      // Storage image register is encoded as 0x6000 | bindingIndex (same as
-      // textures)
-      u16 imgReg = ir->GetOperand(i, 0);
-      if ((imgReg & 0xF000) == 0x6000) {
-        MarkStorageImageRead(analysis, static_cast<u16>(imgReg & 0x0FFF));
-      }
-      break;
-    }
+        // ========== Image Operations ==========
+        case IR::OP_IMG_LOAD: {
+            // Storage image register is encoded as 0x6000 | bindingIndex (same as
+            // textures)
+            u16 imgReg = ir->GetOperand(i, 0);
+            if ((imgReg & 0xF000) == 0x6000) {
+                MarkStorageImageRead(analysis, static_cast<u16>(imgReg & 0x0FFF));
+            }
+            break;
+        }
 
-    case IR::OP_IMG_STORE: {
-      // Storage image register is encoded as 0x6000 | bindingIndex (same as
-      // textures)
-      u16 imgReg = ir->GetOperand(i, 0);
-      if ((imgReg & 0xF000) == 0x6000) {
-        MarkStorageImageWrite(analysis, static_cast<u16>(imgReg & 0x0FFF));
-      }
-      break;
-    }
+        case IR::OP_IMG_STORE: {
+            // Storage image register is encoded as 0x6000 | bindingIndex (same as
+            // textures)
+            u16 imgReg = ir->GetOperand(i, 0);
+            if ((imgReg & 0xF000) == 0x6000) {
+                MarkStorageImageWrite(analysis, static_cast<u16>(imgReg & 0x0FFF));
+            }
+            break;
+        }
 
     // ========== Derivative Operations ==========
     case IR::OP_DDX:

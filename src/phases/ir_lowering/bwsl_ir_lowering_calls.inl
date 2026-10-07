@@ -2228,22 +2228,22 @@ inline NodeRef IRLowering::TryResolveGenericFunction(const FunctionCallData &cal
 }
 
 inline u16 IRLowering::LowerTextureSample(NodeRef ref) {
-  const FunctionCallData &call = ast->GetFunctionCall(ref);
+    const FunctionCallData &call = ast->GetFunctionCall(ref);
 
-  u16 texReg = LowerExpression(call.arguments[0]);
-  u16 coordReg = LowerExpression(call.arguments[1]);
-  u16 dest = AllocateRegister();
+    u16 texReg = LowerExpression(call.arguments[0]);
+    u16 coordReg = LowerExpression(call.arguments[1]);
+    u16 dest = AllocateRegister();
 
-  // IR format: s0 = texture (with 0x6000 marker for slot), s1 = coordinate
-  if (IR::IsUintConstant(texReg)) {
-    // texReg already has 0x6000 marker, pass it directly
-    builder.EmitInstruction(OP_TEX_SAMPLE, dest, texReg, coordReg);
-  } else {
-    // Bindless - texReg is a register containing texture handle
-    builder.EmitInstruction(OP_TEX_SAMPLE, dest, texReg, coordReg);
-  }
+    // IR format: s0 = texture (with 0x6000 marker for slot), s1 = coordinate
+    if (IR::IsUintConstant(texReg)) {
+        // texReg already has 0x6000 marker, pass it directly
+        builder.EmitInstruction(OP_TEX_SAMPLE, dest, texReg, coordReg);
+    } else {
+        // Bindless - texReg is a register containing texture handle
+        builder.EmitInstruction(OP_TEX_SAMPLE, dest, texReg, coordReg);
+    }
 
-  return dest;
+    return dest;
 }
 
 inline OpCode IRLowering::IntrinsicToOpcode(StdLib::Intrinsic intrinsic) {
