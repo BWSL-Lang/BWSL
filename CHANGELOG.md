@@ -27,6 +27,8 @@
 - Vertex attributes beyond the supported 16 slots produce a source error.
 
 ### Backends
+- Direct GLES output preserves array resource lengths and supports constant
+  and dynamic reads. Arrays of structs use the correct uniform-buffer stride.
 - The compiler service shares varying types and locations between stages.
 - A pass whose fragment stage falls back to the direct GLES emitter (for
   example with `ddx_fine`) now links. Both stages use the same varying

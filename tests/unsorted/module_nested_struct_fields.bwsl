@@ -1,3 +1,8 @@
+// A short-name constant from another module must not hide a local type V.
+module Constants {
+    const float V = 5.0;
+}
+
 // Same-file module types must resolve exactly as imported module types do.
 module NestedTypes {
     struct Inner { float x; }

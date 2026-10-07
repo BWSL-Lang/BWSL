@@ -98,6 +98,33 @@ def run_parser_module_tests(compiler: Path) -> tuple[int, int]:
             self.assertIn("lerp ::", next(line["text"] for line in error["context"]
                                         if line["line"] == 2))
 
+        def test_module_type_beats_foreign_short_name_constant(self):
+            for name in ("T", "U", "V"):
+                with self.subTest(name=name):
+                    shader = self.base / f"type_{name}.bwsl"
+                    shader.write_text(
+                        f"module Constants {{ const float {name} = 5.0; }}\n"
+                        f"module Types {{ struct {name} {{ float value; }} "
+                        f"struct Outer {{ {name} item; }} "
+                        "evaluate :: (Outer x) -> float { return x.item.value; } }\n"
+                        "pipeline Test { import Types resources { result: buffer<float> } "
+                        'pass "Main" { use resources { result } compute "Main" [1,1,1] { '
+                        "Types::Outer x; x.item.value = 3.0; "
+                        "resources.result[0] = Types::evaluate(x); } } }")
+                    binaries = self.compile([shader], self.base / f"out_{name}",
+                                            "-validation", "strict")
+                    self.assertTrue(binaries)
+
+        def test_same_module_constant_and_type_remain_duplicates(self):
+            shader = self.base / "duplicate.bwsl"
+            shader.write_text("module Types { const float V = 5.0; "
+                              "struct V { float value; } }")
+            result = subprocess.run(
+                [str(compiler), str(shader), "-check"], cwd=self.base,
+                text=True, capture_output=True, timeout=30)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Duplicate struct declaration", result.stdout + result.stderr)
+
         def test_watch_discovers_new_roots_and_invalidates_negative_files(self):
             shaders = self.base / "shaders"
             shaders.mkdir()

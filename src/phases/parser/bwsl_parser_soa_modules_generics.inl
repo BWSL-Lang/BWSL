@@ -689,7 +689,11 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
                 info.coreType == CoreType::GENERIC_U ||
                 info.coreType == CoreType::GENERIC_V) {
                 Symbol* userSym = SymbolTable::LookupByHash(&symbolTable, typeHash);
-                if (!userSym && symbolTable.inModuleScope &&
+                const bool isUserType = userSym &&
+                    (userSym->kind == SymbolKind::CUSTOM_TYPE ||
+                     userSym->kind == SymbolKind::ENUM ||
+                     userSym->kind == SymbolKind::ENUM_SYMBOL);
+                if (!isUserType && symbolTable.inModuleScope &&
                     symbolTable.currentModuleIndex != INVALID_INDEX) {
                     const ModuleData& module = symbolTable.modules[symbolTable.currentModuleIndex];
                     std::string qualifiedName = module.name.ToString() + "::" + typeName;

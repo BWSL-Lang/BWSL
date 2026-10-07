@@ -87,7 +87,9 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
     for name in ("texture3d_drops_z", "texture_slot_32", "resource_slot_32_mixed", "sampler_gpu", "sampler_shared",
                  "sampler_mixed_default", "sampler_cross_stage", "sampler_helper", "pipeline_scope",
                  "sampler_operations", "texture_query_size_levels", "pointer_address_taken_control_flow",
-                 "texture_sample_grad_cmp_gather", "gl_interface_names", "gl_interface_names_mixed", "gl_interface_names_keyword_fallback", "gl_interface_names_nested"):
+                 "texture_sample_grad_cmp_gather", "gl_interface_names", "gl_interface_names_mixed",
+                 "gl_interface_names_keyword_fallback", "gl_interface_names_nested",
+                 "gl_interface_names_uniform_arrays"):
         for mode in ("-gles", "-gles-direct"):
             directory = out / (name + mode)
             directory.mkdir(exist_ok=True)
@@ -128,6 +130,11 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
                                  "a_position", "a_sample", "v_output", "v_tint"):
                     if not re.search(r"\b" + expected + r"\b", text):
                         row["errors"].append("Missing GL interface name: " + expected)
+            if name == "gl_interface_names_uniform_arrays":
+                for shader in shaders:
+                    for member in ("input", "scales", "bones", "entries"):
+                        if not re.search(r"\bbwsl_u_" + member + r"\[3\]", shader.read_text()):
+                            row["errors"].append("Uniform array length missing: " + member)
             if name == "texture3d_drops_z" and "sampler3D" not in text:
                 row["errors"].append("GLES lost the 3D texture type")
             if name in {"texture_slot_32", "resource_slot_32_mixed"} and mode == "-gles-direct" and "t_tex32" not in text:

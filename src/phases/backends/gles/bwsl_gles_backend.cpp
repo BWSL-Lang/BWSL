@@ -470,6 +470,11 @@ void GLESBuilder::EmitUniforms() {
             EmitRegisterType(uniformReg);
             out.Chr(' ');
             EmitGLName(GLNameKind::UNIFORM_MEMBER, ub.name.c_str());
+            if (ub.bindingIndex < 32 && ir->uniformArrayLengths[ub.bindingIndex]) {
+                out.Chr('[');
+                out.Uint(ir->uniformArrayLengths[ub.bindingIndex]);
+                out.Chr(']');
+            }
             out.Lit(";\n} ");
             EmitGLName(GLNameKind::UNIFORM_INSTANCE, ub.name.c_str());
             out.Lit(";\n");
@@ -711,7 +716,8 @@ bool GLESBuilder::EmitStructuredRegion(u32 block, u32 stopBlock,
 void GLESBuilder::EmitControlFlow() {
     // Registers must survive loop edges and both arms of a selection.
     for (u32 reg = 0; reg < regCount; ++reg) {
-        if (regInfo[reg].flags & REG_DECLARED) continue;
+        if ((regInfo[reg].flags & REG_DECLARED) ||
+            regInfo[reg].uniformPointerInstruction) continue;
         u16 type = ir->registerTypes ? ir->registerTypes[reg] : 0;
         if (type == 0 || type == static_cast<u16>(CoreType::VOID)) continue;
         out.NL(indent); EmitRegWithDecl(static_cast<u16>(reg)); out.Chr(';');
@@ -898,6 +904,8 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_LOAD_ATTR:
         case IR::OP_LOAD_INPUT:
         case IR::OP_LOAD_UNIFORM:
+            // An array root is an address, not a scalar value to materialize.
+            if (dest < regCount && regInfo[dest].uniformPointerInstruction) return;
             // Materialize loads at their definition, like all other SSA values.
             if (dest < regCount) {
                 EmitRegWithDecl(dest);
@@ -1944,10 +1952,26 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         // ===== Storage Buffer Operations =====
-        case IR::OP_STORAGE_PTR:
         case IR::OP_STORAGE_FIELD:
         case IR::OP_STORAGE_INDEX:
-        case IR::OP_STORAGE_LOAD:
+            if (dest < regCount && regInfo[dest].uniformPointerInstruction) return;
+            out.Lit("// Storage buffer op not fully supported in GLES 300");
+            return;
+
+        case IR::OP_STORAGE_LOAD: {
+            u16 pointer = Op(instIdx, 0);
+            if (pointer < regCount && regInfo[pointer].uniformPointerInstruction) {
+                EmitRegWithDecl(dest);
+                out.Lit(" = ");
+                EmitExpr(pointer);
+                out.Lit(";");
+                return;
+            }
+            out.Lit("// Storage buffer op not fully supported in GLES 300");
+            return;
+        }
+
+        case IR::OP_STORAGE_PTR:
             // These require SSBO support - emit as placeholder
             out.Lit("// Storage buffer op not fully supported in GLES 300");
             return;
@@ -2029,6 +2053,25 @@ void GLESBuilder::EmitExpr(u16 reg) {
     // Invalid register marker
     if (reg == 0x3FFF) {
         out.Lit("0.0 /* invalid */");  // Emit placeholder instead of nothing
+        return;
+    }
+
+    if (reg < regCount && regInfo[reg].uniformPointerInstruction) {
+        u32 instIdx = regInfo[reg].uniformPointerInstruction - 1;
+        u16 opcode = ir->opcodes[instIdx];
+        if (opcode == IR::OP_LOAD_UNIFORM) {
+            EmitLoadExpr(instIdx);
+        } else {
+            EmitExpr(Op(instIdx, 0));
+            if (opcode == IR::OP_STORAGE_INDEX) {
+                out.Chr('[');
+                EmitExpr(Op(instIdx, 1));
+                out.Chr(']');
+            } else {
+                out.Chr('.');
+                EmitStructFieldNameByIndex(ir->metadata[instIdx], Op(instIdx, 1));
+            }
+        }
         return;
     }
 

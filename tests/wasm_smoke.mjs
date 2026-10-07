@@ -78,13 +78,18 @@ assert.doesNotMatch(fallbackVertex.shaders.Main.vertex, /\battr0\b/);
 console.log('fallback vertex attribute names: PASS');
 
 for (const name of ['gl_interface_names', 'gl_interface_names_keyword_fallback',
-                    'gl_interface_names_nested']) {
+                    'gl_interface_names_nested', 'gl_interface_names_uniform_arrays']) {
   const source = fs.readFileSync(new URL(`resource_p1/${name}.bwsl`, import.meta.url), 'utf8');
   const result = JSON.parse(compile(source, '', ''));
   assert.equal(result.success, true, JSON.stringify(result));
   const shaders = result.shaders.Main.vertex + result.shaders.Main.fragment;
   assert.match(shaders, /bwsl_u_input/);
   assert.doesNotMatch(shaders, /\b(?:vec4|Outer) input\s*;/);
+    if (name === 'gl_interface_names_uniform_arrays') {
+        for (const member of ['input', 'scales', 'bones', 'entries']) {
+            assert.match(result.shaders.Main.fragment, new RegExp(`bwsl_u_${member}\\[3\\]`));
+        }
+    }
   console.log(`${name} uniform names: PASS`);
 }
 const reserved = JSON.parse(compile(

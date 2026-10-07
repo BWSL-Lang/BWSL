@@ -113,6 +113,16 @@ void SPIRVBuilder::DeclareResources() {
       if (uniformType == CoreType::MAT2) arrayStride = 32;
       else if (uniformType == CoreType::MAT3) arrayStride = 48;
       else if (uniformType == CoreType::MAT4) arrayStride = 64;
+        // Struct elements can exceed 16 bytes; round their full size to std140 alignment.
+        if (uniformType == CoreType::CUSTOM || uniformType == CoreType::ENUM) {
+            u32 structHash = analysis.uniformTypeHashes[binding];
+            for (u32 i = 0; i < ir->structTypeCount; i++) {
+                if (ir->structTypes[i].nameHash == structHash) {
+                    arrayStride = (ir->structTypes[i].totalSize + 15) & ~15u;
+                    break;
+                }
+            }
+        }
       u32 stride_ops[] = {array_type_id, spv::DecorationArrayStride,
                           arrayStride};
       EmitToSection(&decorations, spv::OpDecorate, stride_ops, 3);
@@ -168,14 +178,15 @@ void SPIRVBuilder::DeclareResources() {
 
     // Name the block after its resource. Block and instance get prefixes
     // because GLSL puts block names, struct type names and variables in one
-    // namespace, and the member keeps the plain name:
-    //   uniform ub_render { Render render; } bwsl_ub_render;
+    // namespace. Prefix the member too, so resource names can be GLSL keywords:
+    //   uniform ub_render { Render bwsl_u_render; } bwsl_ub_render;
     ArenaString resourceName;
     if (FindResourceName(ResourceBinding::UniformBuffer, binding, &resourceName)) {
       EmitGLName(struct_type_id, GLNameKind::UNIFORM_BLOCK, resourceName);
-      EmitMemberName(struct_type_id, 0,
-                     GLNames::MakeName(GLNameKind::UNIFORM_MEMBER,
-                                       resourceName).ToString().c_str());
+        EmitMemberName(
+            struct_type_id, 0,
+            GLNames::MakeName(GLNameKind::UNIFORM_MEMBER, resourceName)
+                .ToString().c_str());
       EmitGLName(var_id, GLNameKind::UNIFORM_INSTANCE, resourceName);
     }
 
