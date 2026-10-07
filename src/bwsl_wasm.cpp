@@ -232,7 +232,8 @@ static std::string EmitDirectGLES(IRProgram& program,
                                   IRAnalysis& analysis,
                                   IR::PassVaryingContext* varyingContext,
                                   const ShaderStageData* shaderStageData,
-                                  const char* sourceBase) {
+                                  const char* sourceBase,
+                                  const AST& ast, NodeRef pipelineRef) {
     if (!CanUseDirectGLESFallback(program, stage)) {
         return {};
     }
@@ -244,6 +245,13 @@ static std::string EmitDirectGLES(IRProgram& program,
     GLES::GLESBuilder glesBuilder;
     glesBuilder.Initialize(&glesArena, sourceBase, &program, cfgPtr, stage,
                            &pass, &renderConfig, &analysis, varyingContext);
+    if (!pipelineRef.IsNull()) {
+        const PipelineData& pipeline = ast.GetPipeline(pipelineRef);
+        for (u32 i = 0; i < pipeline.attributes.count; i++) {
+            const AttributeDeclData& attribute = ast.GetAttributeDecl(pipeline.attributes[i]);
+            glesBuilder.SetAttributeName(attribute.attributeIndex, attribute.name);
+        }
+    }
     if (stage == ShaderStage::Compute && shaderStageData) {
         glesBuilder.SetComputeWorkgroupSize(shaderStageData->workgroupSizeX,
                                             shaderStageData->workgroupSizeY,
@@ -641,7 +649,7 @@ static ShaderOutput CompileShaderStage(
     if constexpr (USE_DIRECT_GLES) {
         glslSource = EmitDirectGLES(lowering.program, cfgPtr, stage, pass,
                                     renderConfig, output.analysis, varyingContext,
-                                    shaderStageData, sourceBase);
+                                    shaderStageData, sourceBase, context.ast, pipelineRef);
         if (glslSource.empty()) {
             output.error = "Direct GLES generation failed";
             return output;
@@ -661,7 +669,7 @@ static ShaderOutput CompileShaderStage(
         if (glslSource.empty() || glslSource.find("error:") == 0) {
             std::string fallback = EmitDirectGLES(lowering.program, cfgPtr, stage, pass,
                                                   renderConfig, output.analysis, varyingContext,
-                                                  shaderStageData, sourceBase);
+                                                  shaderStageData, sourceBase, context.ast, pipelineRef);
             if (!fallback.empty()) {
                 glslSource = fallback;
             }

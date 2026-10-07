@@ -213,8 +213,24 @@ void GLESBuilder::EmitStructDeclarations() {
         return;
     }
 
-    for (u32 s = 0; s < ir->structTypeCount; s++) {
+    // IR registers a parent before its field types. GLSL requires the
+    // field types to be declared first, including nested arrays of structs.
+    u8* visited = static_cast<u8*>(arena->Allocate(ir->structTypeCount));
+    memset(visited, 0, ir->structTypeCount);
+    auto emit = [&](auto&& emitType, u32 s) -> void {
+        if (visited[s]) return;
+        visited[s] = 1;
         const IR::IRProgram::StructTypeInfo& info = ir->structTypes[s];
+        for (u32 f = 0; f < info.fieldCount; f++) {
+            u32 hash = ir->structFieldTypeHashes[info.fieldOffset + f];
+            if (!hash) continue;
+            for (u32 nested = 0; nested < ir->structTypeCount; nested++) {
+                if (ir->structTypes[nested].nameHash == hash) {
+                    emitType(emitType, nested);
+                    break;
+                }
+            }
+        }
         out.Lit("struct ");
         EmitStructTypeName(info.nameHash);
         out.Lit(" {\n");
@@ -231,10 +247,16 @@ void GLESBuilder::EmitStructDeclarations() {
             }
             out.Chr(' ');
             EmitStructFieldName(ir->structFieldNameHashes[fieldIdx]);
+            if (ir->structFieldArraySizes && ir->structFieldArraySizes[fieldIdx]) {
+                out.Chr('[');
+                out.Uint(ir->structFieldArraySizes[fieldIdx]);
+                out.Chr(']');
+            }
             out.Lit(";\n");
         }
         out.Lit("};\n\n");
-    }
+    };
+    for (u32 s = 0; s < ir->structTypeCount; s++) emit(emit, s);
 }
 
 // ============================================================================
@@ -430,27 +452,24 @@ void GLESBuilder::EmitUniforms() {
 
             if (!stageMatch) continue;
 
-            // Emit as std140 uniform block. Names match the SPIR-V backend
-            // so passes mixing both GLES emitters bind the same blocks:
-            //   uniform ub_<name> { <type> <name>; } bwsl_ub_<name>;
+            // Emit only live uniform blocks, as the SPIR-V path does. An
+            // unused struct uniform need not have a type registered in this IR.
+            u16 uniformReg = 0xFFFF;
+            for (u32 i = 0; i < ir->instructionCount; i++) {
+                if (ir->opcodes[i] == IR::OP_LOAD_UNIFORM &&
+                    Op(i, 0) == ub.bindingIndex) {
+                    uniformReg = ir->destinations[i];
+                    break;
+                }
+            }
+            if (uniformReg == 0xFFFF) continue;
+
             out.Lit("layout(std140) uniform ");
             EmitGLName(GLNameKind::UNIFORM_BLOCK, ub.name.c_str());
-            out.Lit(" {\n");
-            out.Lit("    ");
-
-            // Map type name to GLSL type
-            const char* glslType = "float";
-            if (ub.typeName == "mat4") glslType = "mat4";
-            else if (ub.typeName == "mat3") glslType = "mat3";
-            else if (ub.typeName == "float4" || ub.typeName == "vec4") glslType = "vec4";
-            else if (ub.typeName == "float3" || ub.typeName == "vec3") glslType = "vec3";
-            else if (ub.typeName == "float2" || ub.typeName == "vec2") glslType = "vec2";
-            else if (ub.typeName == "int") glslType = "int";
-            else if (ub.typeName == "uint") glslType = "uint";
-
-            out.Str(glslType);
+            out.Lit(" {\n    ");
+            EmitRegisterType(uniformReg);
             out.Chr(' ');
-            out.Str(ub.name.c_str());
+            EmitGLName(GLNameKind::UNIFORM_MEMBER, ub.name.c_str());
             out.Lit(";\n} ");
             EmitGLName(GLNameKind::UNIFORM_INSTANCE, ub.name.c_str());
             out.Lit(";\n");
@@ -1733,7 +1752,24 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             u32 structHash = (ir->registerStructTypes && structReg < ir->registerCount)
                                  ? ir->registerStructTypes[structReg]
                                  : 0;
-            EmitRegWithDecl(dest);
+            u32 arraySize = 0;
+            for (u32 s = 0; s < ir->structTypeCount; s++) {
+                const auto& info = ir->structTypes[s];
+                if (info.nameHash == structHash && fieldIdx < info.fieldCount &&
+                    ir->structFieldArraySizes) {
+                    arraySize = ir->structFieldArraySizes[info.fieldOffset + fieldIdx];
+                    break;
+                }
+            }
+            if (arraySize && !(regInfo[dest].flags & REG_DECLARED)) {
+                EmitRegisterType(dest);
+                out.Chr(' ');
+                EmitReg(dest);
+                out.Chr('['); out.Uint(arraySize); out.Chr(']');
+                regInfo[dest].flags |= REG_DECLARED;
+            } else {
+                EmitRegWithDecl(dest);
+            }
             out.Lit(" = ");
             EmitExpr(structReg);
             out.Chr('.');
@@ -2059,7 +2095,8 @@ void GLESBuilder::EmitLoadExpr(u32 instIdx) {
                 for (const auto& ub : renderConfig->uniformBuffers) {
                     if (ub.bindingIndex != uniformIdx) continue;
                     EmitGLName(GLNameKind::UNIFORM_INSTANCE, ub.name.c_str());
-                    out.Chr('.'); out.Str(ub.name.c_str());
+                    out.Chr('.');
+                    EmitGLName(GLNameKind::UNIFORM_MEMBER, ub.name.c_str());
                     return;
                 }
             }

@@ -19,7 +19,11 @@
   `t_atlas` with texture `atlas`. Varying names must also differ within
   their first 31 characters.
 
+### Language
+- Vertex attributes beyond the supported 16 slots produce a source error.
+
 ### Backends
+- The compiler service shares varying types and locations between stages.
 - A pass whose fragment stage falls back to the direct GLES emitter (for
   example with `ddx_fine`) now links. Both stages use the same varying
   names.

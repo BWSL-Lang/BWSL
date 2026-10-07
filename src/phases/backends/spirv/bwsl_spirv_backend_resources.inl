@@ -173,7 +173,9 @@ void SPIRVBuilder::DeclareResources() {
     ArenaString resourceName;
     if (FindResourceName(ResourceBinding::UniformBuffer, binding, &resourceName)) {
       EmitGLName(struct_type_id, GLNameKind::UNIFORM_BLOCK, resourceName);
-      EmitMemberName(struct_type_id, 0, resourceName.ToString().c_str());
+      EmitMemberName(struct_type_id, 0,
+                     GLNames::MakeName(GLNameKind::UNIFORM_MEMBER,
+                                       resourceName).ToString().c_str());
       EmitGLName(var_id, GLNameKind::UNIFORM_INSTANCE, resourceName);
     }
 

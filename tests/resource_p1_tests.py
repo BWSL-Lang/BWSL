@@ -87,7 +87,7 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
     for name in ("texture3d_drops_z", "texture_slot_32", "resource_slot_32_mixed", "sampler_gpu", "sampler_shared",
                  "sampler_mixed_default", "sampler_cross_stage", "sampler_helper", "pipeline_scope",
                  "sampler_operations", "texture_query_size_levels", "pointer_address_taken_control_flow",
-                 "texture_sample_grad_cmp_gather", "gl_interface_names", "gl_interface_names_mixed"):
+                 "texture_sample_grad_cmp_gather", "gl_interface_names", "gl_interface_names_mixed", "gl_interface_names_keyword_fallback", "gl_interface_names_nested"):
         for mode in ("-gles", "-gles-direct"):
             directory = out / (name + mode)
             directory.mkdir(exist_ok=True)

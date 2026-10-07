@@ -179,6 +179,7 @@ VARIANT_ERROR_TESTS = {
 }
 
 ERROR_CASE_TESTS = {
+    "attribute_capacity.bwsl": "supported limit of 16 attributes",
     "array_negative_remainder_index.bwsl": "out of bounds",
     'function_void_return_value.bwsl': 'Void function cannot return a value',
     'remaining_float_bitwise.bwsl': 'Bitwise operators require integer operands',
@@ -1350,7 +1351,7 @@ def find_stage_file(output_dir: Path, test_name: str, stage: str, suffix: str) -
 
 def find_text_golden_files(golden_dir: Path, test_name: str) -> list[Path]:
     return sorted(
-        path for path in golden_dir.glob(f"{test_name}_*.*")
+        path for path in golden_dir.glob(f"{test_name}*.*")
         if path.suffix in TEXT_GOLDEN_SUFFIXES and output_belongs_to_test(path, test_name)
     )
 

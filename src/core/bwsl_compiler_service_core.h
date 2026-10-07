@@ -572,12 +572,17 @@ private:
         std::vector<ExplicitSamplerUse> reflectionSamplerUses;
         bool hasVertexAnalysis = false;
         bool hasFragmentAnalysis = false;
+        IR::PassVaryingContext passVaryings;
+        std::vector<GLReservedName> glNames;
+        GLNames::CollectPipelineNames(ast, pipeline,
+                                     shaderSet.cachedParser->symbolTable, &glNames);
+        passVaryings.reservedGLNames = &glNames;
 
         // Compile vertex shader if present
         if (!targetPass.vertexShader.IsNull()) {
             if (!CompileShaderStage(shaderSet, targetPass.vertexShader, 
                                     ShaderStage::Vertex, config, variant.vertexSpirv,
-                                    &vertexAnalysis, &reflectionSamplerUses)) {
+                                    &vertexAnalysis, &reflectionSamplerUses, &passVaryings)) {
                 shaderSet.variants.erase(variantKey);
                 return false;
             }
@@ -590,7 +595,7 @@ private:
             fragConfig.stage = ShaderStage::Fragment;
             if (!CompileShaderStage(shaderSet, targetPass.fragmentShader,
                                     ShaderStage::Fragment, fragConfig, variant.fragmentSpirv,
-                                    &fragmentAnalysis, &reflectionSamplerUses)) {
+                                    &fragmentAnalysis, &reflectionSamplerUses, &passVaryings)) {
                 shaderSet.variants.erase(variantKey);
                 return false;
             }
@@ -612,7 +617,8 @@ private:
                            ShaderStage stage, const CompilationConfig& config,
                            std::vector<u32>& outSpirv,
                            IRAnalysis* outAnalysis = nullptr,
-                           std::vector<ExplicitSamplerUse>* outExplicitSamplerUses = nullptr) {
+                           std::vector<ExplicitSamplerUse>* outExplicitSamplerUses = nullptr,
+                           IR::PassVaryingContext* passVaryings = nullptr) {
         AST& ast = shaderSet.cachedContext->ast;
         const ShaderStageData& shaderStage = ast.GetShaderStage(stageRef);
         
@@ -628,6 +634,7 @@ private:
         lowering.Initialize(&irPool, &shaderSet.cachedParser->symbolTable, &ast,
                             shaderSet.cachedSource.data());
         lowering.currentStage = stage;
+        lowering.currentPassVaryings = passVaryings;
 
         const PassData* owningPass = nullptr;
         if (ast.pipelines.count > 0) {
@@ -697,6 +704,19 @@ private:
         SPIRVBuilder builder;
         builder.Initialize(&spirvArena, &lowering.program, stage,
                           &shaderSet.cachedParser->symbolTable, &cfgBuilder.cfg);
+        if (passVaryings) {
+            for (u32 i = 0; i < passVaryings->count; i++) {
+                builder.SetVaryingName(passVaryings->varyings[i].slot,
+                                       passVaryings->varyings[i].name);
+            }
+        }
+        if (ast.pipelines.count) {
+            const PipelineData& pipeline = ast.pipelines[0];
+            for (u32 i = 0; i < pipeline.attributes.count; i++) {
+                const AttributeDeclData& attribute = ast.GetAttributeDecl(pipeline.attributes[i]);
+                builder.SetAttributeName(attribute.attributeIndex, attribute.name);
+            }
+        }
 
         // Configure vertex pulling mode
         ConfigureVertexPulling(builder, config);
