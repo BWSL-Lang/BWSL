@@ -179,6 +179,10 @@ VARIANT_ERROR_TESTS = {
 }
 
 ERROR_CASE_TESTS = {
+    "intrinsic_function_name.bwsl": "reserved for a built-in intrinsic",
+    "intrinsic_module_function_name.bwsl": "reserved for a built-in intrinsic",
+    "intrinsic_struct_method_name.bwsl": "reserved for a built-in intrinsic",
+    "intrinsic_enum_method_name.bwsl": "reserved for a built-in intrinsic",
     "attribute_capacity.bwsl": "supported limit of 16 attributes",
     "array_negative_remainder_index.bwsl": "out of bounds",
     'function_void_return_value.bwsl': 'Void function cannot return a value',

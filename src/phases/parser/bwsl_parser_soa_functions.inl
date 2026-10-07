@@ -825,6 +825,10 @@ NodeRef Parser::ParseFunction() {
         return NodeRef::Null();
     }
     std::string functionName(stream->GetValue(previous));
+    if (StdLib::IntrinsicLookup::Find(Utils::HashStr(functionName.c_str()))) {
+        ErrorAtPrevious("Function name '" + functionName +
+                        "' is reserved for a built-in intrinsic; rename the function");
+    }
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     u32 line = loc.line;
     u32 col = loc.column;

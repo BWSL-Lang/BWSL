@@ -662,7 +662,7 @@ enum SDFShape {
     Sphere(float radius),
     Box(float3 size),
 
-    eval distance :: (float3 p) -> float {
+    eval signed_distance :: (float3 p) -> float {
         Sphere(r): length(p) - r
         Box(size): length(max(abs(p) - size, 0.0))
     }

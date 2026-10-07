@@ -11,7 +11,7 @@ pipeline EnumsSumTypeSDF {
         Box(float3 size),
         Torus(float major, float minor),
 
-        eval distance :: (float3 p) -> float {
+        eval signed_distance :: (float3 p) -> float {
             Sphere(r): length(p) - r
             Box(size): {
                 float3 d = abs(p) - size;
@@ -26,11 +26,11 @@ pipeline EnumsSumTypeSDF {
         }
 
         eval normal :: (float3 p, float eps) -> float3 {
-            float d = self.distance(p);
+            float d = self.signed_distance(p);
             return normalize(float3(
-                self.distance(p + float3(eps, 0.0, 0.0)) - d,
-                self.distance(p + float3(0.0, eps, 0.0)) - d,
-                self.distance(p + float3(0.0, 0.0, eps)) - d
+                self.signed_distance(p + float3(eps, 0.0, 0.0)) - d,
+                self.signed_distance(p + float3(0.0, eps, 0.0)) - d,
+                self.signed_distance(p + float3(0.0, 0.0, eps)) - d
             ));
         }
     }
@@ -43,9 +43,9 @@ pipeline EnumsSumTypeSDF {
             SDFShape shape1 = SDFShape::Box(float3(1.0, 2.0, 0.5));
             SDFShape shape2 = SDFShape::Torus(1.5, 0.25);
 
-            float d0 = shape0.distance(attributes.position);
-            float d1 = shape1.distance(attributes.position);
-            float d2 = shape2.distance(attributes.position);
+            float d0 = shape0.signed_distance(attributes.position);
+            float d1 = shape1.signed_distance(attributes.position);
+            float d2 = shape2.signed_distance(attributes.position);
 
             float3 n1 = shape1.normal(attributes.position, 0.01);
             float combined = min(d0, min(d1, d2));

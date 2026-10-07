@@ -3,6 +3,9 @@
 ## unreleased
 
 ### Breaking changes
+- Function and method names matching a built-in intrinsic are rejected at
+  their declaration, including unused and module functions. Rename such
+  functions; the bundled SDF method `distance` is now `signed_distance`.
 - **GL and GLES output use source names for interface objects.** Hosts that
   bind by name must update their lookups. Read `glName` from
   `bindings.json` instead of hard-coding names:

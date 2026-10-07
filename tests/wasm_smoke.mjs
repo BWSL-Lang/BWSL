@@ -87,3 +87,8 @@ for (const name of ['gl_interface_names', 'gl_interface_names_keyword_fallback',
   assert.doesNotMatch(shaders, /\b(?:vec4|Outer) input\s*;/);
   console.log(`${name} uniform names: PASS`);
 }
+const reserved = JSON.parse(compile(
+  'module Reserved { lerp :: (float x) -> float { return x; } }', '', ''));
+assert.equal(reserved.success, false);
+assert.match(JSON.stringify(reserved.errors), /reserved for a built-in intrinsic/);
+console.log('intrinsic function name diagnostic: PASS');

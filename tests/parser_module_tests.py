@@ -1,4 +1,4 @@
-"""Behavioral coverage for cached submodule discovery and watch invalidation."""
+"""Behavioral coverage for module discovery, watch invalidation and diagnostics."""
 from __future__ import annotations
 
 import json
@@ -79,6 +79,24 @@ def run_parser_module_tests(compiler: Path) -> tuple[int, int]:
                     self.base / "left" / "Extra.bwsl")
                 linked = self.compile(inputs[:2], self.base / "symlinks", "-modules", link)
                 self.assertEqual(linked, alias)
+
+        def test_intrinsic_name_error_points_into_imported_module(self):
+            module = self.base / "ReservedFunctions.bwsl"
+            module.write_text("module ReservedFunctions {\n"
+                              "    lerp :: (float x) -> float { return x; }\n}\n")
+            shader = self.base / "shader.bwsl"
+            shader.write_text("pipeline ReservedTest { import ReservedFunctions }\n")
+            result = subprocess.run(
+                [str(compiler), str(shader), "-check", "-errors-json"],
+                cwd=self.base, text=True, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            diagnostics = json.loads(result.stdout)["diagnostics"]
+            error = next(d for d in diagnostics if "reserved for a built-in intrinsic" in d["message"])
+            self.assertEqual(Path(error["file"]).resolve(), module.resolve())
+            self.assertEqual((error["line"], error["column"]), (2, 5))
+            self.assertEqual((error["endLine"], error["endColumn"]), (2, 9))
+            self.assertIn("lerp ::", next(line["text"] for line in error["context"]
+                                        if line["line"] == 2))
 
         def test_watch_discovers_new_roots_and_invalidates_negative_files(self):
             shaders = self.base / "shaders"
