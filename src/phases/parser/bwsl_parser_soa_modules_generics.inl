@@ -310,6 +310,8 @@ NodeRef Parser::ParseModule() {
         symbolTable.inModuleScope = true;
     }
 
+    typeCache.Clear();
+
     // Create module AST node
     NodeRef module = ASTFactory::MakeModule(ast, moduleName, line, col);
     AttachDocComment(module, declToken);
@@ -329,6 +331,7 @@ NodeRef Parser::ParseModule() {
 
     symbolTable.inModuleScope = false;
     symbolTable.currentModuleIndex = INVALID_INDEX;
+    typeCache.Clear();
     currentModule = previousModule;
     currentPipeline = previousPipeline;
 
@@ -440,6 +443,7 @@ NodeRef Parser::ParseSubmodule() {
 
     symbolTable.inModuleScope = true;
     symbolTable.currentModuleIndex = parentIndex;
+    typeCache.Clear();
     currentModule = parentModule;
     currentPipeline = NodeRef::Null();
 
@@ -449,6 +453,7 @@ NodeRef Parser::ParseSubmodule() {
 
     symbolTable.inModuleScope = savedInModuleScope;
     symbolTable.currentModuleIndex = savedCurrentModuleIdx;
+    typeCache.Clear();
     currentModule = previousModule;
     currentPipeline = previousPipeline;
 
@@ -684,6 +689,13 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
                 info.coreType == CoreType::GENERIC_U ||
                 info.coreType == CoreType::GENERIC_V) {
                 Symbol* userSym = SymbolTable::LookupByHash(&symbolTable, typeHash);
+                if (!userSym && symbolTable.inModuleScope &&
+                    symbolTable.currentModuleIndex != INVALID_INDEX) {
+                    const ModuleData& module = symbolTable.modules[symbolTable.currentModuleIndex];
+                    std::string qualifiedName = module.name.ToString() + "::" + typeName;
+                    userSym = SymbolTable::LookupByHash(&symbolTable,
+                        Utils::HashStr(qualifiedName.c_str()));
+                }
                 if (userSym && (userSym->kind == SymbolKind::CUSTOM_TYPE ||
                                 userSym->kind == SymbolKind::ENUM ||
                                 userSym->kind == SymbolKind::ENUM_SYMBOL)) {
@@ -702,6 +714,18 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
     const char* colonColon = strstr(typeName.c_str(), "::");
 
     if (!colonColon) {
+        // Module declarations are registered by their complete qualified
+        // spelling. Hashing the pieces separately does not produce that hash.
+        if (symbolTable.inModuleScope && symbolTable.currentModuleIndex != INVALID_INDEX) {
+            const ModuleData& module = symbolTable.modules[symbolTable.currentModuleIndex];
+            std::string qualifiedName = module.name.ToString() + "::" + typeName;
+            TypeInfo qualified = ResolveType(qualifiedName);
+            if (qualified.coreType != CoreType::INVALID) {
+                typeCache.Insert(typeHash, qualified);
+                return qualified;
+            }
+        }
+
         // Simple custom type lookup
         Symbol* sym = SymbolTable::LookupByHash(&symbolTable, typeHash);
         if (sym && sym->kind == SymbolKind::CUSTOM_TYPE) {
@@ -720,23 +744,6 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
             }
             typeCache.Insert(typeHash, result);
             return result;
-        }
-
-        // Try implicit module qualification if in module scope
-        if (symbolTable.inModuleScope && symbolTable.currentModuleIndex != INVALID_INDEX) {
-            const ModuleData& currentModule = symbolTable.modules[symbolTable.currentModuleIndex];
-
-            // Build qualified hash efficiently
-            u32 qualifiedHash = Utils::HashStr(currentModule.name.ToString(sourceBase()).c_str());
-            qualifiedHash ^= Utils::HashStr("::");
-            qualifiedHash ^= typeHash;
-
-            sym = SymbolTable::LookupByHash(&symbolTable, qualifiedHash);
-            if (sym && sym->kind == SymbolKind::CUSTOM_TYPE) {
-                result = GetTypeInfoFromSymbol(sym);
-                typeCache.Insert(typeHash, result);
-                return result;
-            }
         }
     } else {
         // Module-qualified type: Module::Type

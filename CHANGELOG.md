@@ -20,6 +20,7 @@
   their first 31 characters.
 
 ### Language
+- Struct fields can use a previously declared type in the same module.
 - Vertex attributes beyond the supported 16 slots produce a source error.
 
 ### Backends
