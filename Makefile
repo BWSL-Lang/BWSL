@@ -324,8 +324,9 @@ $(BWSLC_DEBUG_OBJ): $(BWSLC_SRC) Makefile $(EMBEDDED_MODULE_HEADER) $(NATIVE_SPI
 # WebAssembly Build
 # ============================================================================
 
-# Emscripten flags
-EMCC = emcc
+# Emscripten flags. Link with em++, not emcc: current Emscripten (seen with
+# 6.0.11) doesn't link the C++ runtime for emcc (undefined __cxa_guard_acquire).
+EMXX = em++
 WASM_COMMON_FLAGS = \
 	-DUSE_SPIRV_CROSS_LIB \
 	$(VERSION_FLAGS) \
@@ -475,17 +476,17 @@ $(BUILD_DIR_MARKER):
 	@touch $@
 
 wasm: $(WASM_DIR) $(WASM_DIR)/bwsl_wasm.o $(WASM_DIR)/spirv_cross_wrapper.o
-	$(EMCC) $(WASM_DIR)/bwsl_wasm.o $(WASM_DIR)/spirv_cross_wrapper.o \
+	$(EMXX) $(WASM_DIR)/bwsl_wasm.o $(WASM_DIR)/spirv_cross_wrapper.o \
 		$(WASM_COMMON_FLAGS) $(WASM_RELEASE_OPT) -o $(WASM_DIR)/bwsl.js
 	@echo "Built: $(WASM_DIR)/bwsl.js + $(WASM_DIR)/bwsl.wasm"
 	@ls -lh $(WASM_DIR)/bwsl.*
 
 $(WASM_DIR)/bwsl_wasm.o: $(WASM_SOURCE) Makefile $(EMBEDDED_MODULE_HEADER) | $(WASM_DIR)
-	$(EMCC) -c $(WASM_SOURCE) $(WASM_BWSL_INCLUDES) -DBWSL_WASM \
+	$(EMXX) -c $(WASM_SOURCE) $(WASM_BWSL_INCLUDES) -DBWSL_WASM \
 		$(WASM_COMMON_FLAGS) $(WASM_RELEASE_OPT) -MMD -MP -MF $(@:.o=.d) -o $@
 
 $(WASM_DIR)/spirv_cross_wrapper.o: $(SPIRV_CROSS_WRAPPER) Makefile | $(WASM_DIR)
-	$(EMCC) -c $(SPIRV_CROSS_WRAPPER) $(WASM_SPIRV_INCLUDES) \
+	$(EMXX) -c $(SPIRV_CROSS_WRAPPER) $(WASM_SPIRV_INCLUDES) \
 		-DSPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS \
 		$(WASM_COMMON_FLAGS) $(WASM_RELEASE_OPT) -MMD -MP -MF $(@:.o=.d) -o $@
 
@@ -493,11 +494,11 @@ $(WASM_DIR): | $(BUILD_DIR_MARKER)
 	$(MKDIR_WASM)
 
 wasm-debug: $(WASM_DIR) $(EMBEDDED_MODULE_HEADER)
-	$(EMCC) -c $(WASM_SOURCE) $(WASM_BWSL_INCLUDES) -DBWSL_WASM \
+	$(EMXX) -c $(WASM_SOURCE) $(WASM_BWSL_INCLUDES) -DBWSL_WASM \
 		$(WASM_COMMON_FLAGS) $(WASM_DEBUG_OPT) -o $(WASM_DIR)/bwsl_wasm_debug.o
-	$(EMCC) -c $(SPIRV_CROSS_WRAPPER) $(WASM_SPIRV_INCLUDES) \
+	$(EMXX) -c $(SPIRV_CROSS_WRAPPER) $(WASM_SPIRV_INCLUDES) \
 		$(WASM_COMMON_FLAGS) $(WASM_DEBUG_OPT) -o $(WASM_DIR)/spirv_cross_wrapper_debug.o
-	$(EMCC) $(WASM_DIR)/bwsl_wasm_debug.o $(WASM_DIR)/spirv_cross_wrapper_debug.o \
+	$(EMXX) $(WASM_DIR)/bwsl_wasm_debug.o $(WASM_DIR)/spirv_cross_wrapper_debug.o \
 		$(WASM_COMMON_FLAGS) $(WASM_DEBUG_OPT) -o $(WASM_DIR)/bwsl-debug.js
 	@echo "Built: $(WASM_DIR)/bwsl-debug.js"
 

@@ -25,6 +25,9 @@
   names.
 
 ### Tooling
+- `make wasm` and `make wasm-debug` link with `em++`, so they build with
+  current Emscripten (6.x). `em++` must be on `PATH` instead of
+  `emcc`.
 - `bindings.json` reports `glName` for uniform buffers and combined
   textures: the name to pass to `glGetUniformBlockIndex` or
   `glGetUniformLocation`.

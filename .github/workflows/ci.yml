@@ -105,6 +105,51 @@ jobs:
       - name: Build bwslc (cross windows/x64)
         run: make build TARGET_OS=windows TARGET_ARCH=x86_64
 
+  wasm:
+    name: wasm (emscripten)
+    runs-on: ubuntu-latest
+    env:
+      # Pinned so a new Emscripten release can't break CI unannounced.
+      # Bump it deliberately and check `make wasm` still links.
+      EMSDK_VERSION: 6.0.11
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      # The smoke test imports the ES-module build; Node detects that
+      # syntax in a .js file automatically only from 22.7.
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Cache Emscripten SDK
+        uses: actions/cache@v6
+        with:
+          path: ~/emsdk
+          key: emsdk-${{ env.EMSDK_VERSION }}-${{ runner.os }}
+
+      - name: Install Emscripten SDK
+        run: |
+          if [ ! -d ~/emsdk ]; then
+            git clone --depth 1 https://github.com/emscripten-core/emsdk.git ~/emsdk
+          fi
+          ~/emsdk/emsdk install "$EMSDK_VERSION"
+          ~/emsdk/emsdk activate "$EMSDK_VERSION"
+
+      - name: Build WASM module
+        run: |
+          source ~/emsdk/emsdk_env.sh
+          em++ --version
+          make wasm
+
+      - name: Run WASM smoke test
+        run: |
+          node --version
+          node tests/wasm_smoke.mjs
+
   macos:
     name: macos-latest
     runs-on: macos-latest

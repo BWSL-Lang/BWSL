@@ -114,7 +114,7 @@ target other than the host):
   See the per-OS package lists below for what to install.
 
 **For WebAssembly module:**
-- [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) (`emcc` must be in PATH)
+- [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) (`em++` must be in PATH)
 
 #### Windows 
 
