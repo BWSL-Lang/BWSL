@@ -35,6 +35,8 @@
   previously rejected as an invalid swizzle.
 
 ### Backends
+- Struct type and member names are preserved without `-debug-names`, so nested
+  uniforms link across GL shader stages, including mixed GLES emitters.
 - `-debug-names` preserves source local-variable and array names in SPIR-V
   and cross-compiled shaders, including reassignment and loop/branch phis.
   Aliased or inlined values may share or lose a visible name; SPIRV-Cross

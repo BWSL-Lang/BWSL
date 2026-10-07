@@ -83,14 +83,17 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
                 if step["exit"]: print(step["output"])
         records.append(row)
 
-    # Validate both OpenGL output paths and the host-visible pair mapping.
+    # Validate OpenGL output paths and the host-visible pair mapping.
     for name in ("texture3d_drops_z", "texture_slot_32", "resource_slot_32_mixed", "sampler_gpu", "sampler_shared",
                  "sampler_mixed_default", "sampler_cross_stage", "sampler_helper", "pipeline_scope",
                  "sampler_operations", "texture_query_size_levels", "pointer_address_taken_control_flow",
                  "texture_sample_grad_cmp_gather", "gl_interface_names", "gl_interface_names_mixed",
                  "gl_interface_names_keyword_fallback", "gl_interface_names_nested",
                  "gl_interface_names_uniform_arrays"):
-        for mode in ("-gles", "-gles-direct"):
+        modes = ("-gles", "-gles-direct")
+        if name.startswith("gl_interface_names"):
+            modes += ("-glsl",)
+        for mode in modes:
             directory = out / (name + mode)
             directory.mkdir(exist_ok=True)
             source = ROOT / "tests/resource_p1" / (name + ".bwsl")
@@ -98,16 +101,20 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
                 source = ROOT / "tests/unsorted" / (name + ".bwsl")
             result = command([compiler, source, mode, "-bindings", "-validation", "strict", "-o", directory])
             row = {"source": name + mode, "steps": [result], "errors": []}
-            if result["exit"]: row["errors"].append("GLES compilation failed")
+            if result["exit"]: row["errors"].append("GL compilation failed")
             shaders = [p for p in directory.iterdir() if p.suffix in {".vert", ".frag"}]
             if {p.suffix for p in shaders} != {".vert", ".frag"}:
-                row["errors"].append("Missing GLES vertex or fragment artifact")
+                row["errors"].append("Missing GL vertex or fragment artifact")
             text = "\n".join(p.read_text() for p in shaders)
             for shader in shaders:
                 if shutil.which("glslangValidator"):
                     validation = command(["glslangValidator", shader])
                     row["steps"].append(validation)
-                    if validation["exit"]: row["errors"].append("GLES validation failed")
+                    if validation["exit"]: row["errors"].append("GL validation failed")
+            if name.startswith("gl_interface_names") and shaders and shutil.which("glslangValidator"):
+                linked = command(["glslangValidator", "-l", *sorted(shaders)])
+                row["steps"].append(linked)
+                if linked["exit"]: row["errors"].append("GL interface stages failed to link")
             for binding_file in directory.glob("*.bindings.json"):
                 for resource in json.loads(binding_file.read_text())["resources"]:
                     for pair in resource.get("combinedSamplerUniforms", []):
@@ -126,8 +133,12 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
                 if missing:
                     row["errors"].append("Fragment inputs not written by the vertex stage: " + ", ".join(sorted(missing)))
             if name == "gl_interface_names":
-                for expected in ("ub_render", "bwsl_ub_render", "ub_input", "t_texture",
-                                 "a_position", "a_sample", "v_output", "v_tint"):
+                expected_names = ["ub_render", "bwsl_ub_render", "ub_input", "t_texture",
+                                  "v_output", "v_tint"]
+                # Desktop GLSL defaults to storage-buffer vertex pulling.
+                if mode != "-glsl":
+                    expected_names += ["a_position", "a_sample"]
+                for expected in expected_names:
                     if not re.search(r"\b" + expected + r"\b", text):
                         row["errors"].append("Missing GL interface name: " + expected)
             if name == "gl_interface_names_uniform_arrays":
