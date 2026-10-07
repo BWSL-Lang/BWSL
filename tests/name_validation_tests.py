@@ -215,8 +215,12 @@ class NameValidationTests(unittest.TestCase):
             module M { struct Point { float x; } }
             pipeline P { import M as Geometry
                 using Position = Geometry::Point
+                struct Container { Position value; }
                 first :: (Position value) -> float { return value.x; }
-                pass "Main" { vertex { Position p; p.x = 1.0; output.position = float4(first(p)); } }
+                identityPosition :: (Position value) -> Position { return value; }
+                field :: (Container value) -> float { return value.value.x; }
+                array :: () -> float { Position[2] values; return values[0].x; }
+                pass "Main" { vertex { Position p; p.x = 1.0; output.position = float4(first(identityPosition(p))); } }
             }
         """)
         self.assertTrue(data["success"], data)

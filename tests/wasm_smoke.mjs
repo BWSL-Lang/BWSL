@@ -136,3 +136,17 @@ assert.equal(unknownImport.success, false);
 assert.equal(unknownImport.errors[0].token, 'MissingModule');
 assert.equal(unknownImport.errors[0].endColumn - unknownImport.errors[0].column, 13);
 console.log('unknown import source span: PASS');
+
+const aliasTypes = JSON.parse(compile(`module Geometry { struct Point { float x; } }
+pipeline Aliases { import Geometry
+  using Position = Geometry::Point
+  struct Container { Position value; }
+  identityPosition :: (Position value) -> Position { return value; }
+  field :: (Container value) -> float { return value.value.x; }
+  pass "Main" {
+    vertex { Position p; p.x = 1.0; output.position = float4(identityPosition(p).x); }
+    fragment { output.color = float4(1.0); }
+  }
+}`, '', ''));
+assert.equal(aliasTypes.success, true, JSON.stringify(aliasTypes));
+console.log('type aliases in fields and return types: PASS');

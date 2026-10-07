@@ -225,6 +225,7 @@ struct FunctionDeclData {
     ArenaArray<ParameterSourcePositions> parameterPositions;
     CoreType returnType;
     u32 returnTypeHash;
+    u32 returnTypeNameHash = 0; // Written custom type/alias before resolution
     u32 returnTypePosition; // Packed line/column of the written return type, 0 when synthesized
     u32 ownerStructTypeHash;
     NodeRef body;
@@ -240,6 +241,7 @@ struct StructFieldData {
     u32 arraySize;  // 0 = not an array, >0 = fixed-size array
     u32 namePosition = 0;  // Packed line/column (AST::PackPosition) of the
     u32 typePosition = 0;  // field name and its type; 0 when synthesized.
+    u32 typeNameHash = 0; // Written type/alias before resolution
 };
 
 // Struct declaration - 20 bytes + ArenaArray

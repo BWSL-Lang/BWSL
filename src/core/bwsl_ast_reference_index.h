@@ -336,6 +336,19 @@ private:
         return false;
     }
 
+    std::string FunctionReturnType(NodeRef ref) const {
+        const auto& function = ast_.GetFunction(ref);
+        if (errors_ && function.returnTypeNameHash != 0) {
+            return ReverseLookup::GetString(function.returnTypeNameHash);
+        }
+        return ReturnTypeName(ast_, function, ast_.GetDeclarationSource(ref));
+    }
+
+    std::string FieldTypeName(NodeRef owner, const StructFieldData& field) const {
+        if (errors_ && field.typeNameHash != 0) return ReverseLookup::GetString(field.typeNameHash);
+        return StructFieldTypeName(ast_, field, ast_.GetDeclarationSource(owner));
+    }
+
     Index index_;
     std::unordered_map<std::string, size_t> symbolIndices_;
     std::unordered_set<std::string> referenceKeys_;
@@ -455,7 +468,7 @@ private:
         const std::string name = ResolveName(function.name);
         FunctionTarget target;
         target.id = NodeId(ref);
-        target.returnType = CanonicalType(ReturnTypeName(ast_, function, ast_.GetDeclarationSource(ref)), owner);
+        target.returnType = CanonicalType(FunctionReturnType(ref), owner);
         for (u32 i = 0; i < function.parameters.count; i++) {
             target.parameterTypes.push_back(CanonicalType(ResolveName(function.parameters[i].second), owner));
         }
@@ -473,7 +486,7 @@ private:
             if (i > 0) result += ",";
             result += ResolveName(function.parameters[i].second);
         }
-        result += ")->" + ReturnTypeName(ast_, function, ast_.GetDeclarationSource(ref));
+        result += ")->" + FunctionReturnType(ref);
         return result;
     }
 
@@ -579,7 +592,7 @@ private:
                 const StructFieldData& field = structure.fields[fieldIndex];
                 const std::string fieldId = id + "/field:" + std::to_string(fieldIndex);
                 const std::string fieldName = ResolveName(field.name);
-                const std::string fieldType = StructFieldTypeName(ast_, field, ast_.GetDeclarationSource(ref));
+                const std::string fieldType = FieldTypeName(ref, field);
                 AddSymbol({fieldId, "struct-field", fieldName, fieldId, id, fieldType, {}});
                 AddQualifierReference(fieldId, field.typePosition);
                 const std::string stableStruct = StableIdOf(id);
@@ -709,7 +722,7 @@ private:
             const std::string owner = OwnerOf(ref);
             AddSymbol({NodeId(ref), function.isStructMethod ? "method" : "function",
                        ResolveName(function.name), NodeId(ref), owner,
-                       ReturnTypeName(ast_, function, ast_.GetDeclarationSource(ref)), {}});
+                       FunctionReturnType(ref), {}});
             SetStableId(NodeId(ref), FunctionStableId(ref, owner));
             AddFunctionTarget(ref, owner);
         }
@@ -1103,7 +1116,7 @@ private:
         const std::string previousOwner = currentOwner_;
         currentOwner_ = NodeId(ref);
         for (u32 i = 0; i < structure.fields.count; i++) {
-            CheckType(ref, StructFieldTypeName(ast_, structure.fields[i], ast_.GetDeclarationSource(ref)), structure.fields[i].typePosition);
+            CheckType(ref, FieldTypeName(ref, structure.fields[i]), structure.fields[i].typePosition);
         }
         for (u32 i = 0; i < structure.methods.count; i++) {
             VisitFunction(structure.methods[i], NodeId(ref));
@@ -1165,8 +1178,8 @@ private:
         if (owner.rfind("PIPELINE:", 0) == 0) currentPipeline_ = owner;
         if (owner.rfind("PASS:", 0) == 0) currentPass_ = owner;
 
-        CheckType(ref, ReturnTypeName(ast_, function, ast_.GetDeclarationSource(ref)), function.returnTypePosition);
-        AddTypeReference(functionId, ReturnTypeName(ast_, function, ast_.GetDeclarationSource(ref)), "return-type");
+        CheckType(ref, FunctionReturnType(ref), function.returnTypePosition);
+        AddTypeReference(functionId, FunctionReturnType(ref), "return-type");
         AddQualifierReference(functionId, function.returnTypePosition, "/return-type-qualifier");
         PushScope();
         for (u32 i = 0; i < function.parameters.count; i++) {

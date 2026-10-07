@@ -869,6 +869,8 @@ NodeRef Parser::ParseFunction() {
         } else {
             customReturnTypeName = returnTypeName;
         }
+        ast->GetFunction(function).returnTypeNameHash =
+            ArenaString::MakeHashOnly(customReturnTypeName).nameHash;
         TypeInfo resolved = ResolveType(customReturnTypeName);
         if (resolved.coreType != CoreType::INVALID) {
             ast->GetFunction(function).returnType = resolved.coreType;

@@ -653,6 +653,7 @@ NodeRef Parser::ClonePassWithParamsAndRemap(NodeRef passRef, const ParamSubstitu
         }
         dstFn.parameterPositions = srcFn.parameterPositions;
         dstFn.returnTypePosition = srcFn.returnTypePosition;
+        dstFn.returnTypeNameHash = srcFn.returnTypeNameHash;
         dstFn.isEval = srcFn.isEval;
         if (srcFn.body.IsValid() &&
             (srcFn.body.Type() == ASTNodeType::VERTEX_STAGE ||
@@ -1219,6 +1220,7 @@ NodeRef Parser::ClonePassWithActiveVariants(NodeRef passRef) {
         }
         dstFn.parameterPositions = srcFn.parameterPositions;
         dstFn.returnTypePosition = srcFn.returnTypePosition;
+        dstFn.returnTypeNameHash = srcFn.returnTypeNameHash;
         dstFn.isEval = srcFn.isEval;
         dstFn.body = CloneNodeWithParams(srcFn.body, nullptr, 0);
         dstPass.functions.Push(arena, newFn);
@@ -1336,6 +1338,7 @@ NodeRef Parser::SpecializePipelineForVariants(NodeRef pipeline,
         }
         dstFn.parameterPositions = srcFn.parameterPositions;
         dstFn.returnTypePosition = srcFn.returnTypePosition;
+        dstFn.returnTypeNameHash = srcFn.returnTypeNameHash;
         dstFn.isEval = srcFn.isEval;
         dstFn.body = CloneNodeWithParams(srcFn.body, nullptr, 0);
         dstPipeline.functions.Push(arena, newFn);
