@@ -149,6 +149,19 @@ inline u32 ResolveStaticArrayLength(IRLowering *lowering, NodeRef expr) {
 
   if (expr.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &ident = lowering->ast->GetIdentifier(expr);
+    // Local arrays are declared during lowering, so the symbol table doesn't
+    // know them; their length is in the lowering's local-array table.
+    auto local = lowering->variableRegisters.find(ident.name.nameHash);
+    if (local != lowering->variableRegisters.end() &&
+        local->second < MAX_REGISTERS &&
+        lowering->program.registerStorageInfo) {
+      u32 info = lowering->program.registerStorageInfo[local->second];
+      u32 arrayIdx = info >> IRProgram::STORAGE_BINDING_SHIFT;
+      if ((info & IRProgram::STORAGE_IS_LOCAL_ARRAY) &&
+          arrayIdx < lowering->program.localArrayCount) {
+        return lowering->program.localArraySizes[arrayIdx];
+      }
+    }
     Symbol *sym = SymbolTable::LookupAny(
         const_cast<SymbolTableData *>(lowering->symbols), ident.name);
     if (sym && sym->kind == SymbolKind::VARIABLE &&
