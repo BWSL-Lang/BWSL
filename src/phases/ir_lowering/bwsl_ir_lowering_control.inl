@@ -285,6 +285,7 @@ inline void IRLowering::LowerForRange(NodeRef ref) {
   if (!forLoop.iteratorVar.IsNull()) {
     const IdentifierData &iter = ast->GetIdentifier(forLoop.iteratorVar);
     variableRegisters[iter.name.nameHash] = iterReg;
+    program.registerNameHashes[iterReg] = iter.name.nameHash;
   }
 
   u32 loopHeader = builder.currentInstruction;
@@ -359,6 +360,7 @@ inline void IRLowering::LowerForCollection(NodeRef ref) {
     // iteratorVar is stored as an identifier in the AST
     const IdentifierData &iterVar = ast->GetIdentifier(forLoop.iteratorVar);
     variableRegisters[iterVar.name.nameHash] = iterReg;
+    program.registerNameHashes[iterReg] = iterVar.name.nameHash;
   }
 
   // Length comes from the struct (resolved at parse time)

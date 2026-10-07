@@ -394,6 +394,12 @@ void SSAConstructor::Rename() {
         memset(newStructTypes + oldRegisterCount, 0, estimatedNewRegs * sizeof(u32));
         ir->registerStructTypes = newStructTypes;
     }
+    if (ir->registerNameHashes) {
+        u32* newNames = (u32*)arena->Allocate(newCapacity * sizeof(u32), 64);
+        memcpy(newNames, ir->registerNameHashes, oldRegisterCount * sizeof(u32));
+        memset(newNames + oldRegisterCount, 0, estimatedNewRegs * sizeof(u32));
+        ir->registerNameHashes = newNames;
+    }
     ir->registerCount = newCapacity;
 
     // SSA can introduce one undef per variable without an entry definition,
@@ -431,6 +437,8 @@ void SSAConstructor::Rename() {
             // Allocate an "undef" register for this variable
             // We'll use the IR's undef tracking to mark this
             u16 undefReg = state.AllocateNewRegister();
+
+            ir->InheritRegisterName(undefReg, variables[v].originalReg);
 
             // Copy type info to the new register
             if (ir->registerTypes && undefReg < ir->registerCount) {
@@ -562,6 +570,7 @@ void SSAConstructor::Rename() {
         u32 varIdx = phiVariables[p];
         u16 newReg = state.AllocateNewRegister();
         ir->phiResultRegs[p] = newReg;
+        ir->InheritRegisterName(newReg, variables[varIdx].originalReg);
         if (ir->registerTypes && newReg < ir->registerCount) {
             ir->registerTypes[newReg] = variables[varIdx].type;
         }
@@ -586,6 +595,7 @@ void SSAConstructor::Rename() {
             if (ir->phiOperandValues[opIdx] != 0xFFFF) continue;
 
             u16 undefReg = state.AllocateNewRegister();
+            ir->InheritRegisterName(undefReg, variables[varIdx].originalReg);
             if (ir->registerTypes && undefReg < ir->registerCount) {
                 ir->registerTypes[undefReg] = varType;
             }
@@ -707,6 +717,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             // Allocate new register for PHI result
             u16 newReg = state.AllocateNewRegister();
             ir->phiResultRegs[p] = newReg;
+            ir->InheritRegisterName(newReg, variables[varIdx].originalReg);
 
             // Set the type for the new PHI result register
             // Type is inherited from the variable's type
@@ -933,6 +944,8 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                     }
                 }
 
+                ir->InheritRegisterName(valueReg, variables[varIdx].originalReg);
+
                 // Push the value register onto the stack
                 state.PushRegister(varIdx, valueReg);
                 if (pushedCount < pushedCapacity) {
@@ -976,6 +989,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                         // Don't use originalReg here - it might only be defined in a different
                         // path and would cause a "forward reference not defined" SPIR-V error.
                         u16 undefReg = state.AllocateNewRegister();
+                        ir->InheritRegisterName(undefReg, variables[varIdx].originalReg);
 
                         // Copy type info to the new register
                         if (ir->registerTypes && undefReg < ir->registerCount) {

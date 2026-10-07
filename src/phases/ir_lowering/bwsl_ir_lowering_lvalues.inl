@@ -445,6 +445,13 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
     return;
   }
 
+  // This register remains the assignment target throughout lowering, so later
+  // stores and component updates retain the declaration's local identity.
+  // Arrays have their own declaration table; shared variables are handled above.
+  if (!isArray) {
+    program.registerNameHashes[varReg] = varDecl.name.nameHash;
+  }
+
   // Check if this is a struct or enum sum type
   if (coreType == CoreType::CUSTOM || coreType == CoreType::INVALID) {
     u32 lookupHash =

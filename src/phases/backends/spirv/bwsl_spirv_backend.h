@@ -356,6 +356,7 @@ struct SPIRVBuilder {
     
     // Function emission
     void EmitFunction();
+    void EmitLocalNames();
     void EmitFunctionBody();
     
     // Preamble (capabilities, imports, memory model)

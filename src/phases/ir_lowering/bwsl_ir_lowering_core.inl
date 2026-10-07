@@ -177,6 +177,9 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
     program.registerTypes[i] = static_cast<u16>(CoreType::FLOAT);
   }
   program.registerCount = 0;
+  program.registerNameHashes =
+      (u32 *)pool->Allocate(MAX_REGISTERS * sizeof(u32), 64);
+  memset(program.registerNameHashes, 0, MAX_REGISTERS * sizeof(u32));
 
   // Struct type metadata
   u32 structCapacity = 64;
