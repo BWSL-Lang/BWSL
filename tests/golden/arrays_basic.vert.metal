@@ -44,7 +44,7 @@ struct spvUnsafeArray
     }
 };
 
-constant int _30 = {};
+constant int _31 = {};
 
 struct main0_out
 {
@@ -53,85 +53,91 @@ struct main0_out
 
 struct main0_in
 {
-    float3 m_6 [[attribute(0)]];
+    float3 a_position [[attribute(0)]];
 };
 
 vertex main0_out main0(main0_in in [[stage_in]])
 {
     main0_out out = {};
-    spvUnsafeArray<float, 4> _45;
-    _45[0] = 1.0;
-    _45[1] = 2.0;
-    _45[2] = 3.0;
-    _45[3] = 4.0;
-    spvUnsafeArray<int, 4> _49;
-    _49[0] = 10;
-    _49[1] = 20;
-    _49[2] = 30;
-    _49[3] = 40;
-    spvUnsafeArray<float3, 3> _54;
-    _54[0] = float3(1.0, 0.0, 0.0);
-    _54[1] = float3(0.0, 1.0, 0.0);
-    _54[2] = float3(0.0, 0.0, 1.0);
-    _45[0] *= 2.0;
-    _49[1] += 5;
-    float _22 = 0.0;
-    int _24 = 0;
-    float _23;
-    float _12 = _22;
-    int _13 = _24;
-    for (; _13 < 4; _12 = _23, _13++)
+    spvUnsafeArray<float, 4> _50;
+    _50[0] = 1.0;
+    _50[1] = 2.0;
+    _50[2] = 3.0;
+    _50[3] = 4.0;
+    spvUnsafeArray<int, 4> _54;
+    _54[0] = 10;
+    _54[1] = 20;
+    _54[2] = 30;
+    _54[3] = 40;
+    spvUnsafeArray<float3, 3> _59;
+    _59[0] = float3(1.0, 0.0, 0.0);
+    _59[1] = float3(0.0, 1.0, 0.0);
+    _59[2] = float3(0.0, 0.0, 1.0);
+    _50[0] *= 2.0;
+    _54[1] += 5;
+    float _23 = 0.0;
+    int _25 = 0;
+    float _24;
+    float _12 = _23;
+    int _13 = _25;
+    for (; _13 < 4; _12 = _24, _13++)
     {
-        _23 = _12 + _45[_13];
+        _24 = _12 + _50[_13];
     }
-    float _27 = 0.0;
-    int _28 = 0;
+    float _28 = 0.0;
+    int _29 = 0;
     float _14;
     int _18;
-    float _15 = _27;
-    int _16 = _28;
+    float _15 = _28;
+    int _16 = _29;
     int _17;
     for (; _16 < 3; _15 = _14, _16++, _17 = _18)
     {
-        int _32 = 0;
+        int _33 = 0;
         _14 = _15;
-        _18 = _32;
-        float _26;
-        for (; _18 < 3; _14 = _26, _18++)
+        _18 = _33;
+        float _27;
+        for (; _18 < 3; _14 = _27, _18++)
         {
-            _26 = _14 + dot(_54[_16], _54[_18]);
+            _27 = _14 + dot(_59[_16], _59[_18]);
         }
     }
-    spvUnsafeArray<float, 4> _58;
-    _58[0] = 1.0;
-    _58[1] = 2.0;
-    _58[2] = 3.0;
-    _58[3] = 4.0;
-    bool _168 = false;
-    float _34 = 0.0;
-    int _36 = 0;
-    float _35;
-    float _19 = _34;
-    int _20 = _36;
-    for (; (_20 < 4) && (!_168); _19 = _35, _20++)
+    spvUnsafeArray<float, 4> _63;
+    _63[0] = 1.0;
+    _63[1] = 2.0;
+    _63[2] = 3.0;
+    _63[3] = 4.0;
+    uint _35 = 0u;
+    spvUnsafeArray<float, 4> _66;
+    for (uint _19 = _35; _19 < 4u; _19++)
     {
-        _35 = _19 + _58[_20];
+        _66[_19] = _63[_19];
     }
-    bool _183 = true;
-    float _38 = 0.0;
-    float _21;
+    bool _185 = false;
+    float _37 = 0.0;
+    int _39 = 0;
+    float _38;
+    float _20 = _37;
+    int _21 = _39;
+    for (; (_21 < 4) && (!_185); _20 = _38, _21++)
+    {
+        _38 = _20 + _66[_21];
+    }
+    bool _200 = true;
+    float _41 = 0.0;
+    float _22;
     if (2 < 4)
     {
-        _21 = _45[2];
+        _22 = _50[2];
     }
     else
     {
-        _21 = _38;
+        _22 = _41;
     }
-    spvUnsafeArray<float4x4, 2> _63;
-    _63[0] = float4x4(float4(1.0), float4(0.0), float4(0.0), float4(0.0));
-    _63[1] = float4x4(float4(2.0), float4(0.0), float4(0.0), float4(0.0));
-    out.gl_Position = float4(in.m_6, 1.0);
+    spvUnsafeArray<float4x4, 2> _71;
+    _71[0] = float4x4(float4(1.0, 0.0, 0.0, 0.0), float4(0.0, 1.0, 0.0, 0.0), float4(0.0, 0.0, 1.0, 0.0), float4(0.0, 0.0, 0.0, 1.0));
+    _71[1] = float4x4(float4(2.0, 0.0, 0.0, 0.0), float4(0.0, 2.0, 0.0, 0.0), float4(0.0, 0.0, 2.0, 0.0), float4(0.0, 0.0, 0.0, 2.0));
+    out.gl_Position = float4(in.a_position, 1.0);
     return out;
 }
 

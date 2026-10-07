@@ -865,6 +865,10 @@ NodeRef Parser::ParseEnumMethod() {
 
     Consume(TokenType::IDENTIFIER, "Expected method name");
     std::string methodName(stream->GetValue(previous));
+    if (StdLib::IntrinsicLookup::Find(Utils::HashStr(methodName.c_str()))) {
+        ErrorAtPrevious("Function name '" + methodName +
+                        "' is reserved for a built-in intrinsic; rename the method");
+    }
 
     Consume(TokenType::DOUBLE_COLON, "Expected '::' after method name");
 
@@ -1114,6 +1118,10 @@ NodeRef Parser::ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime) {
 
     Consume(TokenType::IDENTIFIER, "Expected method name");
     std::string methodName(stream->GetValue(previous));
+    if (StdLib::IntrinsicLookup::Find(Utils::HashStr(methodName.c_str()))) {
+        ErrorAtPrevious("Function name '" + methodName +
+                        "' is reserved for a built-in intrinsic; rename the method");
+    }
 
     Consume(TokenType::DOUBLE_COLON, "Expected '::' after method name");
 

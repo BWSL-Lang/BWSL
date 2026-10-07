@@ -13,6 +13,13 @@ import subprocess
 
 
 CASES = {
+    "uniform_arrays": (
+        "int i=input.uv.x<0.0?0:1; "
+        "output.color=resources.vectors[i]+resources.entries[i].tint"
+        "+resources.matrices[i]*float4(resources.scalars[i])"
+        "+float4(resources.entries[i].amount)+resources.vectors[0];",
+        [v for _ in range(4) for pixel in ([17,29,41,53], [17,29,41,53],
+                                         [67,79,91,103], [67,79,91,103]) for v in pixel]),
     "loop_break_skip": ("float r=0.0; for(int i=0;i<8;i++){ if(i==3){skip;} if(i==6){break;} r+=float(i); } output.color=float4(r);", [12]*4),
     "array_loop": ("float[4] a; for(int i=0;i<4;i++){a[i]=float(i);} float r=0.0; for(int i=0;i<4;i++){r+=a[i];} output.color=float4(r);", [6]*4),
     "nested_while": ("int i=0; float r=0.0; while(i<3){int j=0; while(j<4){r+=float(i+j);j++;}i++;} output.color=float4(r);", [30]*4),
@@ -62,11 +69,20 @@ def run_gles_regression_tests(compiler: Path, output: Path, runner: Path | None 
         folder = output / name
         folder.mkdir(exist_ok=True)
         source = folder / f"{name}.bwsl"
-        source.write_text('pipeline GLESRegression { attributes { position: float3 } pass "Main" { '
-                          'use attributes { position } vertex { output.position=float4(attributes.position,1.0); '
-                          'output.uv=attributes.position.xy; } fragment { ' + body + ' } } }')
+        resources = ("struct Entry { float4 tint; float amount; } "
+                     "resources { vectors: float4[2] scalars: float[2] "
+                     "matrices: mat4[2] entries: Entry[2] } ") if name == "uniform_arrays" else ""
+        use_resources = "use resources { vectors, scalars, matrices, entries } " if resources else ""
+        attributes = "" if resources else "attributes { position: float3 } "
+        vertex = ("float2 uv=float2(float((input.vertex_id<<1u)&2u),float(input.vertex_id&2u))*2.0-1.0; "
+                  "output.position=float4(uv,0.0,1.0); output.uv=uv; ") if resources else (
+                  "output.position=float4(attributes.position,1.0); output.uv=attributes.position.xy; ")
+        use_attributes = "" if resources else "use attributes { position } "
+        source.write_text('pipeline GLESRegression { ' + attributes + resources + 'pass "Main" { '
+                          + use_resources + use_attributes + 'vertex { ' + vertex
+                          + '} fragment { ' + body + ' } } }')
         try:
-            run([compiler, source, '-gles-direct', '-spv', '-validation', 'strict', '-o', folder])
+            run([compiler, source, '-gles-direct', '-spv', '-bindings', '-validation', 'strict', '-o', folder])
             if name == 'large_output':
                 assert (folder / f'{name}.frag').stat().st_size > 65536, 'Output-growth path was not exercised'
             for stage in ('vert', 'frag'):
@@ -74,14 +90,34 @@ def run_gles_regression_tests(compiler: Path, output: Path, runner: Path | None 
             if runner:
                 fragment = folder / 'runtime.frag'
                 fragment.write_text((folder / f'{name}.frag').read_text().replace('#version 300 es', '#version 310 es'))
-                run(['glslangValidator', '-V', '--auto-map-locations', '-S', 'frag', fragment, '-o', folder / 'direct.spv'])
+                run(['glslangValidator', '-V', '--auto-map-locations', '--auto-map-bindings', '-S', 'frag', fragment, '-o', folder / 'direct.spv'])
                 vbo = folder / 'vbo.bin'
                 vbo.write_bytes(struct.pack('<9f', -1,-1,0, 3,-1,0, -1,3,0))
+                resource_paths = []
+                if resources:
+                    # std140 gives scalar array elements a 16-byte stride and
+                    # rounds Entry (vec4 + float) to a 32-byte array stride.
+                    buffers = [list(range(1, 9)), [2,0,0,0,3,0,0,0],
+                               [scale if row == col else 0 for scale in (2,3)
+                                for col in range(4) for row in range(4)],
+                               [10,20,30,40,1,0,0,0,50,60,70,80,2,0,0,0]]
+                    for binding, values in enumerate(buffers):
+                        path = folder / f"ubo{binding}.bin"
+                        path.write_bytes(struct.pack('<' + 'f'*len(values), *values))
+                        resource_paths.append(path)
                 for backend, frag in [('native', folder / f'{name}.frag.spv'), ('direct', folder / 'direct.spv')]:
                     readback = folder / f'{backend}.bin'
+                    resource_args = []
+                    if resources:
+                        reflected = json.loads((folder / f'{name}.bindings.json').read_text())['resources']
+                        bindings = {resource['name']: resource['binding'] for resource in reflected}
+                        for binding, (member, path) in enumerate(zip(
+                                ('vectors', 'scalars', 'matrices', 'entries'), resource_paths)):
+                            slot = bindings[member] if backend == 'native' else binding
+                            resource_args += ['--raster-ubo', path, str(slot)]
                     run([runner, '--raster', '--vert-spirv', folder / f'{name}.vert.spv', '--frag-spirv', frag,
                          '--width', '4', '--height', '4', '--output', readback, '--output-size', '256', '--set', '1',
-                         '--raster-vbo', vbo, '3', '12', '--raster-vbo-attr', '0', 'R32G32B32_SFLOAT', '0'])
+                         '--raster-vbo', vbo, '3', '12', '--raster-vbo-attr', '0', 'R32G32B32_SFLOAT', '0', *resource_args])
                     actual = struct.unpack('<64f', readback.read_bytes())
                     expected = expected_pixel * 16 if len(expected_pixel) == 4 else expected_pixel
                     assert len(actual) == len(expected), (len(actual), len(expected))

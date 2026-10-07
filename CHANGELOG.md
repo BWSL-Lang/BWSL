@@ -3,6 +3,9 @@
 ## unreleased
 
 ### Breaking changes
+- Function and method names matching a built-in intrinsic are rejected at
+  their declaration, including unused and module functions. Rename such
+  functions; the bundled SDF method `distance` is now `signed_distance`.
 - **GL and GLES output use source names for interface objects.** Hosts that
   bind by name must update their lookups. Read `glName` from
   `bindings.json` instead of hard-coding names:
@@ -19,7 +22,14 @@
   `t_atlas` with texture `atlas`. Varying names must also differ within
   their first 31 characters.
 
+### Language
+- Struct fields can use a previously declared type in the same module.
+- Vertex attributes beyond the supported 16 slots produce a source error.
+
 ### Backends
+- Direct GLES output preserves array resource lengths and supports constant
+  and dynamic reads. Arrays of structs use the correct uniform-buffer stride.
+- The compiler service shares varying types and locations between stages.
 - A pass whose fragment stage falls back to the direct GLES emitter (for
   example with `ddx_fine`) now links. Both stages use the same varying
   names.

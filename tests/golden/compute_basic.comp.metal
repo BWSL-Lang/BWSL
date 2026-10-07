@@ -9,6 +9,6 @@ kernel void main0(uint3 gl_GlobalInvocationID [[thread_position_in_grid]], uint3
     {
         return;
     }
-    float _34 = float(gl_GlobalInvocationID.x) / 1024.0;
+    float _36 = float(gl_GlobalInvocationID.x) / 1024.0;
 }
 

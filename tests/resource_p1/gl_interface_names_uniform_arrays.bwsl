@@ -1,0 +1,31 @@
+// Uniform array reads must work in both GLES emitters and the ldexp fallback.
+pipeline UniformArrays {
+    struct ArrayEntry {
+        float4 tint;
+        float amount;
+    }
+    attributes { position: float3 }
+    resources {
+        input: float4[3]
+        scales: float[3]
+        bones: mat4[3]
+        entries: ArrayEntry[3]
+    }
+    pass "Main" {
+        use attributes { position }
+        use resources { input, scales, bones, entries }
+        vertex {
+            uint index = input.vertex_id % 3u;
+            output.position = resources.bones[index] * float4(attributes.position, 1.0);
+            output.tint = resources.input[1] + resources.entries[index].tint;
+            output.scale = resources.scales[index] + resources.entries[0].amount;
+        }
+        fragment {
+            int index = int(input.scale) % 3;
+            float factor = ldexp(resources.scales[index], 1);
+            output.color = input.tint + resources.input[index]
+                + resources.entries[index].tint + resources.bones[1] * float4(factor)
+                + float4(input.scale + resources.entries[index].amount);
+        }
+    }
+}

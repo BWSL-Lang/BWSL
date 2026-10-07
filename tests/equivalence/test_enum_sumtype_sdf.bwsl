@@ -9,7 +9,7 @@ pipeline EquivEnumSumtypeSdf {
         Box(float3 size),
         Torus(float major, float minor),
 
-        eval distance :: (float3 p) -> float {
+        eval signed_distance :: (float3 p) -> float {
             Sphere(r): length(p) - r
             Box(size): {
                 float3 d = abs(p) - size;
@@ -38,7 +38,7 @@ pipeline EquivEnumSumtypeSdf {
             }
 
             float3 p = float3(t * 0.5, t * 0.3, t * 0.1);
-            float d = shape.distance(p);
+            float d = shape.signed_distance(p);
 
             resources.output[idx] = d;
         }

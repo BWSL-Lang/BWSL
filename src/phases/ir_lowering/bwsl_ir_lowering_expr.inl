@@ -524,6 +524,10 @@ inline u16 IRLowering::LowerIdentifier(NodeRef ref) {
     if (isUsedAttribute) {
       u16 reg = AllocateRegister();
       u16 attrIndex = (u16)GetAttributeIndex(ident.name.nameHash);
+        if (attrIndex >= 16) {
+            ReportErrorAt(ref, "Error: vertex attribute index exceeds the supported limit of 16 attributes\n");
+            return 0;
+        }
       builder.EmitInstruction(OP_LOAD_ATTR, reg, attrIndex);
 
       CompressionFormat compression = GetAttributeCompression(attrIndex);

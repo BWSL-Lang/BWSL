@@ -1,0 +1,1 @@
+pipeline Reserved { struct Value { float x; sample :: () const -> float { return self.x; } } }

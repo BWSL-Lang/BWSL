@@ -2004,6 +2004,10 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
   case SpecialIdentifier::ATTRIBUTES: {
     u16 dest = AllocateRegister();
     u32 attrIndex = GetAttributeIndex(access.member.nameHash);
+    if (attrIndex >= 16) {
+        ReportErrorAt(ref, "Error: vertex attribute index exceeds the supported limit of 16 attributes\n");
+        return 0;
+    }
     builder.EmitInstruction(OP_LOAD_ATTR, dest, (u16)attrIndex);
 
     // Check if attribute is compressed - if so, return raw uint type

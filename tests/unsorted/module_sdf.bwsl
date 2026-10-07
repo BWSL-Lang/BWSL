@@ -15,9 +15,9 @@ pipeline ModuleSDF {
             SDF::SDFShape box = SDF::SDFShape::Box(float3(0.5, 0.35, 0.25));
             SDF::SDFShape torus = SDF::SDFShape::Torus(0.6, 0.15);
 
-            float d0 = sphere.distance(p);
-            float d1 = box.distance(SDF::translate(p, float3(0.25, 0.0, 0.0)));
-            float d2 = torus.distance(p);
+            float d0 = sphere.signed_distance(p);
+            float d1 = box.signed_distance(SDF::translate(p, float3(0.25, 0.0, 0.0)));
+            float d2 = torus.signed_distance(p);
             float combined = SDF::combine(SDF::SDFCombineOp::SmoothUnion, SDF::op_union(d0, d2), d1, 0.2);
             float3 n = sphere.normal(p, 0.01);
 

@@ -1,0 +1,10 @@
+pipeline NestedUniformNames {
+    struct Inner { float4[2] colors; }
+    struct Outer { Inner inner; }
+    resources { input: Outer }
+    pass "Main" {
+        use resources { input }
+        vertex { output.position = resources.input.inner.colors[0]; }
+        fragment { output.color = resources.input.inner.colors[1]; }
+    }
+}

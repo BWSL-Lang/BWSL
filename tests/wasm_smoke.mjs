@@ -61,3 +61,39 @@ for (const [name, diagnostic] of [
   assert.ok(JSON.stringify(result.errors).toLowerCase().includes(diagnostic.toLowerCase()), JSON.stringify(result));
   console.log(`${name} diagnostic: PASS`);
 }
+
+const fallbackVertex = JSON.parse(compile(`pipeline FallbackVertex {
+  attributes { position: float3 }
+  pass "Main" {
+    use attributes { position }
+    vertex {
+      output.position = float4(ldexp(attributes.position.x, 1), 0.0, 0.0, 1.0);
+    }
+    fragment { output.color = float4(1.0); }
+  }
+}`, '', ''));
+assert.equal(fallbackVertex.success, true, JSON.stringify(fallbackVertex));
+assert.match(fallbackVertex.shaders.Main.vertex, /in vec3 a_position;/);
+assert.doesNotMatch(fallbackVertex.shaders.Main.vertex, /\battr0\b/);
+console.log('fallback vertex attribute names: PASS');
+
+for (const name of ['gl_interface_names', 'gl_interface_names_keyword_fallback',
+                    'gl_interface_names_nested', 'gl_interface_names_uniform_arrays']) {
+  const source = fs.readFileSync(new URL(`resource_p1/${name}.bwsl`, import.meta.url), 'utf8');
+  const result = JSON.parse(compile(source, '', ''));
+  assert.equal(result.success, true, JSON.stringify(result));
+  const shaders = result.shaders.Main.vertex + result.shaders.Main.fragment;
+  assert.match(shaders, /bwsl_u_input/);
+  assert.doesNotMatch(shaders, /\b(?:vec4|Outer) input\s*;/);
+    if (name === 'gl_interface_names_uniform_arrays') {
+        for (const member of ['input', 'scales', 'bones', 'entries']) {
+            assert.match(result.shaders.Main.fragment, new RegExp(`bwsl_u_${member}\\[3\\]`));
+        }
+    }
+  console.log(`${name} uniform names: PASS`);
+}
+const reserved = JSON.parse(compile(
+  'module Reserved { lerp :: (float x) -> float { return x; } }', '', ''));
+assert.equal(reserved.success, false);
+assert.match(JSON.stringify(reserved.errors), /reserved for a built-in intrinsic/);
+console.log('intrinsic function name diagnostic: PASS');

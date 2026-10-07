@@ -213,8 +213,24 @@ void GLESBuilder::EmitStructDeclarations() {
         return;
     }
 
-    for (u32 s = 0; s < ir->structTypeCount; s++) {
+    // IR registers a parent before its field types. GLSL requires the
+    // field types to be declared first, including nested arrays of structs.
+    u8* visited = static_cast<u8*>(arena->Allocate(ir->structTypeCount));
+    memset(visited, 0, ir->structTypeCount);
+    auto emit = [&](auto&& emitType, u32 s) -> void {
+        if (visited[s]) return;
+        visited[s] = 1;
         const IR::IRProgram::StructTypeInfo& info = ir->structTypes[s];
+        for (u32 f = 0; f < info.fieldCount; f++) {
+            u32 hash = ir->structFieldTypeHashes[info.fieldOffset + f];
+            if (!hash) continue;
+            for (u32 nested = 0; nested < ir->structTypeCount; nested++) {
+                if (ir->structTypes[nested].nameHash == hash) {
+                    emitType(emitType, nested);
+                    break;
+                }
+            }
+        }
         out.Lit("struct ");
         EmitStructTypeName(info.nameHash);
         out.Lit(" {\n");
@@ -231,10 +247,16 @@ void GLESBuilder::EmitStructDeclarations() {
             }
             out.Chr(' ');
             EmitStructFieldName(ir->structFieldNameHashes[fieldIdx]);
+            if (ir->structFieldArraySizes && ir->structFieldArraySizes[fieldIdx]) {
+                out.Chr('[');
+                out.Uint(ir->structFieldArraySizes[fieldIdx]);
+                out.Chr(']');
+            }
             out.Lit(";\n");
         }
         out.Lit("};\n\n");
-    }
+    };
+    for (u32 s = 0; s < ir->structTypeCount; s++) emit(emit, s);
 }
 
 // ============================================================================
@@ -430,27 +452,29 @@ void GLESBuilder::EmitUniforms() {
 
             if (!stageMatch) continue;
 
-            // Emit as std140 uniform block. Names match the SPIR-V backend
-            // so passes mixing both GLES emitters bind the same blocks:
-            //   uniform ub_<name> { <type> <name>; } bwsl_ub_<name>;
+            // Emit only live uniform blocks, as the SPIR-V path does. An
+            // unused struct uniform need not have a type registered in this IR.
+            u16 uniformReg = 0xFFFF;
+            for (u32 i = 0; i < ir->instructionCount; i++) {
+                if (ir->opcodes[i] == IR::OP_LOAD_UNIFORM &&
+                    Op(i, 0) == ub.bindingIndex) {
+                    uniformReg = ir->destinations[i];
+                    break;
+                }
+            }
+            if (uniformReg == 0xFFFF) continue;
+
             out.Lit("layout(std140) uniform ");
             EmitGLName(GLNameKind::UNIFORM_BLOCK, ub.name.c_str());
-            out.Lit(" {\n");
-            out.Lit("    ");
-
-            // Map type name to GLSL type
-            const char* glslType = "float";
-            if (ub.typeName == "mat4") glslType = "mat4";
-            else if (ub.typeName == "mat3") glslType = "mat3";
-            else if (ub.typeName == "float4" || ub.typeName == "vec4") glslType = "vec4";
-            else if (ub.typeName == "float3" || ub.typeName == "vec3") glslType = "vec3";
-            else if (ub.typeName == "float2" || ub.typeName == "vec2") glslType = "vec2";
-            else if (ub.typeName == "int") glslType = "int";
-            else if (ub.typeName == "uint") glslType = "uint";
-
-            out.Str(glslType);
+            out.Lit(" {\n    ");
+            EmitRegisterType(uniformReg);
             out.Chr(' ');
-            out.Str(ub.name.c_str());
+            EmitGLName(GLNameKind::UNIFORM_MEMBER, ub.name.c_str());
+            if (ub.bindingIndex < 32 && ir->uniformArrayLengths[ub.bindingIndex]) {
+                out.Chr('[');
+                out.Uint(ir->uniformArrayLengths[ub.bindingIndex]);
+                out.Chr(']');
+            }
             out.Lit(";\n} ");
             EmitGLName(GLNameKind::UNIFORM_INSTANCE, ub.name.c_str());
             out.Lit(";\n");
@@ -692,7 +716,8 @@ bool GLESBuilder::EmitStructuredRegion(u32 block, u32 stopBlock,
 void GLESBuilder::EmitControlFlow() {
     // Registers must survive loop edges and both arms of a selection.
     for (u32 reg = 0; reg < regCount; ++reg) {
-        if (regInfo[reg].flags & REG_DECLARED) continue;
+        if ((regInfo[reg].flags & REG_DECLARED) ||
+            regInfo[reg].uniformPointerInstruction) continue;
         u16 type = ir->registerTypes ? ir->registerTypes[reg] : 0;
         if (type == 0 || type == static_cast<u16>(CoreType::VOID)) continue;
         out.NL(indent); EmitRegWithDecl(static_cast<u16>(reg)); out.Chr(';');
@@ -879,6 +904,8 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_LOAD_ATTR:
         case IR::OP_LOAD_INPUT:
         case IR::OP_LOAD_UNIFORM:
+            // An array root is an address, not a scalar value to materialize.
+            if (dest < regCount && regInfo[dest].uniformPointerInstruction) return;
             // Materialize loads at their definition, like all other SSA values.
             if (dest < regCount) {
                 EmitRegWithDecl(dest);
@@ -1733,7 +1760,24 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             u32 structHash = (ir->registerStructTypes && structReg < ir->registerCount)
                                  ? ir->registerStructTypes[structReg]
                                  : 0;
-            EmitRegWithDecl(dest);
+            u32 arraySize = 0;
+            for (u32 s = 0; s < ir->structTypeCount; s++) {
+                const auto& info = ir->structTypes[s];
+                if (info.nameHash == structHash && fieldIdx < info.fieldCount &&
+                    ir->structFieldArraySizes) {
+                    arraySize = ir->structFieldArraySizes[info.fieldOffset + fieldIdx];
+                    break;
+                }
+            }
+            if (arraySize && !(regInfo[dest].flags & REG_DECLARED)) {
+                EmitRegisterType(dest);
+                out.Chr(' ');
+                EmitReg(dest);
+                out.Chr('['); out.Uint(arraySize); out.Chr(']');
+                regInfo[dest].flags |= REG_DECLARED;
+            } else {
+                EmitRegWithDecl(dest);
+            }
             out.Lit(" = ");
             EmitExpr(structReg);
             out.Chr('.');
@@ -1908,10 +1952,26 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         // ===== Storage Buffer Operations =====
-        case IR::OP_STORAGE_PTR:
         case IR::OP_STORAGE_FIELD:
         case IR::OP_STORAGE_INDEX:
-        case IR::OP_STORAGE_LOAD:
+            if (dest < regCount && regInfo[dest].uniformPointerInstruction) return;
+            out.Lit("// Storage buffer op not fully supported in GLES 300");
+            return;
+
+        case IR::OP_STORAGE_LOAD: {
+            u16 pointer = Op(instIdx, 0);
+            if (pointer < regCount && regInfo[pointer].uniformPointerInstruction) {
+                EmitRegWithDecl(dest);
+                out.Lit(" = ");
+                EmitExpr(pointer);
+                out.Lit(";");
+                return;
+            }
+            out.Lit("// Storage buffer op not fully supported in GLES 300");
+            return;
+        }
+
+        case IR::OP_STORAGE_PTR:
             // These require SSBO support - emit as placeholder
             out.Lit("// Storage buffer op not fully supported in GLES 300");
             return;
@@ -1996,6 +2056,25 @@ void GLESBuilder::EmitExpr(u16 reg) {
         return;
     }
 
+    if (reg < regCount && regInfo[reg].uniformPointerInstruction) {
+        u32 instIdx = regInfo[reg].uniformPointerInstruction - 1;
+        u16 opcode = ir->opcodes[instIdx];
+        if (opcode == IR::OP_LOAD_UNIFORM) {
+            EmitLoadExpr(instIdx);
+        } else {
+            EmitExpr(Op(instIdx, 0));
+            if (opcode == IR::OP_STORAGE_INDEX) {
+                out.Chr('[');
+                EmitExpr(Op(instIdx, 1));
+                out.Chr(']');
+            } else {
+                out.Chr('.');
+                EmitStructFieldNameByIndex(ir->metadata[instIdx], Op(instIdx, 1));
+            }
+        }
+        return;
+    }
+
     // Keep values at their defining instruction, including mutable reads and
     // values crossing loop edges. The driver can optimize the temporaries.
     EmitReg(reg);
@@ -2059,7 +2138,8 @@ void GLESBuilder::EmitLoadExpr(u32 instIdx) {
                 for (const auto& ub : renderConfig->uniformBuffers) {
                     if (ub.bindingIndex != uniformIdx) continue;
                     EmitGLName(GLNameKind::UNIFORM_INSTANCE, ub.name.c_str());
-                    out.Chr('.'); out.Str(ub.name.c_str());
+                    out.Chr('.');
+                    EmitGLName(GLNameKind::UNIFORM_MEMBER, ub.name.c_str());
                     return;
                 }
             }

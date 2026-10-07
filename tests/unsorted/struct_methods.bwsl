@@ -40,7 +40,7 @@ pipeline StructMethods {
     struct ShadowBox {
         float value;
 
-        select :: (float value) const -> float {
+        choose :: (float value) const -> float {
             float local = value * 2.0;
             return local + self.value;
         }
@@ -97,7 +97,7 @@ pipeline StructMethods {
 
             ShadowBox box;
             box.value = 3.0;
-            float shadowed = box.select(4.0);
+            float shadowed = box.choose(4.0);
 
             Meter meter;
             meter.v = 7.0;

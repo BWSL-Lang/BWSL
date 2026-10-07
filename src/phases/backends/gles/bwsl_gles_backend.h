@@ -241,11 +241,13 @@ struct StringBuilder {
 };
 
 // ============================================================================
-// Register use tracking for SSA → expression inlining
+// Register declarations and uniform-array pointer aliases
 // ============================================================================
 
 struct RegInfo {
     u8 flags;
+    // Uniform-array pointer definition + 1; zero denotes an ordinary value.
+    u32 uniformPointerInstruction;
 };
 
 static constexpr u8 REG_DECLARED = 0x01;
@@ -314,6 +316,23 @@ struct GLESBuilder {
         regInfo = static_cast<RegInfo*>(arena->Allocate(regCount * sizeof(RegInfo)));
         for (u32 i = 0; i < regCount; i++) {
             regInfo[i] = {};
+        }
+
+        // Uniform arrays use storage-pointer IR operations, but their reads
+        // are legal in ES 3.00. Track only aliases rooted at those uniforms.
+        for (u32 i = 0; i < ir->instructionCount; i++) {
+            u16 dest = ir->destinations[i];
+            if (dest >= regCount) continue;
+            u16 opcode = ir->opcodes[i];
+            if (opcode != IR::OP_LOAD_UNIFORM && opcode != IR::OP_STORAGE_INDEX &&
+                opcode != IR::OP_STORAGE_FIELD) continue;
+            u16 base = ir->GetOperand(i, 0);
+            if ((opcode == IR::OP_LOAD_UNIFORM && base < 32 &&
+                 ir->uniformArrayLengths[base] != 0) ||
+                ((opcode == IR::OP_STORAGE_INDEX || opcode == IR::OP_STORAGE_FIELD) &&
+                 base < regCount && regInfo[base].uniformPointerInstruction != 0)) {
+                regInfo[dest].uniformPointerInstruction = i + 1;
+            }
         }
 
         out.Init(arena, 64 * 1024);  // 64KB output buffer

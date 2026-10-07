@@ -24,8 +24,9 @@
 namespace BWSL {
 
 enum class GLNameKind : u8 {
-    UNIFORM_BLOCK,     // uniform ub_<resource> { T <resource>; } ...
+    UNIFORM_BLOCK,     // uniform ub_<resource> { T bwsl_u_<resource>; } ...
     UNIFORM_INSTANCE,  // ... bwsl_ub_<resource>;
+    UNIFORM_MEMBER,    // Members also need a prefix for GLSL reserved words.
     COMBINED_TEXTURE,  // texture used one-to-one with its sampler
     DEFAULT_SAMPLER,   // sampler synthesized for a texture sampled without one (Metal/HLSL)
     SAMPLER,
@@ -44,6 +45,7 @@ static constexpr struct {
 } GL_NAME_KINDS[] = {
     {"ub_",      "the uniform block of resource"},
     {"bwsl_ub_", "the uniform block instance of resource"},
+    {"bwsl_u_",  "the uniform member of resource"},
     {"t_",       "texture"},
     {"bwsl_s_",  "the default sampler of texture"},
     {"",         "sampler"},
