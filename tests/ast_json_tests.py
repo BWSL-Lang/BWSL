@@ -59,6 +59,171 @@ class AstJsonTests(unittest.TestCase):
     def assert_edge(self, data, source, target, role):
         self.assertIn({'from': source, 'to': target, 'role': role}, self.edges(data))
 
+    def assert_type_shape(self, info, element, sizes):
+        self.assertEqual(info['elementType'], element)
+        self.assertEqual(info['arraySizes'], sizes)
+        self.assertEqual(info['arrayDimensions'], len(sizes))
+        length = 0 if not sizes else 1
+        for size in sizes:
+            length *= size
+        self.assertEqual(info['arrayLength'], length)
+
+    def test_array_metadata_across_parameters_locals_fields_and_symbols(self):
+        data = self.parse('''module Arrays {
+            struct Light { float3 color; float[4] weights; }
+            sum :: (float[3] values, Light[2] lights, float scale) -> float {
+                float[2] local;
+                Light[2] localLights;
+                float total = values[0] * scale + local[1] + lights[0].color.x
+                    + localLights[1].weights[0];
+                return total;
+            }
+        }''')
+        function = self.nodes(data, 'FUNCTION', 'sum')[0]
+        fields = self.nodes(data, 'STRUCT_DECL', 'Light')[0]['fields']
+        declarations = [
+            (function['parameters'][0], 'float', [3], 'dataType'),
+            (function['parameters'][1], 'Light', [2], 'dataType'),
+            (function['parameters'][2], 'float', [], 'dataType'),
+            (self.nodes(data, 'VARIABLE_DECL', 'local')[0], 'float', [2], 'declaredType'),
+            (self.nodes(data, 'VARIABLE_DECL', 'localLights')[0], 'Light', [2], 'declaredType'),
+            (self.nodes(data, 'VARIABLE_DECL', 'total')[0], 'float', [], 'declaredType'),
+            (fields[0], 'float3', [], 'dataType'),
+            (fields[1], 'float', [4], 'dataType'),
+        ]
+        symbols = {symbol['id']: symbol for symbol in data['referenceIndex']['symbols']}
+        for declaration, element, sizes, type_key in declarations:
+            with self.subTest(name=declaration['name']):
+                self.assertEqual(declaration[type_key], element)
+                self.assert_type_shape(declaration['typeInfo'], element, sizes)
+                symbol = symbols[declaration['id']]
+                self.assertEqual(symbol['type'], element)
+                self.assert_type_shape(symbol['typeInfo'], element, sizes)
+        self.assertEqual(fields[0]['typeInfo']['componentCount'], 3)
+        self.assertEqual(fields[1]['arraySize'], 4)  # Legacy field retained.
+        self.assert_type_shape(function['returnTypeInfo'], 'float', [])
+        self.assertIn('sum(float[3],Light[2],float)', symbols[function['id']]['stableId'])
+
+    def test_multidimensional_array_shapes_and_parameter_syntaxes(self):
+        data = self.parse('''module Arrays {
+            const int ROWS = 2;
+            struct Light { float x; }
+            inspect :: (float[ROWS][3] values, lights: Arrays::Light[2][4],
+                        Arrays::Light[5] qualified, float[6]) -> void {
+                float[2][3] local;
+                Light[3][4] custom;
+            }
+        }''')
+        function = self.nodes(data, 'FUNCTION', 'inspect')[0]
+        for parameter, element, sizes in zip(function['parameters'],
+                ['float', 'Arrays::Light', 'Arrays::Light', 'float'],
+                [[2, 3], [2, 4], [5], [6]]):
+            self.assert_type_shape(parameter['typeInfo'], element, sizes)
+        for name, element, sizes in [('local', 'float', [2, 3]), ('custom', 'Light', [3, 4])]:
+            node = self.nodes(data, 'VARIABLE_DECL', name)[0]
+            self.assert_type_shape(node['typeInfo'], element, sizes)
+            self.assertEqual(node['arrayDimensions'], len(sizes))
+            self.assertEqual(node['arrayLength'], node['typeInfo']['arrayLength'])
+
+    def test_imported_and_aliased_array_element_types(self):
+        data = self.parse('''pipeline P { import Geometry as G
+            using Position = G::Point
+            struct Container { G::Point[3] points; }
+            inspect :: (G::Point[2] points, Position[4] aliases) -> G::Point {
+                G::Point[5] local;
+                Position[6] aliasLocal;
+                return points[0];
+            }
+        }''', {'Geometry.bwsl': 'module Geometry { struct Point { float x; } }'})
+        function = self.nodes(data, 'FUNCTION', 'inspect')[0]
+        for parameter, element, sizes in zip(function['parameters'],
+                ['Geometry::Point', 'Position'], [[2], [4]]):
+            self.assert_type_shape(parameter['typeInfo'], element, sizes)
+        local = self.nodes(data, 'VARIABLE_DECL', 'local')[0]
+        self.assert_type_shape(local['typeInfo'], 'Geometry::Point', [5])
+        alias = self.nodes(data, 'VARIABLE_DECL', 'aliasLocal')[0]
+        self.assert_type_shape(alias['typeInfo'], 'Position', [6])
+        field = self.nodes(data, 'STRUCT_DECL', 'Container')[0]['fields'][0]
+        self.assert_type_shape(field['typeInfo'], 'Geometry::Point', [3])
+        point = self.nodes(data, 'STRUCT_DECL', 'Point')[0]
+        for declaration in [*function['parameters'], local, alias, field]:
+            self.assert_edge(data, declaration['id'], point['id'], 'type')
+        self.assert_type_shape(function['returnTypeInfo'], 'Geometry::Point', [])
+
+    def test_vector_matrix_and_return_types_are_not_arrays(self):
+        data = self.parse('''module Shapes {
+            struct Vectors { float3 direction; mat4 transform; float3[2] points; }
+            identity :: (float3 value, mat4 transform) -> float3 {
+                float3 direction = value;
+                mat4 matrix = transform;
+                return direction;
+            }
+        }''')
+        function = self.nodes(data, 'FUNCTION', 'identity')[0]
+        for parameter in function['parameters']:
+            self.assert_type_shape(parameter['typeInfo'], parameter['dataType'], [])
+        for field, sizes in zip(self.nodes(data, 'STRUCT_DECL')[0]['fields'], [[], [], [2]]):
+            self.assert_type_shape(field['typeInfo'], field['dataType'], sizes)
+        for name in ['direction', 'matrix']:
+            node = self.nodes(data, 'VARIABLE_DECL', name)[0]
+            self.assert_type_shape(node['typeInfo'], node['declaredType'], [])
+        self.assert_type_shape(function['returnTypeInfo'], 'float3', [])
+
+    def test_array_parameter_sizes_use_parsed_constant_values(self):
+        data = self.parse('''module Arrays {
+            const int COUNT = 4;
+            inspect :: (float[COUNT] named, float[0x10] hex, float[0b11] binary) -> void {}
+        }''')
+        for parameter, sizes in zip(self.nodes(data, 'FUNCTION')[0]['parameters'], [[4], [16], [3]]):
+            self.assert_type_shape(parameter['typeInfo'], 'float', sizes)
+
+    def test_array_method_parameters_and_imported_local_metadata(self):
+        data = self.parse("pipeline P { import Geometry }", {
+            'Geometry.bwsl': """module Geometry {
+                struct Point {
+                    float x;
+                    combine :: (float3[2] vectors, weights: float[3]) -> float {
+                        float3[2] scratch;
+                        return x;
+                    }
+                }
+            }""",
+        })
+        method = self.nodes(data, 'FUNCTION', 'combine')[0]
+        self.assertTrue(method['sourceFile'].endswith('Geometry.bwsl'))
+        symbols = {symbol['id']: symbol for symbol in data['referenceIndex']['symbols']}
+        for parameter, element, sizes in zip(method['parameters'], ['float3', 'float'], [[2], [3]]):
+            self.assert_type_shape(parameter['typeInfo'], element, sizes)
+            self.assert_type_shape(symbols[parameter['id']]['typeInfo'], element, sizes)
+        local = self.nodes(data, 'VARIABLE_DECL', 'scratch')[0]
+        self.assert_type_shape(local['typeInfo'], 'float3', [2])
+        self.assert_type_shape(symbols[local['id']]['typeInfo'], 'float3', [2])
+
+    def test_imported_array_qualifiers_with_identical_source_positions(self):
+        data = self.parse('pipeline P { import A, B }', {
+            'A.bwsl': 'module A { import First\nstruct Box { First::Point[2] points; }\n}',
+            'B.bwsl': 'module B { import Other\nstruct Box { Other::Point[3] points; }\n}',
+            'First.bwsl': 'module First { struct Point { float x; } }',
+            'Other.bwsl': 'module Other { struct Point { float y; } }',
+        })
+        boxes = self.nodes(data, 'STRUCT_DECL', 'Box')
+        symbols = {symbol['id']: symbol for symbol in data['referenceIndex']['symbols']}
+        for box, element, sizes in zip(boxes, ['First::Point', 'Other::Point'], [[2], [3]]):
+            field = box['fields'][0]
+            self.assertEqual(field['dataType'], element)
+            self.assert_type_shape(field['typeInfo'], element, sizes)
+            self.assert_type_shape(symbols[field['id']]['typeInfo'], element, sizes)
+
+    def test_array_parameter_rejects_invalid_and_overflowing_sizes(self):
+        for suffix in ['[0]', '[262145]', '[512][513]', '[1.5]']:
+            with self.subTest(suffix=suffix), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'invalid.bwsl'
+                path.write_text(f'module M {{ inspect :: (float{suffix} values) -> void {{}} }}')
+                result = subprocess.run([str(COMPILER), str(path), '-check', '-errors-json'],
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertFalse(json.loads(result.stdout)['success'])
+
     def test_document_roots_in_source_order_exclude_imported_modules(self):
         data = self.parse('''
             pipeline First { import Dependency }

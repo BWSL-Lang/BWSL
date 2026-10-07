@@ -126,6 +126,7 @@ struct VariableDeclData {
     u8 arrayDimensions;
     u32 arrayLength;
     u32 arrayElementTypeHash;
+    ArenaArray<u32> arraySizes{}; // Written dimensions, in outer-to-inner order
     u32 typePosition;  // Packed line/column (AST::PackPosition) of the declared
     u32 namePosition;  // type and the variable name; 0 when synthesized.
 };
@@ -223,6 +224,7 @@ struct FunctionDeclData {
     ArenaString name;
     ArenaArray<std::pair<ArenaString, ArenaString>> parameters;
     ArenaArray<ParameterSourcePositions> parameterPositions;
+    ArenaArray<ArenaArray<u32>> parameterArraySizes;
     CoreType returnType;
     u32 returnTypeHash;
     u32 returnTypeNameHash = 0; // Written custom type/alias before resolution
@@ -1634,6 +1636,7 @@ namespace ASTFactory {
         data.ownerStructTypeHash = 0;
         data.parameters.Init(ast->arena, 4);
         data.parameterPositions.Init(ast->arena, 0);
+        data.parameterArraySizes.Init(ast->arena, 0);
         data.body = NodeRef::Null();
         data.isEval = false;
         data.isStructMethod = false;
@@ -2128,6 +2131,7 @@ namespace ASTClone {
         VariableDeclData& newData = ctx.ast->GetVariableDecl(newVar);
         newData.typePosition = src.typePosition;
         newData.namePosition = src.namePosition;
+        newData.arraySizes = src.arraySizes;
 
         return newVar;
     }
@@ -2393,6 +2397,7 @@ namespace ASTClone {
 
         dst.isEval = src.isEval;
         dst.parameterPositions = src.parameterPositions;
+        dst.parameterArraySizes = src.parameterArraySizes;
         dst.returnTypePosition = src.returnTypePosition;
 
         // Clone parameters with type substitution

@@ -686,7 +686,7 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
     if (!arrayDims.empty()) {
         varDecl = ASTFactory::MakeVariableDecl(ast,
             ArenaString::MakeHashOnly(varName),
-            ArenaString::MakeHashOnly("array"),
+            ArenaString::MakeHashOnly(typeName),
             initializer, false, line, col, StorageClass::Default,
             static_cast<u8>(arrayDims.size()), totalSize, arrayElementTypeHash);
     } else {
@@ -695,6 +695,7 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
             ArenaString::MakeHashOnly(typeName),
             initializer, false, line, col);
     }
+    for (u32 dim : arrayDims) ast->GetVariableDecl(varDecl).arraySizes.Push(arena, dim);
     ast->GetVariableDecl(varDecl).typePosition = AST::PackPosition(line, col);
     ast->GetVariableDecl(varDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
 
