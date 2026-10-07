@@ -36,3 +36,6 @@ print(result.stdout, end='')
 print(result.stderr, end='')
 for message in ['Shader register limit exceeded', 'SSA register limit exceeded']:
     assert re.search(r'line [1-9]\d*:[1-9]\d*: ' + message, result.stderr), result.stderr
+
+assert re.search(r'Shadowing.bwsl:1:\d+: note: Variable \'value\' shadows parameter declared at ', result.stderr), result.stderr
+assert result.stderr.count("Variable 'value' shadows parameter") == 1, result.stderr

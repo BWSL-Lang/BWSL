@@ -217,7 +217,7 @@ inline std::string StructFieldTypeName(const AST& ast, const StructFieldData& fi
                              field.typePosition, sourceFile);
 }
 
-struct NameError {
+struct NameDiagnostic {
     std::string message;
     std::string file;
     u32 position;
@@ -226,8 +226,9 @@ struct NameError {
 
 class Builder {
 public:
-    explicit Builder(const AST& ast, std::vector<NameError>* errors = nullptr)
-        : ast_(ast), errors_(errors) {}
+    explicit Builder(const AST& ast, std::vector<NameDiagnostic>* errors = nullptr,
+                     std::vector<NameDiagnostic>* shadowNotes = nullptr)
+        : ast_(ast), errors_(errors), shadowNotes_(shadowNotes) {}
 
     Index Build() {
         for (u32 i = 0; i < ast_.foldedConstants.count; i++) {
@@ -246,7 +247,7 @@ public:
         // detached from a container array.
         for (u32 i = 0; i < ast_.variableDecls.count; i++) {
             NodeRef ref(ASTNodeType::VARIABLE_DECL, i);
-            if (!errors_ && visitedVariables_.find(ref.packed) == visitedVariables_.end()) {
+            if (!errors_ && !shadowNotes_ && visitedVariables_.find(ref.packed) == visitedVariables_.end()) {
                 PushScope();
                 VisitVariableDecl(ref);
                 PopScope();
@@ -282,7 +283,65 @@ private:
     };
 
     const AST& ast_;
-    std::vector<NameError>* errors_ = nullptr;
+    std::vector<NameDiagnostic>* errors_ = nullptr;
+    std::vector<NameDiagnostic>* shadowNotes_ = nullptr;
+    struct DeclarationSite {
+        std::string file;
+        u32 position;
+    };
+    std::unordered_map<std::string, DeclarationSite> declarationSites_;
+
+    void RememberDeclaration(const std::string& id, NodeRef node, u32 position) {
+        if (!shadowNotes_) return;
+        const char* file = ast_.GetDeclarationSource(node);
+        if (!file) file = ast_.GetDeclarationSource(sourceDeclaration_);
+        declarationSites_[id] = {file ? file : "", position};
+    }
+
+    void CheckShadowing(NodeRef node, const std::string& id, const std::string& name,
+                        u32 position, const char* declarationKind) {
+        if (!shadowNotes_ || name.empty() || position == 0) return;
+        RememberDeclaration(id, node, position);
+        Binding hidden;
+        for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+            auto found = scope->find(name);
+            if (found != scope->end() && found->second.id != id) {
+                hidden = found->second;
+                break;
+            }
+        }
+        if (hidden.id.empty()) {
+            for (const auto& owner : VisibleScopes(CurrentOwner())) {
+                auto field = fields_.find(ScopedKey(owner, name));
+                if (field != fields_.end() && field->second.id != id) {
+                    hidden = field->second;
+                    break;
+                }
+                auto constant = consts_.find(ScopedKey(owner, name));
+                if (constant != consts_.end() && constant->second.id != id) {
+                    hidden = constant->second;
+                    break;
+                }
+            }
+        }
+        const Symbol* previous = FindSymbol(hidden.id);
+        if (!previous) return;
+        const auto site = declarationSites_.find(hidden.id);
+        if (site == declarationSites_.end() || site->second.position == 0) return;
+        u32 line = 0, column = 0;
+        AST::UnpackPosition(site->second.position, line, column);
+        std::string kind = previous->kind == "loop-iterator" ? "loop variable" :
+                           previous->kind == "struct-field" ? "field" : previous->kind;
+        std::string message = std::string(declarationKind) + " '" + name + "' shadows " + kind +
+            " declared at " + (site->second.file.empty() ? "" : site->second.file + ":") +
+            std::to_string(line) + ":" + std::to_string(column);
+        const DeclarationSite& current = declarationSites_.at(id);
+        const std::string key = current.file + ":" + std::to_string(position) + ":" + message;
+        if (shadowKeys_.insert(key).second) {
+            shadowNotes_->push_back({message, current.file, position, static_cast<u32>(name.size())});
+        }
+    }
+    std::unordered_set<std::string> shadowKeys_;
     NodeRef sourceDeclaration_;
     std::unordered_set<std::string> errorKeys_;
 
@@ -599,6 +658,7 @@ private:
                 const std::string fieldName = ResolveName(field.name);
                 const std::string fieldType = FieldTypeName(ref, field);
                 AddSymbol({fieldId, "struct-field", fieldName, fieldId, id, fieldType, {}});
+                RememberDeclaration(fieldId, ref, field.namePosition);
                 if (field.arraySize != 0) FindSymbol(fieldId)->arraySizes = {field.arraySize};
                 AddQualifierReference(fieldId, field.typePosition);
                 const std::string stableStruct = StableIdOf(id);
@@ -699,6 +759,7 @@ private:
                 variable.typePosition, ast_.GetDeclarationSource(ref));
             AddSymbol({NodeId(ref), variable.isConst ? "constant" : "variable", name,
                        NodeId(ref), OwnerOf(ref), type, {}});
+            RememberDeclaration(NodeId(ref), ref, variable.namePosition);
             for (u32 j = 0; j < variable.arraySizes.count; j++) {
                 FindSymbol(NodeId(ref))->arraySizes.push_back(variable.arraySizes[j]);
             }
@@ -987,6 +1048,7 @@ private:
             if (!visitedVariables_.insert(ref.packed).second) continue;
             const VariableDeclData& variable = ast_.GetVariableDecl(ref);
             VisitExpr(variable.initializer, "read");
+            CheckShadowing(ref, NodeId(ref), ResolveName(variable.name), variable.namePosition, "Constant");
             CheckType(ref, ResolveName(variable.type), variable.typePosition);
             AddTypeReference(NodeId(ref), ResolveName(variable.type), "type");
         }
@@ -1210,6 +1272,9 @@ private:
                 CheckType(ref, type, function.parameterPositions[i].typePosition);
                 AddQualifierReference(parameterId, function.parameterPositions[i].typePosition);
             }
+            if (i < function.parameterPositions.count) {
+                CheckShadowing(ref, parameterId, name, function.parameterPositions[i].namePosition, "Parameter");
+            }
             Bind(name, {parameterId, CanonicalType(type, functionId)});
         }
         VisitNode(function.body);
@@ -1233,6 +1298,7 @@ private:
         CheckType(ref, type, variable.typePosition);
         AddTypeReference(NodeId(ref), type, "type");
         AddQualifierReference(NodeId(ref), variable.typePosition);
+        CheckShadowing(ref, NodeId(ref), name, variable.namePosition, "Variable");
         Bind(name, {NodeId(ref), CanonicalType(type, CurrentOwner())});
     }
 
@@ -1611,6 +1677,7 @@ private:
                     const std::string id = NodeId(ref) + "/iterator:0";
                     const std::string name = ResolveName(ast_.GetIdentifier(loop.iteratorVar).name);
                     AddSymbol({id, "loop-iterator", name, id, NodeId(ref), {}, {}});
+                    CheckShadowing(loop.iteratorVar, id, name, ast_.FindPosition(loop.iteratorVar), "Loop variable");
                     Bind(name, {id, {}});
                 }
                 VisitNode(loop.body);
@@ -1627,6 +1694,7 @@ private:
                     const std::string id = NodeId(ref) + "/iterator:0";
                     const std::string name = ResolveName(ast_.GetIdentifier(loop.iteratorVar).name);
                     AddSymbol({id, "loop-iterator", name, id, NodeId(ref), {}, {}});
+                    CheckShadowing(loop.iteratorVar, id, name, ast_.FindPosition(loop.iteratorVar), "Loop variable");
                     Bind(name, {id, {}});
                 }
                 VisitNode(loop.body);

@@ -171,6 +171,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     (void) parser.ParseDocument();
 
     if (parser.hadError) return 0;
+    parser.DiagnoseShadowing();
     if (context.ast.pipelines.count == 0) return 0;
 
     // Only the first pipeline is compiled — the point is to cover backend

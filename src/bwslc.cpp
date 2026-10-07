@@ -1499,16 +1499,20 @@ static void PrintDiagnosticsText(const CompilerConfig& config,
 
     u32 shown = 0;
     std::unordered_map<std::string, std::vector<std::string>> sourceLineCache;
-    for (u32 i = 0; i < diagnostics.Count(); i++) {
-        if (shown >= maxDiagnostics) break;
-        const std::vector<std::string>* diagnosticSourceLines =
-            ResolveDiagnosticSourceLines(config, diagnostics, i,
-                                         sourceLines, sourceLineCache);
-        const TokenStream* diagnosticStream =
-            ResolveDiagnosticTokenStream(config, diagnostics, i, stream);
-        PrintDiagnosticText(config, diagnostics, i,
-                            diagnosticStream, diagnosticSourceLines);
-        shown++;
+    // Non-blocking notes must not consume the display limit before errors.
+    for (DiagnosticSeverity severity : {DiagnosticSeverity::Error, DiagnosticSeverity::Warning,
+                                       DiagnosticSeverity::Note, DiagnosticSeverity::Hint}) {
+        for (u32 i = 0; i < diagnostics.Count() && shown < maxDiagnostics; i++) {
+            if (diagnostics.GetSeverity(i) != severity) continue;
+            const std::vector<std::string>* diagnosticSourceLines =
+                ResolveDiagnosticSourceLines(config, diagnostics, i,
+                                             sourceLines, sourceLineCache);
+            const TokenStream* diagnosticStream =
+                ResolveDiagnosticTokenStream(config, diagnostics, i, stream);
+            PrintDiagnosticText(config, diagnostics, i,
+                                diagnosticStream, diagnosticSourceLines);
+            shown++;
+        }
     }
 
     if (diagnostics.Count() > shown) {
@@ -3484,6 +3488,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
         return outcome;
     }
 
+    parser.DiagnoseShadowing();
+
     bool isModule = (context.ast.pipelines.count == 0 && context.ast.modules.count > 0);
 
     if (!isModule && context.root.IsValid()) {
@@ -3533,6 +3539,7 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
             outcome.json = BuildDiagnosticsJson(config, diagnostics, true,
                                                 nullptr, nullptr, includeJsonHeader);
         } else {
+            PrintDiagnosticsText(config, diagnostics, &stream, &sourceLines);
             printf("Module '%s' parsed successfully.\n", baseName.c_str());
             printf("Note: Modules define reusable functions/structs but have no shaders to compile.\n");
             printf("To compile shaders, use a pipeline file that imports this module.\n");

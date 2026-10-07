@@ -1620,7 +1620,7 @@ return ASTFactory::MakeForCollection(ast, firstPart, rangeStart, body, isEval, l
         // length lookup below.)
         SourceLocation loc = getLocation(stream->GetOffset(previous));
         std::string varName = "it";
-        NodeRef iteratorVar = ASTFactory::MakeIdentifier(ast, varName, loc.line, loc.column);
+        NodeRef iteratorVar = ASTFactory::MakeIdentifier(ast, varName);
 
         Consume(TokenType::RIGHT_PAREN, "Expected ')'");
         Consume(TokenType::LEFT_BRACE, "Expected '{' after for");
