@@ -319,6 +319,104 @@ class AstJsonTests(unittest.TestCase):
         self.assert_edge(data, identifiers[1]['id'], 'FUNCTION:1/parameter:0', 'read')
         self.assert_edge(data, identifiers[2]['id'], 'VARIABLE_DECL:0', 'read')
 
+    def test_struct_self_field_and_method_references(self):
+        data = self.parse("""
+            module Self {
+                struct Light {
+                    float intensity;
+                    float3 color;
+                    twice :: () -> float { return intensity * 2.0; }
+                    scaled :: (float k) -> float {
+                        float a = intensity * k;
+                        float b = self.intensity * k;
+                        float c = self.color.x;
+                        float d = self.twice();
+                        return a + b + c + d;
+                    }
+                }
+                consume :: (Light l) -> float { return l.intensity + l.twice(); }
+            }
+        """)
+        structure = self.nodes(data, 'STRUCT_DECL', 'Light')[0]
+        fields = {field['name']: field['id'] for field in structure['fields']}
+        for node in self.nodes(data, 'IDENTIFIER', 'intensity'):
+            self.assert_edge(data, node['id'], fields['intensity'], 'read')
+        for node in self.nodes(data, 'MEMBER_ACCESS'):
+            if node['member'] in fields:
+                self.assert_edge(data, node['id'], fields[node['member']], 'member')
+            else:  # Swizzles have no declaration target.
+                self.assertFalse(any(e['from'] == node['id'] for e in self.edges(data)))
+        method = self.nodes(data, 'FUNCTION', 'twice')[0]
+        for call in self.nodes(data, 'FUNCTION_CALL', 'twice'):
+            self.assert_edge(data, call['id'], method['id'], 'call')
+        receivers = self.nodes(data, 'IDENTIFIER', 'self')
+        self.assertEqual(len(receivers), 3)
+        for receiver in receivers:
+            self.assert_edge(data, receiver['id'], structure['id'], 'type')
+
+    def test_struct_self_bypasses_parameter_and_local_shadowing(self):
+        data = self.parse("""
+            module M {
+                struct Box {
+                    float size;
+                    parameter :: (float size) -> float {
+                        self.size = size;
+                        return self.size;
+                    }
+                    local :: () -> float {
+                        float size = 3.0;
+                        self.size = size;
+                        return self.size;
+                    }
+                }
+            }
+        """)
+        structure = self.nodes(data, 'STRUCT_DECL', 'Box')[0]
+        field = structure['fields'][0]
+        members = self.nodes(data, 'MEMBER_ACCESS')
+        self.assertEqual(len(members), 4)
+        for member, role in zip(members, ['write', 'member', 'write', 'member']):
+            self.assert_edge(data, member['id'], field['id'], role)
+        parameter = self.nodes(data, 'FUNCTION', 'parameter')[0]['parameters'][0]
+        local = self.nodes(data, 'VARIABLE_DECL', 'size')[0]
+        for node, target in zip(self.nodes(data, 'IDENTIFIER', 'size'), [parameter, local]):
+            self.assert_edge(data, node['id'], target['id'], 'read')
+
+    def test_struct_self_uses_enclosing_struct_in_modules_and_pipelines(self):
+        data = self.parse("""
+            module A {
+                struct Box {
+                    float size;
+                    value :: () -> float { return self.size; }
+                    run :: () -> float { return self.value(); }
+                }
+            }
+            module B {
+                struct Box {
+                    int size;
+                    value :: () -> int { return self.size; }
+                    run :: () -> int { return self.value(); }
+                }
+            }
+            pipeline P {
+                struct Box {
+                    float3 size;
+                    value :: () -> float3 { return self.size; }
+                    run :: () -> float3 { return self.value(); }
+                }
+            }
+        """)
+        structures = self.nodes(data, 'STRUCT_DECL', 'Box')
+        members = self.nodes(data, 'MEMBER_ACCESS')
+        calls = self.nodes(data, 'FUNCTION_CALL', 'value')
+        self.assertEqual((len(structures), len(members), len(calls)), (3, 3, 3))
+        for structure, member, call in zip(structures, members, calls):
+            self.assert_edge(data, member['id'], structure['fields'][0]['id'], 'member')
+            method = next(m for m in structure['methods'] if m['name'] == 'value')
+            self.assert_edge(data, call['id'], method['id'], 'call')
+            for receiver in self.nodes({'modules': [structure], 'pipelines': []}, 'IDENTIFIER', 'self'):
+                self.assert_edge(data, receiver['id'], structure['id'], 'type')
+
     def test_qualified_call_serializes_qualifier(self):
         data = self.parse('''
             module Mod { helper :: () -> float { return 1.0; } }

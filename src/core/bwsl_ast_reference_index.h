@@ -1555,9 +1555,11 @@ private:
             case ASTNodeType::IDENTIFIER: {
                 const IdentifierData& identifier = ast_.GetIdentifier(ref);
                 if (identifier.identifierKind != SpecialIdentifier::NONE) {
-                    if (errors_ && identifier.identifierKind == SpecialIdentifier::SELF) {
+                    if (identifier.identifierKind == SpecialIdentifier::SELF) {
+                        // Receiver typing is needed by AST export as well as validation.
                         for (const auto& owner : VisibleScopes(CurrentOwner())) {
                             if (owner.rfind("STRUCT_DECL:", 0) == 0 || owner.rfind("ENUM_DECL:", 0) == 0) {
+                                AddReference(NodeId(ref), owner, "type");
                                 return {owner, {}};
                             }
                         }

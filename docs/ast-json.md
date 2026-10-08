@@ -140,7 +140,11 @@ imports. Locals do not escape their functions. A module qualifier or method
 receiver restricts lookup to that declaration's scope. Struct identities are
 preserved through parameters, variables, fields, and function returns even
 when different modules declare the same short name. Bare field names in methods
-respect local and parameter shadowing.
+respect local and parameter shadowing. Explicit `self` receivers resolve to
+the enclosing struct even when a local or parameter shadows a field name.
+`self.field` has a `member` edge (or `write` when assigned), and
+`self.method()` has a `call` edge, just like accesses through a typed variable.
+Each `self` identifier also has a `type` edge to its enclosing declaration.
 
 Stage-interface symbols take their `type` from the first value assigned to
 them. Intrinsic calls are typed from the standard-library table: a fixed
