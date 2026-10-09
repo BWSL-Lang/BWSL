@@ -130,6 +130,30 @@ class NameValidationTests(unittest.TestCase):
         }''')
         self.assert_keyword_error(data, 'inputs', 'variable')
 
+    def test_keyword_foreach_iterator_name_recovers(self):
+        data = self.compile('''module M {
+            shade :: () -> float {
+                foreach (inputs in 0..2) {}
+                return 1.0;
+            }
+            later :: () -> float { return 2.0; }
+        }''')
+        self.assert_keyword_error(data, 'inputs', 'variable')
+
+    def test_keyword_foreach_iterators_recover_references_and_clauses(self):
+        for keyword in ('inputs', 'outputs', 'resources', 'attributes', 'variants', 'pass'):
+            for modifier in ('', 'eval '):
+                with self.subTest(keyword=keyword, modifier=modifier):
+                    data = self.compile('''module M {
+                        shade :: () -> float {
+                            MODIFIERforeach (i in 0..2, KEYWORD in i..=2 by 1) {
+                                float value = float(KEYWORD);
+                            }
+                            return 1.0;
+                        }
+                    }'''.replace('MODIFIER', modifier).replace('KEYWORD', keyword))
+                    self.assert_keyword_error(data, keyword, 'variable')
+
     def test_keyword_names_report_each_declaration(self):
         data = self.compile('''module M {
             struct Payload { float inputs; float outputs; }

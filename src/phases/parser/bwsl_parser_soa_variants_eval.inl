@@ -1434,7 +1434,7 @@ NodeRef Parser::ParseForStatement(bool isEval) {
             SymbolTable::EnterScope(&symbolTable);
             scopesToExit++;
 
-            Consume(TokenType::IDENTIFIER, "Expected iterator variable in foreach");
+            ConsumeDeclarationName("variable", "Expected iterator variable in foreach");
             std::string varName(stream->GetValue(previous));
             SourceLocation loc = getLocation(stream->GetOffset(previous));
 
