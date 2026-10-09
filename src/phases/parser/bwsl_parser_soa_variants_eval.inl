@@ -1511,7 +1511,7 @@ NodeRef Parser::ParseForStatement(bool isEval) {
                 typeStr += "^";
             }
 
-            Consume(TokenType::IDENTIFIER, "Expected variable name in for loop init");
+            ConsumeDeclarationName("variable", "Expected variable name in for loop init");
             std::string varName(stream->GetValue(previous));
             const SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
 

@@ -892,6 +892,36 @@ bool Parser::Consume(TokenType type, const char* message) {
     return false;
 }
 
+bool Parser::IsKeywordNameToken(TokenType type) {
+    // Word tokens are split around operators/delimiters in the token enum.
+    return type <= TokenType::CONSTRAINT || type == TokenType::AS ||
+           (type >= TokenType::IF && type <= TokenType::CONFLICT) ||
+           (type >= TokenType::DEFAULT && type < TokenType::TOKEN_COUNT);
+}
+
+bool Parser::ConsumeDeclarationName(const char* role, const char* message) {
+    if (Match(TokenType::IDENTIFIER)) return true;
+    if (!IsKeywordNameToken(CurrentTokenType())) {
+        ErrorAtCurrent(message);
+        return false;
+    }
+
+    const bool wasInPanicMode = panicMode;
+    ErrorAtCurrent("'" + std::string(CurrentValue()) +
+                   "' is a keyword and cannot be used as a " + role + " name");
+    recoveredKeywordNames.insert(CurrentTokenType());
+    // Consuming the bad name keeps parameter lists and enclosing braces intact.
+    // This error is fully recovered, so later declarations can report errors.
+    panicMode = wasInPanicMode;
+    Advance();
+    return true;
+}
+
+bool Parser::CheckRecoveredKeywordName() const {
+    return !recoveredKeywordNames.empty() &&
+           recoveredKeywordNames.count(CurrentTokenType()) != 0;
+}
+
 void Parser::MarkNodeEndAtToken(NodeRef node, TokenRef token) {
     if (!node.IsValid() || token == INVALID_TOKEN) return;
     SourceLocation loc = getLocation(stream->GetOffset(token));
