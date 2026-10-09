@@ -121,7 +121,7 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
         Consume(TokenType::RIGHT_BRACKET, "Expected ']' after array size");
         arrayDims.push_back(dimSize);
     }
-    Consume(TokenType::IDENTIFIER, "Expected array variable name");
+    ConsumeDeclarationName("variable", "Expected array variable name");
 
     SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
     std::string varName(stream->GetValue(previous));
@@ -1313,7 +1313,7 @@ NodeRef Parser::ParseStruct() {
             arraySize = ParseFieldArraySize();
         }
 
-        Consume(TokenType::IDENTIFIER, "Expected field name");
+        ConsumeDeclarationName("field", "Expected field name");
         SourceLocation fieldNameLoc = getLocation(stream->GetOffset(previous));
         std::string fieldNameStr(stream->GetValue(previous));
 

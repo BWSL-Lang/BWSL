@@ -417,6 +417,15 @@ NodeRef Parser::ParsePrimary() {
     u32 line = loc.line;
     u32 col = loc.column;
 
+    // After rejecting a keyword declaration, parse references to that spelling
+    // as identifiers to keep the surrounding expression and braces intact.
+    // This only affects invalid programs; the declaration error remains fatal.
+    if (CheckRecoveredKeywordName()) {
+        std::string name(CurrentValue());
+        Advance();
+        return ASTFactory::MakeIdentifier(ast, name, line, col);
+    }
+
     // Type constructor check
     if (CheckMask(TokenMasks::CORE_TYPES)) {
         TokenRef next = PeekNext();
@@ -763,7 +772,11 @@ NodeRef Parser::ParseMemberAccess(NodeRef object) {
     }
 
     SourceLocation loc = getLocation(stream->GetOffset(previous));
-    Consume(TokenType::IDENTIFIER, "Expected member name after '.'");
+    if (CheckRecoveredKeywordName()) {
+        Advance();
+    } else {
+        Consume(TokenType::IDENTIFIER, "Expected member name after '.'");
+    }
     ArenaString memberName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
     SourceLocation memberLoc = getLocation(stream->GetOffset(previous));
 

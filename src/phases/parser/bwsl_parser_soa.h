@@ -266,6 +266,7 @@ struct Parser {
         has3TokenLookahead = false;
         multiDimArrayDims.clear();
         resourceTypeSites.clear();
+        recoveredKeywordNames.clear();
         evalBindings.clear();
         evalBindingScopeStarts.clear();
         activeVariantBindings.clear();
@@ -339,6 +340,12 @@ private:
     bool Check(TokenType type) const { return stream->GetType(current) == type; }
     bool Match(TokenType type);
     bool Consume(TokenType type, const char* message);
+    static bool IsKeywordNameToken(TokenType type);
+    bool ConsumeDeclarationName(const char* role, const char* message);
+    bool CheckRecoveredKeywordName() const;
+    // Only populated after rejecting a declaration. References to those names
+    // can then be parsed without cascading errors; compilation still fails.
+    std::unordered_set<TokenType> recoveredKeywordNames;
     void MarkNodeEndAtToken(NodeRef node, TokenRef token);
     void MarkNodeEndAtPreviousToken(NodeRef node);
     void Synchronize();

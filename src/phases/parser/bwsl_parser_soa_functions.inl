@@ -1152,9 +1152,9 @@ void Parser::ParseFunctionParameters(NodeRef function) {
         SourceLocation typeLoc = getLocation(stream->GetOffset(current));
 
         // Both Type name and name: Type share the same type/suffix parser.
-        if (Check(TokenType::IDENTIFIER) &&
+        if ((Check(TokenType::IDENTIFIER) || IsKeywordNameToken(CurrentTokenType())) &&
             stream->GetType(PeekNext()) == TokenType::COLON) {
-            Advance();
+            ConsumeDeclarationName("parameter", "Expected parameter name");
             paramName = std::string(stream->GetValue(previous));
             positions.namePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
             Advance(); // ':'
@@ -1194,7 +1194,9 @@ void Parser::ParseFunctionParameters(NodeRef function) {
             totalSize *= size;
             arraySizes.Push(arena, size);
         }
-        if (paramName.empty() && Match(TokenType::IDENTIFIER)) {
+        if (paramName.empty() &&
+            (Check(TokenType::IDENTIFIER) || IsKeywordNameToken(CurrentTokenType()))) {
+            ConsumeDeclarationName("parameter", "Expected parameter name");
             paramName = std::string(stream->GetValue(previous));
             const SourceLocation loc = getLocation(stream->GetOffset(previous));
             positions.namePosition = AST::PackPosition(loc.line, loc.column);

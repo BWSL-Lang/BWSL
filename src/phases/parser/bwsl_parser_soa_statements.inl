@@ -240,7 +240,7 @@ NodeRef Parser::ParseStatement() {
             typeStr += "^";
         }
 
-        Consume(TokenType::IDENTIFIER, "Expected variable name");
+        ConsumeDeclarationName("variable", "Expected variable name");
         SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
         std::string varName = std::string(stream->GetValue(previous));
 
@@ -376,7 +376,9 @@ NodeRef Parser::ParseStatement() {
             NodeRef call = ParseExpression();
             if (call.IsValid()) Consume(TokenType::SEMICOLON, "Expected ';' after function call");
             return call;
-        } else if (stream->GetType(next) == TokenType::IDENTIFIER) {
+        } else if (stream->GetType(next) == TokenType::IDENTIFIER ||
+                   (IsKeywordNameToken(stream->GetType(next)) &&
+                    ResolveType(std::string(CurrentValue())).coreType != CoreType::INVALID)) {
             // Could be custom type variable declaration: TypeName varName;
             return ParseCustomTypeVarDecl();
         } else if (stream->GetType(next) == TokenType::LEFT_BRACKET) {
@@ -402,7 +404,8 @@ NodeRef Parser::ParseStatement() {
                 }
             }
             if (probe < stream->Count() &&
-                stream->GetType(probe) == TokenType::IDENTIFIER) {
+                (stream->GetType(probe) == TokenType::IDENTIFIER ||
+                 IsKeywordNameToken(stream->GetType(probe)))) {
                 return ParseCustomTypeVarDecl();
             }
         } else if (stream->GetType(next) == TokenType::DOUBLE_COLON) {
@@ -418,7 +421,9 @@ NodeRef Parser::ParseStatement() {
             while (probe < stream->Count() && stream->GetType(probe) == TokenType::BITWISE_XOR) {
                 probe++;
             }
-            if (probe < stream->Count() && stream->GetType(probe) == TokenType::IDENTIFIER) {
+            if (probe < stream->Count() &&
+                (stream->GetType(probe) == TokenType::IDENTIFIER ||
+                 IsKeywordNameToken(stream->GetType(probe)))) {
                 TokenRef afterName = probe + 1;
                 if (afterName < stream->Count() &&
                     (stream->GetType(afterName) == TokenType::ASSIGN ||
@@ -474,7 +479,7 @@ NodeRef Parser::ParseStatement() {
             return arrayDecl;
         }
 
-        Consume(TokenType::IDENTIFIER, "Expected variable name");
+        ConsumeDeclarationName("variable", "Expected variable name");
         SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
         std::string varName(stream->GetValue(previous));
 
@@ -592,7 +597,7 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
     }
 
     // Now expect variable name
-    Consume(TokenType::IDENTIFIER, "Expected variable name");
+    ConsumeDeclarationName("variable", "Expected variable name");
     SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
     std::string varName(stream->GetValue(previous));
 

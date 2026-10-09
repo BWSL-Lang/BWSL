@@ -280,7 +280,7 @@ ERROR_CASE_TESTS = {
     "mutual_recursion.bwsl": "recursion is not supported",
     "derivative_in_vertex_stage.bwsl": "Intrinsic not available in this shader stage",
     "pipeline_scope_mutable_var.bwsl": "Expected 'import', 'using', 'attributes', 'resources'",
-    "keyword_as_variable_name.bwsl": "Expected variable name",
+    "keyword_as_variable_name.bwsl": "'pass' is a keyword and cannot be used as a variable name",
     "overload_no_viable_match.bwsl": "Function not found: pickone",
     "swizzle_component_out_of_range.bwsl": "SPIR-V validation failed",
     "ternary_branch_type_mismatch.bwsl": "SPIR-V validation failed",

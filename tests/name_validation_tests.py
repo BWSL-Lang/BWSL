@@ -12,7 +12,7 @@ COMPILER = ROOT / "build/bwslc"
 
 
 class NameValidationTests(unittest.TestCase):
-    def compile(self, source, dependencies=None, flags=("-check",)):
+    def compile(self, source, dependencies=None, flags=("-check",), validate_tokens=True):
         with tempfile.TemporaryDirectory(prefix="bwsl-names-") as directory:
             folder = Path(directory)
             sources = {"main.bwsl": source, **(dependencies or {})}
@@ -36,7 +36,8 @@ class NameValidationTests(unittest.TestCase):
                 self.assertEqual(error["endLine"], error["line"], error)
                 token = line[error["column"] - 1:error["endColumn"] - 1]
                 self.assertTrue(token, error)
-                self.assertIn(token, error["message"], error)
+                if validate_tokens:
+                    self.assertIn(token, error["message"], error)
                 error["sourceToken"] = token
             return data
 
@@ -61,6 +62,111 @@ class NameValidationTests(unittest.TestCase):
             self.assertIn(' shadows ', note['message'])
             self.assertIn(' declared at ', note['message'])
         return notes
+
+    def assert_keyword_error(self, data, keyword, role):
+        self.assert_errors(data, [keyword])
+        self.assertEqual(data['diagnostics'][0]['message'],
+                         f"'{keyword}' is a keyword and cannot be used as a {role} name")
+
+    def test_keyword_parameter_names_recover_in_pass(self):
+        for keyword in ('inputs', 'outputs', 'resources', 'attributes', 'variants', 'pass'):
+            for parameter in (f'FragmentInputs {keyword}', f'{keyword}: FragmentInputs'):
+                with self.subTest(keyword=keyword, parameter=parameter):
+                    data = self.compile('''pipeline Pass {
+                        attributes { position: float4 }
+                        struct FragmentInputs { float4 color; }
+                        pass "Main" {
+                            use attributes { position }
+                            outputs { color: float4 }
+                            shade :: (PARAMETER, float k) -> float4 {
+                                return KEYWORD.color * k;
+                            }
+                            vertex { output.pos = attributes.position; output.color = attributes.position; }
+                            fragment {
+                                FragmentInputs fragmentInputs;
+                                fragmentInputs.color = input.color;
+                                output.color = shade(fragmentInputs, 2.0);
+                            }
+                        }
+                    }'''.replace('PARAMETER', parameter).replace('KEYWORD', keyword))
+                    self.assert_keyword_error(data, keyword, 'parameter')
+                    error = data['diagnostics'][0]
+                    self.assertEqual(error['line'], 7)
+                    self.assertEqual(error['column'], 29 + len('shade :: (') + parameter.index(keyword))
+
+    def test_keyword_local_names_recover(self):
+        for declaration, value in (('float inputs = k;', 'inputs'),
+                                   ('const float inputs = 2.0;', 'inputs'),
+                                   ('float[2] inputs = {k, k};', 'inputs[0]'),
+                                   ('Payload inputs;', 'inputs.color'),
+                                   ('Payload[2] inputs;', 'inputs[0].color'),
+                                   ('Payload^ inputs;', 'k')):
+            with self.subTest(declaration=declaration):
+                data = self.compile('''module M {
+                    struct Payload { float color; }
+                    shade :: (float k) -> float {
+                        DECLARATION
+                        return VALUE;
+                    }
+                    later :: () -> float { return 1.0; }
+                }'''.replace('DECLARATION', declaration).replace('VALUE', value))
+                self.assert_keyword_error(data, 'inputs', 'variable')
+
+    def test_keyword_field_names_recover_through_member_access(self):
+        for keyword in ('inputs', 'outputs', 'resources', 'attributes', 'variants', 'pass'):
+            with self.subTest(keyword=keyword):
+                data = self.compile('''module M {
+                    struct Payload { float KEYWORD; float valid; }
+                    shade :: (Payload value) -> float { return value.KEYWORD + value.valid; }
+                }'''.replace('KEYWORD', keyword))
+                self.assert_keyword_error(data, keyword, 'field')
+
+    def test_keyword_for_loop_variable_name_recovers(self):
+        data = self.compile('''module M {
+            shade :: () -> float {
+                for (int inputs = 0; inputs < 2; inputs++) {}
+                return 1.0;
+            }
+        }''')
+        self.assert_keyword_error(data, 'inputs', 'variable')
+
+    def test_keyword_names_report_each_declaration(self):
+        data = self.compile('''module M {
+            struct Payload { float inputs; float outputs; }
+            shade :: (float inputs, float outputs) -> float {
+                float pass = inputs + outputs;
+                return pass;
+            }
+        }''')
+        self.assert_errors(data, ['inputs', 'outputs', 'inputs', 'outputs', 'pass'])
+        self.assertEqual([d['message'].split(' as a ')[1] for d in data['diagnostics']],
+                         ['field name', 'field name', 'parameter name', 'parameter name', 'variable name'])
+
+    def test_type_and_control_keywords_are_identified_as_names(self):
+        for keyword in ('float', 'enum', 'as', 'double', 'using', 'return'):
+            for parameter in (f'float {keyword}', f'{keyword}: float'):
+                with self.subTest(parameter=parameter):
+                    data = self.compile(f'module M {{ f :: ({parameter}) -> float {{ return 1.0; }} }}')
+                    self.assert_keyword_error(data, keyword, 'parameter')
+
+    def test_keyword_recovery_keeps_other_errors_visible(self):
+        data = self.compile('''module M {
+            f :: (float inputs) -> float { return inputs; }
+            broken :: () -> float { return 1.0 }
+        }''', validate_tokens=False)
+        self.assertFalse(data['success'], data)
+        self.assertEqual(data['errorCount'], 2, data)
+        self.assertIn("'inputs' is a keyword", data['diagnostics'][0]['message'])
+        self.assertIn("Expected ';'", data['diagnostics'][1]['message'])
+
+    def test_ordinary_and_unnamed_parameters_remain_valid(self):
+        data = self.compile('''module M {
+            struct Payload { float inputsValue; float range; }
+            f :: (Payload inputsValue, float) -> float { return inputsValue.inputsValue; }
+            g :: (inputsValue: Payload) -> float { return inputsValue.range; }
+            h :: (float range, float it) -> float { return range + it; }
+        }''')
+        self.assertTrue(data['success'], data)
 
     def test_nested_shadowing_reports_nearest_declaration_once(self):
         data = self.compile('''module M {
