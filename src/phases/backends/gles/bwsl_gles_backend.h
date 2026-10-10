@@ -248,7 +248,55 @@ struct RegInfo {
     u8 flags;
     // Uniform-array pointer definition + 1; zero denotes an ordinary value.
     u32 uniformPointerInstruction;
+    // Definition + 1 of a pointer into a local struct variable
+    // (OP_LOCAL_FIELD_PTR / OP_LOCAL_INDEX_PTR); zero for other registers.
+    // It is emitted as the access path itself, e.g. `r3.items[r7].kind`.
+    u32 localPointerInstruction;
 };
+
+// Whether the direct emitter can express the program's local pointers: field
+// and element pointers into a local struct variable, used directly by loads,
+// stores and further field/element pointers. A pointer to a whole variable
+// (`^var`) or a pointer that is copied (assigned, passed, merged in a phi)
+// needs the SPIR-V path, which tracks its target at run time.
+inline bool SupportsLocalPointers(const IR::IRProgram& program) {
+    auto isAccessPointer = [&](u16 reg) {
+        if (reg >= program.registerCount) return false;
+        for (u32 i = 0; i < program.instructionCount; i++) {
+            u16 op = program.opcodes[i];
+            if ((op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_LOCAL_INDEX_PTR) &&
+                program.destinations[i] == reg)
+                return true;
+        }
+        return false;
+    };
+    for (u32 i = 0; i < program.instructionCount; i++) {
+        u16 op = program.opcodes[i];
+        if (op == IR::OP_LOCAL_VAR_PTR) return false;
+        bool usesPointerOperand = op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_LOCAL_INDEX_PTR ||
+                                  op == IR::OP_LOCAL_LOAD || op == IR::OP_LOCAL_STORE;
+        for (u32 operand = 0; operand < 4; operand++) {
+            u16 reg = program.GetOperand(i, operand);
+            if (reg >= program.registerCount || !program.registerStorageInfo ||
+                !(program.registerStorageInfo[reg] & IR::IRProgram::STORAGE_IS_FIELD_PTR))
+                continue;
+            // A field/element pointer may only be the address operand.
+            if (!usesPointerOperand || operand != 0) return false;
+        }
+        if ((op == IR::OP_LOCAL_LOAD || op == IR::OP_LOCAL_STORE) &&
+            !isAccessPointer(program.GetOperand(i, 0)))
+            return false;
+    }
+    for (u32 phi = 0; phi < program.phiCount; phi++) {
+        for (u32 i = 0; i < program.GetPhiOperandCount(phi); i++) {
+            u16 reg = program.GetPhiOperandValue(phi, i);
+            if (reg < program.registerCount && program.registerStorageInfo &&
+                (program.registerStorageInfo[reg] & IR::IRProgram::STORAGE_IS_PTR))
+                return false;
+        }
+    }
+    return true;
+}
 
 static constexpr u8 REG_DECLARED = 0x01;
 
@@ -324,6 +372,8 @@ struct GLESBuilder {
             u16 dest = ir->destinations[i];
             if (dest >= regCount) continue;
             u16 opcode = ir->opcodes[i];
+            if (opcode == IR::OP_LOCAL_FIELD_PTR || opcode == IR::OP_LOCAL_INDEX_PTR)
+                regInfo[dest].localPointerInstruction = i + 1;
             if (opcode != IR::OP_LOAD_UNIFORM && opcode != IR::OP_STORAGE_INDEX &&
                 opcode != IR::OP_STORAGE_FIELD) continue;
             u16 base = ir->GetOperand(i, 0);

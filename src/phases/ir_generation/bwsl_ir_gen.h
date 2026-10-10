@@ -516,6 +516,9 @@ enum OpCode : u16 {
     OP_LOCAL_FIELD_PTR = 0xDC,  // Get pointer to struct field in a local: dest = ^base.field
                                 // (operand0=base_struct_reg, operand1=field_index,
                                 //  metadata=structTypeHash)
+    OP_LOCAL_INDEX_PTR = 0xDD,  // Get pointer to an element of an array field of a local
+                                // struct: dest = ^base[index] (operand0=pointer to the
+                                // array field, operand1=index register)
 
     // ========== Atomics ==========
     OP_ATOMIC_ADD      = 0xE0,

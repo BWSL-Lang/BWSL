@@ -579,6 +579,13 @@ STAGE_SUFFIXES = ("vert", "frag", "comp")
 KNOWN_TEST_STEMS: set[str] = set()
 
 TRANSLATION_EXPECTATION_TESTS = {
+    "struct_in_place_mutation": {
+        "frag": {
+            "ir_contains": ["LOCAL_INDEX_PTR", "LOCAL_STORE"],
+            "ir_not_contains": ["STRUCT_ARRAY_INSERT", "STRUCT_ARRAY_EXTRACT"],
+            "spirv_not_contains": ["OpPhi %State", "OpPhi %Item"],
+        },
+    },
     "uniform_struct_dynamic_index": {
         "frag": {
             "spirv_contains": ["OpAccessChain %_ptr_Uniform_v4float", "OpAccessChain %_ptr_Uniform_mat4v4float"],

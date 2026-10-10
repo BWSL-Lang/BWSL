@@ -299,6 +299,7 @@ struct SPIRVBuilder {
 
     // Struct type management
     u32 GetStructTypeId(u32 structTypeHash);  // Get or create SPIR-V struct type from IR struct info
+    u32 GetStructMemberTypeId(u32 structTypeHash, u32 fieldIndex);
 
     // Texture type management
     u32 GetImageTypeId();               // Get OpTypeImage ID for 2D sampled texture

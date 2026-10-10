@@ -717,7 +717,8 @@ void GLESBuilder::EmitControlFlow() {
     // Registers must survive loop edges and both arms of a selection.
     for (u32 reg = 0; reg < regCount; ++reg) {
         if ((regInfo[reg].flags & REG_DECLARED) ||
-            regInfo[reg].uniformPointerInstruction) continue;
+            regInfo[reg].uniformPointerInstruction ||
+            regInfo[reg].localPointerInstruction) continue;
         u16 type = ir->registerTypes ? ir->registerTypes[reg] : 0;
         if (type == 0 || type == static_cast<u16>(CoreType::VOID)) continue;
         out.NL(indent); EmitRegWithDecl(static_cast<u16>(reg)); out.Chr(';');
@@ -766,6 +767,17 @@ void GLESBuilder::EmitUndefDeclarations() {
         regInfo[reg].flags |= REG_DECLARED;
         
         out.NL(indent);
+        if (type == static_cast<u16>(CoreType::CUSTOM) ||
+            type == static_cast<u16>(CoreType::ENUM)) {
+            // A struct has no scalar default; it's only a base that every
+            // field is written over (see EmitZeroStruct), so leave it
+            // uninitialized.
+            EmitRegisterType(reg);
+            out.Chr(' ');
+            EmitReg(reg);
+            out.Chr(';');
+            continue;
+        }
         EmitType(type);
         out.Chr(' ');
         EmitReg(reg);
@@ -1208,16 +1220,22 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             EmitBinaryAssign(instIdx, dest, ">=");
             return;
 
-        // ===== Bitwise =====
-        case IR::OP_AND:
-            EmitBinaryAssign(instIdx, dest, "&");
+        // ===== Bitwise (logical on bool scalars, which GLSL requires) =====
+        case IR::OP_AND: {
+            bool logical = static_cast<CoreType>(Type(instIdx)) == CoreType::BOOL;
+            EmitBinaryAssign(instIdx, dest, logical ? "&&" : "&");
             return;
-        case IR::OP_OR:
-            EmitBinaryAssign(instIdx, dest, "|");
+        }
+        case IR::OP_OR: {
+            bool logical = static_cast<CoreType>(Type(instIdx)) == CoreType::BOOL;
+            EmitBinaryAssign(instIdx, dest, logical ? "||" : "|");
             return;
-        case IR::OP_XOR:
-            EmitBinaryAssign(instIdx, dest, "^");
+        }
+        case IR::OP_XOR: {
+            bool logical = static_cast<CoreType>(Type(instIdx)) == CoreType::BOOL;
+            EmitBinaryAssign(instIdx, dest, logical ? "^^" : "^");
             return;
+        }
         case IR::OP_NOT: {
             CoreType type = static_cast<CoreType>(Type(instIdx));
             if (type == CoreType::BOOL)
@@ -2002,6 +2020,26 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             out.Lit("// Wave ops not supported in GLSL ES 300");
             return;
 
+        // ===== Local struct variables, accessed in place =====
+        case IR::OP_LOCAL_FIELD_PTR:
+        case IR::OP_LOCAL_INDEX_PTR:
+            // Emitted where used, as an access path (see EmitExpr).
+            return;
+
+        case IR::OP_LOCAL_LOAD:
+            EmitRegWithDecl(dest);
+            out.Lit(" = ");
+            EmitExpr(Op(instIdx, 0));
+            out.Chr(';');
+            return;
+
+        case IR::OP_LOCAL_STORE:
+            EmitExpr(Op(instIdx, 0));
+            out.Lit(" = ");
+            EmitExpr(Op(instIdx, 1));
+            out.Chr(';');
+            return;
+
         // ===== Call (function calls - should be inlined) =====
         case IR::OP_CALL:
             out.Lit("// Function call - should be inlined");
@@ -2075,6 +2113,21 @@ void GLESBuilder::EmitExpr(u16 reg) {
         return;
     }
 
+    // A pointer into a local struct variable is its access path.
+    if (reg < regCount && regInfo[reg].localPointerInstruction) {
+        u32 instIdx = regInfo[reg].localPointerInstruction - 1;
+        EmitExpr(Op(instIdx, 0));
+        if (ir->opcodes[instIdx] == IR::OP_LOCAL_INDEX_PTR) {
+            out.Chr('[');
+            EmitExpr(Op(instIdx, 1));
+            out.Chr(']');
+        } else {
+            out.Chr('.');
+            EmitStructFieldNameByIndex(ir->metadata[instIdx], Op(instIdx, 1));
+        }
+        return;
+    }
+
     // Keep values at their defining instruction, including mutable reads and
     // values crossing loop edges. The driver can optimize the temporaries.
     EmitReg(reg);
@@ -2104,6 +2157,7 @@ void GLESBuilder::EmitLoadExpr(u32 instIdx) {
                 switch (inputIdx) {
                     case 0x80: out.Lit("uint(gl_VertexID)"); return;
                     case 0x81: out.Lit("uint(gl_InstanceID)"); return;
+                    case BuiltinInputSlot::FRAG_COORD: out.Lit("gl_FragCoord"); return;
                     case 0x90: out.Lit("gl_GlobalInvocationID"); return;
                     case 0x91: out.Lit("gl_LocalInvocationID"); return;
                     case 0x92: out.Lit("gl_WorkGroupID"); return;
@@ -2244,6 +2298,7 @@ bool GLESBuilder::EmitConstantExpr(u16 reg, u32 depth) {
     } else {
         const char* operation = nullptr;
         bool unary = false;
+        bool logical = static_cast<CoreType>(ir->types[definition]) == CoreType::BOOL;
         switch (op) {
             case IR::OP_INEG: case IR::OP_FNEG: operation = "-"; unary = true; break;
             case IR::OP_IADD: case IR::OP_FADD: operation = " + "; break;
@@ -2253,9 +2308,9 @@ bool GLESBuilder::EmitConstantExpr(u16 reg, u32 depth) {
             case IR::OP_IMOD: operation = " % "; break;
             case IR::OP_SHL: operation = " << "; break;
             case IR::OP_SHR: case IR::OP_ASR: operation = " >> "; break;
-            case IR::OP_AND: operation = " & "; break;
-            case IR::OP_OR: operation = " | "; break;
-            case IR::OP_XOR: operation = " ^ "; break;
+            case IR::OP_AND: operation = logical ? " && " : " & "; break;
+            case IR::OP_OR: operation = logical ? " || " : " | "; break;
+            case IR::OP_XOR: operation = logical ? " ^^ " : " ^ "; break;
             case IR::OP_NOT: operation = "~"; unary = true; break;
             default: break;
         }

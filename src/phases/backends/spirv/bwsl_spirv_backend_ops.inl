@@ -4744,8 +4744,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u16 dest_reg = ir->destinations[ir_idx];
     u32 struct_type_hash = ir->metadata[ir_idx];
 
-    // Ensure the base struct OpVariable holds the current SSA value so the
-    // subsequent access chain sees the same data that register code sees.
+    // The base register is address-taken, so every write to it is already
+    // stored into its OpVariable (see writesAddressTaken): the access chain
+    // works on the variable in place, without a snapshot copy.
     bool nestedPointer = ir->registerStorageInfo && base_reg < ir->registerCount &&
         (ir->registerStorageInfo[base_reg] & IR::IRProgram::STORAGE_IS_FIELD_PTR);
     u32 var_id = nestedPointer ? GetSpirvId(base_reg)
@@ -4756,10 +4757,6 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
               "base reg %u\n",
               base_reg);
       break;
-    }
-    u32 base_val_id = nestedPointer ? 0 : GetSpirvId(base_reg);
-    if (base_val_id != 0) {
-      Emit(spv::OpStore, var_id, base_val_id);
     }
 
     // Resolve the field's SPIR-V type.
@@ -4781,8 +4778,11 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         }
       }
     }
-    u32 field_type_id = 0;
-    if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
+    // Use the member type the struct declares: for an array field that's the
+    // struct's own OpTypeArray, not the element type.
+    u32 field_type_id = GetStructMemberTypeId(struct_type_hash, field_idx);
+    if (field_type_id == 0 &&
+        (fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
         fieldStructHash != 0) {
       field_type_id = GetStructTypeId(fieldStructHash);
     }
@@ -4800,6 +4800,18 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     if (dest_reg < idCapacity) {
       spirvIds[dest_reg] = dest;
     }
+    break;
+  }
+
+  case IR::OP_LOCAL_INDEX_PTR: {
+    // dest = &base[index], where base points to an array field of a local
+    // struct. The element type is the pointee recorded on dest.
+    u16 base_reg = ir->GetOperand(ir_idx, 0);
+    u16 index_reg = ir->GetOperand(ir_idx, 1);
+    u32 element_type_id = LocalPointerValueType(resultReg);
+    Emit(spv::OpAccessChain,
+         GetPointerTypeId(element_type_id, spv::StorageClassFunction), dest,
+         GetSpirvId(base_reg), GetSpirvId(index_reg));
     break;
   }
 
