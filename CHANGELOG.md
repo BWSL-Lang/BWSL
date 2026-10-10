@@ -37,6 +37,11 @@
 - Vertex attributes beyond the supported 16 slots produce a source error.
 - `.length` works on local arrays and array function parameters. It was
   previously rejected as an invalid swizzle.
+- `min` and `max` with more than two arguments reduce over all of them, up
+  to 16. Previously only the first two were used and the rest were
+  silently dropped. More than 16 arguments is a source error.
+- `min` and `max` with both float and integer (or bool) arguments produce a
+  source error. Previously they failed SPIR-V validation.
 
 ### Backends
 - Struct locals are updated in place. Writing a field or an array element of
@@ -72,6 +77,10 @@
   with both source locations. Compilation still succeeds; errors and
   warnings take priority over notes in the CLI's limited text display.
 - WASM results include non-blocking notes in a `diagnostics` array.
+
+### Standard library
+- `Color::hsluvToRgb`, `rgbToHsluv`, `hpluvToRgb` and `rgbToHpluv` return
+  correct colors. They over-saturated because of the `min` bug above.
 
 ### Tooling
 - `make wasm` and `make wasm-debug` link with `em++`, so they build with
