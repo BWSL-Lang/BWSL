@@ -37,7 +37,8 @@ vertex main0_out main0(main0_in in [[stage_in]])
     }
     else
     {
-        _13 = -1.0;
+        float _34 = -1.0;
+        _13 = _34;
     }
     float _80 = 0.0;
     float _14;

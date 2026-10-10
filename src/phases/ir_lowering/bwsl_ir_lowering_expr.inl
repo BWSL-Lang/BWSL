@@ -302,6 +302,16 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
   switch (unop.op) {
   case UnaryOpType::NEGATE: {
     CoreType type = GetRegisterType(operand);
+    if (operand != 0xFFFF && IR::IsConstant(operand)) {
+      if (type == CoreType::FLOAT)
+        return builder.EmitConstant(-program.floatConstants[operand & 0x7FFF]);
+      if (type == CoreType::UINT)
+        return EmitConstantUint(0u - program.uintConstants[operand & 0x1FFF]);
+      if (type == CoreType::INT) {
+        s64 value = static_cast<s32>(program.intConstants[operand & 0x1FFF]);
+        if (value != INT32_MIN) return EmitConstantInt(static_cast<u32>(-value));
+      }
+    }
     TypeMask tmask = mask(type);
     // Matrix types are float-valued but not in FLOAT_TYPES, so test them
     // explicitly to avoid falling into the integer path (which emits
@@ -1254,6 +1264,8 @@ inline u16 IRLowering::LowerBinaryOp(NodeRef ref) {
     }
   }
 
+  u16 constant = TryFoldScalarArithmetic(op, left, right);
+  if (constant != 0xFFFF) return constant;
   builder.EmitInstruction(op, dest, left, right);
 
   // Comparison operations produce BOOL, other operations produce the operand

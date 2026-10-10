@@ -32,6 +32,7 @@ void SPIRVBuilder::Initialize(BWSL_Arena *arena, IR::IRProgram *ir,
   localVarIds = (u32 *)arena->Allocate(idCapacity * sizeof(u32), 64);
   const u32 localArrayCapacity = std::max(1u, ir->localArrayCount);
   localArrayVarIds = (u32 *)arena->Allocate(localArrayCapacity * sizeof(u32), 64);
+  localArrayTypeIds = (u32 *)arena->Allocate(localArrayCapacity * sizeof(u32), 64);
   localArrayElemPtrTypes = (u32 *)arena->Allocate(localArrayCapacity * sizeof(u32), 64);
   memset(spirvIds, 0, idCapacity * sizeof(u32));
   memset(idTypes, 0, idCapacity * sizeof(u16));
@@ -39,6 +40,7 @@ void SPIRVBuilder::Initialize(BWSL_Arena *arena, IR::IRProgram *ir,
   memset(hasPreAllocatedId, 0, idCapacity * sizeof(bool));
   memset(localVarIds, 0, idCapacity * sizeof(u32));
   memset(localArrayVarIds, 0, localArrayCapacity * sizeof(u32));
+  memset(localArrayTypeIds, 0, localArrayCapacity * sizeof(u32));
   memset(localArrayElemPtrTypes, 0, localArrayCapacity * sizeof(u32));
 
   // Initialize storage pointer element type tracking

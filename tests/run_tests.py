@@ -3481,6 +3481,11 @@ def main() -> int:
     passed += local_names_passed
     failed += local_names_failed
 
+    from array_initializer_tests import run_array_initializer_tests
+    array_passed, array_failed = run_array_initializer_tests(bwslc)
+    passed += array_passed
+    failed += array_failed
+
     from p1_regression_tests import run_p1_regression_tests
     p1_passed, p1_failed = run_p1_regression_tests(bwslc, output_dir / "p1_validation")
     passed += p1_passed

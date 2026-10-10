@@ -28,6 +28,7 @@ struct SPIRVBuilder {
     alignas(64) bool* hasPreAllocatedId; // True if register has pre-allocated ID needing definition
     alignas(64) u32* localVarIds;        // Maps IR register -> OpVariable ID (for address-taken vars)
     alignas(64) u32* localArrayVarIds;   // SPIR-V IDs for local array variables
+    alignas(64) u32* localArrayTypeIds;  // Value types for whole-array initialization
     alignas(64) u32* localArrayElemPtrTypes;  // Pointer types for local array elements
     // Rebound local pointers carry a runtime producer tag, without requiring
     // VariablePointers support in downstream GLSL/HLSL/Metal compilers.
@@ -339,6 +340,7 @@ struct SPIRVBuilder {
     
     // IR translation
     void TranslateInstruction(u32 ir_idx);
+    u32 TranslateArrayStoreSequence(u32 first, u32 end);
     u32 LocalPointerValueType(u16 reg);
     u32 LocalPointerTag(u16 reg);
     u32 LocalPointerTarget(u32 producer, u32 index = 0, u32 depth = 0);

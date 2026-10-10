@@ -11,6 +11,7 @@
 #include "core/bwsl_resource_reflection.h"
 #include "core/bwsl_symbol_table.h"
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -469,6 +470,8 @@ struct IRLowering {
   u16 EmitConstantUint(u32 value);
 
   u16 ConvertRegisterToType(u16 reg, CoreType targetType);
+  u16 TryConvertScalarConstant(u16 reg, CoreType targetType);
+  u16 TryFoldScalarArithmetic(OpCode op, u16 left, u16 right);
 
   u16 GetOrAllocateVariable(u32 nameHash);
 

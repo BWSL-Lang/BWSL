@@ -16,7 +16,7 @@ struct main0_in
 vertex main0_out main0(main0_in in [[stage_in]])
 {
     main0_out out = {};
-    float2 _47 = float2(1.0, 2.0);
+    float2 _45 = float2(1.0, 2.0);
     out.gl_Position = float4(in.a_position, 1.0);
     return out;
 }
