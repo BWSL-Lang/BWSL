@@ -197,6 +197,7 @@ static std::string BuildStageOutputFileName(const std::string& outputStem,
 }
 
 static bool CanUseDirectGLESFallback(const IRProgram& program, ShaderStage stage) {
+    if (!GLES::SupportsLocalPointers(program)) return false;
     for (u32 i = 0; i < program.instructionCount; i++) {
         IR::OpCode op = static_cast<IR::OpCode>(program.opcodes[i]);
         switch (op) {

@@ -716,25 +716,57 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       op = (mask(argType) & TypeMasks::FLOAT_TYPES) ? OP_FABS : OP_IABS;
       break;
     }
-    case Intrinsic::MIN: {
-      CoreType argType = GetRegisterType(args[0]);
-      if (mask(argType) & TypeMasks::FLOAT_TYPES)
-        op = OP_FMIN;
-      else if (mask(argType) & TypeMasks::UINT_TYPES)
-        op = OP_UMIN;
-      else
-        op = OP_IMIN;
-      break;
-    }
+    case Intrinsic::MIN:
     case Intrinsic::MAX: {
-      CoreType argType = GetRegisterType(args[0]);
-      if (mask(argType) & TypeMasks::FLOAT_TYPES)
-        op = OP_FMAX;
-      else if (mask(argType) & TypeMasks::UINT_TYPES)
-        op = OP_UMAX;
-      else
-        op = OP_IMAX;
-      break;
+        bool isMin = intrinsic == Intrinsic::MIN;
+        CoreType argType = GetRegisterType(args[0]);
+        // The opcode is picked from the first argument. The backends
+        // splat scalars and convert int/uint, but not float/integer or
+        // bool, so reject those mixes here rather than in SPIR-V
+        // validation.
+        constexpr TypeMask INTEGER_TYPES = TypeMasks::INT_TYPES | TypeMasks::UINT_TYPES;
+        auto numericKind = [&](CoreType type) {
+            if (mask(type) & TypeMasks::FLOAT_TYPES) return 1;
+            if (mask(type) & INTEGER_TYPES) return 2;
+            return 0;
+        };
+        int kind = numericKind(argType);
+        for (u32 i = 0; i < argCount; i++) {
+            CoreType type = GetRegisterType(args[i]);
+            if (numericKind(type) == 0 || numericKind(type) != kind) {
+                char msg[192];
+                snprintf(msg, sizeof(msg),
+                         "Error: '%s' argument %u is %s, but argument 1 is %s; "
+                         "use all float or all integer arguments\n",
+                         isMin ? "min" : "max", i + 1, CoreTypeToString(type),
+                         CoreTypeToString(argType));
+                if (kind == 0)
+                    snprintf(msg, sizeof(msg),
+                             "Error: '%s' argument 1 is %s; expected a float "
+                             "or integer scalar or vector\n",
+                             isMin ? "min" : "max", CoreTypeToString(argType));
+                ReportErrorAt(call.arguments[i], msg);
+                return 0;
+            }
+        }
+        if (kind == 1)
+            op = isMin ? OP_FMIN : OP_FMAX;
+        else if (mask(argType) & TypeMasks::UINT_TYPES)
+            op = isMin ? OP_UMIN : OP_UMAX;
+        else
+            op = isMin ? OP_IMIN : OP_IMAX;
+        // min/max are variadic: reduce left to right, min(a, b, c) =
+        // min(min(a, b), c). The last step is emitted below like any binary
+        // intrinsic, so clear consumed arguments out of its operand slots.
+        for (u32 i = 2; i < argCount; i++) {
+            u16 partial = AllocateRegister();
+            builder.EmitInstruction(op, partial, args[0], args[1]);
+            SetRegisterType(partial, argType);
+            args[0] = partial;
+            args[1] = args[i];
+            args[i] = 0xFFFF;
+        }
+        break;
     }
     case Intrinsic::CLAMP: {
       CoreType argType = GetRegisterType(args[0]);
@@ -1634,6 +1666,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   auto savedVariableRegisters = variableRegisters;
   auto savedVariableStructTypes = variableStructTypes;
   auto savedConstVariables = constVariables;
+  auto savedInitializedVariables = initializedVariables;
   auto savedNodeRegisters = nodeRegisters;
   u32 savedStructMethodTypeHash = currentStructMethodTypeHash;
   u16 savedStructMethodSelfReg = currentStructMethodSelfReg;
@@ -1642,6 +1675,10 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   u32 selfHash = Utils::HashStr("self");
   variableRegisters[selfHash] = receiverReg;
   variableStructTypes[selfHash] = receiverStructHash;
+  // `self` aliases the receiver, which already holds a value. Without this,
+  // the first `self.field = ...` would zero-initialize it and overwrite the
+  // receiver's other fields.
+  initializedVariables.insert(selfHash);
   if (receiverReg < MAX_REGISTERS) {
     program.registerStructTypes[receiverReg] = receiverStructHash;
   }
@@ -1659,6 +1696,8 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
     u16 paramReg = CopyArgumentValue(args[i]);
     variableRegisters[paramNameHash] = paramReg;
     constVariables.erase(paramNameHash);
+    initializedVariables.insert(paramNameHash); // holds the argument's value
+    program.registerNameHashes[paramReg] = paramNameHash; // its own variable
 
     u32 paramTypeHash = 0;
     CoreType paramType =
@@ -1716,6 +1755,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   variableRegisters = savedVariableRegisters;
   variableStructTypes = savedVariableStructTypes;
   constVariables = savedConstVariables;
+  initializedVariables = savedInitializedVariables;
   nodeRegisters = savedNodeRegisters;
   currentStructMethodTypeHash = savedStructMethodTypeHash;
   currentStructMethodSelfReg = savedStructMethodSelfReg;
@@ -1982,6 +2022,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   auto savedVariableRegisters = variableRegisters;
   auto savedVariableStructTypes = variableStructTypes;
   auto savedConstVariables = constVariables;
+  auto savedInitializedVariables = initializedVariables;
   auto savedNodeRegisters = nodeRegisters;
   u32 savedStructMethodTypeHash = currentStructMethodTypeHash;
   u16 savedStructMethodSelfReg = currentStructMethodSelfReg;
@@ -1999,6 +2040,8 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
     u16 paramReg = CopyArgumentValue(args[i]);
     variableRegisters[paramNameHash] = paramReg;
     constVariables.erase(paramNameHash);
+    initializedVariables.insert(paramNameHash); // holds the argument's value
+    program.registerNameHashes[paramReg] = paramNameHash; // its own variable
 
     // Also set the type for the parameter based on the type name
     // The second element of the pair is the type name (e.g., "uint",
@@ -2084,6 +2127,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   variableRegisters = savedVariableRegisters;
   variableStructTypes = savedVariableStructTypes;
   constVariables = savedConstVariables;
+  initializedVariables = savedInitializedVariables;
   nodeRegisters = savedNodeRegisters;
   currentStructMethodTypeHash = savedStructMethodTypeHash;
   currentStructMethodSelfReg = savedStructMethodSelfReg;

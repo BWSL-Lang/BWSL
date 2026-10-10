@@ -1,0 +1,78 @@
+// Regression (#143): struct locals keep their value in memory and are read
+// and written in place. Copies and merges must still behave like values: a
+// copy doesn't follow later writes to its source, a ternary or branch merge
+// picks the value at that point, and a by-value parameter is its own copy.
+pipeline EquivStructInPlace {
+
+    resources {
+        output: buffer<float>
+    }
+
+    struct Pair {
+        float a;
+        float b;
+    };
+
+    struct Outer {
+        Pair inner;
+        Pair[3] items;
+    };
+
+    mutate :: (Pair p) -> float {
+        p.a = 100.0;
+        return p.a + p.b;
+    }
+
+    pass "Compute" {
+        use resources { output }
+
+        compute "Main" [1, 1, 1] {
+            // 0, but not a compile-time constant.
+            float z = float(input.global_id.x);
+
+            Pair x;
+            x.a = 1.0;
+            Pair y = x;
+            x.a = 5.0;
+
+            Pair p;
+            p.a = 1.0;
+            Pair q;
+            q.a = 2.0;
+            Pair picked = z < 0.5 ? p : q;
+            Pair other = z > 0.5 ? p : q;
+            p.a = 9.0;
+
+            if (z < 0.5) {
+                x.b = 3.0;
+            } else {
+                x.b = 4.0;
+            }
+
+            Outer o;
+            o.inner.b = 7.0;
+            for (int i = 0; i < 3; i++) {
+                o.items[i].a = float(i) * 2.0;
+            }
+            for (int i = 0; i < 4; i++) {
+                o.inner.a += float(i);
+            }
+
+            Pair w;
+            w.a = 1.0;
+            w.b = 2.0;
+            float mutated = mutate(w);
+
+            resources.output[0] = y.a;
+            resources.output[1] = x.a;
+            resources.output[2] = picked.a;
+            resources.output[3] = other.a;
+            resources.output[4] = x.b;
+            resources.output[5] = o.inner.b;
+            resources.output[6] = o.items[2].a;
+            resources.output[7] = mutated;
+            resources.output[8] = w.a;
+            resources.output[9] = o.inner.a;
+        }
+    }
+}

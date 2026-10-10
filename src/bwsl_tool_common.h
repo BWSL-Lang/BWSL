@@ -234,6 +234,7 @@ inline const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_LOCAL_LOAD:      return "LOCAL_LOAD";
         case IR::OP_LOCAL_STORE:     return "LOCAL_STORE";
         case IR::OP_LOCAL_FIELD_PTR: return "LOCAL_FIELD_PTR";
+        case IR::OP_LOCAL_INDEX_PTR: return "LOCAL_INDEX_PTR";
 
         case IR::OP_BARRIER:         return "BARRIER";
         case IR::OP_MEM_FENCE:       return "MEM_FENCE";

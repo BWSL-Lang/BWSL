@@ -51,6 +51,23 @@ CASES = {
                     [v for _ in range(4) for x in (-1,-2,-3,-4) for v in [x]*4]),
     "lazy_scalar_expressions": ("int n=0;bool b=input.uv.x<0.0;bool a=b&&++n>0;bool c=b||++n>0;int r=b?++n:++n+10;output.color=float4(float(n),float(r),a?1.0:0.0,c?1.0:0.0);",
                                 [v for _ in range(4) for pixel in ([2,2,1,1],[2,2,1,1],[2,12,0,1],[2,12,0,1]) for v in pixel]),
+    # Struct locals are accessed in place (#143): element and field writes,
+    # copies that stay independent, and a mutating method in a loop.
+    "struct_in_place": (
+        "State s; for(int i=0;i<4;i++){s.items[i].kind=i%2;s.items[i].center=float2(float(i),1.0);} "
+        "s.index=-1; for(int i=1;i<4;i++){if(s.items[i].kind!=s.items[0].kind){s.index=i;s.best=s.items[i].center;}} "
+        "output.color=float4(float(s.index),s.best.x,s.best.y,float(s.items[2].kind));",
+        [3,3,1,0],
+        "struct Item { int kind; float2 center; }; struct State { Item[4] items; float2 best; int index; }; "),
+    "struct_copy_isolation": (
+        "Pair x; x.a=1.0; Pair y=x; x.a=5.0; y.b=2.0; output.color=float4(x.a,y.a,y.b,x.b);",
+        [5,1,2,0],
+        "struct Pair { float a; float b; }; "),
+    "struct_method_mutation": (
+        "Counter c; for(int i=0;i<3;i++){c.bump(float(i));} output.color=float4(float(c.n),c.total,0.0,1.0);",
+        [3,3,0,1],
+        "struct Counter { int n; float total; "
+        "bump :: (float v) -> void { self.n = self.n + 1; total += v; } }; "),
     "large_output": ("float r=input.uv.x;" + "r+=1.0;" * 1800 + "output.color=float4(r);",
                      [value for _ in range(4) for x in (-0.75,-0.25,0.25,0.75) for value in [1800+x]*4]),
 }
@@ -65,7 +82,8 @@ def run_gles_regression_tests(compiler: Path, output: Path, runner: Path | None 
         if result.returncode:
             raise AssertionError(f"{command}: exit {result.returncode}\n{result.stdout}{result.stderr}")
 
-    for name, (body, expected_pixel) in CASES.items():
+    for name, (body, expected_pixel, *extra) in CASES.items():
+        declarations = extra[0] if extra else ""
         folder = output / name
         folder.mkdir(exist_ok=True)
         source = folder / f"{name}.bwsl"
@@ -78,7 +96,7 @@ def run_gles_regression_tests(compiler: Path, output: Path, runner: Path | None 
                   "output.position=float4(uv,0.0,1.0); output.uv=uv; ") if resources else (
                   "output.position=float4(attributes.position,1.0); output.uv=attributes.position.xy; ")
         use_attributes = "" if resources else "use attributes { position } "
-        source.write_text('pipeline GLESRegression { ' + attributes + resources + 'pass "Main" { '
+        source.write_text('pipeline GLESRegression { ' + declarations + attributes + resources + 'pass "Main" { '
                           + use_resources + use_attributes + 'vertex { ' + vertex
                           + '} fragment { ' + body + ' } } }')
         try:

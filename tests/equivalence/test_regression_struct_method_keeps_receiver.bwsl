@@ -1,0 +1,57 @@
+// Regression (#143): inside an inlined mutating method, the first
+// `self.field = ...` zero-initialized `self`, which aliases the receiver, so
+// the call wiped the receiver's other fields (here `items`).
+// A struct parameter of an inlined function had the same problem.
+pipeline EquivStructMethodKeepsReceiver {
+    resources { output: buffer<float> }
+
+    struct Item {
+        int kind;
+        float2 center;
+    };
+
+    struct State {
+        Item[8] items;
+        float2 closestVec;
+        int closestIndex;
+
+        findClosest :: (float2 p) -> void {
+            float closest = 1000000.0;
+            self.closestIndex = -1;
+            for (int i = 1; i < 8; i++) {
+                if (self.items[i].kind != self.items[0].kind) {
+                    float2 d = self.items[i].center - p;
+                    float dist = length(d);
+                    if (dist < closest) {
+                        closest = dist;
+                        self.closestIndex = i;
+                        self.closestVec = d;
+                    }
+                }
+            }
+        }
+    };
+
+    kindAfterWrite :: (State st) -> float {
+        st.closestIndex = 7;
+        return float(st.items[5].kind);
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            float z = float(input.global_id.x);
+            State s;
+            for (int i = 0; i < 8; i++) {
+                s.items[i].kind = i % 3;
+                s.items[i].center = float2(float(i), float(i) + z);
+            }
+            s.findClosest(float2(4.2, 4.2));
+            resources.output[0] = float(s.closestIndex);
+            resources.output[1] = s.closestVec.x;
+            resources.output[2] = s.closestVec.y;
+            resources.output[3] = float(s.items[5].kind);
+            resources.output[4] = kindAfterWrite(s);
+        }
+    }
+}

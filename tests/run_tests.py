@@ -252,6 +252,8 @@ ERROR_CASE_TESTS = {
     "use_unknown_resource.bwsl": "Unknown resource in 'use resources'",
     "duplicate_fragment_output_name.bwsl": "Duplicate fragment output name",
     "duplicate_fragment_output_location.bwsl": "Duplicate fragment output location",
+    "min_max_too_many_arguments.bwsl": "'max' accepts at most 16 arguments, got 17",
+    "min_max_mixed_argument_types.bwsl": "'min' argument 3 is INT, but argument 1 is FLOAT",
     "gl_name_sampler_vs_texture.bwsl": "GL name 't_atlas' of sampler 't_atlas' collides with texture 'atlas'",
     "gl_name_struct_vs_attribute.bwsl": "GL name 'a_position' of struct 'a_position' collides with attribute 'position'",
     "gl_name_varying_vs_struct.bwsl": "GL name 'v_uv' of varying 'uv' collides with struct 'v_uv'",
@@ -581,6 +583,13 @@ STAGE_SUFFIXES = ("vert", "frag", "comp")
 KNOWN_TEST_STEMS: set[str] = set()
 
 TRANSLATION_EXPECTATION_TESTS = {
+    "struct_in_place_mutation": {
+        "frag": {
+            "ir_contains": ["LOCAL_INDEX_PTR", "LOCAL_STORE"],
+            "ir_not_contains": ["STRUCT_ARRAY_INSERT", "STRUCT_ARRAY_EXTRACT"],
+            "spirv_not_contains": ["OpPhi %State", "OpPhi %Item"],
+        },
+    },
     "uniform_struct_dynamic_index": {
         "frag": {
             "spirv_contains": ["OpAccessChain %_ptr_Uniform_v4float", "OpAccessChain %_ptr_Uniform_mat4v4float"],

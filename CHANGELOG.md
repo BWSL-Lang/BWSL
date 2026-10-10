@@ -37,17 +37,23 @@
 - Vertex attributes beyond the supported 16 slots produce a source error.
 - `.length` works on local arrays and array function parameters. It was
   previously rejected as an invalid swizzle.
-- Swizzles on expressions such as `float2(0.25, 0.75).xyxy` or
-  `(a + b).yx` have the swizzled type. Previously only `.xy` and `.xyz`
-  (and `.rg`, `.rgb`) worked there; other swizzles kept the expression's
-  type and failed SPIR-V validation. Invalid swizzles on expressions are
-  rejected like those on variables.
-- Swizzle components past the end of a vector, such as `.z` or `.xyzw` on a
-  `float2`, produce a source error. Previously reads failed SPIR-V
-  validation or repeated earlier components (`.xyzw` gave `(x, y, x, y)`),
-  and stores like `v.xz = ...` dropped the out-of-range write.
+- `min` and `max` with more than two arguments reduce over all of them, up
+  to 16. Previously only the first two were used and the rest were
+  silently dropped. More than 16 arguments is a source error.
+- `min` and `max` with both float and integer (or bool) arguments produce a
+  source error. Previously they failed SPIR-V validation.
 
 ### Backends
+- Struct locals are updated in place. Writing a field or an array element of
+  a struct no longer copies the whole struct at every branch merge and loop
+  iteration, which made shaders that mutate structs in loops (for example
+  through a mutating method) several times slower than equivalent GLSL.
+- `-gles-direct` output for struct locals compiles: the zero value a struct
+  starts from was declared as `void`. Boolean `&&`/`||` are no longer emitted
+  as `&`/`|`, and a fragment stage's `input.position` is `gl_FragCoord`.
+- A mutating struct method no longer wipes the receiver's other fields, and
+  writing a field of a struct parameter no longer resets the parameter's
+  other fields. The first field write zero-initialized the whole struct.
 - Struct type and member names are preserved without `-debug-names`, so nested
   uniforms link across GL shader stages, including mixed GLES emitters.
 - `-debug-names` preserves source local-variable and array names in SPIR-V
@@ -71,6 +77,10 @@
   with both source locations. Compilation still succeeds; errors and
   warnings take priority over notes in the CLI's limited text display.
 - WASM results include non-blocking notes in a `diagnostics` array.
+
+### Standard library
+- `Color::hsluvToRgb`, `rgbToHsluv`, `hpluvToRgb` and `rgbToHpluv` return
+  correct colors. They over-saturated because of the `min` bug above.
 
 ### Tooling
 - `make wasm` and `make wasm-debug` link with `em++`, so they build with

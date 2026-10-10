@@ -949,7 +949,14 @@ inline bool IRLowering::CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
   if (!(info & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY)) return true;
   u32 arrayIdx = info >> IR::IRProgram::STORAGE_BINDING_SHIFT;
   if (arrayIdx >= program.localArrayCount) return true;
-  u32 length = program.localArraySizes[arrayIdx];
+  return CheckConstIndexInBounds(indexReg, indexExpr,
+                                 program.localArraySizes[arrayIdx]);
+}
+
+// Reports an error when a constant index is negative or >= length. Returns
+// true when the index is fine or not a constant.
+inline bool IRLowering::CheckConstIndexInBounds(u16 indexReg, NodeRef indexExpr,
+                                                u32 length) {
   if (length == 0) return true;
 
     s64 indexValue;

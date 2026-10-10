@@ -379,6 +379,182 @@ inline u16 IRLowering::TryLowerLocalFieldAddressOf(NodeRef memberRef) {
   return dest;
 }
 
+// ============= In-place struct variables =============
+
+// A register that holds a struct variable's own value: a declared local, a
+// parameter copy or `self`. Declarations and parameter copies get a fresh
+// register (registerNameHashes marks it), so writing it in place can't affect
+// another value. Pointers, arrays and shared or uniform storage don't qualify.
+inline bool IRLowering::IsInPlaceStructVariable(u16 reg) const {
+  if ((reg & 0xC000) != 0 || reg >= MAX_REGISTERS) return false;
+  if (program.registerNameHashes[reg] == 0) return false;
+  if (static_cast<CoreType>(program.registerTypes[reg]) != CoreType::CUSTOM)
+    return false;
+  u32 structHash = program.registerStructTypes[reg];
+  if (structHash == 0 || structTypeMap.find(structHash) == structTypeMap.end())
+    return false;
+  constexpr u32 notInPlace =
+      IRProgram::STORAGE_IS_PTR | IRProgram::STORAGE_IS_SHARED |
+      IRProgram::STORAGE_IS_LOCAL_ARRAY | IRProgram::STORAGE_IS_FIELD_PTR |
+      IRProgram::STORAGE_IS_UNIFORM_ARRAY;
+  return (program.registerStorageInfo[reg] & notInPlace) == 0;
+}
+
+inline bool IRLowering::ResolveLocalField(const LocalPlace &base,
+                                          u32 memberHash, bool emit,
+                                          LocalPlace *out) {
+  if (base.type != CoreType::CUSTOM || base.structHash == 0 ||
+      base.arrayLength != 0) {
+    return false;
+  }
+  auto structIt = structTypeMap.find(base.structHash);
+  if (structIt == structTypeMap.end()) return false;
+  const IRProgram::StructTypeInfo &info = program.structTypes[structIt->second];
+  for (u32 i = 0; i < info.fieldCount; i++) {
+    u32 field = info.fieldOffset + i;
+    if (program.structFieldNameHashes[field] != memberHash) continue;
+    CoreType fieldType = static_cast<CoreType>(program.structFieldTypes[field]);
+    u32 fieldTypeHash =
+        program.structFieldTypeHashes ? program.structFieldTypeHashes[field] : 0;
+    *out = base;
+    out->isPointer = true;
+    out->type = fieldType;
+    out->structHash = (fieldType == CoreType::CUSTOM ||
+                       fieldType == CoreType::ENUM) ? fieldTypeHash : 0;
+    out->arrayLength =
+        program.structFieldArraySizes ? program.structFieldArraySizes[field] : 0;
+    if (!emit) return true;
+
+    u16 dest = AllocateRegister();
+    if (dest >= MAX_REGISTERS) return false;
+    builder.EmitInstruction(OP_LOCAL_FIELD_PTR, dest, base.reg,
+                            static_cast<u16>(i));
+    program.metadata[builder.currentInstruction - 1] = base.structHash;
+    SetRegisterType(dest, CoreType::CUSTOM);
+    program.registerStorageInfo[dest] =
+        (static_cast<u32>(base.reg) << 16) |
+        (static_cast<u32>(fieldType) << 8) | IRProgram::STORAGE_IS_PTR |
+        IRProgram::STORAGE_IS_FIELD_PTR;
+    program.registerStructTypes[dest] = out->structHash;
+    if (!base.isPointer) {
+      // The variable now lives in memory; SSA leaves it alone.
+      program.registerStorageInfo[base.reg] |=
+          IRProgram::STORAGE_IS_ADDRESS_TAKEN;
+    }
+    out->reg = dest;
+    return true;
+  }
+  return false;
+}
+
+inline bool IRLowering::ResolveLocalPlace(NodeRef expr, bool emit,
+                                          LocalPlace *out) {
+  switch (expr.Type()) {
+  case ASTNodeType::IDENTIFIER: {
+    const IdentifierData &ident = ast->GetIdentifier(expr);
+    if (ident.identifierKind != SpecialIdentifier::NONE &&
+        ident.identifierKind != SpecialIdentifier::SELF) {
+      return false;
+    }
+    auto var = variableRegisters.find(ident.name.nameHash);
+    if (var != variableRegisters.end()) {
+      if (!IsInPlaceStructVariable(var->second)) return false;
+      *out = {};
+      out->reg = out->rootReg = var->second;
+      out->type = CoreType::CUSTOM;
+      out->structHash = program.registerStructTypes[var->second];
+      out->rootNameHash = ident.name.nameHash;
+      return true;
+    }
+    // A receiver field named without `self.` inside a struct method.
+    if (currentStructMethodTypeHash == 0 ||
+        !IsInPlaceStructVariable(currentStructMethodSelfReg)) {
+      return false;
+    }
+    LocalPlace self;
+    self.reg = self.rootReg = currentStructMethodSelfReg;
+    self.type = CoreType::CUSTOM;
+    self.structHash = program.registerStructTypes[currentStructMethodSelfReg];
+    self.rootNameHash = Utils::HashStr("self");
+    return ResolveLocalField(self, ident.name.nameHash, emit, out);
+  }
+  case ASTNodeType::MEMBER_ACCESS: {
+    const MemberAccessData &access = ast->GetMemberAccess(expr);
+    if (access.isModuleQualified) return false;
+    LocalPlace base;
+    return ResolveLocalPlace(access.object, emit, &base) &&
+           ResolveLocalField(base, access.member.nameHash, emit, out);
+  }
+  case ASTNodeType::ARRAY_ACCESS: {
+    const ArrayAccessData &access = ast->GetArrayAccess(expr);
+    LocalPlace base;
+    if (!ResolveLocalPlace(access.array, emit, &base) || base.arrayLength == 0)
+      return false;
+    *out = base;
+    out->arrayLength = 0;
+    if (!emit) return true;
+
+    u16 index = LowerExpression(access.index);
+    CheckConstIndexInBounds(index, access.index, base.arrayLength);
+    u16 dest = AllocateRegister();
+    if (dest >= MAX_REGISTERS) return false;
+    builder.EmitInstruction(OP_LOCAL_INDEX_PTR, dest, base.reg, index);
+    SetRegisterType(dest, CoreType::CUSTOM);
+    program.registerStorageInfo[dest] =
+        (static_cast<u32>(base.reg) << 16) |
+        (static_cast<u32>(base.type) << 8) | IRProgram::STORAGE_IS_PTR |
+        IRProgram::STORAGE_IS_FIELD_PTR;
+    program.registerStructTypes[dest] = base.structHash;
+    out->reg = dest;
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+
+inline u16 IRLowering::TryLoadLocalPlace(NodeRef expr) {
+  LocalPlace place;
+  if (!ResolveLocalPlace(expr, false, &place) || !place.isPointer ||
+      place.arrayLength != 0) {
+    return 0xFFFF;
+  }
+  ResolveLocalPlace(expr, true, &place);
+  u16 dest = AllocateRegister();
+  builder.EmitInstruction(OP_LOCAL_LOAD, dest, place.reg);
+  SetRegisterType(dest, place.type);
+  if (dest < MAX_REGISTERS) program.registerStructTypes[dest] = place.structHash;
+  return dest;
+}
+
+inline bool IRLowering::TryStoreLocalPlace(NodeRef target, u16 valueReg) {
+  LocalPlace place;
+  if (!ResolveLocalPlace(target, false, &place) || !place.isPointer ||
+      place.arrayLength != 0) {
+    return false;
+  }
+  // A const variable keeps its existing diagnostics.
+  if (constVariables.find(place.rootNameHash) != constVariables.end() &&
+      !(currentStructMethodIsConst &&
+        place.rootReg == currentStructMethodSelfReg)) {
+    return false;
+  }
+  if (currentStructMethodIsConst && place.rootReg == currentStructMethodSelfReg) {
+    ReportError("Error: cannot assign to receiver field inside const method\n");
+    return true;
+  }
+  if (initializedVariables.find(place.rootNameHash) == initializedVariables.end()) {
+    builder.EmitInstruction(OP_STORE_REG, place.rootReg,
+                            EmitZeroStruct(program.registerStructTypes[place.rootReg]));
+    initializedVariables.insert(place.rootNameHash);
+  }
+  ResolveLocalPlace(target, true, &place);
+  if (place.type != CoreType::CUSTOM && place.type != CoreType::ENUM)
+    valueReg = ConvertRegisterToType(valueReg, place.type);
+  builder.EmitInstruction(OP_LOCAL_STORE, 0, place.reg, valueReg);
+  return true;
+}
+
 inline void IRLowering::LowerVariableDecl(NodeRef ref) {
   const VariableDeclData &varDecl = ast->GetVariableDecl(ref);
 
@@ -653,6 +829,7 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
 
 inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
                                   InterpolationMode interpolation) {
+  if (TryStoreLocalPlace(target, valueReg)) return;
 
   if (target.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &ident = ast->GetIdentifier(target);
@@ -1418,6 +1595,9 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
 inline u16 IRLowering::LowerArrayAccess(NodeRef ref) {
   const ArrayAccessData &access = ast->GetArrayAccess(ref);
 
+  u16 inPlace = TryLoadLocalPlace(ref);
+  if (inPlace != 0xFFFF) return inPlace;
+
   // `s.field[i]` where `field` is an array held by value in a struct
   // register: emit a fused two-level extract instead of materializing the
   // array as a temporary (the array copy mistypes element reads and the
@@ -1653,6 +1833,9 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       return EmitConstantInt(arrayLength);
     }
   }
+
+  u16 inPlace = TryLoadLocalPlace(ref);
+  if (inPlace != 0xFFFF) return inPlace;
 
   // Sum-type enum variant with no payload, e.g. `Curve::Linear`.
   // Payload variants with arguments lower through LowerFunctionCall.
