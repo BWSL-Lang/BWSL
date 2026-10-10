@@ -1,0 +1,10 @@
+// A multi-component swizzle past the end of a vector expression is a source
+// error. float2(...).xyzw used to compile to (x, y, x, y).
+pipeline SwizzleOutOfRangeExpression {
+    pass "Main" {
+        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+        fragment {
+            output.color = float2(0.25, 0.75).xyzw;
+        }
+    }
+}

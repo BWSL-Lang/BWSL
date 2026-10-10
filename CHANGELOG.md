@@ -42,6 +42,10 @@
   (and `.rg`, `.rgb`) worked there; other swizzles kept the expression's
   type and failed SPIR-V validation. Invalid swizzles on expressions are
   rejected like those on variables.
+- Swizzle components past the end of a vector, such as `.z` or `.xyzw` on a
+  `float2`, produce a source error. Previously reads failed SPIR-V
+  validation or repeated earlier components (`.xyzw` gave `(x, y, x, y)`),
+  and stores like `v.xz = ...` dropped the out-of-range write.
 
 ### Backends
 - Struct type and member names are preserved without `-debug-names`, so nested
