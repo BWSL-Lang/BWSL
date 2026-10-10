@@ -697,17 +697,19 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
   if (!varDecl.initializer.IsNull()) {
     // Check for array initializer (BLOCK node with element expressions)
     if (isArray && varDecl.initializer.Type() == ASTNodeType::BLOCK) {
-      // Array with block initializer - emit element-by-element stores
+      // Array with block initializer. Evaluate every element before storing
+      // any, so the stores form one uninterrupted run that the backend can
+      // emit as a single whole-array store.
       const BlockData &initBlock = ast->GetBlock(varDecl.initializer);
-      for (u32 i = 0; i < initBlock.statements.count && i < arrayLength;
-           i++) {
-        NodeRef elementExpr = initBlock.statements[i];
-        u16 elementReg = LowerExpression(elementExpr);
-        elementReg = ConvertRegisterToType(elementReg, arrayElementType);
-
-        // Emit array store: store element at index i
+      u32 elementCount = std::min(initBlock.statements.count, arrayLength);
+      std::vector<u16> elementRegs(elementCount);
+      for (u32 i = 0; i < elementCount; i++) {
+        u16 elementReg = LowerExpression(initBlock.statements[i]);
+        elementRegs[i] = ConvertRegisterToType(elementReg, arrayElementType);
+      }
+      for (u32 i = 0; i < elementCount; i++) {
         u16 indexReg = EmitConstantUint(i);
-        builder.EmitInstruction(OP_ARRAY_STORE, varReg, indexReg, elementReg);
+        builder.EmitInstruction(OP_ARRAY_STORE, varReg, indexReg, elementRegs[i]);
       }
       initializedVariables.insert(varDecl.name.nameHash);
     } else {

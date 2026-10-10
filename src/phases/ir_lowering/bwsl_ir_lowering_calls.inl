@@ -1429,6 +1429,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         // Store arg count in metadata for SPIR-V backend
         program.metadata[builder.currentInstruction - 1] = argCount;
         SetRegisterType(dest, constructedType);
+        RecordConstantVector(dest);
       }
     } else {
       u32 callHash = call.name.nameHash;

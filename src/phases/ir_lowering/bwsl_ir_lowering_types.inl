@@ -1083,6 +1083,58 @@ inline u16 IRLowering::TryFoldScalarArithmetic(OpCode op, u16 left, u16 right) {
   return 0xFFFF;
 }
 
+// Call right after emitting the OP_VEC_CONSTRUCT that writes `reg`, a fresh
+// temporary. Records it when every component is a scalar constant.
+inline void IRLowering::RecordConstantVector(u16 reg) {
+  u32 inst = builder.currentInstruction - 1;
+  CoreType type = GetRegisterType(reg);
+  CoreType scalarType = GetScalarComponentType(type);
+  u32 width = GetVectorDimension(type);
+  u32 count = program.metadata[inst];
+  if (width < 2 || (count != 1 && count != width)) return;
+  for (u32 i = 0; i < count; i++) {
+    u16 component = program.GetOperand(inst, i);
+    if (component == 0xFFFF || !IR::IsConstant(component) ||
+        GetRegisterType(component) != scalarType) return;
+  }
+  constantVectors[reg] = inst;
+}
+
+inline bool IRLowering::GetConstantVectorComponents(u16 reg, u16 components[4],
+                                                    u32 *width) {
+  auto it = constantVectors.find(reg);
+  if (it == constantVectors.end()) return false;
+  *width = GetVectorDimension(GetRegisterType(reg));
+  bool splat = program.metadata[it->second] == 1;
+  for (u32 i = 0; i < *width; i++) {
+    components[i] = program.GetOperand(it->second, splat ? 0 : i);
+  }
+  return true;
+}
+
+// Folds componentwise arithmetic on two constant vectors (a scalar operand is
+// already splatted by then) into a new constant vector.
+inline u16 IRLowering::TryFoldVectorArithmetic(OpCode op, u16 left, u16 right) {
+  u16 a[4], b[4], folded[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+  u32 width, rightWidth;
+  if (!GetConstantVectorComponents(left, a, &width) ||
+      !GetConstantVectorComponents(right, b, &rightWidth) ||
+      width != rightWidth || GetRegisterType(left) != GetRegisterType(right)) {
+    return 0xFFFF;
+  }
+  for (u32 i = 0; i < width; i++) {
+    folded[i] = TryFoldScalarArithmetic(op, a[i], b[i]);
+    if (folded[i] == 0xFFFF) return 0xFFFF;
+  }
+  u16 dest = AllocateRegister();
+  builder.EmitInstruction(OP_VEC_CONSTRUCT, dest, folded[0], folded[1],
+                          folded[2], folded[3]);
+  program.metadata[builder.currentInstruction - 1] = width;
+  SetRegisterType(dest, GetRegisterType(left));
+  RecordConstantVector(dest);
+  return dest;
+}
+
 inline u16 IRLowering::ConvertRegisterToType(u16 reg, CoreType targetType) {
   CoreType sourceType = GetRegisterType(reg);
   if (sourceType == targetType) {

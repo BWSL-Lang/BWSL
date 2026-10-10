@@ -52,6 +52,11 @@
   a struct no longer copies the whole struct at every branch merge and loop
   iteration, which made shaders that mutate structs in loops (for example
   through a mutating method) several times slower than equivalent GLSL.
+- Local arrays of vectors with constant elements, such as
+  `float2[4] t = {float2(1.0, -3.0) / 16.0, ...}`, get one array initializer
+  instead of one store per element, with constant vector arithmetic folded.
+  The element stores made NVIDIA drivers rebuild the array in local memory on
+  every invocation.
 - `-gles-direct` output for struct locals compiles: the zero value a struct
   starts from was declared as `void`. Boolean `&&`/`||` are no longer emitted
   as `&`/`|`, and a fragment stage's `input.position` is `gl_FragCoord`.
