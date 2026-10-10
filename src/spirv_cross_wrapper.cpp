@@ -427,12 +427,36 @@ static void combineGLSLSamplers(spirv_cross::CompilerGLSL& compiler) {
     }
 }
 
+// SPIRV-Cross turns an array variable that is only ever assigned a constant
+// into a lookup table: a module-scope `const` array, indexed directly. Drivers
+// handle dynamic indexing into `const` arrays badly (NVIDIA copies the whole
+// array into local memory on every invocation, see issue #151), while a plain
+// initialized array is cheap. This keeps such variables as ordinary arrays.
+class GLSLCompiler : public spirv_cross::CompilerGLSL {
+public:
+    using spirv_cross::CompilerGLSL::CompilerGLSL;
+
+protected:
+    // Runs after SPIRV-Cross's analysis (which finds the lookup tables) and
+    // before anything is emitted, on every compile pass.
+    void emit_header() override {
+        ir.for_each_typed_id<spirv_cross::SPIRVariable>([&](uint32_t, spirv_cross::SPIRVariable& var) {
+            if (!variable_is_lut(var)) return;
+            get<spirv_cross::SPIRConstant>(var.static_expression).is_used_as_lut = false;
+            var.static_expression = 0;
+            var.statically_assigned = false;
+            var.remapped_variable = false;
+        });
+        spirv_cross::CompilerGLSL::emit_header();
+    }
+};
+
 std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, bool es) {
 #ifdef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
     if (auto err = CheckGLSLESSPIRVCompatRaw(spirv, glslVersion, es); !err.empty()) {
         return err;
     }
-    spirv_cross::CompilerGLSL compiler(spirv);
+    GLSLCompiler compiler(spirv);
     if (auto err = CheckGLSLESCompat(compiler, glslVersion, es); !err.empty()) {
         return err;
     }
@@ -454,7 +478,7 @@ std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, b
         if (auto err = CheckGLSLESSPIRVCompatRaw(spirv, glslVersion, es); !err.empty()) {
             return err;
         }
-        spirv_cross::CompilerGLSL compiler(spirv);
+        GLSLCompiler compiler(spirv);
         if (auto err = CheckGLSLESCompat(compiler, glslVersion, es); !err.empty()) {
             return err;
         }

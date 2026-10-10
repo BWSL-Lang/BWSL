@@ -93,6 +93,24 @@ def run_array_initializer_tests(compiler: Path) -> tuple[int, int]:
             self.assert_constant_table(ops, bits)
             self.assertIn("float[](", (target / "table.gles.frag").read_text())
 
+        def test_dynamically_indexed_table_is_not_a_const_array(self):
+            # Issue #151: SPIRV-Cross emits a table that is stored once as a
+            # module-scope `const` array, which drivers index slowly.
+            target, _ = self.compile('''
+                int index = min(ELEMENT_COUNT - 1, int(ELEMENT_COUNT * input.uv.x));
+                output.color = float4(lookup(index));
+            ''', '''
+                const int ELEMENT_COUNT = 4;
+                lookup :: (int index) -> float {
+                    float[ELEMENT_COUNT] table = {1.5, 2.5, 3.5, 4.5};
+                    return table[index];
+                }
+            ''')
+            for kind in ("glsl", "gles"):
+                frag = (target / f"table.{kind}.frag").read_text()
+                self.assertNotRegex(frag, r"\bconst\b[^;]*\[")
+                self.assertRegex(frag, r"\n\s+(highp )?float \w+\[4\] = float\[\]\(1\.5, 2\.5, 3\.5, 4\.5\);")
+
         def test_literal_conversions_and_arithmetic(self):
             _, ops = self.compile('''
                 float[8] table = {float(3), -2, (10-1)*2, 9/2, 9%2,
