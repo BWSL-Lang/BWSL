@@ -745,7 +745,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
                              "Error: '%s' argument 1 is %s; expected a float "
                              "or integer scalar or vector\n",
                              isMin ? "min" : "max", CoreTypeToString(argType));
-                ReportError(msg);
+                ReportErrorAt(call.arguments[i], msg);
                 return 0;
             }
         }
