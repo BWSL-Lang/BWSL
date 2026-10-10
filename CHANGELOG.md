@@ -80,6 +80,9 @@
   with both source locations. Compilation still succeeds; errors and
   warnings take priority over notes in the CLI's limited text display.
 - WASM results include non-blocking notes in a `diagnostics` array.
+- Reading `input.<name>` in a fragment stage when the vertex stage never
+  writes `output.<name>` is a source error. It previously compiled with an
+  invented `varying0` input that could not link in GL.
 
 ### Standard library
 - `Color::hsluvToRgb`, `rgbToHsluv`, `hpluvToRgb` and `rgbToHpluv` return

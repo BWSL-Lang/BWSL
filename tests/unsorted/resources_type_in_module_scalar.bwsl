@@ -21,6 +21,7 @@ pipeline ResourceTypeInModuleScalar {
 
     vertex {
       output.position = float4(resources.render.value * attributes.position, 1.0);
+      output.color = float4(1.0, 1.0, 1.0, 1.0);
     }
 
     fragment {

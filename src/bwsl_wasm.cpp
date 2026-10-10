@@ -557,6 +557,9 @@ static ShaderOutput CompileShaderStage(
         for (const auto& diagnostic : lowering.diagnostics) output.error += "\n" + diagnostic;
         return output;
     }
+    if (stage == ShaderStage::Vertex && varyingContext) {
+        varyingContext->vertexStageLowered = true;
+    }
 
     // Ensure return
     if (lowering.program.instructionCount == 0 ||

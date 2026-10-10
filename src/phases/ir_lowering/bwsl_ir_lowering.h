@@ -51,6 +51,10 @@ struct PassVaryingContext {
   std::string diagnosticPassName;
   const char *diagnosticStageName = "vertex";
   bool varyingLimitDiagnosed = false;
+  // Set by the driver once the vertex stage lowered cleanly, so the varying
+  // table is complete and a fragment read of a missing name is a user error.
+  // Stays false when the vertex stage was skipped (-stage fragment) or failed.
+  bool vertexStageLowered = false;
   // Pipeline-level GL names a new varying's v_<name> must not repeat.
   const std::vector<GLReservedName> *reservedGLNames = nullptr;
 
