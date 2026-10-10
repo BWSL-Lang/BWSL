@@ -1635,8 +1635,16 @@ private:
                 VisitExpr(access.index, "read");
                 return array;
             }
-            case ASTNodeType::FUNCTION_CALL:
+            case ASTNodeType::FUNCTION_CALL: {
+                // A folded vector constant is a synthesized constructor call;
+                // index the constant it was written as, not the constructor.
+                auto folded = foldedConstants_.find(ref.packed);
+                if (folded != foldedConstants_.end()) {
+                    ExprInfo constant = VisitFoldedConstant(ref, *folded->second);
+                    if (!constant.type.empty()) return constant;
+                }
                 return VisitCall(ref);
+            }
             default:
                 VisitNode(ref);
                 return {};

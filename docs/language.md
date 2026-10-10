@@ -561,7 +561,20 @@ Supported module contents:
 
 Note:
 
-- Module constants currently require literal initializers.
+- Module constants are folded at compile time. Their type must be a scalar
+  or a `float`, `int` or `uint` vector. The initializer may use literals,
+  other constants, scalar arithmetic, and scalar or vector constructors:
+
+  ```bwsl
+  module Dirs {
+      const float HALF_PI = 3.14159265 * 0.5;
+      const float2 NORTH = float2(0.0, -1.0);
+  }
+  ```
+
+  Vector arithmetic (`NORTH * 2.0`), swizzles (`NORTH.y`) and matrix
+  constants are not supported in module constant initializers yet. Uses of
+  the constant can still be swizzled (`Dirs::NORTH.y`).
 
 ## Structs and Arrays
 

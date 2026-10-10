@@ -214,25 +214,12 @@ NodeRef Parser::ParsePostfix() {
                     // Check for EVAL_CONSTANT first (module-level const declarations)
                     if (sym && sym->kind == SymbolKind::EVAL_CONSTANT) {
                         const LiteralValue& constVal = symbolTable.evalConstants[sym->index];
-                        switch (constVal.type) {
-                            case LiteralValue::FLOAT:
-                                return RecordFoldedConstant(
-                                    ASTFactory::MakeLiteralFloat(ast, constVal.floatValue, loc.line, loc.column),
-                                    expr, memberToken);
-                            case LiteralValue::INT:
-                                return RecordFoldedConstant(
-                                    ASTFactory::MakeLiteralInt(ast, constVal.intValue, loc.line, loc.column),
-                                    expr, memberToken);
-                            case LiteralValue::UINT:
-                                return RecordFoldedConstant(
-                                    ASTFactory::MakeLiteralUint(ast, constVal.uintValue, loc.line, loc.column),
-                                    expr, memberToken);
-                            case LiteralValue::BOOL:
-                                return RecordFoldedConstant(
-                                    ASTFactory::MakeLiteralBool(ast, constVal.boolValue, loc.line, loc.column),
-                                    expr, memberToken);
-                            default:
-                                break;
+                        NodeRef folded = MakeLiteralNodeFromValue(constVal, loc.line, loc.column);
+                        if (folded.IsValid()) {
+                            // Keep parsing postfixes: a vector constant may be
+                            // swizzled or indexed (Dirs::TINT.xy).
+                            expr = RecordFoldedConstant(folded, expr, memberToken);
+                            continue;
                         }
                     }
                     // Also check for VARIABLE kind (for const variables declared inside functions/scopes)
@@ -550,25 +537,9 @@ NodeRef Parser::ParsePrimary() {
         // Check for EVAL_CONSTANT first (module-level const declarations)
         if (sym && sym->kind == SymbolKind::EVAL_CONSTANT) {
             const LiteralValue& constVal = symbolTable.evalConstants[sym->index];
-            switch (constVal.type) {
-                case LiteralValue::FLOAT:
-                    return RecordFoldedConstant(
-                        ASTFactory::MakeLiteralFloat(ast, constVal.floatValue, line, col),
-                        NodeRef::Null(), previous);
-                case LiteralValue::INT:
-                    return RecordFoldedConstant(
-                        ASTFactory::MakeLiteralInt(ast, constVal.intValue, line, col),
-                        NodeRef::Null(), previous);
-                case LiteralValue::UINT:
-                    return RecordFoldedConstant(
-                        ASTFactory::MakeLiteralUint(ast, constVal.uintValue, line, col),
-                        NodeRef::Null(), previous);
-                case LiteralValue::BOOL:
-                    return RecordFoldedConstant(
-                        ASTFactory::MakeLiteralBool(ast, constVal.boolValue, line, col),
-                        NodeRef::Null(), previous);
-                default:
-                    break;
+            NodeRef folded = MakeLiteralNodeFromValue(constVal, line, col);
+            if (folded.IsValid()) {
+                return RecordFoldedConstant(folded, NodeRef::Null(), previous);
             }
         }
         // Evaluated const variables may still be substituted while parsing; unevaluated

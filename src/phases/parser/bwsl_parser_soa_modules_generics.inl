@@ -208,6 +208,7 @@ void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
                 Error("Expected type after 'const'");
                 continue;
             }
+            TokenType constType = static_cast<TokenType>(stream->GetType(previous));
             std::string typeStr(stream->GetValue(previous));
             SourceLocation typeLoc = getLocation(stream->GetOffset(previous));
 
@@ -234,14 +235,45 @@ void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
             ast->GetVariableDecl(constDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
             ast->GetModule(module).consts.Push(arena, constDecl);
 
-            // Evaluate the constant value first
+            // Fold the initializer now: uses are replaced by the folded value
+            // while parsing, so the declaration itself is never lowered.
+            EvalStateSoA evalState;
+            CompileTimeEvaluatorSoA::Init(&evalState, this, ast, &context->evalCache, ast->arena);
+            // LiteralValue holds at most four components, so matrices (and
+            // 64-bit vectors) can't be folded yet.
+            TypeInfo constTypeInfo = GetTypeInfoFromToken(constType);
+            bool foldableType = false;
+            switch (constTypeInfo.coreType) {
+                case CoreType::FLOAT: case CoreType::INT: case CoreType::UINT: case CoreType::BOOL:
+                case CoreType::FLOAT2: case CoreType::FLOAT3: case CoreType::FLOAT4:
+                case CoreType::INT2: case CoreType::INT3: case CoreType::INT4:
+                case CoreType::UINT2: case CoreType::UINT3: case CoreType::UINT4:
+                    foldableType = true;
+                    break;
+                default:
+                    break;
+            }
             LiteralValue constValue;
             bool hasValue = false;
-            if (value.Type() == ASTNodeType::LITERAL) {
-                constValue = ast->GetLiteral(value).value;
-                hasValue = true;
+            if (!foldableType) {
+                Error(("Module constants of type " + typeStr + " are not supported yet; "
+                       "use a scalar or a float, int or uint vector").c_str());
+            } else if (CompileTimeEvaluatorSoA::CanEvaluateNode(&evalState, value) &&
+                CompileTimeEvaluatorSoA::EvaluateNode(&evalState, value, &constValue)) {
+                // Scalar and vector CoreType names are the source spelling in upper case.
+                std::string initType = CoreTypeToString(MakeTypeInfoForConstant(constValue).coreType);
+                for (char& c : initType) c = static_cast<char>(tolower(c));
+                if (CoerceLiteralToType(constTypeInfo, &constValue)) {
+                    hasValue = true;
+                } else {
+                    Error(("Module constant '" + constName + "' is declared " + typeStr +
+                           " but its initializer is " + initType).c_str());
+                }
             } else {
-                Error("Module constants must have literal initializers");
+                Error("Module constant initializers must be built from literals and "
+                      "other constants with scalar arithmetic and scalar or vector "
+                      "constructors, e.g. float2(0.0, -1.0); vector arithmetic and "
+                      "swizzles are not supported here");
             }
 
             if (hasValue) {
@@ -636,15 +668,8 @@ TypeInfo Parser::GetTypeInfoFromSymbol(Symbol* sym) {
             return MakeTypeInfoForResource(&symbolTable, symbolTable.resources[sym->index]);
         }
 
-        case SymbolKind::EVAL_CONSTANT: {
-            const LiteralValue& value = symbolTable.evalConstants[sym->index];
-            switch (value.type) {
-                case LiteralValue::FLOAT: return TYPE_INFO(CoreType::FLOAT, 1, false);
-                case LiteralValue::INT:   return TYPE_INFO(CoreType::INT, 1, false);
-                case LiteralValue::BOOL:  return TYPE_INFO(CoreType::BOOL, 1, false);
-                default: return TYPE_INFO(CoreType::INVALID, 0, false);
-            }
-        }
+        case SymbolKind::EVAL_CONSTANT:
+            return MakeTypeInfoForConstant(symbolTable.evalConstants[sym->index]);
 
         case SymbolKind::FUNCTION: {
             const FunctionData& funcData = symbolTable.functions[sym->index];

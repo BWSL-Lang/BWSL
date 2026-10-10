@@ -383,19 +383,8 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
                     case SymbolKind::RESOURCE:
                         return MakeTypeInfoForResource(&symbolTable, symbolTable.resources[sym->index]);
 
-                    case SymbolKind::EVAL_CONSTANT: {
-                        LiteralValue& value = symbolTable.evalConstants[sym->index];
-                        switch (value.type) {
-                            case LiteralValue::FLOAT:
-                                return TypeInfo{CoreType::FLOAT, 1, 0, 0, 0, 0, 0};
-                            case LiteralValue::INT:
-                                return TypeInfo{CoreType::INT, 1, 0, 0, 0, 0, 0};
-                            case LiteralValue::BOOL:
-                                return TypeInfo{CoreType::BOOL, 1, 0, 0, 0, 0, 0};
-                            default:
-                                return TypeInfo{CoreType::INVALID, 0, 0, 0, 0, 0, 0};
-                        }
-                    }
+                    case SymbolKind::EVAL_CONSTANT:
+                        return MakeTypeInfoForConstant(symbolTable.evalConstants[sym->index]);
 
                     default:
                         break;

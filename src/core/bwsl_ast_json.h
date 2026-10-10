@@ -855,6 +855,28 @@ inline bool IsDeclarationWithSource(ASTNodeType type) {
     }
 }
 
+// A named constant folded to this literal (or, for a vector constant, this
+// constructor call) while parsing: keep the written name as a positioned
+// IDENTIFIER occurrence.
+inline void AppendFoldedFromField(std::ostringstream& json, bool& first,
+                                  const AST& ast, NodeRef ref, u32 depth) {
+    const FoldedConstantData* folded = ast.FindFoldedConstant(ref);
+    if (!folded) return;
+    AppendFieldName(json, first, "foldedFrom");
+    bool foldedFirst = true;
+    json << "{";
+    AppendStringField(json, foldedFirst, "id", AstReferenceIndex::FoldedConstantId(ref));
+    AppendStringField(json, foldedFirst, "type", "IDENTIFIER");
+    AppendPackedPosition(json, foldedFirst, folded->namePosition, "line", "column");
+    AppendPackedPosition(json, foldedFirst, folded->namePosition, "nameLine", "nameColumn");
+    AppendArenaStringFields(json, foldedFirst, "name", folded->name);
+    AppendStringField(json, foldedFirst, "identifierKind", "NONE");
+    if (folded->qualifier.IsValid()) {
+        AppendNodeField(json, foldedFirst, "qualifier", ast, folded->qualifier, depth);
+    }
+    json << "}";
+}
+
 inline void AppendCommonNodeFields(std::ostringstream& json, bool& first,
                                    const AST& ast, NodeRef ref) {
     AppendStringField(json, first, "id", NodeRefId(ref));
@@ -905,24 +927,7 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
         case ASTNodeType::LITERAL: {
             AppendFieldName(json, first, "literal");
             AppendLiteralValue(json, ast.GetLiteral(ref).value);
-            // A named constant folded to this literal while parsing: keep the
-            // written name as a positioned IDENTIFIER occurrence.
-            const FoldedConstantData* folded = ast.FindFoldedConstant(ref);
-            if (folded) {
-                AppendFieldName(json, first, "foldedFrom");
-                bool foldedFirst = true;
-                json << "{";
-                AppendStringField(json, foldedFirst, "id", AstReferenceIndex::FoldedConstantId(ref));
-                AppendStringField(json, foldedFirst, "type", "IDENTIFIER");
-                AppendPackedPosition(json, foldedFirst, folded->namePosition, "line", "column");
-                AppendPackedPosition(json, foldedFirst, folded->namePosition, "nameLine", "nameColumn");
-                AppendArenaStringFields(json, foldedFirst, "name", folded->name);
-                AppendStringField(json, foldedFirst, "identifierKind", "NONE");
-                if (folded->qualifier.IsValid()) {
-                    AppendNodeField(json, foldedFirst, "qualifier", ast, folded->qualifier, depth);
-                }
-                json << "}";
-            }
+            AppendFoldedFromField(json, first, ast, ref, depth);
             break;
         }
         case ASTNodeType::BINARY_OP: {
@@ -1004,6 +1009,7 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
                        node.moduleObject.IsValid()) {
                 AppendNodeField(json, first, "receiver", ast, node.moduleObject, depth);
             }
+            AppendFoldedFromField(json, first, ast, ref, depth);
             break;
         }
         case ASTNodeType::VARIABLE_DECL: {
