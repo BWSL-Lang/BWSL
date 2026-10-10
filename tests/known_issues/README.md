@@ -213,8 +213,9 @@ New front-end diagnostics (all promoted to `tests/error_cases/`):
   `all()`/`any()`; comparisons now carry boolN register types), and
   pointer-typed function parameters (previously a misleading
   "Function not found" at the call site).
-- invalid swizzles: more than 4 components, mixed xyzw/rgba sets, and
-  duplicate components in swizzle stores.
+- invalid swizzles: more than 4 components, mixed xyzw/rgba sets,
+  duplicate components in swizzle stores, and components past the end of
+  the vector (`.z` on a `float2`).
 - duplicate names: enum members, struct fields, pass names, `use attributes`
   entries, and function parameters.
 - arity: vector constructors must cover the target component count exactly

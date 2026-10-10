@@ -46,6 +46,29 @@ inline bool DecodeSwizzleByHash(u32 nameHash, u16 lengthHint, u8 outIndices[4],
   return false;
 }
 
+// Reports an error and returns false if a swizzle on a vector of
+// `vectorType` uses a component past its end, e.g. .z or .xyzw on a float2.
+// Scalars are left to the callers. `node` is the swizzle's member access.
+inline bool CheckSwizzleInRange(IRLowering *lowering, NodeRef node,
+                                CoreType vectorType, const u8 *indices,
+                                u32 length) {
+    u32 count = lowering->GetVectorDimension(vectorType);
+    if (count < 2) return true;
+    for (u32 i = 0; i < length; i++) {
+        if (indices[i] >= count) {
+            char msg[192];
+            snprintf(msg, sizeof(msg),
+                     "Error: invalid swizzle - component '%c' ('%c') is out "
+                     "of range for %s, which has %u components\n",
+                     "xyzw"[indices[i]], "rgba"[indices[i]],
+                     CoreTypeToString(vectorType), count);
+            lowering->ReportErrorAt(node, msg);
+            return false;
+        }
+    }
+    return true;
+}
+
 inline u32 FindStructTypeIndex(IRLowering *lowering, u32 structTypeHash) {
   if (!lowering || structTypeHash == 0) return 0xFFFFFFFF;
 
@@ -913,6 +936,8 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
         u32 length = 0;
         if (DecodeSwizzleByHash(access.member.nameHash, access.member.nameLength,
                                 indices, &length)) {
+          if (!CheckSwizzleInRange(this, target, objectType, indices, length))
+              return;
           for (u32 j = 0; j < length; ++j) {
             for (u32 k = 0; k < j; ++k) {
               if (indices[j] == indices[k]) {
@@ -993,6 +1018,9 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
             componentIndex = 3;
 
           if (componentIndex != 0xFFFF) {
+            u8 index = static_cast<u8>(componentIndex);
+            if (!CheckSwizzleInRange(this, target, outputType, &index, 1))
+                return;
             u32 numComponents = GetVectorDimension(outputType);
             if (numComponents < 2) {
               builder.EmitInstruction(OP_STORE_OUTPUT, valueReg, slot);
@@ -1014,6 +1042,8 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           u32 swizzleLen = 0;
           if (DecodeSwizzleByHash(memberHash, access.member.nameLength,
                                   swizzleIndices, &swizzleLen)) {
+            if (!CheckSwizzleInRange(this, target, outputType, swizzleIndices, swizzleLen))
+                return;
             // A repeated component in a swizzle store would silently drop
             // one of the writes.
             for (u32 i = 0; i < swizzleLen; i++) {
@@ -1183,6 +1213,9 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           // Vector component assignment: vec.x = value
           // We need to insert the component into the vector and store back
           CoreType varType = GetRegisterType(objReg);
+          u8 index = static_cast<u8>(componentIndex);
+          if (!CheckSwizzleInRange(this, target, varType, &index, 1))
+              return;
 
           // Create a new vector with the component inserted
           u16 newVecReg = AllocateRegister();
@@ -1221,6 +1254,8 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
             }
 
             CoreType varType = GetRegisterType(objReg);
+            if (!CheckSwizzleInRange(this, target, varType, targetIdx, swizzleLen))
+                return;
             u32 numComponents = GetVectorDimension(varType);
             if (numComponents < 2) {
               builder.EmitInstruction(OP_STORE_REG, objReg, valueReg);
@@ -2022,6 +2057,9 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
           (mask(srcType) & TypeMasks::SCALAR_TYPES) && componentIndex == 0) {
         return srcReg;
       }
+      u8 index = static_cast<u8>(componentIndex);
+      if (!CheckSwizzleInRange(this, ref, srcType, &index, 1))
+          return srcReg;
       u16 dest = AllocateRegister();
       builder.EmitInstruction(OP_VEC_EXTRACT, dest, srcReg, componentIndex);
       // Get the scalar type from the vector type
@@ -2048,6 +2086,8 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
           SetRegisterType(srcReg, loadType);
           builder.EmitInstruction(OP_STORAGE_LOAD, srcReg, objectReg);
         }
+        if (!CheckSwizzleInRange(this, ref, GetRegisterType(srcReg), indices, swizzleLen))
+            return srcReg;
         u16 dest = AllocateRegister();
         u32 shuffleMask = 0;
         for (u32 i = 0; i < swizzleLen; i++) {
@@ -2153,6 +2193,9 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       if ((mask(objType) & TypeMasks::SCALAR_TYPES) && componentIndex == 0) {
         return objectReg;
       }
+      u8 index = static_cast<u8>(componentIndex);
+      if (!CheckSwizzleInRange(this, ref, objType, &index, 1))
+          return objectReg;
       u16 dest = AllocateRegister();
       builder.EmitInstruction(OP_VEC_EXTRACT, dest, objectReg,
                               componentIndex);
@@ -2163,41 +2206,45 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       return dest;
     }
 
-    // Check for multi-component swizzle (rgb, xyz, etc.)
-    static const u32 HASH_RGB = Utils::HashStr("rgb");
-    static const u32 HASH_XYZ = Utils::HashStr("xyz");
-    static const u32 HASH_XY = Utils::HashStr("xy");
-    static const u32 HASH_RG = Utils::HashStr("rg");
-
-    if (memberHash == HASH_RGB || memberHash == HASH_XYZ) {
-      // Extract first 3 components (vec4 -> vec3)
-      u16 dest = AllocateRegister();
-      // For VEC_SHUFFLE: operand0 = src0, operand1 = src1 (same for
-      // single-source swizzle) Metadata = shuffle mask (4 bits per component)
-      u32 shuffleMask = (0 << 0) | (1 << 4) | (2 << 8); // components 0, 1, 2
-      builder.EmitInstruction(OP_VEC_SHUFFLE, dest, objectReg, objectReg);
-      program.metadata[builder.currentInstruction - 1] = shuffleMask;
-      // Get the scalar type and build the appropriate vec3 type
-      CoreType vectorType = GetRegisterType(objectReg);
-      CoreType scalarType = GetScalarComponentType(vectorType);
-      SetRegisterType(dest, GetVectorType(scalarType, 3));
-      return dest;
+    // Multi-component swizzle: any 2-4 components from xyzw or rgba, like
+    // swizzles on variables. Only .xyz/.rgb/.xy/.rg used to be handled
+    // here, so float2(...).xyxy kept the constructor's type.
+    {
+        u8 indices[4] = {0, 0, 0, 0};
+        u32 swizzleLen = 0;
+        if (DecodeSwizzleByHash(memberHash, access.member.nameLength, indices,
+                                &swizzleLen)) {
+            if (!CheckSwizzleInRange(this, ref, GetRegisterType(objectReg), indices,
+                                     swizzleLen))
+                return objectReg;
+            u16 dest = AllocateRegister();
+            u32 shuffleMask = 0;
+            for (u32 i = 0; i < swizzleLen; i++) {
+                shuffleMask |= (indices[i] & 0xF) << (i * 4);
+            }
+            builder.EmitInstruction(OP_VEC_SHUFFLE, dest, objectReg, objectReg);
+            program.metadata[builder.currentInstruction - 1] = shuffleMask;
+            CoreType vectorType = GetRegisterType(objectReg);
+            CoreType scalarType = GetScalarComponentType(vectorType);
+            SetRegisterType(dest, GetVectorType(scalarType, swizzleLen));
+            return dest;
+        }
     }
 
-    if (memberHash == HASH_XY || memberHash == HASH_RG) {
-      // Extract first 2 components (vec4/vec3 -> vec2)
-      u16 dest = AllocateRegister();
-      u32 shuffleMask = (0 << 0) | (1 << 4); // components 0, 1
-      builder.EmitInstruction(OP_VEC_SHUFFLE, dest, objectReg, objectReg);
-      program.metadata[builder.currentInstruction - 1] = shuffleMask;
-      // Get the scalar type and build the appropriate vec2 type
-      CoreType vectorType = GetRegisterType(objectReg);
-      CoreType scalarType = GetScalarComponentType(vectorType);
-      SetRegisterType(dest, GetVectorType(scalarType, 2));
-      return dest;
+    // Vector and scalar values only support swizzle member access, so a
+    // member that didn't decode above is invalid.
+    {
+        CoreType objType = GetRegisterType(objectReg);
+        if (mask(objType) &
+            (TypeMasks::FLOAT_VECTORS | TypeMasks::INT_VECTORS |
+             TypeMasks::UINT_VECTORS | TypeMasks::BOOL_VECTORS |
+             TypeMasks::SCALAR_TYPES)) {
+            ReportErrorAt(ref, "Error: invalid swizzle - swizzles use 1-4 components from a single naming set (xyzw or rgba)\n");
+            return objectReg;
+        }
     }
 
-    // No swizzle or unknown member, return object as-is
+    // Unknown member, return object as-is
     return objectReg;
   }
 
@@ -2564,6 +2611,9 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       if ((mask(objType) & TypeMasks::SCALAR_TYPES) && componentIndex == 0) {
         return objReg;
       }
+      u8 index = static_cast<u8>(componentIndex);
+      if (!CheckSwizzleInRange(this, ref, objType, &index, 1))
+          return 0;
       u16 dest = AllocateRegister();
       builder.EmitInstruction(OP_VEC_EXTRACT, dest, objReg, componentIndex);
       // Get the scalar type from the vector type
@@ -2581,6 +2631,8 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       u32 swizzleLen = 0;
       if (DecodeSwizzleByHash(access.member.nameHash, access.member.nameLength,
                               indices, &swizzleLen)) {
+        if (!CheckSwizzleInRange(this, ref, GetRegisterType(objReg), indices, swizzleLen))
+            return 0;
         u16 dest = AllocateRegister();
         u32 shuffleMask = 0;
         for (u32 i = 0; i < swizzleLen; i++) {
