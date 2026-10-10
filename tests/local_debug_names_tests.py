@@ -13,8 +13,9 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def shader(body: str) -> str:
+def shader(body: str, declarations: str = "") -> str:
     return '''pipeline LocalNames {
+        ''' + declarations + '''
         attributes { }
         pass "Main" {
             vertex {
@@ -68,9 +69,9 @@ def run_local_debug_names_tests(compiler: Path) -> tuple[int, int]:
             self.addCleanup(self.temp.cleanup)
             self.folder = Path(self.temp.name)
 
-        def compile(self, body, debug=True):
+        def compile(self, body, debug=True, declarations=""):
             source = self.folder / "locals.bwsl"
-            source.write_text(shader(body), encoding="utf-8")
+            source.write_text(shader(body, declarations), encoding="utf-8")
             target = self.folder / ("debug" if debug else "plain")
             result = subprocess.run(
                 [str(compiler), str(source), "-all", "-o", str(target),
@@ -241,6 +242,50 @@ def run_local_debug_names_tests(compiler: Path) -> tuple[int, int]:
             self.assertTrue({"value", "cursor"}.isdisjoint(names(plain).values()))
             self.assertEqual([inst for inst in plain if inst[0] != 5],
                              [inst for inst in debug if inst[0] != 5])
+
+        def test_local_live_across_discard(self):
+            body = """
+                float2 coord = input.position.xy;
+                if (coord.x > 10.0) { discard; }
+                output.color = float4(coord, 1.0, 1.0);
+            """
+            _, debug = self.compile(body)
+            self.assert_names(debug, ["coord"])
+            self.assertTrue(any(op == 252 for op, _ in debug))  # OpKill
+            _, plain = self.compile(body, debug=False)
+            self.assertEqual([inst for inst in plain if inst[0] != 5],
+                             [inst for inst in debug if inst[0] != 5])
+
+        def test_struct_local_live_across_discard(self):
+            _, ops = self.compile("""
+                FragmentData fragIn;
+                fragIn.coord = input.position.xy;
+                if (fragIn.coord.x > 10.0) { discard; }
+                output.color = float4(fragIn.coord, 1.0, 1.0);
+            """, declarations="struct FragmentData { float2 coord; }")
+            self.assert_names(ops, ["fragIn"])
+
+        def test_local_live_across_inlined_discard(self):
+            _, ops = self.compile("""
+                float2 coord = input.position.xy;
+                reject(coord.x);
+                output.color = float4(coord, 1.0, 1.0);
+            """, declarations="""
+                reject :: (float x) -> void {
+                    if (x > 10.0) { discard; }
+                }
+            """)
+            self.assert_names(ops, ["coord"])
+            self.assertTrue(any(op == 252 for op, _ in ops))
+
+        def test_constant_local_keeps_its_name(self):
+            _, ops = self.compile("""
+                float brightness = 0.5;
+                output.color = float4(brightness);
+            """)
+            self.assert_names(ops, ["brightness"])
+            constants = {args[1] for op, args in ops if op == 43}  # OpConstant
+            self.assertTrue(any(names(ops).get(id) == "brightness" for id in constants))
 
         def test_debug_names_off_and_semantics_unchanged(self):
             _, plain = self.compile(EXAMPLE, debug=False)

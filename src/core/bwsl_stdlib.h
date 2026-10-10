@@ -6,7 +6,15 @@
 #include "bwsl_utils.h"
 #include <array>
 #include "SPIRV-Headers/include/spirv/1.2/GLSL.std.450.h"
-#include "SPIRV-Headers/include/spirv/1.2/spirv.hpp"
+// Include the unified definitions and opcode result metadata together. The
+// unity build reaches this header before the SPIR-V backend.
+#ifndef SPV_ENABLE_UTILITY_CODE
+#define SPV_ENABLE_UTILITY_CODE
+#include "SPIRV-Headers/include/spirv/unified1/spirv.hpp"
+#undef SPV_ENABLE_UTILITY_CODE
+#else
+#include "SPIRV-Headers/include/spirv/unified1/spirv.hpp"
+#endif
 
 // Sentinel values for opcodes that are not applicable
 constexpr spv::Op SPV_OP_NONE = spv::OpMax;

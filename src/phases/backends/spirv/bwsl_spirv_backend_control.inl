@@ -374,6 +374,27 @@ void SPIRVBuilder::EmitLocalNames() {
   // Wait until body emission has resolved copies and trivial PHIs. Never
   // allocate IDs for debug metadata: unused locals must stay unused, and the
   // default binary must not change. Several registers can alias a single ID.
+  // IDs preallocated for PHIs in terminated blocks may never be defined.
+  // Inspect emitted instructions so debug names cannot create dangling refs.
+  std::vector<bool> defined(nextId, false);
+  auto collectDefinitions = [&](const u32* words, u32 size) {
+    for (u32 offset = 0; offset < size;) {
+      u32 header = words[offset];
+      u32 count = header >> 16;
+      bool hasResult, hasResultType;
+      spv::HasResultAndType(static_cast<spv::Op>(header & 0xFFFF),
+                            &hasResult, &hasResultType);
+      if (hasResult) {
+        u32 id = words[offset + 1 + (hasResultType ? 1 : 0)];
+        if (id < defined.size()) defined[id] = true;
+      }
+      offset += count;
+    }
+  };
+  collectDefinitions(typesConstants.words, typesConstants.count);
+  collectDefinitions(globals.words, globals.count);
+  collectDefinitions(currentFunction, currentFunctionSize);
+
   std::vector<bool> named(nextId, false);
   for (u32 offset = 0; offset < debugNames.count;) {
     u32 header = debugNames.words[offset];
@@ -385,7 +406,7 @@ void SPIRVBuilder::EmitLocalNames() {
     offset += count;
   }
   auto nameId = [&](u32 id, u32 hash) {
-    if (id == 0 || id >= named.size() || named[id] || hash == 0) return;
+    if (id == 0 || id >= named.size() || !defined[id] || named[id] || hash == 0) return;
     std::string name = ReverseLookup::GetString(hash);
     if (!name.empty()) {
       EmitName(id, name.c_str());
