@@ -30,6 +30,7 @@ void SPIRVBuilder::Initialize(BWSL_Arena *arena, IR::IRProgram *ir,
   idDecorations = (u32 *)arena->Allocate(idCapacity * sizeof(u32), 64);
   hasPreAllocatedId = (bool *)arena->Allocate(idCapacity * sizeof(bool), 64);
   localVarIds = (u32 *)arena->Allocate(idCapacity * sizeof(u32), 64);
+  constantComposites = (bool *)arena->Allocate(idCapacity * sizeof(bool), 64);
   const u32 localArrayCapacity = std::max(1u, ir->localArrayCount);
   localArrayVarIds = (u32 *)arena->Allocate(localArrayCapacity * sizeof(u32), 64);
   localArrayTypeIds = (u32 *)arena->Allocate(localArrayCapacity * sizeof(u32), 64);
@@ -39,6 +40,7 @@ void SPIRVBuilder::Initialize(BWSL_Arena *arena, IR::IRProgram *ir,
   memset(idDecorations, 0, idCapacity * sizeof(u32));
   memset(hasPreAllocatedId, 0, idCapacity * sizeof(bool));
   memset(localVarIds, 0, idCapacity * sizeof(u32));
+  memset(constantComposites, 0, idCapacity * sizeof(bool));
   memset(localArrayVarIds, 0, localArrayCapacity * sizeof(u32));
   memset(localArrayTypeIds, 0, localArrayCapacity * sizeof(u32));
   memset(localArrayElemPtrTypes, 0, localArrayCapacity * sizeof(u32));

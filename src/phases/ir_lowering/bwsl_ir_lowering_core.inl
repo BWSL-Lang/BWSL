@@ -75,6 +75,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   sourceBase = srcBase;
   initializedVariables.clear();
   constVariables.clear();
+  constantVectors.clear();
   builder.pool = pool;
   builder.program = &program;
   builder.currentInstruction = 0;
@@ -265,6 +266,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   nodeRegisters.clear();
   variableRegisters.clear();
   constVariables.clear();
+  constantVectors.clear();
   arrayBaseRegisters.clear();
   structTypeMap.clear();
   variableStructTypes.clear();

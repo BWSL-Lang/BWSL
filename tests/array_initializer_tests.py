@@ -1,4 +1,4 @@
-"""Issue #130: compact local tables and scalar constant evaluation."""
+"""Issues #130 and #155: compact local tables and constant evaluation."""
 from __future__ import annotations
 
 import argparse
@@ -21,9 +21,9 @@ def run_array_initializer_tests(compiler: Path) -> tuple[int, int]:
             self.addCleanup(self.temp.cleanup)
             self.folder = Path(self.temp.name)
 
-        def compile(self, body, declarations=""):
+        def compile(self, body, declarations="", prelude=""):
             source = self.folder / "table.bwsl"
-            source.write_text(shader(body, declarations), encoding="utf-8")
+            source.write_text(prelude + shader(body, declarations), encoding="utf-8")
             target = self.folder / "output"
             result = subprocess.run(
                 [str(compiler), str(source), "-all", "-validation", "strict",
@@ -189,12 +189,102 @@ def run_array_initializer_tests(compiler: Path) -> tuple[int, int]:
 
         def test_interrupted_stores_keep_expression_order(self):
             _, ops = self.compile('''
-                float[3] table = {input.uv.x, input.uv.y * 2.0, input.uv.x + 3.0};
+                float[3] table;
+                table[0u] = input.uv.x;
+                table[1u] = input.uv.y * 2.0;
+                table[2u] = input.uv.x + 3.0;
                 output.color = float4(table[int(input.uv.y * 2.0)]);
             ''')
             _, _, stores = self.array_info(ops)
             self.assertEqual(stores, [])
             self.assertEqual(sum(op == 65 for op, _ in ops), 4)
+
+        def test_runtime_initializer_elements_form_one_composite(self):
+            _, ops = self.compile('''
+                float[3] table = {input.uv.x, input.uv.y * 2.0, input.uv.x + 3.0};
+                output.color = float4(table[int(input.uv.y * 2.0)]);
+            ''')
+            arrays, _, stores = self.array_info(ops)
+            constructs = {args[1]: args[2:] for op, args in ops if op == 80 and args[0] in arrays}
+            self.assertEqual(len(stores), 1)
+            self.assertIn(stores[0], constructs)
+            # Elements keep their source order; only the dynamic read indexes.
+            mul = next(args[1] for op, args in ops if op == 133)  # OpFMul
+            add = next(args[1] for op, args in ops if op == 129)  # OpFAdd
+            self.assertEqual(list(constructs[stores[0]][1:]), [mul, add])
+            self.assertEqual(sum(op == 65 for op, _ in ops), 1)
+
+        def vector_table(self, ops):
+            """Components of the one array, which must be stored once as a constant."""
+            arrays, _, stores = self.array_info(ops)
+            self.assertEqual(len(stores), 1)
+            composites = {args[1]: args[2:] for op, args in ops if op == 44}
+            constants = {args[1]: args[2] for op, args in ops if op == 43 and len(args) == 3}
+            self.assertIn(stores[0], composites)
+            to_float = lambda id: struct.unpack("<f", struct.pack("<I", constants[id]))[0]
+            # No element vector is built at runtime.
+            elements = {args[1] for op, args in ops if op == 28}
+            self.assertFalse(any(op == 80 and args[0] in elements for op, args in ops))
+            return [[to_float(c) for c in composites[v]] for v in composites[stores[0]]]
+
+        def test_constant_vector_table(self):
+            # Issue #155: arrays of vectors with constant elements were built
+            # with one store per element, in local memory.
+            target, ops = self.compile('''
+                float2[4] table = {
+                    float2(0.0, 0.0),
+                    float2(0.0625, -0.1875),
+                    float2(-0.0625),
+                    float2(0.3125, 0.0625)
+                };
+                output.color = float4(table[int(input.uv.x * 3.0)], 0.0, 1.0);
+            ''')
+            self.assertEqual(self.vector_table(ops), [
+                [0.0, 0.0], [0.0625, -0.1875], [-0.0625, -0.0625], [0.3125, 0.0625]])
+            gles = (target / "table.gles.frag").read_text()
+            self.assertRegex(gles, r"vec2 \w+\[4\] = vec2\[\]\(vec2\(0\.0\), "
+                                   r"vec2\(0\.0625, -0\.1875\), vec2\(-0\.0625\), "
+                                   r"vec2\(0\.3125, 0\.0625\)\);")
+
+        def test_constant_vector_arithmetic_folds(self):
+            _, ops = self.compile('''
+                float3[4] table = {
+                    float3(1.0, -3.0, 2.0) / 16.0,
+                    2.0 * float3(1.0, 2.0, 3.0),
+                    float3(1.0, 2.0, 3.0) - float3(0.5, 0.5, 4.0),
+                    (float3(1.0) + 1.0) * float3(0.25, 0.5, 1.0)
+                };
+                output.color = float4(table[int(input.uv.x * 3.0)], 1.0);
+            ''')
+            self.assertEqual(self.vector_table(ops), [
+                [0.0625, -0.1875, 0.125], [2.0, 4.0, 6.0], [0.5, 1.5, -1.0], [0.5, 1.0, 2.0]])
+            # Only the dynamic index's multiply is left.
+            arithmetic = [op for op, _ in ops if op in (129, 131, 133, 136, 142)]
+            self.assertEqual(arithmetic, [133])
+
+        def test_module_vector_constants_fold_into_table(self):
+            _, ops = self.compile('''
+                float2[3] table = {Kernel::A / 16.0, Kernel::B / 16.0, Kernel::A + Kernel::B};
+                output.color = float4(table[int(input.uv.x * 2.0)], 0.0, 1.0);
+            ''', "import Kernel", '''
+                module Kernel {
+                    const float2 A = float2(1.0, -3.0);
+                    const float2 B = float2(-1.0, 3.0);
+                }
+            ''')
+            self.assertEqual(self.vector_table(ops), [
+                [0.0625, -0.1875], [-0.0625, 0.1875], [0.0, 0.0]])
+
+        def test_vector_division_by_zero_stays_at_runtime(self):
+            _, ops = self.compile('''
+                float2[2] table = {float2(1.0, 2.0) / 0.0, float2(input.uv.x, 1.0)};
+                output.color = float4(table[int(input.uv.x)], 0.0, 1.0);
+            ''')
+            arrays, _, stores = self.array_info(ops)
+            constructs = {args[1] for op, args in ops if op == 80 and args[0] in arrays}
+            self.assertEqual(len(stores), 1)
+            self.assertIn(stores[0], constructs)
+            self.assertTrue(any(op == 136 for op, _ in ops))  # OpFDiv
 
         def test_loop_initializer_and_mutable_arithmetic(self):
             _, ops = self.compile('''

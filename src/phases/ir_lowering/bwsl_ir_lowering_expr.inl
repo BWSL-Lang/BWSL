@@ -1005,6 +1005,7 @@ inline u16 IRLowering::LowerBinaryOp(NodeRef ref) {
       program.metadata[builder.currentInstruction - 1] =
           GetVectorDimension(vectorType);
       SetRegisterType(splat, vectorType);
+      RecordConstantVector(splat);
 
       if (leftIsVector) {
         right = splat;
@@ -1267,6 +1268,7 @@ inline u16 IRLowering::LowerBinaryOp(NodeRef ref) {
   }
 
   u16 constant = TryFoldScalarArithmetic(op, left, right);
+  if (constant == 0xFFFF) constant = TryFoldVectorArithmetic(op, left, right);
   if (constant != 0xFFFF) return constant;
   builder.EmitInstruction(op, dest, left, right);
 

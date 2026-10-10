@@ -25,7 +25,8 @@ u32 SPIRVBuilder::TranslateArrayStoreSequence(u32 first, u32 end) {
     if (!IR::IsUintConstant(index) || ir->uintConstants[index & 0x1FFF] != i) return 0;
     u16 value = ir->GetOperand(inst, 1);
     if (value == 0xFFFF) return 0;
-    constant &= IR::IsConstant(value);
+    constant &= IR::IsConstant(value) ||
+                (value < idCapacity && constantComposites[value]);
   }
   std::vector<u32> values;
   values.reserve(count);

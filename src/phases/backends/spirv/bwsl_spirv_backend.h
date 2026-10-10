@@ -29,6 +29,7 @@ struct SPIRVBuilder {
     alignas(64) u32* localVarIds;        // Maps IR register -> OpVariable ID (for address-taken vars)
     alignas(64) u32* localArrayVarIds;   // SPIR-V IDs for local array variables
     alignas(64) u32* localArrayTypeIds;  // Value types for whole-array initialization
+    alignas(64) bool* constantComposites; // Register is an OpConstantComposite
     alignas(64) u32* localArrayElemPtrTypes;  // Pointer types for local array elements
     // Rebound local pointers carry a runtime producer tag, without requiring
     // VariablePointers support in downstream GLSL/HLSL/Metal compilers.

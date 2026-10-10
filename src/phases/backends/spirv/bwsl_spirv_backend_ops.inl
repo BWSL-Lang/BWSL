@@ -2501,6 +2501,27 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
       }
 
       CoreType desiredScalarType = GetScalarComponentType(resultType);
+
+      // A vector of scalar constants is a module-scope constant. That keeps
+      // it usable in a constant array initializer (see
+      // TranslateArrayStoreSequence) instead of being rebuilt in the body.
+      bool allConstant = requiredComponents > 1 &&
+                         (inputCount == 1 || inputCount == requiredComponents);
+      for (u32 c = 0; allConstant && c < inputCount; c++) {
+        allConstant = IR::IsConstant(inputRegs[c]) &&
+                      GetOperandType(inputRegs[c]) == desiredScalarType;
+      }
+      if (allConstant) {
+        u32 ops[6] = {result_type_id, dest};
+        for (u32 c = 0; c < requiredComponents; c++) {
+          ops[2 + c] = inputIds[inputCount == 1 ? 0 : c];
+        }
+        EmitToSection(&typesConstants, spv::OpConstantComposite, ops,
+                      2 + requiredComponents);
+        if (dest_reg < idCapacity) constantComposites[dest_reg] = true;
+        break;
+      }
+
       auto convertScalar = [&](u32 value_id, CoreType srcType) -> u32 {
         if (srcType == desiredScalarType)
           return value_id;

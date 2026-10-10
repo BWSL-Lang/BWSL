@@ -205,6 +205,11 @@ struct IRLowering {
   };
   std::unordered_map<u16, StructArrayValueInfo> structArrayValueRegs;
 
+  // Vector temporaries built from scalar constants only, mapped to the
+  // OP_VEC_CONSTRUCT that defines them. These registers are written once, so
+  // arithmetic on them can be folded into another constant vector.
+  std::unordered_map<u16, u32> constantVectors;
+
   // Record `dest` as a struct-field array value when the extracted field is
   // an array. Call after emitting OP_STRUCT_EXTRACT for a struct field.
   void MarkIfStructArrayField(u16 dest, u16 parentStructReg,
@@ -509,6 +514,9 @@ struct IRLowering {
   u16 ConvertRegisterToType(u16 reg, CoreType targetType);
   u16 TryConvertScalarConstant(u16 reg, CoreType targetType);
   u16 TryFoldScalarArithmetic(OpCode op, u16 left, u16 right);
+  void RecordConstantVector(u16 reg);
+  bool GetConstantVectorComponents(u16 reg, u16 components[4], u32 *width);
+  u16 TryFoldVectorArithmetic(OpCode op, u16 left, u16 right);
 
   u16 GetOrAllocateVariable(u32 nameHash);
 
