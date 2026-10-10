@@ -811,7 +811,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             op == IR::OP_STRUCT_CONSTRUCT ||                // Struct positional constructor
             op == IR::OP_STORAGE_FIELD || op == IR::OP_STORAGE_INDEX || op == IR::OP_STORAGE_LOAD ||
             op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_LOAD || op == IR::OP_LOCAL_STORE ||  // Pointer operations
-            op == IR::OP_LOCAL_FIELD_PTR ||                                                     // Struct-field pointer
+            op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_LOCAL_INDEX_PTR ||                     // Struct-field pointers
             op == IR::OP_ARRAY_LOAD || op == IR::OP_ARRAY_STORE) {  // Array operations with register indices
             shouldRenameOperands = true;
         }
@@ -885,8 +885,14 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                 
                 // Check if source is a constant reference
                 bool srcIsConstant = (srcReg & 0xC000) != 0;
+                // An address-taken source lives in memory and can change after
+                // this copy, so it can't stand in for the copied value (in a
+                // phi or a later read). Snapshot it like a constant.
+                bool srcInMemory = !srcIsConstant && srcReg < ir->registerCount &&
+                    ir->registerStorageInfo &&
+                    (ir->registerStorageInfo[srcReg] & IR::IRProgram::STORAGE_IS_ADDRESS_TAKEN);
                 
-                if (srcIsConstant) {
+                if (srcIsConstant || srcInMemory) {
                     // Source is a constant - allocate a new SSA register for this definition.
                     // This is critical for phi nodes: they need a typed register reference,
                     // not a raw constant reference.

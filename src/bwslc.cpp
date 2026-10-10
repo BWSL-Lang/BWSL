@@ -2233,21 +2233,10 @@ CompileResult CompileShaderStage(
 
     result.explicitSamplerUses = CollectExplicitSamplerUses(lowering.program, stage);
 
-    bool hasLocalPointers = false;
-    for (u32 i = 0; i < lowering.program.instructionCount; ++i) {
-        switch (static_cast<IR::OpCode>(lowering.program.opcodes[i])) {
-            case IR::OP_LOCAL_VAR_PTR:
-            case IR::OP_LOCAL_FIELD_PTR:
-            case IR::OP_LOCAL_LOAD:
-            case IR::OP_LOCAL_STORE:
-                hasLocalPointers = true;
-                break;
-            default: break;
-        }
-    }
-    // Local pointer identity is represented by the SPIR-V memory lowering.
-    // Reuse that path until the direct emitter has equivalent pointer support.
-    const bool emitDirectGles = !hasLocalPointers &&
+    // Pointers the direct emitter can't express (`^var`, copied pointers)
+    // need the SPIR-V path, which tracks their targets at run time.
+    const bool hasUnsupportedPointers = !GLES::SupportsLocalPointers(lowering.program);
+    const bool emitDirectGles = !hasUnsupportedPointers &&
         (useDirectGles || (allowDirectGlesFallback && ProgramNeedsDirectGLESFallback(lowering.program)));
 
     // Direct GLES output (bypasses SPIRV-Cross)

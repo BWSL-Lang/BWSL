@@ -717,7 +717,8 @@ void GLESBuilder::EmitControlFlow() {
     // Registers must survive loop edges and both arms of a selection.
     for (u32 reg = 0; reg < regCount; ++reg) {
         if ((regInfo[reg].flags & REG_DECLARED) ||
-            regInfo[reg].uniformPointerInstruction) continue;
+            regInfo[reg].uniformPointerInstruction ||
+            regInfo[reg].localPointerInstruction) continue;
         u16 type = ir->registerTypes ? ir->registerTypes[reg] : 0;
         if (type == 0 || type == static_cast<u16>(CoreType::VOID)) continue;
         out.NL(indent); EmitRegWithDecl(static_cast<u16>(reg)); out.Chr(';');
@@ -2019,6 +2020,26 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             out.Lit("// Wave ops not supported in GLSL ES 300");
             return;
 
+        // ===== Local struct variables, accessed in place =====
+        case IR::OP_LOCAL_FIELD_PTR:
+        case IR::OP_LOCAL_INDEX_PTR:
+            // Emitted where used, as an access path (see EmitExpr).
+            return;
+
+        case IR::OP_LOCAL_LOAD:
+            EmitRegWithDecl(dest);
+            out.Lit(" = ");
+            EmitExpr(Op(instIdx, 0));
+            out.Chr(';');
+            return;
+
+        case IR::OP_LOCAL_STORE:
+            EmitExpr(Op(instIdx, 0));
+            out.Lit(" = ");
+            EmitExpr(Op(instIdx, 1));
+            out.Chr(';');
+            return;
+
         // ===== Call (function calls - should be inlined) =====
         case IR::OP_CALL:
             out.Lit("// Function call - should be inlined");
@@ -2088,6 +2109,21 @@ void GLESBuilder::EmitExpr(u16 reg) {
                 out.Chr('.');
                 EmitStructFieldNameByIndex(ir->metadata[instIdx], Op(instIdx, 1));
             }
+        }
+        return;
+    }
+
+    // A pointer into a local struct variable is its access path.
+    if (reg < regCount && regInfo[reg].localPointerInstruction) {
+        u32 instIdx = regInfo[reg].localPointerInstruction - 1;
+        EmitExpr(Op(instIdx, 0));
+        if (ir->opcodes[instIdx] == IR::OP_LOCAL_INDEX_PTR) {
+            out.Chr('[');
+            EmitExpr(Op(instIdx, 1));
+            out.Chr(']');
+        } else {
+            out.Chr('.');
+            EmitStructFieldNameByIndex(ir->metadata[instIdx], Op(instIdx, 1));
         }
         return;
     }

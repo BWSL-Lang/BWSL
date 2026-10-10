@@ -486,6 +486,8 @@ inline u16 IRLowering::LowerIdentifier(NodeRef ref) {
 
   if (currentStructMethodTypeHash != 0 &&
       currentStructMethodSelfReg != 0xFFFF) {
+    u16 inPlace = TryLoadLocalPlace(ref);
+    if (inPlace != 0xFFFF) return inPlace;
     u32 fieldIndex = 0xFFFFFFF;
     CoreType fieldType = CoreType::INVALID;
     u32 fieldTypeHash = 0;

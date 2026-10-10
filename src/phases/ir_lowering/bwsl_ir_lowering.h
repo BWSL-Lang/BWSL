@@ -355,6 +355,36 @@ struct IRLowering {
   // object). The caller falls back to the legacy ADDRESS_OF path on 0.
   u16 TryLowerLocalFieldAddressOf(NodeRef memberRef);
 
+  // ============= In-place struct variables =============
+  // A struct local (a declared variable, a parameter copy or `self`) keeps
+  // its value in memory, and field reads and writes go through an access
+  // chain instead of rebuilding the whole struct value. A rebuilt value is a
+  // whole-struct copy at every merge and loop header once SSA runs (#143).
+  //
+  // A place is the variable itself or a pointer to one of its fields or to an
+  // element of an array field.
+  struct LocalPlace {
+    u16 reg = 0xFFFF;         // Root variable, or the pointer register
+    bool isPointer = false;   // false: reg is the root variable
+    CoreType type = CoreType::INVALID;  // Value type (element type of an array field)
+    u32 structHash = 0;       // Struct type when type is CUSTOM
+    u32 arrayLength = 0;      // > 0: an array field, which isn't loaded as a value
+    u16 rootReg = 0xFFFF;
+    u32 rootNameHash = 0;
+  };
+  bool IsInPlaceStructVariable(u16 reg) const;
+  // Resolves `expr` to a place without emitting anything when !emit, or
+  // emits the pointer chain when emit. Fails for anything else (swizzles,
+  // resources, pointers, non-struct variables), which lowers as before.
+  bool ResolveLocalPlace(NodeRef expr, bool emit, LocalPlace *out);
+  bool ResolveLocalField(const LocalPlace &base, u32 memberHash, bool emit,
+                         LocalPlace *out);
+  // Loads `expr` in place; returns 0xFFFF when it isn't a loadable place.
+  u16 TryLoadLocalPlace(NodeRef expr);
+  // Stores `valueReg` to `target` in place; returns false when `target`
+  // isn't a place, so the caller lowers the store as before.
+  bool TryStoreLocalPlace(NodeRef target, u16 valueReg);
+
   u16 LowerUnaryOp(NodeRef ref);
 
   u16 LowerIdentifier(NodeRef ref);
@@ -466,6 +496,7 @@ struct IRLowering {
   u16 EmitConstantInt(u32 value);
   bool CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
                                  NodeRef indexExpr = NodeRef::Null());
+  bool CheckConstIndexInBounds(u16 indexReg, NodeRef indexExpr, u32 length);
 
   u16 EmitConstantUint(u32 value);
 

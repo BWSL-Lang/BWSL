@@ -39,6 +39,13 @@
   previously rejected as an invalid swizzle.
 
 ### Backends
+- Struct locals are updated in place. Writing a field or an array element of
+  a struct no longer copies the whole struct at every branch merge and loop
+  iteration, which made shaders that mutate structs in loops (for example
+  through a mutating method) several times slower than equivalent GLSL.
+- `-gles-direct` output for struct locals compiles: the zero value a struct
+  starts from was declared as `void`. Boolean `&&`/`||` are no longer emitted
+  as `&`/`|`, and a fragment stage's `input.position` is `gl_FragCoord`.
 - A mutating struct method no longer wipes the receiver's other fields, and
   writing a field of a struct parameter no longer resets the parameter's
   other fields. The first field write zero-initialized the whole struct.

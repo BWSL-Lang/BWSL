@@ -257,6 +257,19 @@ u32 SPIRVBuilder::GetStructTypeId(u32 structTypeHash) {
   return struct_type_id;
 }
 
+// The type a struct declares for a member. Array members are the struct's own
+// OpTypeArray (with its ArrayStride), which an access chain must match.
+// Returns 0 when the struct isn't in the field-type cache.
+u32 SPIRVBuilder::GetStructMemberTypeId(u32 structTypeHash, u32 fieldIndex) {
+  if (fieldIndex >= MAX_FIELDS_PER_STRUCT || GetStructTypeId(structTypeHash) == 0)
+    return 0;
+  for (u32 i = 0; i < structTypeCount; i++) {
+    if (structTypeHashes[i] == structTypeHash)
+      return structFieldTypeIds[i * MAX_FIELDS_PER_STRUCT + fieldIndex];
+  }
+  return 0;
+}
+
 // ============= Texture Type Management =============
 u32 SPIRVBuilder::GetImageTypeId() {
   if (imageTypeId != 0)

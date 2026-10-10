@@ -1665,6 +1665,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
     variableRegisters[paramNameHash] = paramReg;
     constVariables.erase(paramNameHash);
     initializedVariables.insert(paramNameHash); // holds the argument's value
+    program.registerNameHashes[paramReg] = paramNameHash; // its own variable
 
     u32 paramTypeHash = 0;
     CoreType paramType =
@@ -2008,6 +2009,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
     variableRegisters[paramNameHash] = paramReg;
     constVariables.erase(paramNameHash);
     initializedVariables.insert(paramNameHash); // holds the argument's value
+    program.registerNameHashes[paramReg] = paramNameHash; // its own variable
 
     // Also set the type for the parameter based on the type name
     // The second element of the pair is the type name (e.g., "uint",
