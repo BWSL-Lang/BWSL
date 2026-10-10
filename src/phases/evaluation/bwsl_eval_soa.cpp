@@ -707,32 +707,30 @@ bool CompileTimeEvaluatorSoA::EvaluateFunctionCall(EvalStateSoA* state, NodeRef 
         return true;
     }
 
-    // min(a, b)
+    // min(a, b, ...) and max(a, b, ...), folded left to right like the
+    // lowering does. Only when every argument has the same scalar type.
     static const u32 minHash = Utils::HashStr("min");
-    if (nameHash == minHash && argCount == 2) {
-        if (args[0].type == LiteralValue::FLOAT && args[1].type == LiteralValue::FLOAT) {
-            outValue->type = LiteralValue::FLOAT;
-            outValue->floatValue = (args[0].floatValue < args[1].floatValue) ? args[0].floatValue : args[1].floatValue;
-            return true;
-        }
-        if (args[0].type == LiteralValue::INT && args[1].type == LiteralValue::INT) {
-            outValue->type = LiteralValue::INT;
-            outValue->intValue = (args[0].intValue < args[1].intValue) ? args[0].intValue : args[1].intValue;
-            return true;
-        }
-    }
-
-    // max(a, b)
     static const u32 maxHash = Utils::HashStr("max");
-    if (nameHash == maxHash && argCount == 2) {
-        if (args[0].type == LiteralValue::FLOAT && args[1].type == LiteralValue::FLOAT) {
-            outValue->type = LiteralValue::FLOAT;
-            outValue->floatValue = (args[0].floatValue > args[1].floatValue) ? args[0].floatValue : args[1].floatValue;
-            return true;
+    if ((nameHash == minHash || nameHash == maxHash) && argCount >= 2) {
+        bool isMin = nameHash == minHash;
+        LiteralValue::Type type = args[0].type;
+        bool sameType = type == LiteralValue::FLOAT || type == LiteralValue::INT;
+        for (u32 i = 1; i < argCount && sameType; i++) {
+            sameType = args[i].type == type;
         }
-        if (args[0].type == LiteralValue::INT && args[1].type == LiteralValue::INT) {
-            outValue->type = LiteralValue::INT;
-            outValue->intValue = (args[0].intValue > args[1].intValue) ? args[0].intValue : args[1].intValue;
+        if (sameType) {
+            *outValue = args[0];
+            for (u32 i = 1; i < argCount; i++) {
+                if (type == LiteralValue::FLOAT) {
+                    f32 v = args[i].floatValue;
+                    if (isMin ? v < outValue->floatValue : v > outValue->floatValue)
+                        outValue->floatValue = v;
+                } else {
+                    s32 v = args[i].intValue;
+                    if (isMin ? v < outValue->intValue : v > outValue->intValue)
+                        outValue->intValue = v;
+                }
+            }
             return true;
         }
     }

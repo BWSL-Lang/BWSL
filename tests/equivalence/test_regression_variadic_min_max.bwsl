@@ -1,0 +1,32 @@
+// Regression (#141): min/max with more than two arguments kept only the
+// first two. The extreme value is never among the first two arguments here.
+pipeline EquivVariadicMinMax {
+
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+
+        compute "Main" [1, 1, 1] {
+            // 0, but not a compile-time constant, so these calls are lowered
+            // rather than folded. `c` is folded by the evaluator.
+            uint zu = input.global_id.x;
+            int zi = int(zu);
+            float z = float(zu);
+            const float c = min(3.0, 2.0, 1.0);
+            float3 v = min(float3(3.0, 1.0, 2.0) + z, float3(2.0, 3.0, 1.0), float3(1.0, 2.0, 3.0));
+
+            resources.output[0] = min(3.0 + z, 2.0 + z, 1.0 + z);
+            resources.output[1] = max(1.0 + z, 2.0 + z, 3.0 + z);
+            resources.output[2] = min(5.0 + z, 4.0 + z, 3.0 + z, 6.0 + z, 2.0 + z, 1.0 + z);
+            resources.output[3] = float(min(4 + zi, 3 + zi, 2 + zi));
+            resources.output[4] = float(max(1u + zu, 3u + zu, 5u + zu));
+            resources.output[5] = c;
+            resources.output[6] = v.x;
+            resources.output[7] = v.y;
+            resources.output[8] = v.z;
+        }
+    }
+}

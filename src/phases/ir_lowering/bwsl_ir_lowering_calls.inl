@@ -716,24 +716,27 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       op = (mask(argType) & TypeMasks::FLOAT_TYPES) ? OP_FABS : OP_IABS;
       break;
     }
-    case Intrinsic::MIN: {
-      CoreType argType = GetRegisterType(args[0]);
-      if (mask(argType) & TypeMasks::FLOAT_TYPES)
-        op = OP_FMIN;
-      else if (mask(argType) & TypeMasks::UINT_TYPES)
-        op = OP_UMIN;
-      else
-        op = OP_IMIN;
-      break;
-    }
+    case Intrinsic::MIN:
     case Intrinsic::MAX: {
+      bool isMin = intrinsic == Intrinsic::MIN;
       CoreType argType = GetRegisterType(args[0]);
       if (mask(argType) & TypeMasks::FLOAT_TYPES)
-        op = OP_FMAX;
+        op = isMin ? OP_FMIN : OP_FMAX;
       else if (mask(argType) & TypeMasks::UINT_TYPES)
-        op = OP_UMAX;
+        op = isMin ? OP_UMIN : OP_UMAX;
       else
-        op = OP_IMAX;
+        op = isMin ? OP_IMIN : OP_IMAX;
+      // min/max are variadic: reduce left to right, min(a, b, c) =
+      // min(min(a, b), c). The last step is emitted below like any binary
+      // intrinsic, so clear consumed arguments out of its operand slots.
+      for (u32 i = 2; i < argCount; i++) {
+        u16 partial = AllocateRegister();
+        builder.EmitInstruction(op, partial, args[0], args[1]);
+        SetRegisterType(partial, argType);
+        args[0] = partial;
+        args[1] = args[i];
+        args[i] = 0xFFFF;
+      }
       break;
     }
     case Intrinsic::CLAMP: {
