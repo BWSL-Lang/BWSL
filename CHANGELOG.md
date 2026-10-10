@@ -40,6 +40,8 @@
 - `min` and `max` with more than two arguments reduce over all of them, up
   to 16. Previously only the first two were used and the rest were
   silently dropped. More than 16 arguments is a source error.
+- `min` and `max` with both float and integer (or bool) arguments produce a
+  source error. Previously they failed SPIR-V validation.
 
 ### Backends
 - Struct type and member names are preserved without `-debug-names`, so nested

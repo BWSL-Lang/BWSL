@@ -11,11 +11,12 @@ pipeline EquivVariadicMinMax {
 
         compute "Main" [1, 1, 1] {
             // 0, but not a compile-time constant, so these calls are lowered
-            // rather than folded. `c` is folded by the evaluator.
+            // rather than folded. `c` and `cu` are folded by the evaluator.
             uint zu = input.global_id.x;
             int zi = int(zu);
             float z = float(zu);
             const float c = min(3.0, 2.0, 1.0);
+            const uint cu = max(1u, 2u, 5u, 3u);
             float3 v = min(float3(3.0, 1.0, 2.0) + z, float3(2.0, 3.0, 1.0), float3(1.0, 2.0, 3.0));
 
             resources.output[0] = min(3.0 + z, 2.0 + z, 1.0 + z);
@@ -27,6 +28,7 @@ pipeline EquivVariadicMinMax {
             resources.output[6] = v.x;
             resources.output[7] = v.y;
             resources.output[8] = v.z;
+            resources.output[9] = float(cu);
         }
     }
 }

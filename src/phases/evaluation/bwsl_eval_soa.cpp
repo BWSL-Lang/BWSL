@@ -714,7 +714,8 @@ bool CompileTimeEvaluatorSoA::EvaluateFunctionCall(EvalStateSoA* state, NodeRef 
     if ((nameHash == minHash || nameHash == maxHash) && argCount >= 2) {
         bool isMin = nameHash == minHash;
         LiteralValue::Type type = args[0].type;
-        bool sameType = type == LiteralValue::FLOAT || type == LiteralValue::INT;
+        bool sameType = type == LiteralValue::FLOAT || type == LiteralValue::INT ||
+                        type == LiteralValue::UINT;
         for (u32 i = 1; i < argCount && sameType; i++) {
             sameType = args[i].type == type;
         }
@@ -725,6 +726,10 @@ bool CompileTimeEvaluatorSoA::EvaluateFunctionCall(EvalStateSoA* state, NodeRef 
                     f32 v = args[i].floatValue;
                     if (isMin ? v < outValue->floatValue : v > outValue->floatValue)
                         outValue->floatValue = v;
+                } else if (type == LiteralValue::UINT) {
+                    u32 v = args[i].uintValue;
+                    if (isMin ? v < outValue->uintValue : v > outValue->uintValue)
+                        outValue->uintValue = v;
                 } else {
                     s32 v = args[i].intValue;
                     if (isMin ? v < outValue->intValue : v > outValue->intValue)
