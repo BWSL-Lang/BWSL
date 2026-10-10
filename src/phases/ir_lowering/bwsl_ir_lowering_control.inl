@@ -57,17 +57,22 @@ inline void IRLowering::LowerStatement(NodeRef ref) {
   }
 }
 
-inline void IRLowering::LowerStatementWithReturnGuard(NodeRef ref) {
-  if (inlineReturnFlagReg == 0xFFFF) {
-    LowerStatement(ref);
-    return;
-  }
-
+inline void IRLowering::LowerStatementsWithReturnGuard(const BlockData &block,
+                                                       u32 first) {
   u32 branchIdx = builder.currentInstruction;
   builder.EmitInstruction(OP_BRANCH, 0, inlineReturnFlagReg, 0, 0);
 
   u32 falseTarget = builder.currentInstruction;
-  LowerStatement(ref);
+  for (u32 i = first; i < block.statements.count; i++) {
+    u32 returnCountBefore = inlineReturnCounter;
+    LowerStatement(block.statements[i]);
+    // This statement may have returned too: the rest needs its own guard.
+    if (inlineReturnCounter != returnCountBefore &&
+        i + 1 < block.statements.count) {
+      LowerStatementsWithReturnGuard(block, i + 1);
+      break;
+    }
+  }
 
   u32 mergePoint = builder.currentInstruction;
   builder.EmitInstruction(OP_NOP, 0, 0);

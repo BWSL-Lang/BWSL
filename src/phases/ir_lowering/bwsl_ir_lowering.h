@@ -318,7 +318,9 @@ struct IRLowering {
 
   void LowerStatement(NodeRef ref);
 
-  void LowerStatementWithReturnGuard(NodeRef ref);
+  // Lowers block.statements[first..] under one "not returned yet" guard
+  // (inside an inlined call, after a statement that may have returned).
+  void LowerStatementsWithReturnGuard(const BlockData &block, u32 first);
 
   void LowerBreak();
 
