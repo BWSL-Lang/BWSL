@@ -998,6 +998,84 @@ inline u16 IRLowering::EmitConstantUint(u32 value) {
     return 0x6000 | (u16)slot;
 }
 
+inline u16 IRLowering::TryConvertScalarConstant(u16 reg, CoreType targetType) {
+  if (reg == 0xFFFF || !IR::IsConstant(reg)) return 0xFFFF;
+  CoreType sourceType = GetRegisterType(reg);
+  if (sourceType == targetType) return reg;
+  double value;
+  if (sourceType == CoreType::FLOAT) value = program.floatConstants[reg & 0x7FFF];
+  else if (sourceType == CoreType::INT) value = static_cast<s32>(program.intConstants[reg & 0x1FFF]);
+  else if (sourceType == CoreType::UINT) value = program.uintConstants[reg & 0x1FFF];
+  else if (sourceType == CoreType::BOOL) value = program.boolConstants[reg & 0x3FFF];
+  else return 0xFFFF;
+  if (targetType == CoreType::FLOAT) return builder.EmitConstant(static_cast<float>(value));
+  if (targetType != CoreType::INT && targetType != CoreType::UINT) return 0xFFFF;
+  if (sourceType == CoreType::FLOAT) {
+    // Float-to-integer conversion is undefined outside the target's range.
+    // Do not invoke an undefined host cast while compiling those expressions.
+    value = std::trunc(value);
+    if (!std::isfinite(value) ||
+        (targetType == CoreType::INT && (value < INT32_MIN || value > INT32_MAX)) ||
+        (targetType == CoreType::UINT && (value < 0 || value > UINT32_MAX))) return 0xFFFF;
+  }
+  u32 bits = sourceType == CoreType::INT ||
+                     (sourceType == CoreType::FLOAT && targetType == CoreType::INT)
+                 ? static_cast<u32>(static_cast<s32>(value))
+                 : static_cast<u32>(value);
+  return targetType == CoreType::INT ? EmitConstantInt(bits) : EmitConstantUint(bits);
+}
+
+inline u16 IRLowering::TryFoldScalarArithmetic(OpCode op, u16 left, u16 right) {
+  if (left == 0xFFFF || right == 0xFFFF || !IR::IsConstant(left) ||
+      !IR::IsConstant(right) || GetRegisterType(left) != GetRegisterType(right)) return 0xFFFF;
+  CoreType type = GetRegisterType(left);
+  if (type == CoreType::FLOAT) {
+    float a = program.floatConstants[left & 0x7FFF], b = program.floatConstants[right & 0x7FFF];
+    float result;
+    switch (op) {
+    case OP_FADD: result = a + b; break;
+    case OP_FSUB: result = a - b; break;
+    case OP_FMUL: result = a * b; break;
+    case OP_FDIV: if (b == 0) return 0xFFFF; result = a / b; break;
+    default: return 0xFFFF;
+    }
+    if (!std::isfinite(result)) return 0xFFFF;
+    return builder.EmitConstant(result);
+  }
+  if (type == CoreType::UINT) {
+    u32 a = program.uintConstants[left & 0x1FFF], b = program.uintConstants[right & 0x1FFF];
+    u32 result;
+    switch (op) {
+    case OP_IADD: result = a + b; break;
+    case OP_ISUB: result = a - b; break;
+    case OP_IMUL: result = a * b; break;
+    case OP_IDIV: if (!b) return 0xFFFF; result = a / b; break;
+    case OP_IMOD: if (!b) return 0xFFFF; result = a % b; break;
+    default: return 0xFFFF;
+    }
+    return EmitConstantUint(result);
+  }
+  if (type == CoreType::INT) {
+    s64 a = static_cast<s32>(program.intConstants[left & 0x1FFF]);
+    s64 b = static_cast<s32>(program.intConstants[right & 0x1FFF]);
+    s64 result;
+    switch (op) {
+    case OP_IADD: result = a + b; break;
+    case OP_ISUB: result = a - b; break;
+    case OP_IMUL: result = a * b; break;
+    case OP_IDIV:
+    case OP_IMOD:
+      if (!b || (a == INT32_MIN && b == -1)) return 0xFFFF;
+      result = op == OP_IDIV ? a / b : a % b;
+      break;
+    default: return 0xFFFF;
+    }
+    if (result < INT32_MIN || result > INT32_MAX) return 0xFFFF;
+    return EmitConstantInt(static_cast<u32>(result));
+  }
+  return 0xFFFF;
+}
+
 inline u16 IRLowering::ConvertRegisterToType(u16 reg, CoreType targetType) {
   CoreType sourceType = GetRegisterType(reg);
   if (sourceType == targetType) {
@@ -1023,6 +1101,8 @@ inline u16 IRLowering::ConvertRegisterToType(u16 reg, CoreType targetType) {
     return reg;
   }
 
+  u16 constant = TryConvertScalarConstant(reg, targetType);
+  if (constant != 0xFFFF) return constant;
   u16 converted = AllocateRegister();
   builder.EmitInstruction(convOp, converted, reg);
   SetRegisterType(converted, targetType);

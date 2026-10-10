@@ -5,6 +5,47 @@
 
 namespace BWSL {
 
+u32 SPIRVBuilder::TranslateArrayStoreSequence(u32 first, u32 end) {
+  if (ir->opcodes[first] != IR::OP_ARRAY_STORE) return 0;
+  u16 base = ir->destinations[first];
+  if (base >= ir->registerCount || !ir->registerStorageInfo ||
+      !(ir->registerStorageInfo[base] & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY)) return 0;
+  u32 array = ir->registerStorageInfo[base] >> IR::IRProgram::STORAGE_BINDING_SHIFT;
+  if (array >= ir->localArrayCount) return 0;
+  u32 count = ir->localArraySizes[array];
+  // Stay inside the current basic block and the SPIR-V instruction word limit.
+  // Partial writes and sequences interrupted by an expression retain their
+  // original element stores, so no reads or side effects move across a write.
+  if (count == 0 || count > end - first || count > 0xFFFF - 3) return 0;
+  bool constant = true;
+  for (u32 i = 0; i < count; ++i) {
+    u32 inst = first + i;
+    if (ir->opcodes[inst] != IR::OP_ARRAY_STORE || ir->destinations[inst] != base) return 0;
+    u16 index = ir->GetOperand(inst, 0);
+    if (!IR::IsUintConstant(index) || ir->uintConstants[index & 0x1FFF] != i) return 0;
+    u16 value = ir->GetOperand(inst, 1);
+    if (value == 0xFFFF) return 0;
+    constant &= IR::IsConstant(value);
+  }
+  std::vector<u32> values;
+  values.reserve(count);
+  for (u32 i = 0; i < count; ++i) values.push_back(GetSpirvId(ir->GetOperand(first + i, 1)));
+  u32 composite;
+  if (constant) {
+    composite = GetCompositeConstantId(localArrayTypeIds[array], values.data(), count);
+  } else {
+    composite = AllocateId();
+    u32 words = 3 + count;
+    while (currentFunctionSize + words > currentFunctionCapacity) GrowCurrentFunction();
+    currentFunction[currentFunctionSize++] = (words << 16) | spv::OpCompositeConstruct;
+    currentFunction[currentFunctionSize++] = localArrayTypeIds[array];
+    currentFunction[currentFunctionSize++] = composite;
+    for (u32 value : values) currentFunction[currentFunctionSize++] = value;
+  }
+  Emit(spv::OpStore, localArrayVarIds[array], composite);
+  return count;
+}
+
 u32 SPIRVBuilder::GetOrCreateBlockLabel(u32 ir_idx) {
   // Check if we already have a label for this IR index
   for (u32 i = 0; i < blockCount; i++) {
@@ -716,6 +757,7 @@ void SPIRVBuilder::EmitFunctionBody() {
         localArrayElemPtrTypes[i] =
             GetPointerTypeId(elemTypeId, spv::StorageClassFunction);
         localArrayVarIds[i] = varId;
+        localArrayTypeIds[i] = arrayTypeId;
       }
     }
 
@@ -764,8 +806,10 @@ void SPIRVBuilder::EmitFunctionBody() {
     // Emit all local pointer OpVariables at the start of the function
     emitLocalPointerVars();
 
-    for (u32 i = 0; i < ir->instructionCount; i++) {
-      TranslateInstruction(i);
+    for (u32 i = 0; i < ir->instructionCount;) {
+      u32 count = TranslateArrayStoreSequence(i, ir->instructionCount);
+      if (count) i += count;
+      else TranslateInstruction(i++);
     }
 
     if (ir->instructionCount == 0 ||
@@ -799,8 +843,10 @@ void SPIRVBuilder::EmitFunctionBody() {
     bool lastIsTerminator = IR::IsTerminator(lastOp);
 
     u32 endInst = lastIsTerminator ? lastInst : lastInst + 1;
-    for (u32 i = firstInst; i < endInst; i++) {
-      TranslateInstruction(i);
+    for (u32 i = firstInst; i < endInst;) {
+      u32 count = TranslateArrayStoreSequence(i, endInst);
+      if (count) i += count;
+      else TranslateInstruction(i++);
     }
 
     // Handle terminator with structured control flow

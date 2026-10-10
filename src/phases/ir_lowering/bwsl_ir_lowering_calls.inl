@@ -1096,6 +1096,8 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
                                 argCount == 1;
 
       if (isScalarConversion) {
+        u16 constant = TryConvertScalarConstant(args[0], constructedType);
+        if (constant != 0xFFFF) return constant;
         // Scalar type conversion - emit appropriate conversion opcode
         CoreType srcType = GetRegisterType(args[0]);
         if (srcType == constructedType) {

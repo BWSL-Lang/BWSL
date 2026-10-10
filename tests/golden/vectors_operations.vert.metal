@@ -22,9 +22,9 @@ vertex main0_out main0(main0_in in [[stage_in]])
     float3 _23 = float3(0.0, 1.0, 0.0);
     float3 _25 = float3(1.0);
     float3 _45 = float3(0.0);
-    float3 _92 = float3(1.0, 0.0, 0.0);
-    float2 _101 = float2(3.0, 4.0);
-    float4 _111 = float4(1.0, 2.0, 3.0, 4.0);
+    float3 _89 = float3(1.0, 0.0, 0.0);
+    float2 _98 = float2(3.0, 4.0);
+    float4 _108 = float4(1.0, 2.0, 3.0, 4.0);
     out.gl_Position = float4(in.a_position, 1.0);
     out.v_normal = in.a_normal;
     return out;

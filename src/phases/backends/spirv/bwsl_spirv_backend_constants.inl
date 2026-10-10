@@ -103,7 +103,7 @@ void SPIRVBuilder::EmitToSection(Section *section, spv::Op op, u32 *operands,
                                  u32 operand_count) {
   u32 word_count = 1 + operand_count;
 
-  if (section->count + word_count > section->capacity) {
+  while (section->count + word_count > section->capacity) {
     GrowSection(section);
   }
 

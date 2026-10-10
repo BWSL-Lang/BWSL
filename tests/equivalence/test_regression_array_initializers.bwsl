@@ -1,0 +1,31 @@
+// Issue #130: constant and runtime composites retain indexing and mutation.
+pipeline ArrayInitializers {
+    const int ELEMENT_COUNT = 10;
+    resources { output: buffer<float> }
+
+    lookup :: (int index) -> float {
+        float[ELEMENT_COUNT] table = {1,2,3,4,5,6,7,8,9,10};
+        return table[index];
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [64, 1, 1] {
+            uint idx = input.global_id.x;
+            float[3] dynamic = {float(idx), 2.0, 3.0};
+            dynamic[1] += float(idx);
+            float total = lookup(int(idx % 10u)) + dynamic[1];
+            for (int i = 0; i < 3; i++) {
+                float[3] table = {1,2,3};
+                table[1] = float(i);
+                total += table[i];
+            }
+            int[2] converted = {int(-6.75), int(4294967295u)};
+            total += float(converted[0] + converted[1]);
+            float[2] rounded = {16777217, 0u-1u};
+            total += rounded[0] - 16777216.0;
+            total += rounded[1] - 4294967296.0;
+            resources.output[idx] = total;
+        }
+    }
+}
