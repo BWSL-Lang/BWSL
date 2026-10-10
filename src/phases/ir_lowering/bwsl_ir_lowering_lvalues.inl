@@ -2510,6 +2510,19 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
     // Fragment shader reading interpolated varyings from vertex output
     // input.xxx -> OP_LOAD_INPUT with slot index
 
+    // A name the vertex stage never wrote has no slot; GetInputSlotIndex would
+    // fall back to a guessed slot and type that the vertex stage doesn't declare.
+    if (currentPassVaryings && currentPassVaryings->vertexStageLowered &&
+        currentPassVaryings->GetSlot(memberHash) < 0) {
+      std::string memberName = ReverseLookup::GetString(memberHash);
+      std::string message = "Error: varying '" + memberName +
+                            "' is read in the fragment stage but never written "
+                            "by the vertex stage - assign output." +
+                            memberName + " in the vertex stage\n";
+      ReportErrorAt(ref, message.c_str());
+      return 0;
+    }
+
     // Map varying name to slot index using pass context if available
     u16 inputSlot = (u16)GetInputSlotIndex(memberHash);
     builder.EmitInstruction(OP_LOAD_INPUT, dest, inputSlot);

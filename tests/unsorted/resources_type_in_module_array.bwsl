@@ -27,6 +27,7 @@ pipeline ResourceTypeInModuleArray {
           tmp = tmp * scale + offset;
       }
       output.position = float4(tmp, attributes.position.z, 1.0);
+      output.color = float4(1.0, 1.0, 1.0, 1.0);
     }
 
     fragment {

@@ -2155,6 +2155,9 @@ CompileResult CompileShaderStage(
         result.error = "IR lowering failed. See diagnostic above.";
         return result;
     }
+    if (stage == ShaderStage::Vertex && varyingContext) {
+        varyingContext->vertexStageLowered = true;
+    }
 
     // Ensure return
     if (lowering.program.instructionCount == 0 ||

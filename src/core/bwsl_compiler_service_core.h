@@ -679,6 +679,9 @@ private:
             lowering.LowerStatement(block.statements[i]);
         }
         if (lowering.hadError) return false;
+        if (stage == ShaderStage::Vertex && passVaryings) {
+            passVaryings->vertexStageLowered = true;
+        }
         
         // Ensure return at end
         if (lowering.program.instructionCount == 0 ||

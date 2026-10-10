@@ -300,6 +300,7 @@ inline void IRLowering::LowerPass(NodeRef passRef) {
     currentStage = ShaderStage::Vertex;
     LowerPassConstants(pass);
     LowerShaderStage(pass.vertexShader);
+    varyingContext.vertexStageLowered = !hadError;
   }
 
   // Phase 2: Lower fragment shader (uses collected varyings for input

@@ -207,6 +207,7 @@ ERROR_CASE_TESTS = {
     "type_alias_scope_isolation.bwsl": "Unknown type 'Material' in using alias",
     "workgroup_id_wrong_stage.bwsl": "input.workgroup_id is only available in compute shaders",
     "input_attribute_in_vertex_stage.bwsl": "input.position is not available in vertex shaders - use attributes.position",
+    "varying_read_never_written.bwsl": "varying 'tint' is read in the fragment stage but never written by the vertex stage",
     "local_id_wrong_stage.bwsl": "input.local_id is only available in compute shaders",
     "matrix_alias_rejected.bwsl": "Matrix aliases float2x2/float3x3/float4x4 are not supported",
     "dereference_non_pointer.bwsl": "dereference (`^` postfix) applied to a non-pointer value",
