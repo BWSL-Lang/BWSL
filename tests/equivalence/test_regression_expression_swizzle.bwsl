@@ -1,0 +1,37 @@
+// Regression (#138): a swizzle on a non-variable expression only handled
+// .x/.xy/.xyz (and rgba), so float2(0.25, 0.75).xyxy kept type float2.
+pipeline EquivExpressionSwizzle {
+
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+
+        compute "Main" [1, 1, 1] {
+            // 0, but not a compile-time constant.
+            float z = float(input.global_id.x);
+            float2 tc = float2(1.0, 2.0) + z;
+
+            float4 a = float2(0.25, 0.75).xyxy;
+            float4 b = tc.xxyy + float2(-0.5, 1.5).xyxy;
+            float3 c = float4(tc, 3.0, 4.0).wzy;
+            float2 d = (tc * 2.0).gr;
+
+            resources.output[0] = a.x;
+            resources.output[1] = a.y;
+            resources.output[2] = a.z;
+            resources.output[3] = a.w;
+            resources.output[4] = b.x;
+            resources.output[5] = b.y;
+            resources.output[6] = b.z;
+            resources.output[7] = b.w;
+            resources.output[8] = c.x;
+            resources.output[9] = c.y;
+            resources.output[10] = c.z;
+            resources.output[11] = d.x;
+            resources.output[12] = d.y;
+        }
+    }
+}

@@ -1980,41 +1980,42 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       return dest;
     }
 
-    // Check for multi-component swizzle (rgb, xyz, etc.)
-    static const u32 HASH_RGB = Utils::HashStr("rgb");
-    static const u32 HASH_XYZ = Utils::HashStr("xyz");
-    static const u32 HASH_XY = Utils::HashStr("xy");
-    static const u32 HASH_RG = Utils::HashStr("rg");
-
-    if (memberHash == HASH_RGB || memberHash == HASH_XYZ) {
-      // Extract first 3 components (vec4 -> vec3)
-      u16 dest = AllocateRegister();
-      // For VEC_SHUFFLE: operand0 = src0, operand1 = src1 (same for
-      // single-source swizzle) Metadata = shuffle mask (4 bits per component)
-      u32 shuffleMask = (0 << 0) | (1 << 4) | (2 << 8); // components 0, 1, 2
-      builder.EmitInstruction(OP_VEC_SHUFFLE, dest, objectReg, objectReg);
-      program.metadata[builder.currentInstruction - 1] = shuffleMask;
-      // Get the scalar type and build the appropriate vec3 type
-      CoreType vectorType = GetRegisterType(objectReg);
-      CoreType scalarType = GetScalarComponentType(vectorType);
-      SetRegisterType(dest, GetVectorType(scalarType, 3));
-      return dest;
+    // Multi-component swizzle: any 2-4 components from xyzw or rgba, like
+    // swizzles on variables. Only .xyz/.rgb/.xy/.rg used to be handled
+    // here, so float2(...).xyxy kept the constructor's type.
+    {
+        u8 indices[4] = {0, 0, 0, 0};
+        u32 swizzleLen = 0;
+        if (DecodeSwizzleByHash(memberHash, access.member.nameLength, indices,
+                                &swizzleLen)) {
+            u16 dest = AllocateRegister();
+            u32 shuffleMask = 0;
+            for (u32 i = 0; i < swizzleLen; i++) {
+                shuffleMask |= (indices[i] & 0xF) << (i * 4);
+            }
+            builder.EmitInstruction(OP_VEC_SHUFFLE, dest, objectReg, objectReg);
+            program.metadata[builder.currentInstruction - 1] = shuffleMask;
+            CoreType vectorType = GetRegisterType(objectReg);
+            CoreType scalarType = GetScalarComponentType(vectorType);
+            SetRegisterType(dest, GetVectorType(scalarType, swizzleLen));
+            return dest;
+        }
     }
 
-    if (memberHash == HASH_XY || memberHash == HASH_RG) {
-      // Extract first 2 components (vec4/vec3 -> vec2)
-      u16 dest = AllocateRegister();
-      u32 shuffleMask = (0 << 0) | (1 << 4); // components 0, 1
-      builder.EmitInstruction(OP_VEC_SHUFFLE, dest, objectReg, objectReg);
-      program.metadata[builder.currentInstruction - 1] = shuffleMask;
-      // Get the scalar type and build the appropriate vec2 type
-      CoreType vectorType = GetRegisterType(objectReg);
-      CoreType scalarType = GetScalarComponentType(vectorType);
-      SetRegisterType(dest, GetVectorType(scalarType, 2));
-      return dest;
+    // Vector and scalar values only support swizzle member access, so a
+    // member that didn't decode above is invalid.
+    {
+        CoreType objType = GetRegisterType(objectReg);
+        if (mask(objType) &
+            (TypeMasks::FLOAT_VECTORS | TypeMasks::INT_VECTORS |
+             TypeMasks::UINT_VECTORS | TypeMasks::BOOL_VECTORS |
+             TypeMasks::SCALAR_TYPES)) {
+            ReportError("Error: invalid swizzle - swizzles use 1-4 components from a single naming set (xyzw or rgba)\n");
+            return objectReg;
+        }
     }
 
-    // No swizzle or unknown member, return object as-is
+    // Unknown member, return object as-is
     return objectReg;
   }
 

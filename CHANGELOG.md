@@ -37,6 +37,11 @@
 - Vertex attributes beyond the supported 16 slots produce a source error.
 - `.length` works on local arrays and array function parameters. It was
   previously rejected as an invalid swizzle.
+- Swizzles on expressions such as `float2(0.25, 0.75).xyxy` or
+  `(a + b).yx` have the swizzled type. Previously only `.xy` and `.xyz`
+  (and `.rg`, `.rgb`) worked there; other swizzles kept the expression's
+  type and failed SPIR-V validation. Invalid swizzles on expressions are
+  rejected like those on variables.
 
 ### Backends
 - Struct type and member names are preserved without `-debug-names`, so nested
