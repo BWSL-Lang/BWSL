@@ -352,6 +352,9 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
             clonedData.typePosition = src.typePosition;
             clonedData.namePosition = src.namePosition;
             clonedData.arraySizes = src.arraySizes;
+            if (const char* sourceFile = ast->GetDeclarationSource(node)) {
+                ast->SetDeclarationSource(cloned, ast->InternSourceFile(sourceFile));
+            }
             return cloned;
         }
 

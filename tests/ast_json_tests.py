@@ -635,6 +635,53 @@ class AstJsonTests(unittest.TestCase):
         line_key, column_key = (prefix + 'Line', prefix + 'Column') if prefix else ('line', 'column')
         self.assertEqual((entry.get(line_key), entry.get(column_key)), expected, entry)
 
+    def test_type_qualifier_nodes_and_edges_use_the_declarations_source_file(self):
+        data = self.parse('pipeline P { import Qualified import Plain }', {
+            'Shared.bwsl': 'module Shared { struct Box { float value; } }',
+            'Qualified.bwsl': '''module Qualified {
+import Shared as S
+struct Holder {
+    S::Box field;
+}
+identity :: (S::Box box) -> S::Box { return box; }
+value :: () -> float {
+    S::Box local;
+    local.value = 1.0;
+    return identity(local).value;
+}
+}''',
+            # Same positions, and equally wide type spellings, as Qualified.
+            'Plain.bwsl': '''module Plain {
+
+struct Holder {
+    float2 field;
+}
+identity :: (float2 box) -> float2 { return box; }
+value :: () -> float {
+    float2 local = float2(1.0);
+    return identity(local).x;
+}
+}''',
+        })
+        modules = {m['name']: m for m in data['modules']}
+        plain_nodes = list(objects(modules['Plain']))
+        for node in plain_nodes:
+            self.assertNotIn('typeQualifier', node)
+            self.assertNotIn('returnTypeQualifier', node)
+        plain_ids = {n['id'] for n in plain_nodes if 'id' in n}
+        qualifier_edges = self.edges(data, 'qualifier')
+        self.assertFalse(any(e['from'].rsplit('/', 1)[0] in plain_ids
+                             for e in qualifier_edges))
+        qualified_nodes = list(objects(modules['Qualified']))
+        qualifiers = [n[key] for n in qualified_nodes
+                      for key in ('typeQualifier', 'returnTypeQualifier') if key in n]
+        self.assertEqual(len(qualifiers), 4)  # field, parameter, return type, local
+        for qualifier in qualifiers:
+            self.assertEqual(qualifier['name'], 'S')
+            self.assertTrue(any(e['from'] == qualifier['id'] and
+                                e['to'] == modules['Shared']['id']
+                                for e in qualifier_edges))
+
     def test_declarations_record_their_source_file(self):
         data = self.parse('''
             pipeline P { import Dependency import Random }
