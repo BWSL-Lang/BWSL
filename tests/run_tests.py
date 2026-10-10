@@ -3498,6 +3498,11 @@ def main() -> int:
     passed += array_passed
     failed += array_failed
 
+    from inline_return_tests import run_inline_return_tests
+    inline_return_passed, inline_return_failed = run_inline_return_tests(bwslc)
+    passed += inline_return_passed
+    failed += inline_return_failed
+
     from p1_regression_tests import run_p1_regression_tests
     p1_passed, p1_failed = run_p1_regression_tests(bwslc, output_dir / "p1_validation")
     passed += p1_passed

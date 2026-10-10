@@ -347,12 +347,13 @@ inline void IRLowering::LowerBlock(NodeRef blockRef) {
   auto savedVariableStructTypes = variableStructTypes;
 
   for (u32 i = 0; i < block.statements.count; i++) {
-    u32 returnCountBefore = inlineReturnCounter;
     if (guardInlineReturns && returnSeen) {
-      LowerStatementWithReturnGuard(block.statements[i]);
-    } else {
-      LowerStatement(block.statements[i]);
+      // One guard for the rest of the block, not one per statement.
+      LowerStatementsWithReturnGuard(block, i);
+      break;
     }
+    u32 returnCountBefore = inlineReturnCounter;
+    LowerStatement(block.statements[i]);
     if (guardInlineReturns && inlineReturnCounter != returnCountBefore) {
       returnSeen = true;
     }
