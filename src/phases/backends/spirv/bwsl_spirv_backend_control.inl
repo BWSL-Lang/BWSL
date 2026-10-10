@@ -462,8 +462,15 @@ void SPIRVBuilder::EmitLocalNames() {
     for (u32 reg = 0; reg < count && reg < idCapacity; reg++) {
       nameId(localVarIds[reg], ir->registerNameHashes[reg]);
     }
+    // An undef register stands for "not assigned on this path" and becomes an
+    // OpUndef, which SPIRV-Cross declares at module scope. Naming it after the
+    // variable would give every inlined copy a global of the same name.
+    std::vector<bool> undef(count, false);
+    for (u32 i = 0; ir->undefRegs && i < ir->undefRegCount; i++) {
+      if (ir->undefRegs[i] < count) undef[ir->undefRegs[i]] = true;
+    }
     for (u32 reg = 0; reg < count && reg < idCapacity; reg++) {
-      nameId(spirvIds[reg], ir->registerNameHashes[reg]);
+      if (!undef[reg]) nameId(spirvIds[reg], ir->registerNameHashes[reg]);
     }
   }
   if (ir->localArrayNameHashes) {

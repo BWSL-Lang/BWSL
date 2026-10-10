@@ -287,6 +287,28 @@ def run_local_debug_names_tests(compiler: Path) -> tuple[int, int]:
             constants = {args[1] for op, args in ops if op == 43}  # OpConstant
             self.assertTrue(any(names(ops).get(id) == "brightness" for id in constants))
 
+        def test_inlined_copies_keep_global_names_unique(self):
+            # #142: a local assigned after an early return is undefined on the
+            # return path. Each inlined copy's OpUndef is declared at module
+            # scope by SPIRV-Cross, so naming it `squared` gave two globals of
+            # the same name and invalid GLSL ('squared' : redefinition).
+            declarations = """
+                shade :: (float x) -> float {
+                    float scaled = x * 2.0;
+                    if (scaled > 1.0) {
+                        return 1.0;
+                    }
+                    float squared = scaled * scaled;
+                    return squared;
+                }
+            """
+            target, ops = self.compile(
+                "output.color = float4(shade(input.uv.x), shade(input.uv.y), 0.0, 1.0);",
+                declarations=declarations)
+            self.assert_names(ops, ["scaled", "squared"])
+            undefs = {args[1] for op, args in ops if op == 1}  # OpUndef
+            self.assertTrue(undefs.isdisjoint(names(ops)), "OpUndef must stay unnamed")
+
         def test_debug_names_off_and_semantics_unchanged(self):
             _, plain = self.compile(EXAMPLE, debug=False)
             _, debug = self.compile(EXAMPLE, debug=True)

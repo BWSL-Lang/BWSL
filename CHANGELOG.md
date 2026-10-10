@@ -54,6 +54,9 @@
 - A mutating struct method no longer wipes the receiver's other fields, and
   writing a field of a struct parameter no longer resets the parameter's
   other fields. The first field write zero-initialized the whole struct.
+- With `-debug-names`, calling a function with an early `return` more than
+  once in a stage no longer gives GLSL two globals with the same name
+  (`'squared' : redefinition`).
 - Struct type and member names are preserved without `-debug-names`, so nested
   uniforms link across GL shader stages, including mixed GLES emitters.
 - `-debug-names` preserves source local-variable and array names in SPIR-V
