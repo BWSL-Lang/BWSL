@@ -1339,6 +1339,7 @@ NodeRef Parser::ParseEvalStatement() {
         ArenaString::MakeHashOnly(varName),
         ArenaString::MakeHashOnly(typeName),
         expr, true, line, col);
+    RecordDeclarationSource(varDecl);
     ast->GetVariableDecl(varDecl).isEval = true;
 
     // Add to symbol table
@@ -1524,6 +1525,7 @@ NodeRef Parser::ParseForStatement(bool isEval) {
                 ArenaString::MakeHashOnly(varName),
                 ArenaString::MakeHashOnly(typeStr),
                 initializer, false, line, col);
+            RecordDeclarationSource(firstPart);
             ast->GetVariableDecl(firstPart).typePosition = AST::PackPosition(line, col);
             ast->GetVariableDecl(firstPart).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
 

@@ -529,7 +529,8 @@ inline void AppendFunctionParameters(std::ostringstream& json, const AST& ast,
     const ArenaArray<std::pair<ArenaString, ArenaString>>& params,
     const std::string& idPrefix,
     const ArenaArray<ParameterSourcePositions>* positions = nullptr,
-    const ArenaArray<ArenaArray<u32>>* arraySizes = nullptr) {
+    const ArenaArray<ArenaArray<u32>>* arraySizes = nullptr,
+    const char* sourceFile = nullptr) {
     json << "[";
     for (u32 i = 0; i < params.count; i++) {
         if (i > 0) json << ",";
@@ -544,7 +545,8 @@ inline void AppendFunctionParameters(std::ostringstream& json, const AST& ast,
                 "line", "column");
             AppendPackedPosition(json, first, position.namePosition, "nameLine", "nameColumn");
             AppendPackedPosition(json, first, position.typePosition, "typeLine", "typeColumn");
-            AppendTypeQualifierField(json, first, ast, position.typePosition, id);
+            AppendTypeQualifierField(json, first, ast, position.typePosition, id,
+                                     "typeQualifier", "/type-qualifier", sourceFile);
         }
         AppendArenaStringFields(json, first, "name", params[i].first);
         const std::string elementType = ResolveArenaString(params[i].second);
@@ -570,7 +572,8 @@ inline void AppendStructFields(std::ostringstream& json, const AST& ast,
         AppendPackedPosition(json, first, fields[i].namePosition, "line", "column");
         AppendPackedPosition(json, first, fields[i].namePosition, "nameLine", "nameColumn");
         AppendPackedPosition(json, first, fields[i].typePosition, "typeLine", "typeColumn");
-        AppendTypeQualifierField(json, first, ast, fields[i].typePosition, id);
+        AppendTypeQualifierField(json, first, ast, fields[i].typePosition, id,
+                                 "typeQualifier", "/type-qualifier", sourceFile);
         AppendArenaStringFields(json, first, "name", fields[i].name);
         AppendStringField(json, first, "dataType", AstReferenceIndex::StructFieldTypeName(ast, fields[i], sourceFile));
         AppendFieldName(json, first, "typeInfo");
@@ -1011,7 +1014,8 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             AppendStringField(json, first, "declaredType", elementType);
             AppendFieldName(json, first, "typeInfo");
             AppendDeclarationTypeInfo(json, elementType, ArraySizes(node.arraySizes));
-            AppendTypeQualifierField(json, first, ast, node.typePosition, NodeRefId(ref));
+            AppendTypeQualifierField(json, first, ast, node.typePosition, NodeRefId(ref),
+                                     "typeQualifier", "/type-qualifier", ast.GetDeclarationSource(ref));
             if (node.typePosition != 0) {
                 u32 typeLine = 0, typeColumn = 0;
                 AST::UnpackPosition(node.typePosition, typeLine, typeColumn);
@@ -1116,7 +1120,7 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             AppendArenaStringFields(json, first, "name", node.name);
             AppendFieldName(json, first, "parameters");
             AppendFunctionParameters(json, ast, node.parameters, NodeRefId(ref) + "/parameter:",
-                                     &node.parameterPositions, &node.parameterArraySizes);
+                                     &node.parameterPositions, &node.parameterArraySizes, ast.GetDeclarationSource(ref));
             const std::string returnType = FunctionReturnTypeToString(ast, node, ast.GetDeclarationSource(ref));
             AppendStringField(json, first, "returnType", returnType);
             AppendFieldName(json, first, "returnTypeInfo");
@@ -1124,7 +1128,7 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             AppendPackedPosition(json, first, node.returnTypePosition,
                                  "returnTypeLine", "returnTypeColumn");
             AppendTypeQualifierField(json, first, ast, node.returnTypePosition, NodeRefId(ref),
-                                     "returnTypeQualifier", "/return-type-qualifier");
+                                     "returnTypeQualifier", "/return-type-qualifier", ast.GetDeclarationSource(ref));
             AppendNodeField(json, first, "body", ast, node.body, depth);
             AppendBoolField(json, first, "isEval", node.isEval);
             AppendBoolField(json, first, "isStructMethod", node.isStructMethod);

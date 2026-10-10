@@ -172,6 +172,7 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
         ArenaString::MakeHashOnly(ReverseLookup::GetString(SymbolTable::GetCoreTypeNameHash(elementType))),
         initializer, false, line, col, storageClass, static_cast<u8>(arrayDims.size()),
         static_cast<u32>(totalSize), SymbolTable::GetCoreTypeNameHash(elementType));
+    RecordDeclarationSource(varDecl);
     ast->GetVariableDecl(varDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
     for (u32 dim : arrayDims) ast->GetVariableDecl(varDecl).arraySizes.Push(arena, dim);
 

@@ -672,7 +672,8 @@ private:
                 AddSymbol({fieldId, "struct-field", fieldName, fieldId, id, fieldType, {}});
                 RememberDeclaration(fieldId, ref, field.namePosition);
                 if (field.arraySize != 0) FindSymbol(fieldId)->arraySizes = {field.arraySize};
-                AddQualifierReference(fieldId, field.typePosition);
+                AddQualifierReference(fieldId, field.typePosition,
+                                      "/type-qualifier", ast_.GetDeclarationSource(ref));
                 const std::string stableStruct = StableIdOf(id);
                 if (!stableStruct.empty()) {
                     SetStableId(fieldId, stableStruct + "/field:" + fieldName);
@@ -1269,7 +1270,8 @@ private:
 
         CheckType(ref, FunctionReturnType(ref), function.returnTypePosition);
         AddTypeReference(functionId, FunctionReturnType(ref), "return-type");
-        AddQualifierReference(functionId, function.returnTypePosition, "/return-type-qualifier");
+        AddQualifierReference(functionId, function.returnTypePosition,
+                              "/return-type-qualifier", ast_.GetDeclarationSource(ref));
         PushScope();
         for (u32 i = 0; i < function.parameters.count; i++) {
             const std::string parameterId = functionId + "/parameter:" + std::to_string(i);
@@ -1287,7 +1289,8 @@ private:
             AddTypeReference(parameterId, type, "type");
             if (i < function.parameterPositions.count) {
                 CheckType(ref, type, function.parameterPositions[i].typePosition);
-                AddQualifierReference(parameterId, function.parameterPositions[i].typePosition);
+                AddQualifierReference(parameterId, function.parameterPositions[i].typePosition,
+                                      "/type-qualifier", ast_.GetDeclarationSource(ref));
             }
             if (i < function.parameterPositions.count) {
                 CheckShadowing(ref, parameterId, name, function.parameterPositions[i].namePosition, "Parameter");
@@ -1314,7 +1317,8 @@ private:
             variable.typePosition, ast_.GetDeclarationSource(ref));
         CheckType(ref, type, variable.typePosition);
         AddTypeReference(NodeId(ref), type, "type");
-        AddQualifierReference(NodeId(ref), variable.typePosition);
+        AddQualifierReference(NodeId(ref), variable.typePosition,
+                              "/type-qualifier", ast_.GetDeclarationSource(ref));
         CheckShadowing(ref, NodeId(ref), name, variable.namePosition, "Variable");
         Bind(name, {NodeId(ref), CanonicalType(type, CurrentOwner())});
     }

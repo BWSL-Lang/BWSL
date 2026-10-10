@@ -115,6 +115,81 @@ def run_parser_module_tests(compiler: Path) -> tuple[int, int]:
                                             "-validation", "strict")
                     self.assertTrue(binaries)
 
+        def test_transitive_modules_keep_local_type_qualifiers_in_their_source_file(self):
+            # Each qualified field in Collision occupies the same line/column
+            # as a different local declaration in Wrapper. Import order must
+            # not qualify Wrapper's built-in or unqualified local types.
+            (self.base / "Dependency.bwsl").write_text(
+                "module Dependency { struct Box { float value; } "
+                "base :: () -> float { return 1.0; } }\n")
+            (self.base / "Collision.bwsl").write_text(
+                "module Collision {\n"
+                "import Dependency\n"
+                "struct Fields {\n"
+                "    Dependency::Box scalar;\n"
+                "          Dependency::Box constant;\n"
+                "    Dependency::Box array;\n"
+                "    Dependency::Box custom;\n"
+                "    Dependency::Box iterator;\n"
+                "}\n}\n")
+            wrapper = self.base / "Wrapper.bwsl"
+            wrapper.write_text(
+                "module Wrapper {\n"
+                "import Dependency import Collision\n"
+                "value :: () -> float {\n"
+                "    float2 vector = float2(1.0);\n"
+                "    const float amount = 2.0;\n"
+                "    float[2] array = {3.0, 4.0};\n"
+                "    Box local;\n"
+                "    for (int index = 0; index < 1; index++) { local.value = amount; }\n"
+                "    return vector.x + array[0] + local.value + Dependency::base();\n"
+                "}\n"
+                "struct Box { float value; }\n}\n")
+            shader = self.base / "shader.bwsl"
+            shader.write_text(
+                "pipeline Test { import Wrapper\n"
+                'pass "Main" {\n'
+                "vertex { output.position = float4(Wrapper::value()); }\n"
+                "fragment { output.color = float4(Wrapper::value()); }\n"
+                "}\n}\n")
+            for mode in ("-check", "-ast-json"):
+                result = subprocess.run(
+                    [str(compiler), str(shader), mode], cwd=self.base,
+                    text=True, capture_output=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                if mode == "-ast-json":
+                    data = json.loads(result.stdout)
+                    def objects(value):
+                        if isinstance(value, dict):
+                            yield value
+                            for child in value.values():
+                                yield from objects(child)
+                        elif isinstance(value, list):
+                            for child in value:
+                                yield from objects(child)
+                    module = next(m for m in data["modules"] if m["name"] == "Wrapper")
+                    locals = {n["name"]: n for n in objects(module)
+                              if n.get("type") == "VARIABLE_DECL"}
+                    expected = {"vector": "float2", "amount": "float", "array": "float",
+                                "local": "Box", "index": "int"}
+                    for name, type_name in expected.items():
+                        node = locals[name]
+                        self.assertEqual(node["declaredType"], type_name)
+                        self.assertNotIn("typeQualifier", node)
+                        self.assertEqual(Path(node["sourceFile"]).resolve(), wrapper.resolve())
+                        self.assertFalse(any(r["from"] == node["id"] + "/type-qualifier"
+                                             for r in data["referenceIndex"]["references"]))
+            binaries = self.compile([shader], self.base / "compiled", "-gles",
+                                    "-validation", "strict")
+            self.assertEqual(len(binaries), 2)
+            # Explicitly importing the transitive dependencies is only a
+            # workaround; it must not change either shader's generated code.
+            shader.write_text(shader.read_text().replace(
+                "import Wrapper", "import Wrapper import Dependency import Collision"))
+            explicit = self.compile([shader], self.base / "explicit", "-gles",
+                                    "-validation", "strict")
+            self.assertEqual(binaries, explicit)
+
         def test_same_module_constant_and_type_remain_duplicates(self):
             shader = self.base / "duplicate.bwsl"
             shader.write_text("module Types { const float V = 5.0; "

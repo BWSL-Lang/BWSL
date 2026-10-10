@@ -258,6 +258,7 @@ NodeRef Parser::ParseStatement() {
         NodeRef varDecl = ASTFactory::MakeVariableDecl(ast, varNameStr,
             ArenaString::MakeHashOnly(typeStr),
             value, true, line, col);
+        RecordDeclarationSource(varDecl);
         ast->GetVariableDecl(varDecl).typePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
         ast->GetVariableDecl(varDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
 
@@ -500,6 +501,7 @@ NodeRef Parser::ParseStatement() {
             ArenaString::MakeHashOnly(varName),
             ArenaString::MakeHashOnly(typeStr),
             initializer, false, line, col, storageClass);
+        RecordDeclarationSource(varDecl);
         ast->GetVariableDecl(varDecl).typePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
         ast->GetVariableDecl(varDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
 
@@ -700,6 +702,7 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
             ArenaString::MakeHashOnly(typeName),
             initializer, false, line, col);
     }
+    RecordDeclarationSource(varDecl);
     for (u32 dim : arrayDims) ast->GetVariableDecl(varDecl).arraySizes.Push(arena, dim);
     ast->GetVariableDecl(varDecl).typePosition = AST::PackPosition(line, col);
     ast->GetVariableDecl(varDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
