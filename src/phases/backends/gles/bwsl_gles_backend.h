@@ -260,8 +260,15 @@ struct RegInfo {
 // (`^var`) or a pointer that is copied (assigned, passed, merged in a phi)
 // needs the SPIR-V path, which tracks its target at run time.
 inline bool SupportsLocalPointers(const IR::IRProgram& program) {
+    // Operands carry tag bits for constants and markers, and registerCount
+    // can exceed the register range, so decode an operand before using it
+    // as a register index.
+    auto isRegister = [&](u16 reg) {
+        return !IR::IsConstant(reg) && reg < IR::RegisterLimit &&
+               reg < program.registerCount;
+    };
     auto isAccessPointer = [&](u16 reg) {
-        if (reg >= program.registerCount) return false;
+        if (!isRegister(reg)) return false;
         for (u32 i = 0; i < program.instructionCount; i++) {
             u16 op = program.opcodes[i];
             if ((op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_LOCAL_INDEX_PTR) &&
@@ -277,7 +284,7 @@ inline bool SupportsLocalPointers(const IR::IRProgram& program) {
                                   op == IR::OP_LOCAL_LOAD || op == IR::OP_LOCAL_STORE;
         for (u32 operand = 0; operand < 4; operand++) {
             u16 reg = program.GetOperand(i, operand);
-            if (reg >= program.registerCount || !program.registerStorageInfo ||
+            if (!isRegister(reg) || !program.registerStorageInfo ||
                 !(program.registerStorageInfo[reg] & IR::IRProgram::STORAGE_IS_FIELD_PTR))
                 continue;
             // A field/element pointer may only be the address operand.
@@ -290,7 +297,7 @@ inline bool SupportsLocalPointers(const IR::IRProgram& program) {
     for (u32 phi = 0; phi < program.phiCount; phi++) {
         for (u32 i = 0; i < program.GetPhiOperandCount(phi); i++) {
             u16 reg = program.GetPhiOperandValue(phi, i);
-            if (reg < program.registerCount && program.registerStorageInfo &&
+            if (isRegister(reg) && program.registerStorageInfo &&
                 (program.registerStorageInfo[reg] & IR::IRProgram::STORAGE_IS_PTR))
                 return false;
         }
