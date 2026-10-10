@@ -1043,6 +1043,43 @@ value :: () -> float {
         self.assertEqual(qualified['qualifier']['name'], 'C')
         self.assert_edge(data, qualified['qualifier']['id'], 'MODULE:0', 'qualifier')
 
+    def test_vector_constants_fold_to_navigable_constructor_calls(self):
+        source = '''
+            module Dirs {
+                const float2 NORTH = float2(0.0, -1.0);
+                flip :: (float2 v) -> float2 { return v * NORTH; }
+            }
+            pipeline P {
+                import Dirs
+                attributes {
+                    position: float2
+                }
+                pass "Main" {
+                    use attributes { position }
+                    vertex {
+                        float2 p = Dirs::flip(attributes.position) + Dirs::NORTH.yx;
+                        output.position = float4(p, 0.0, 1.0);
+                    }
+                }
+            }
+        '''
+        data = self.parse(source)
+        north = self.nodes(data, 'MODULE', 'Dirs')[0]['consts'][0]
+        folded = {}
+        for call in self.nodes(data, 'FUNCTION_CALL'):
+            if 'foldedFrom' in call:
+                self.assertEqual(call['name'], 'float2')
+                use = call['foldedFrom']
+                self.assertEqual((use['type'], use['id']), ('IDENTIFIER', call['id'] + '/folded-constant'))
+                folded[(use['name'], use['line'])] = use
+        # The unqualified use inside the module, then the swizzled qualified use.
+        self.assertEqual(set(folded), {('NORTH', 3), ('NORTH', 13)})
+        for use in folded.values():
+            self.assert_edge(data, use['id'], north['id'], 'read')
+        self.assert_position(folded[('NORTH', 3)], self.position(source, 3, 'NORTH'))
+        self.assert_position(folded[('NORTH', 13)], self.position(source, 13, 'NORTH'))
+        self.assertEqual(folded[('NORTH', 13)]['qualifier']['name'], 'Dirs')
+
     def test_named_nodes_report_name_positions(self):
         source = '''
             module Dep { helper :: () -> float { return 1.0; } }

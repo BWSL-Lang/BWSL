@@ -817,7 +817,9 @@ struct AST {
     }
 
     const FoldedConstantData* FindFoldedConstant(NodeRef literal) const {
-        if (literal.Type() != ASTNodeType::LITERAL) return nullptr;
+        // Vector constants fold to a constructor call rather than a literal.
+        if (literal.Type() != ASTNodeType::LITERAL &&
+            literal.Type() != ASTNodeType::FUNCTION_CALL) return nullptr;
         for (u32 i = 0; i < foldedConstants.count; i++) {
             if (foldedConstants[i].literal == literal.packed) return &foldedConstants[i];
         }

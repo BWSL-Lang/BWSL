@@ -62,6 +62,26 @@ static std::string ParseInnerResourceType(std::string_view typeName, std::string
     return std::string(typeName.substr(prefix.size(), typeName.size() - prefix.size() - 1));
 }
 
+// Type of a folded module constant (EVAL_CONSTANT symbol).
+static TypeInfo MakeTypeInfoForConstant(const LiteralValue& value) {
+    switch (value.type) {
+        case LiteralValue::FLOAT:  return TYPE_INFO(CoreType::FLOAT,  1, 0);
+        case LiteralValue::INT:    return TYPE_INFO(CoreType::INT,    1, 0);
+        case LiteralValue::UINT:   return TYPE_INFO(CoreType::UINT,   1, 0);
+        case LiteralValue::BOOL:   return TYPE_INFO(CoreType::BOOL,   1, 0);
+        case LiteralValue::FLOAT2: return TYPE_INFO(CoreType::FLOAT2, 2, 0);
+        case LiteralValue::FLOAT3: return TYPE_INFO(CoreType::FLOAT3, 3, 0);
+        case LiteralValue::FLOAT4: return TYPE_INFO(CoreType::FLOAT4, 4, 0);
+        case LiteralValue::INT2:   return TYPE_INFO(CoreType::INT2,   2, 0);
+        case LiteralValue::INT3:   return TYPE_INFO(CoreType::INT3,   3, 0);
+        case LiteralValue::INT4:   return TYPE_INFO(CoreType::INT4,   4, 0);
+        case LiteralValue::UINT2:  return TYPE_INFO(CoreType::UINT2,  2, 0);
+        case LiteralValue::UINT3:  return TYPE_INFO(CoreType::UINT3,  3, 0);
+        case LiteralValue::UINT4:  return TYPE_INFO(CoreType::UINT4,  4, 0);
+        default:                   return TYPE_INFO(CoreType::INVALID, 0, 0);
+    }
+}
+
 static TypeInfo MakeTypeInfoForCoreType(CoreType coreType) {
     switch (coreType) {
         case CoreType::BOOL:   return TYPE_INFO(CoreType::BOOL,   1, false);

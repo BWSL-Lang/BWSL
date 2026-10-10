@@ -1,0 +1,38 @@
+// Test: module constants with vector constructor initializers (#139)
+// Tests: qualified and unqualified uses, swizzles on a folded constant,
+//        constructor arguments built from other constants and scalar
+//        arithmetic, int-to-float promotion, int vectors, const from const
+
+module Dirs {
+    const float2 NORTH = float2(0.0, -1.0);
+    const float2 UP = NORTH;
+    const float HALF = 1.0 / 2.0;
+    const float HALF_PI = 3.14159265 * 0.5;
+    const float3 TINT = float3(HALF, 0.25, 1);
+    const int2 STEP = int2(1, 2);
+    const uint4 MASK = uint4(1u, 2u, 4u, 8u);
+
+    flip :: (float2 v) -> float2 { return v * NORTH.y; }
+}
+
+pipeline ModuleConstVectors {
+    import Dirs
+
+    attributes {
+        position: float2
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float2 p = attributes.position + Dirs::NORTH + Dirs::flip(Dirs::UP);
+            p += float2(Dirs::STEP) * Dirs::HALF_PI;
+            output.position = float4(p, float(Dirs::MASK.w), 1.0);
+        }
+
+        fragment {
+            output.color = float4(Dirs::TINT.xy, Dirs::TINT[2] * Dirs::HALF, 1.0);
+        }
+    }
+}

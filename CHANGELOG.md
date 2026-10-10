@@ -31,6 +31,10 @@
   their first 31 characters.
 
 ### Language
+- Module constants can be vectors, and their initializers can use scalar
+  arithmetic and constructors, e.g. `const float2 NORTH = float2(0.0, -1.0);`.
+  Previously only a single literal was allowed. Vector arithmetic, swizzles
+  and matrices are not supported in these initializers yet.
 - Imported resource payloads use `Module::Type`; `Module.Type` remains a
   deprecated compatibility alias.
 - Struct fields can use a previously declared type in the same module.
