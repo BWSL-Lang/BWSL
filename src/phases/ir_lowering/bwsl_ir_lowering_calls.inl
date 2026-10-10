@@ -1634,6 +1634,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   auto savedVariableRegisters = variableRegisters;
   auto savedVariableStructTypes = variableStructTypes;
   auto savedConstVariables = constVariables;
+  auto savedInitializedVariables = initializedVariables;
   auto savedNodeRegisters = nodeRegisters;
   u32 savedStructMethodTypeHash = currentStructMethodTypeHash;
   u16 savedStructMethodSelfReg = currentStructMethodSelfReg;
@@ -1642,6 +1643,10 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   u32 selfHash = Utils::HashStr("self");
   variableRegisters[selfHash] = receiverReg;
   variableStructTypes[selfHash] = receiverStructHash;
+  // `self` aliases the receiver, which already holds a value. Without this,
+  // the first `self.field = ...` would zero-initialize it and overwrite the
+  // receiver's other fields.
+  initializedVariables.insert(selfHash);
   if (receiverReg < MAX_REGISTERS) {
     program.registerStructTypes[receiverReg] = receiverStructHash;
   }
@@ -1659,6 +1664,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
     u16 paramReg = CopyArgumentValue(args[i]);
     variableRegisters[paramNameHash] = paramReg;
     constVariables.erase(paramNameHash);
+    initializedVariables.insert(paramNameHash); // holds the argument's value
 
     u32 paramTypeHash = 0;
     CoreType paramType =
@@ -1716,6 +1722,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   variableRegisters = savedVariableRegisters;
   variableStructTypes = savedVariableStructTypes;
   constVariables = savedConstVariables;
+  initializedVariables = savedInitializedVariables;
   nodeRegisters = savedNodeRegisters;
   currentStructMethodTypeHash = savedStructMethodTypeHash;
   currentStructMethodSelfReg = savedStructMethodSelfReg;
@@ -1982,6 +1989,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   auto savedVariableRegisters = variableRegisters;
   auto savedVariableStructTypes = variableStructTypes;
   auto savedConstVariables = constVariables;
+  auto savedInitializedVariables = initializedVariables;
   auto savedNodeRegisters = nodeRegisters;
   u32 savedStructMethodTypeHash = currentStructMethodTypeHash;
   u16 savedStructMethodSelfReg = currentStructMethodSelfReg;
@@ -1999,6 +2007,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
     u16 paramReg = CopyArgumentValue(args[i]);
     variableRegisters[paramNameHash] = paramReg;
     constVariables.erase(paramNameHash);
+    initializedVariables.insert(paramNameHash); // holds the argument's value
 
     // Also set the type for the parameter based on the type name
     // The second element of the pair is the type name (e.g., "uint",
@@ -2084,6 +2093,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   variableRegisters = savedVariableRegisters;
   variableStructTypes = savedVariableStructTypes;
   constVariables = savedConstVariables;
+  initializedVariables = savedInitializedVariables;
   nodeRegisters = savedNodeRegisters;
   currentStructMethodTypeHash = savedStructMethodTypeHash;
   currentStructMethodSelfReg = savedStructMethodSelfReg;
