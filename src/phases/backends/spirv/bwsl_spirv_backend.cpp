@@ -4,6 +4,7 @@
 #include "core/bwsl_utils.h"
 #include "core/bwsl_resource_reflection.h"
 #include "SPIRV-Headers/include/spirv/unified1/GLSL.std.450.h"
+#include <algorithm>
 #include <array>
 #include <cstring>
 
