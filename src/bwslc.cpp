@@ -2050,7 +2050,8 @@ CompileResult CompileShaderStage(
     const RenderConfig* renderConfig = nullptr,  // For GLES backend
     DiagnosticStream* diagnosticStream = nullptr,
     const std::string& diagnosticPassName = "",
-    bool suppressDiagnostics = false
+    bool suppressDiagnostics = false,
+    bool avoidGlslReservedNames = false  // Rename local debug names reserved in GLSL
 ) {
     using Clock = std::chrono::high_resolution_clock;
     auto shaderStart = Clock::now();
@@ -2317,6 +2318,7 @@ CompileResult CompileShaderStage(
     vpConfig.descriptorSet = 0;
     builder.SetVertexPullingConfig(vpConfig);
     builder.SetEmitDebugNames(debugNames);
+    builder.SetAvoidGlslReservedNames(avoidGlslReservedNames);
     if (varyingContext) {
         for (u32 i = 0; i < varyingContext->count; i++) {
             builder.SetVaryingName(varyingContext->varyings[i].slot,
@@ -3755,7 +3757,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        config.useDirectGles, config.outputGlslEs, &config.renderConfig,
                                                        &diagnostics,
                                                        passName,
-                                                       config.errorsJson);
+                                                       config.errorsJson,
+                                                       config.outputGlsl || config.outputGlslEs);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "vertex");
@@ -3796,7 +3799,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        config.useDirectGles, config.outputGlslEs, &config.renderConfig,
                                                        &diagnostics,
                                                        passName,
-                                                       config.errorsJson);  // Use same varying context populated by vertex shader
+                                                       config.errorsJson,
+                                                       config.outputGlsl || config.outputGlslEs);  // Use same varying context populated by vertex shader
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "fragment");
@@ -3837,7 +3841,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        config.useDirectGles, config.outputGlslEs, &config.renderConfig,
                                                        &diagnostics,
                                                        passName,
-                                                       config.errorsJson);
+                                                       config.errorsJson,
+                                                       config.outputGlsl || config.outputGlslEs);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "compute");

@@ -295,6 +295,102 @@ constexpr std::array<u32, 256> BuildIrToGlslStd450Table() {
 
 static constexpr auto IR_TO_GLSL_STD_450_TABLE = BuildIrToGlslStd450Table();
 
+// Words a GLSL local may not be named: keywords, reserved words, types and
+// built-in functions. Copied from CompilerGLSL::replace_illegal_names() in
+// SPIRV-Cross, which applies it to variables, functions and types but not to
+// OpNames on plain result IDs. Sorted for binary search.
+static constexpr const char* GLSL_RESERVED_NAMES[] = {
+    "EmitStreamVertex", "EmitVertex", "EndPrimitive", "EndStreamPrimitive",
+    "abs", "acos", "acosh", "active", "all", "any", "asin", "asinh", "asm",
+    "atan", "atanh", "atomicAdd", "atomicCompSwap", "atomicCounter",
+    "atomicCounterDecrement", "atomicCounterIncrement", "atomicExchange",
+    "atomicMax", "atomicMin", "atomicOr", "atomicXor", "atomic_uint",
+    "attribute", "bitCount", "bitfieldExtract", "bitfieldInsert",
+    "bitfieldReverse", "bool", "break", "buffer", "bvec2", "bvec3", "bvec4",
+    "case", "cast", "ceil", "centroid", "class", "coherent", "common", "const",
+    "continue", "cos", "cosh", "cross", "dFdx", "dFdxCoarse", "dFdxFine",
+    "dFdy", "dFdyCoarse", "dFdyFine", "default", "degrees", "discard",
+    "distance", "dmat2", "dmat2x2", "dmat2x3", "dmat2x4", "dmat3", "dmat3x2",
+    "dmat3x3", "dmat3x4", "dmat4", "dmat4x2", "dmat4x3", "dmat4x4", "do",
+    "dot", "double", "dvec2", "dvec3", "dvec4", "else", "enum", "equal", "exp",
+    "exp2", "extern", "external", "faceforward", "false", "filter", "findLSB",
+    "findMSB", "fixed", "flat", "float", "float16BitsToInt16",
+    "float16BitsToUint16", "floatBitsToInt", "floatBitsToUint", "floor", "fma",
+    "for", "fract", "frexp", "fvec2", "fvec3", "fvec4", "fwidth",
+    "fwidthCoarse", "fwidthFine", "goto", "greaterThan", "greaterThanEqual",
+    "groupMemoryBarrier", "half", "highp", "hvec2", "hvec3", "hvec4", "if",
+    "iimage1D", "iimage1DArray", "iimage2D", "iimage2DArray", "iimage2DMS",
+    "iimage2DMSArray", "iimage2DRect", "iimage3D", "iimageBuffer",
+    "iimageCube", "iimageCubeArray", "image1D", "image1DArray", "image2D",
+    "image2DArray", "image2DMS", "image2DMSArray", "image2DRect", "image3D",
+    "imageAtomicAdd", "imageAtomicAnd", "imageAtomicCompSwap",
+    "imageAtomicExchange", "imageAtomicMax", "imageAtomicMin", "imageAtomicOr",
+    "imageAtomicXor", "imageBuffer", "imageCube", "imageCubeArray",
+    "imageLoad", "imageSamples", "imageSize", "imageStore", "imulExtended",
+    "in", "inline", "inout", "input", "int", "int16BitsToFloat16",
+    "intBitsToFloat", "interface", "interpolateAtCentroid",
+    "interpolateAtOffset", "interpolateAtSample", "invariant", "inverse",
+    "inversesqrt", "isampler1D", "isampler1DArray", "isampler2D",
+    "isampler2DArray", "isampler2DMS", "isampler2DMSArray", "isampler2DRect",
+    "isampler3D", "isamplerBuffer", "isamplerCube", "isamplerCubeArray",
+    "isinf", "isnan", "ivec2", "ivec3", "ivec4", "layout", "ldexp", "length",
+    "lessThan", "lessThanEqual", "log", "log2", "long", "lowp", "mat2",
+    "mat2x2", "mat2x3", "mat2x4", "mat3", "mat3x2", "mat3x3", "mat3x4", "mat4",
+    "mat4x2", "mat4x3", "mat4x4", "matrixCompMult", "max", "mediump",
+    "memoryBarrier", "memoryBarrierAtomicCounter", "memoryBarrierBuffer",
+    "memoryBarrierImage", "memoryBarrierShared", "min", "mix", "mod", "modf",
+    "namespace", "noinline", "noise", "noise1", "noise2", "noise3", "noise4",
+    "noperspective", "normalize", "not", "notEqual", "out", "outerProduct",
+    "output", "packDouble2x32", "packHalf2x16", "packInt2x16", "packInt4x16",
+    "packSnorm2x16", "packSnorm4x8", "packUint2x16", "packUint4x16",
+    "packUnorm2x16", "packUnorm4x8", "packed", "partition", "patch", "pow",
+    "precise", "precision", "public", "radians", "readonly", "reflect",
+    "refract", "resource", "restrict", "return", "round", "roundEven",
+    "sample", "sampler1D", "sampler1DArray", "sampler1DArrayShadow",
+    "sampler1DShadow", "sampler2D", "sampler2DArray", "sampler2DArrayShadow",
+    "sampler2DMS", "sampler2DMSArray", "sampler2DRect", "sampler2DRectShadow",
+    "sampler2DShadow", "sampler3D", "sampler3DRect", "samplerBuffer",
+    "samplerCube", "samplerCubeArray", "samplerCubeArrayShadow",
+    "samplerCubeShadow", "shared", "short", "sign", "sin", "sinh", "sizeof",
+    "smooth", "smoothstep", "sqrt", "static", "step", "struct", "subroutine",
+    "superp", "switch", "tan", "tanh", "template", "texelFetch",
+    "texelFetchOffset", "texture", "textureGather", "textureGatherOffset",
+    "textureGatherOffsets", "textureGrad", "textureGradOffset", "textureLod",
+    "textureLodOffset", "textureOffset", "textureProj", "textureProjGrad",
+    "textureProjGradOffset", "textureProjLod", "textureProjLodOffset",
+    "textureProjOffset", "textureQueryLevels", "textureQueryLod",
+    "textureSamples", "textureSize", "this", "transpose", "true", "trunc",
+    "typedef", "uaddCarry", "uimage1D", "uimage1DArray", "uimage2D",
+    "uimage2DArray", "uimage2DMS", "uimage2DMSArray", "uimage2DRect",
+    "uimage3D", "uimageBuffer", "uimageCube", "uimageCubeArray", "uint",
+    "uint16BitsToFloat16", "uintBitsToFloat", "umulExtended", "uniform",
+    "union", "unpackDouble2x32", "unpackHalf2x16", "unpackInt2x16",
+    "unpackInt4x16", "unpackSnorm2x16", "unpackSnorm4x8", "unpackUint2x16",
+    "unpackUint4x16", "unpackUnorm2x16", "unpackUnorm4x8", "unsigned",
+    "usampler1D", "usampler1DArray", "usampler2D", "usampler2DArray",
+    "usampler2DMS", "usampler2DMSArray", "usampler2DRect", "usampler3D",
+    "usamplerBuffer", "usamplerCube", "usamplerCubeArray", "using",
+    "usubBorrow", "uvec2", "uvec3", "uvec4", "varying", "vec2", "vec3", "vec4",
+    "void", "volatile", "while", "writeonly",
+};
+
+constexpr bool IsSortedNameTable(const char* const* names, u32 count) {
+    for (u32 i = 1; i < count; i++) {
+        const char* a = names[i - 1];
+        const char* b = names[i];
+        while (*a && *a == *b) { a++; b++; }
+        if (static_cast<unsigned char>(*a) >= static_cast<unsigned char>(*b)) return false;
+    }
+    return true;
+}
+static_assert(IsSortedNameTable(GLSL_RESERVED_NAMES, std::size(GLSL_RESERVED_NAMES)),
+              "GLSL_RESERVED_NAMES must stay sorted and unique");
+
+static bool IsGlslReservedName(const char* name) {
+    return std::binary_search(std::begin(GLSL_RESERVED_NAMES), std::end(GLSL_RESERVED_NAMES), name,
+                              [](const char* a, const char* b) { return strcmp(a, b) < 0; });
+}
+
 // ============= Initialization =============
 
 

@@ -450,6 +450,7 @@ void SPIRVBuilder::EmitLocalNames() {
   auto nameId = [&](u32 id, u32 hash) {
     if (id == 0 || id >= named.size() || !defined[id] || named[id] || hash == 0) return;
     std::string name = ReverseLookup::GetString(hash);
+    if (avoidGlslReservedNames && IsGlslReservedName(name.c_str())) name += '_';
     if (!name.empty()) {
       EmitName(id, name.c_str());
       named[id] = true;

@@ -71,7 +71,8 @@
 - `-debug-names` preserves source local-variable and array names in SPIR-V
   and cross-compiled shaders, including reassignment and loop/branch phis.
   Aliased or inlined values may share or lose a visible name; SPIRV-Cross
-  handles duplicate and target-reserved names. Default output is unchanged.
+  handles duplicate names. With `-glsl` or `-gles`, a name reserved in GLSL
+  gets a `_` suffix (`vec4` becomes `vec4_`). Default output is unchanged.
 - Large shaders keep live registers separate from constant and texture tags.
   Integer constant pools grow safely up to 8192 values per signedness, and
   register or integer-constant exhaustion reports a source location.

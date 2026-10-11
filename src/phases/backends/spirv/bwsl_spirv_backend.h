@@ -218,6 +218,10 @@ struct SPIRVBuilder {
 
     // ============= Debug Options =============
     bool emitDebugNames = false;  // Emit OpName/OpMemberName for debugging
+    // Suffix local debug names that are reserved in GLSL ("vec4" -> "vec4_").
+    // SPIRV-Cross does not rename OpNames on plain result IDs, so these would
+    // reach GLSL/ESSL output verbatim and fail to compile.
+    bool avoidGlslReservedNames = false;
 
     // ============= Interface Names =============
     // Source names of vertex->fragment varyings, indexed by 0-based varying
@@ -376,6 +380,7 @@ struct SPIRVBuilder {
     
     // Debug options
     void SetEmitDebugNames(bool emit) { emitDebugNames = emit; }
+    void SetAvoidGlslReservedNames(bool avoid) { avoidGlslReservedNames = avoid; }
 
     // Interface names. These are emitted regardless of emitDebugNames:
     // GL hosts without layout(binding) look blocks and samplers up by name,

@@ -160,8 +160,9 @@ def run_local_debug_names_tests(compiler: Path) -> tuple[int, int]:
                 for (weight in weights) { total += weight * total; }
                 output.color = float4(total, total * total, total + 1.0, 1.0);
             ''')
-            self.assert_names(ops, ["step", "weight", "total", "weights"])
-            self.assertTrue(any(op == 245 and names(ops).get(args[1]) == "step"
+            # `step` is a GLSL built-in, so it gets a suffix (#148).
+            self.assert_names(ops, ["step_", "weight", "total", "weights"])
+            self.assertTrue(any(op == 245 and names(ops).get(args[1]) == "step_"
                                 for op, args in ops))
 
         def test_nested_shadowing_and_same_named_arrays(self):
@@ -222,6 +223,31 @@ def run_local_debug_names_tests(compiler: Path) -> tuple[int, int]:
             self.assert_names(ops, ["gl_local"])
             glsl = (target / "locals.glsl.frag").read_text()
             self.assertNotRegex(glsl, r"\bfloat\s+gl_local\b")
+
+        def test_glsl_reserved_local_names_get_a_suffix(self):
+            # #148: SPIRV-Cross does not rename OpNames on plain result IDs,
+            # so a local called `vec4` or `centroid` reached GLSL verbatim.
+            body = '''
+                float4 vec4 = float4(input.uv, input.uv.x * 2.0, 1.0);
+                float3 centroid = vec4.xyz * input.uv.y;
+                output.color = float4(centroid, vec4.w);
+            '''
+            target, ops = self.compile(body)
+            self.assert_names(ops, ["vec4_", "centroid_"])
+            self.assertTrue({"vec4", "centroid"}.isdisjoint(names(ops).values()))
+            for suffix in ("glsl.frag", "gles.frag"):
+                text = (target / f"locals.{suffix}").read_text()
+                self.assertNotRegex(text, r"\bvec4\s+vec4\b")
+                self.assertNotRegex(text, r"\bvec3\s+centroid\b")
+            # The rename only applies when a GLSL target is requested.
+            metal = self.folder / "metal"
+            result = subprocess.run(
+                [str(compiler), str(self.folder / "locals.bwsl"), "-metal", "-spv",
+                 "-debug-names", "-o", str(metal)],
+                capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assert_names(list(instructions(metal / "locals.frag.spv")),
+                              ["vec4", "centroid"])
 
         def test_address_taken_local_keeps_its_storage_name(self):
             body = '''
