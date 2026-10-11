@@ -239,6 +239,7 @@ struct IRLowering {
       0xFFFF; // Register to store return value during inlining
   u16 inlineReturnFlagReg = 0xFFFF; // Bool register for early-return tracking
   u32 inlineReturnCounter = 0;    // Counts returns seen during current inlining
+  u32 inlineReturnFlagReads = 0;  // Counts reads of inlineReturnFlagReg
   u32 inlineReturnGuardDepth = 0; // Suppress nested return guards
   u32 inlineDepth = 0; // Current inlining depth (for recursion detection)
   u32 inlineModuleIndex =
@@ -323,9 +324,25 @@ struct IRLowering {
 
   void LowerStatement(NodeRef ref);
 
+  // Lowers block.statements[first..]. With guardReturns (inside an inlined
+  // call), the statements after one that may have returned are guarded.
+  void LowerStatements(const BlockData &block, u32 first, bool guardReturns);
+
   // Lowers block.statements[first..] under one "not returned yet" guard
   // (inside an inlined call, after a statement that may have returned).
   void LowerStatementsWithReturnGuard(const BlockData &block, u32 first);
+
+  // Inside an inlined call, lowers `if (c) { ...; return; } rest` as
+  // `if (c) { ...; return; } else { rest }`: one branch and no flag check.
+  // Returns false, emitting nothing, when the if doesn't have that shape.
+  bool LowerIfWithEarlyReturn(NodeRef ifRef, const BlockData &block,
+                              u32 restFirst);
+
+  bool HasTrailingReturn(NodeRef ref) const;
+
+  // Turns the stores to the return flag into NOPs when nothing read it
+  // (every return was folded into an if/else).
+  void DropUnreadReturnFlag(u32 firstInstruction);
 
   void LowerBreak();
 
@@ -457,6 +474,10 @@ struct IRLowering {
                    InterpolationMode interpolation = InterpolationMode::Default);
 
   void LowerIfStatement(NodeRef ref);
+  // Lowers an if, with block.statements[restFirst..] appended to its then
+  // branch (restInThen) or its else branch (rest null: a plain if).
+  void LowerIfWithRest(NodeRef ref, const BlockData *rest, u32 restFirst,
+                       bool restInThen);
 
   void LowerReturn(NodeRef ref);
 
