@@ -44,6 +44,9 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
             if source.stem == "binding_collision":
                 if by_name.get("scale", {}).get("binding") != 1 or by_name.get("values", {}).get("binding") != 2:
                     row["errors"].append("Reflection does not match collision-free buffer slots")
+            if source.stem == "attribute_binding_sixteen":
+                if by_name.get("scale", {}).get("binding") != 16 or "[[buffer(16)]]" not in metal:
+                    row["errors"].append("Uniform does not follow all 16 attribute buffers")
             if source.stem.startswith("texture3D_") or source.stem == "texture3d_drops_z":
                 if "texture3d<float>" not in metal or "texture2d<float>" in metal:
                     row["errors"].append("3D texture dimension was lost")
