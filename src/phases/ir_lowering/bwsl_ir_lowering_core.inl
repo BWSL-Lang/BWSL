@@ -337,7 +337,6 @@ inline void IRLowering::LowerBlock(NodeRef blockRef) {
   const BlockData &block = ast->GetBlock(blockRef);
   bool guardInlineReturns =
       (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF);
-  bool returnSeen = false;
 
   // Save variable-register map so that inner-scope redeclarations
   // (`{ float x = …; }` inside an outer `int x`) don't overwrite the
@@ -348,18 +347,7 @@ inline void IRLowering::LowerBlock(NodeRef blockRef) {
   auto savedVariableRegisters = variableRegisters;
   auto savedVariableStructTypes = variableStructTypes;
 
-  for (u32 i = 0; i < block.statements.count; i++) {
-    if (guardInlineReturns && returnSeen) {
-      // One guard for the rest of the block, not one per statement.
-      LowerStatementsWithReturnGuard(block, i);
-      break;
-    }
-    u32 returnCountBefore = inlineReturnCounter;
-    LowerStatement(block.statements[i]);
-    if (guardInlineReturns && inlineReturnCounter != returnCountBefore) {
-      returnSeen = true;
-    }
-  }
+  LowerStatements(block, 0, guardInlineReturns);
 
   variableRegisters = savedVariableRegisters;
   variableStructTypes = savedVariableStructTypes;

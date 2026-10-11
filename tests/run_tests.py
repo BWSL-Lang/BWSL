@@ -1049,10 +1049,16 @@ def check_inline_return_jump(path: Path) -> tuple[bool, str]:
 
     ir = data.get("ir", "")
     branch_count = sum(1 for line in ir.splitlines() if " BRANCH " in line)
-    if " JUMP " in ir:
-        return False, "Unexpected inline return jump in IR"
-    if branch_count < 2:
-        return False, f"Expected return guard branch, found {branch_count}"
+    # A return must not jump out of the inlined body. The only jumps allowed
+    # are those over an else, which an early return folded into an if/else
+    # (issue #156) produces: the instruction after one is a branch's false
+    # target.
+    else_starts = {int(m.group(1)) for m in re.finditer(r"\bBRANCH\s+\S+\s+\? -> \d+ : (\d+)", ir)}
+    for m in re.finditer(r"\[\s*(\d+)\]\s+JUMP\b", ir):
+        if int(m.group(1)) + 1 not in else_starts:
+            return False, "Unexpected inline return jump in IR"
+    if branch_count < 1:
+        return False, f"Expected a branch around the early return, found {branch_count}"
     return True, ""
 
 

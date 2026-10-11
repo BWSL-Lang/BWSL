@@ -1,0 +1,66 @@
+// An if whose branch ends in an early return, inside an inlined call
+// (issue #156: the rest of the block becomes the other branch, with no
+// return flag). Covers a returning else, a return from a loop in the
+// non-returning branch, and a then-branch that returns from both arms of a
+// nested if.
+pipeline EquivEarlyReturnIfElse {
+
+    resources {
+        output: buffer<float>
+    }
+
+    elseReturns :: (int v) -> float {
+        float r = 1.0;
+        if (v > 1) {
+            r = float(v) * 3.0;
+        } else {
+            return -2.0;
+        }
+        r += 0.5;
+        return r;
+    }
+
+    loopInElse :: (int v) -> float {
+        float r = 0.0;
+        if (v < -1) {
+            return 100.0;
+        } else {
+            for (int i = 0; i < 4; i++) {
+                if (i == v) {
+                    return float(i) + 0.25;
+                }
+                r += 1.0;
+            }
+        }
+        r += 10.0;
+        return r;
+    }
+
+    chain :: (int v) -> float {
+        if (v == 0) {
+            if (v > 5) {
+                return 1.0;
+            } else {
+                return 2.0;
+            }
+        }
+        float x = float(v);
+        if (v < 0) {
+            x = -x;
+        } else if (v > 3) {
+            return x * 100.0;
+        }
+        return x + 0.5;
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int v = int(idx) - 2;
+            resources.output[idx] = elseReturns(v);
+            resources.output[idx + 8u] = loopInElse(v);
+            resources.output[idx + 16u] = chain(v);
+        }
+    }
+}

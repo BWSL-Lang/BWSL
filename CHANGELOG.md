@@ -57,6 +57,10 @@
   instead of one store per element, with constant vector arithmetic folded.
   The element stores made NVIDIA drivers rebuild the array in local memory on
   every invocation.
+- An `if` branch ending in `return` inside a called function makes the rest
+  of the function its other branch. The function no longer tracks a
+  "returned" flag and branches on it a second time, which drivers don't
+  merge.
 - `-gles-direct` output for struct locals compiles: the zero value a struct
   starts from was declared as `void`. Boolean `&&`/`||` are no longer emitted
   as `&`/`|`, and a fragment stage's `input.position` is `gl_FragCoord`.

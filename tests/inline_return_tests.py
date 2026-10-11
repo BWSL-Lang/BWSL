@@ -1,4 +1,4 @@
-"""Issue #152: one guard for the statements after an inlined early return."""
+"""Issues #152 and #156: inlined early returns cost no extra branches."""
 from __future__ import annotations
 
 import argparse
@@ -10,6 +10,7 @@ import unittest
 
 from local_debug_names_tests import instructions, shader
 
+OP_LOGICAL_NOT = 168
 OP_BRANCH_CONDITIONAL = 250
 
 
@@ -78,6 +79,30 @@ def run_inline_return_tests(compiler: Path) -> tuple[int, int]:
                 }
             ''')
             self.assert_no_condition_reused(ops)
+
+        def test_if_return_folds_rest_into_else(self):
+            # Issue #156: each `if (...) { return; }` becomes an if/else with
+            # the rest of the block, so the only branches are the two ifs: no
+            # guard on the return flag, and no flag left to merge.
+            ops = self.compile('''
+                output.color = float4(steps(input.uv.x));
+            ''', '''
+                steps :: (float v) -> float {
+                    if (v < 0.25) {
+                        return -1.0;
+                    }
+                    float a = v * 2.0;
+                    if (a > 1.5) {
+                        a += 1.0;
+                    } else {
+                        return a;
+                    }
+                    return a * a;
+                }
+            ''')
+            branches = sum(1 for op, _ in ops if op == OP_BRANCH_CONDITIONAL)
+            self.assertEqual(branches, 2)
+            self.assertNotIn(OP_LOGICAL_NOT, [op for op, _ in ops])
 
     result = unittest.TextTestRunner(verbosity=1).run(
         unittest.defaultTestLoader.loadTestsFromTestCase(InlineReturnTests))

@@ -1720,14 +1720,17 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   u16 savedReturnReg = inlineReturnReg;
   u16 savedReturnFlagReg = inlineReturnFlagReg;
   u32 savedReturnCounter = inlineReturnCounter;
+  u32 savedReturnFlagReads = inlineReturnFlagReads;
   u32 savedModuleIndex = inlineModuleIndex;
 
   inlineReturnReg = returnReg;
   inlineReturnFlagReg = AllocateRegister();
   SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
+  u32 inlineFirstInstruction = builder.currentInstruction;
   builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg,
                           builder.EmitConstantBool(false));
   inlineReturnCounter = 0;
+  inlineReturnFlagReads = 0;
   inlineModuleIndex = methodModuleIndex;
   inlineDepth++;
   if (inlineStackDepth < MAX_INLINE_DEPTH) {
@@ -1749,9 +1752,11 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
     inlineStackDepth--;
   }
   inlineDepth--;
+  DropUnreadReturnFlag(inlineFirstInstruction);
   inlineReturnReg = savedReturnReg;
   inlineReturnFlagReg = savedReturnFlagReg;
   inlineReturnCounter = savedReturnCounter;
+  inlineReturnFlagReads = savedReturnFlagReads;
   inlineModuleIndex = savedModuleIndex;
   variableRegisters = savedVariableRegisters;
   variableStructTypes = savedVariableStructTypes;
@@ -2074,13 +2079,16 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   u16 savedReturnReg = inlineReturnReg;
   u16 savedReturnFlagReg = inlineReturnFlagReg;
   u32 savedReturnCounter = inlineReturnCounter;
+  u32 savedReturnFlagReads = inlineReturnFlagReads;
   u32 savedModuleIndex = inlineModuleIndex;
   inlineReturnReg = returnReg;
   inlineReturnFlagReg = AllocateRegister();
   SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
+  u32 inlineFirstInstruction = builder.currentInstruction;
   builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg,
                           builder.EmitConstantBool(false));
   inlineReturnCounter = 0;
+  inlineReturnFlagReads = 0;
   inlineModuleIndex =
       foundModuleIndex; // Set module context for nested unqualified calls
   inlineDepth++;
@@ -2121,9 +2129,11 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
     inlineStackDepth--;
   }
   inlineDepth--;
+  DropUnreadReturnFlag(inlineFirstInstruction);
   inlineReturnReg = savedReturnReg;
   inlineReturnFlagReg = savedReturnFlagReg;
   inlineReturnCounter = savedReturnCounter;
+  inlineReturnFlagReads = savedReturnFlagReads;
   inlineModuleIndex = savedModuleIndex;
   variableRegisters = savedVariableRegisters;
   variableStructTypes = savedVariableStructTypes;
