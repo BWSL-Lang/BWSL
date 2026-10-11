@@ -1,4 +1,4 @@
-"""Issue #169: `?:` with pure, cheap arms lowers to OpSelect."""
+"""Issues #169 and #168: `?:` with pure, cheap arms lowers to OpSelect."""
 from __future__ import annotations
 
 import argparse
@@ -97,6 +97,15 @@ def run_ternary_select_tests(compiler: Path) -> tuple[int, int]:
                         output.color = float4((i > 0 && i < 4) ? {arm} : 0.0);
                     ''', "twice :: (float x) -> float { return x * 2.0; }")
                     self.assertNotIn(OP_SELECT, ops)
+
+        def test_hsluv_to_rgb_has_no_branches(self):
+            # Issue #168: the edge cases select their results, so the
+            # conversion runs straight through.
+            ops = self.compile('''
+                float3 hsl = float3(input.uv.x * 360.0, 80.0, input.uv.y * 100.0);
+                output.color = float4(Color::hsluvToRgb(hsl) + Color::hpluvToRgb(hsl), 1.0);
+            ''', "import Color")
+            self.assertNotIn(OP_BRANCH_CONDITIONAL, ops)
 
     result = unittest.TextTestRunner(verbosity=1).run(
         unittest.defaultTestLoader.loadTestsFromTestCase(TernarySelectTests))

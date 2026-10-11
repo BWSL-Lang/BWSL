@@ -82,7 +82,7 @@ module ColorInternals {
     }
 
     toLinear :: (float c) -> float {
-        return c > 0.04045 ? pow((c + 0.055) / (1.0 + 0.055), 2.4) : c / 12.92;
+        return c > 0.04045 ? pow((c + 0.055) / 1.055, 2.4) : c / 12.92;
     }
 
     toLinear :: (float3 c) -> float3 {

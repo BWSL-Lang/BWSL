@@ -127,6 +127,9 @@
 ### Standard library
 - `Color::hsluvToRgb`, `rgbToHsluv`, `hpluvToRgb` and `rgbToHpluv` return
   correct colors. They over-saturated because of the `min` bug above.
+- The HSLuv and HPLuv conversions in `Color` no longer return early for
+  black and white. They compute the color and select the edge-case result,
+  which made `Color::hsluvToRgb` about 10% faster in a measured shader.
 
 ### Tooling
 - `make wasm` and `make wasm-debug` link with `em++`, so they build with

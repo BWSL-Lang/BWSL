@@ -69,26 +69,21 @@ xyzToLuv :: (float3 tuple) -> float3 {
     float Z = tuple.z;
 
     float L = ColorInternals::yToL(Y);
-    if (abs(L) <= HSLUV_EPSILON) {
-        return float3(0.0);
-    }
-
     float div = 1.0 / dot(tuple, float3(1.0, 15.0, 3.0));
-
-    return float3(
+    float3 luv = float3(
         1.0,
         52.0 * X * div - 2.57179,
         117.0 * Y * div - 6.08816
     ) * L;
+
+    // Black divides by zero above; the select discards that result. An early
+    // return would put the whole conversion behind a branch instead.
+    return abs(L) <= HSLUV_EPSILON ? float3(0.0) : luv;
 }
 
 
 luvToXyz :: (float3 tuple) -> float3 {
     float L = tuple.x;
-    if (abs(L) <= HSLUV_EPSILON) {
-        return float3(0.0);
-    }
-
     float U = tuple.y / (13.0 * L) + 0.19783000664283681;
     float V = tuple.z / (13.0 * L) + 0.468319994938791;
 
@@ -96,7 +91,8 @@ luvToXyz :: (float3 tuple) -> float3 {
     float X = 2.25 * U * Y / V;
     float Z = (3.0 / V - 5.0) * Y - X / 3.0;
 
-    return float3(X, Y, Z);
+    // Black divides by zero above; the select discards that result.
+    return abs(L) <= HSLUV_EPSILON ? float3(0.0) : float3(X, Y, Z);
 }
 
 luvToLch :: (float3 tuple) -> float3 {
@@ -131,30 +127,25 @@ hsluvToLch :: (float3 tuple) -> float3 {
     float H = tuple.r;
     float S = tuple.g;
     float L = tuple.b;
-    if (L <= HSLUV_EPSILON) {
-        return float3(0.0, 0.0, H);
-    }
-    if (L >= 100.0 - HSLUV_EPSILON) {
-        return float3(100.0, 0.0, H);
-    }
-
     float C = S * ColorInternals::maxChromaForLH(L, H) * 0.01;
-    return float3(L, C, H);
+
+    // Black and white select their values rather than return early: a
+    // branch around maxChromaForLH costs far more than computing it.
+    bool black = L <= HSLUV_EPSILON;
+    bool white = L >= 100.0 - HSLUV_EPSILON;
+    return float3(black ? 0.0 : (white ? 100.0 : L), (black || white) ? 0.0 : C, H);
 }
 
 lchToHsluv :: (float3 tuple) -> float3 {
     float L = tuple.r;
     float C = tuple.g;
     float H = tuple.b;
-    if (L <= HSLUV_EPSILON) {
-        return float3(H, 0.0, 0.0);
-    }
-    if (L >= 100.0 - HSLUV_EPSILON) {
-        return float3(H, 0.0, 100.0);
-    }
-
     float S = C / (ColorInternals::maxChromaForLH(L, H) * 0.01);
-    return float3(H, S, L);
+
+    // See hsluvToLch. Black divides by zero above; the select discards it.
+    bool black = L <= HSLUV_EPSILON;
+    bool white = L >= 100.0 - HSLUV_EPSILON;
+    return float3(H, (black || white) ? 0.0 : S, black ? 0.0 : (white ? 100.0 : L));
 }
 
 lchToRgb :: (float3 tuple) -> float3 {
@@ -178,15 +169,12 @@ hpluvToLch :: (float3 tuple) -> float3 {
     float H = tuple.r;
     float P = tuple.g;
     float L = tuple.b;
-    if (L <= HSLUV_EPSILON) {
-        return float3(0.0, 0.0, H);
-    }
-    if (L >= 100.0 - HSLUV_EPSILON) {
-        return float3(100.0, 0.0, H);
-    }
-
     float C = P * ColorInternals::maxSafeChromaForL(L) * 0.01;
-    return float3(L, C, H);
+
+    // See hsluvToLch.
+    bool black = L <= HSLUV_EPSILON;
+    bool white = L >= 100.0 - HSLUV_EPSILON;
+    return float3(black ? 0.0 : (white ? 100.0 : L), (black || white) ? 0.0 : C, H);
 }
 
 hpluvToRgb :: (float3 tuple) -> float3 {
@@ -197,15 +185,12 @@ lchToHpluv :: (float3 tuple) -> float3 {
     float L = tuple.r;
     float C = tuple.g;
     float H = tuple.b;
-    if (L <= HSLUV_EPSILON) {
-        return float3(H, 0.0, 0.0);
-    }
-    if (L >= 100.0 - HSLUV_EPSILON) {
-        return float3(H, 0.0, 100.0);
-    }
-
     float P = C / (ColorInternals::maxSafeChromaForL(L) * 0.01);
-    return float3(H, P, L);
+
+    // See hsluvToLch. Black divides by zero above; the select discards it.
+    bool black = L <= HSLUV_EPSILON;
+    bool white = L >= 100.0 - HSLUV_EPSILON;
+    return float3(H, (black || white) ? 0.0 : P, black ? 0.0 : (white ? 100.0 : L));
 }
 
 rgbToHpluv :: (float3 tuple) -> float3 {
