@@ -126,14 +126,16 @@ lchToLuv :: (float3 tuple) -> float3 {
 hsluvToLch :: (float3 tuple) -> float3 {
     float H = tuple.r;
     float S = tuple.g;
-    float L = tuple.b;
-    float C = S * ColorInternals::maxChromaForLH(L, H) * 0.01;
-
-    // Black and white select their values rather than return early: a
-    // branch around maxChromaForLH costs far more than computing it.
-    bool black = L <= HSLUV_EPSILON;
-    bool white = L >= 100.0 - HSLUV_EPSILON;
-    return float3(black ? 0.0 : (white ? 100.0 : L), (black || white) ? 0.0 : C, H);
+    float L = clamp(tuple.b, 0.0, 100.0);
+    // Black and white need no special case. The gamut shrinks to a point at
+    // both ends, so the chroma is tiny just inside them, and luvToXyz turns
+    // L = 0 into black. maxChromaForLH itself is 0/0 at L = 0, and at
+    // L = 100 its result relies on exact cancellation that an inexact GPU
+    // pow breaks (up to ~80 instead of 0), so it's evaluated just inside.
+    // Selecting the edge values instead cost ~4% of a shader that calls
+    // hsluvToRgb twice per pixel.
+    float C = S * ColorInternals::maxChromaForLH(clamp(L, HSLUV_EPSILON, 99.9999), H) * 0.01;
+    return float3(L, C, H);
 }
 
 lchToHsluv :: (float3 tuple) -> float3 {
@@ -168,13 +170,10 @@ rgbToHsluv :: (float3 tuple) -> float3 {
 hpluvToLch :: (float3 tuple) -> float3 {
     float H = tuple.r;
     float P = tuple.g;
-    float L = tuple.b;
-    float C = P * ColorInternals::maxSafeChromaForL(L) * 0.01;
-
-    // See hsluvToLch.
-    bool black = L <= HSLUV_EPSILON;
-    bool white = L >= 100.0 - HSLUV_EPSILON;
-    return float3(black ? 0.0 : (white ? 100.0 : L), (black || white) ? 0.0 : C, H);
+    float L = clamp(tuple.b, 0.0, 100.0);
+    // See hsluvToLch. maxSafeChromaForL is also 0/0 at L = 0.
+    float C = P * ColorInternals::maxSafeChromaForL(clamp(L, HSLUV_EPSILON, 99.9999)) * 0.01;
+    return float3(L, C, H);
 }
 
 hpluvToRgb :: (float3 tuple) -> float3 {

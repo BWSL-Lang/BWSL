@@ -128,8 +128,11 @@
 - `Color::hsluvToRgb`, `rgbToHsluv`, `hpluvToRgb` and `rgbToHpluv` return
   correct colors. They over-saturated because of the `min` bug above.
 - The HSLuv and HPLuv conversions in `Color` no longer return early for
-  black and white. They compute the color and select the edge-case result,
-  which made `Color::hsluvToRgb` about 10% faster in a measured shader.
+  black and white, which made shaders calling `Color::hsluvToRgb`
+  measurably faster. `hsluvToLch` and `hpluvToLch` clamp lightness to
+  [0, 100] instead of special-casing the ends, so near black and white they
+  return the lightness as given with a tiny chroma rather than exactly 0;
+  the RGB result is unchanged.
 
 ### Tooling
 - `make wasm` and `make wasm-debug` link with `em++`, so they build with
