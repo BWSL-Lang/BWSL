@@ -668,6 +668,14 @@ TRANSLATION_EXPECTATION_TESTS = {
             "glsl_count_at_least": {"for (": 4, "if (": 8, "break;": 2},
         },
     },
+    # Issue #160: only the loop-carried `sum` and `i` (twice) and the
+    # inlined functions' own merges get phis, not their locals or return flag.
+    "ssa_dead_loop_phis": {
+        "frag": {
+            "ir_count_exactly": {"  PHI r": 6},
+            "spirv_count_exactly": {"OpPhi": 6},
+        },
+    },
     "types_matrices": {
         "vert": {
             "ir_contains": ["MAT_CONSTRUCT", "COS", "SIN"],
@@ -1360,11 +1368,16 @@ def check_text_patterns(label: str, text: str,
 
 
 def check_pattern_counts(label: str, text: str,
-                         count_at_least: dict[str, int] | None = None) -> tuple[bool, str]:
+                         count_at_least: dict[str, int] | None = None,
+                         count_exactly: dict[str, int] | None = None) -> tuple[bool, str]:
     for pattern, expected in (count_at_least or {}).items():
         actual = text.count(pattern)
         if actual < expected:
             return False, f"{label} contains '{pattern}' {actual} times, expected at least {expected}"
+    for pattern, expected in (count_exactly or {}).items():
+        actual = text.count(pattern)
+        if actual != expected:
+            return False, f"{label} contains '{pattern}' {actual} times, expected exactly {expected}"
     return True, ""
 
 
@@ -1431,6 +1444,7 @@ def check_translation_expectations(output_dir: Path, test_name: str,
                 f"{stage} {label}",
                 texts[key],
                 expectations.get(f"{key}_count_at_least"),
+                expectations.get(f"{key}_count_exactly"),
             )
             if not ok:
                 return False, message
@@ -3515,6 +3529,16 @@ def main() -> int:
     inline_return_passed, inline_return_failed = run_inline_return_tests(bwslc)
     passed += inline_return_passed
     failed += inline_return_failed
+
+    from logical_operator_tests import run_logical_operator_tests
+    logical_passed, logical_failed = run_logical_operator_tests(bwslc)
+    passed += logical_passed
+    failed += logical_failed
+
+    from ternary_select_tests import run_ternary_select_tests
+    ternary_passed, ternary_failed = run_ternary_select_tests(bwslc)
+    passed += ternary_passed
+    failed += ternary_failed
 
     from p1_regression_tests import run_p1_regression_tests
     p1_passed, p1_failed = run_p1_regression_tests(bwslc, output_dir / "p1_validation")

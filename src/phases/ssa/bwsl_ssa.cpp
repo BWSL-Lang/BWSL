@@ -47,6 +47,7 @@ bool SSAConstructor::ConvertToSSA() {
     IdentifyVariables();
     PlacePhis();
     Rename();
+    EliminateDeadPhis();
     return !registerLimitExceeded;
 }
 
@@ -1035,6 +1036,89 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
     for (u32 i = 0; i < pushedCount; i++) {
         state.PopVersion(pushedVars[i]);
     }
+}
+
+//==============================================================================
+// Phase 4: Dead PHI Elimination
+//==============================================================================
+
+// Minimal SSA places a phi at every join in a variable's iterated dominance
+// frontier, whether or not the variable is live there. An inlined call's
+// locals and return flag are written before they're read on every call, so
+// a loop calling the function gets loop-header phis whose results nothing
+// reads. They survive into SPIR-V, and SPIRV-Cross turns each into a copy
+// in the loop increment (issue #160). Mark-and-sweep removes them: a phi is
+// live if an instruction references its result, or a live phi does.
+void SSAConstructor::EliminateDeadPhis() {
+    if (ir->phiCount == 0) return;
+
+    u32 regCount = ir->registerCount;
+    bool* regUsed = (bool*)arena->Allocate(regCount * sizeof(bool), 64);
+    memset(regUsed, 0, regCount * sizeof(bool));
+
+    // Any appearance in an instruction counts as a use, destination slots
+    // included: STORE_OUTPUT and LOCAL_STORE carry a value register there.
+    // Over-approximating only keeps a phi that could have gone.
+    for (u32 i = 0; i < ir->instructionCount; i++) {
+        if (ir->opcodes[i] == IR::OP_NOP) continue;
+        u16 dest = ir->destinations[i];
+        if ((dest & 0xC000) == 0 && dest < regCount) regUsed[dest] = true;
+        for (u32 opIdx = 0; opIdx < 4; opIdx++) {
+            u16 opReg = ir->GetOperand(i, opIdx);
+            if (opReg == 0xFFFF || (opReg & 0xC000) != 0 || opReg >= regCount) continue;
+            regUsed[opReg] = true;
+        }
+    }
+
+    // Instructions define a phi result only through the phi itself, so a
+    // phi whose result appears in an instruction is read there.
+    u32* regToPhi = (u32*)arena->Allocate(regCount * sizeof(u32), 64);
+    memset(regToPhi, 0xFF, regCount * sizeof(u32));
+    bool* phiLive = (bool*)arena->Allocate(ir->phiCount * sizeof(bool), 64);
+    u32* phiWorklist = (u32*)arena->Allocate(ir->phiCount * sizeof(u32), 64);
+    u32 workTail = 0;
+    for (u32 p = 0; p < ir->phiCount; p++) {
+        u16 resultReg = ir->phiResultRegs[p];
+        phiLive[p] = resultReg < regCount && regUsed[resultReg];
+        if (resultReg < regCount) regToPhi[resultReg] = p;
+        if (phiLive[p]) phiWorklist[workTail++] = p;
+    }
+
+    // A live phi keeps the phis feeding it alive.
+    u32 workHead = 0;
+    while (workHead < workTail) {
+        u32 p = phiWorklist[workHead++];
+        for (u32 opIdx = ir->phiOperandOffsets[p]; opIdx < ir->phiOperandOffsets[p + 1]; opIdx++) {
+            u16 valueReg = ir->phiOperandValues[opIdx];
+            if (valueReg >= regCount) continue;
+            u32 source = regToPhi[valueReg];
+            if (source == 0xFFFFFFFF || phiLive[source]) continue;
+            phiLive[source] = true;
+            phiWorklist[workTail++] = source;
+        }
+    }
+    if (workTail == ir->phiCount) return;
+
+    // Compact the phi arrays in place, keeping their order.
+    u32 keptPhis = 0;
+    u32 keptOperands = 0;
+    for (u32 p = 0; p < ir->phiCount; p++) {
+        if (!phiLive[p]) continue;
+        u32 opStart = ir->phiOperandOffsets[p];
+        u32 opEnd = ir->phiOperandOffsets[p + 1];
+        ir->phiBlockIndices[keptPhis] = ir->phiBlockIndices[p];
+        ir->phiResultRegs[keptPhis] = ir->phiResultRegs[p];
+        ir->phiTypes[keptPhis] = ir->phiTypes[p];
+        ir->phiOperandOffsets[keptPhis] = keptOperands;
+        for (u32 opIdx = opStart; opIdx < opEnd; opIdx++) {
+            ir->phiOperandValues[keptOperands] = ir->phiOperandValues[opIdx];
+            ir->phiOperandBlocks[keptOperands] = ir->phiOperandBlocks[opIdx];
+            keptOperands++;
+        }
+        keptPhis++;
+    }
+    ir->phiOperandOffsets[keptPhis] = keptOperands;
+    ir->phiCount = keptPhis;
 }
 
 }  // namespace SSA

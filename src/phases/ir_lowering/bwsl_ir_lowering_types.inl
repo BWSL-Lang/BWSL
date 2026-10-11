@@ -1396,7 +1396,7 @@ inline CoreType IRLowering::GetVectorTypeWithDimension(CoreType baseType, u32 di
   return baseType; // Return as-is if unknown
 }
 
-inline CoreType IRLowering::LookupCoreType(u32 typeHash) {
+inline CoreType IRLowering::LookupCoreType(u32 typeHash) const {
   // Use TypeHashes from bwsl_types.h
   for (u32 i = 0; i < TypeHashes::HASH_TABLE_SIZE; i++) {
     if (TypeHashes::HASH_TABLE[i].hash == typeHash) {

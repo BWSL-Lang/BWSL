@@ -63,10 +63,26 @@
   instead of one store per element, with constant vector arithmetic folded.
   The element stores made NVIDIA drivers rebuild the array in local memory on
   every invocation.
+- `a || b` and `a && b` whose right operand is a short, side-effect-free
+  expression (comparisons, arithmetic, locals, swizzles) compile to a
+  logical `or`/`and` instead of a branch. Calls, array indexing, pointer
+  reads, integer division and shifts still short-circuit, so guards such as
+  `i < n && a[i] > 0.0` stay safe.
+- `c ? a : b` whose arms are short and side-effect-free compiles to a select
+  instead of an `if`/`else`. Math intrinsics such as `pow`, constructors and
+  division by a literal now count as side-effect-free here and in `&&`/`||`
+  operands. Calls to your functions, array indexing, derivatives and texture
+  reads keep the branch.
+- `c ? a : b` with `bool2`/`bool3`/`bool4` arms compiles. It failed SPIR-V
+  validation when the condition was a bool vector.
 - An `if` branch ending in `return` inside a called function makes the rest
   of the function its other branch. The function no longer tracks a
   "returned" flag and branches on it a second time, which drivers don't
   merge.
+- A loop that calls a function no longer carries the function's locals and
+  return flag from one iteration to the next. They became copies in the
+  loop increment of GLSL, HLSL and Metal output, which drivers don't
+  always remove.
 - `-gles-direct` output for struct locals compiles: the zero value a struct
   starts from was declared as `void`. Boolean `&&`/`||` are no longer emitted
   as `&`/`|`, and a fragment stage's `input.position` is `gl_FragCoord`.
@@ -111,6 +127,12 @@
 ### Standard library
 - `Color::hsluvToRgb`, `rgbToHsluv`, `hpluvToRgb` and `rgbToHpluv` return
   correct colors. They over-saturated because of the `min` bug above.
+- The HSLuv and HPLuv conversions in `Color` no longer return early for
+  black and white, which made shaders calling `Color::hsluvToRgb`
+  measurably faster. `hsluvToLch` and `hpluvToLch` clamp lightness to
+  [0, 100] instead of special-casing the ends, so near black and white they
+  return the lightness as given with a tiny chroma rather than exactly 0;
+  the RGB result is unchanged.
 
 ### Tooling
 - `make wasm` and `make wasm-debug` link with `em++`, so they build with

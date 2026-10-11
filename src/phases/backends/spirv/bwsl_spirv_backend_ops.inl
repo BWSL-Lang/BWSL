@@ -1327,16 +1327,19 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     case CoreType::FLOAT2:
     case CoreType::INT2:
     case CoreType::UINT2:
+    case CoreType::BOOL2:
       numComponents = 2;
       break;
     case CoreType::FLOAT3:
     case CoreType::INT3:
     case CoreType::UINT3:
+    case CoreType::BOOL3:
       numComponents = 3;
       break;
     case CoreType::FLOAT4:
     case CoreType::INT4:
     case CoreType::UINT4:
+    case CoreType::BOOL4:
       numComponents = 4;
       break;
     default:

@@ -63,38 +63,31 @@ inline u16 IRLowering::LowerExpression(NodeRef ref) {
     auto &tern = ast->GetTernaryExpression(ref);
     u16 condReg = LowerExpression(tern.condition);
     if (mask(GetRegisterType(condReg)) & TypeMasks::SCALAR_TYPES) {
-      condReg = EnsureBoolCondition(condReg);
-      // Scalar conditionals execute exactly one arm. Stores into a shared
-      // result register become a typed SSA phi, including aggregate values.
-      auto dominatingNodes = nodeRegisters;
-      u16 selected = AllocateRegister();
-      u32 branch = builder.currentInstruction;
-      builder.EmitInstruction(OP_BRANCH, 0, condReg);
-      u32 trueTarget = builder.currentInstruction;
-      u16 trueReg = LowerExpression(tern.trueExpr);
-      CoreType resultType = GetRegisterType(trueReg);
-      SetRegisterType(selected, resultType);
-      if (trueReg < MAX_REGISTERS)
-        program.registerStructTypes[selected] = program.registerStructTypes[trueReg];
-      builder.EmitInstruction(OP_STORE_REG, selected, trueReg);
-      u32 jump = builder.currentInstruction;
-      builder.EmitInstruction(OP_JUMP, 0, 0);
-      nodeRegisters = dominatingNodes;
-      u32 falseTarget = builder.currentInstruction;
-      u16 falseReg = LowerExpression(tern.falseExpr);
-      if (trueReg < MAX_REGISTERS && falseReg < MAX_REGISTERS &&
-          ((program.registerStorageInfo[trueReg] | program.registerStorageInfo[falseReg]) &
-           IRProgram::STORAGE_IS_PTR)) {
-        ReportError("Error: ternary expression with pointer operands is not supported; select the dereferenced value instead or use if/else.\n");
-      }
-      builder.EmitInstruction(OP_STORE_REG, selected, falseReg);
-      u32 merge = builder.currentInstruction;
-      builder.EmitInstruction(OP_NOP, 0, 0);
-      program.SetBranchTargets(branch, trueTarget, falseTarget);
-      program.structureInfo[branch] = IRProgram::PackStructure(IRProgram::STRUCT_IF_HEADER, merge);
-      program.metadata[jump] = merge;
-      nodeRegisters = std::move(dominatingNodes);
-      return selected;
+        condReg = EnsureBoolCondition(condReg);
+        // Pure, cheap arms are both evaluated and picked with OpSelect (issue
+        // #169), as `&&`/`||` operands are. A branch per ternary only adds
+        // structured control flow that drivers don't always flatten.
+        u32 budget = MAX_SPECULATED_OPERAND_NODES;
+        if (!IsSpeculatableExpression(tern.trueExpr, &budget) ||
+            !IsSpeculatableExpression(tern.falseExpr, &budget)) {
+            return LowerTernaryBranches(ref, condReg, 0xFFFF, 0xFFFF);
+        }
+        u16 trueReg = LowerExpression(tern.trueExpr);
+        u16 falseReg = LowerExpression(tern.falseExpr);
+        CoreType type = GetRegisterType(trueReg);
+        TypeMask selectable = TypeMasks::SCALAR_TYPES | TypeMasks::VECTOR_TYPES |
+                              TypeMasks::BOOL_VECTORS;
+        // Before SPIR-V 1.4, OpSelect takes only scalars and vectors (the
+        // backend widens a scalar condition). Other values, and mismatched
+        // arms, merge through a branch that no longer computes anything.
+        if (type != GetRegisterType(falseReg) || !(mask(type) & selectable)) {
+            return LowerTernaryBranches(ref, condReg, trueReg, falseReg);
+        }
+        u16 dest = AllocateRegister();
+        // OP_SELECT operand order is (false, true, cond)
+        builder.EmitInstruction(OP_SELECT, dest, falseReg, trueReg, condReg);
+        SetRegisterType(dest, type);
+        return dest;
     }
     u16 trueReg = LowerExpression(tern.trueExpr);
     u16 falseReg = LowerExpression(tern.falseExpr);
@@ -590,12 +583,180 @@ inline u16 IRLowering::LowerLiteral(NodeRef ref) {
   }
 }
 
+// Math intrinsics that can run unconditionally: no side effects, no texture
+// access, derivatives or wave operations (whose results depend on which
+// invocations are active), and no out-parameters.
+static constexpr StdLib::Intrinsic SPECULATABLE_INTRINSICS[] = {
+    StdLib::Intrinsic::LERP, StdLib::Intrinsic::SMOOTHSTEP, StdLib::Intrinsic::SATURATE,
+    StdLib::Intrinsic::FRACT, StdLib::Intrinsic::STEP, StdLib::Intrinsic::CLAMP,
+    StdLib::Intrinsic::SIGN, StdLib::Intrinsic::ABS, StdLib::Intrinsic::MIN,
+    StdLib::Intrinsic::MAX, StdLib::Intrinsic::FLOOR, StdLib::Intrinsic::CEIL,
+    StdLib::Intrinsic::ROUND, StdLib::Intrinsic::TRUNC, StdLib::Intrinsic::FMA,
+    StdLib::Intrinsic::POW, StdLib::Intrinsic::SQRT, StdLib::Intrinsic::RSQRT,
+    StdLib::Intrinsic::RCP, StdLib::Intrinsic::EXP, StdLib::Intrinsic::EXP2,
+    StdLib::Intrinsic::LOG, StdLib::Intrinsic::LOG2, StdLib::Intrinsic::LOG10,
+    StdLib::Intrinsic::SIN, StdLib::Intrinsic::COS, StdLib::Intrinsic::TAN,
+    StdLib::Intrinsic::ASIN, StdLib::Intrinsic::ACOS, StdLib::Intrinsic::ATAN,
+    StdLib::Intrinsic::ATAN2, StdLib::Intrinsic::SINH, StdLib::Intrinsic::COSH,
+    StdLib::Intrinsic::TANH, StdLib::Intrinsic::DEGREES, StdLib::Intrinsic::RADIANS,
+    StdLib::Intrinsic::DOT, StdLib::Intrinsic::CROSS, StdLib::Intrinsic::NORMALIZE,
+    StdLib::Intrinsic::LENGTH, StdLib::Intrinsic::DISTANCE, StdLib::Intrinsic::REFLECT,
+    StdLib::Intrinsic::REFRACT, StdLib::Intrinsic::FACEFORWARD,
+};
+
+static bool IsSpeculatableIntrinsic(StdLib::Intrinsic intrinsic) {
+    for (StdLib::Intrinsic allowed : SPECULATABLE_INTRINSICS) {
+        if (allowed == intrinsic) return true;
+    }
+    return false;
+}
+
+inline bool IRLowering::IsNonzeroLiteral(NodeRef ref) const {
+    if (ref.IsNull() || ref.Type() != ASTNodeType::LITERAL) return false;
+    const LiteralValue& value = ast->GetLiteral(ref).value;
+    switch (value.type) {
+        case LiteralValue::FLOAT: return value.floatValue != 0.0f;
+        case LiteralValue::INT:   return value.intValue > 0;
+        case LiteralValue::UINT:  return value.uintValue != 0;
+        default:                  return false;
+    }
+}
+
+// Lowers `cond ? a : b` as an if/else whose arms store into one register,
+// which SSA turns into a phi. An arm passed as 0xFFFF is lowered inside its
+// branch so only the taken arm runs; one already lowered is just stored.
+inline u16 IRLowering::LowerTernaryBranches(NodeRef ref, u16 condReg, u16 trueReg,
+                                            u16 falseReg) {
+    const TernaryExprData& tern = ast->GetTernaryExpression(ref);
+    auto dominatingNodes = nodeRegisters;
+    u16 selected = AllocateRegister();
+    u32 branch = builder.currentInstruction;
+    builder.EmitInstruction(OP_BRANCH, 0, condReg);
+    u32 trueTarget = builder.currentInstruction;
+    if (trueReg == 0xFFFF) trueReg = LowerExpression(tern.trueExpr);
+    CoreType resultType = GetRegisterType(trueReg);
+    SetRegisterType(selected, resultType);
+    if (trueReg < MAX_REGISTERS)
+        program.registerStructTypes[selected] = program.registerStructTypes[trueReg];
+    builder.EmitInstruction(OP_STORE_REG, selected, trueReg);
+    u32 jump = builder.currentInstruction;
+    builder.EmitInstruction(OP_JUMP, 0, 0);
+    nodeRegisters = dominatingNodes;
+    u32 falseTarget = builder.currentInstruction;
+    if (falseReg == 0xFFFF) falseReg = LowerExpression(tern.falseExpr);
+    if (trueReg < MAX_REGISTERS && falseReg < MAX_REGISTERS &&
+        ((program.registerStorageInfo[trueReg] | program.registerStorageInfo[falseReg]) &
+         IRProgram::STORAGE_IS_PTR)) {
+        ReportErrorAt(ref, "Error: ternary expression with pointer operands is not supported; select the dereferenced value instead or use if/else.\n");
+    }
+    builder.EmitInstruction(OP_STORE_REG, selected, falseReg);
+    u32 merge = builder.currentInstruction;
+    builder.EmitInstruction(OP_NOP, 0, 0);
+    program.SetBranchTargets(branch, trueTarget, falseTarget);
+    program.structureInfo[branch] = IRProgram::PackStructure(IRProgram::STRUCT_IF_HEADER, merge);
+    program.metadata[jump] = merge;
+    nodeRegisters = std::move(dominatingNodes);
+    return selected;
+}
+
+inline bool IRLowering::IsSpeculatableExpression(NodeRef ref, u32* budget) const {
+    if (ref.IsNull() || *budget == 0) return false;
+    (*budget)--;
+    switch (ref.Type()) {
+        case ASTNodeType::LITERAL:
+            return true;
+        case ASTNodeType::IDENTIFIER: {
+            // Reading through a pointer is a load the left operand may guard.
+            auto it = variableRegisters.find(ast->GetIdentifier(ref).name.nameHash);
+            if (it == variableRegisters.end() || it->second >= MAX_REGISTERS) return true;
+            return (program.registerStorageInfo[it->second] & IRProgram::STORAGE_IS_PTR) == 0;
+        }
+        case ASTNodeType::MEMBER_ACCESS:
+            return IsSpeculatableExpression(ast->GetMemberAccess(ref).object, budget);
+        case ASTNodeType::UNARY_OP: {
+            const UnaryOpData& unop = ast->GetUnaryOp(ref);
+            switch (unop.op) {
+                case UnaryOpType::NEGATE:
+                case UnaryOpType::NOT:
+                case UnaryOpType::BITWISE_NOT:
+                    return IsSpeculatableExpression(unop.operand, budget);
+                default:
+                    return false;
+            }
+        }
+        case ASTNodeType::BINARY_OP: {
+            const BinaryOpData& binop = ast->GetBinaryOp(ref);
+            // Integer division by zero and out-of-range shifts are undefined
+            // behaviour in MSL, and are exactly what a guard like
+            // `n != 0 && 100 / n > 2` protects against. Dividing by a nonzero
+            // literal is always defined (a negative one is a NEGATE node).
+            switch (binop.op) {
+                case BinaryOpType::DIVIDE:
+                case BinaryOpType::MODULO:
+                    if (!IsNonzeroLiteral(binop.right)) return false;
+                    break;
+                case BinaryOpType::LEFT_SHIFT:
+                case BinaryOpType::RIGHT_SHIFT:
+                    return false;
+                default:
+                    break;
+            }
+            return IsSpeculatableExpression(binop.left, budget) &&
+                   IsSpeculatableExpression(binop.right, budget);
+        }
+        case ASTNodeType::TERNARY_EXPRESSION: {
+            const TernaryExprData& tern = ast->GetTernaryExpression(ref);
+            return IsSpeculatableExpression(tern.condition, budget) &&
+                   IsSpeculatableExpression(tern.trueExpr, budget) &&
+                   IsSpeculatableExpression(tern.falseExpr, budget);
+        }
+        case ASTNodeType::FUNCTION_CALL: {
+            const FunctionCallData& call = ast->GetFunctionCall(ref);
+            if (call.moduleObject.IsValid()) return false;
+            if (call.flags & FunctionCallFlags::IS_INTRINSIC) {
+                if (!IsSpeculatableIntrinsic(static_cast<StdLib::Intrinsic>(
+                        StdLib::INTRINSICS[call.intrinsicIndex].enumIndex))) return false;
+            } else {
+                // Scalar and vector constructors (float3(x, y, z), float(i))
+                // only rearrange or convert their arguments. A user function
+                // of the same name wins over the constructor.
+                CoreType type = LookupCoreType(call.name.nameHash);
+                TypeMask constructible = TypeMasks::SCALAR_TYPES | TypeMasks::VECTOR_TYPES |
+                                         TypeMasks::BOOL_VECTORS;
+                if (!(mask(type) & constructible)) return false;
+                Symbol* sym = SymbolTable::LookupByHash(
+                    const_cast<SymbolTableData*>(symbols), call.name.nameHash);
+                if (sym && sym->kind == SymbolKind::FUNCTION) return false;
+            }
+            for (u32 i = 0; i < call.arguments.count; i++) {
+                if (!IsSpeculatableExpression(call.arguments[i], budget)) return false;
+            }
+            return true;
+        }
+        default:
+            // Array indexing may be bounds-guarded by the left operand
+            // (`i < n && a[i] > 0`); pointer reads, likewise.
+            return false;
+    }
+}
+
 inline u16 IRLowering::LowerBinaryOp(NodeRef ref) {
   const BinaryOpData &binop = ast->GetBinaryOp(ref);
   u16 left = LowerExpression(binop.left);
   if ((binop.op == BinaryOpType::AND || binop.op == BinaryOpType::OR) &&
       (mask(GetRegisterType(left)) & TypeMasks::SCALAR_TYPES)) {
     left = EnsureBoolCondition(left);
+    // A pure, cheap right operand is evaluated unconditionally and combined
+    // with OpLogicalAnd/Or. Branching on it only adds structured control
+    // flow that drivers don't always flatten (see issue #157).
+    u32 budget = MAX_SPECULATED_OPERAND_NODES;
+    if (IsSpeculatableExpression(binop.right, &budget)) {
+      u16 right = EnsureBoolCondition(LowerExpression(binop.right));
+      u16 dest = AllocateRegister();
+      SetRegisterType(dest, CoreType::BOOL);
+      builder.EmitInstruction(binop.op == BinaryOpType::AND ? OP_AND : OP_OR, dest, left, right);
+      return dest;
+    }
     auto dominatingNodes = nodeRegisters;
     u16 selected = AllocateRegister();
     SetRegisterType(selected, CoreType::BOOL);

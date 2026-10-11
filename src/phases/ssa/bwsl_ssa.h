@@ -161,6 +161,7 @@ struct SSAConstructor {
     void IdentifyVariables();
     void PlacePhis();
     void Rename();
+    void EliminateDeadPhis();
     
 private:
     void ComputeIDF(u32 varIdx);
