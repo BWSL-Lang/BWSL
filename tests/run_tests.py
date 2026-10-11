@@ -3535,6 +3535,11 @@ def main() -> int:
     passed += logical_passed
     failed += logical_failed
 
+    from ternary_select_tests import run_ternary_select_tests
+    ternary_passed, ternary_failed = run_ternary_select_tests(bwslc)
+    passed += ternary_passed
+    failed += ternary_failed
+
     from p1_regression_tests import run_p1_regression_tests
     p1_passed, p1_failed = run_p1_regression_tests(bwslc, output_dir / "p1_validation")
     passed += p1_passed

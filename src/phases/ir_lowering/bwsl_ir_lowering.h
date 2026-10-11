@@ -245,9 +245,9 @@ struct IRLowering {
   u32 inlineModuleIndex =
       0xFFFFFFFF; // Module index during inlining (for unqualified calls)
   static constexpr u32 MAX_INLINE_DEPTH = 8;
-  // Largest right operand of `&&`/`||` evaluated without a branch. A few
-  // comparisons of locals fit; anything bigger keeps short-circuiting so a
-  // false/true left operand still skips the work.
+  // Largest right operand of `&&`/`||`, or pair of `?:` arms, evaluated
+  // without a branch. A few comparisons of locals fit; anything bigger keeps
+  // branching so the operand that isn't needed still skips the work.
   static constexpr u32 MAX_SPECULATED_OPERAND_NODES = 16;
 
   // Stack of currently-inlining function AST nodes, for direct /
@@ -538,6 +538,8 @@ struct IRLowering {
   // and small enough that skipping it never pays for a branch. `budget` is
   // the node count still allowed and is decremented as nodes are visited.
   bool IsSpeculatableExpression(NodeRef ref, u32* budget) const;
+  bool IsNonzeroLiteral(NodeRef ref) const;
+  u16 LowerTernaryBranches(NodeRef ref, u16 condReg, u16 trueReg, u16 falseReg);
 
   u16 CombineLoopCondition(u16 condReg);
 
@@ -629,7 +631,7 @@ struct IRLowering {
   // Get the vector type with a specific dimension for a base scalar/vector type
   CoreType GetVectorTypeWithDimension(CoreType baseType, u32 dim);
 
-  CoreType LookupCoreType(u32 typeHash);
+  CoreType LookupCoreType(u32 typeHash) const;
 
   CoreType ResolveCoreTypeFromHash(u32 typeHash, u32 *outCustomHash = nullptr);
 

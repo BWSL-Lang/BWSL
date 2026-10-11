@@ -68,6 +68,13 @@
   logical `or`/`and` instead of a branch. Calls, array indexing, pointer
   reads, integer division and shifts still short-circuit, so guards such as
   `i < n && a[i] > 0.0` stay safe.
+- `c ? a : b` whose arms are short and side-effect-free compiles to a select
+  instead of an `if`/`else`. Math intrinsics such as `pow`, constructors and
+  division by a literal now count as side-effect-free here and in `&&`/`||`
+  operands. Calls to your functions, array indexing, derivatives and texture
+  reads keep the branch.
+- `c ? a : b` with `bool2`/`bool3`/`bool4` arms compiles. It failed SPIR-V
+  validation when the condition was a bool vector.
 - An `if` branch ending in `return` inside a called function makes the rest
   of the function its other branch. The function no longer tracks a
   "returned" flag and branches on it a second time, which drivers don't
