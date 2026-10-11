@@ -583,6 +583,17 @@ NodeRef Parser::ParsePrimary() {
         } else {
             ast->GetIdentifier(node).identifierKind = SpecialIdentifier::NONE;
         }
+        if (sym && sym->kind == SymbolKind::VARIABLE &&
+            sym->namespaceKind == NamespaceKind::MODULE &&
+            sym->moduleIndex < symbolTable.modules.count) {
+            const VariableData& data = symbolTable.variables[sym->index];
+            if (data.isConst && IsArray(data.typeInfo) && data.constDecl.IsValid()) {
+                std::string qualified = symbolTable.modules[sym->moduleIndex].name.ToString() +
+                                        "::" + identArena.ToString(sourceBase());
+                ast->identifierConstBindingHashes[node.Index()] =
+                    ArenaString::MakeHashOnly(qualified).nameHash;
+            }
+        }
         return node;
     }
 

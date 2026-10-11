@@ -433,7 +433,9 @@ struct IRLowering {
 
   u16 LowerIdentifier(NodeRef ref);
 
-  void LowerVariableDecl(NodeRef ref);
+  void LowerVariableDecl(NodeRef ref, u32 bindingNameHash = 0,
+                         const VariableData *bindingData = nullptr);
+  u16 LowerModuleArrayConstant(const VariableData &data, u32 bindingNameHash);
 
   u16 EmitZeroStruct(u32 structTypeHash);
 

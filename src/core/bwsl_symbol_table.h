@@ -59,6 +59,7 @@ struct VariableData {
     StorageClass storageClass;
     LiteralValue evalValue;
     NodeRef constExpr;
+    NodeRef constDecl; // Array constants retain their AST declaration for lowering.
 };
 using OverloadTypeMask = u64;
 static constexpr OverloadTypeMask OVERLOAD_CUSTOM_MASK = (1ULL << 63);

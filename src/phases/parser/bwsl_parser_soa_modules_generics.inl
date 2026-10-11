@@ -212,6 +212,62 @@ void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
             std::string typeStr(stream->GetValue(previous));
             SourceLocation typeLoc = getLocation(stream->GetOffset(previous));
 
+            if (Match(TokenType::LEFT_BRACKET)) {
+                NodeRef constDecl = ParseArrayDeclaration(TokenTypeToReturnType(constType),
+                                                           StorageClass::Default, true, false);
+                if (!constDecl.IsValid()) continue;
+                const VariableDeclData& decl = ast->GetVariableDecl(constDecl);
+                EvalStateSoA arrayEvalState;
+                CompileTimeEvaluatorSoA::Init(&arrayEvalState, this, ast,
+                                              &context->evalCache, ast->arena);
+                const BlockData& elements = ast->GetBlock(decl.initializer);
+                bool allConstant = true;
+                for (u32 i = 0; i < elements.statements.count; ++i) {
+                    LiteralValue value;
+                    if (!CompileTimeEvaluatorSoA::CanEvaluateNode(&arrayEvalState,
+                                                                   elements.statements[i]) ||
+                        !CompileTimeEvaluatorSoA::EvaluateNode(&arrayEvalState,
+                                                               elements.statements[i], &value)) {
+                        allConstant = false;
+                        break;
+                    }
+                }
+                if (!allConstant) {
+                    Error("Module constant array elements must be compile-time expressions");
+                    continue;
+                }
+                ast->IndexPosition(constDecl, constLoc.line, constLoc.column);
+                ast->GetVariableDecl(constDecl).typePosition =
+                    AST::PackPosition(typeLoc.line, typeLoc.column);
+                ast->GetModule(module).consts.Push(arena, constDecl);
+
+                TypeInfo arrayType = GetTypeInfoFromToken(constType);
+                arrayType.arrayDimensions = decl.arrayDimensions;
+                arrayType.arrayLength = decl.arrayLength;
+                arrayType.arrayStride = static_cast<u32>(arrayType.componentCount) * 4u;
+                auto registerArray = [&](const ArenaString& name, NamespaceKind ns,
+                                         u32 moduleIndex) {
+                    Symbol* sym = SymbolTable::AddSymbol(&symbolTable, name,
+                        SymbolKind::VARIABLE, ns, moduleIndex);
+                    if (!sym) {
+                        Error("Constant already declared in this scope");
+                        return;
+                    }
+                    VariableData& data = symbolTable.variables[sym->index];
+                    data.typeInfo = arrayType;
+                    data.isConst = true;
+                    data.constExpr = decl.initializer;
+                    data.constDecl = constDecl;
+                };
+                std::string name = decl.name.ToString(sourceBase());
+                if (name.empty()) name = ReverseLookup::GetString(decl.name.nameHash);
+                registerArray(ArenaString::MakeHashOnly(moduleName + "::" + name),
+                              NamespaceKind::GLOBAL, INVALID_INDEX);
+                registerArray(decl.name, NamespaceKind::MODULE,
+                              symbolTable.currentModuleIndex);
+                continue;
+            }
+
             Consume(TokenType::IDENTIFIER, "Expected constant name");
             SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
             std::string constName(stream->GetValue(previous));

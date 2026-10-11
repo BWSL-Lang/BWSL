@@ -172,9 +172,11 @@ inline u32 ResolveStaticArrayLength(IRLowering *lowering, NodeRef expr) {
 
   if (expr.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &ident = lowering->ast->GetIdentifier(expr);
+    u32 bindingHash = lowering->ast->identifierConstBindingHashes[expr.Index()];
     // Local arrays are declared during lowering, so the symbol table doesn't
     // know them; their length is in the lowering's local-array table.
-    auto local = lowering->variableRegisters.find(ident.name.nameHash);
+    auto local = lowering->variableRegisters.find(
+        bindingHash ? bindingHash : ident.name.nameHash);
     if (local != lowering->variableRegisters.end() &&
         local->second < MAX_REGISTERS &&
         lowering->program.registerStorageInfo) {
@@ -185,8 +187,11 @@ inline u32 ResolveStaticArrayLength(IRLowering *lowering, NodeRef expr) {
         return lowering->program.localArraySizes[arrayIdx];
       }
     }
-    Symbol *sym = SymbolTable::LookupAny(
-        const_cast<SymbolTableData *>(lowering->symbols), ident.name);
+    Symbol *sym = bindingHash
+        ? SymbolTable::LookupByHash(
+              const_cast<SymbolTableData *>(lowering->symbols), bindingHash)
+        : SymbolTable::LookupAny(
+              const_cast<SymbolTableData *>(lowering->symbols), ident.name);
     if (sym && sym->kind == SymbolKind::VARIABLE &&
         sym->index < lowering->symbols->variables.count) {
       return lowering->symbols->variables[sym->index].typeInfo.arrayLength;
@@ -199,6 +204,18 @@ inline u32 ResolveStaticArrayLength(IRLowering *lowering, NodeRef expr) {
   }
 
   const MemberAccessData &access = lowering->ast->GetMemberAccess(expr);
+  if (access.isModuleQualified &&
+      access.object.Type() == ASTNodeType::IDENTIFIER &&
+      SymbolTable::ResolveModuleIndexByHashInScope(
+          const_cast<SymbolTableData *>(lowering->symbols),
+          lowering->ast->GetIdentifier(access.object).name.nameHash,
+          lowering->AliasOwnerKind(), lowering->AliasOwnerModuleIndex()) !=
+          INVALID_INDEX) {
+    Symbol *sym = SymbolTable::LookupByHash(
+        const_cast<SymbolTableData *>(lowering->symbols), access.qualifiedNameHash);
+    if (sym && sym->kind == SymbolKind::VARIABLE)
+      return lowering->symbols->variables[sym->index].typeInfo.arrayLength;
+  }
   u32 objectStructHash =
       ResolveStructHashForStaticAccess(lowering, access.object);
   u32 structIdx = FindStructTypeIndex(lowering, objectStructHash);
@@ -555,14 +572,16 @@ inline bool IRLowering::TryStoreLocalPlace(NodeRef target, u16 valueReg) {
   return true;
 }
 
-inline void IRLowering::LowerVariableDecl(NodeRef ref) {
+inline void IRLowering::LowerVariableDecl(NodeRef ref, u32 bindingNameHash,
+                                          const VariableData *bindingData) {
   const VariableDeclData &varDecl = ast->GetVariableDecl(ref);
+  const u32 nameHash = bindingNameHash ? bindingNameHash : varDecl.name.nameHash;
 
   Symbol *sym = SymbolTable::LookupByHash(
       const_cast<SymbolTableData *>(symbols), varDecl.name.nameHash);
-  const VariableData *varData = (sym && sym->kind == SymbolKind::VARIABLE)
-                                    ? &symbols->variables[sym->index]
-                                    : nullptr;
+  const VariableData *varData = bindingData ? bindingData :
+      ((sym && sym->kind == SymbolKind::VARIABLE) ?
+          &symbols->variables[sym->index] : nullptr);
   bool isShared = (varDecl.storageClass == StorageClass::Shared) ||
                   (varData && varData->storageClass == StorageClass::Shared);
   bool isArray = varData && IsArray(varData->typeInfo);
@@ -576,9 +595,9 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
   u16 varReg = AllocateRegister();
 
   // Store mapping from variable name hash to register
-  variableRegisters[varDecl.name.nameHash] = varReg;
+  variableRegisters[nameHash] = varReg;
   if (varDecl.isConst) {
-    constVariables.insert(varDecl.name.nameHash);
+    constVariables.insert(nameHash);
   }
 
   // Track type from the declaration first to avoid symbol-table collisions
@@ -633,7 +652,7 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
     }
 
     u32 sharedIndex = program.sharedVarCount++;
-    program.sharedNameHashes[sharedIndex] = varDecl.name.nameHash;
+    program.sharedNameHashes[sharedIndex] = nameHash;
     program.sharedTypes[sharedIndex] = static_cast<u16>(coreType);
     program.sharedArraySizes[sharedIndex] = isArray ? arrayLength : 0;
     program.sharedRegisters[sharedIndex] = varReg;
@@ -648,7 +667,7 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
   // stores and component updates retain the declaration's local identity.
   // Arrays have their own declaration table; shared variables are handled above.
   if (!isArray) {
-    program.registerNameHashes[varReg] = varDecl.name.nameHash;
+    program.registerNameHashes[varReg] = nameHash;
   }
 
   // Check if this is a struct or enum sum type
@@ -658,7 +677,7 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
     u32 structTypeHash = LookupOrRegisterStructType(lookupHash);
     if (structTypeHash != 0) {
       coreType = CoreType::CUSTOM;
-      variableStructTypes[varDecl.name.nameHash] = structTypeHash;
+      variableStructTypes[nameHash] = structTypeHash;
       program.registerStructTypes[varReg] = structTypeHash;
     }
   }
@@ -690,7 +709,7 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
     }
 
     RegisterLocalArray(varReg, arrayElementType, arrayElementStructHash,
-                       arrayLength, varDecl.name.nameHash);
+                       arrayLength, nameHash);
   }
 
   // If there's an initializer, evaluate it
@@ -711,7 +730,7 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
         u16 indexReg = EmitConstantUint(i);
         builder.EmitInstruction(OP_ARRAY_STORE, varReg, indexReg, elementRegs[i]);
       }
-      initializedVariables.insert(varDecl.name.nameHash);
+      initializedVariables.insert(nameHash);
     } else {
       u16 initReg = LowerExpression(varDecl.initializer);
 
@@ -719,13 +738,13 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
       // propagate the struct type to the initializer result. This handles
       // cases like loading from untyped storage buffers into typed variables.
       if (coreType == CoreType::CUSTOM && initReg < MAX_REGISTERS) {
-        u32 varStructHash = variableStructTypes[varDecl.name.nameHash];
+        u32 varStructHash = variableStructTypes[nameHash];
         if (varStructHash == 0) {
           varStructHash = program.registerStructTypes[varReg];
         }
         if (varStructHash == 0 && program.registerStructTypes[initReg] != 0) {
           varStructHash = program.registerStructTypes[initReg];
-          variableStructTypes[varDecl.name.nameHash] = varStructHash;
+          variableStructTypes[nameHash] = varStructHash;
           program.registerStructTypes[varReg] = varStructHash;
         }
         if (varStructHash != 0 && program.registerStructTypes[initReg] == 0) {
@@ -786,20 +805,20 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
               program.registerStructTypes[initReg];
         }
       }
-      initializedVariables.insert(varDecl.name.nameHash);
+      initializedVariables.insert(nameHash);
     }
   } else if (!isArray && coreType == CoreType::CUSTOM) {
     // For single struct types without initializer, emit a zero/undef struct
     // value. Note: struct arrays are handled differently - they are
     // pointer-based and individual elements are stored via ARRAY_STORE.
-    u32 structTypeHash = variableStructTypes[varDecl.name.nameHash];
+    u32 structTypeHash = variableStructTypes[nameHash];
     if (structTypeHash == 0 && varReg < MAX_REGISTERS) {
       structTypeHash = program.registerStructTypes[varReg];
     }
     if (structTypeHash != 0) {
       u16 zeroStruct = EmitZeroStruct(structTypeHash);
       builder.EmitInstruction(OP_STORE_REG, varReg, zeroStruct);
-      initializedVariables.insert(varDecl.name.nameHash);
+      initializedVariables.insert(nameHash);
     }
   } else if (!isArray &&
              (coreType == CoreType::FLOAT2 || coreType == CoreType::FLOAT3 ||
@@ -813,8 +832,20 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
                                                           : 4;
     builder.EmitInstruction(OP_VEC_CONSTRUCT, varReg, zero, zero, zero, zero);
     program.metadata[program.instructionCount - 1] = componentCount;
-    initializedVariables.insert(varDecl.name.nameHash);
+    initializedVariables.insert(nameHash);
   }
+}
+
+inline u16 IRLowering::LowerModuleArrayConstant(const VariableData &data,
+                                                u32 bindingNameHash) {
+  auto found = variableRegisters.find(bindingNameHash);
+  if (found != variableRegisters.end()) return found->second;
+  if (!data.constDecl.IsValid()) {
+    ReportError("Error: module array constant has no declaration\n");
+    return 0;
+  }
+  LowerVariableDecl(data.constDecl, bindingNameHash, &data);
+  return variableRegisters[bindingNameHash];
 }
 
 inline void IRLowering::LowerAssignment(NodeRef ref) {
@@ -831,6 +862,44 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
 
 inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
                                   InterpolationMode interpolation) {
+  // Array element and nested field writes must honor the root declaration's
+  // const flag. The direct identifier path below only covers whole values.
+  NodeRef root = target;
+  bool indexed = false;
+  while (root.Type() == ASTNodeType::ARRAY_ACCESS ||
+         root.Type() == ASTNodeType::MEMBER_ACCESS) {
+    if (root.Type() == ASTNodeType::ARRAY_ACCESS) {
+      indexed = true;
+      root = ast->GetArrayAccess(root).array;
+    } else {
+      const MemberAccessData &member = ast->GetMemberAccess(root);
+      if (member.isModuleQualified) break;
+      root = member.object;
+    }
+  }
+  if (indexed) {
+    u32 rootHash = 0;
+    if (root.Type() == ASTNodeType::IDENTIFIER) {
+      u32 boundHash = ast->identifierConstBindingHashes[root.Index()];
+      rootHash = boundHash ? boundHash : ast->GetIdentifier(root).name.nameHash;
+    } else if (root.Type() == ASTNodeType::MEMBER_ACCESS &&
+             ast->GetMemberAccess(root).isModuleQualified)
+      rootHash = ast->GetMemberAccess(root).qualifiedNameHash;
+    if (rootHash != 0) {
+      bool knownLocal = variableRegisters.find(rootHash) != variableRegisters.end();
+      bool immutable = constVariables.find(rootHash) != constVariables.end();
+      if (!knownLocal) {
+        Symbol *sym = SymbolTable::LookupByHash(
+            const_cast<SymbolTableData *>(symbols), rootHash);
+        immutable = immutable || (sym && sym->kind == SymbolKind::VARIABLE &&
+                                  symbols->variables[sym->index].isConst);
+      }
+      if (immutable) {
+        ReportError("Error: cannot assign to a const declaration\n");
+        return;
+      }
+    }
+  }
   if (TryStoreLocalPlace(target, valueReg)) return;
 
   if (target.Type() == ASTNodeType::IDENTIFIER) {
@@ -1851,6 +1920,18 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       access.object.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &enumIdent = ast->GetIdentifier(access.object);
     u32 qualifierHash = enumIdent.name.nameHash;
+    u32 visibleModule = SymbolTable::ResolveModuleIndexByHashInScope(
+        const_cast<SymbolTableData *>(symbols), qualifierHash,
+        AliasOwnerKind(), AliasOwnerModuleIndex());
+    if (visibleModule != INVALID_INDEX) {
+      Symbol *constant = SymbolTable::LookupByHash(
+          const_cast<SymbolTableData *>(symbols), access.qualifiedNameHash);
+      if (constant && constant->kind == SymbolKind::VARIABLE) {
+        const VariableData &data = symbols->variables[constant->index];
+        if (data.isConst && IsArray(data.typeInfo) && data.constDecl.IsValid())
+          return LowerModuleArrayConstant(data, access.qualifiedNameHash);
+      }
+    }
     Symbol *enumSym = SymbolTable::LookupByHash(
         const_cast<SymbolTableData *>(symbols), qualifierHash);
     if (enumSym && (enumSym->kind == SymbolKind::ENUM ||

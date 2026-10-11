@@ -240,6 +240,18 @@ NodeRef Parser::ParseStatement() {
             typeStr += "^";
         }
 
+        if (constType.coreType != CoreType::INVALID &&
+            constType.coreType != CoreType::CUSTOM && Match(TokenType::LEFT_BRACKET)) {
+            NodeRef arrayDecl = ParseArrayDeclaration(constType.coreType,
+                                                       StorageClass::Default, true);
+            if (arrayDecl.IsValid()) {
+                ast->IndexPosition(arrayDecl, line, col);
+                ast->GetVariableDecl(arrayDecl).typePosition =
+                    AST::PackPosition(typeLoc.line, typeLoc.column);
+            }
+            return arrayDecl;
+        }
+
         ConsumeDeclarationName("variable", "Expected variable name");
         SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
         std::string varName = std::string(stream->GetValue(previous));

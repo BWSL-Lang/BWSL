@@ -554,6 +554,7 @@ struct AST {
 
     // Type-specific pools (cold, only touched when you need that node type)
     ArenaArray<IdentifierData> identifiers;
+    ArenaArray<u32> identifierConstBindingHashes; // Qualified array-const binding, zero otherwise.
     ArenaArray<LiteralData> literals;
     ArenaArray<BinaryOpData> binaryOps;
     ArenaArray<UnaryOpData> unaryOps;
@@ -644,6 +645,7 @@ struct AST {
 
         // Initialize pools with reasonable defaults based on typical usage
         identifiers.Init(arena, 64);        // Very common
+        identifierConstBindingHashes.Init(arena, 64);
         literals.Init(arena, 32);           // Common
         binaryOps.Init(arena, 32);          // Common
         unaryOps.Init(arena, 8);            // Less common
@@ -1075,6 +1077,7 @@ namespace ASTFactory {
         data.name = name;
         data.identifierKind = SpecialIdentifier::NONE;
         ast->identifiers.Push(ast->arena, data);
+        ast->identifierConstBindingHashes.Push(ast->arena, 0u);
 
         // Store position
         if (ast->nodeCount >= ast->nodeCapacity) {
@@ -2259,7 +2262,10 @@ namespace ASTClone {
                 const IdentifierData& src = ctx.ast->GetIdentifier(node);
                 u32 line = ctx.ast->GetLine(node);
                 u32 col = ctx.ast->GetColumn(node);
-                return ASTFactory::MakeIdentifier(ctx.ast, src.name, line, col);
+                NodeRef copy = ASTFactory::MakeIdentifier(ctx.ast, src.name, line, col);
+                ctx.ast->identifierConstBindingHashes[copy.Index()] =
+                    ctx.ast->identifierConstBindingHashes[node.Index()];
+                return copy;
             }
 
             case ASTNodeType::LITERAL: {

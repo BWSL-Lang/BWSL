@@ -590,8 +590,8 @@ Supported module contents:
 
 Note:
 
-- Module constants are folded at compile time. Their type must be a scalar
-  or a `float`, `int` or `uint` vector. The initializer may use literals,
+- Scalar and vector module constants are folded at compile time. Their type
+  must be a scalar or a `float`, `int` or `uint` vector. The initializer may use literals,
   other constants, scalar arithmetic, and scalar or vector constructors:
 
   ```bwsl
@@ -604,6 +604,19 @@ Note:
   Vector arithmetic (`NORTH * 2.0`), swizzles (`NORTH.y`) and matrix
   constants are not supported in module constant initializers yet. Uses of
   the constant can still be swizzled (`Dirs::NORTH.y`).
+
+Fixed arrays of core types can be declared `const` at module, pipeline, pass,
+or local scope. Brace initializers must supply every element. Module array
+elements must be compile-time expressions. Array elements cannot be assigned
+after declaration.
+
+```bwsl
+module Tables {
+    const float[4] WEIGHTS = { 0.125, 0.25, 0.375, 0.25 };
+}
+
+// After importing Tables, use Tables::WEIGHTS[index].
+```
 
 ## Structs and Arrays
 

@@ -470,6 +470,18 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
 
 inline u16 IRLowering::LowerIdentifier(NodeRef ref) {
   const IdentifierData &ident = ast->GetIdentifier(ref);
+  u32 boundHash = ast->identifierConstBindingHashes[ref.Index()];
+  if (boundHash != 0) {
+    auto boundRegister = variableRegisters.find(boundHash);
+    if (boundRegister != variableRegisters.end()) return boundRegister->second;
+    Symbol *bound = SymbolTable::LookupByHash(
+        const_cast<SymbolTableData *>(symbols), boundHash);
+    if (bound && bound->kind == SymbolKind::VARIABLE) {
+      const VariableData &data = symbols->variables[bound->index];
+      if (data.isConst && IsArray(data.typeInfo) && data.constDecl.IsValid())
+        return LowerModuleArrayConstant(data, boundHash);
+    }
+  }
 
   // Check if we already have a register for this variable
   auto it = variableRegisters.find(ident.name.nameHash);
@@ -501,10 +513,24 @@ inline u16 IRLowering::LowerIdentifier(NodeRef ref) {
   }
 
   // Look up in symbol table
-  Symbol *sym = SymbolTable::LookupByHash(
-      const_cast<SymbolTableData *>(symbols), ident.name.nameHash);
+  SymbolTableData *table = const_cast<SymbolTableData *>(symbols);
+  Symbol *sym = inlineModuleIndex != INVALID_INDEX
+      ? SymbolTable::Lookup(table, ident.name, NamespaceKind::MODULE,
+                            inlineModuleIndex)
+      : nullptr;
+  if (!sym) sym = SymbolTable::LookupByHash(table, ident.name.nameHash);
   if (sym && sym->kind == SymbolKind::VARIABLE) {
     const VariableData &varData = symbols->variables[sym->index];
+    if (varData.isConst && IsArray(varData.typeInfo) && varData.constDecl.IsValid()) {
+      u32 bindingHash = ident.name.nameHash;
+      if (sym->namespaceKind == NamespaceKind::MODULE &&
+          sym->moduleIndex < symbols->modules.count) {
+        std::string qualified = symbols->modules[sym->moduleIndex].name.ToString() +
+                                "::" + ident.name.ToString(sourceBase);
+        bindingHash = ArenaString::MakeHashOnly(qualified).nameHash;
+      }
+      return LowerModuleArrayConstant(varData, bindingHash);
+    }
     if (varData.isConst && varData.constExpr.IsValid()) {
       return LowerExpression(varData.constExpr);
     }
