@@ -174,6 +174,35 @@ Notes:
 - The compiler can emit resolved resource bindings with `-bindings`; that
   reflection output is the authoritative ABI.
 
+### Texture arrays
+
+A texture resource can be a fixed-size array of separate textures:
+
+```bwsl
+resources {
+    units: texture2D[4]
+}
+
+fragment {
+    float4 base = sample(resources.units[0], input.uv);
+    float4 picked = sample(resources.units[input.unit], input.uv);
+}
+```
+
+- Index an element with a constant or with an `int`/`uint` expression;
+  `resources.units.length` is the element count.
+- A non-constant index may only appear in the texture argument of a texture
+  function such as `sample`. It compiles to one constant-index call per
+  element, chosen by branches, because GLSL ES 3.00 only accepts constant
+  sampler indices. An out-of-range index reads the last element.
+- Each element uses one of the pipeline's 32 resource slots and has its own
+  texture unit (GL) or texture register (Metal, HLSL); Vulkan uses one
+  binding with a descriptor count. Resources declared after the array follow
+  its last element. `bindings.json` reports the array once, with `count`.
+- The array has one sampler per element (GL, Metal) or is paired with one
+  explicit sampler. It can't share a sampler with other textures or be passed
+  to a function.
+
 
 ## Passes
 

@@ -179,6 +179,12 @@ VARIANT_ERROR_TESTS = {
 }
 
 ERROR_CASE_TESTS = {
+    "texture_array_unindexed.bwsl": "texture array 'resources.textures' must be indexed",
+    "texture_array_index_out_of_bounds.bwsl": "index 4 is out of bounds for texture array",
+    "texture_array_dynamic_outside_call.bwsl": "non-constant index can only be passed directly to a texture function",
+    "texture_array_shared_sampler.bwsl": "can't share a sampler with other textures",
+    "texture_array_slot_limit.bwsl": "each texture array element counts as one",
+    "sampler_array.bwsl": "Arrays of sampler resources are not supported",
     "intrinsic_function_name.bwsl": "reserved for a built-in intrinsic",
     "intrinsic_module_function_name.bwsl": "reserved for a built-in intrinsic",
     "intrinsic_struct_method_name.bwsl": "reserved for a built-in intrinsic",

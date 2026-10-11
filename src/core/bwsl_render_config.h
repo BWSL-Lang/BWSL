@@ -49,6 +49,7 @@ struct TextureBinding {
     bool isVolume = false;
     bool separateSampler = false;
     u32 defaultSamplerBinding = 0;
+    u32 arraySize = 0;  // Texture array element count; element i is at bindingIndex + i
     u8 stages = 2;  // Bitmask: 1=vertex, 2=fragment, 3=both
 };
 

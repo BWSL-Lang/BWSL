@@ -434,6 +434,16 @@ bool SPIRVBuilder::LoadSampledTexture(u16 texReg, CoreType missingResultType,
 
   GetSampledTextureTypeIds(load.slot, &load.sampledImageTypeId, &load.imageTypeId);
 
+  if (textureArrayLength[load.slot] > 0) {
+    // Element slots share the array's variable; load through a
+    // constant-index access chain.
+    u32 elementType = textureIsSeparate[load.slot] ? load.imageTypeId : load.sampledImageTypeId;
+    u32 element = AllocateId();
+    Emit(spv::OpAccessChain, GetPointerTypeId(elementType, spv::StorageClassUniformConstant),
+         element, load.variableId, GetIntConstantId(textureArrayElement[load.slot], true));
+    load.variableId = element;
+  }
+
   if (textureIsSeparate[load.slot]) {
     load.imageId = AllocateId();
     Emit(spv::OpLoad, load.imageTypeId, load.imageId, load.variableId);

@@ -38,6 +38,12 @@
 - Imported resource payloads use `Module::Type`; `Module.Type` remains a
   deprecated compatibility alias.
 - Struct fields can use a previously declared type in the same module.
+- Texture resources can be arrays, e.g. `units: texture2D[4]`, indexed with a
+  constant or a dynamic `int`/`uint` index (`resources.units[input.unit]`).
+  GL output declares `sampler2D t_units[4]` and indexes it with constants
+  only, as GLSL ES 3.00 requires. Each element takes a resource slot, and
+  `bindings.json` reports the array's `count`. Previously such a declaration
+  failed SPIR-V validation with `Id is 0`.
 - Vertex attributes beyond the supported 16 slots produce a source error.
 - `.length` works on local arrays and array function parameters. It was
   previously rejected as an invalid swizzle.

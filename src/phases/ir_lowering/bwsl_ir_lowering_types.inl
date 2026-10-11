@@ -953,25 +953,33 @@ inline bool IRLowering::CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
                                  program.localArraySizes[arrayIdx]);
 }
 
+// Reads the value of an index that is a constant register or folds to one.
+inline bool IRLowering::TryGetConstIndex(u16 indexReg, NodeRef indexExpr,
+                                         s64* value) {
+    if (IR::IsIntConstant(indexReg)) {
+        u16 slot = indexReg & 0x3FFF;
+        if (slot >= program.intCount) return false;
+        *value = static_cast<s32>(program.intConstants[slot]);
+        return true;
+    }
+    if (IR::IsUintConstant(indexReg)) {
+        u16 slot = indexReg & 0x1FFF;
+        if (slot >= program.uintCount) return false;
+        *value = program.uintConstants[slot];
+        return true;
+    }
+    bool isUnsigned;
+    return !indexExpr.IsNull() && TryFoldArrayIndex(ast, indexExpr, value, &isUnsigned);
+}
+
 // Reports an error when a constant index is negative or >= length. Returns
 // true when the index is fine or not a constant.
 inline bool IRLowering::CheckConstIndexInBounds(u16 indexReg, NodeRef indexExpr,
                                                 u32 length) {
   if (length == 0) return true;
 
-    s64 indexValue;
-    if (IR::IsIntConstant(indexReg)) {
-        u16 slot = indexReg & 0x3FFF;
-        if (slot >= program.intCount) return true;
-        indexValue = static_cast<s32>(program.intConstants[slot]);
-    } else if (IR::IsUintConstant(indexReg)) {
-        u16 slot = indexReg & 0x1FFF;
-        if (slot >= program.uintCount) return true;
-        indexValue = program.uintConstants[slot];
-    } else {
-        bool isUnsigned;
-        if (!TryFoldArrayIndex(ast, indexExpr, &indexValue, &isUnsigned)) return true;
-    }
+  s64 indexValue;
+  if (!TryGetConstIndex(indexReg, indexExpr, &indexValue)) return true;
 
   if (indexValue < 0 || indexValue >= static_cast<s64>(length)) {
     char msg[160];

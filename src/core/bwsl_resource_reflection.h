@@ -41,6 +41,7 @@ struct ReflectedResourceBinding {
     u8 stages = 0;
     u8 resourceIndex = 0xFF;
     u8 bindingSlot = 0xFF;
+    u32 arraySize = 0;  // Texture array element count (0 = not an array)
     ResourceAccessMode access = ResourceAccessMode::ReadOnly;
     bool combinedSampledImage = false;
     bool separateImageSampler = false;
@@ -81,12 +82,20 @@ inline bool ReflectionMaskContains(u32 mask, u32 bindingIndex) {
     return bindingIndex < 32 && (mask & (1u << bindingIndex)) != 0;
 }
 
+// Texture array elements each have a slot; the array is used when any is.
+inline bool TextureSlotsUsed(const ResourceData& resource, u32 usedTextureMask) {
+    if (resource.bindingIndex >= 32) return false;  // compacted away
+    for (u32 slot = 0; slot < GetResourceSlotCount(resource); ++slot)
+        if (ReflectionMaskContains(usedTextureMask, resource.bindingIndex + slot)) return true;
+    return false;
+}
+
 inline bool ResourceUsedByStage(const ResourceData& resource, const IRAnalysis& analysis) {
     switch (resource.type) {
         case ::ResourceBinding::UniformBuffer:
             return ReflectionMaskContains(analysis.usedUniformMask, resource.bindingIndex);
         case ::ResourceBinding::Texture:
-            return ReflectionMaskContains(analysis.usedTextureMask, resource.bindingIndex);
+            return TextureSlotsUsed(resource, analysis.usedTextureMask);
         case ::ResourceBinding::Sampler:
             return ReflectionMaskContains(analysis.usedSamplerMask, resource.bindingIndex);
         case ::ResourceBinding::StorageBuffer:
@@ -400,7 +409,18 @@ struct SeparateSamplerPlan {
 };
 
 inline SeparateSamplerPlan BuildSeparateSamplerPlan(const SymbolTableData& symbols,
-                                                     const std::vector<ExplicitSamplerUse>& uses) {
+                                                     std::vector<ExplicitSamplerUse> uses) {
+    // A texture array's elements share one descriptor: pair it as a whole,
+    // under its first slot.
+    for (ExplicitSamplerUse& use : uses) {
+        for (u32 i = 0; i < symbols.resources.count; ++i) {
+            const auto& resource = symbols.resources[i];
+            if (resource.type == ::ResourceBinding::Texture && resource.bindingIndex < 32 &&
+                use.textureBinding > resource.bindingIndex &&
+                use.textureBinding < resource.bindingIndex + GetResourceSlotCount(resource))
+                use.textureBinding = static_cast<u16>(resource.bindingIndex);
+        }
+    }
     SeparateSamplerPlan plan;
     for (u32 i = 0; i < symbols.resources.count; ++i) {
         const auto& resource = symbols.resources[i];
@@ -440,7 +460,9 @@ inline ReflectedResourceBinding* FindReflectedResourceBinding(
     u16 bindingSlot,
     u8 stageFlags) {
     for (ReflectedResourceBinding& binding : bindings) {
-        if (binding.type != type || binding.bindingSlot != bindingSlot) {
+        // A texture array's binding covers its elements' slots.
+        if (binding.type != type || bindingSlot < binding.bindingSlot ||
+            bindingSlot >= binding.bindingSlot + std::max<u32>(binding.arraySize, 1)) {
             continue;
         }
         if (stageFlags != 0 && (binding.stages & stageFlags) == 0) {
@@ -497,6 +519,7 @@ inline std::vector<ReflectedResourceBinding> BuildResolvedResourceReflection(
         binding.stages = stages;
         binding.resourceIndex = declaredIndex;
         binding.bindingSlot = static_cast<u8>(resource.bindingIndex);
+        binding.arraySize = resource.type == ::ResourceBinding::Texture ? resource.arraySize : 0;
         binding.access = CollectResourceAccess(resource, vertexAnalysis, fragmentAnalysis, computeAnalysis);
         bindings.push_back(std::move(binding));
     };
@@ -526,6 +549,7 @@ inline std::vector<ReflectedResourceBinding> BuildResolvedResourceReflection(
             binding.binding = ResolveResourceBindingIndex(resource, config, &symbols);
             binding.stages = stages;
             binding.bindingSlot = static_cast<u8>(resource.bindingIndex);
+            binding.arraySize = resource.type == ::ResourceBinding::Texture ? resource.arraySize : 0;
             binding.access = CollectResourceAccess(resource, vertexAnalysis, fragmentAnalysis, computeAnalysis);
             bindings.push_back(std::move(binding));
         }

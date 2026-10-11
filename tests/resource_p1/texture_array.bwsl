@@ -1,0 +1,32 @@
+// Texture arrays (#137): each element takes a binding slot, so `extra`
+// follows at textures + 3. A constant index selects the element directly; a
+// dynamic one branches to a constant-index sample per element, which
+// GLSL ES 3.00 requires.
+pipeline TextureArray {
+    attributes {
+        position: float2
+        unit: uint
+    }
+    resources {
+        tint: float4
+        textures: texture2D[3]
+        extra: texture2D
+    }
+
+    pass "Main" {
+        use attributes { position, unit }
+        use resources { tint, textures, extra }
+        vertex {
+            output.position = float4(attributes.position, 1.0, 1.0);
+            output.uv = attributes.position * 0.5 + 0.5;
+            @flat output.unit = attributes.unit;
+        }
+        fragment {
+            int2 size = texture_size(resources.textures[2]);
+            float4 picked = sample(resources.textures[input.unit], input.uv);
+            float4 fixed = sample(resources.textures[1], input.uv);
+            float count = float(resources.textures.length + size.x);
+            output.color = (picked + fixed) * resources.tint + sample(resources.extra, input.uv) * count;
+        }
+    }
+}

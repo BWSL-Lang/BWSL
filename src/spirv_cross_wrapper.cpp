@@ -66,9 +66,15 @@ static void preserveBindingIndices(spirv_cross::CompilerMSL& compiler, spv::Exec
         if (binding >= 16) SPIRV_CROSS_THROW("Metal supports sampler bindings 0 through 15");
         samplerSlots[binding] = true;
     }
-    auto allocateSamplerSlot = [&]() -> uint32_t {
-        for (uint32_t slot = 0; slot < 16; ++slot)
-            if (!samplerSlots[slot]) { samplerSlots[slot] = true; return slot; }
+    // A texture array's samplers take `count` consecutive slots.
+    auto allocateSamplerSlots = [&](uint32_t count) -> uint32_t {
+        for (uint32_t first = 0; first + count <= 16; ++first) {
+            uint32_t free = 0;
+            while (free < count && !samplerSlots[first + free]) ++free;
+            if (free < count) continue;
+            for (uint32_t slot = first; slot < first + count; ++slot) samplerSlots[slot] = true;
+            return first;
+        }
         SPIRV_CROSS_THROW("Metal supports at most 16 active samplers");
     };
 
@@ -100,7 +106,8 @@ static void preserveBindingIndices(spirv_cross::CompilerMSL& compiler, spv::Exec
         mslBinding.msl_buffer = binding;
         mslBinding.msl_texture = binding;
         // Remap sampler to sequential slots within 0-15 range
-        mslBinding.msl_sampler = allocateSamplerSlot();
+        const auto& type = compiler.get_type(res.type_id);
+        mslBinding.msl_sampler = allocateSamplerSlots(type.array.empty() ? 1 : type.array[0]);
         compiler.add_msl_resource_binding(mslBinding);
     };
 

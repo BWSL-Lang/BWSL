@@ -293,26 +293,34 @@ void Parser::RegisterParsedResource(const std::string& resourceName,
         data.coreType = static_cast<u8>(CoreType::SAMPLER);
         return;
     }
-    if (typeName == "texture2D") {
+    // Textures may be declared as fixed arrays ("texture2D[4]"); elements
+    // are indexed with a constant or dynamic index in shader code.
+    const std::string textureBase = StripFixedArraySuffixes(typeName);
+    const u32 textureArraySize = textureBase.size() != typeName.size() ? ExtractFixedArraySize(typeName) : 0;
+    if (textureBase == "texture2D") {
         data.type = ResourceBinding::Texture;
         data.coreType = static_cast<u8>(CoreType::TEXTURE2D);
+        data.arraySize = textureArraySize;
         return;
     }
-    if (typeName == "texture3D") {
+    if (textureBase == "texture3D") {
         data.type = ResourceBinding::Texture;
         data.coreType = static_cast<u8>(CoreType::TEXTURE3D);
+        data.arraySize = textureArraySize;
         return;
     }
-    if (typeName == "textureCube") {
+    if (textureBase == "textureCube") {
         data.type = ResourceBinding::Texture;
         data.coreType = static_cast<u8>(CoreType::TEXTURECUBE);
         data.isCubemapTexture = true;
+        data.arraySize = textureArraySize;
         return;
     }
-    if (typeName == "texture2DArray") {
+    if (textureBase == "texture2DArray") {
         data.type = ResourceBinding::Texture;
         data.coreType = static_cast<u8>(CoreType::TEXTURE2DARRAY);
         data.isArrayTexture = true;
+        data.arraySize = textureArraySize;
         return;
     }
     if (typeName == "image2D") {
@@ -390,7 +398,16 @@ void Parser::FinalizeParsedResourceBindings(NodeRef pipeline, u32 firstMemberAcc
         visitingTypes.pop_back();
         return found;
     };
+    auto declarationToken = [&](NodeRef declaration) {
+        const u32 line = ast->GetLine(declaration), column = ast->GetColumn(declaration);
+        for (TokenRef token = 0; token < stream->Count(); ++token) {
+            auto location = getLocation(stream->GetOffset(token));
+            if (location.line == line && location.column == column) return token;
+        }
+        return previous;
+    };
     std::vector<ResourceData*> resources;
+    std::vector<NodeRef> resourceDecls;
     std::vector<u32> hashes;
     std::vector<bool> referenced;
     for (u32 i = 0; i < declarations.count; ++i) {
@@ -402,19 +419,25 @@ void Parser::FinalizeParsedResourceBindings(NodeRef pipeline, u32 firstMemberAcc
             containsBool(containsBool, static_cast<CoreType>(resource->coreType), resource->structTypeHash)) {
             std::string message = "External resource '" + declaration.name.ToString(sourceBase()) +
                 "' contains bool storage, which is unsupported; use uint fields and compare them with 0u in shader code";
-            TokenRef declarationToken = previous;
-            const u32 line = ast->GetLine(declarations[i]), column = ast->GetColumn(declarations[i]);
-            for (TokenRef token = 0; token < stream->Count(); ++token) {
-                auto location = getLocation(stream->GetOffset(token));
-                if (location.line == line && location.column == column) { declarationToken = token; break; }
-            }
-            ErrorAt(declarationToken, message);
+            ErrorAt(declarationToken(declarations[i]), message);
         }
         resources.push_back(resource);
+        resourceDecls.push_back(declarations[i]);
         hashes.push_back(declaration.name.nameHash);
         referenced.push_back(false);
     }
+    // A declaration's slot is the number of slots declared before it, as
+    // each texture array element takes one (GetResourceSlotCount).
+    u32 slotCount = 0;
+    const bool hasTextureArray = std::any_of(resources.begin(), resources.end(),
+        [](const ResourceData* r) { return GetResourceSlotCount(*r) > 1; });
+    for (ResourceData* resource : resources) {
+        if (hasTextureArray) resource->bindingIndex = slotCount;
+        slotCount += GetResourceSlotCount(*resource);
+    }
     auto resourceIndex = [&](NodeRef node) -> int {
+        if (!node.IsNull() && node.Type() == ASTNodeType::ARRAY_ACCESS)
+            node = ast->GetArrayAccess(node).array;  // texture array element
         if (node.IsNull() || node.Type() != ASTNodeType::MEMBER_ACCESS) return -1;
         const auto& access = ast->GetMemberAccess(node);
         if (access.object.IsNull() || access.object.Type() != ASTNodeType::IDENTIFIER ||
@@ -473,27 +496,59 @@ void Parser::FinalizeParsedResourceBindings(NodeRef pipeline, u32 firstMemberAcc
             }
         }
     } while (changed);
+    // Elements of one array share a descriptor, so they can't be split
+    // between combined and separate texture/sampler pairs.
+    for (size_t i = 0; i < resources.size(); ++i) {
+        if (resources[i]->type != ResourceBinding::Texture || resources[i]->arraySize == 0 ||
+            !resources[i]->separateSampler) continue;
+        const auto& declaration = ast->GetResourceDecl(resourceDecls[i]);
+        ErrorAt(declarationToken(resourceDecls[i]),
+                "Texture array '" + declaration.name.ToString(sourceBase()) +
+                "' can't share a sampler with other textures, use more than one sampler, "
+                "or be passed to a function; sample its elements directly with one sampler of its own");
+    }
 
-    if (resources.size() <= 32) return;
+    if (slotCount <= 32) return;
     if (resources.size() > 255) {
         Error("Pipeline resource declarations exceed the supported limit of 255");
         return;
     }
-    if (std::count(referenced.begin(), referenced.end(), true) > 32) {
-        Error("Pipeline references more than the supported limit of 32 resources");
+    u32 referencedSlots = 0;
+    for (size_t i = 0; i < resources.size(); ++i)
+        if (referenced[i]) referencedSlots += GetResourceSlotCount(*resources[i]);
+    if (referencedSlots > 32) {
+        Error("Pipeline references more than the supported limit of 32 resources "
+              "(each texture array element counts as one)");
         return;
     }
     // Keep live low slots stable; reuse only unused declarations' slots.
     bool occupied[32] = {};
-    for (size_t i = 0; i < resources.size(); ++i)
-        if (referenced[i] && resources[i]->bindingIndex < 32) occupied[resources[i]->bindingIndex] = true;
+    auto isLow = [&](size_t i) {
+        return resources[i]->bindingIndex < 32 &&
+               resources[i]->bindingIndex + GetResourceSlotCount(*resources[i]) <= 32;
+    };
+    for (size_t i = 0; i < resources.size(); ++i) {
+        if (!referenced[i] || !isLow(i)) continue;
+        for (u32 s = 0; s < GetResourceSlotCount(*resources[i]); ++s)
+            occupied[resources[i]->bindingIndex + s] = true;
+    }
     for (size_t i = 0; i < resources.size(); ++i) {
         if (!referenced[i]) { resources[i]->bindingIndex = UINT32_MAX; continue; }
-        if (resources[i]->bindingIndex < 32) continue;
-        u32 slot = 0;
-        while (slot < 32 && occupied[slot]) ++slot;
-        resources[i]->bindingIndex = slot;
-        occupied[slot] = true;
+        if (isLow(i)) continue;
+        // Arrays need a contiguous run; the total fits, but free slots may be split.
+        const u32 count = GetResourceSlotCount(*resources[i]);
+        u32 slot = 0, run = 0;
+        for (; slot < 32 && run < count; ++slot) run = occupied[slot] ? 0 : run + 1;
+        if (run < count) {
+            ErrorAt(declarationToken(resourceDecls[i]),
+                    "No " + std::to_string(count) + " consecutive resource slots are free for texture array '" +
+                    ast->GetResourceDecl(resourceDecls[i]).name.ToString(sourceBase()) +
+                    "'; declare it before other resources");
+            resources[i]->bindingIndex = UINT32_MAX;
+            continue;
+        }
+        resources[i]->bindingIndex = slot - count;
+        for (u32 s = 0; s < count; ++s) occupied[slot - count + s] = true;
     }
 }
 
