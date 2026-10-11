@@ -138,6 +138,7 @@ inline void AppendCompactResourceReflectionJson(
         json << "\"type\":\"" << ResourceTypeToString(resource.type) << "\",";
         json << "\"set\":" << resource.set << ",";
         json << "\"binding\":" << resource.binding << ",";
+        if (resource.arraySize > 0) json << "\"count\":" << resource.arraySize << ",";
         json << "\"stages\":" << StageFlagsToJsonArray(resource.stages) << ",";
         json << "\"access\":\"" << ResourceAccessToString(resource.access) << "\"";
         ArenaString glName;
@@ -177,6 +178,8 @@ inline std::string BuildPrettyResourceBindingsJson(
         json += "      \"type\": \"" + std::string(ResourceTypeToString(binding.type)) + "\",\n";
         json += "      \"set\": " + std::to_string(binding.set) + ",\n";
         json += "      \"binding\": " + std::to_string(binding.binding) + ",\n";
+        if (binding.arraySize > 0)
+            json += "      \"count\": " + std::to_string(binding.arraySize) + ",\n";
         json += "      \"stages\": " + StageFlagsToJsonArray(binding.stages, true) + ",\n";
         json += "      \"access\": \"" + std::string(ResourceAccessToString(binding.access)) + "\"";
         ArenaString glName;

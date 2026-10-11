@@ -449,6 +449,8 @@ private:
     // ===== Expression Emission =====
     void EmitExpr(u16 reg);
     void EmitTexture(u16 reg, u32 metadata = 0);
+    // The texture whose slots include `slot` (texture arrays have one per element).
+    const TextureBinding* FindTextureBinding(u16 slot) const;
     bool EmitConstantExpr(u16 reg, u32 depth = 0);
     void EmitTextureOffset(u16 reg);
     void EmitSelect(u32 instIdx);

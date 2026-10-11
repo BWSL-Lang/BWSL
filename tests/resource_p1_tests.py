@@ -61,6 +61,18 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
                     row["errors"].append("Independent samplers collapsed")
                 if source.stem == "sampler_mixed_default" and not any(r.get("defaultSamplerFor") == "tex" for r in samplers):
                     row["errors"].append("Implicit default sampler mapping missing")
+            if source.stem == "texture_array":
+                textures, extra = by_name.get("textures", {}), by_name.get("extra", {})
+                if textures.get("count") != 3 or extra.get("binding") != textures.get("binding", -9) + 3:
+                    row["errors"].append("Texture array elements do not occupy consecutive reflected slots")
+                if "array<texture2d<float>, 3> t_textures" not in metal or "array<sampler, 3>" not in metal:
+                    row["errors"].append("Metal lost the texture array")
+                # The array's samplers take three slots; the next sampler follows them.
+                array_sampler = re.search(r"array<sampler, 3> \w+ \[\[sampler\((\d+)\)\]\]", metal)
+                extra_sampler = re.search(r"sampler t_extraSmplr \[\[sampler\((\d+)\)\]\]", metal)
+                if not array_sampler or not extra_sampler or \
+                        int(array_sampler.group(1)) <= int(extra_sampler.group(1)) < int(array_sampler.group(1)) + 3:
+                    row["errors"].append("Metal sampler slots overlap the texture array")
             if source.stem == "pipeline_scope" and by_name.get("tex", {}).get("abi") != "combined_sampled_image":
                 row["errors"].append("A previous pipeline changed the current pipeline's sampler ABI")
             for path in metal_files:
@@ -89,7 +101,7 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
                  "sampler_operations", "texture_query_size_levels", "pointer_address_taken_control_flow",
                  "texture_sample_grad_cmp_gather", "gl_interface_names", "gl_interface_names_mixed",
                  "gl_interface_names_keyword_fallback", "gl_interface_names_nested",
-                 "gl_interface_names_uniform_arrays"):
+                 "gl_interface_names_uniform_arrays", "texture_array"):
         modes = ("-gles", "-gles-direct")
         if name.startswith("gl_interface_names"):
             modes += ("-glsl",)
@@ -146,6 +158,15 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
                     for member in ("input", "scales", "bones", "entries"):
                         if not re.search(r"\bbwsl_u_" + member + r"\[3\]", shader.read_text()):
                             row["errors"].append("Uniform array length missing: " + member)
+            if name == "texture_array":
+                if not re.search(r"uniform highp sampler2D t_textures\[3\];", text):
+                    row["errors"].append("GL texture array declaration missing")
+                # ES 3.00 indexes sampler arrays with constant expressions only.
+                if re.search(r"t_textures\[(?!\d+u?\])", text.replace("t_textures[3];", "")):
+                    row["errors"].append("GL texture array indexed with a non-constant")
+                for element in range(3):
+                    if not re.search(r"t_textures\[" + str(element) + r"u?\]", text):
+                        row["errors"].append(f"GL texture array element {element} is never sampled")
             if name == "texture3d_drops_z" and "sampler3D" not in text:
                 row["errors"].append("GLES lost the 3D texture type")
             if name in {"texture_slot_32", "resource_slot_32_mixed"} and mode == "-gles-direct" and "t_tex32" not in text:

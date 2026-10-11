@@ -1,0 +1,23 @@
+// Only textures can be declared as resource arrays (#137).
+pipeline TextureArrayError {
+    attributes {
+        position: float2
+    }
+    resources {
+        textures: texture2D
+        samp: sampler[2]
+        other: texture2D
+        tint: float4
+    }
+    pass "Main" {
+        use attributes { position }
+        use resources { textures, samp, other, tint }
+        vertex {
+            output.position = float4(attributes.position, 1.0, 1.0);
+            output.uv = attributes.position;
+        }
+        fragment {
+            output.color = sample(resources.other, input.uv) * resources.tint;
+        }
+    }
+}

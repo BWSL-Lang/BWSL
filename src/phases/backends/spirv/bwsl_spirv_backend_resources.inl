@@ -200,21 +200,40 @@ void SPIRVBuilder::DeclareResources() {
   // sampler reused with different partners needs independent descriptors.
   SeparateSamplerPlan samplerPlan;
   if (symbols) samplerPlan = BuildSeparateSamplerPlan(*symbols, CollectExplicitSamplerUses(*ir, stage));
+  // A texture array is declared once, at its first slot, when any of its
+  // element slots is used.
+  u32 usedTextureMask = analysis.usedTextureMask;
+  if (symbols) for (u32 r = 0; r < symbols->resources.count; ++r) {
+    const auto& resource = symbols->resources[r];
+    if (resource.type != ResourceBinding::Texture || resource.arraySize == 0 ||
+        resource.bindingIndex >= 32 || resource.bindingIndex + resource.arraySize > 32) continue;
+    const u32 elements = ((1ull << resource.arraySize) - 1) << resource.bindingIndex;
+    usedTextureMask &= ~elements;
+    if (analysis.usedTextureMask & elements) usedTextureMask |= 1u << resource.bindingIndex;
+  }
   for (u32 binding = 0; binding < 32; ++binding) {
-    if (!(analysis.usedTextureMask & (1u << binding))) continue;
+    if (!(usedTextureMask & (1u << binding))) continue;
+    u32 arrayLength = 0;
     if (symbols) for (u32 r = 0; r < symbols->resources.count; ++r) {
       const auto& resource = symbols->resources[r];
       if (resource.bindingIndex != binding || resource.type != ResourceBinding::Texture) continue;
       textureIsArray[binding] = resource.isArrayTexture;
       textureIsCubemap[binding] = resource.isCubemapTexture;
       textureIsVolume[binding] = static_cast<CoreType>(resource.coreType) == CoreType::TEXTURE3D;
+      arrayLength = resource.arraySize;
       break;
     }
     textureIsSeparate[binding] = (samplerPlan.textures & (1u << binding)) != 0;
     u32 sampledType = 0, imageType = 0;
     GetSampledTextureTypeIds(binding, &sampledType, &imageType);
-    u32 pointerType = GetPointerTypeId(textureIsSeparate[binding] ? imageType : sampledType,
-                                      spv::StorageClassUniformConstant);
+    u32 variableType = textureIsSeparate[binding] ? imageType : sampledType;
+    if (arrayLength > 0) {
+      u32 arrayType = AllocateId();
+      u32 arrayOps[] = {arrayType, variableType, GetIntConstantId(arrayLength, true)};
+      EmitToSection(&typesConstants, spv::OpTypeArray, arrayOps, 3);
+      variableType = arrayType;
+    }
+    u32 pointerType = GetPointerTypeId(variableType, spv::StorageClassUniformConstant);
     u32 variable = AllocateId();
     u32 ops[] = {pointerType, variable, spv::StorageClassUniformConstant};
     EmitToSection(&globals, spv::OpVariable, ops, 3);
@@ -231,6 +250,17 @@ void SPIRVBuilder::DeclareResources() {
     if (FindResourceName(ResourceBinding::Texture, binding, &textureName))
       EmitGLName(variable, GLNameKind::COMBINED_TEXTURE, textureName);
     textureIds[binding] = variable;
+    for (u32 element = 1; element < arrayLength; ++element) {
+      const u32 slot = binding + element;
+      textureIds[slot] = variable;
+      textureIsArray[slot] = textureIsArray[binding];
+      textureIsCubemap[slot] = textureIsCubemap[binding];
+      textureIsVolume[slot] = textureIsVolume[binding];
+      textureIsSeparate[slot] = textureIsSeparate[binding];
+      textureArrayLength[slot] = static_cast<u8>(arrayLength);
+      textureArrayElement[slot] = static_cast<u8>(element);
+    }
+    textureArrayLength[binding] = static_cast<u8>(arrayLength);
     bindingSets[resourceCount] = 0;
     bindingIndices[resourceCount++] = static_cast<u8>(resolved);
   }

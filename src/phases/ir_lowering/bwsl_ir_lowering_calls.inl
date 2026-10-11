@@ -202,6 +202,9 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
 
 inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
   const FunctionCallData &call = ast->GetFunctionCall(ref);
+  u16 textureArrayResult;
+  if (TryLowerDynamicTextureArrayCall(ref, &textureArrayResult))
+    return textureArrayResult;
 
   // Collect argument registers
   // Initialize to the unused operand sentinel. Supports up to 16 arguments
@@ -2291,6 +2294,124 @@ inline u16 IRLowering::LowerTextureSample(NodeRef ref) {
     }
 
     return dest;
+}
+
+// ============= Texture arrays =============
+
+inline const ResourceData *IRLowering::FindTextureArrayResource(NodeRef expr) const {
+  if (expr.IsNull() || expr.Type() != ASTNodeType::MEMBER_ACCESS)
+    return nullptr;
+  const MemberAccessData &access = ast->GetMemberAccess(expr);
+  if (access.object.IsNull() || access.object.Type() != ASTNodeType::IDENTIFIER ||
+      ast->GetIdentifier(access.object).identifierKind != SpecialIdentifier::RESOURCES)
+    return nullptr;
+  Symbol *sym = SymbolTable::LookupByHash(const_cast<SymbolTableData *>(symbols),
+                                          access.member.nameHash);
+  if (!sym || sym->kind != SymbolKind::RESOURCE || sym->index >= symbols->resources.count)
+    return nullptr;
+  const ResourceData &resource = symbols->resources[sym->index];
+  if (resource.type != ResourceBinding::Texture || resource.arraySize == 0)
+    return nullptr;
+  return &resource;
+}
+
+inline u16 IRLowering::LowerTextureArrayElement(NodeRef ref) {
+  const ArrayAccessData &access = ast->GetArrayAccess(ref);
+  const ResourceData *textures = FindTextureArrayResource(access.array);
+  const std::string name = ast->GetMemberAccess(access.array).member.ToString();
+  if (textures->bindingIndex >= 32) {
+    ReportErrorAt(ref, ("Error: texture array 'resources." + name +
+                        "' has no binding slot; list it in the pass's 'use resources'\n").c_str());
+    return 0;
+  }
+  s64 index = 0;
+  if (!TryGetConstIndex(LowerExpression(access.index), access.index, &index)) {
+    // TryLowerDynamicTextureArrayCall handles the supported dynamic case
+    // before the argument is lowered.
+    ReportErrorAt(ref, ("Error: texture array 'resources." + name +
+                        "' indexed with a non-constant index can only be passed directly "
+                        "to a texture function, e.g. sample(resources." + name + "[i], uv)\n").c_str());
+    return 0;
+  }
+  if (index < 0 || index >= static_cast<s64>(textures->arraySize)) {
+    ReportErrorAt(ref, ("Error: index " + std::to_string(index) + " is out of bounds for texture array 'resources." +
+                        name + "' of length " + std::to_string(textures->arraySize) + "\n").c_str());
+    return 0;
+  }
+  u16 texture = 0x6000 | static_cast<u16>(textures->bindingIndex + index);
+  SetRegisterType(texture, static_cast<CoreType>(textures->coreType));
+  return texture;
+}
+
+// GLSL ES 3.00 only indexes sampler arrays with constants, and Vulkan needs
+// a dynamically uniform index, so a dynamic index becomes an if/else chain
+// with one constant-index call per element, like a hand-written switch.
+// Out-of-range indices take the last element.
+inline bool IRLowering::TryLowerDynamicTextureArrayCall(NodeRef ref, u16 *result) {
+  const FunctionCallData &call = ast->GetFunctionCall(ref);
+  if (!(call.flags & FunctionCallFlags::IS_INTRINSIC) || call.arguments.count == 0)
+    return false;
+  NodeRef element = call.arguments[0];
+  if (element.IsNull() || element.Type() != ASTNodeType::ARRAY_ACCESS ||
+      nodeRegisters.count(element.packed))  // already inside an element's branch
+    return false;
+  const ArrayAccessData &access = ast->GetArrayAccess(element);
+  const ResourceData *textures = FindTextureArrayResource(access.array);
+  if (!textures || textures->bindingIndex >= 32)
+    return false;
+  u16 indexReg = LowerExpression(access.index);
+  s64 constIndex;
+  if (TryGetConstIndex(indexReg, access.index, &constIndex))
+    return false;
+  CoreType indexType = GetRegisterType(indexReg);
+  if (indexType != CoreType::INT && indexType != CoreType::UINT) {
+    ReportErrorAt(access.index, "Error: texture array index must be an int or uint scalar\n");
+    *result = 0;
+    return true;
+  }
+
+  // Lower the other arguments once, ahead of the branches, so every
+  // element's call reuses them.
+  for (u32 i = 1; i < call.arguments.count; i++)
+    LowerExpression(call.arguments[i]);
+
+  auto dominatingNodes = nodeRegisters;
+  u16 selected = AllocateRegister();
+  auto lowerElement = [&](u32 elementIndex) {
+    nodeRegisters = dominatingNodes;
+    nodeRegisters[element.packed] = 0x6000 | static_cast<u16>(textures->bindingIndex + elementIndex);
+    u16 value = LowerFunctionCall(ref);
+    SetRegisterType(selected, GetRegisterType(value));
+    builder.EmitInstruction(OP_STORE_REG, selected, value);
+  };
+  auto lowerFrom = [&](auto &&self, u32 elementIndex) -> void {
+    if (elementIndex + 1 == textures->arraySize) {
+      lowerElement(elementIndex);
+      return;
+    }
+    u16 expected = indexType == CoreType::UINT ? EmitConstantUint(elementIndex)
+                                               : EmitConstantInt(elementIndex);
+    u16 equal = AllocateRegister();
+    SetRegisterType(equal, CoreType::BOOL);
+    builder.EmitInstruction(OP_IEQ, equal, indexReg, expected);
+    u32 branch = builder.currentInstruction;
+    builder.EmitInstruction(OP_BRANCH, 0, equal);
+    u32 trueTarget = builder.currentInstruction;
+    lowerElement(elementIndex);
+    u32 jump = builder.currentInstruction;
+    builder.EmitInstruction(OP_JUMP, 0, 0);
+    u32 falseTarget = builder.currentInstruction;
+    self(self, elementIndex + 1);
+    u32 merge = builder.currentInstruction;
+    builder.EmitInstruction(OP_NOP, 0, 0);
+    program.SetBranchTargets(branch, trueTarget, falseTarget);
+    program.structureInfo[branch] = IRProgram::PackStructure(IRProgram::STRUCT_IF_HEADER, merge);
+    program.metadata[jump] = merge;
+  };
+  lowerFrom(lowerFrom, 0);
+  nodeRegisters = std::move(dominatingNodes);
+  *result = selected;
+  return true;
 }
 
 inline OpCode IRLowering::IntrinsicToOpcode(StdLib::Intrinsic intrinsic) {

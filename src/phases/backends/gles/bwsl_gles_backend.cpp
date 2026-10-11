@@ -491,13 +491,24 @@ void GLESBuilder::EmitUniforms() {
                 continue;
             }
 
+            // Texture array elements share one declaration and sampler type.
+            const u32 slotCount = std::max<u32>(tex.arraySize, 1);
+            bool shadow = false;
+            for (u32 slot = texSlot; slot < texSlot + slotCount && slot < 32; ++slot)
+                shadow |= shadowTextures[slot];
             auto emitSampler = [&](u32 metadata) {
                 out.Lit("uniform highp ");
-                if (tex.isCubemap) out.Str(shadowTextures[texSlot] ? "samplerCubeShadow" : "samplerCube");
-                else if (tex.isArray) out.Str(shadowTextures[texSlot] ? "sampler2DArrayShadow" : "sampler2DArray");
+                if (tex.isCubemap) out.Str(shadow ? "samplerCubeShadow" : "samplerCube");
+                else if (tex.isArray) out.Str(shadow ? "sampler2DArrayShadow" : "sampler2DArray");
                 else if (tex.isVolume) out.Lit("sampler3D");
-                else out.Str(shadowTextures[texSlot] ? "sampler2DShadow" : "sampler2D");
-                out.Chr(' '); EmitTexture(static_cast<u16>(0x6000 | texSlot), metadata);
+                else out.Str(shadow ? "sampler2DShadow" : "sampler2D");
+                out.Chr(' ');
+                if (tex.arraySize > 0) {
+                    EmitGLName(GLNameKind::COMBINED_TEXTURE, tex.name.c_str());
+                    out.Chr('['); out.Uint(tex.arraySize); out.Chr(']');
+                } else {
+                    EmitTexture(static_cast<u16>(0x6000 | texSlot), metadata);
+                }
                 out.Lit(";\n");
             };
             if (tex.separateSampler) {
@@ -515,12 +526,14 @@ void GLESBuilder::EmitUniforms() {
                     emitSampler(metadata);
                 }
             } else emitSampler(0);
-            if (texSlot < 32 && usedTextureLevels[texSlot]) {
-                out.Lit("uniform int ");
-                EmitTextureLevelsUniformName(static_cast<u16>(0x6000 | texSlot));
-                out.Lit(";\n");
+            for (u32 slot = texSlot; slot < texSlot + slotCount && slot < 32; ++slot) {
+                if (usedTextureLevels[slot]) {
+                    out.Lit("uniform int ");
+                    EmitTextureLevelsUniformName(static_cast<u16>(0x6000 | slot));
+                    out.Lit(";\n");
+                }
+                emittedTextures[slot] = true;
             }
-            if (texSlot < 32) emittedTextures[texSlot] = true;
         }
         out.NL(0);
     } else {
@@ -1588,14 +1601,9 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));  // lod
             out.Chr(')');
-            if (renderConfig && Type(instIdx) == static_cast<u16>(CoreType::INT2)) {
-                u16 slot = Op(instIdx, 0) & 0x0FFF;
-                for (const auto& texture : renderConfig->textures) {
-                    if (texture.bindingIndex == slot && (texture.isVolume || texture.isArray)) {
-                        out.Lit(".xy");
-                        break;
-                    }
-                }
+            if (Type(instIdx) == static_cast<u16>(CoreType::INT2)) {
+                const TextureBinding* texture = FindTextureBinding(Op(instIdx, 0) & 0x0FFF);
+                if (texture && (texture->isVolume || texture->isArray)) out.Lit(".xy");
             }
             out.Chr(';');
             return;
@@ -2334,9 +2342,24 @@ void GLESBuilder::EmitTextureOffset(u16 reg) {
     if (!EmitConstantExpr(reg)) EmitExpr(reg);
 }
 
+const TextureBinding* GLESBuilder::FindTextureBinding(u16 slot) const {
+    if (!renderConfig) return nullptr;
+    for (const auto& texture : renderConfig->textures) {
+        if (slot >= texture.bindingIndex &&
+            slot < texture.bindingIndex + std::max<u32>(texture.arraySize, 1)) return &texture;
+    }
+    return nullptr;
+}
+
 void GLESBuilder::EmitTexture(u16 reg, u32 metadata) {
     u16 slot = reg & 0x0FFF;
     if (renderConfig) {
+        if (const TextureBinding* texture = FindTextureBinding(slot); texture && texture->arraySize > 0) {
+            // Element indices are constants, as GLSL ES 3.00 requires.
+            EmitGLName(GLNameKind::COMBINED_TEXTURE, texture->name.c_str());
+            out.Chr('['); out.Uint(slot - texture->bindingIndex); out.Chr(']');
+            return;
+        }
         for (const auto& texture : renderConfig->textures) {
             if (texture.bindingIndex != slot) continue;
             if (texture.separateSampler) {

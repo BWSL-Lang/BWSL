@@ -113,14 +113,20 @@
 <resource-decl> ::= <identifier> ':' <resource-type> <semicolon-opt>
 
 <resource-type> ::= 'sampler'
-                  | 'texture2D'
-                  | 'texture3D'
-                  | 'textureCube'
-                  | 'texture2DArray'
+                  | <texture-type> <texture-array-suffix-opt>
                   | 'image2D'
                   | 'buffer' '<' <resource-element-type> '>'
                   | 'cbuffer' '<' <resource-element-type> '>'
                   | <resource-element-type>
+
+<texture-type> ::= 'texture2D'
+                 | 'texture3D'
+                 | 'textureCube'
+                 | 'texture2DArray'
+
+# One dimension, at most 32 elements; each element uses a binding slot.
+<texture-array-suffix-opt> ::= <fixed-array-suffix>
+                             | <empty>
 
 <resource-element-type> ::= <resource-payload-type> <fixed-array-suffix-list>
 

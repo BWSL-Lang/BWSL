@@ -494,6 +494,14 @@ struct IRLowering {
 
   u16 LowerTextureSample(NodeRef ref);
 
+  // Texture arrays ("textures: texture2D[4]") bind element i at slot
+  // bindingIndex + i. A constant index lowers to that slot's texture; a
+  // dynamic one, only allowed as a texture function's texture argument,
+  // branches to one call per element.
+  const ResourceData* FindTextureArrayResource(NodeRef expr) const;
+  u16 LowerTextureArrayElement(NodeRef ref);
+  bool TryLowerDynamicTextureArrayCall(NodeRef ref, u16* result);
+
   //==========================================================================
   // Helper functions
   //==========================================================================
@@ -508,6 +516,7 @@ struct IRLowering {
   bool CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
                                  NodeRef indexExpr = NodeRef::Null());
   bool CheckConstIndexInBounds(u16 indexReg, NodeRef indexExpr, u32 length);
+  bool TryGetConstIndex(u16 indexReg, NodeRef indexExpr, s64* value);
 
   u16 EmitConstantUint(u32 value);
 

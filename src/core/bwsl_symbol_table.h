@@ -182,11 +182,18 @@ struct ResourceData {
     bool isArrayTexture = false;   // For texture arrays (sampler2DArray)
     bool isCubemapTexture = false; // For cubemap textures (samplerCube)
     bool separateSampler = false; // Reused texture/sampler pairs need separate descriptors.
-    u32 arraySize = 0;       // Fixed element count for array-typed uniforms (0 = not an array)
+    u32 arraySize = 0;       // Fixed element count for array-typed uniforms and textures (0 = not an array)
     u32 structTypeHash = 0;  // For struct types (storage buffers), hash of the fully qualified type name
     ArenaString renderTargetName;
     ArenaString typeName;
 };
+
+// Binding slots a resource occupies, starting at bindingIndex. Each texture
+// array element has its own slot, as it has its own GL texture unit and
+// Metal/HLSL texture register; the SPIR-V backend declares the array once.
+inline u32 GetResourceSlotCount(const ResourceData& resource) {
+    return resource.type == ResourceBinding::Texture && resource.arraySize > 0 ? resource.arraySize : 1;
+}
 
 struct StructData {
     ArenaString name;

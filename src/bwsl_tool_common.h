@@ -462,6 +462,7 @@ inline RenderConfig CreateSyntheticRenderConfig(const AST& ast,
                 binding.isCubemap = resource.isCubemapTexture;
                 binding.isVolume = static_cast<CoreType>(resource.coreType) == CoreType::TEXTURE3D;
                 binding.separateSampler = resource.separateSampler;
+                binding.arraySize = resource.arraySize;
                 binding.defaultSamplerBinding = ResolveDefaultSamplerBinding(symbols, resource.bindingIndex);
                 binding.stages = resource.stageFlags;
                 config.textures.push_back(std::move(binding));

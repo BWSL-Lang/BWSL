@@ -105,6 +105,10 @@ struct SPIRVBuilder {
     bool textureIsCubemap[32] = {false};
     bool textureIsVolume[32] = {false};
     bool textureIsSeparate[32] = {false};
+    // Texture array elements: every element slot maps to the array's one
+    // variable in textureIds; the length is 0 for slots of plain textures.
+    u8 textureArrayLength[32] = {};
+    u8 textureArrayElement[32] = {};
     u32 defaultSamplerIds[32] = {};
 
     // Built-in input type IDs (cached for reuse)

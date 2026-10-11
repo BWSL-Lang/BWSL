@@ -1001,13 +1001,36 @@ NodeRef Parser::ParseResourceDecl() {
         payloadType = CanonicalizeModuleQualifiedName(moduleName, std::string(stream->GetValue(previous)));
     }
 
+    const bool textureHandle = payloadTokenType >= TokenType::TEXTURE2D &&
+        payloadTokenType <= TokenType::TEXTURE2DARRAY;
+    const bool otherHandle = payloadTokenType == TokenType::SAMPLER || payloadType == "image2D";
+    u32 dimensions = 0;
     while (Match(TokenType::LEFT_BRACKET)) {
+        const TokenRef bracket = previous;
         u32 size = 0;
         if (!ParseArraySizeValue(&size) ||
             !Consume(TokenType::RIGHT_BRACKET, "Expected ']' after resource array size")) {
             return NodeRef::Null();
         }
+        // Each texture array element takes its own binding slot (see
+        // FinalizeParsedResourceBindings), so arrays share the 32-slot limit.
+        // A rejected suffix is dropped, so uses of the resource still resolve.
+        if (wrapper.empty() && otherHandle) {
+            ErrorAt(bracket, "Arrays of " + std::string(stream->GetValue(payloadToken)) +
+                    " resources are not supported; declare one resource per element");
+            continue;
+        }
+        if (wrapper.empty() && textureHandle && dimensions > 0) {
+            ErrorAt(bracket, "Texture arrays must have one dimension, e.g. 'textures: texture2D[4]'");
+            continue;
+        }
+        if (wrapper.empty() && textureHandle && size > 32) {
+            ErrorAt(bracket, "Texture array '" + name + "' has " + std::to_string(size) +
+                    " elements; a pipeline has 32 resource slots and each element uses one");
+            continue;
+        }
         payloadType += "[" + std::to_string(size) + "]";
+        ++dimensions;
     }
     if (!wrapper.empty() && !Consume(TokenType::GREATER, "Expected '>' after buffer element type")) {
         return NodeRef::Null();

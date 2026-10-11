@@ -1596,6 +1596,8 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
 
 inline u16 IRLowering::LowerArrayAccess(NodeRef ref) {
   const ArrayAccessData &access = ast->GetArrayAccess(ref);
+  if (FindTextureArrayResource(access.array))
+    return LowerTextureArrayElement(ref);
 
   u16 inPlace = TryLoadLocalPlace(ref);
   if (inPlace != 0xFFFF) return inPlace;
@@ -1831,6 +1833,8 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
 
   if (access.member.nameHash == HASH_LENGTH) {
     u32 arrayLength = ResolveStaticArrayLength(this, access.object);
+    if (const ResourceData *textures = FindTextureArrayResource(access.object))
+      arrayLength = textures->arraySize;
     if (arrayLength > 0) {
       return EmitConstantInt(arrayLength);
     }
@@ -2355,6 +2359,14 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       break;
 
     case ResourceBinding::Texture:
+        if (resData.arraySize > 0) {
+          // Elements are lowered by LowerTextureArrayElement.
+          std::string name = access.member.ToString();
+          ReportErrorAt(ref, ("Error: texture array 'resources." + name +
+                              "' must be indexed, e.g. resources." + name +
+                              "[0]\n").c_str());
+          return 0;
+        }
         // Traditional bound texture - encode slot in register
         dest = 0x6000 | (u16)resData.bindingIndex;
         break;
