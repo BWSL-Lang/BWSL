@@ -1705,7 +1705,7 @@ static void SetAttributeNames(Builder& builder, const AST& ast, NodeRef pipeline
     }
 }
 
-static u8 BuildPassAttributeMask(const AST& ast, NodeRef pipelineRef, NodeRef passRef) {
+static u16 BuildPassAttributeMask(const AST& ast, NodeRef pipelineRef, NodeRef passRef) {
     if (pipelineRef.IsNull() || passRef.IsNull()) {
         return 0;
     }
@@ -1713,13 +1713,16 @@ static u8 BuildPassAttributeMask(const AST& ast, NodeRef pipelineRef, NodeRef pa
     const PipelineData& pipeline = ast.GetPipeline(pipelineRef);
     const PassData& pass = ast.GetPass(passRef);
 
-    u8 mask = 0;
+    u16 mask = 0;
 
     auto addAttributeMask = [&](const ArenaString& attributeName) {
         for (u32 i = 0; i < pipeline.attributes.count; i++) {
             const AttributeDeclData& attr = ast.GetAttributeDecl(pipeline.attributes[i]);
             if (attr.name.nameHash == attributeName.nameHash) {
-                mask |= (1u << attr.attributeIndex);
+                // Slots past 16 are reported by IR lowering; keep the shift in range.
+                if (attr.attributeIndex < 16) {
+                    mask |= static_cast<u16>(1u << attr.attributeIndex);
+                }
                 return;
             }
         }
@@ -1734,7 +1737,9 @@ static u8 BuildPassAttributeMask(const AST& ast, NodeRef pipelineRef, NodeRef pa
 
     for (u32 i = 0; i < pipeline.attributes.count; i++) {
         const AttributeDeclData& attr = ast.GetAttributeDecl(pipeline.attributes[i]);
-        mask |= (1u << attr.attributeIndex);
+        if (attr.attributeIndex < 16) {
+            mask |= static_cast<u16>(1u << attr.attributeIndex);
+        }
     }
 
     return mask;
@@ -3866,7 +3871,7 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
             reflectionConfig.attributeMask = 0;
             if (!config.outputGlslEs) {
                 reflectionConfig.attributeMask = haveVertexReflectionAnalysis
-                    ? static_cast<u8>(vertexReflectionAnalysis.usedAttributeMask)
+                    ? static_cast<u16>(vertexReflectionAnalysis.usedAttributeMask)
                     : BuildPassAttributeMask(context.ast, specializedPipelineRef, pipeline.passes[passIdx]);
             }
             reflectionConfig.baseBufferBinding = 0;

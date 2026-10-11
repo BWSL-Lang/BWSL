@@ -425,7 +425,7 @@ void SPIRVBuilder::DeclareVertexPullingBuffers() {
     // Declare one storage buffer per attribute
     u32 binding = vertexPullingConfig.baseBufferBinding;
 
-    for (u8 attrIdx = 0; attrIdx < 8; attrIdx++) {
+    for (u8 attrIdx = 0; attrIdx < 16; attrIdx++) {
       if (!(analysis.usedAttributeMask & (1 << attrIdx)))
         continue;
 

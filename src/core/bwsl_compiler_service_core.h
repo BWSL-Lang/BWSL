@@ -43,7 +43,7 @@ struct VertexPullingConfig {
     
     // Which attributes are active (bitmask from VertexAttributeType)
     // e.g., AttributeMask(POSITION) | AttributeMask(NORMAL) | AttributeMask(TEXCOORD)
-    u8 attributeMask = 0;
+    u16 attributeMask = 0;
     
     // Base binding index for attribute buffers
     // For SeparateBuffers: position at baseBinding, normal at baseBinding+1, etc.
@@ -231,7 +231,7 @@ public:
     CompiledVariant* GetOrCompileVariant(
         const std::string& pipelineName,
         const std::string& passName,
-        u8 attributeMask,
+        u16 attributeMask,
         const CompilationConfig& config = CompilationConfig()
     ) {
         // Find pipeline shader set
@@ -270,7 +270,7 @@ public:
         const std::vector<VertexAttributeType>& activeAttributes,
         const CompilationConfig& config = CompilationConfig()
     ) {
-        u8 mask = CalculateAttributeMask(activeAttributes);
+        u16 mask = CalculateAttributeMask(activeAttributes);
         return GetOrCompileVariant(pipelineName, passName, mask, config);
     }
     
@@ -377,7 +377,7 @@ private:
     struct VariantUsage {
         std::string pipelineName;
         std::string passName;
-        u8 attributeMask;
+        u16 attributeMask;
         u32 frameLastUsed;
     };
     std::vector<VariantUsage> recentVariants;
@@ -387,21 +387,21 @@ private:
     // Internal Implementation
     // ========================================================================
     
-    static std::string MakeVariantKey(const std::string& pipeline, const std::string& pass, u8 mask) {
+    static std::string MakeVariantKey(const std::string& pipeline, const std::string& pass, u16 mask) {
         char buffer[128];
         snprintf(buffer, sizeof(buffer), "%s.%s.0x%02X", pipeline.c_str(), pass.c_str(), mask);
         return buffer;
     }
     
-    static u8 CalculateAttributeMask(const std::vector<VertexAttributeType>& attributes) {
-        u8 mask = 0;
+    static u16 CalculateAttributeMask(const std::vector<VertexAttributeType>& attributes) {
+        u16 mask = 0;
         for (auto attr : attributes) {
             mask |= AttributeMask(attr);
         }
         return mask;
     }
     
-    void TrackVariantUsage(const std::string& pipeline, const std::string& pass, u8 mask) {
+    void TrackVariantUsage(const std::string& pipeline, const std::string& pass, u16 mask) {
         // Remove old entry if exists
         recentVariants.erase(
             std::remove_if(recentVariants.begin(), recentVariants.end(),
@@ -548,7 +548,7 @@ private:
             return false;
         }
         
-        u8 attributeMask = config.vertexPulling.attributeMask;
+        u16 attributeMask = config.vertexPulling.attributeMask;
         std::string variantKey = MakeVariantKey(shaderSet.pipelineName, passName, attributeMask);
         
         // Find the pass in AST
@@ -834,7 +834,7 @@ private:
             : ResourceReflectionConfig::VertexPullingMode::SeparateBuffers;
         reflectionConfig.attributeMask = config.vertexPulling.attributeMask;
         if (reflectionConfig.attributeMask == 0 && vertexAnalysis) {
-            reflectionConfig.attributeMask = static_cast<u8>(vertexAnalysis->usedAttributeMask);
+            reflectionConfig.attributeMask = static_cast<u16>(vertexAnalysis->usedAttributeMask);
         }
         reflectionConfig.baseBufferBinding = config.vertexPulling.baseBufferBinding;
         reflectionConfig.descriptorSet = config.vertexPulling.descriptorSet;

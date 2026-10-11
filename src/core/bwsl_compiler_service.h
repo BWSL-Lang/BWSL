@@ -83,7 +83,7 @@ public:
     MetalCompiledVariant* GetOrCompileVariant(
         const std::string& pipelineName,
         const std::string& passName,
-        u8 attributeMask,
+        u16 attributeMask,
         BWSL::VertexInputMode vertexMode = BWSL::VertexInputMode::SeparateBuffers
     ) {
         // Create variant key
@@ -136,7 +136,7 @@ public:
         const std::string& passName,
         const std::vector<std::string>& activeAttributes
     ) {
-        u8 mask = CalculateAttributeMask(activeAttributes);
+        u16 mask = CalculateAttributeMask(activeAttributes);
         return GetOrCompileVariant(pipelineName, passName, mask);
     }
     
@@ -146,7 +146,7 @@ public:
         const std::string& passName,
         const std::vector<VertexAttributeType>& activeAttributes
     ) {
-        u8 mask = 0;
+        u16 mask = 0;
         for (auto attr : activeAttributes) {
             mask |= AttributeMask(attr);
         }
@@ -198,19 +198,19 @@ private:
     // Metal-specific variant cache
     std::unordered_map<std::string, MetalCompiledVariant> metalVariants_;
     
-    static std::string MakeVariantKey(const std::string& pipeline, const std::string& pass, u8 mask) {
+    static std::string MakeVariantKey(const std::string& pipeline, const std::string& pass, u16 mask) {
         char buffer[128];
         snprintf(buffer, sizeof(buffer), "%s.%s.0x%02X", pipeline.c_str(), pass.c_str(), mask);
         return buffer;
     }
     
-    static u8 CalculateAttributeMask(const std::vector<std::string>& attributes) {
+    static u16 CalculateAttributeMask(const std::vector<std::string>& attributes) {
         static const std::unordered_map<std::string, u8> attributeBits = {
             {"position", 0}, {"normal", 1}, {"texcoord", 2}, {"color", 3},
             {"tangent", 4}, {"bitangent", 5}, {"boneIndices", 6}, {"boneWeights", 7}
         };
         
-        u8 mask = 0;
+        u16 mask = 0;
         for (const auto& attr : attributes) {
             auto it = attributeBits.find(attr);
             if (it != attributeBits.end()) {

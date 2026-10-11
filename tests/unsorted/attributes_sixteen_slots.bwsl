@@ -1,0 +1,56 @@
+// Test: All 16 vertex attribute slots on vertex-pulling targets
+// Regression: attributes 8-15 used to get no storage buffer, so SPIR-V
+// validation failed as soon as a pass read a ninth attribute.
+
+pipeline AttributesSixteenSlots {
+    attributes {
+        position: float3
+        a1: float
+        a2: float2
+        a3: float3
+        a4: float4
+        a5: int
+        a6: uint
+        a7: float
+        a8: float
+        a9: float2
+        a10: float3
+        a11: float4
+        a12: int4
+        a13: uint2
+        a14: float
+        a15: float4
+    }
+
+    pass "All" {
+        use attributes { position, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15 }
+
+        vertex {
+            float s = attributes.a1 + attributes.a2.x + attributes.a3.y + attributes.a4.z
+                + float(attributes.a5) + float(attributes.a6) + attributes.a7 + attributes.a8
+                + attributes.a9.y + attributes.a10.z + attributes.a11.w
+                + float(attributes.a12.x) + float(attributes.a13.y) + attributes.a14
+                + attributes.a15.x;
+            output.position = float4(attributes.position, s);
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+
+    // Only high slots: the buffers for 8-15 must still be declared when the
+    // low slots are absent.
+    pass "HighOnly" {
+        use attributes { position, a9, a12, a15 }
+
+        vertex {
+            output.position = float4(attributes.position + attributes.a15.xyz,
+                                     attributes.a9.x + float(attributes.a12.w));
+        }
+
+        fragment {
+            output.color = float4(1.0);
+        }
+    }
+}

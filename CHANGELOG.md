@@ -83,6 +83,10 @@
 - A pass whose fragment stage falls back to the direct GLES emitter (for
   example with `ddx_fine`) now links. Both stages use the same varying
   names.
+- Passes using more than 8 vertex attributes compile for vertex-pulling
+  targets (SPIR-V, Metal, HLSL, GLSL and `-check`), up to the documented
+  limit of 16. The 9th and later attributes got no storage buffer, so
+  SPIR-V validation failed.
 
 ### Diagnostics
 - Shadowed local, parameter, and loop-variable declarations produce a note
