@@ -987,6 +987,7 @@ namespace TypeHashes {
     constexpr u32 TEXTURE2D   = Utils::HashStr("texture2D");
     constexpr u32 TEXTURE3D   = Utils::HashStr("texture3D");
     constexpr u32 TEXTURECUBE = Utils::HashStr("textureCube");
+    constexpr u32 TEXTURE2DARRAY = Utils::HashStr("texture2DArray");
     constexpr u32 SAMPLER     = Utils::HashStr("sampler");
     constexpr u32 CBUFFER     = Utils::HashStr("cbuffer");
     constexpr u32 BUFFER      = Utils::HashStr("buffer");
@@ -1042,6 +1043,7 @@ namespace TypeHashes {
         {TEXTURE2D,   TYPE_INFO(CoreType::TEXTURE2D,     0, false)},
         {TEXTURE3D,   TYPE_INFO(CoreType::TEXTURE3D,     0, false)},
         {TEXTURECUBE, TYPE_INFO(CoreType::TEXTURECUBE,   0, false)},
+        {TEXTURE2DARRAY, TYPE_INFO(CoreType::TEXTURE2DARRAY, 0, false)},
         {SAMPLER,     TYPE_INFO(CoreType::SAMPLER,       0, false)},
         {CBUFFER,     TYPE_INFO(CoreType::CBUFFER,       0, false)},
         {BUFFER,      TYPE_INFO(CoreType::BUFFER,        0, false)},

@@ -52,6 +52,10 @@
   silently dropped. More than 16 arguments is a source error.
 - `min` and `max` with both float and integer (or bool) arguments produce a
   source error. Previously they failed SPIR-V validation.
+- Functions with `texture2D`, `texture3D`, `textureCube`, `texture2DArray`
+  or `sampler` parameters can be called with resources, e.g.
+  `shade(resources.albedo, uv)`. Such calls previously failed with
+  `Function not found`.
 
 ### Backends
 - Struct locals are updated in place. Writing a field or an array element of
@@ -123,6 +127,8 @@
 - Reading `input.<name>` in a fragment stage when the vertex stage never
   writes `output.<name>` is a source error. It previously compiled with an
   invented `varying0` input that could not link in GL.
+- A call that fails with `Function not found` inside a vector constructor
+  no longer also reports `vector constructor expects N components`.
 
 ### Standard library
 - `Color::hsluvToRgb`, `rgbToHsluv`, `hpluvToRgb` and `rgbToHpluv` return

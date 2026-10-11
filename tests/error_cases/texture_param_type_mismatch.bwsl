@@ -1,0 +1,23 @@
+// A textureCube passed to a texture2D parameter matches no overload. The
+// call's error must not be followed by a constructor arity error for the
+// enclosing float4(...).
+pipeline TexParamMismatch {
+    attributes { position: float2 }
+    resources { tex: textureCube }
+
+    sampleClamped :: (texture2D t, float2 uv) -> float3 {
+        return sample(t, uv).rgb;
+    }
+
+    pass "Main" {
+        use attributes { position }
+        use resources { tex }
+        vertex {
+            output.position = float4(attributes.position, 1.0, 1.0);
+            output.uv = attributes.position * 0.5 + 0.5;
+        }
+        fragment {
+            output.color = float4(sampleClamped(resources.tex, input.uv), 1.0);
+        }
+    }
+}

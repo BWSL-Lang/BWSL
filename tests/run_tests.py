@@ -180,6 +180,7 @@ VARIANT_ERROR_TESTS = {
 
 ERROR_CASE_TESTS = {
     "texture_array_unindexed.bwsl": "texture array 'resources.textures' must be indexed",
+    "texture_param_type_mismatch.bwsl": "Function not found: sampleClamped",
     "texture_array_index_out_of_bounds.bwsl": "index 4 is out of bounds for texture array",
     "texture_array_dynamic_outside_call.bwsl": "non-constant index can only be passed directly to a texture function",
     "texture_array_shared_sampler.bwsl": "can't share a sampler with other textures",
@@ -411,6 +412,12 @@ ERROR_CASE_EXTRA_EXPECTATIONS = {
     ],
 }
 
+# Follow-on diagnostics that must not appear alongside the expected error.
+ERROR_CASE_FORBIDDEN_OUTPUT = {
+    # An unresolved call has no type; the enclosing float4(...) must not also
+    # report a component-count error for it.
+    "texture_param_type_mismatch.bwsl": ["vector constructor expects"],
+}
 
 def diagnostic_output_contains(output: str, expected: str) -> bool:
     if expected in output:
@@ -3351,6 +3358,16 @@ def main() -> int:
             if missing_expectations:
                 print(f"[{RED}FAIL{NC}] error_cases/{test_file.stem}")
                 print(f"       Error: expected diagnostic output to include {missing_expectations}, got: {result.stdout.strip()}")
+                failed += 1
+                continue
+
+            forbidden_output = [
+                forbidden for forbidden in ERROR_CASE_FORBIDDEN_OUTPUT.get(test_file.name, [])
+                if forbidden in result.stdout
+            ]
+            if forbidden_output:
+                print(f"[{RED}FAIL{NC}] error_cases/{test_file.stem}")
+                print(f"       Error: expected diagnostic output not to include {forbidden_output}, got: {result.stdout.strip()}")
                 failed += 1
                 continue
 
