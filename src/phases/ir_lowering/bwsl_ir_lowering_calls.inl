@@ -1401,8 +1401,17 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         {
           u32 targetWidth = GetVectorDimension(constructedType);
           u32 providedComponents = 0;
+          // An argument that already failed to lower (e.g. an unresolved
+          // call) has no type and would count as one component, turning
+          // its error into a misleading arity error as well.
+          bool hasFailedArg = false;
           for (u32 i = 0; i < argCount; i++) {
-            providedComponents += GetVectorDimension(GetRegisterType(args[i]));
+            CoreType argType = GetRegisterType(args[i]);
+            hasFailedArg |= argType == CoreType::INVALID;
+            providedComponents += GetVectorDimension(argType);
+          }
+          if (hasFailedArg && hadError) {
+            return 0;
           }
           bool validArity;
           if (argCount == 1) {
@@ -1542,6 +1551,9 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         snprintf(msg, sizeof(msg), "Error: Function not found: %s\n",
                  functionName.c_str());
         ReportError(msg);
+        // Leave the result untyped so enclosing constructors don't report
+        // follow-on arity errors for it.
+        SetRegisterType(dest, CoreType::INVALID);
       }
     }
   }
@@ -1815,7 +1827,18 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
       0xFFFFFFFF; // Track which module we found the function in
   std::vector<OverloadTypeMask> argMasks;
   argMasks.reserve(argCount);
+  // Texture and sampler handles aren't real registers, so their type comes
+  // from the argument expression; a texture handle would otherwise read as
+  // a uint constant and match no texture2D parameter.
+  CoreType argHandleTypes[16];
   for (u32 i = 0; i < argCount; i++) {
+    argHandleTypes[i] = i < call.arguments.count
+                            ? GetResourceHandleType(call.arguments[i], args[i])
+                            : CoreType::INVALID;
+    if (argHandleTypes[i] != CoreType::INVALID) {
+      argMasks.push_back(MakeOverloadMask(argHandleTypes[i]));
+      continue;
+    }
     CoreType argType = GetRegisterType(args[i]);
     u32 customHash = 0;
     if (argType == CoreType::CUSTOM) {
@@ -2032,6 +2055,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   auto savedVariableStructTypes = variableStructTypes;
   auto savedConstVariables = constVariables;
   auto savedInitializedVariables = initializedVariables;
+  auto savedResourceHandleVariables = resourceHandleVariables;
   auto savedNodeRegisters = nodeRegisters;
   u32 savedStructMethodTypeHash = currentStructMethodTypeHash;
   u16 savedStructMethodSelfReg = currentStructMethodSelfReg;
@@ -2046,6 +2070,15 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   for (u32 i = 0; i < paramCount; i++) {
     const auto &param = func.parameters[i];
     u32 paramNameHash = param.first.nameHash; // Parameter name
+    if (argHandleTypes[i] != CoreType::INVALID) {
+      // Texture functions read the slot from the handle, so bind it as is.
+      variableRegisters[paramNameHash] = args[i];
+      resourceHandleVariables[paramNameHash] = {args[i], argHandleTypes[i]};
+      constVariables.erase(paramNameHash);
+      initializedVariables.insert(paramNameHash);
+      continue;
+    }
+    resourceHandleVariables.erase(paramNameHash);
     u16 paramReg = CopyArgumentValue(args[i]);
     variableRegisters[paramNameHash] = paramReg;
     constVariables.erase(paramNameHash);
@@ -2142,6 +2175,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   variableStructTypes = savedVariableStructTypes;
   constVariables = savedConstVariables;
   initializedVariables = savedInitializedVariables;
+  resourceHandleVariables = savedResourceHandleVariables;
   nodeRegisters = savedNodeRegisters;
   currentStructMethodTypeHash = savedStructMethodTypeHash;
   currentStructMethodSelfReg = savedStructMethodSelfReg;
@@ -2323,6 +2357,39 @@ inline const ResourceData *IRLowering::FindTextureArrayResource(NodeRef expr) co
   if (resource.type != ResourceBinding::Texture || resource.arraySize == 0)
     return nullptr;
   return &resource;
+}
+
+inline CoreType IRLowering::GetResourceHandleType(NodeRef expr, u16 reg) const {
+    if (expr.IsNull())
+        return CoreType::INVALID;
+    if (expr.Type() == ASTNodeType::IDENTIFIER) {
+        auto it = resourceHandleVariables.find(ast->GetIdentifier(expr).name.nameHash);
+        // A later local with the same name rebinds the variable to another
+        // register, so the handle must still match.
+        if (it != resourceHandleVariables.end() && it->second.handle == reg)
+            return it->second.type;
+        return CoreType::INVALID;
+    }
+    if (expr.Type() == ASTNodeType::ARRAY_ACCESS) {
+        const ResourceData* textures = FindTextureArrayResource(ast->GetArrayAccess(expr).array);
+        return textures ? static_cast<CoreType>(textures->coreType) : CoreType::INVALID;
+    }
+    if (expr.Type() != ASTNodeType::MEMBER_ACCESS)
+        return CoreType::INVALID;
+    const MemberAccessData& access = ast->GetMemberAccess(expr);
+    if (access.object.IsNull() || access.object.Type() != ASTNodeType::IDENTIFIER ||
+        ast->GetIdentifier(access.object).identifierKind != SpecialIdentifier::RESOURCES)
+        return CoreType::INVALID;
+    Symbol* sym = SymbolTable::LookupByHash(const_cast<SymbolTableData*>(symbols),
+                                            access.member.nameHash);
+    if (!sym || sym->kind != SymbolKind::RESOURCE || sym->index >= symbols->resources.count)
+        return CoreType::INVALID;
+    const ResourceData& resource = symbols->resources[sym->index];
+    // An unindexed texture array is not a handle; its access already reported.
+    if ((resource.type == ResourceBinding::Texture && resource.arraySize == 0) ||
+        resource.type == ResourceBinding::Sampler)
+        return static_cast<CoreType>(resource.coreType);
+    return CoreType::INVALID;
 }
 
 inline u16 IRLowering::LowerTextureArrayElement(NodeRef ref) {

@@ -180,6 +180,18 @@ struct IRLowering {
   std::unordered_set<u32> initializedVariables;
   std::unordered_set<u32> constVariables;
 
+  // Texture and sampler parameters of an inlined function, keyed by name
+  // hash. They bind to the caller's resource handle (0x6000 | slot for
+  // textures, 0x3000 | slot for samplers) rather than a copy. The texture
+  // encoding is shared with uint constants, so the register alone can't say
+  // it holds a texture; this records the handle and its type for overload
+  // resolution in nested calls.
+  struct ResourceHandleVariable {
+    u16 handle;
+    CoreType type;
+  };
+  std::unordered_map<u32, ResourceHandleVariable> resourceHandleVariables;
+
   // Array base registers (var hash -> base reg)
   std::unordered_map<u32, u32> arrayBaseRegisters;
 
@@ -520,6 +532,10 @@ struct IRLowering {
   // dynamic one, only allowed as a texture function's texture argument,
   // branches to one call per element.
   const ResourceData* FindTextureArrayResource(NodeRef expr) const;
+  // Returns the texture or sampler type of an argument expression that
+  // lowered to resource handle `reg` (a bound resource, a constant texture
+  // array element, or a texture/sampler parameter), or INVALID otherwise.
+  CoreType GetResourceHandleType(NodeRef expr, u16 reg) const;
   u16 LowerTextureArrayElement(NodeRef ref);
   bool TryLowerDynamicTextureArrayCall(NodeRef ref, u16* result);
 

@@ -1,0 +1,43 @@
+// Equivalence: test_raster_tex_read with the sample made through functions
+// taking texture and sampler parameters: a nested call and an overload
+// chosen by texture type. The helpers must sample the texture they are
+// passed, so the output matches test_raster_tex_read.
+pipeline EquivRasterTexParam {
+
+    resources {
+        colorTex: texture2D
+        colorSampler: sampler
+    }
+    attributes {
+    }
+
+    fetch :: (texture2D t, sampler s, float2 uv) -> float4 {
+        return sample(t, s, uv);
+    }
+
+    fetch :: (textureCube t, sampler s, float2 uv) -> float4 {
+        return float4(0.0);
+    }
+
+    fetchScaled :: (texture2D t, sampler s, float2 uv, float scale) -> float4 {
+        return fetch(t, s, uv) * scale;
+    }
+
+    pass "Main" {
+        use resources { colorTex, colorSampler }
+        vertex {
+            float2[3] positions;
+            positions[0] = float2(-1.0, -1.0);
+            positions[1] = float2( 3.0, -1.0);
+            positions[2] = float2(-1.0,  3.0);
+
+            float2 p = positions[input.vertex_id];
+            output.position = float4(p, 0.0, 1.0);
+            output.uv = (p + 1.0) * 0.5;
+        }
+
+        fragment {
+            output.color = fetchScaled(resources.colorTex, resources.colorSampler, input.uv, 1.0);
+        }
+    }
+}
