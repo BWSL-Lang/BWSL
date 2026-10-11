@@ -287,6 +287,159 @@ inline void IRLowering::LowerPassConstants(const PassData &pass) {
   }
 }
 
+inline void IRLowering::LowerGlobalArrayConstants(NodeRef stageBody,
+                                                  const PassData &pass) {
+  // These arrays are materialized in function storage. Emit their initializer
+  // before stage control flow so a cached register is initialized on every path.
+  // Scan the stage and pass constants first. Function bodies are included
+  // conservatively because calls may be inlined from inside control flow.
+  std::vector<NodeRef> pending;
+  pending.push_back(stageBody);
+  for (u32 i = 0; i < pass.consts.count; ++i) pending.push_back(pass.consts[i]);
+  for (u32 i = 0; i < ast->functions.count; ++i)
+    pending.push_back(ast->functions[i].body);
+  std::unordered_set<u32> visited;
+  std::unordered_set<u32> usedNames;
+  std::vector<u32> bindings;
+  while (!pending.empty()) {
+    NodeRef ref = pending.back();
+    pending.pop_back();
+    if (!ref.IsValid() || !visited.insert(ref.packed).second) continue;
+    auto push = [&](NodeRef child) { if (child.IsValid()) pending.push_back(child); };
+    auto pushBlock = [&](const BlockData &block) {
+      for (u32 i = 0; i < block.statements.count; ++i) push(block.statements[i]);
+    };
+    switch (ref.Type()) {
+    case ASTNodeType::IDENTIFIER:
+      usedNames.insert(ast->GetIdentifier(ref).name.nameHash);
+      bindings.push_back(ast->identifierConstBindingHashes[ref.Index()]);
+      break;
+    case ASTNodeType::MEMBER_ACCESS: {
+      const MemberAccessData &member = ast->GetMemberAccess(ref);
+      if (member.isModuleQualified) bindings.push_back(member.qualifiedNameHash);
+      push(member.object);
+      break;
+    }
+    case ASTNodeType::ARRAY_ACCESS: {
+      const ArrayAccessData &access = ast->GetArrayAccess(ref);
+      push(access.array); push(access.index);
+      break;
+    }
+    case ASTNodeType::BINARY_OP: {
+      const BinaryOpData &op = ast->GetBinaryOp(ref);
+      push(op.left); push(op.right);
+      break;
+    }
+    case ASTNodeType::UNARY_OP:
+      push(ast->GetUnaryOp(ref).operand);
+      break;
+    case ASTNodeType::TERNARY_EXPRESSION: {
+      const TernaryExprData &expr = ast->GetTernaryExpression(ref);
+      push(expr.condition); push(expr.trueExpr); push(expr.falseExpr);
+      break;
+    }
+    case ASTNodeType::ASSIGNMENT:
+    case ASTNodeType::RETURN: {
+      const AssignmentData &assignment = ast->GetAssignment(ref);
+      push(assignment.target); push(assignment.value);
+      break;
+    }
+    case ASTNodeType::VARIABLE_DECL:
+      push(ast->GetVariableDecl(ref).initializer);
+      break;
+    case ASTNodeType::FUNCTION_CALL: {
+      const FunctionCallData &call = ast->GetFunctionCall(ref);
+      push(call.moduleObject);
+      for (u32 i = 0; i < call.arguments.count; ++i) push(call.arguments[i]);
+      break;
+    }
+    case ASTNodeType::BLOCK:
+    case ASTNodeType::EVAL_BLOCK:
+    case ASTNodeType::IF_STATEMENT:
+    case ASTNodeType::EVAL_IF:
+      pushBlock(ast->GetBlock(ref));
+      break;
+    case ASTNodeType::FOR_CSTYLE: {
+      const ForCStyleData &loop = ast->GetForCStyle(ref);
+      push(loop.init); push(loop.condition); push(loop.increment); push(loop.body);
+      break;
+    }
+    case ASTNodeType::FOR_RANGE: {
+      const ForRangeData &loop = ast->GetForRange(ref);
+      push(loop.iteratorVar); push(loop.rangeStart); push(loop.rangeEnd);
+      push(loop.step); push(loop.body);
+      break;
+    }
+    case ASTNodeType::FOR_COLLECTION: {
+      const ForCollectionData &loop = ast->GetForCollection(ref);
+      push(loop.iteratorVar); push(loop.collection); push(loop.body);
+      break;
+    }
+    case ASTNodeType::LOOP: {
+      const LoopData &loop = ast->GetLoop(ref);
+      push(loop.count); push(loop.body); push(loop.untilCondition);
+      break;
+    }
+    case ASTNodeType::SWITCH: {
+      const SwitchData &branch = ast->GetSwitch(ref);
+      push(branch.expression); push(branch.defaultCase);
+      for (u32 i = 0; i < branch.cases.count; ++i) push(branch.cases[i]);
+      break;
+    }
+    case ASTNodeType::SWITCH_CASE: {
+      const SwitchCaseData &arm = ast->GetSwitchCase(ref);
+      push(arm.body);
+      for (u32 i = 0; i < arm.values.count; ++i) push(arm.values[i]);
+      break;
+    }
+    case ASTNodeType::PATTERN_MATCH:
+    case ASTNodeType::PATTERN_MATCH_ARM: {
+      const PatternMatchData &match = ast->GetPatternMatch(ref);
+      push(match.body); push(match.defaultArm);
+      for (u32 i = 0; i < match.statements.count; ++i) push(match.statements[i]);
+      for (u32 i = 0; i < match.arms.count; ++i) push(match.arms[i]);
+      break;
+    }
+    case ASTNodeType::TYPE_PATTERN_MATCH: {
+      const TypePatternMatchData &match = ast->GetTypePatternMatch(ref);
+      push(match.defaultArm);
+      for (u32 i = 0; i < match.arms.count; ++i) push(match.arms[i]);
+      break;
+    }
+    case ASTNodeType::TYPE_PATTERN_ARM:
+      push(ast->GetTypePatternArm(ref).body);
+      break;
+    default:
+      break;
+    }
+  }
+
+  if (currentPipeline.Type() == ASTNodeType::PIPELINE &&
+      currentPipeline.Index() < ast->pipelines.count) {
+    const PipelineData &pipeline = ast->GetPipeline(currentPipeline);
+    for (u32 i = 0; i < pipeline.consts.count; ++i) {
+      NodeRef decl = pipeline.consts[i];
+      if (decl.Type() == ASTNodeType::VARIABLE_DECL &&
+          ast->GetVariableDecl(decl).arrayDimensions > 0 &&
+          usedNames.count(ast->GetVariableDecl(decl).name.nameHash))
+        LowerVariableDecl(decl);
+    }
+  }
+
+  auto lowerBinding = [&](u32 hash) {
+    if (hash == 0 || variableRegisters.find(hash) != variableRegisters.end()) return;
+    Symbol *sym = SymbolTable::LookupByHash(
+        const_cast<SymbolTableData *>(symbols), hash);
+    if (!sym || sym->kind != SymbolKind::VARIABLE) return;
+    const VariableData &data = symbols->variables[sym->index];
+    if (data.isConst && IsArray(data.typeInfo) && data.constDecl.IsValid())
+      LowerModuleArrayConstant(data, hash);
+  };
+  std::sort(bindings.begin(), bindings.end());
+  bindings.erase(std::unique(bindings.begin(), bindings.end()), bindings.end());
+  for (u32 hash : bindings) lowerBinding(hash);
+}
+
 inline void IRLowering::LowerPass(NodeRef passRef) {
   const PassData &pass = ast->GetPass(passRef);
   currentPass = passRef; // Track current pass for pass-scoped function lookup
@@ -300,6 +453,7 @@ inline void IRLowering::LowerPass(NodeRef passRef) {
   // Phase 1: Lower vertex shader (collects output.xxx usages)
   if (!pass.vertexShader.IsNull()) {
     currentStage = ShaderStage::Vertex;
+    LowerGlobalArrayConstants(ast->GetShaderStage(pass.vertexShader).body, pass);
     LowerPassConstants(pass);
     LowerShaderStage(pass.vertexShader);
     varyingContext.vertexStageLowered = !hadError;
@@ -309,12 +463,14 @@ inline void IRLowering::LowerPass(NodeRef passRef) {
   // resolution)
   if (!pass.fragmentShader.IsNull()) {
     currentStage = ShaderStage::Fragment;
+    LowerGlobalArrayConstants(ast->GetShaderStage(pass.fragmentShader).body, pass);
     LowerPassConstants(pass);
     LowerShaderStage(pass.fragmentShader);
   }
 
   if (!pass.computeShader.IsNull()) {
     currentStage = ShaderStage::Compute;
+    LowerGlobalArrayConstants(ast->GetShaderStage(pass.computeShader).body, pass);
     LowerPassConstants(pass);
     LowerShaderStage(pass.computeShader);
   }

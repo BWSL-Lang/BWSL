@@ -2136,6 +2136,7 @@ CompileResult CompileShaderStage(
     lowering.currentPassData = &pass;
     lowering.currentPassVaryings = varyingContext;  // Set varying context for vertex->fragment data flow
 
+    lowering.LowerGlobalArrayConstants(shaderBody, pass);
     for (u32 i = 0; i < pass.consts.count; i++) {
         lowering.LowerStatement(pass.consts[i]);
     }

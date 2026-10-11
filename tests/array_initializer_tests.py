@@ -93,6 +93,39 @@ def run_array_initializer_tests(compiler: Path) -> tuple[int, int]:
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Cannot assign to const variable 'table'", result.stdout + result.stderr)
 
+        def test_global_const_arrays_initialize_before_control_flow(self):
+            source = self.folder / "table.bwsl"
+            source.write_text('''
+                module Tables {
+                    const float[2] VALUES = {1.0, 2.0};
+                }
+                pipeline InitBeforeBranch {
+                    import Tables
+                    const float[2] PIPE = {3.0, 4.0};
+                    pass "Main" {
+                        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+                        fragment {
+                            float x = 0.0;
+                            if (input.position.x > 0.0) {
+                                x = Tables::VALUES[0] + PIPE[0];
+                            }
+                            output.color = float4(x + Tables::VALUES[1] + PIPE[1]);
+                        }
+                    }
+                }
+            ''', encoding="utf-8")
+            target, ops = self.compile_source(source)
+            array_types = {args[0] for op, args in ops if op == 28}  # OpTypeArray
+            composites = {args[1] for op, args in ops
+                          if op == 44 and args[0] in array_types}
+            first_branch = next(i for i, (op, _) in enumerate(ops) if op == 250)
+            array_stores = [i for i, (op, args) in enumerate(ops)
+                            if op == 62 and len(args) > 1 and args[1] in composites]
+            self.assertEqual(len(array_stores), 2)
+            self.assertTrue(all(i < first_branch for i in array_stores))
+            vertex_ops = list(instructions(target / "table.vert.spv"))
+            self.assertFalse(any(op == 28 for op, _ in vertex_ops))
+
         def test_module_const_vector_array(self):
             source = self.folder / "table.bwsl"
             source.write_text('''

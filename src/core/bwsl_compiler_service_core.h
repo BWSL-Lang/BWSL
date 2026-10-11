@@ -668,6 +668,7 @@ private:
 
         if (owningPass) {
             lowering.currentPassData = owningPass;
+            lowering.LowerGlobalArrayConstants(shaderStage.body, *owningPass);
             for (u32 i = 0; i < owningPass->consts.count; i++) {
                 lowering.LowerStatement(owningPass->consts[i]);
             }
