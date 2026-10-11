@@ -67,6 +67,10 @@
   of the function its other branch. The function no longer tracks a
   "returned" flag and branches on it a second time, which drivers don't
   merge.
+- A loop that calls a function no longer carries the function's locals and
+  return flag from one iteration to the next. They became copies in the
+  loop increment of GLSL, HLSL and Metal output, which drivers don't
+  always remove.
 - `-gles-direct` output for struct locals compiles: the zero value a struct
   starts from was declared as `void`. Boolean `&&`/`||` are no longer emitted
   as `&`/`|`, and a fragment stage's `input.position` is `gl_FragCoord`.
