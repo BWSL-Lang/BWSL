@@ -245,6 +245,10 @@ struct IRLowering {
   u32 inlineModuleIndex =
       0xFFFFFFFF; // Module index during inlining (for unqualified calls)
   static constexpr u32 MAX_INLINE_DEPTH = 8;
+  // Largest right operand of `&&`/`||` evaluated without a branch. A few
+  // comparisons of locals fit; anything bigger keeps short-circuiting so a
+  // false/true left operand still skips the work.
+  static constexpr u32 MAX_SPECULATED_OPERAND_NODES = 16;
 
   // Stack of currently-inlining function AST nodes, for direct /
   // indirect recursion detection. Packed NodeRefs are 32-bit, so a
@@ -528,6 +532,12 @@ struct IRLowering {
   //==========================================================================
 
   u16 EnsureBoolCondition(u16 condReg);
+
+  // True when `ref` can be evaluated unconditionally: no side effects, no
+  // loads that a guard could be protecting (array indexing, dereference),
+  // and small enough that skipping it never pays for a branch. `budget` is
+  // the node count still allowed and is decremented as nodes are visited.
+  bool IsSpeculatableExpression(NodeRef ref, u32* budget) const;
 
   u16 CombineLoopCondition(u16 condReg);
 

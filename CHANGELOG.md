@@ -63,6 +63,11 @@
   instead of one store per element, with constant vector arithmetic folded.
   The element stores made NVIDIA drivers rebuild the array in local memory on
   every invocation.
+- `a || b` and `a && b` whose right operand is a short, side-effect-free
+  expression (comparisons, arithmetic, locals, swizzles) compile to a
+  logical `or`/`and` instead of a branch. Calls, array indexing, pointer
+  reads, integer division and shifts still short-circuit, so guards such as
+  `i < n && a[i] > 0.0` stay safe.
 - An `if` branch ending in `return` inside a called function makes the rest
   of the function its other branch. The function no longer tracks a
   "returned" flag and branches on it a second time, which drivers don't

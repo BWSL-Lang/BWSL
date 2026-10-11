@@ -3530,6 +3530,11 @@ def main() -> int:
     passed += inline_return_passed
     failed += inline_return_failed
 
+    from logical_operator_tests import run_logical_operator_tests
+    logical_passed, logical_failed = run_logical_operator_tests(bwslc)
+    passed += logical_passed
+    failed += logical_failed
+
     from p1_regression_tests import run_p1_regression_tests
     p1_passed, p1_failed = run_p1_regression_tests(bwslc, output_dir / "p1_validation")
     passed += p1_passed

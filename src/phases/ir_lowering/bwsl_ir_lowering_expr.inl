@@ -590,12 +590,72 @@ inline u16 IRLowering::LowerLiteral(NodeRef ref) {
   }
 }
 
+inline bool IRLowering::IsSpeculatableExpression(NodeRef ref, u32* budget) const {
+    if (ref.IsNull() || *budget == 0) return false;
+    (*budget)--;
+    switch (ref.Type()) {
+        case ASTNodeType::LITERAL:
+            return true;
+        case ASTNodeType::IDENTIFIER: {
+            // Reading through a pointer is a load the left operand may guard.
+            auto it = variableRegisters.find(ast->GetIdentifier(ref).name.nameHash);
+            if (it == variableRegisters.end() || it->second >= MAX_REGISTERS) return true;
+            return (program.registerStorageInfo[it->second] & IRProgram::STORAGE_IS_PTR) == 0;
+        }
+        case ASTNodeType::MEMBER_ACCESS:
+            return IsSpeculatableExpression(ast->GetMemberAccess(ref).object, budget);
+        case ASTNodeType::UNARY_OP: {
+            const UnaryOpData& unop = ast->GetUnaryOp(ref);
+            switch (unop.op) {
+                case UnaryOpType::NEGATE:
+                case UnaryOpType::NOT:
+                case UnaryOpType::BITWISE_NOT:
+                    return IsSpeculatableExpression(unop.operand, budget);
+                default:
+                    return false;
+            }
+        }
+        case ASTNodeType::BINARY_OP: {
+            const BinaryOpData& binop = ast->GetBinaryOp(ref);
+            // Integer division by zero and out-of-range shifts are undefined
+            // behaviour in MSL, and are exactly what a guard like
+            // `n != 0 && 100 / n > 2` protects against.
+            switch (binop.op) {
+                case BinaryOpType::DIVIDE:
+                case BinaryOpType::MODULO:
+                case BinaryOpType::LEFT_SHIFT:
+                case BinaryOpType::RIGHT_SHIFT:
+                    return false;
+                default:
+                    break;
+            }
+            return IsSpeculatableExpression(binop.left, budget) &&
+                   IsSpeculatableExpression(binop.right, budget);
+        }
+        default:
+            // Calls may have side effects or be expensive; array indexing may
+            // be bounds-guarded by the left operand (`i < n && a[i] > 0`).
+            return false;
+    }
+}
+
 inline u16 IRLowering::LowerBinaryOp(NodeRef ref) {
   const BinaryOpData &binop = ast->GetBinaryOp(ref);
   u16 left = LowerExpression(binop.left);
   if ((binop.op == BinaryOpType::AND || binop.op == BinaryOpType::OR) &&
       (mask(GetRegisterType(left)) & TypeMasks::SCALAR_TYPES)) {
     left = EnsureBoolCondition(left);
+    // A pure, cheap right operand is evaluated unconditionally and combined
+    // with OpLogicalAnd/Or. Branching on it only adds structured control
+    // flow that drivers don't always flatten (see issue #157).
+    u32 budget = MAX_SPECULATED_OPERAND_NODES;
+    if (IsSpeculatableExpression(binop.right, &budget)) {
+      u16 right = EnsureBoolCondition(LowerExpression(binop.right));
+      u16 dest = AllocateRegister();
+      SetRegisterType(dest, CoreType::BOOL);
+      builder.EmitInstruction(binop.op == BinaryOpType::AND ? OP_AND : OP_OR, dest, left, right);
+      return dest;
+    }
     auto dominatingNodes = nodeRegisters;
     u16 selected = AllocateRegister();
     SetRegisterType(selected, CoreType::BOOL);
