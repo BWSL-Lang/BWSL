@@ -230,6 +230,8 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
             // still recognize special identifiers after cloning.
             NodeRef cloned = ASTFactory::MakeIdentifier(ast, src.name, line, col);
             ast->GetIdentifier(cloned).identifierKind = src.identifierKind;
+            ast->identifierConstBindingHashes[cloned.Index()] =
+                ast->identifierConstBindingHashes[node.Index()];
             return cloned;
         }
 

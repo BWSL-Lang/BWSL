@@ -10,6 +10,7 @@
 #include "core/bwsl_mem_pool.h"
 #include "core/bwsl_resource_reflection.h"
 #include "core/bwsl_symbol_table.h"
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -327,6 +328,7 @@ struct IRLowering {
   IRProgram *LowerPipeline(NodeRef pipelineRef);
 
   void LowerPassConstants(const PassData &pass);
+  void LowerGlobalArrayConstants(NodeRef stageBody, const PassData &pass);
 
   void LowerPass(NodeRef passRef);
 
@@ -433,7 +435,9 @@ struct IRLowering {
 
   u16 LowerIdentifier(NodeRef ref);
 
-  void LowerVariableDecl(NodeRef ref);
+  void LowerVariableDecl(NodeRef ref, u32 bindingNameHash = 0,
+                         const VariableData *bindingData = nullptr);
+  u16 LowerModuleArrayConstant(const VariableData &data, u32 bindingNameHash);
 
   u16 EmitZeroStruct(u32 structTypeHash);
 

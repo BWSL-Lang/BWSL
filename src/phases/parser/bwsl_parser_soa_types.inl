@@ -98,7 +98,8 @@ bool Parser::ParseArraySizeValue(u32* outSize) {
     return false;
 }
 
-NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storageClass) {
+NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storageClass,
+                                      bool isConst, bool registerSymbol) {
     SourceLocation loc = getLocation(stream->GetOffset(previous));
     u32 line = loc.line;
     u32 col = loc.column;
@@ -164,22 +165,36 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
         Error("Shared arrays cannot have initializers");
         return NodeRef::Null();
     }
+    if (isConst && !initializer.IsValid()) {
+        Error("const arrays must be initialized");
+        return NodeRef::Null();
+    }
+    if (isConst && initializer.Type() != ASTNodeType::BLOCK) {
+        Error("const arrays require a brace initializer");
+        return NodeRef::Null();
+    }
+    if (isConst && initializer.Type() == ASTNodeType::BLOCK &&
+        ast->GetBlock(initializer).statements.count != totalSize) {
+        Error("const array initializer must provide exactly one value per element");
+        return NodeRef::Null();
+    }
 
     Consume(TokenType::SEMICOLON, "Expected ';' after array declaration");
 
     NodeRef varDecl = ASTFactory::MakeVariableDecl(ast,
         ArenaString::MakeHashOnly(varName),
         ArenaString::MakeHashOnly(ReverseLookup::GetString(SymbolTable::GetCoreTypeNameHash(elementType))),
-        initializer, false, line, col, storageClass, static_cast<u8>(arrayDims.size()),
+        initializer, isConst, line, col, storageClass, static_cast<u8>(arrayDims.size()),
         static_cast<u32>(totalSize), SymbolTable::GetCoreTypeNameHash(elementType));
     RecordDeclarationSource(varDecl);
     ast->GetVariableDecl(varDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
     for (u32 dim : arrayDims) ast->GetVariableDecl(varDecl).arraySizes.Push(arena, dim);
 
     // Add to symbol table
-    Symbol* sym = SymbolTable::AddSymbol(&symbolTable, ArenaString::MakeHashOnly(varName), SymbolKind::VARIABLE);
+    Symbol* sym = registerSymbol ? SymbolTable::AddSymbol(&symbolTable,
+        ArenaString::MakeHashOnly(varName), SymbolKind::VARIABLE) : nullptr;
 
-    if (!sym) {
+    if (registerSymbol && !sym) {
         Error("Variable already declared in this scope");
         return NodeRef::Null();
     }
@@ -187,6 +202,9 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
         VariableData& varData = symbolTable.variables[sym->index];
         varData.typeInfo = arrayInfo;
         varData.storageClass = storageClass;
+        varData.isConst = isConst;
+        varData.constExpr = initializer;
+        varData.constDecl = varDecl;
     }
 
     if (arrayDims.size() > 1) {
@@ -300,6 +318,15 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
     switch (expr.Type()) {
         case ASTNodeType::MEMBER_ACCESS: {
             const MemberAccessData& memberData = ast->GetMemberAccess(expr);
+            if (memberData.isModuleQualified && memberData.qualifiedNameHash != 0 &&
+                memberData.object.Type() == ASTNodeType::IDENTIFIER &&
+                ResolveModuleIndexByWrittenName(
+                    ast->GetIdentifier(memberData.object).name) != INVALID_INDEX) {
+                Symbol* sym = SymbolTable::LookupByHash(&symbolTable,
+                                                         memberData.qualifiedNameHash);
+                if (sym && sym->kind == SymbolKind::VARIABLE)
+                    return symbolTable.variables[sym->index].typeInfo;
+            }
             if (memberData.object.Type() == ASTNodeType::IDENTIFIER) {
                 const IdentifierData& objIdent = ast->GetIdentifier(memberData.object);
                 switch (objIdent.identifierKind) {
@@ -369,6 +396,12 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
 
         case ASTNodeType::IDENTIFIER: {
             const IdentifierData& ident = ast->GetIdentifier(expr);
+            u32 boundHash = ast->identifierConstBindingHashes[expr.Index()];
+            if (boundHash != 0) {
+                Symbol* bound = SymbolTable::LookupByHash(&symbolTable, boundHash);
+                if (bound && bound->kind == SymbolKind::VARIABLE)
+                    return symbolTable.variables[bound->index].typeInfo;
+            }
             TypeInfo activeVariantType;
             if (allowBareVariantLookup &&
                 LookupActiveVariantBinding(ident.name.nameHash, nullptr, &activeVariantType)) {
@@ -396,6 +429,14 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
         case ASTNodeType::ARRAY_ACCESS: {
             const ArrayAccessData& arrayData = ast->GetArrayAccess(expr);
             TypeInfo arrayType = GetExpressionType(arrayData.array);
+            if (arrayType.arrayDimensions > 0) {
+                arrayType.arrayDimensions--;
+                if (arrayType.arrayDimensions == 0) {
+                    arrayType.arrayLength = 0;
+                    arrayType.arrayStride = 0;
+                }
+                return arrayType;
+            }
             switch (arrayType.coreType) {
                 case CoreType::FLOAT2:
                 case CoreType::FLOAT3:

@@ -400,6 +400,8 @@ static NodeRef CloneNodeImpl(ComptimeState* state, NodeRef node) {
             }
             NodeRef cloned = ASTFactory::MakeIdentifier(state->ast, src.name, line, col);
             state->ast->GetIdentifier(cloned).identifierKind = src.identifierKind;
+            state->ast->identifierConstBindingHashes[cloned.Index()] =
+                state->ast->identifierConstBindingHashes[node.Index()];
             return cloned;
         }
         case ASTNodeType::LITERAL: {

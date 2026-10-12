@@ -543,6 +543,7 @@ static ShaderOutput CompileShaderStage(
     lowering.currentPassData = &pass;
     lowering.currentPassVaryings = varyingContext;
 
+    lowering.LowerGlobalArrayConstants(shaderBody, pass);
     for (u32 i = 0; i < pass.consts.count; i++) {
         lowering.LowerStatement(pass.consts[i]);
     }

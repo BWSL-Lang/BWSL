@@ -24,10 +24,16 @@ def run_array_initializer_tests(compiler: Path) -> tuple[int, int]:
         def compile(self, body, declarations="", prelude=""):
             source = self.folder / "table.bwsl"
             source.write_text(prelude + shader(body, declarations), encoding="utf-8")
+            return self.compile_source(source)
+
+        def compile_source(self, source, module_dir=None):
             target = self.folder / "output"
+            command = [str(compiler), str(source), "-all", "-validation", "strict",
+                       "-debug-names", "-o", str(target)]
+            if module_dir is not None:
+                command.extend(["-modules", str(module_dir)])
             result = subprocess.run(
-                [str(compiler), str(source), "-all", "-validation", "strict",
-                 "-debug-names", "-o", str(target)],
+                command,
                 capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             validator = shutil.which("spirv-val")
@@ -45,6 +51,178 @@ def run_array_initializer_tests(compiler: Path) -> tuple[int, int]:
                             capture_output=True, text=True, timeout=30)
                         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return target, list(instructions(target / "table.frag.spv"))
+
+        def test_const_arrays_in_all_scopes(self):
+            source = self.folder / "table.bwsl"
+            source.write_text('''
+                module Tables {
+                    const float[4] VALUES = {1.0, 2.0, 3.0, 4.0};
+                    lookup :: (int i) -> float { return VALUES[i]; }
+                }
+                pipeline ConstArrays {
+                    import Tables
+                    const float[4] PIPE = {5.0, 6.0, 7.0, 8.0};
+                    pass "Main" {
+                        const float[4] PASS = {9.0, 10.0, 11.0, 12.0};
+                        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+                        fragment {
+                            const float[4] LOCAL = {13.0, 14.0, 15.0, 16.0};
+                            int i = int(input.position.x) % 4;
+                            output.color = float4(Tables::VALUES[i] +
+                                Tables::lookup(i) + PIPE[i] + PASS[i] + LOCAL[i]);
+                        }
+                    }
+                }
+            ''', encoding="utf-8")
+            target, ops = self.compile_source(source)
+            self.assertTrue((target / "table.frag.spv").exists())
+            arrays = {args[0] for op, args in ops if op == 28}
+            self.assertGreaterEqual(sum(op == 44 and args[0] in arrays
+                                        for op, args in ops), 4)
+
+        def test_const_array_element_cannot_be_written(self):
+            source = self.folder / "table.bwsl"
+            source.write_text(shader('''
+                const float[2] table = {1.0, 2.0};
+                table[0] = 3.0;
+                output.color = float4(table[0]);
+            '''), encoding="utf-8")
+            result = subprocess.run(
+                [str(compiler), str(source), "-check", "-validation", "off"],
+                capture_output=True, text=True, timeout=60)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Cannot assign to const variable 'table'", result.stdout + result.stderr)
+
+        def test_global_const_arrays_initialize_before_control_flow(self):
+            source = self.folder / "table.bwsl"
+            source.write_text('''
+                module Tables {
+                    const float[2] VALUES = {1.0, 2.0};
+                }
+                pipeline InitBeforeBranch {
+                    import Tables
+                    const float[2] PIPE = {3.0, 4.0};
+                    pass "Main" {
+                        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+                        fragment {
+                            float x = 0.0;
+                            if (input.position.x > 0.0) {
+                                x = Tables::VALUES[0] + PIPE[0];
+                            }
+                            output.color = float4(x + Tables::VALUES[1] + PIPE[1]);
+                        }
+                    }
+                }
+            ''', encoding="utf-8")
+            target, ops = self.compile_source(source)
+            array_types = {args[0] for op, args in ops if op == 28}  # OpTypeArray
+            composites = {args[1] for op, args in ops
+                          if op == 44 and args[0] in array_types}
+            first_branch = next(i for i, (op, _) in enumerate(ops) if op == 250)
+            array_stores = [i for i, (op, args) in enumerate(ops)
+                            if op == 62 and len(args) > 1 and args[1] in composites]
+            self.assertEqual(len(array_stores), 2)
+            self.assertTrue(all(i < first_branch for i in array_stores))
+            vertex_ops = list(instructions(target / "table.vert.spv"))
+            self.assertFalse(any(op == 28 for op, _ in vertex_ops))
+
+        def test_module_const_vector_array(self):
+            source = self.folder / "table.bwsl"
+            source.write_text('''
+                module Kernel {
+                    const float2[2] OFFSETS = {
+                        float2(-1.0, 0.5), float2(1.0, -0.5)
+                    };
+                }
+                pipeline ConstVectors {
+                    import Kernel
+                    pass "Main" {
+                        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+                        fragment {
+                            int i = int(input.position.x) % 2;
+                            output.color = float4(Kernel::OFFSETS[i], 0.0, 1.0);
+                        }
+                    }
+                }
+            ''', encoding="utf-8")
+            target, ops = self.compile_source(source)
+            self.assertTrue((target / "table.frag.spv").exists())
+            arrays = {args[0] for op, args in ops if op == 28}
+            self.assertTrue(any(op == 44 and args[0] in arrays for op, args in ops))
+
+        def test_imported_module_const_array(self):
+            modules = self.folder / "modules"
+            modules.mkdir()
+            (modules / "ConstTableMod.bwsl").write_text('''
+                module ConstTableMod {
+                    const float[3] VALUES = {2.0, 4.0, 8.0};
+                }
+            ''', encoding="utf-8")
+            source = self.folder / "table.bwsl"
+            source.write_text('''
+                pipeline ImportedConstArray {
+                    import ConstTableMod
+                    pass "Main" {
+                        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+                        fragment {
+                            int i = int(input.position.x) % ConstTableMod::VALUES.length;
+                            output.color = float4(ConstTableMod::VALUES[i]);
+                        }
+                    }
+                }
+            ''', encoding="utf-8")
+            target, ops = self.compile_source(source, modules)
+            self.assertTrue((target / "table.frag.spv").exists())
+            bits = [struct.unpack("<I", struct.pack("<f", value))[0]
+                    for value in (2.0, 4.0, 8.0)]
+            self.assert_constant_table(ops, bits)
+            for kind in ("glsl", "gles"):
+                self.assertNotRegex((target / f"table.{kind}.frag").read_text(),
+                                    r"\bconst\b[^;]*\[")
+
+        def test_module_const_array_names_are_scoped(self):
+            source = self.folder / "table.bwsl"
+            source.write_text('''
+                module FirstTable {
+                    const float[2] VALUES = {1.0, 2.0};
+                    lookup :: (int i) -> float { return VALUES[i]; }
+                }
+                module SecondTable {
+                    const float[2] VALUES = {3.0, 4.0};
+                    lookup :: (int i) -> float { return VALUES[i]; }
+                }
+                pipeline ScopedTables {
+                    import FirstTable
+                    import SecondTable
+                    const float[2] VALUES = {9.0, 10.0};
+                    pass "Main" {
+                        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+                        fragment {
+                            int i = int(input.position.x) % 2;
+                            output.color = float4(VALUES[i] + FirstTable::lookup(i) +
+                                                   SecondTable::lookup(i));
+                        }
+                    }
+                }
+            ''', encoding="utf-8")
+            target, ops = self.compile_source(source)
+            self.assertTrue((target / "table.frag.spv").exists())
+            arrays = {args[0] for op, args in ops if op == 28}
+            self.assertGreaterEqual(sum(op == 44 and args[0] in arrays
+                                        for op, args in ops), 3)
+
+        def test_const_array_requires_full_initializer(self):
+            source = self.folder / "table.bwsl"
+            source.write_text(shader('''
+                const float[3] table = {1.0, 2.0};
+                output.color = float4(table[0]);
+            '''), encoding="utf-8")
+            result = subprocess.run(
+                [str(compiler), str(source), "-check", "-validation", "off"],
+                capture_output=True, text=True, timeout=60)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("const array initializer must provide exactly one value",
+                          result.stdout + result.stderr)
 
         def array_info(self, ops):
             arrays = {args[0] for op, args in ops if op == 28}  # OpTypeArray

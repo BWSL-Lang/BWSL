@@ -93,6 +93,7 @@ static void CompileOneStage(CompilationContext& context, Parser& parser,
     lowering.currentPipeline = pipelineRef;
     lowering.currentPass = passRef;
 
+    lowering.LowerGlobalArrayConstants(stageData.body, pass);
     for (u32 i = 0; i < pass.consts.count; i++) {
         lowering.LowerStatement(pass.consts[i]);
     }

@@ -177,6 +177,17 @@ NodeRef Parser::ParsePipeline() {
             TokenType varType = static_cast<TokenType>(stream->GetType(previous));
             std::string typeStr(stream->GetValue(previous));
             SourceLocation typeLoc = getLocation(stream->GetOffset(previous));
+            if (Match(TokenType::LEFT_BRACKET)) {
+                NodeRef arrayDecl = ParseArrayDeclaration(TokenTypeToReturnType(varType),
+                                                           StorageClass::Default, true);
+                if (arrayDecl.IsValid()) {
+                    ast->IndexPosition(arrayDecl, constLoc.line, constLoc.column);
+                    ast->GetVariableDecl(arrayDecl).typePosition =
+                        AST::PackPosition(typeLoc.line, typeLoc.column);
+                    ast->GetPipeline(pipeline).consts.Push(arena, arrayDecl);
+                }
+                continue;
+            }
             Consume(TokenType::IDENTIFIER, "Expected constant name");
             SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
             std::string constName(stream->GetValue(previous));
@@ -1261,6 +1272,17 @@ void Parser::ParsePassBody(NodeRef pass) {
             TokenType varType = static_cast<TokenType>(stream->GetType(previous));
             std::string typeStr(stream->GetValue(previous));
             SourceLocation typeLoc = getLocation(stream->GetOffset(previous));
+            if (Match(TokenType::LEFT_BRACKET)) {
+                NodeRef arrayDecl = ParseArrayDeclaration(TokenTypeToReturnType(varType),
+                                                           StorageClass::Default, true);
+                if (arrayDecl.IsValid()) {
+                    ast->IndexPosition(arrayDecl, loc.line, loc.column);
+                    ast->GetVariableDecl(arrayDecl).typePosition =
+                        AST::PackPosition(typeLoc.line, typeLoc.column);
+                    ast->GetPass(pass).consts.Push(arena, arrayDecl);
+                }
+                continue;
+            }
             Consume(TokenType::IDENTIFIER, "Expected constant name");
             SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
             std::string constName(stream->GetValue(previous));

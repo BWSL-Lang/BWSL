@@ -300,11 +300,14 @@
 
 # Constants, constraints, functions, structs, enums
 
-<pipeline-const-decl> ::= 'const' <core-type> <identifier> '=' <expression> ';'
+<pipeline-const-decl> ::= 'const' <core-type> <fixed-array-suffix-list> <identifier> '=' <const-initializer> ';'
 
-<pass-const-decl> ::= 'const' <core-type> <identifier> '=' <expression> ';'
+<pass-const-decl> ::= 'const' <core-type> <fixed-array-suffix-list> <identifier> '=' <const-initializer> ';'
 
-<module-const-decl> ::= 'const' <core-type> <identifier> '=' <expression> ';'
+<module-const-decl> ::= 'const' <core-type> <fixed-array-suffix-list> <identifier> '=' <const-initializer> ';'
+
+<const-initializer> ::= <expression>
+                      | '{' <expression-list> '}'
 
 <constraint-decl> ::= 'constraint' <identifier> '=' <constraint-type-expr> ';'
 
@@ -488,7 +491,7 @@
 
 <discard-stmt> ::= 'discard' ';'
 
-<const-local-decl> ::= 'const' <type-ref> <identifier> '=' <expression> ';'
+<const-local-decl> ::= 'const' <type-ref> <fixed-array-suffix-list> <identifier> '=' <const-initializer> ';'
 
 <if-stmt> ::= 'if' '(' <expression> ')' <statement-body> <else-clause-opt>
 

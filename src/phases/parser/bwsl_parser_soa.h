@@ -461,7 +461,8 @@ private:
     NodeRef ParseWhereClause();
     NodeRef ParseArrayInitializer();
     NodeRef ParseInlineArrayConstruction();
-    NodeRef ParseArrayDeclaration(CoreType elementType, StorageClass storageClass = StorageClass::Default);
+    NodeRef ParseArrayDeclaration(CoreType elementType, StorageClass storageClass = StorageClass::Default,
+                                  bool isConst = false, bool registerSymbol = true);
     // Parse one array-size token: an integer literal or a compile-time
     // integer constant name (optionally module-qualified). Validates the
     // value against MAX_ARRAY_SIZE, reports an error and returns false on
