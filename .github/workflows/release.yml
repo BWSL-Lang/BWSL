@@ -25,14 +25,16 @@ jobs:
             out: build/bwslc
             asset: bwslc-linux-x64
           - target: linux-arm64
-            runner: ubuntu-latest
-            apt: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
+            runner: ubuntu-24.04-arm
+            # The arm64 runner image is slimmer than ubuntu-latest; install
+            # the compiler and the CMake used for SPIRV-Tools explicitly.
+            apt: clang cmake
             make_args: TARGET_OS=linux TARGET_ARCH=arm64
-            out: build/bwslc-linux-arm64
+            out: build/bwslc
             asset: bwslc-linux-arm64
           - target: windows-x64
             runner: ubuntu-latest
-            apt: mingw-w64
+            apt: clang lld mingw-w64
             make_args: TARGET_OS=windows TARGET_ARCH=x86_64
             out: build/bwslc-windows-x86_64.exe
             asset: bwslc-windows-x64.exe
@@ -62,11 +64,11 @@ jobs:
             echo "BWSL_VERSION=dev-$date-${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
           fi
 
-      - name: Install cross-compilation toolchain
+      - name: Install toolchain
         if: matrix.apt
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang lld ${{ matrix.apt }}
+          sudo apt-get install -y --no-install-recommends ${{ matrix.apt }}
 
       - name: Build bwslc
         env:
