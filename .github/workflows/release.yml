@@ -72,7 +72,6 @@ jobs:
 
   macos:
     name: macos-latest
-    needs: linux
     runs-on: macos-latest
     steps:
       - name: Checkout
