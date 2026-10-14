@@ -139,12 +139,17 @@ python3 tests/run_tests.py
 
 # Equivalence suite (requires Vulkan + dxc + glslang)
 ./tests/run_tests.sh --equivalence
+
+# GPU benchmarks: hand-written GLSL ES vs BWSL output on GL and Vulkan,
+# GPU-timed, outputs compared (see tests/benchmarks/README.md)
+python3 tests/benchmarks/run.py
 ```
 
 Test categories under `tests/`:
 
 - top-level `*.bwsl` — regression / smoke tests
 - `equivalence/` — multi-backend GPU equivalence tests
+- `benchmarks/` — GPU performance benchmarks (`run.py` + one directory per case)
 - `error_cases/` — inputs that must fail with a specific diagnostic
 - `ast_json/` — fixtures whose `-ast-json` node positions are asserted
 - `fuzz_regressions/` — minimized inputs from past fuzzer crashes

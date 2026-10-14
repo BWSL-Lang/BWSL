@@ -1,0 +1,33 @@
+{
+  "description": "1024x1024 grid (2.1M triangles); vertex shader: 3x 4-octave fbm, 8-bone blend, 4 lights",
+  "format": "rgba8",
+  "depth": true,
+  "mesh": {"type": "grid", "cols": 1024, "rows": 1024, "extent": 1.0},
+  "attributes": [
+    {"name": "position", "type": "float3"},
+    {"name": "uv", "type": "float2"}
+  ],
+  "uniforms": [
+    {
+      "name": "scene",
+      "values": [
+        0.95, 0, 0, 0,
+        0, 0.95, 0, 0,
+        0, 0, 0.4, 0.5,
+        0, 0, 0, 1,
+        1.7, 0.5, 6.0, 24.0,
+        0, 0, 1, 0,
+        0.5, 0.3, 0.8, 0,
+        -0.6, 0.4, 0.7, 0,
+        0.1, -0.7, 0.7, 0,
+        0.0, 0.0, 1.0, 0,
+        0.9, 0.8, 0.6, 0.5,
+        0.3, 0.4, 0.7, 0.3,
+        0.4, 0.2, 0.2, 0.2,
+        0.1, 0.1, 0.1, 0.0
+      ],
+      "random": {"count": 96, "seed": 21, "range": [-0.05, 0.05]}
+    }
+  ],
+  "tolerance": 0.0079
+}

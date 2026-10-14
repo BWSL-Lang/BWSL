@@ -1,0 +1,20 @@
+{
+  "description": "2x2 supersampled domain-warped fbm (5 x 5 octaves) + 3x3 Worley per sample",
+  "format": "rgba8",
+  "mesh": {"type": "fullscreen"},
+  "attributes": [
+    {"name": "position", "type": "float2"}
+  ],
+  "uniforms": [
+    {
+      "name": "params",
+      "values": [
+        "6 * aspect", 3.5, "1 / width", "1 / height",
+        0.10, 0.12, 0.20, 1,
+        0.95, 0.65, 0.30, 1,
+        0.20, 0.55, 0.60, 1
+      ]
+    }
+  ],
+  "tolerance": 0.0079
+}

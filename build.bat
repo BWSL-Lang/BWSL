@@ -15,6 +15,8 @@ if errorlevel 1 exit /b 1
 
 if not exist "build" mkdir "build"
 
+if /I "%TARGET%"=="bench_runner" goto :build_bench_runner
+
 call :generate_embedded_modules
 if errorlevel 1 exit /b 1
 
@@ -85,6 +87,16 @@ if errorlevel 1 exit /b 1
 cl /nologo /Fdbuild\bwslc-debug.pdb /Febuild\bwslc-debug.exe build\spirv_cross_wrapper_debug.obj build\bwslc_debug.obj %SPIRV_TOOLS_LINK_LIB% %LINK_FLAGS%
 if errorlevel 1 exit /b 1
 echo Built: build\bwslc-debug.exe
+exit /b 0
+
+:build_bench_runner
+if not defined VULKAN_SDK (
+    echo bench_runner needs the Vulkan SDK; set VULKAN_SDK.
+    exit /b 1
+)
+cl /nologo /std:c++20 /O2 /W4 /EHsc /MT /I"%VULKAN_SDK%\Include" /Fobuild\bench_runner.obj /Febuild\bench_runner.exe src\bench_runner.cpp /link /LIBPATH:"%VULKAN_SDK%\Lib" vulkan-1.lib opengl32.lib gdi32.lib user32.lib
+if errorlevel 1 exit /b 1
+echo Built: build\bench_runner.exe
 exit /b 0
 
 :test
@@ -223,6 +235,7 @@ echo.
 echo Targets:
 echo   bwslc              Build release CLI compiler ^(default^)
 echo   bwslc-debug        Build debug CLI compiler
+echo   bench_runner       Build the GPU benchmark runner ^(needs VULKAN_SDK^)
 echo   test               Run tests via Python
 echo   clean              Remove build artifacts
 echo   help               Show this message
