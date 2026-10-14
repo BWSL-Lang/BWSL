@@ -13,8 +13,8 @@ namespace Optimization {
 // replaced by the constant, then the scalar instructions and phis nothing
 // reads any more are removed.
 //
-// The CFG and block layout are left alone: a branch with a constant
-// condition stays a branch, and the backends emit only the arm it takes.
+// The CFG and block layout are left alone: a branch or switch with a
+// constant condition stays one, and the backends emit only the edge it takes.
 // `cfg` is null for straight-line stages, which skip CFG and SSA. Those,
 // and single-block stages, get one forward walk instead, since a register
 // there can be assigned more than once.

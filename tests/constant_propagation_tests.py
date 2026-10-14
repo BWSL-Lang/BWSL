@@ -13,6 +13,7 @@ OP_PHI = 245
 OP_LOOP_MERGE = 246
 OP_SELECTION_MERGE = 247
 OP_BRANCH_CONDITIONAL = 250
+OP_SWITCH = 251
 OP_FADD = 129
 OP_SDIV = 135
 
@@ -66,6 +67,23 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
                 output.color = float4(input.uv.y * scale);
             ''')
             self.assertNotIn(OP_PHI, ops)
+
+        def test_constant_switch_keeps_one_case(self):
+            # Older DXC rejects `switch (2)`, so a constant selector must not
+            # reach HLSL as a switch.
+            ops, target = self.fragment_ops('''
+                int mode = 2;
+                float weight = input.uv.x;
+                switch (mode) {
+                    case 1: weight = 0.25; break;
+                    case 2: weight = weight * 3.0; break;
+                    default: break;
+                }
+                output.color = float4(weight);
+            ''')
+            self.assertNotIn(OP_SWITCH, ops)
+            self.assertNotIn(OP_PHI, ops)
+            self.assertNotIn("switch", (target / "constprop.frag.hlsl").read_text(encoding="utf-8"))
 
         def test_runtime_branch_stays(self):
             ops, _ = self.fragment_ops('''

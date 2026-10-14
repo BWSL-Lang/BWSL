@@ -675,6 +675,18 @@ bool GLESBuilder::EmitStructuredRegion(u32 block, u32 stopBlock,
             out.NL(indent); out.Lit("return;");
             return false;
         }
+        // A constant condition or selector (usually left by constant
+        // propagation) always takes one edge. Loop headers keep the branch
+        // that exits the loop.
+        u32 constantTarget;
+        if (terminal != NO_BLOCK && IR::TryGetConstantTarget(ir, terminal, &constantTarget)) {
+            u32 taken = cfg->instToBlock[constantTarget];
+            bool falls = EmitBlockEdge(block, taken, merge != NO_BLOCK ? merge : stopBlock, loop, depth);
+            if (merge == NO_BLOCK) return falls;
+            if (!falls) return false;
+            block = merge;
+            continue;
+        }
         if (op == IR::OP_SWITCH) {
             // Case bodies are mutually exclusive, with no source fallthrough.
             // Using if/else also lets a case's loop break/skip target its loop
@@ -711,19 +723,6 @@ bool GLESBuilder::EmitStructuredRegion(u32 block, u32 stopBlock,
             // source-level reconvergence for derivatives and implicit LOD.
             // Loop conditions/until branches instead exit via break/continue.
             u32 branchStop = merge != NO_BLOCK ? merge : stopBlock;
-            // A constant condition (usually left by constant propagation)
-            // runs one arm. Loop headers keep the branch that exits the loop.
-            bool constantCondition;
-            if ((structure & IR::IRProgram::STRUCT_TYPE_MASK) != IR::IRProgram::STRUCT_LOOP_HEADER &&
-                IR::TryGetConstantCondition(ir, Op(terminal, 0), &constantCondition)) {
-                u32 taken = cfg->GetSuccessor(block, constantCondition ? 0 : 1);
-                if (taken == NO_BLOCK) taken = cfg->GetSuccessor(block, 0);
-                bool falls = EmitBlockEdge(block, taken, branchStop, loop, depth);
-                if (merge == NO_BLOCK) return falls;
-                if (!falls) return false;
-                block = merge;
-                continue;
-            }
             out.NL(indent); out.Lit("if ("); EmitExpr(Op(terminal, 0)); out.Lit(") {"); ++indent;
             bool thenFalls = EmitBlockEdge(block, cfg->GetSuccessor(block, 0), branchStop, loop, depth);
             --indent; out.NL(indent); out.Lit("} else {"); ++indent;

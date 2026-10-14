@@ -692,35 +692,31 @@ static void AddUndefRegister(ConstantPropagationData* data, u16 reg, u16 type) {
     data->undef[reg] = true;
 }
 
-// The backends emit a branch with a constant condition as a jump (see
-// SPIRVBuilder::EmitBranch), so the edge to the arm it skips disappears.
-// Phis lose their operand for that edge. One left with none is in a block
-// nothing branches to any more, and its result becomes an undef register.
+// The backends emit a branch or switch with a constant condition as a jump
+// (see IR::TryGetConstantTarget), so the edges to the targets it skips
+// disappear. Phis lose their operands for those edges. One left with none
+// is in a block nothing branches to any more, and its result becomes an
+// undef register.
 static void DropFoldedBranchEdges(ConstantPropagationData* data, BWSL_Arena* arena) {
     IRProgram* ir = data->ir;
     const CFG* cfg = data->cfg;
-    if (ir->phiCount == 0 || !ir->structureInfo) return;
+    if (ir->phiCount == 0) return;
     bool* dropped = (bool*)AllocateZeroed(arena, ir->phiOperandOffsets[ir->phiCount] * sizeof(bool));
     bool anyDropped = false;
     for (u32 block = 0; block < cfg->blockCount; block++) {
-        u32 last = cfg->lastInst[block];
-        bool condition;
-        if (ir->opcodes[last] != IR::OP_BRANCH ||
-            (ir->structureInfo[last] & IRProgram::STRUCT_TYPE_MASK) == IRProgram::STRUCT_LOOP_HEADER ||
-            !IR::TryGetConstantCondition(ir, ir->GetOperand(last, 0), &condition)) {
-            continue;
-        }
-        u32 taken = condition ? ir->GetBranchTrueTarget(last) : ir->GetBranchFalseTarget(last);
-        u32 skipped = condition ? ir->GetBranchFalseTarget(last) : ir->GetBranchTrueTarget(last);
-        if (taken == skipped || skipped >= ir->instructionCount) continue;
-        u32 skippedBlock = cfg->instToBlock[skipped];
-        if (taken < ir->instructionCount && cfg->instToBlock[taken] == skippedBlock) continue;
-        for (u32 k = data->blockPhiOffsets[skippedBlock]; k < data->blockPhiOffsets[skippedBlock + 1]; k++) {
-            u32 phi = data->blockPhis[k];
-            for (u32 j = ir->phiOperandOffsets[phi]; j < ir->phiOperandOffsets[phi + 1]; j++) {
-                if (ir->phiOperandBlocks[j] != block) continue;
-                dropped[j] = true;
-                anyDropped = true;
+        u32 target;
+        if (!IR::TryGetConstantTarget(ir, cfg->lastInst[block], &target)) continue;
+        u32 takenBlock = cfg->instToBlock[target];
+        for (u32 s = 0; s < cfg->TotalSuccessorCount(block); s++) {
+            u32 skippedBlock = cfg->GetAnySuccessor(block, s);
+            if (skippedBlock == takenBlock || skippedBlock >= cfg->blockCount) continue;
+            for (u32 k = data->blockPhiOffsets[skippedBlock]; k < data->blockPhiOffsets[skippedBlock + 1]; k++) {
+                u32 phi = data->blockPhis[k];
+                for (u32 j = ir->phiOperandOffsets[phi]; j < ir->phiOperandOffsets[phi + 1]; j++) {
+                    if (ir->phiOperandBlocks[j] != block) continue;
+                    dropped[j] = true;
+                    anyDropped = true;
+                }
             }
         }
     }
@@ -749,8 +745,8 @@ static void DropFoldedBranchEdges(ConstantPropagationData* data, BWSL_Arena* are
 // Giving it that value on every edge lets the backends alias the two, so no
 // phi is emitted. The value reaches the phi's block on every emitted path,
 // so it dominates every use. Edges count by what the backends emit, not by
-// what can run: a loop header or switch keeps every edge, even when its
-// condition is constant.
+// what can run: a loop header keeps every edge, even when its condition is
+// constant.
 static void CollapseSingleValuePhis(ConstantPropagationData* data, BWSL_Arena* arena) {
     IRProgram* ir = data->ir;
     const CFG* cfg = data->cfg;
@@ -781,16 +777,10 @@ static void CollapseSingleValuePhis(ConstantPropagationData* data, BWSL_Arena* a
     queue[tail++] = cfg->entryBlock;
     while (head < tail) {
         u32 block = queue[head++];
-        u32 last = cfg->lastInst[block];
-        bool condition;
-        if (ir->opcodes[last] == IR::OP_BRANCH && ir->structureInfo &&
-            (ir->structureInfo[last] & IRProgram::STRUCT_TYPE_MASK) != IRProgram::STRUCT_LOOP_HEADER &&
-            IR::TryGetConstantCondition(ir, ir->GetOperand(last, 0), &condition)) {
-            u32 target = condition ? ir->GetBranchTrueTarget(last) : ir->GetBranchFalseTarget(last);
-            if (target < ir->instructionCount) {
-                emitEdge(block, cfg->instToBlock[target]);
-                continue;
-            }
+        u32 target;
+        if (IR::TryGetConstantTarget(ir, cfg->lastInst[block], &target)) {
+            emitEdge(block, cfg->instToBlock[target]);
+            continue;
         }
         for (u32 s = 0; s < cfg->TotalSuccessorCount(block); s++) {
             emitEdge(block, cfg->GetAnySuccessor(block, s));

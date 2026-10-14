@@ -360,7 +360,7 @@ struct SPIRVBuilder {
     // Control flow
     u32 GetOrCreateBlockLabel(u32 ir_idx);
     void EmitBranch(u32 ir_idx);
-    bool PhiReadsEdge(u32 branchInst, u32 targetInst) const;
+    bool DropsPhiEdge(u32 branchInst, u32 targetInst) const;
     void EmitStructuredControlFlow(u32 ir_idx);
     
     // PHI nodes

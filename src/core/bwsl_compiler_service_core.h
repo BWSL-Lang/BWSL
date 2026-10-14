@@ -6,7 +6,7 @@
 #include "bwsl_cfg.h"
 #include "bwsl_gl_names.h"
 #include "bwsl_ssa.h"
-#include "bwsl_constant_propagation.h"
+#include "phases/optimization/bwsl_constant_propagation.h"
 #include "bwsl_parser_soa.h"
 #include "bwsl_comptime_interpreter.h"
 #include "bwsl_resource_reflection.h"
