@@ -3,6 +3,7 @@
 #include "core/bwsl_defs.h"
 #include "core/bwsl_mem_pool.h"
 #include "core/bwsl_types.h"
+#include <algorithm>
 #include <iostream>
 namespace BWSL{
 
@@ -18,9 +19,13 @@ namespace IR {
 // a shader exceeded 8192 registers. The external instruction widths do not change.
 constexpr u32 RegisterLimit = 0x3FFF;
 constexpr u32 IntegerConstantLimit = 0x2000;
+// Float constants are 0x8000 | index; index 0x4000 and up would read as bool.
+constexpr u32 FloatConstantLimit = 0x4000;
 constexpr bool IsConstant(u16 value) { return (value & 0xC000) != 0; }
 constexpr bool IsIntConstant(u16 value) { return (value & 0xE000) == 0x4000; }
 constexpr bool IsUintConstant(u16 value) { return (value & 0xE000) == 0x6000; }
+constexpr bool IsFloatConstant(u16 value) { return (value & 0xC000) == 0x8000; }
+constexpr bool IsBoolConstant(u16 value) { return value != 0xFFFF && (value & 0xC000) == 0xC000; }
 
 
 struct IRProgram {
@@ -55,6 +60,7 @@ struct IRProgram {
     alignas(64) u64* int64Constants;
     alignas(64) u8* boolConstants;      // Bool constants (0=false, 1=true)
     u32 floatCount;
+    u32 floatCapacity;
     u32 intCapacity;
     u32 uintCapacity;
     u32 intCount;
@@ -612,6 +618,31 @@ inline bool HasSideEffects(OpCode op) {
            op == OP_BARRIER || op == OP_MEM_FENCE || op == OP_DISCARD;
 }
 
+// Reads a branch condition that is a tagged constant. Like the backends, a
+// non-bool condition counts as true when it isn't zero.
+inline bool TryGetConstantCondition(const IRProgram* prog, u16 operand, bool* value) {
+    if (operand == 0xFFFF || !IsConstant(operand)) return false;
+    if (IsBoolConstant(operand)) {
+        u32 index = operand & 0x3FFF;
+        if (index >= prog->boolCount) return false;
+        *value = prog->boolConstants[index] != 0;
+        return true;
+    }
+    if (IsFloatConstant(operand)) {
+        u32 index = operand & 0x3FFF;
+        if (index >= prog->floatCount || prog->floatConstants[index] != prog->floatConstants[index]) {
+            return false;
+        }
+        *value = prog->floatConstants[index] != 0.0f;
+        return true;
+    }
+    bool isUnsigned = IsUintConstant(operand);
+    u32 index = operand & 0x1FFF;
+    if (index >= (isUnsigned ? prog->uintCount : prog->intCount)) return false;
+    *value = (isUnsigned ? prog->uintConstants : prog->intConstants)[index] != 0;
+    return true;
+}
+
 
      
 // Returns true for instructions that produce side effects and must be kept
@@ -652,7 +683,9 @@ struct IRBuilder {
     u32 floatConstantCount;
     u32 intConstantCount;
     u32 uintConstantCount;
-    
+    // EmitConstant can't report a located error; IRLowering does when set.
+    bool floatConstantLimitExceeded = false;
+
     // Note: Unused operand slots default to 0xFFFF. SSA and backends treat
     // this as the explicit unused operand sentinel.
     void EmitInstruction(u16 opcode, u16 dest, u16 s0, u16 s1 = 0xFFFF, u16 s2 = 0xFFFF, u16 s3 = 0xFFFF) {
@@ -701,11 +734,46 @@ struct IRBuilder {
             }
         }
 
+        if (program->floatCount >= FloatConstantLimit) {
+            floatConstantLimitExceeded = true;
+            return 0x8000;
+        }
+        // The pools start at 256 entries. Growing them keeps a shader with
+        // more distinct floats from writing over the int constants.
+        if (program->floatCount == program->floatCapacity) {
+            u32 newCapacity = std::min(program->floatCapacity * 2, FloatConstantLimit);
+            program->floatConstants = (float*)pool->Reallocate(
+                program->floatConstants, newCapacity * sizeof(float), 64);
+            floatConstantHashes = (u32*)pool->Reallocate(
+                floatConstantHashes, newCapacity * sizeof(u32), 64);
+            program->floatCapacity = newCapacity;
+        }
+
         // Add new constant
         u32 slot = program->floatCount++;
         program->floatConstants[slot] = value;
         floatConstantHashes[slot] = hash;
         return 0x8000 | (u16)slot;
+    }
+
+    // Returns 0xFFFF when the pool is full (IntegerConstantLimit values).
+    u16 EmitConstantInteger(u32 value, bool isUnsigned) {
+        u32* values = isUnsigned ? program->uintConstants : program->intConstants;
+        u32 count = isUnsigned ? program->uintCount : program->intCount;
+        u16 tag = isUnsigned ? 0x6000 : 0x4000;
+        for (u32 i = 0; i < count; i++) {
+            if (values[i] == value) return tag | (u16)i;
+        }
+        if (count >= IntegerConstantLimit) return 0xFFFF;
+        u32& capacity = isUnsigned ? program->uintCapacity : program->intCapacity;
+        if (count == capacity) {
+            capacity = std::min(capacity * 2, IntegerConstantLimit);
+            values = (u32*)pool->Reallocate(values, capacity * sizeof(u32), 64);
+            (isUnsigned ? program->uintConstants : program->intConstants) = values;
+        }
+        values[count] = value;
+        (isUnsigned ? program->uintCount : program->intCount) = count + 1;
+        return tag | (u16)count;
     }
 
     u16 EmitConstantBool(bool value) {

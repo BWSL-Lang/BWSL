@@ -675,6 +675,25 @@ inline u16 IRLowering::LowerTernaryBranches(NodeRef ref, u16 condReg, u16 trueRe
          IRProgram::STORAGE_IS_PTR)) {
         ReportErrorAt(ref, "Error: ternary expression with pointer operands is not supported; select the dereferenced value instead or use if/else.\n");
     }
+    // Both arms merge into one value. This used to surface only as a SPIR-V
+    // validation failure, which constant propagation hides when the
+    // condition is constant and one arm is never taken.
+    CoreType falseType = GetRegisterType(falseReg);
+    bool typesKnown = resultType != CoreType::INVALID && resultType != CoreType::VOID &&
+                      falseType != CoreType::INVALID && falseType != CoreType::VOID;
+    bool structsDiffer = resultType == CoreType::CUSTOM && falseType == CoreType::CUSTOM &&
+                         trueReg < MAX_REGISTERS && falseReg < MAX_REGISTERS &&
+                         program.registerStructTypes[trueReg] != program.registerStructTypes[falseReg];
+    if (typesKnown && (resultType != falseType || structsDiffer)) {
+        // Source spellings are the lowercase type names (float3, mat4).
+        std::string trueName = structsDiffer ? "struct" : CoreTypeToString(resultType);
+        std::string falseName = structsDiffer ? "another struct" : CoreTypeToString(falseType);
+        for (char& c : trueName) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+        for (char& c : falseName) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+        std::string message = "Error: ternary arms have different types (" + trueName + " and " +
+                              falseName + "); convert one arm so both match\n";
+        ReportErrorAt(ref, message.c_str());
+    }
     builder.EmitInstruction(OP_STORE_REG, selected, falseReg);
     u32 merge = builder.currentInstruction;
     builder.EmitInstruction(OP_NOP, 0, 0);

@@ -2,6 +2,23 @@
 
 ## unreleased
 
+### Backends
+- Constant values are propagated through the whole shader, including across
+  branches, loops and inlined functions. Arithmetic, comparisons and
+  conversions on constants are folded, an `if` whose condition is constant
+  keeps only the arm it takes, and values that nothing reads are removed.
+  For example, `gain` set to `2.0` on both sides of an `if` becomes the
+  constant `2.0`. Folding skips results that can differ between GPUs:
+  NaN, infinities, denormals, `-0.0`, integer division of negative values
+  and conversions that are out of range or inexact.
+- A shader with more than 256 distinct float constants no longer corrupts
+  its integer constants (`+ 7` could become `+ 1132478464`). More than
+  16384 distinct float constants is a source error.
+
+### Diagnostics
+- Ternary arms of different types, such as `c ? float3(1.0) : float2(1.0)`,
+  are a source error. They previously failed SPIR-V validation.
+
 ## v0.11.0
 
 ### Breaking changes

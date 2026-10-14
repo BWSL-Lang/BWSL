@@ -78,6 +78,21 @@ u32 SPIRVBuilder::GetOrCreateBlockLabel(u32 ir_idx) {
   return label_id;
 }
 
+// True when a phi in the target's block takes a value from the branch's
+// block, i.e. dropping that edge would leave the phi naming a non-predecessor.
+bool SPIRVBuilder::PhiReadsEdge(u32 branchInst, u32 targetInst) const {
+    if (!cfg || targetInst >= ir->instructionCount || !ir->phiBlockIndices) return false;
+    u32 fromBlock = cfg->instToBlock[branchInst];
+    u32 toBlock = cfg->instToBlock[targetInst];
+    for (u32 phi = 0; phi < ir->phiCount; phi++) {
+        if (ir->phiBlockIndices[phi] != toBlock) continue;
+        for (u32 op = 0; op < ir->GetPhiOperandCount(phi); op++) {
+            if (ir->GetPhiOperandBlock(phi, op) == fromBlock) return true;
+        }
+    }
+    return false;
+}
+
 void SPIRVBuilder::EmitBranch(u32 ir_idx) {
   // For OP_BRANCH, we may need to convert the condition to bool BEFORE
   // emitting OpSelectionMerge, since SPIR-V requires OpSelectionMerge
@@ -95,6 +110,20 @@ void SPIRVBuilder::EmitBranch(u32 ir_idx) {
       // Empty if-block: just emit unconditional branch, skip merge
       u32 label = GetOrCreateBlockLabel(true_target);
       Emit(spv::OpBranch, label);
+      return;
+    }
+
+    // A constant condition (usually left by constant propagation) runs one
+    // arm, which needs no selection construct; the other arm is
+    // unreachable. A loop header keeps its branch, as OpLoopMerge must
+    // precede one. So does a branch whose dropped edge a phi still reads:
+    // the phi would name a block that no longer branches to it.
+    bool constantCondition;
+    if ((ir->structureInfo[ir_idx] & IR::IRProgram::STRUCT_TYPE_MASK) !=
+            IR::IRProgram::STRUCT_LOOP_HEADER &&
+        IR::TryGetConstantCondition(ir, ir->GetOperand(ir_idx, 0), &constantCondition) &&
+        !PhiReadsEdge(ir_idx, constantCondition ? false_target : true_target)) {
+      Emit(spv::OpBranch, GetOrCreateBlockLabel(constantCondition ? true_target : false_target));
       return;
     }
 

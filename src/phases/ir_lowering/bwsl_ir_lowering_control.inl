@@ -55,6 +55,9 @@ inline void IRLowering::LowerStatement(NodeRef ref) {
     LowerExpression(ref);
     break;
   }
+  if (builder.floatConstantLimitExceeded && !hadError) {
+    ReportErrorAt(ref, "Float constant limit exceeded (16384 values). Split or simplify the shader.\n");
+  }
 }
 
 inline void IRLowering::LowerStatements(const BlockData& block, u32 first,
