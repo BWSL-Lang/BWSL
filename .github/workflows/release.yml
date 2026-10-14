@@ -3,6 +3,13 @@ name: Release
 on:
   push:
     tags: ['v*']
+    branches: [master]
+
+# Nightly builds share one rolling release, so a newer push supersedes an
+# in-flight one. Tagged releases never cancel each other.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 jobs:
   linux:
@@ -19,6 +26,16 @@ jobs:
         with:
           key: ubuntu-latest-release
 
+      - name: Compute version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "BWSL_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            # Commit date rather than wall clock, so every job agrees.
+            date=$(TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y%m%d)
+            echo "BWSL_VERSION=nightly-$date-${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+          fi
+
       - name: Install cross-compilation toolchains
         run: |
           sudo apt-get update
@@ -29,45 +46,44 @@ jobs:
       - name: Build bwslc (native linux/x64)
         env:
           CXX: ccache clang++
-        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make build
+        run: make build
 
       - name: Build bwslc (cross linux/arm64)
         env:
           CXX: ccache clang++
-        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make build TARGET_OS=linux TARGET_ARCH=arm64
+        run: make build TARGET_OS=linux TARGET_ARCH=arm64
 
       - name: Build bwslc (cross windows/x64)
         env:
           CXX: ccache clang++
-        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make build TARGET_OS=windows TARGET_ARCH=x86_64
+        run: make build TARGET_OS=windows TARGET_ARCH=x86_64
 
       - name: Package binaries
         run: |
-          version="${GITHUB_REF_NAME#v}"
           mkdir -p dist
-          cp build/bwslc "dist/bwslc-linux-x64-$version"
-          cp build/bwslc-linux-arm64 "dist/bwslc-linux-arm64-$version"
-          cp build/bwslc-windows-x86_64.exe "dist/bwslc-windows-x64-$version.exe"
+          cp build/bwslc dist/bwslc-linux-x64
+          cp build/bwslc-linux-arm64 dist/bwslc-linux-arm64
+          cp build/bwslc-windows-x86_64.exe dist/bwslc-windows-x64.exe
 
       - name: Upload Linux x64 binary
         uses: actions/upload-artifact@v7
         with:
           name: bwslc-linux-x64
-          path: dist/bwslc-linux-x64-*
+          path: dist/bwslc-linux-x64
           if-no-files-found: error
 
       - name: Upload Linux arm64 binary
         uses: actions/upload-artifact@v7
         with:
           name: bwslc-linux-arm64
-          path: dist/bwslc-linux-arm64-*
+          path: dist/bwslc-linux-arm64
           if-no-files-found: error
 
       - name: Upload Windows x64 binary
         uses: actions/upload-artifact@v7
         with:
           name: bwslc-windows-x64
-          path: dist/bwslc-windows-x64-*
+          path: dist/bwslc-windows-x64.exe
           if-no-files-found: error
 
   macos:
@@ -85,20 +101,29 @@ jobs:
         with:
           key: macos-latest-release
 
+      - name: Compute version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "BWSL_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            # Commit date rather than wall clock, so every job agrees.
+            date=$(TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y%m%d)
+            echo "BWSL_VERSION=nightly-$date-${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+          fi
+
       - name: Build bwslc
         env:
           CXX: ccache clang++
-        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make build
+        run: make build
 
       - name: Package macOS binary
         id: package
         run: |
-          version="${GITHUB_REF_NAME#v}"
           arch=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')
           artifact_name="bwslc-macos-$arch"
           mkdir -p dist
-          cp build/bwslc "dist/$artifact_name-$version"
-          chmod +x "dist/$artifact_name-$version"
+          cp build/bwslc "dist/$artifact_name"
+          chmod +x "dist/$artifact_name"
           echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
 
       - name: Upload macOS binary
@@ -124,6 +149,7 @@ jobs:
           merge-multiple: true
 
       - name: Create GitHub release
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -135,5 +161,38 @@ jobs:
             gh release create "$GITHUB_REF_NAME" dist/* \
               --title "BWSL $version Open Beta" \
               --generate-notes \
+              --verify-tag
+          fi
+
+      # Rolling dev build: one prerelease under the `nightly` tag, moved to
+      # each new master commit, with its assets replaced in place so
+      # releases/download/nightly/<asset> always serves the newest build.
+      - name: Publish nightly release
+        if: github.ref_type == 'branch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh api "repos/$GH_REPO/git/refs/tags/nightly" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" \
+              -f sha="$GITHUB_SHA" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/$GH_REPO/git/refs" \
+              -f ref=refs/tags/nightly -f sha="$GITHUB_SHA" >/dev/null
+          fi
+
+          notes="Development build from master at ${GITHUB_SHA:0:7} ($(date -u +%Y-%m-%d)). Not a stable release."
+          if gh release view nightly >/dev/null 2>&1; then
+            # Drop assets this build no longer produces, then replace the rest.
+            gh release view nightly --json assets -q '.assets[].name' | while read -r asset; do
+              [ -e "dist/$asset" ] || gh release delete-asset nightly "$asset" -y
+            done
+            gh release upload nightly dist/* --clobber
+            gh release edit nightly --prerelease --title "Nightly" --notes "$notes"
+          else
+            gh release create nightly dist/* \
+              --prerelease \
+              --title "Nightly" \
+              --notes "$notes" \
               --verify-tag
           fi
