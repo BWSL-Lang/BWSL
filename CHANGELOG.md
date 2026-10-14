@@ -2,6 +2,10 @@
 
 ## unreleased
 
+### Backends
+- `sign()` of an integer constant, such as `sign(-3)`, compiles. It used the
+  float version and failed SPIR-V validation.
+
 ## v0.11.0
 
 ### Breaking changes
