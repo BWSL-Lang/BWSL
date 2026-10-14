@@ -8,9 +8,9 @@
   is always at `releases/latest/download/<asset>`.
 
 ### Tooling
-- Every push to `master` publishes a `nightly` prerelease, replaced in place,
-  at `releases/download/nightly/<asset>`. These builds report their version
-  as `nightly-<date>-<commit>` in the banner and JSON output.
+- Every push to `master` publishes a `dev` prerelease, replaced in place,
+  at `releases/download/dev/<asset>`. These builds report their version
+  as `dev-<date>-<commit>` in the banner and JSON output.
 
 ## v0.11.0
 

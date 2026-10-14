@@ -5,7 +5,7 @@ on:
     tags: ['v*']
     branches: [master]
 
-# Nightly builds share one rolling release, so a newer push supersedes an
+# Dev builds share one rolling release, so a newer push supersedes an
 # in-flight one. Tagged releases never cancel each other.
 concurrency:
   group: release-${{ github.ref }}
@@ -33,7 +33,7 @@ jobs:
           else
             # Commit date rather than wall clock, so every job agrees.
             date=$(TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y%m%d)
-            echo "BWSL_VERSION=nightly-$date-${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+            echo "BWSL_VERSION=dev-$date-${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
           fi
 
       - name: Install cross-compilation toolchains
@@ -108,7 +108,7 @@ jobs:
           else
             # Commit date rather than wall clock, so every job agrees.
             date=$(TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y%m%d)
-            echo "BWSL_VERSION=nightly-$date-${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+            echo "BWSL_VERSION=dev-$date-${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
           fi
 
       - name: Build bwslc
@@ -164,35 +164,35 @@ jobs:
               --verify-tag
           fi
 
-      # Rolling dev build: one prerelease under the `nightly` tag, moved to
+      # Rolling dev build: one prerelease under the `dev` tag, moved to
       # each new master commit, with its assets replaced in place so
-      # releases/download/nightly/<asset> always serves the newest build.
-      - name: Publish nightly release
+      # releases/download/dev/<asset> always serves the newest build.
+      - name: Publish dev release
         if: github.ref_type == 'branch'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          if gh api "repos/$GH_REPO/git/refs/tags/nightly" >/dev/null 2>&1; then
-            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" \
+          if gh api "repos/$GH_REPO/git/refs/tags/dev" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/dev" \
               -f sha="$GITHUB_SHA" -F force=true >/dev/null
           else
             gh api -X POST "repos/$GH_REPO/git/refs" \
-              -f ref=refs/tags/nightly -f sha="$GITHUB_SHA" >/dev/null
+              -f ref=refs/tags/dev -f sha="$GITHUB_SHA" >/dev/null
           fi
 
           notes="Development build from master at ${GITHUB_SHA:0:7} ($(date -u +%Y-%m-%d)). Not a stable release."
-          if gh release view nightly >/dev/null 2>&1; then
+          if gh release view dev >/dev/null 2>&1; then
             # Drop assets this build no longer produces, then replace the rest.
-            gh release view nightly --json assets -q '.assets[].name' | while read -r asset; do
-              [ -e "dist/$asset" ] || gh release delete-asset nightly "$asset" -y
+            gh release view dev --json assets -q '.assets[].name' | while read -r asset; do
+              [ -e "dist/$asset" ] || gh release delete-asset dev "$asset" -y
             done
-            gh release upload nightly dist/* --clobber
-            gh release edit nightly --prerelease --title "Nightly" --notes "$notes"
+            gh release upload dev dist/* --clobber
+            gh release edit dev --prerelease --title "Dev" --notes "$notes"
           else
-            gh release create nightly dist/* \
+            gh release create dev dist/* \
               --prerelease \
-              --title "Nightly" \
+              --title "Dev" \
               --notes "$notes" \
               --verify-tag
           fi
