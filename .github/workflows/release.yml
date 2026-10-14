@@ -12,9 +12,35 @@ concurrency:
   cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 jobs:
-  linux:
-    name: linux-latest
-    runs-on: ubuntu-latest
+  # One job per target so the builds run in parallel rather than back to back.
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-latest
+            make_args: TARGET_OS=linux TARGET_ARCH=x86_64
+            out: build/bwslc
+            asset: bwslc-linux-x64
+          - target: linux-arm64
+            runner: ubuntu-latest
+            apt: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
+            make_args: TARGET_OS=linux TARGET_ARCH=arm64
+            out: build/bwslc-linux-arm64
+            asset: bwslc-linux-arm64
+          - target: windows-x64
+            runner: ubuntu-latest
+            apt: mingw-w64
+            make_args: TARGET_OS=windows TARGET_ARCH=x86_64
+            out: build/bwslc-windows-x86_64.exe
+            asset: bwslc-windows-x64.exe
+          - target: macos-arm64
+            runner: macos-latest
+            make_args: TARGET_OS=macos TARGET_ARCH=arm64
+            out: build/bwslc
+            asset: bwslc-macos-arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -24,7 +50,7 @@ jobs:
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1
         with:
-          key: ubuntu-latest-release
+          key: release-${{ matrix.target }}
 
       - name: Compute version
         run: |
@@ -36,106 +62,33 @@ jobs:
             echo "BWSL_VERSION=dev-$date-${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
           fi
 
-      - name: Install cross-compilation toolchains
+      - name: Install cross-compilation toolchain
+        if: matrix.apt
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            clang lld mingw-w64 \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
-
-      - name: Build bwslc (native linux/x64)
-        env:
-          CXX: ccache clang++
-        run: make build
-
-      - name: Build bwslc (cross linux/arm64)
-        env:
-          CXX: ccache clang++
-        run: make build TARGET_OS=linux TARGET_ARCH=arm64
-
-      - name: Build bwslc (cross windows/x64)
-        env:
-          CXX: ccache clang++
-        run: make build TARGET_OS=windows TARGET_ARCH=x86_64
-
-      - name: Package binaries
-        run: |
-          mkdir -p dist
-          cp build/bwslc dist/bwslc-linux-x64
-          cp build/bwslc-linux-arm64 dist/bwslc-linux-arm64
-          cp build/bwslc-windows-x86_64.exe dist/bwslc-windows-x64.exe
-
-      - name: Upload Linux x64 binary
-        uses: actions/upload-artifact@v7
-        with:
-          name: bwslc-linux-x64
-          path: dist/bwslc-linux-x64
-          if-no-files-found: error
-
-      - name: Upload Linux arm64 binary
-        uses: actions/upload-artifact@v7
-        with:
-          name: bwslc-linux-arm64
-          path: dist/bwslc-linux-arm64
-          if-no-files-found: error
-
-      - name: Upload Windows x64 binary
-        uses: actions/upload-artifact@v7
-        with:
-          name: bwslc-windows-x64
-          path: dist/bwslc-windows-x64.exe
-          if-no-files-found: error
-
-  macos:
-    name: macos-latest
-    needs: linux
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          submodules: recursive
-
-      - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@v1
-        with:
-          key: macos-latest-release
-
-      - name: Compute version
-        run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            echo "BWSL_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-          else
-            # Commit date rather than wall clock, so every job agrees.
-            date=$(TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y%m%d)
-            echo "BWSL_VERSION=dev-$date-${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
-          fi
+          sudo apt-get install -y --no-install-recommends clang lld ${{ matrix.apt }}
 
       - name: Build bwslc
         env:
           CXX: ccache clang++
-        run: make build
+        run: make build ${{ matrix.make_args }}
 
-      - name: Package macOS binary
-        id: package
+      - name: Package binary
         run: |
-          arch=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')
-          artifact_name="bwslc-macos-$arch"
           mkdir -p dist
-          cp build/bwslc "dist/$artifact_name"
-          chmod +x "dist/$artifact_name"
-          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+          cp "${{ matrix.out }}" "dist/${{ matrix.asset }}"
+          chmod +x "dist/${{ matrix.asset }}"
 
-      - name: Upload macOS binary
+      - name: Upload binary
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.package.outputs.artifact_name }}
-          path: dist/bwslc-*
+          name: bwslc-${{ matrix.target }}
+          path: dist/${{ matrix.asset }}
           if-no-files-found: error
 
   release:
     name: Release
-    needs: [linux, macos]
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       actions: read
