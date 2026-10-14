@@ -612,6 +612,27 @@ class Comparison:
     mismatch_fraction: float
     ok: bool
     images: list[Path] = field(default_factory=list)
+    reference: str = ""
+
+
+def same_device(a: str, b: str) -> bool:
+    """GL and Vulkan name a GPU differently ("X/PCIe/SSE2", "D3D12 (X)")."""
+    a, b = a.split("/")[0], b.split("/")[0]
+    return a in b or b in a
+
+
+def comparison_reference(backend: str, by_backend: dict, baseline: str) -> str | None:
+    """The backend whose output `backend` must match. Normally the baseline
+    (GL hand). Vulkan backends on another device than the baseline's (WSL:
+    GL on the GPU, Vulkan on llvmpipe) are compared with VK hand instead:
+    filtering and mip selection legitimately differ between devices."""
+    if backend == baseline:
+        return None
+    base, result = by_backend.get(baseline), by_backend.get(backend)
+    if (backend.startswith("vk-") and base and result and not base.error and
+            not result.error and not same_device(base.device, result.device)):
+        return "vk-hand" if backend != "vk-hand" else None
+    return baseline
 
 
 def load_readback(path: Path, width: int, height: int, targets: int) -> np.ndarray:
@@ -709,7 +730,7 @@ def print_report(results: dict, comparisons: dict, backends: list[str], meta: di
           "against GL hand, i.e. the API's own cost)")
     gl_dev = meta["devices"].get("gl", ("", ""))[0]
     vk_dev = meta["devices"].get("vulkan", ("", ""))[0]
-    if gl_dev and vk_dev and vk_dev.split("/")[0] not in gl_dev:
+    if gl_dev and vk_dev and not same_device(gl_dev, vk_dev):
         print(f"- WARNING: GL and Vulkan ran on different GPUs")
     print()
 
@@ -752,19 +773,27 @@ def print_report(results: dict, comparisons: dict, backends: list[str], meta: di
         print()
         others = [b for b in backends if b != meta["baseline"]]
         rows = []
+        other_references = False
         for test, by_backend in comparisons.items():
             cells = []
             for b in others:
                 c = by_backend.get(b)
                 if c is None:
                     cells.append("-")
-                elif c.ok:
-                    cells.append(f"ok ({c.max_diff:.2g})")
-                else:
-                    cells.append(f"**MISMATCH** {c.max_diff:.3g}, {c.mismatch_fraction:.2%}")
+                    continue
+                cell = (f"ok ({c.max_diff:.2g})" if c.ok else
+                        f"**MISMATCH** {c.max_diff:.3g}, {c.mismatch_fraction:.2%}")
+                if c.reference != meta["baseline"]:
+                    cell += f" vs {BACKEND_TITLES[c.reference]}"
+                    other_references = True
+                cells.append(cell)
             rows.append([test, *cells])
         print_table(["Test", *(BACKEND_TITLES[b] for b in others)], rows,
                     [False] * (len(others) + 1))
+        if other_references:
+            print()
+            print("Vulkan ran on another device than GL, so its outputs are compared with "
+                  "VK hand: filtering and mip selection differ between devices.")
 
     errors = [(t, res, b, r.error) for t, by_res in results.items()
               for res, by_b in by_res.items() for b, r in by_b.items() if r.error]
@@ -935,23 +964,31 @@ def main() -> int:
 
             if verify:
                 comparisons[name] = {}
-                ref = by_backend.get(baseline)
-                if ref and not ref.error and ref.readback:
-                    targets = bench.get("targets", 1)
-                    ref_img = load_readback(ref.readback, width, height, targets)
-                    image_dir = work / "images"
-                    if args.save_images:
-                        compare(ref_img, ref_img, bench, image_dir, baseline, True)
-                    for backend, r in by_backend.items():
-                        if backend == baseline or r.error or not r.readback:
-                            continue
-                        img = load_readback(r.readback, width, height, targets)
-                        c = compare(ref_img, img, bench, image_dir, backend, args.save_images)
-                        comparisons[name][backend] = c
-                        if not c.ok:
-                            print(f"[{name}] {backend} output differs from {baseline}: "
-                                  f"max {c.max_diff:.4g}, {c.mismatch_fraction:.3%} over "
-                                  f"tolerance; images in {image_dir}", flush=True)
+                targets = bench.get("targets", 1)
+                image_dir = work / "images"
+                images: dict[str, np.ndarray] = {}
+
+                def image(backend: str) -> np.ndarray:
+                    if backend not in images:
+                        images[backend] = load_readback(by_backend[backend].readback,
+                                                        width, height, targets)
+                    return images[backend]
+
+                ok = {b for b, r in by_backend.items() if not r.error and r.readback}
+                if args.save_images and baseline in ok:
+                    compare(image(baseline), image(baseline), bench, image_dir, baseline, True)
+                for backend in by_backend:
+                    reference = comparison_reference(backend, by_backend, baseline)
+                    if backend not in ok or reference not in ok:
+                        continue
+                    c = compare(image(reference), image(backend), bench, image_dir, backend,
+                                args.save_images)
+                    c.reference = reference
+                    comparisons[name][backend] = c
+                    if not c.ok:
+                        print(f"[{name}] {backend} output differs from {reference}: "
+                              f"max {c.max_diff:.4g}, {c.mismatch_fraction:.3%} over "
+                              f"tolerance; images in {image_dir}", flush=True)
 
             if elapsed > args.skip_after and index + 1 < len(resolutions):
                 skipped = ", ".join(r for r, _ in resolutions[index + 1:])

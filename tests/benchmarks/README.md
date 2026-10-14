@@ -20,6 +20,11 @@ or older than `src/bench_runner.cpp` (`build.bat bench_runner` on Windows,
 `make bench_runner` elsewhere). macOS has no usable GL; run the Vulkan
 backends only (`--backends vk-hand,vk-bwsl`).
 
+Under WSL2, GL uses llvmpipe (CPU) unless you select Mesa's D3D12 driver:
+`GALLIUM_DRIVER=d3d12 MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA` (or `AMD`,
+`Intel`). Vulkan has no GPU driver there and runs on llvmpipe, so its timings
+are only useful for checking that it works.
+
 ## Backends
 
 | Column | Shader | API |
@@ -67,6 +72,10 @@ of the values (default 0) differ. Differing outputs and a red difference map
 are written as PNGs to `build/benchmarks/<test>/images/` (`--save-images`
 writes every output). `run.py` exits with 1 when an output differs or a
 backend fails.
+
+When Vulkan runs on another device than GL, VK bwsl is compared with VK hand
+instead (marked "vs VK hand"), since filtering and mip selection differ
+between devices.
 
 Keep tolerances tight and explain any widening in `tolerance_note`: a
 mismatch is usually a compiler bug.

@@ -490,7 +490,6 @@ constexpr GLenum GL_HALF_FLOAT = 0x140B;
 constexpr GLenum GL_COLOR = 0x1800;
 constexpr GLenum GL_DEPTH = 0x1801;
 constexpr GLenum GL_RGBA = 0x1908;
-constexpr GLenum GL_VENDOR = 0x1F00;
 constexpr GLenum GL_RENDERER = 0x1F01;
 constexpr GLenum GL_VERSION = 0x1F02;
 constexpr GLenum GL_NEAREST = 0x2600;
