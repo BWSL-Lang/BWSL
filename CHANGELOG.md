@@ -2,6 +2,8 @@
 
 ## unreleased
 
+## v0.11.0
+
 ### Breaking changes
 - Unknown resource payload types now produce source errors, including unused
   resources and `buffer`/`cbuffer` element types.
@@ -56,17 +58,34 @@
   or `sampler` parameters can be called with resources, e.g.
   `shade(resources.albedo, uv)`. Such calls previously failed with
   `Function not found`.
+- Fixed-size arrays can be declared `const` at module, pipeline, pass or
+  local scope, e.g. `const float[4] WEIGHTS = {0.125, 0.25, 0.375, 0.25};`.
+  Brace initializers must supply every element, and elements cannot be
+  assigned. Module array elements must be compile-time expressions.
+- Any swizzle works on an expression result, e.g.
+  `float2(0.25, 0.75).xyxy`. Previously only `.x`–`.w`, `.xy` and `.xyz`
+  did; others kept the original type and failed SPIR-V validation.
+- Swizzle components past the end of a vector, such as `.z` on a `float2`,
+  produce a source error. Previously reads failed SPIR-V validation or
+  repeated earlier components, and stores like `v.xz = ...` dropped the
+  out-of-range write.
+- A module's local or built-in types are no longer mistaken for a qualified
+  type from another imported module that sits at the same line and column
+  in its own file.
 
 ### Backends
 - Struct locals are updated in place. Writing a field or an array element of
   a struct no longer copies the whole struct at every branch merge and loop
   iteration, which made shaders that mutate structs in loops (for example
   through a mutating method) several times slower than equivalent GLSL.
-- Local arrays of vectors with constant elements, such as
-  `float2[4] t = {float2(1.0, -3.0) / 16.0, ...}`, get one array initializer
-  instead of one store per element, with constant vector arithmetic folded.
-  The element stores made NVIDIA drivers rebuild the array in local memory on
-  every invocation.
+- Local arrays with constant elements, such as `float[4] t = {1, 2, 3, 4}`
+  or `float2[4] t = {float2(1.0, -3.0) / 16.0, ...}`, get one array
+  initializer instead of one store per element, with constant arithmetic
+  and conversions folded. The element stores made NVIDIA drivers rebuild
+  the array in local memory on every invocation.
+- GLSL and GLES output declare such arrays where they were, as
+  `float t[N] = float[](...)`, instead of module-scope `const` tables, which
+  NVIDIA drivers also copy to local memory on every invocation.
 - `a || b` and `a && b` whose right operand is a short, side-effect-free
   expression (comparisons, arithmetic, locals, swizzles) compile to a
   logical `or`/`and` instead of a branch. Calls, array indexing, pointer
@@ -129,6 +148,10 @@
   invented `varying0` input that could not link in GL.
 - A call that fails with `Function not found` inside a vector constructor
   no longer also reports `vector constructor expects N components`.
+- Naming a variable, parameter, field or `foreach` iterator after a keyword
+  such as `inputs` or `pass` reports `'inputs' is a keyword and cannot be
+  used as a variable name`. Parsing continues, so later errors in the file
+  are still reported.
 
 ### Standard library
 - `Color::hsluvToRgb`, `rgbToHsluv`, `hpluvToRgb` and `rgbToHpluv` return
@@ -155,6 +178,11 @@
 - Resource declarations include type positions and references to payload types
   and module qualifiers. Their `typeName` uses canonical module qualification,
   including when the source uses an import alias or the legacy dot spelling.
+- `self.field` inside a struct method has a `member` edge (or `write` when
+  assigned) and `self.method()` a `call` edge, even when a local or
+  parameter shadows the field. Each `self` has a `type` edge to its struct.
+- Type qualifiers in a module are no longer attached to nodes of another
+  module file that share their line and column.
 
 ## v0.10.0
 
