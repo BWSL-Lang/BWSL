@@ -2,6 +2,12 @@
 
 ## unreleased
 
+### Backends
+- GLES fragment shaders from the SPIR-V path now default to `highp float`
+  (was `mediump`), matching the vertex stage and `-gles-direct`. Some drivers
+  (e.g. Intel iGPUs) failed to link programs whose varyings resolved to
+  different precisions across stages.
+
 ## v0.11.0
 
 ### Breaking changes
