@@ -219,6 +219,11 @@ struct SPIRVBuilder {
     IRAnalysis analysis;
     const SymbolTableData* symbols;
     CFG* cfg;  // Control flow graph for proper block ordering and PHI emission
+    // What EmitFunctionBody emits as reachable: blocks, and CFG edges
+    // (parallel to cfg->predecessorData). Blocks a constant branch skips
+    // aren't. See FindEmittedBlocks.
+    bool* blockEmitted = nullptr;
+    bool* edgeEmitted = nullptr;
 
     // ============= Debug Options =============
     bool emitDebugNames = false;  // Emit OpName/OpMemberName for debugging
@@ -361,6 +366,9 @@ struct SPIRVBuilder {
     u32 GetOrCreateBlockLabel(u32 ir_idx);
     void EmitBranch(u32 ir_idx);
     bool DropsPhiEdge(u32 branchInst, u32 targetInst) const;
+    bool TakesConstantEdge(u32 branchInst, u32* targetInst) const;
+    void FindEmittedBlocks();
+    bool IsEdgeEmitted(u32 fromBlock, u32 toBlock) const;
     void EmitStructuredControlFlow(u32 ir_idx);
     
     // PHI nodes
