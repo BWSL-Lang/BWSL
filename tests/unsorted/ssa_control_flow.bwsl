@@ -10,7 +10,8 @@ pipeline SSAControlFlow {
         use attributes { position }
 
         vertex {
-            float cond_val = 0.5;
+            // Inputs come from attributes so constant propagation keeps every branch.
+            float cond_val = attributes.position.x;
 
             // Simple if - phi at join
             float result1 = 0.0;
@@ -107,7 +108,9 @@ pipeline SSAControlFlow {
             }
             float final_deep = deep;
 
-            output.position = float4(attributes.position, 1.0);
+            float total = result1 + result2 + result3 + result4 + after_if + sum_ab +
+                          final_color.x + final_seq + final_deep;
+            output.position = float4(attributes.position, 1.0 + total * 0.001);
         }
 
         fragment {

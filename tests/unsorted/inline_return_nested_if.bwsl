@@ -19,7 +19,7 @@ pipeline InlineReturnNestedIf {
         use attributes { position }
 
         vertex {
-            int v = chooseNestedIf(2);
+            int v = chooseNestedIf(int(attributes.position.y));  // Run-time, so the guard stays
             output.position = float4(attributes.position, 1.0);
             output.position.x = float(v);
         }

@@ -10,7 +10,8 @@ pipeline ControlIfElse {
         use attributes { position }
 
         vertex {
-            float x = 0.5;
+            // Inputs come from attributes so constant propagation keeps every branch.
+            float x = attributes.position.x;
 
             // Simple if
             float result1 = 0.0;
@@ -58,7 +59,7 @@ pipeline ControlIfElse {
             }
 
             // Complex condition
-            float y = 0.7;
+            float y = attributes.position.y;
             float result6 = 0.0;
             if ((x > 0.0) && (y > 0.0)) {
                 result6 = x * y;
@@ -71,7 +72,7 @@ pipeline ControlIfElse {
             }
 
             // Negated condition
-            bool isHidden = false;
+            bool isHidden = attributes.position.z > 1.0;
             float result8 = 0.0;
             if (!isHidden) {
                 result8 = 1.0;
@@ -86,7 +87,7 @@ pipeline ControlIfElse {
             }
 
             // Comparison chain via else-if
-            int value = 2;
+            int value = int(attributes.position.z);
             float result10 = 0.0;
             if (value == 0) {
                 result10 = 0.0;
@@ -100,11 +101,13 @@ pipeline ControlIfElse {
                 result10 = 1.0;
             }
 
-            output.position = float4(attributes.position, 1.0);
+            float total = result1 + result2 + result3 + result4 + result5 + result6 +
+                          result7 + result8 + result9 + result10;
+            output.position = float4(attributes.position, 1.0 + total * 0.001);
         }
 
         fragment {
-            float x = 0.5;
+            float x = input.position.x;
             float3 color = float3(0.0);
 
             // If in fragment shader

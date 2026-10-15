@@ -30,6 +30,7 @@
 #include "phases/ir_lowering/bwsl_ir_lowering.h"
 #include "phases/control_flow/bwsl_cfg.h"
 #include "phases/ssa/bwsl_ssa.h"
+#include "phases/optimization/bwsl_constant_propagation.h"
 #include "phases/ir_generation/bwsl_ir_analysis.h"
 #include "phases/backends/spirv/bwsl_spirv_backend.h"
 
@@ -44,6 +45,7 @@
 #include "phases/ir_generation/bwsl_ir_analysis.cpp"
 #include "phases/control_flow/bwsl_cfg.cpp"
 #include "phases/ssa/bwsl_ssa.cpp"
+#include "phases/optimization/bwsl_constant_propagation.cpp"
 #include "phases/backends/spirv/bwsl_spirv_backend.cpp"
 
 using namespace BWSL;
@@ -129,6 +131,7 @@ static void CompileOneStage(CompilationContext& context, Parser& parser,
                                    &cfgArena)) return;
         }
     }
+    Optimization::PropagateConstants(&lowering.builder, cfgPtr);
 
     // SPIR-V emit. 16 MB covers pathological fuzz inputs that emit tens of
     // thousands of IR instructions; real shaders use well under 1 MB. The

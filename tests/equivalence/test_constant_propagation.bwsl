@@ -1,0 +1,62 @@
+// Constant propagation through branches, a switch, an always-taken break,
+// an inlined early return, wrapping integer math and conversions. Every
+// result below is a compile-time constant except the parts read from idx.
+pipeline EquivConstantPropagation {
+
+    resources {
+        output: buffer<int>
+    }
+
+    pick :: (int m) -> int {
+        if (m == 2) {
+            return 40;
+        }
+        return 50;
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int mode = 2;
+            int a = 7;
+
+            int b;
+            if (mode > 1) { b = a * 3; } else { b = a - 100; }  // 21
+            switch (mode) {
+                case 1: b = b + 1000; break;
+                case 2: b = b + 2000; break;                    // 2021
+                default: b = 0; break;
+            }
+
+            uint big = 4000000000u;
+            uint wrapped = big + big;                            // 3705032704
+            int shifted = (b << 2) >> 1;                         // 4042
+            float f = float(b) * 0.5;                            // 1010.5
+            int back = int(f);                                   // 1010
+            bool flag = f > 1000.0 && a < 10;
+            int picked = flag ? 1 : 0;                           // 1
+
+            // Equal constants from a run-time branch, and a run-time choice.
+            int r;
+            if (idx > 3u) { r = 5; } else { r = 5; }
+            int s;
+            if (idx > 3u) { s = 1; } else { s = 2; }
+
+            int acc = 0;
+            for (int i = 0; i < 4; i++) {
+                if (mode == 2) { acc += i; } else { acc -= 100; }  // 6
+            }
+
+            int firstOnly = 0;
+            for (int i = 0; i < 10; i++) {
+                firstOnly += 3;
+                if (mode == 2) { break; }                        // 3
+            }
+
+            int result = b + shifted + back + picked + int(wrapped % 1000u)
+                       + r + s + acc + firstOnly + pick(mode) + int(idx);
+            resources.output[idx] = result;
+        }
+    }
+}

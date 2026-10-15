@@ -823,23 +823,12 @@ inline u16 IRLowering::AllocateRegister() {
 }
 
 inline u16 IRLowering::EmitConstantInt(u32 value) {
-    for (u32 i = 0; i < program.intCount; i++) {
-        if (program.intConstants[i] == value) return 0x4000 | (u16)i;
-    }
-    if (program.intCount >= IntegerConstantLimit) {
-        NodeRef node;
-        node.packed = builder.currentSourceNode;
-        if (!hadError) ReportErrorAt(node, "Signed integer constant limit exceeded (8192 values). Split or simplify the shader.\n");
-        return 0x4000;
-    }
-    if (program.intCount == program.intCapacity) {
-        program.intCapacity = std::min(program.intCapacity * 2, IntegerConstantLimit);
-        program.intConstants = (u32*)pool->Reallocate(
-            program.intConstants, program.intCapacity * sizeof(u32), 64);
-    }
-    u32 slot = program.intCount++;
-    program.intConstants[slot] = value;
-    return 0x4000 | (u16)slot;
+    u16 constant = builder.EmitConstantInteger(value, false);
+    if (constant != 0xFFFF) return constant;
+    NodeRef node;
+    node.packed = builder.currentSourceNode;
+    if (!hadError) ReportErrorAt(node, "Signed integer constant limit exceeded (8192 values). Split or simplify the shader.\n");
+    return 0x4000;
 }
 
 // Fold only pure integer ASTs. In particular, do not infer constants from a
@@ -994,23 +983,12 @@ inline bool IRLowering::CheckConstIndexInBounds(u16 indexReg, NodeRef indexExpr,
 }
 
 inline u16 IRLowering::EmitConstantUint(u32 value) {
-    for (u32 i = 0; i < program.uintCount; i++) {
-        if (program.uintConstants[i] == value) return 0x6000 | (u16)i;
-    }
-    if (program.uintCount >= IntegerConstantLimit) {
-        NodeRef node;
-        node.packed = builder.currentSourceNode;
-        if (!hadError) ReportErrorAt(node, "Unsigned integer constant limit exceeded (8192 values). Split or simplify the shader.\n");
-        return 0x6000;
-    }
-    if (program.uintCount == program.uintCapacity) {
-        program.uintCapacity = std::min(program.uintCapacity * 2, IntegerConstantLimit);
-        program.uintConstants = (u32*)pool->Reallocate(
-            program.uintConstants, program.uintCapacity * sizeof(u32), 64);
-    }
-    u32 slot = program.uintCount++;
-    program.uintConstants[slot] = value;
-    return 0x6000 | (u16)slot;
+    u16 constant = builder.EmitConstantInteger(value, true);
+    if (constant != 0xFFFF) return constant;
+    NodeRef node;
+    node.packed = builder.currentSourceNode;
+    if (!hadError) ReportErrorAt(node, "Unsigned integer constant limit exceeded (8192 values). Split or simplify the shader.\n");
+    return 0x6000;
 }
 
 inline u16 IRLowering::TryConvertScalarConstant(u16 reg, CoreType targetType) {
