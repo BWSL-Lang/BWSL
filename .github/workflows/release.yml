@@ -3,11 +3,46 @@ name: Release
 on:
   push:
     tags: ['v*']
+    branches: [master]
+
+# Dev builds share one rolling release, so a newer push supersedes an
+# in-flight one. Tagged releases never cancel each other.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 jobs:
-  linux:
-    name: linux-latest
-    runs-on: ubuntu-latest
+  # One job per target so the builds run in parallel rather than back to back.
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-latest
+            make_args: TARGET_OS=linux TARGET_ARCH=x86_64
+            out: build/bwslc
+            asset: bwslc-linux-x64
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            # The arm64 runner image is slimmer than ubuntu-latest; install
+            # the compiler and the CMake used for SPIRV-Tools explicitly.
+            apt: clang cmake
+            make_args: TARGET_OS=linux TARGET_ARCH=arm64
+            out: build/bwslc
+            asset: bwslc-linux-arm64
+          - target: windows-x64
+            runner: ubuntu-latest
+            apt: clang lld mingw-w64
+            make_args: TARGET_OS=windows TARGET_ARCH=x86_64
+            out: build/bwslc-windows-x86_64.exe
+            asset: bwslc-windows-x64.exe
+          - target: macos-arm64
+            runner: macos-latest
+            make_args: TARGET_OS=macos TARGET_ARCH=arm64
+            out: build/bwslc
+            asset: bwslc-macos-arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -17,100 +52,45 @@ jobs:
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1
         with:
-          key: ubuntu-latest-release
+          key: release-${{ matrix.target }}
 
-      - name: Install cross-compilation toolchains
+      - name: Compute version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "BWSL_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            # Commit date rather than wall clock, so every job agrees.
+            date=$(TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y%m%d)
+            echo "BWSL_VERSION=dev-$date-${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install toolchain
+        if: matrix.apt
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            clang lld mingw-w64 \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
-
-      - name: Build bwslc (native linux/x64)
-        env:
-          CXX: ccache clang++
-        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make build
-
-      - name: Build bwslc (cross linux/arm64)
-        env:
-          CXX: ccache clang++
-        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make build TARGET_OS=linux TARGET_ARCH=arm64
-
-      - name: Build bwslc (cross windows/x64)
-        env:
-          CXX: ccache clang++
-        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make build TARGET_OS=windows TARGET_ARCH=x86_64
-
-      - name: Package binaries
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          mkdir -p dist
-          cp build/bwslc "dist/bwslc-linux-x64-$version"
-          cp build/bwslc-linux-arm64 "dist/bwslc-linux-arm64-$version"
-          cp build/bwslc-windows-x86_64.exe "dist/bwslc-windows-x64-$version.exe"
-
-      - name: Upload Linux x64 binary
-        uses: actions/upload-artifact@v7
-        with:
-          name: bwslc-linux-x64
-          path: dist/bwslc-linux-x64-*
-          if-no-files-found: error
-
-      - name: Upload Linux arm64 binary
-        uses: actions/upload-artifact@v7
-        with:
-          name: bwslc-linux-arm64
-          path: dist/bwslc-linux-arm64-*
-          if-no-files-found: error
-
-      - name: Upload Windows x64 binary
-        uses: actions/upload-artifact@v7
-        with:
-          name: bwslc-windows-x64
-          path: dist/bwslc-windows-x64-*
-          if-no-files-found: error
-
-  macos:
-    name: macos-latest
-    needs: linux
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          submodules: recursive
-
-      - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@v1
-        with:
-          key: macos-latest-release
+          sudo apt-get install -y --no-install-recommends ${{ matrix.apt }}
 
       - name: Build bwslc
         env:
           CXX: ccache clang++
-        run: BWSL_VERSION="${GITHUB_REF_NAME#v}" make build
+        run: make build ${{ matrix.make_args }}
 
-      - name: Package macOS binary
-        id: package
+      - name: Package binary
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          arch=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')
-          artifact_name="bwslc-macos-$arch"
           mkdir -p dist
-          cp build/bwslc "dist/$artifact_name-$version"
-          chmod +x "dist/$artifact_name-$version"
-          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+          cp "${{ matrix.out }}" "dist/${{ matrix.asset }}"
+          chmod +x "dist/${{ matrix.asset }}"
 
-      - name: Upload macOS binary
+      - name: Upload binary
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.package.outputs.artifact_name }}
-          path: dist/bwslc-*
+          name: bwslc-${{ matrix.target }}
+          path: dist/${{ matrix.asset }}
           if-no-files-found: error
 
   release:
     name: Release
-    needs: [linux, macos]
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -124,6 +104,7 @@ jobs:
           merge-multiple: true
 
       - name: Create GitHub release
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -135,5 +116,38 @@ jobs:
             gh release create "$GITHUB_REF_NAME" dist/* \
               --title "BWSL $version Open Beta" \
               --generate-notes \
+              --verify-tag
+          fi
+
+      # Rolling dev build: one prerelease under the `dev` tag, moved to
+      # each new master commit, with its assets replaced in place so
+      # releases/download/dev/<asset> always serves the newest build.
+      - name: Publish dev release
+        if: github.ref_type == 'branch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh api "repos/$GH_REPO/git/refs/tags/dev" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/dev" \
+              -f sha="$GITHUB_SHA" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/$GH_REPO/git/refs" \
+              -f ref=refs/tags/dev -f sha="$GITHUB_SHA" >/dev/null
+          fi
+
+          notes="Development build from master at ${GITHUB_SHA:0:7} ($(date -u +%Y-%m-%d)). Not a stable release."
+          if gh release view dev >/dev/null 2>&1; then
+            # Drop assets this build no longer produces, then replace the rest.
+            gh release view dev --json assets -q '.assets[].name' | while read -r asset; do
+              [ -e "dist/$asset" ] || gh release delete-asset dev "$asset" -y
+            done
+            gh release upload dev dist/* --clobber
+            gh release edit dev --prerelease --title "Dev" --notes "$notes"
+          else
+            gh release create dev dist/* \
+              --prerelease \
+              --title "Dev" \
+              --notes "$notes" \
               --verify-tag
           fi
