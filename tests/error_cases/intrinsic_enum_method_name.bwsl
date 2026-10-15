@@ -1,0 +1,1 @@
+pipeline Reserved { enum Value { A, eval distance :: (float x) -> float { A: x } } }

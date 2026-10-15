@@ -106,21 +106,21 @@ calculateDirectLighting :: (PBRMaterial mat, float3 N, float3 V, float3 L, float
 // --------------------------- Image Based Lighting (IBL) -------------------------
 
 // IBL Diffuse (Irradiance)
-calculateIBLDiffuse :: (samplerCube irradianceMap, float3 N, float3 albedo, float metallic) -> float3 {
+calculateIBLDiffuse :: (textureCube irradianceMap, float3 N, float3 albedo, float metallic) -> float3 {
 
-    float3 irradiance = textureCube(irradianceMap, N).rgb;
+    float3 irradiance = sample(irradianceMap, N).rgb;
     return irradiance * albedo * (1.0 - metallic);
 
 }
 
 // IBL Specular (Pre-filtered Environment + BRDF LUT)
-calculateIBLSpecular :: (samplerCube prefilterMap, sampler2D brdfLUT, float3 N, float3 V, float3 albedo, float roughness, float metallic) -> float3 {
+calculateIBLSpecular :: (textureCube prefilterMap, texture2D brdfLUT, float3 N, float3 V, float3 albedo, float roughness, float metallic) -> float3 {
 
     float3 R = reflect(-V, N);
     float NdotV = max(dot(N, V), 0.0);
     
     // Sample pre-filtered environment map at appropriate mip level
-    float3 prefilteredColor = textureCubeLod(prefilterMap, R, roughness * 4.0).rgb; // Todo: add textureCubeLod
+    float3 prefilteredColor = sample_lod(prefilterMap, R, roughness * 4.0).rgb;
     
     // Sample BRDF integration map
     float2 brdf = sample(brdfLUT, float2(NdotV, roughness)).rg;
@@ -137,7 +137,7 @@ calculateIBLSpecular :: (samplerCube prefilterMap, sampler2D brdfLUT, float3 N, 
 }
 
 // Complete IBL Calculation
- calculateIBL :: (samplerCube irradianceMap, samplerCube prefilterMap, sampler2D brdfLUT, PBRMaterial mat, float3 N, float3 V) -> float3 {
+ calculateIBL :: (textureCube irradianceMap, textureCube prefilterMap, texture2D brdfLUT, PBRMaterial mat, float3 N, float3 V) -> float3 {
 
     float3 diffuse = calculateIBLDiffuse(irradianceMap, N, mat.albedo, mat.metallic);
     float3 specular = calculateIBLSpecular(prefilterMap, brdfLUT, N, V, mat.albedo, mat.roughness, mat.metallic);

@@ -9,14 +9,13 @@ pipeline BugTernaryNumericCondition {
         modelMatrix: mat4
         viewProjMatrix: mat4
         lightViewProjMatrix: mat4
-        particles: buffer<Particle>
     }
     attributes {
         position: float3
     }
 
     pass "Main" {
-        use resources { viewMatrix, projectionMatrix, modelMatrix, viewProjMatrix, lightViewProjMatrix, particles }
+        use resources { viewMatrix, projectionMatrix, modelMatrix, viewProjMatrix, lightViewProjMatrix }
         use attributes { position }
 
         vertex {

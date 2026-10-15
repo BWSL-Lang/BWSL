@@ -5,6 +5,48 @@
 
 namespace BWSL {
 
+u32 SPIRVBuilder::TranslateArrayStoreSequence(u32 first, u32 end) {
+  if (ir->opcodes[first] != IR::OP_ARRAY_STORE) return 0;
+  u16 base = ir->destinations[first];
+  if (base >= ir->registerCount || !ir->registerStorageInfo ||
+      !(ir->registerStorageInfo[base] & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY)) return 0;
+  u32 array = ir->registerStorageInfo[base] >> IR::IRProgram::STORAGE_BINDING_SHIFT;
+  if (array >= ir->localArrayCount) return 0;
+  u32 count = ir->localArraySizes[array];
+  // Stay inside the current basic block and the SPIR-V instruction word limit.
+  // Partial writes and sequences interrupted by an expression retain their
+  // original element stores, so no reads or side effects move across a write.
+  if (count == 0 || count > end - first || count > 0xFFFF - 3) return 0;
+  bool constant = true;
+  for (u32 i = 0; i < count; ++i) {
+    u32 inst = first + i;
+    if (ir->opcodes[inst] != IR::OP_ARRAY_STORE || ir->destinations[inst] != base) return 0;
+    u16 index = ir->GetOperand(inst, 0);
+    if (!IR::IsUintConstant(index) || ir->uintConstants[index & 0x1FFF] != i) return 0;
+    u16 value = ir->GetOperand(inst, 1);
+    if (value == 0xFFFF) return 0;
+    constant &= IR::IsConstant(value) ||
+                (value < idCapacity && constantComposites[value]);
+  }
+  std::vector<u32> values;
+  values.reserve(count);
+  for (u32 i = 0; i < count; ++i) values.push_back(GetSpirvId(ir->GetOperand(first + i, 1)));
+  u32 composite;
+  if (constant) {
+    composite = GetCompositeConstantId(localArrayTypeIds[array], values.data(), count);
+  } else {
+    composite = AllocateId();
+    u32 words = 3 + count;
+    while (currentFunctionSize + words > currentFunctionCapacity) GrowCurrentFunction();
+    currentFunction[currentFunctionSize++] = (words << 16) | spv::OpCompositeConstruct;
+    currentFunction[currentFunctionSize++] = localArrayTypeIds[array];
+    currentFunction[currentFunctionSize++] = composite;
+    for (u32 value : values) currentFunction[currentFunctionSize++] = value;
+  }
+  Emit(spv::OpStore, localArrayVarIds[array], composite);
+  return count;
+}
+
 u32 SPIRVBuilder::GetOrCreateBlockLabel(u32 ir_idx) {
   // Check if we already have a label for this IR index
   for (u32 i = 0; i < blockCount; i++) {
@@ -36,11 +78,37 @@ u32 SPIRVBuilder::GetOrCreateBlockLabel(u32 ir_idx) {
   return label_id;
 }
 
+// True when jumping straight to `targetInst` would drop an edge a phi reads:
+// the phi would then name a block that no longer branches to it.
+bool SPIRVBuilder::DropsPhiEdge(u32 branchInst, u32 targetInst) const {
+    if (!cfg || !ir->phiBlockIndices) return false;
+    u32 fromBlock = cfg->instToBlock[branchInst];
+    u32 toBlock = cfg->instToBlock[targetInst];
+    for (u32 phi = 0; phi < ir->phiCount; phi++) {
+        if (ir->phiBlockIndices[phi] == toBlock) continue;
+        for (u32 op = 0; op < ir->GetPhiOperandCount(phi); op++) {
+            if (ir->GetPhiOperandBlock(phi, op) == fromBlock) return true;
+        }
+    }
+    return false;
+}
+
 void SPIRVBuilder::EmitBranch(u32 ir_idx) {
   // For OP_BRANCH, we may need to convert the condition to bool BEFORE
   // emitting OpSelectionMerge, since SPIR-V requires OpSelectionMerge
   // to be immediately followed by OpBranchConditional
   IR::OpCode op = static_cast<IR::OpCode>(ir->opcodes[ir_idx]);
+
+  // A constant condition or selector (usually left by constant propagation)
+  // always takes one edge, which needs no selection construct; the rest are
+  // unreachable. This also keeps a literal selector out of HLSL, where older
+  // DXC rejects `switch (2)`.
+  u32 constantTarget;
+  if (IR::TryGetConstantTarget(ir, ir_idx, &constantTarget) &&
+      !DropsPhiEdge(ir_idx, constantTarget)) {
+    Emit(spv::OpBranch, GetOrCreateBlockLabel(constantTarget));
+    return;
+  }
 
   if (op == IR::OP_BRANCH) {
     // Check if this is an empty if-block (both targets are the same)
@@ -56,23 +124,23 @@ void SPIRVBuilder::EmitBranch(u32 ir_idx) {
       return;
     }
 
-    // Pre-convert condition to bool if needed (before merge instruction)
-    u16 cond_reg = ir->GetOperand(ir_idx, 0);
-    CoreType condType = CoreType::BOOL;
-    if (cond_reg & 0xC000) {
-      // Constant-encoded condition
-      if ((cond_reg & 0xC000) == 0xC000) {
-        condType = CoreType::BOOL;
-      } else if (cond_reg & 0x8000) {
-        condType = CoreType::FLOAT;
-      } else if (IR::IsIntConstant(cond_reg)) {
-        condType = CoreType::INT;
-      } else if (IR::IsUintConstant(cond_reg)) {
-        condType = CoreType::UINT;
-      }
-    } else if (cond_reg < ir->registerCount && ir->registerTypes) {
-      condType = static_cast<CoreType>(ir->registerTypes[cond_reg]);
-    }
+        // Pre-convert condition to bool if needed (before merge instruction)
+        u16 cond_reg = ir->GetOperand(ir_idx, 0);
+        CoreType condType = CoreType::BOOL;
+        if (cond_reg & 0xC000) {
+            // Constant-encoded condition
+            if ((cond_reg & 0xC000) == 0xC000) {
+                condType = CoreType::BOOL;
+            } else if (cond_reg & 0x8000) {
+                condType = CoreType::FLOAT;
+            } else if (IR::IsIntConstant(cond_reg)) {
+                condType = CoreType::INT;
+            } else if (IR::IsUintConstant(cond_reg)) {
+                condType = CoreType::UINT;
+            }
+        } else if (cond_reg < ir->registerCount && ir->registerTypes) {
+            condType = static_cast<CoreType>(ir->registerTypes[cond_reg]);
+        }
 
     if (condType != CoreType::BOOL) {
       // Convert non-bool to bool: condition != 0
@@ -368,6 +436,78 @@ void SPIRVBuilder::SimplifyTrivialPhis() {
   }
 }
 
+void SPIRVBuilder::EmitLocalNames() {
+  if (!emitDebugNames) return;
+
+  // Wait until body emission has resolved copies and trivial PHIs. Never
+  // allocate IDs for debug metadata: unused locals must stay unused, and the
+  // default binary must not change. Several registers can alias a single ID.
+  // IDs preallocated for PHIs in terminated blocks may never be defined.
+  // Inspect emitted instructions so debug names cannot create dangling refs.
+  std::vector<bool> defined(nextId, false);
+  auto collectDefinitions = [&](const u32* words, u32 size) {
+    for (u32 offset = 0; offset < size;) {
+      u32 header = words[offset];
+      u32 count = header >> 16;
+      bool hasResult, hasResultType;
+      spv::HasResultAndType(static_cast<spv::Op>(header & 0xFFFF),
+                            &hasResult, &hasResultType);
+      if (hasResult) {
+        u32 id = words[offset + 1 + (hasResultType ? 1 : 0)];
+        if (id < defined.size()) defined[id] = true;
+      }
+      offset += count;
+    }
+  };
+  collectDefinitions(typesConstants.words, typesConstants.count);
+  collectDefinitions(globals.words, globals.count);
+  collectDefinitions(currentFunction, currentFunctionSize);
+
+  std::vector<bool> named(nextId, false);
+  for (u32 offset = 0; offset < debugNames.count;) {
+    u32 header = debugNames.words[offset];
+    u32 count = header >> 16;
+    if ((header & 0xFFFF) == spv::OpName && count >= 3) {
+      u32 id = debugNames.words[offset + 1];
+      if (id < named.size()) named[id] = true;
+    }
+    offset += count;
+  }
+  auto nameId = [&](u32 id, u32 hash) {
+    if (id == 0 || id >= named.size() || !defined[id] || named[id] || hash == 0) return;
+    std::string name = ReverseLookup::GetString(hash);
+    if (avoidGlslReservedNames && IsGlslReservedName(name.c_str())) name += '_';
+    if (!name.empty()) {
+      EmitName(id, name.c_str());
+      named[id] = true;
+    }
+  };
+
+  if (ir->registerNameHashes) {
+    u32 count = std::min(ir->registerCount, IR::RegisterLimit);
+    // Address-taken locals have a separate Function-storage variable. Name
+    // those slots first so a pointer alias cannot rename the pointee's storage.
+    for (u32 reg = 0; reg < count && reg < idCapacity; reg++) {
+      nameId(localVarIds[reg], ir->registerNameHashes[reg]);
+    }
+    // An undef register stands for "not assigned on this path" and becomes an
+    // OpUndef, which SPIRV-Cross declares at module scope. Naming it after the
+    // variable would give every inlined copy a global of the same name.
+    std::vector<bool> undef(count, false);
+    for (u32 i = 0; ir->undefRegs && i < ir->undefRegCount; i++) {
+      if (ir->undefRegs[i] < count) undef[ir->undefRegs[i]] = true;
+    }
+    for (u32 reg = 0; reg < count && reg < idCapacity; reg++) {
+      if (!undef[reg]) nameId(spirvIds[reg], ir->registerNameHashes[reg]);
+    }
+  }
+  if (ir->localArrayNameHashes) {
+    for (u32 i = 0; i < ir->localArrayCount; i++) {
+      nameId(localArrayVarIds[i], ir->localArrayNameHashes[i]);
+    }
+  }
+}
+
 void SPIRVBuilder::EmitFunction() {
   // Emit the main shader function
   // 1. Declare interface variables
@@ -394,6 +534,7 @@ void SPIRVBuilder::EmitFunction() {
 
   // 6. Emit function body
   EmitFunctionBody();
+  EmitLocalNames();
 
   // 7. OpFunctionEnd
   Emit(spv::OpFunctionEnd);
@@ -435,47 +576,47 @@ void SPIRVBuilder::EmitFunctionBody() {
     }
   }
 
-  // Phase 2: Pre-allocate IDs for PHI OPERANDS (that aren't PHI results)
-  // This handles cases where a PHI references a value from a block that comes
-  // later in CFG order (e.g., back edges in loops).
-  //
-  // We also need to check if the register is an "undef" register (from SSA when
-  // a variable isn't defined on some path to a PHI) and emit OpUndef for it.
-  if (ir->phiCount > 0 && ir->phiOperandValues) {
-    for (u32 phi_idx = 0; phi_idx < ir->phiCount; phi_idx++) {
-      u32 operandCount = ir->GetPhiOperandCount(phi_idx);
-      for (u32 op = 0; op < operandCount; op++) {
-        u16 valueReg = ir->GetPhiOperandValue(phi_idx, op);
-        // Skip constants (they have special encoding and are handled
-        // differently) 0x8000=float, 0x4000=int, 0x6000=uint, 0xC000=bool
-        if (valueReg & 0xC000)
-          continue;
-        // Pre-allocate an ID for this register if it doesn't have one
-        // Use GetSpirvId which handles undef registers properly
-        if (valueReg < idCapacity && spirvIds[valueReg] == 0) {
-          // Check if this is an undef register first
-          bool isUndef = false;
-          if (ir->undefRegs && ir->undefRegCount > 0) {
-            for (u32 i = 0; i < ir->undefRegCount; i++) {
-              if (ir->undefRegs[i] == valueReg) {
-                isUndef = true;
-                break;
-              }
+    // Phase 2: Pre-allocate IDs for PHI OPERANDS (that aren't PHI results)
+    // This handles cases where a PHI references a value from a block that comes
+    // later in CFG order (e.g., back edges in loops).
+    //
+    // We also need to check if the register is an "undef" register (from SSA when
+    // a variable isn't defined on some path to a PHI) and emit OpUndef for it.
+    if (ir->phiCount > 0 && ir->phiOperandValues) {
+        for (u32 phi_idx = 0; phi_idx < ir->phiCount; phi_idx++) {
+            u32 operandCount = ir->GetPhiOperandCount(phi_idx);
+            for (u32 op = 0; op < operandCount; op++) {
+                u16 valueReg = ir->GetPhiOperandValue(phi_idx, op);
+                // Skip constants (they have special encoding and are handled
+                // differently) 0x8000=float, 0x4000=int, 0x6000=uint, 0xC000=bool
+                if (valueReg & 0xC000)
+                    continue;
+                // Pre-allocate an ID for this register if it doesn't have one
+                // Use GetSpirvId which handles undef registers properly
+                if (valueReg < idCapacity && spirvIds[valueReg] == 0) {
+                    // Check if this is an undef register first
+                    bool isUndef = false;
+                    if (ir->undefRegs && ir->undefRegCount > 0) {
+                        for (u32 i = 0; i < ir->undefRegCount; i++) {
+                            if (ir->undefRegs[i] == valueReg) {
+                                isUndef = true;
+                                break;
+                            }
+                        }
+                    }
+                    // Call GetSpirvId - it will check for undef registers and emit
+                    // OpUndef if needed
+                    (void)GetSpirvId(valueReg);
+                    // Mark as pre-allocated if NOT an undef (undef already has
+                    // definition) This flag tells STORE_REG to emit OpCopyObject to
+                    // define this ID
+                    if (!isUndef && valueReg < idCapacity) {
+                        hasPreAllocatedId[valueReg] = true;
+                    }
+                }
             }
-          }
-          // Call GetSpirvId - it will check for undef registers and emit
-          // OpUndef if needed
-          (void)GetSpirvId(valueReg);
-          // Mark as pre-allocated if NOT an undef (undef already has
-          // definition) This flag tells STORE_REG to emit OpCopyObject to
-          // define this ID
-          if (!isUndef && valueReg < idCapacity) {
-            hasPreAllocatedId[valueReg] = true;
-          }
         }
-      }
     }
-  }
 
   localPointerTargets.assign(idCapacity, {});
   localPointerTagVars.assign(idCapacity, 0);
@@ -651,45 +792,46 @@ void SPIRVBuilder::EmitFunctionBody() {
         localArrayElemPtrTypes[i] =
             GetPointerTypeId(elemTypeId, spv::StorageClassFunction);
         localArrayVarIds[i] = varId;
+        localArrayTypeIds[i] = arrayTypeId;
       }
     }
 
-    // Pre-declare scratch variables for dynamically-indexed struct array
-    // fields. OP_STRUCT_ARRAY_EXTRACT/INSERT with a runtime element index
-    // spill the struct value into one of these Function-storage variables
-    // and address the element with OpAccessChain. OpVariable must appear in
-    // the entry block, so scan the IR up front and declare one scratch
-    // variable per distinct struct type.
-    if (ir) {
-      for (u32 i = 0; i < ir->instructionCount; i++) {
-        IR::OpCode scanOp = static_cast<IR::OpCode>(ir->opcodes[i]);
-        if (scanOp != IR::OP_STRUCT_ARRAY_EXTRACT &&
-            scanOp != IR::OP_STRUCT_ARRAY_INSERT) {
-          continue;
+        // Pre-declare scratch variables for dynamically-indexed struct array
+        // fields. OP_STRUCT_ARRAY_EXTRACT/INSERT with a runtime element index
+        // spill the struct value into one of these Function-storage variables
+        // and address the element with OpAccessChain. OpVariable must appear in
+        // the entry block, so scan the IR up front and declare one scratch
+        // variable per distinct struct type.
+        if (ir) {
+            for (u32 i = 0; i < ir->instructionCount; i++) {
+                IR::OpCode scanOp = static_cast<IR::OpCode>(ir->opcodes[i]);
+                if (scanOp != IR::OP_STRUCT_ARRAY_EXTRACT &&
+                        scanOp != IR::OP_STRUCT_ARRAY_INSERT) {
+                    continue;
+                }
+                u16 indexReg = ir->GetOperand(i, 2);
+                if (IR::IsIntConstant(indexReg)) {
+                    continue; // Constant index uses OpCompositeExtract/Insert directly
+                }
+                u32 structHash = ir->metadata[i];
+                if (structHash == 0) {
+                    continue;
+                }
+                u32 structTypeId = GetStructTypeId(structHash);
+                if (structTypeId != 0 &&
+                        GetStructArrayScratchVar(structTypeId) == 0 &&
+                        structArrayScratchCount < MAX_STRUCT_ARRAY_SCRATCH) {
+                    u32 ptrTypeId =
+                            GetPointerTypeId(structTypeId, spv::StorageClassFunction);
+                    u32 varId = AllocateId();
+                    Emit(spv::OpVariable, ptrTypeId, varId, spv::StorageClassFunction);
+                    structArrayScratchTypeIds[structArrayScratchCount] = structTypeId;
+                    structArrayScratchVarIds[structArrayScratchCount] = varId;
+                    structArrayScratchCount++;
+                }
+            }
         }
-        u16 indexReg = ir->GetOperand(i, 2);
-        if (IR::IsIntConstant(indexReg)) {
-          continue; // Constant index uses OpCompositeExtract/Insert directly
-        }
-        u32 structHash = ir->metadata[i];
-        if (structHash == 0) {
-          continue;
-        }
-        u32 structTypeId = GetStructTypeId(structHash);
-        if (structTypeId != 0 &&
-            GetStructArrayScratchVar(structTypeId) == 0 &&
-            structArrayScratchCount < MAX_STRUCT_ARRAY_SCRATCH) {
-          u32 ptrTypeId =
-              GetPointerTypeId(structTypeId, spv::StorageClassFunction);
-          u32 varId = AllocateId();
-          Emit(spv::OpVariable, ptrTypeId, varId, spv::StorageClassFunction);
-          structArrayScratchTypeIds[structArrayScratchCount] = structTypeId;
-          structArrayScratchVarIds[structArrayScratchCount] = varId;
-          structArrayScratchCount++;
-        }
-      }
-    }
-  };
+    };
 
   if (!cfg || cfg->blockCount == 0) {
     // Fallback for trivial shaders without CFG
@@ -699,8 +841,10 @@ void SPIRVBuilder::EmitFunctionBody() {
     // Emit all local pointer OpVariables at the start of the function
     emitLocalPointerVars();
 
-    for (u32 i = 0; i < ir->instructionCount; i++) {
-      TranslateInstruction(i);
+    for (u32 i = 0; i < ir->instructionCount;) {
+      u32 count = TranslateArrayStoreSequence(i, ir->instructionCount);
+      if (count) i += count;
+      else TranslateInstruction(i++);
     }
 
     if (ir->instructionCount == 0 ||
@@ -734,8 +878,10 @@ void SPIRVBuilder::EmitFunctionBody() {
     bool lastIsTerminator = IR::IsTerminator(lastOp);
 
     u32 endInst = lastIsTerminator ? lastInst : lastInst + 1;
-    for (u32 i = firstInst; i < endInst; i++) {
-      TranslateInstruction(i);
+    for (u32 i = firstInst; i < endInst;) {
+      u32 count = TranslateArrayStoreSequence(i, endInst);
+      if (count) i += count;
+      else TranslateInstruction(i++);
     }
 
     // Handle terminator with structured control flow

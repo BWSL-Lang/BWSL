@@ -10,13 +10,14 @@ struct main0_out
 
 struct main0_in
 {
-    float2 varying0 [[user(locn0)]];
+    float2 v_texcoord [[user(locn0)]];
 };
 
-fragment main0_out main0(main0_in in [[stage_in]])
+fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> t_albedo [[texture(0)]], texturecube<float> t_environment [[texture(1)]], texture3d<float> t_volume [[texture(2)]], texture2d_array<float> t_layers [[texture(3)]], sampler t_albedoSmplr [[sampler(0)]], sampler t_environmentSmplr [[sampler(1)]], sampler t_volumeSmplr [[sampler(2)]], sampler t_layersSmplr [[sampler(3)]])
 {
     main0_out out = {};
-    out.m_9 = float4(in.varying0, fwidth(in.varying0.x), 1.0);
+    float3 _76 = float3(in.v_texcoord, 0.0);
+    out.m_9 = ((((((float4(in.v_texcoord, fwidth(in.v_texcoord.x), 1.0) + t_albedo.sample(t_albedoSmplr, (in.v_texcoord * float2(2.0)))) + t_albedo.sample(t_albedoSmplr, (in.v_texcoord + float2(0.5)), level(-1.0))) + t_albedo.sample(t_albedoSmplr, abs((in.v_texcoord * float2(2.0)) - float2(1.0)), gradient2d(dfdx(in.v_texcoord), dfdy(in.v_texcoord)))) + t_environment.sample(t_environmentSmplr, reflect(fast::normalize(float3(0.0, 0.0, -1.0)), float3(0.0, 0.0, 1.0)))) + t_environment.sample(t_environmentSmplr, fast::normalize(float3((in.v_texcoord.x * 2.0) - 1.0, (in.v_texcoord.y * 2.0) - 1.0, 1.0)), level(2.0))) + t_volume.sample(t_volumeSmplr, float3(in.v_texcoord, 0.5))) + t_layers.sample(t_layersSmplr, _76.xy, uint(rint(_76.z)));
     return out;
 }
 

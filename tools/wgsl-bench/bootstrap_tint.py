@@ -21,6 +21,23 @@ def run(command: list[str]) -> None:
     subprocess.run(command, check=True)
 
 
+def prepare_checkout(checkout: Path) -> None:
+    checkout.mkdir(parents=True, exist_ok=True)
+    if not (checkout / ".git").exists():
+        run(["git", "init", str(checkout)])
+        run(["git", "-C", str(checkout), "remote", "add", "origin", REMOTE])
+    revision = subprocess.run(
+        ["git", "-C", str(checkout), "rev-parse", "--verify", "HEAD"],
+        capture_output=True, text=True, check=False,
+    )
+    actual = revision.stdout.strip() if revision.returncode == 0 else ""
+    if actual != REVISION:
+        if actual:
+            raise SystemExit(f"Refusing to overwrite checkout {actual}; expected {REVISION}")
+        run(["git", "-C", str(checkout), "fetch", "--depth", "1", "origin", REVISION])
+        run(["git", "-C", str(checkout), "checkout", "--detach", "FETCH_HEAD"])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=ROOT / "build/wgsl-tools")
@@ -30,19 +47,7 @@ def main() -> None:
         parser.error("--jobs must be positive")
     checkout = args.root.resolve() / "dawn"
     build = args.root.resolve() / "tint"
-    checkout.mkdir(parents=True, exist_ok=True)
-    if not (checkout / ".git").exists():
-        run(["git", "init", str(checkout)])
-        run(["git", "-C", str(checkout), "remote", "add", "origin", REMOTE])
-    actual = subprocess.run(
-        ["git", "-C", str(checkout), "rev-parse", "HEAD"],
-        capture_output=True, text=True, check=False,
-    ).stdout.strip()
-    if actual != REVISION:
-        if actual:
-            raise SystemExit(f"Refusing to overwrite checkout {actual}; expected {REVISION}")
-        run(["git", "-C", str(checkout), "fetch", "--depth", "1", "origin", REVISION])
-        run(["git", "-C", str(checkout), "checkout", "--detach", "FETCH_HEAD"])
+    prepare_checkout(checkout)
 
     definitions = {
         "CMAKE_BUILD_TYPE": "Release",

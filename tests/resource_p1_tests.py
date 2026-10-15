@@ -44,6 +44,9 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
             if source.stem == "binding_collision":
                 if by_name.get("scale", {}).get("binding") != 1 or by_name.get("values", {}).get("binding") != 2:
                     row["errors"].append("Reflection does not match collision-free buffer slots")
+            if source.stem == "attribute_binding_sixteen":
+                if by_name.get("scale", {}).get("binding") != 16 or "[[buffer(16)]]" not in metal:
+                    row["errors"].append("Uniform does not follow all 16 attribute buffers")
             if source.stem.startswith("texture3D_") or source.stem == "texture3d_drops_z":
                 if "texture3d<float>" not in metal or "texture2d<float>" in metal:
                     row["errors"].append("3D texture dimension was lost")
@@ -61,6 +64,18 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
                     row["errors"].append("Independent samplers collapsed")
                 if source.stem == "sampler_mixed_default" and not any(r.get("defaultSamplerFor") == "tex" for r in samplers):
                     row["errors"].append("Implicit default sampler mapping missing")
+            if source.stem == "texture_array":
+                textures, extra = by_name.get("textures", {}), by_name.get("extra", {})
+                if textures.get("count") != 3 or extra.get("binding") != textures.get("binding", -9) + 3:
+                    row["errors"].append("Texture array elements do not occupy consecutive reflected slots")
+                if "array<texture2d<float>, 3> t_textures" not in metal or "array<sampler, 3>" not in metal:
+                    row["errors"].append("Metal lost the texture array")
+                # The array's samplers take three slots; the next sampler follows them.
+                array_sampler = re.search(r"array<sampler, 3> \w+ \[\[sampler\((\d+)\)\]\]", metal)
+                extra_sampler = re.search(r"sampler t_extraSmplr \[\[sampler\((\d+)\)\]\]", metal)
+                if not array_sampler or not extra_sampler or \
+                        int(array_sampler.group(1)) <= int(extra_sampler.group(1)) < int(array_sampler.group(1)) + 3:
+                    row["errors"].append("Metal sampler slots overlap the texture array")
             if source.stem == "pipeline_scope" and by_name.get("tex", {}).get("abi") != "combined_sampled_image":
                 row["errors"].append("A previous pipeline changed the current pipeline's sampler ABI")
             for path in metal_files:
@@ -83,12 +98,18 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
                 if step["exit"]: print(step["output"])
         records.append(row)
 
-    # Validate both OpenGL output paths and the host-visible pair mapping.
+    # Validate OpenGL output paths and the host-visible pair mapping.
     for name in ("texture3d_drops_z", "texture_slot_32", "resource_slot_32_mixed", "sampler_gpu", "sampler_shared",
+                 "sampler_shared_attributes_1", "sampler_shared_attributes_2",
                  "sampler_mixed_default", "sampler_cross_stage", "sampler_helper", "pipeline_scope",
                  "sampler_operations", "texture_query_size_levels", "pointer_address_taken_control_flow",
-                 "texture_sample_grad_cmp_gather"):
-        for mode in ("-gles", "-gles-direct"):
+                 "texture_sample_grad_cmp_gather", "gl_interface_names", "gl_interface_names_mixed",
+                 "gl_interface_names_keyword_fallback", "gl_interface_names_nested",
+                 "gl_interface_names_uniform_arrays", "texture_array"):
+        modes = ("-gles", "-gles-direct")
+        if name.startswith("gl_interface_names"):
+            modes += ("-glsl",)
+        for mode in modes:
             directory = out / (name + mode)
             directory.mkdir(exist_ok=True)
             source = ROOT / "tests/resource_p1" / (name + ".bwsl")
@@ -96,24 +117,67 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
                 source = ROOT / "tests/unsorted" / (name + ".bwsl")
             result = command([compiler, source, mode, "-bindings", "-validation", "strict", "-o", directory])
             row = {"source": name + mode, "steps": [result], "errors": []}
-            if result["exit"]: row["errors"].append("GLES compilation failed")
+            if result["exit"]: row["errors"].append("GL compilation failed")
             shaders = [p for p in directory.iterdir() if p.suffix in {".vert", ".frag"}]
             if {p.suffix for p in shaders} != {".vert", ".frag"}:
-                row["errors"].append("Missing GLES vertex or fragment artifact")
+                row["errors"].append("Missing GL vertex or fragment artifact")
             text = "\n".join(p.read_text() for p in shaders)
             for shader in shaders:
                 if shutil.which("glslangValidator"):
                     validation = command(["glslangValidator", shader])
                     row["steps"].append(validation)
-                    if validation["exit"]: row["errors"].append("GLES validation failed")
+                    if validation["exit"]: row["errors"].append("GL validation failed")
+            if name.startswith("gl_interface_names") and shaders and shutil.which("glslangValidator"):
+                linked = command(["glslangValidator", "-l", *sorted(shaders)])
+                row["steps"].append(linked)
+                if linked["exit"]: row["errors"].append("GL interface stages failed to link")
             for binding_file in directory.glob("*.bindings.json"):
                 for resource in json.loads(binding_file.read_text())["resources"]:
                     for pair in resource.get("combinedSamplerUniforms", []):
-                        if pair["name"] not in text:
-                            row["errors"].append("Reflected sampler pair uniform is missing: " + pair["name"])
+                        for stage in pair["stages"]:
+                            suffix = {"vertex": ".vert", "fragment": ".frag"}[stage]
+                            stage_text = "\n".join(p.read_text() for p in shaders if p.suffix == suffix)
+                            declaration = r"uniform\s+(?:highp\s+)?sampler\w+\s+" + re.escape(pair["name"]) + r"\s*;"
+                            if not re.search(declaration, stage_text):
+                                row["errors"].append("Reflected sampler pair uniform is missing in " + stage + ": " + pair["name"])
+                    gl_name = resource.get("glName")
+                    if gl_name and not re.search(r"\b" + re.escape(gl_name) + r"\b", text):
+                        row["errors"].append("Reflected glName is not declared: " + gl_name)
+            # ES 3.00 links varyings by name, so every fragment input must be a
+            # vertex output, even when the stages come from different emitters.
+            def interface_names(path: Path, qualifier: str) -> set[str]:
+                pattern = r"\b" + qualifier + r"\s+(?:\w+\s+)*?(v_\w+|varying\d+)\s*;"
+                return set(re.findall(pattern, path.read_text())) if path.exists() else set()
+            for shader in [p for p in shaders if p.suffix == ".frag"]:
+                missing = interface_names(shader, "in") - interface_names(shader.with_suffix(".vert"), "out")
+                if missing:
+                    row["errors"].append("Fragment inputs not written by the vertex stage: " + ", ".join(sorted(missing)))
+            if name == "gl_interface_names":
+                expected_names = ["ub_render", "bwsl_ub_render", "ub_input", "t_texture",
+                                  "v_output", "v_tint"]
+                # Desktop GLSL defaults to storage-buffer vertex pulling.
+                if mode != "-glsl":
+                    expected_names += ["a_position", "a_sample"]
+                for expected in expected_names:
+                    if not re.search(r"\b" + expected + r"\b", text):
+                        row["errors"].append("Missing GL interface name: " + expected)
+            if name == "gl_interface_names_uniform_arrays":
+                for shader in shaders:
+                    for member in ("input", "scales", "bones", "entries"):
+                        if not re.search(r"\bbwsl_u_" + member + r"\[3\]", shader.read_text()):
+                            row["errors"].append("Uniform array length missing: " + member)
+            if name == "texture_array":
+                if not re.search(r"uniform highp sampler2D t_textures\[3\];", text):
+                    row["errors"].append("GL texture array declaration missing")
+                # ES 3.00 indexes sampler arrays with constant expressions only.
+                if re.search(r"t_textures\[(?!\d+u?\])", text.replace("t_textures[3];", "")):
+                    row["errors"].append("GL texture array indexed with a non-constant")
+                for element in range(3):
+                    if not re.search(r"t_textures\[" + str(element) + r"u?\]", text):
+                        row["errors"].append(f"GL texture array element {element} is never sampled")
             if name == "texture3d_drops_z" and "sampler3D" not in text:
                 row["errors"].append("GLES lost the 3D texture type")
-            if name in {"texture_slot_32", "resource_slot_32_mixed"} and mode == "-gles-direct" and "u_tex32" not in text:
+            if name in {"texture_slot_32", "resource_slot_32_mixed"} and mode == "-gles-direct" and "t_tex32" not in text:
                 row["errors"].append("Direct GLES selected the wrong compacted resource name")
             good = not row["errors"]
             passed += int(good)

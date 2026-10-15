@@ -42,6 +42,8 @@ void Parser::RecordMemberSources(NodeRef container) {
         recordNew(module.enums);
         recordNew(module.attributes);
         recordNew(module.resources);
+        for (u32 i = 0; i < module.structs.count; i++) recordNew(ast->GetStructDecl(module.structs[i]).methods);
+        for (u32 i = 0; i < module.enums.count; i++) recordNew(ast->GetEnumDecl(module.enums[i]).methods);
     } else if (container.Type() == ASTNodeType::PIPELINE) {
         const PipelineData& pipeline = ast->GetPipeline(container);
         recordNew(pipeline.consts);
@@ -50,6 +52,8 @@ void Parser::RecordMemberSources(NodeRef container) {
         recordNew(pipeline.enums);
         recordNew(pipeline.attributes);
         recordNew(pipeline.resources);
+        for (u32 i = 0; i < pipeline.structs.count; i++) recordNew(ast->GetStructDecl(pipeline.structs[i]).methods);
+        for (u32 i = 0; i < pipeline.enums.count; i++) recordNew(ast->GetEnumDecl(pipeline.enums[i]).methods);
         recordNew(pipeline.constraints);
         recordNew(pipeline.passes);
         for (u32 i = 0; i < pipeline.passes.count; i++) {
@@ -81,8 +85,12 @@ NodeRef Parser::RecordFoldedConstant(NodeRef literal, NodeRef qualifier, TokenRe
 
 void Parser::RecordTypeQualifierBeforeTypeName() {
     if (previous < 2 ||
-        stream->GetType(previous - 1) != TokenType::DOUBLE_COLON ||
-        stream->GetType(previous - 2) != TokenType::IDENTIFIER) {
+        (stream->GetType(previous - 1) != TokenType::DOUBLE_COLON &&
+         stream->GetType(previous - 1) != TokenType::DOT) ||
+        (stream->GetType(previous - 2) != TokenType::IDENTIFIER &&
+         stream->GetType(previous - 2) != TokenType::T &&
+         stream->GetType(previous - 2) != TokenType::U &&
+         stream->GetType(previous - 2) != TokenType::V)) {
         return;
     }
     const TokenRef qualifier = previous - 2;
@@ -95,11 +103,13 @@ void Parser::RecordTypeQualifierBeforeTypeName() {
     if (moduleIdx != INVALID_INDEX && moduleIdx < symbolTable.modules.count) {
         data.moduleNameHash = symbolTable.modules[moduleIdx].name.nameHash;
     }
+    data.sourceFile = ast->InternSourceFile(currentSourceName.c_str()) + 1;
     ast->typeQualifiers.Push(arena, data);
 }
 
 void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
                              const std::string& moduleName) {
+    const u32 firstResource = ast->GetModule(module).resources.count;
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
         ProgressGuard _pg_(this);
         if (Match(TokenType::IMPORT)) {
@@ -198,8 +208,65 @@ void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
                 Error("Expected type after 'const'");
                 continue;
             }
+            TokenType constType = static_cast<TokenType>(stream->GetType(previous));
             std::string typeStr(stream->GetValue(previous));
             SourceLocation typeLoc = getLocation(stream->GetOffset(previous));
+
+            if (Match(TokenType::LEFT_BRACKET)) {
+                NodeRef constDecl = ParseArrayDeclaration(TokenTypeToReturnType(constType),
+                                                           StorageClass::Default, true, false);
+                if (!constDecl.IsValid()) continue;
+                const VariableDeclData& decl = ast->GetVariableDecl(constDecl);
+                EvalStateSoA arrayEvalState;
+                CompileTimeEvaluatorSoA::Init(&arrayEvalState, this, ast,
+                                              &context->evalCache, ast->arena);
+                const BlockData& elements = ast->GetBlock(decl.initializer);
+                bool allConstant = true;
+                for (u32 i = 0; i < elements.statements.count; ++i) {
+                    LiteralValue value;
+                    if (!CompileTimeEvaluatorSoA::CanEvaluateNode(&arrayEvalState,
+                                                                   elements.statements[i]) ||
+                        !CompileTimeEvaluatorSoA::EvaluateNode(&arrayEvalState,
+                                                               elements.statements[i], &value)) {
+                        allConstant = false;
+                        break;
+                    }
+                }
+                if (!allConstant) {
+                    Error("Module constant array elements must be compile-time expressions");
+                    continue;
+                }
+                ast->IndexPosition(constDecl, constLoc.line, constLoc.column);
+                ast->GetVariableDecl(constDecl).typePosition =
+                    AST::PackPosition(typeLoc.line, typeLoc.column);
+                ast->GetModule(module).consts.Push(arena, constDecl);
+
+                TypeInfo arrayType = GetTypeInfoFromToken(constType);
+                arrayType.arrayDimensions = decl.arrayDimensions;
+                arrayType.arrayLength = decl.arrayLength;
+                arrayType.arrayStride = static_cast<u32>(arrayType.componentCount) * 4u;
+                auto registerArray = [&](const ArenaString& name, NamespaceKind ns,
+                                         u32 moduleIndex) {
+                    Symbol* sym = SymbolTable::AddSymbol(&symbolTable, name,
+                        SymbolKind::VARIABLE, ns, moduleIndex);
+                    if (!sym) {
+                        Error("Constant already declared in this scope");
+                        return;
+                    }
+                    VariableData& data = symbolTable.variables[sym->index];
+                    data.typeInfo = arrayType;
+                    data.isConst = true;
+                    data.constExpr = decl.initializer;
+                    data.constDecl = constDecl;
+                };
+                std::string name = decl.name.ToString(sourceBase());
+                if (name.empty()) name = ReverseLookup::GetString(decl.name.nameHash);
+                registerArray(ArenaString::MakeHashOnly(moduleName + "::" + name),
+                              NamespaceKind::GLOBAL, INVALID_INDEX);
+                registerArray(decl.name, NamespaceKind::MODULE,
+                              symbolTable.currentModuleIndex);
+                continue;
+            }
 
             Consume(TokenType::IDENTIFIER, "Expected constant name");
             SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
@@ -224,14 +291,45 @@ void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
             ast->GetVariableDecl(constDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
             ast->GetModule(module).consts.Push(arena, constDecl);
 
-            // Evaluate the constant value first
+            // Fold the initializer now: uses are replaced by the folded value
+            // while parsing, so the declaration itself is never lowered.
+            EvalStateSoA evalState;
+            CompileTimeEvaluatorSoA::Init(&evalState, this, ast, &context->evalCache, ast->arena);
+            // LiteralValue holds at most four components, so matrices (and
+            // 64-bit vectors) can't be folded yet.
+            TypeInfo constTypeInfo = GetTypeInfoFromToken(constType);
+            bool foldableType = false;
+            switch (constTypeInfo.coreType) {
+                case CoreType::FLOAT: case CoreType::INT: case CoreType::UINT: case CoreType::BOOL:
+                case CoreType::FLOAT2: case CoreType::FLOAT3: case CoreType::FLOAT4:
+                case CoreType::INT2: case CoreType::INT3: case CoreType::INT4:
+                case CoreType::UINT2: case CoreType::UINT3: case CoreType::UINT4:
+                    foldableType = true;
+                    break;
+                default:
+                    break;
+            }
             LiteralValue constValue;
             bool hasValue = false;
-            if (value.Type() == ASTNodeType::LITERAL) {
-                constValue = ast->GetLiteral(value).value;
-                hasValue = true;
+            if (!foldableType) {
+                Error(("Module constants of type " + typeStr + " are not supported yet; "
+                       "use a scalar or a float, int or uint vector").c_str());
+            } else if (CompileTimeEvaluatorSoA::CanEvaluateNode(&evalState, value) &&
+                CompileTimeEvaluatorSoA::EvaluateNode(&evalState, value, &constValue)) {
+                // Scalar and vector CoreType names are the source spelling in upper case.
+                std::string initType = CoreTypeToString(MakeTypeInfoForConstant(constValue).coreType);
+                for (char& c : initType) c = static_cast<char>(tolower(c));
+                if (CoerceLiteralToType(constTypeInfo, &constValue)) {
+                    hasValue = true;
+                } else {
+                    Error(("Module constant '" + constName + "' is declared " + typeStr +
+                           " but its initializer is " + initType).c_str());
+                }
             } else {
-                Error("Module constants must have literal initializers");
+                Error("Module constant initializers must be built from literals and "
+                      "other constants with scalar arithmetic and scalar or vector "
+                      "constructors, e.g. float2(0.0, -1.0); vector arithmetic and "
+                      "swizzles are not supported here");
             }
 
             if (hasValue) {
@@ -260,6 +358,7 @@ void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
     // A submodule body runs with currentSourceName set to the submodule file,
     // so merged members keep their own file instead of the parent's.
     RecordMemberSources(module);
+    ValidateResourceTypes(module, false, firstResource);
 }
 
 NodeRef Parser::ParseModule() {
@@ -310,6 +409,8 @@ NodeRef Parser::ParseModule() {
         symbolTable.inModuleScope = true;
     }
 
+    typeCache.Clear();
+
     // Create module AST node
     NodeRef module = ASTFactory::MakeModule(ast, moduleName, line, col);
     AttachDocComment(module, declToken);
@@ -329,6 +430,7 @@ NodeRef Parser::ParseModule() {
 
     symbolTable.inModuleScope = false;
     symbolTable.currentModuleIndex = INVALID_INDEX;
+    typeCache.Clear();
     currentModule = previousModule;
     currentPipeline = previousPipeline;
 
@@ -440,6 +542,7 @@ NodeRef Parser::ParseSubmodule() {
 
     symbolTable.inModuleScope = true;
     symbolTable.currentModuleIndex = parentIndex;
+    typeCache.Clear();
     currentModule = parentModule;
     currentPipeline = NodeRef::Null();
 
@@ -449,6 +552,7 @@ NodeRef Parser::ParseSubmodule() {
 
     symbolTable.inModuleScope = savedInModuleScope;
     symbolTable.currentModuleIndex = savedCurrentModuleIdx;
+    typeCache.Clear();
     currentModule = previousModule;
     currentPipeline = previousPipeline;
 
@@ -620,15 +724,8 @@ TypeInfo Parser::GetTypeInfoFromSymbol(Symbol* sym) {
             return MakeTypeInfoForResource(&symbolTable, symbolTable.resources[sym->index]);
         }
 
-        case SymbolKind::EVAL_CONSTANT: {
-            const LiteralValue& value = symbolTable.evalConstants[sym->index];
-            switch (value.type) {
-                case LiteralValue::FLOAT: return TYPE_INFO(CoreType::FLOAT, 1, false);
-                case LiteralValue::INT:   return TYPE_INFO(CoreType::INT, 1, false);
-                case LiteralValue::BOOL:  return TYPE_INFO(CoreType::BOOL, 1, false);
-                default: return TYPE_INFO(CoreType::INVALID, 0, false);
-            }
-        }
+        case SymbolKind::EVAL_CONSTANT:
+            return MakeTypeInfoForConstant(symbolTable.evalConstants[sym->index]);
 
         case SymbolKind::FUNCTION: {
             const FunctionData& funcData = symbolTable.functions[sym->index];
@@ -684,6 +781,17 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
                 info.coreType == CoreType::GENERIC_U ||
                 info.coreType == CoreType::GENERIC_V) {
                 Symbol* userSym = SymbolTable::LookupByHash(&symbolTable, typeHash);
+                const bool isUserType = userSym &&
+                    (userSym->kind == SymbolKind::CUSTOM_TYPE ||
+                     userSym->kind == SymbolKind::ENUM ||
+                     userSym->kind == SymbolKind::ENUM_SYMBOL);
+                if (!isUserType && symbolTable.inModuleScope &&
+                    symbolTable.currentModuleIndex != INVALID_INDEX) {
+                    const ModuleData& module = symbolTable.modules[symbolTable.currentModuleIndex];
+                    std::string qualifiedName = module.name.ToString() + "::" + typeName;
+                    userSym = SymbolTable::LookupByHash(&symbolTable,
+                        Utils::HashStr(qualifiedName.c_str()));
+                }
                 if (userSym && (userSym->kind == SymbolKind::CUSTOM_TYPE ||
                                 userSym->kind == SymbolKind::ENUM ||
                                 userSym->kind == SymbolKind::ENUM_SYMBOL)) {
@@ -702,6 +810,18 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
     const char* colonColon = strstr(typeName.c_str(), "::");
 
     if (!colonColon) {
+        // Module declarations are registered by their complete qualified
+        // spelling. Hashing the pieces separately does not produce that hash.
+        if (symbolTable.inModuleScope && symbolTable.currentModuleIndex != INVALID_INDEX) {
+            const ModuleData& module = symbolTable.modules[symbolTable.currentModuleIndex];
+            std::string qualifiedName = module.name.ToString() + "::" + typeName;
+            TypeInfo qualified = ResolveType(qualifiedName);
+            if (qualified.coreType != CoreType::INVALID) {
+                typeCache.Insert(typeHash, qualified);
+                return qualified;
+            }
+        }
+
         // Simple custom type lookup
         Symbol* sym = SymbolTable::LookupByHash(&symbolTable, typeHash);
         if (sym && sym->kind == SymbolKind::CUSTOM_TYPE) {
@@ -720,23 +840,6 @@ TypeInfo Parser::ResolveType(const std::string& typeName) {
             }
             typeCache.Insert(typeHash, result);
             return result;
-        }
-
-        // Try implicit module qualification if in module scope
-        if (symbolTable.inModuleScope && symbolTable.currentModuleIndex != INVALID_INDEX) {
-            const ModuleData& currentModule = symbolTable.modules[symbolTable.currentModuleIndex];
-
-            // Build qualified hash efficiently
-            u32 qualifiedHash = Utils::HashStr(currentModule.name.ToString(sourceBase()).c_str());
-            qualifiedHash ^= Utils::HashStr("::");
-            qualifiedHash ^= typeHash;
-
-            sym = SymbolTable::LookupByHash(&symbolTable, qualifiedHash);
-            if (sym && sym->kind == SymbolKind::CUSTOM_TYPE) {
-                result = GetTypeInfoFromSymbol(sym);
-                typeCache.Insert(typeHash, result);
-                return result;
-            }
         }
     } else {
         // Module-qualified type: Module::Type

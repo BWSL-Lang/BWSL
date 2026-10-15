@@ -1,0 +1,33 @@
+// Uniforms must start after all 16 attribute buffers, not after the first 8.
+pipeline AttributeBindingSixteen {
+    attributes {
+        position: float3
+        a1: float
+        a2: float
+        a3: float
+        a4: float
+        a5: float
+        a6: float
+        a7: float
+        a8: float
+        a9: float
+        a10: float
+        a11: float
+        a12: float
+        a13: float
+        a14: float
+        a15: float
+    }
+    resources { scale: float }
+    pass "Main" {
+        use attributes { position, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15 }
+        use resources { scale }
+        vertex {
+            float s = attributes.a1 + attributes.a2 + attributes.a3 + attributes.a4
+                + attributes.a5 + attributes.a6 + attributes.a7 + attributes.a8
+                + attributes.a9 + attributes.a10 + attributes.a11 + attributes.a12
+                + attributes.a13 + attributes.a14 + attributes.a15;
+            output.position = float4(attributes.position * resources.scale, s);
+        }
+    }
+}

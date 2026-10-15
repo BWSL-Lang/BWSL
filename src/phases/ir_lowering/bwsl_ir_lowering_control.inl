@@ -5,6 +5,7 @@
 namespace BWSL::IR {
 
 inline void IRLowering::LowerStatement(NodeRef ref) {
+    SourceNodeGuard sourceGuard(builder, ref);
   switch (ref.Type()) {
   case ASTNodeType::ASSIGNMENT:
     LowerAssignment(ref);
@@ -54,19 +55,41 @@ inline void IRLowering::LowerStatement(NodeRef ref) {
     LowerExpression(ref);
     break;
   }
+  if (builder.floatConstantLimitExceeded && !hadError) {
+    ReportErrorAt(ref, "Float constant limit exceeded (16384 values). Split or simplify the shader.\n");
+  }
 }
 
-inline void IRLowering::LowerStatementWithReturnGuard(NodeRef ref) {
-  if (inlineReturnFlagReg == 0xFFFF) {
-    LowerStatement(ref);
-    return;
-  }
+inline void IRLowering::LowerStatements(const BlockData& block, u32 first,
+                                        bool guardReturns) {
+    for (u32 i = first; i < block.statements.count; i++) {
+        NodeRef statement = block.statements[i];
+        bool hasRest = i + 1 < block.statements.count;
+        if (guardReturns && hasRest &&
+            statement.Type() == ASTNodeType::IF_STATEMENT &&
+            LowerIfWithEarlyReturn(statement, block, i + 1)) {
+            return;
+        }
+        u32 returnCountBefore = inlineReturnCounter;
+        LowerStatement(statement);
+        // This statement may have returned: one guard for the rest of the
+        // block, not one per statement.
+        if (guardReturns && hasRest &&
+            inlineReturnCounter != returnCountBefore) {
+            LowerStatementsWithReturnGuard(block, i + 1);
+            return;
+        }
+    }
+}
 
+inline void IRLowering::LowerStatementsWithReturnGuard(const BlockData &block,
+                                                       u32 first) {
   u32 branchIdx = builder.currentInstruction;
   builder.EmitInstruction(OP_BRANCH, 0, inlineReturnFlagReg, 0, 0);
+  inlineReturnFlagReads++;
 
   u32 falseTarget = builder.currentInstruction;
-  LowerStatement(ref);
+  LowerStatements(block, first, true);
 
   u32 mergePoint = builder.currentInstruction;
   builder.EmitInstruction(OP_NOP, 0, 0);
@@ -284,6 +307,7 @@ inline void IRLowering::LowerForRange(NodeRef ref) {
   if (!forLoop.iteratorVar.IsNull()) {
     const IdentifierData &iter = ast->GetIdentifier(forLoop.iteratorVar);
     variableRegisters[iter.name.nameHash] = iterReg;
+    program.registerNameHashes[iterReg] = iter.name.nameHash;
   }
 
   u32 loopHeader = builder.currentInstruction;
@@ -358,6 +382,7 @@ inline void IRLowering::LowerForCollection(NodeRef ref) {
     // iteratorVar is stored as an identifier in the AST
     const IdentifierData &iterVar = ast->GetIdentifier(forLoop.iteratorVar);
     variableRegisters[iterVar.name.nameHash] = iterReg;
+    program.registerNameHashes[iterReg] = iterVar.name.nameHash;
   }
 
   // Length comes from the struct (resolved at parse time)
@@ -857,7 +882,74 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
       IRProgram::PackStructure(IRProgram::STRUCT_SWITCH_HEADER, mergePoint);
 }
 
+// ============= Inlined early returns =============
+
+inline bool IRLowering::HasTrailingReturn(NodeRef ref) const {
+    switch (ref.Type()) {
+        case ASTNodeType::RETURN:
+            return true;
+        case ASTNodeType::BLOCK: {
+            const BlockData& block = ast->GetBlock(ref);
+            return block.statements.count > 0 &&
+                   HasTrailingReturn(block.statements[block.statements.count - 1]);
+        }
+        case ASTNodeType::IF_STATEMENT: {
+            const BlockData& block = ast->GetBlock(ref);
+            return block.statements.count > 2 &&
+                   HasTrailingReturn(block.statements[1]) &&
+                   HasTrailingReturn(block.statements[2]);
+        }
+        default:
+            return false;
+    }
+}
+
+inline bool IRLowering::LowerIfWithEarlyReturn(NodeRef ifRef,
+                                               const BlockData& block,
+                                               u32 restFirst) {
+    const BlockData& ifBlock = ast->GetBlock(ifRef);
+    if (ifBlock.statements.count < 2) return false;
+    bool thenReturns = HasTrailingReturn(ifBlock.statements[1]);
+    bool elseReturns = ifBlock.statements.count > 2 &&
+                       HasTrailingReturn(ifBlock.statements[2]);
+    // Both returning leaves the rest unreachable; the flag guard handles it.
+    if (thenReturns == elseReturns) return false;
+
+    SourceNodeGuard sourceGuard(builder, ifRef);
+    LowerIfWithRest(ifRef, &block, restFirst, elseReturns);
+    return true;
+}
+
+inline void IRLowering::DropUnreadReturnFlag(u32 firstInstruction) {
+    if (inlineReturnFlagReads != 0) return;
+    for (u32 i = firstInstruction; i < builder.currentInstruction; i++) {
+        if (program.opcodes[i] == OP_STORE_REG &&
+            program.destinations[i] == inlineReturnFlagReg) {
+            program.opcodes[i] = OP_NOP;
+            program.destinations[i] = 0;
+            for (u32 j = 0; j < 4; j++) program.SetOperand(i, j, 0xFFFF);
+        }
+    }
+}
+
 inline void IRLowering::LowerIfStatement(NodeRef ref) {
+    LowerIfWithRest(ref, nullptr, 0, false);
+}
+
+inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
+                                        u32 restFirst, bool restInThen) {
+  // The rest runs after its branch; guard it if that branch may have
+  // returned (e.g. from inside a loop).
+  auto lowerBranchAndRest = [&](NodeRef branch) {
+      u32 returnCountBefore = inlineReturnCounter;
+      if (!branch.IsNull()) LowerStatement(branch);
+      if (inlineReturnCounter != returnCountBefore) {
+          LowerStatementsWithReturnGuard(*rest, restFirst);
+      } else {
+          LowerStatements(*rest, restFirst, true);
+      }
+  };
+
   const BlockData &block = ast->GetBlock(ref);
   if (block.statements.count < 2)
     return;
@@ -872,10 +964,15 @@ inline void IRLowering::LowerIfStatement(NodeRef ref) {
   u32 trueTarget = builder.currentInstruction;
 
   // Lower true branch
-  LowerStatement(block.statements[1]);
+  if (rest && restInThen) {
+    lowerBranchAndRest(block.statements[1]);
+  } else {
+    LowerStatement(block.statements[1]);
+  }
 
+  bool restInElse = rest && !restInThen;
   u32 jumpOverElseIdx = 0;
-  if (block.statements.count > 2) {
+  if (block.statements.count > 2 || restInElse) {
     jumpOverElseIdx = builder.currentInstruction;
     builder.EmitInstruction(OP_JUMP, 0, 0, 0);
   }
@@ -884,7 +981,10 @@ inline void IRLowering::LowerIfStatement(NodeRef ref) {
   u32 falseTarget = builder.currentInstruction;
 
   bool needMergePad = true;
-  if (block.statements.count > 2) {
+  if (restInElse) {
+    lowerBranchAndRest(block.statements.count > 2 ? block.statements[2]
+                                                  : NodeRef::Null());
+  } else if (block.statements.count > 2) {
     LowerStatement(block.statements[2]);
 
     // If the else block was an if statement and ended at the same instruction
@@ -996,6 +1096,7 @@ inline u16 IRLowering::CombineLoopCondition(u16 condReg) {
   u16 boolCond = EnsureBoolCondition(condReg);
   u16 notReturn = AllocateRegister();
   builder.EmitInstruction(OP_NOT, notReturn, inlineReturnFlagReg);
+  inlineReturnFlagReads++;
   SetRegisterType(notReturn, CoreType::BOOL);
 
   u16 combined = AllocateRegister();

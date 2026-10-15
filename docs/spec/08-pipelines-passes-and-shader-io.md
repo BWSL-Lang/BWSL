@@ -22,6 +22,10 @@ resources {
 
 Current intended model:
 
+- Module-defined payloads use `Module::Type`, including `buffer<Module::Type>`
+  and `cbuffer<Module::Type>`. The legacy `Module.Type` resource spelling is
+  deprecated but remains accepted as an alias. Unknown payload types are errors.
+  Payload types and imports may be declared later in the same pipeline or module body.
 - `resources.*` names are pipeline-scoped.
 - A resource declaration gives a name plus a type.
 - Pipeline `resources {}` declarations are authoritative for

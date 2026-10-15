@@ -104,6 +104,19 @@ else
 TARGET_LDFLAGS =
 endif
 
+# Cross-compiling to Windows from Linux/macOS links GCC's mingw-w64
+# libstdc++, which stores thread_local variables with emulated TLS. Clang
+# defaults to native TLS for mingw, so libstdc++'s TLS symbols (e.g. the
+# std::call_once state behind std::async) fail to link. Match libstdc++.
+# Native Windows builds (MSYS2 CLANG64) use libc++ with native TLS and must
+# not get this flag.
+TARGET_TLS_FLAGS =
+ifeq ($(TARGET_OS),windows)
+ifneq ($(HOST_OS),windows)
+TARGET_TLS_FLAGS = -femulated-tls
+endif
+endif
+
 ifeq ($(TARGET_OS),windows)
 CMAKE_TARGET_SYSTEM_NAME = Windows
 else ifeq ($(TARGET_OS),macos)
@@ -166,6 +179,9 @@ BWSLC_SANITIZE_OUT = $(BUILD_DIR)/bwslc-sanitize$(EXE_EXT)
 EQUIV_RUNNER_SRC = src/equiv_runner.cpp
 EQUIV_RUNNER_OUT = $(BUILD_DIR)/equiv_runner$(EXE_EXT)
 
+BENCH_RUNNER_SRC = src/bench_runner.cpp
+BENCH_RUNNER_OUT = $(BUILD_DIR)/bench_runner$(EXE_EXT)
+
 # Vulkan SDK location (override by exporting VULKAN_SDK)
 ifeq ($(HOST_OS),macos)
 VULKAN_SDK ?= $(HOME)/VulkanSDK/1.3.243.0/macOS
@@ -177,6 +193,13 @@ VULKAN_LIBS = $(if $(VULKAN_SDK),-L$(VULKAN_SDK)/lib,) -lvulkan
 else
 VULKAN_INCLUDE =
 VULKAN_LIBS =
+endif
+
+# bench_runner also needs OpenGL: EGL on Linux, none on macOS (Vulkan only).
+ifeq ($(HOST_OS),linux)
+BENCH_RUNNER_LIBS = $(VULKAN_LIBS) -lEGL
+else
+BENCH_RUNNER_LIBS = $(VULKAN_LIBS)
 endif
 
 # SPIRV-Cross integration for cross-compilation
@@ -203,7 +226,10 @@ SPIRV_TOOLS_CMAKE_TARGET_FLAGS = \
 	-DCMAKE_C_COMPILER=clang \
 	-DCMAKE_CXX_COMPILER=clang++ \
 	-DCMAKE_C_COMPILER_TARGET=$(TARGET_TRIPLE) \
-	-DCMAKE_CXX_COMPILER_TARGET=$(TARGET_TRIPLE)
+	-DCMAKE_CXX_COMPILER_TARGET=$(TARGET_TRIPLE) \
+	$(if $(TARGET_TLS_FLAGS),\
+		"-DCMAKE_C_FLAGS=$(TARGET_TLS_FLAGS)" \
+		"-DCMAKE_CXX_FLAGS=$(TARGET_TLS_FLAGS)",)
 
 USE_LINKED_SPIRV_TOOLS ?= 1
 NATIVE_SPIRV_TOOLS_PREREQS =
@@ -248,8 +274,8 @@ ifeq ($(findstring $(COMPILER_LAUNCHER_NAME),$(firstword $(CXX))),)
 CXX := $(COMPILER_LAUNCHER) $(CXX)
 endif
 endif
-CXXFLAGS ?= -O3 -target $(TARGET_TRIPLE) $(TARGET_ARCH_FLAGS) -std=c++20 -Wall -Wextra
-CXXFLAGS_DEBUG ?= -g -O0 -target $(TARGET_TRIPLE) $(TARGET_ARCH_FLAGS) -std=c++20 -Wall -Wextra
+CXXFLAGS ?= -O3 -target $(TARGET_TRIPLE) $(TARGET_ARCH_FLAGS) $(TARGET_TLS_FLAGS) -std=c++20 -Wall -Wextra
+CXXFLAGS_DEBUG ?= -g -O0 -target $(TARGET_TRIPLE) $(TARGET_ARCH_FLAGS) $(TARGET_TLS_FLAGS) -std=c++20 -Wall -Wextra
 
 # Override the compiled-in VERSION string (e.g. BWSL_VERSION=1.2.3 make build).
 BWSL_VERSION ?=
@@ -308,8 +334,9 @@ $(BWSLC_DEBUG_OBJ): $(BWSLC_SRC) Makefile $(EMBEDDED_MODULE_HEADER) $(NATIVE_SPI
 # WebAssembly Build
 # ============================================================================
 
-# Emscripten flags
-EMCC = emcc
+# Emscripten flags. Link with em++, not emcc: current Emscripten (seen with
+# 6.0.11) doesn't link the C++ runtime for emcc (undefined __cxa_guard_acquire).
+EMXX = em++
 WASM_COMMON_FLAGS = \
 	-DUSE_SPIRV_CROSS_LIB \
 	$(VERSION_FLAGS) \
@@ -337,7 +364,7 @@ WASM_SPIRV_INCLUDES = $(BWSL_INCLUDE_DIRS)
 
 .PHONY: all help build bwslc-sanitize \
 	clean wasm wasm-debug test test-sanitize test-symbol-table test-symbol-table-sanitize \
-	install equiv_runner spirv-tools clangd-config benchmark-backend
+	install equiv_runner bench_runner spirv-tools clangd-config benchmark-backend
 
 all: build
 
@@ -351,6 +378,7 @@ help:
 	@echo "  make spirv-tools        Build SPIRV-Tools library and CLI tools"
 	@echo "  make install DOCS_DIR=/path/to/site/public/wasm"
 	@echo "  make benchmark-backend  Benchmark backend cache/validation overlap"
+	@echo "  make bench_runner       GPU benchmark runner for tests/benchmarks/run.py"
 	@echo "  make clean              Remove build artifacts"
 
 build: $(ACTIVE_WRAPPER_OBJ) $(ACTIVE_OBJ)
@@ -410,6 +438,12 @@ equiv_runner: | $(BUILD_DIR_MARKER)
 		$(EQUIV_RUNNER_SRC) $(VULKAN_LIBS)
 	@echo "Built: $(EQUIV_RUNNER_OUT)"
 
+# GPU benchmark runner for tests/benchmarks/run.py (Windows: build.bat bench_runner).
+bench_runner: | $(BUILD_DIR_MARKER)
+	$(CXX) $(CXXFLAGS) $(VULKAN_INCLUDE) -o $(BENCH_RUNNER_OUT) \
+		$(BENCH_RUNNER_SRC) $(BENCH_RUNNER_LIBS)
+	@echo "Built: $(BENCH_RUNNER_OUT)"
+
 spirv-tools: $(SPIRV_TOOLS_STAMP)
 
 $(SPIRV_TOOLS_STAMP): $(SPIRV_TOOLS_SRC)/CMakeLists.txt | $(BUILD_DIR_MARKER)
@@ -459,17 +493,17 @@ $(BUILD_DIR_MARKER):
 	@touch $@
 
 wasm: $(WASM_DIR) $(WASM_DIR)/bwsl_wasm.o $(WASM_DIR)/spirv_cross_wrapper.o
-	$(EMCC) $(WASM_DIR)/bwsl_wasm.o $(WASM_DIR)/spirv_cross_wrapper.o \
+	$(EMXX) $(WASM_DIR)/bwsl_wasm.o $(WASM_DIR)/spirv_cross_wrapper.o \
 		$(WASM_COMMON_FLAGS) $(WASM_RELEASE_OPT) -o $(WASM_DIR)/bwsl.js
 	@echo "Built: $(WASM_DIR)/bwsl.js + $(WASM_DIR)/bwsl.wasm"
 	@ls -lh $(WASM_DIR)/bwsl.*
 
 $(WASM_DIR)/bwsl_wasm.o: $(WASM_SOURCE) Makefile $(EMBEDDED_MODULE_HEADER) | $(WASM_DIR)
-	$(EMCC) -c $(WASM_SOURCE) $(WASM_BWSL_INCLUDES) -DBWSL_WASM \
+	$(EMXX) -c $(WASM_SOURCE) $(WASM_BWSL_INCLUDES) -DBWSL_WASM \
 		$(WASM_COMMON_FLAGS) $(WASM_RELEASE_OPT) -MMD -MP -MF $(@:.o=.d) -o $@
 
 $(WASM_DIR)/spirv_cross_wrapper.o: $(SPIRV_CROSS_WRAPPER) Makefile | $(WASM_DIR)
-	$(EMCC) -c $(SPIRV_CROSS_WRAPPER) $(WASM_SPIRV_INCLUDES) \
+	$(EMXX) -c $(SPIRV_CROSS_WRAPPER) $(WASM_SPIRV_INCLUDES) \
 		-DSPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS \
 		$(WASM_COMMON_FLAGS) $(WASM_RELEASE_OPT) -MMD -MP -MF $(@:.o=.d) -o $@
 
@@ -477,11 +511,11 @@ $(WASM_DIR): | $(BUILD_DIR_MARKER)
 	$(MKDIR_WASM)
 
 wasm-debug: $(WASM_DIR) $(EMBEDDED_MODULE_HEADER)
-	$(EMCC) -c $(WASM_SOURCE) $(WASM_BWSL_INCLUDES) -DBWSL_WASM \
+	$(EMXX) -c $(WASM_SOURCE) $(WASM_BWSL_INCLUDES) -DBWSL_WASM \
 		$(WASM_COMMON_FLAGS) $(WASM_DEBUG_OPT) -o $(WASM_DIR)/bwsl_wasm_debug.o
-	$(EMCC) -c $(SPIRV_CROSS_WRAPPER) $(WASM_SPIRV_INCLUDES) \
+	$(EMXX) -c $(SPIRV_CROSS_WRAPPER) $(WASM_SPIRV_INCLUDES) \
 		$(WASM_COMMON_FLAGS) $(WASM_DEBUG_OPT) -o $(WASM_DIR)/spirv_cross_wrapper_debug.o
-	$(EMCC) $(WASM_DIR)/bwsl_wasm_debug.o $(WASM_DIR)/spirv_cross_wrapper_debug.o \
+	$(EMXX) $(WASM_DIR)/bwsl_wasm_debug.o $(WASM_DIR)/spirv_cross_wrapper_debug.o \
 		$(WASM_COMMON_FLAGS) $(WASM_DEBUG_OPT) -o $(WASM_DIR)/bwsl-debug.js
 	@echo "Built: $(WASM_DIR)/bwsl-debug.js"
 
@@ -523,6 +557,7 @@ benchmark-wgsl-web: build
 	python3 scripts/benchmark_wgsl_web.py --compiler $(BWSLC_OUT)
 
 test-wgsl-web:
+	python3 tests/wgsl_bootstrap_tests.py
 	node --test tests/webgpu_benchmark_tests.mjs
 	node --test tests/webgpu_render_tests.mjs
 	python3 tests/wgsl_web_server_tests.py

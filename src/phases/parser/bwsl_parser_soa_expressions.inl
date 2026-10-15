@@ -214,25 +214,12 @@ NodeRef Parser::ParsePostfix() {
                     // Check for EVAL_CONSTANT first (module-level const declarations)
                     if (sym && sym->kind == SymbolKind::EVAL_CONSTANT) {
                         const LiteralValue& constVal = symbolTable.evalConstants[sym->index];
-                        switch (constVal.type) {
-                            case LiteralValue::FLOAT:
-                                return RecordFoldedConstant(
-                                    ASTFactory::MakeLiteralFloat(ast, constVal.floatValue, loc.line, loc.column),
-                                    expr, memberToken);
-                            case LiteralValue::INT:
-                                return RecordFoldedConstant(
-                                    ASTFactory::MakeLiteralInt(ast, constVal.intValue, loc.line, loc.column),
-                                    expr, memberToken);
-                            case LiteralValue::UINT:
-                                return RecordFoldedConstant(
-                                    ASTFactory::MakeLiteralUint(ast, constVal.uintValue, loc.line, loc.column),
-                                    expr, memberToken);
-                            case LiteralValue::BOOL:
-                                return RecordFoldedConstant(
-                                    ASTFactory::MakeLiteralBool(ast, constVal.boolValue, loc.line, loc.column),
-                                    expr, memberToken);
-                            default:
-                                break;
+                        NodeRef folded = MakeLiteralNodeFromValue(constVal, loc.line, loc.column);
+                        if (folded.IsValid()) {
+                            // Keep parsing postfixes: a vector constant may be
+                            // swizzled or indexed (Dirs::TINT.xy).
+                            expr = RecordFoldedConstant(folded, expr, memberToken);
+                            continue;
                         }
                     }
                     // Also check for VARIABLE kind (for const variables declared inside functions/scopes)
@@ -417,6 +404,15 @@ NodeRef Parser::ParsePrimary() {
     u32 line = loc.line;
     u32 col = loc.column;
 
+    // After rejecting a keyword declaration, parse references to that spelling
+    // as identifiers to keep the surrounding expression and braces intact.
+    // This only affects invalid programs; the declaration error remains fatal.
+    if (CheckRecoveredKeywordName()) {
+        std::string name(CurrentValue());
+        Advance();
+        return ASTFactory::MakeIdentifier(ast, name, line, col);
+    }
+
     // Type constructor check
     if (CheckMask(TokenMasks::CORE_TYPES)) {
         TokenRef next = PeekNext();
@@ -541,25 +537,9 @@ NodeRef Parser::ParsePrimary() {
         // Check for EVAL_CONSTANT first (module-level const declarations)
         if (sym && sym->kind == SymbolKind::EVAL_CONSTANT) {
             const LiteralValue& constVal = symbolTable.evalConstants[sym->index];
-            switch (constVal.type) {
-                case LiteralValue::FLOAT:
-                    return RecordFoldedConstant(
-                        ASTFactory::MakeLiteralFloat(ast, constVal.floatValue, line, col),
-                        NodeRef::Null(), previous);
-                case LiteralValue::INT:
-                    return RecordFoldedConstant(
-                        ASTFactory::MakeLiteralInt(ast, constVal.intValue, line, col),
-                        NodeRef::Null(), previous);
-                case LiteralValue::UINT:
-                    return RecordFoldedConstant(
-                        ASTFactory::MakeLiteralUint(ast, constVal.uintValue, line, col),
-                        NodeRef::Null(), previous);
-                case LiteralValue::BOOL:
-                    return RecordFoldedConstant(
-                        ASTFactory::MakeLiteralBool(ast, constVal.boolValue, line, col),
-                        NodeRef::Null(), previous);
-                default:
-                    break;
+            NodeRef folded = MakeLiteralNodeFromValue(constVal, line, col);
+            if (folded.IsValid()) {
+                return RecordFoldedConstant(folded, NodeRef::Null(), previous);
             }
         }
         // Evaluated const variables may still be substituted while parsing; unevaluated
@@ -602,6 +582,17 @@ NodeRef Parser::ParsePrimary() {
             ast->GetIdentifier(node).identifierKind = SpecialIdentifier::INPUT;
         } else {
             ast->GetIdentifier(node).identifierKind = SpecialIdentifier::NONE;
+        }
+        if (sym && sym->kind == SymbolKind::VARIABLE &&
+            sym->namespaceKind == NamespaceKind::MODULE &&
+            sym->moduleIndex < symbolTable.modules.count) {
+            const VariableData& data = symbolTable.variables[sym->index];
+            if (data.isConst && IsArray(data.typeInfo) && data.constDecl.IsValid()) {
+                std::string qualified = symbolTable.modules[sym->moduleIndex].name.ToString() +
+                                        "::" + identArena.ToString(sourceBase());
+                ast->identifierConstBindingHashes[node.Index()] =
+                    ArenaString::MakeHashOnly(qualified).nameHash;
+            }
         }
         return node;
     }
@@ -763,7 +754,11 @@ NodeRef Parser::ParseMemberAccess(NodeRef object) {
     }
 
     SourceLocation loc = getLocation(stream->GetOffset(previous));
-    Consume(TokenType::IDENTIFIER, "Expected member name after '.'");
+    if (CheckRecoveredKeywordName()) {
+        Advance();
+    } else {
+        Consume(TokenType::IDENTIFIER, "Expected member name after '.'");
+    }
     ArenaString memberName = ArenaString::Make(sourceBase(), stream->GetOffset(previous), stream->GetLength(previous));
     SourceLocation memberLoc = getLocation(stream->GetOffset(previous));
 

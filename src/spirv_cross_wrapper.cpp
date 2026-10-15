@@ -66,9 +66,15 @@ static void preserveBindingIndices(spirv_cross::CompilerMSL& compiler, spv::Exec
         if (binding >= 16) SPIRV_CROSS_THROW("Metal supports sampler bindings 0 through 15");
         samplerSlots[binding] = true;
     }
-    auto allocateSamplerSlot = [&]() -> uint32_t {
-        for (uint32_t slot = 0; slot < 16; ++slot)
-            if (!samplerSlots[slot]) { samplerSlots[slot] = true; return slot; }
+    // A texture array's samplers take `count` consecutive slots.
+    auto allocateSamplerSlots = [&](uint32_t count) -> uint32_t {
+        for (uint32_t first = 0; first + count <= 16; ++first) {
+            uint32_t free = 0;
+            while (free < count && !samplerSlots[first + free]) ++free;
+            if (free < count) continue;
+            for (uint32_t slot = first; slot < first + count; ++slot) samplerSlots[slot] = true;
+            return first;
+        }
         SPIRV_CROSS_THROW("Metal supports at most 16 active samplers");
     };
 
@@ -100,7 +106,8 @@ static void preserveBindingIndices(spirv_cross::CompilerMSL& compiler, spv::Exec
         mslBinding.msl_buffer = binding;
         mslBinding.msl_texture = binding;
         // Remap sampler to sequential slots within 0-15 range
-        mslBinding.msl_sampler = allocateSamplerSlot();
+        const auto& type = compiler.get_type(res.type_id);
+        mslBinding.msl_sampler = allocateSamplerSlots(type.array.empty() ? 1 : type.array[0]);
         compiler.add_msl_resource_binding(mslBinding);
     };
 
@@ -206,12 +213,11 @@ static std::string CheckGLSLESSPIRVCompatRaw(const std::vector<uint32_t>& spirv,
             return "error: GLSL ES does not support fine/coarse derivative opcodes; use the direct GLES derivative fallback";
         } else if (glslVersion < 310 && op == spv::OpImageQueryLevels) {
             return "error: GLSL ES 300 does not support textureQueryLevels";
-        } else if (glslVersion < 310 && op == spv::OpImageGather &&
-                   wordCount >= 7) {
-            uint32_t imageOperands = spirv[offset + 6];
-            if ((imageOperands & spv::ImageOperandsOffsetMask) != 0) {
-                return "error: GLSL ES 300 does not support textureGatherOffset";
-            }
+        } else if (glslVersion < 310 && op == spv::OpImageGather) {
+            // SPIRV-Cross asserts for every gather on ESSL 300 in WASM builds,
+            // including the form without optional image operands. Return to
+            // the direct GLES fallback before invoking compiler.compile().
+            return "error: GLSL ES 300 does not support textureGather; use the direct GLES gather fallback";
         }
 
         offset += wordCount;
@@ -428,12 +434,36 @@ static void combineGLSLSamplers(spirv_cross::CompilerGLSL& compiler) {
     }
 }
 
+// SPIRV-Cross turns an array variable that is only ever assigned a constant
+// into a lookup table: a module-scope `const` array, indexed directly. Drivers
+// handle dynamic indexing into `const` arrays badly (NVIDIA copies the whole
+// array into local memory on every invocation, see issue #151), while a plain
+// initialized array is cheap. This keeps such variables as ordinary arrays.
+class GLSLCompiler : public spirv_cross::CompilerGLSL {
+public:
+    using spirv_cross::CompilerGLSL::CompilerGLSL;
+
+protected:
+    // Runs after SPIRV-Cross's analysis (which finds the lookup tables) and
+    // before anything is emitted, on every compile pass.
+    void emit_header() override {
+        ir.for_each_typed_id<spirv_cross::SPIRVariable>([&](uint32_t, spirv_cross::SPIRVariable& var) {
+            if (!variable_is_lut(var)) return;
+            get<spirv_cross::SPIRConstant>(var.static_expression).is_used_as_lut = false;
+            var.static_expression = 0;
+            var.statically_assigned = false;
+            var.remapped_variable = false;
+        });
+        spirv_cross::CompilerGLSL::emit_header();
+    }
+};
+
 std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, bool es) {
 #ifdef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
     if (auto err = CheckGLSLESSPIRVCompatRaw(spirv, glslVersion, es); !err.empty()) {
         return err;
     }
-    spirv_cross::CompilerGLSL compiler(spirv);
+    GLSLCompiler compiler(spirv);
     if (auto err = CheckGLSLESCompat(compiler, glslVersion, es); !err.empty()) {
         return err;
     }
@@ -442,6 +472,11 @@ std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, b
     glslOpts.es = es;
     glslOpts.vulkan_semantics = false;
     glslOpts.separate_shader_objects = true;
+    // ES fragment shaders otherwise default to mediump float while vertex
+    // shaders default to highp; drivers that resolve varying precision from
+    // the stage default (Intel iGPUs) then reject or truncate the interface.
+    glslOpts.fragment.default_float_precision = spirv_cross::CompilerGLSL::Options::Highp;
+    glslOpts.fragment.default_int_precision = spirv_cross::CompilerGLSL::Options::Highp;
     compiler.set_common_options(glslOpts);
     combineGLSLSamplers(compiler);
         std::string result = compiler.compile();
@@ -455,7 +490,7 @@ std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, b
         if (auto err = CheckGLSLESSPIRVCompatRaw(spirv, glslVersion, es); !err.empty()) {
             return err;
         }
-        spirv_cross::CompilerGLSL compiler(spirv);
+        GLSLCompiler compiler(spirv);
         if (auto err = CheckGLSLESCompat(compiler, glslVersion, es); !err.empty()) {
             return err;
         }
@@ -464,89 +499,15 @@ std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, b
         glslOpts.es = es;
         glslOpts.vulkan_semantics = false;
         glslOpts.separate_shader_objects = true;
+        // ES fragment shaders otherwise default to mediump float while vertex
+        // shaders default to highp; drivers that resolve varying precision from
+        // the stage default (Intel iGPUs) then reject or truncate the interface.
+        glslOpts.fragment.default_float_precision = spirv_cross::CompilerGLSL::Options::Highp;
+        glslOpts.fragment.default_int_precision = spirv_cross::CompilerGLSL::Options::Highp;
         compiler.set_common_options(glslOpts);
         combineGLSLSamplers(compiler);
         std::string result = compiler.compile();
         PatchGLSLES300Packing4x8Builtins(result, glslVersion, es);
-        if (auto err = CheckGLSLESEmittedCompat(result, glslVersion, es); !err.empty()) {
-            return err;
-        }
-        return result;
-    } catch (const spirv_cross::CompilerError& e) {
-        return std::string("error: ") + e.what();
-    } catch (const std::exception& e) {
-        return std::string("error: ") + e.what();
-    }
-#endif
-}
-
-// Compile to GLSL with varying name remapping
-// varyingNames maps location -> desired name (e.g., {0: "v_position", 1: "v_normal"})
-// isVertex: true for vertex shader (rename outputs), false for fragment (rename inputs)
-std::string CompileToGLSLWithVaryings(
-    const std::vector<uint32_t>& spirv,
-    int glslVersion,
-    bool es,
-    const std::unordered_map<uint32_t, std::string>& varyingNames,
-    bool isVertex)
-{
-#ifdef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
-    if (auto err = CheckGLSLESSPIRVCompatRaw(spirv, glslVersion, es); !err.empty()) {
-        return err;
-    }
-    spirv_cross::CompilerGLSL compiler(spirv);
-    spirv_cross::CompilerGLSL::Options glslOpts;
-    glslOpts.version = glslVersion;
-    glslOpts.es = es;
-    glslOpts.vulkan_semantics = false;
-    glslOpts.separate_shader_objects = true;
-    compiler.set_common_options(glslOpts);
-
-    // Rename stage inputs/outputs based on location
-    auto resources = compiler.get_shader_resources();
-    auto& interfaceVars = isVertex ? resources.stage_outputs : resources.stage_inputs;
-
-    for (const auto& var : interfaceVars) {
-        uint32_t location = compiler.get_decoration(var.id, spv::DecorationLocation);
-        auto it = varyingNames.find(location);
-        if (it != varyingNames.end()) {
-            compiler.set_name(var.id, it->second);
-        }
-    }
-
-    combineGLSLSamplers(compiler);
-        std::string result = compiler.compile();
-    if (auto err = CheckGLSLESEmittedCompat(result, glslVersion, es); !err.empty()) {
-        return err;
-    }
-    return result;
-#else
-    try {
-        if (auto err = CheckGLSLESSPIRVCompatRaw(spirv, glslVersion, es); !err.empty()) {
-            return err;
-        }
-        spirv_cross::CompilerGLSL compiler(spirv);
-        spirv_cross::CompilerGLSL::Options glslOpts;
-        glslOpts.version = glslVersion;
-        glslOpts.es = es;
-        glslOpts.vulkan_semantics = false;
-        glslOpts.separate_shader_objects = true;
-        compiler.set_common_options(glslOpts);
-
-        // Rename stage inputs/outputs based on location
-        auto resources = compiler.get_shader_resources();
-        auto& interfaceVars = isVertex ? resources.stage_outputs : resources.stage_inputs;
-
-        for (const auto& var : interfaceVars) {
-            uint32_t location = compiler.get_decoration(var.id, spv::DecorationLocation);
-            auto it = varyingNames.find(location);
-            if (it != varyingNames.end()) {
-                compiler.set_name(var.id, it->second);
-            }
-        }
-
-        combineGLSLSamplers(compiler);
-        std::string result = compiler.compile();
         if (auto err = CheckGLSLESEmittedCompat(result, glslVersion, es); !err.empty()) {
             return err;
         }

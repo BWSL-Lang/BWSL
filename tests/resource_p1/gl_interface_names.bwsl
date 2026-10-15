@@ -1,0 +1,36 @@
+// GL interface names: uniform blocks, combined samplers, attributes and
+// varyings are emitted under predictable names (also when a source name is
+// a GLSL keyword or builtin) and reported as glName in bindings.json.
+pipeline GLInterfaceNames {
+    struct Render {
+        float4[2] transforms;
+        float2 viewport;
+    };
+
+    attributes {
+        position: float3
+        sample: float2
+    }
+
+    resources {
+        render: Render
+        input: float4
+        texture: texture2D
+        texSampler: sampler
+    }
+
+    pass "Main" {
+        use attributes { position, sample }
+        use resources { render, input, texture, texSampler }
+
+        vertex {
+            output.position = float4(attributes.position.xy / resources.render.viewport, 0.0, 1.0);
+            output.output = attributes.sample;
+            @flat output.tint = resources.render.transforms[1];
+        }
+
+        fragment {
+            output.color = sample(resources.texture, resources.texSampler, input.output) * input.tint * resources.input;
+        }
+    }
+}

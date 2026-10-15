@@ -1,0 +1,24 @@
+// Each texture array element uses one of the 32 resource slots (#137).
+pipeline TextureArrayError {
+    attributes {
+        position: float2
+    }
+    resources {
+        textures: texture2D[30]
+        samp: sampler
+        other: texture2D
+        tint: float4
+        more: float4
+    }
+    pass "Main" {
+        use attributes { position }
+        use resources { textures, samp, other, tint, more }
+        vertex {
+            output.position = float4(attributes.position, 1.0, 1.0);
+            output.uv = attributes.position;
+        }
+        fragment {
+            output.color = sample(resources.textures[0], input.uv) + sample(resources.other, input.uv) * resources.tint * resources.more;
+        }
+    }
+}

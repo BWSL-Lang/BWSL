@@ -1,0 +1,90 @@
+// G-buffer style pass writing four RGBA16F render targets at once: terrain
+// albedo blended from three layers by height and slope, normals from the
+// height map plus a detail normal map, material parameters, and an emissive
+// term. Ambient occlusion compares the height against an 8-tap ring read
+// from a constant array.
+pipeline MrtBench {
+    attributes {
+        position: float2
+    }
+
+    struct Params {
+        // uv tiling, height-to-normal strength, AO radius (uv units)
+        float4 terrain;
+        // 1/height map width, 1/height map height, detail tiling, detail strength
+        float4 heightTexel;
+        float4 grassTint;
+        float4 rockTint;
+        float4 lavaColor;
+    };
+
+    resources {
+        params: Params
+        heightMap: texture2D
+        detailNormals: texture2D
+        albedoAtlas: texture2D
+    }
+
+    const float2[8] AO_RING = {
+        float2(1.0, 0.0), float2(0.7071, 0.7071), float2(0.0, 1.0), float2(-0.7071, 0.7071),
+        float2(-1.0, 0.0), float2(-0.7071, -0.7071), float2(0.0, -1.0), float2(0.7071, -0.7071)
+    };
+
+    pass "Main" {
+        use attributes { position }
+        use resources { params, heightMap, detailNormals, albedoAtlas }
+
+        outputs {
+            albedo: float4
+            normal: float4
+            material: float4
+            emissive: float4
+        }
+
+        vertex {
+            output.position = float4(attributes.position, 0.0, 1.0);
+            output.uv = attributes.position * 0.5 + 0.5;
+        }
+
+        fragment {
+            Params p = resources.params;
+            float2 uv = input.uv * p.terrain.x;
+            float2 texel = p.heightTexel.xy;
+
+            float h = sample(resources.heightMap, uv).r;
+            float hl = sample(resources.heightMap, uv - float2(texel.x, 0.0)).r;
+            float hr = sample(resources.heightMap, uv + float2(texel.x, 0.0)).r;
+            float hd = sample(resources.heightMap, uv - float2(0.0, texel.y)).r;
+            float hu = sample(resources.heightMap, uv + float2(0.0, texel.y)).r;
+            float3 n = normalize(float3((hl - hr) * p.terrain.y, (hd - hu) * p.terrain.y, 1.0));
+
+            float3 detail = sample(resources.detailNormals, uv * p.heightTexel.z).xyz * 2.0 - 1.0;
+            n = normalize(float3(n.xy + detail.xy * p.heightTexel.w, n.z));
+            float slope = 1.0 - n.z;
+
+            float3 grass = sample(resources.albedoAtlas, uv * 4.0).rgb * p.grassTint.rgb;
+            float3 rock = sample(resources.albedoAtlas, uv * 3.0 + float2(0.5, 0.0)).rgb * p.rockTint.rgb;
+            float3 snow = float3(0.9, 0.92, 0.95) + sample(resources.albedoAtlas, uv * 6.0 + float2(0.0, 0.5)).rgb * 0.05;
+            float rockWeight = smoothstep(0.15, 0.35, slope);
+            float snowWeight = smoothstep(0.65, 0.8, h) * (1.0 - rockWeight);
+            float3 albedo = lerp(lerp(grass, rock, rockWeight), snow, snowWeight);
+
+            float occlusion = 0.0;
+            for (int i = 0; i < 8; i++) {
+                float2 offset = AO_RING[i] * p.terrain.z;
+                float ring = sample(resources.heightMap, uv + offset).r;
+                float ringFar = sample(resources.heightMap, uv + offset * 2.5).r;
+                occlusion += max(ring - h, 0.0) + 0.5 * max(ringFar - h, 0.0);
+            }
+            float ao = clamp(1.0 - occlusion * 1.5, 0.0, 1.0);
+
+            float lava = 1.0 - smoothstep(0.08, 0.15, h);
+            float roughness = lerp(0.85, 0.45, rockWeight) * (1.0 - 0.6 * snowWeight);
+
+            output.albedo = float4(albedo * (1.0 - lava), ao);
+            output.normal = float4(n * 0.5 + 0.5, h);
+            output.material = float4(roughness, rockWeight * 0.1, slope, lava);
+            output.emissive = float4(p.lavaColor.rgb * lava * (0.5 + 0.5 * detail.z), 1.0);
+        }
+    }
+}

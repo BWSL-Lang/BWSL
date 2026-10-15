@@ -202,6 +202,9 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
 
 inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
   const FunctionCallData &call = ast->GetFunctionCall(ref);
+  u16 textureArrayResult;
+  if (TryLowerDynamicTextureArrayCall(ref, &textureArrayResult))
+    return textureArrayResult;
 
   // Collect argument registers
   // Initialize to the unused operand sentinel. Supports up to 16 arguments
@@ -716,25 +719,57 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       op = (mask(argType) & TypeMasks::FLOAT_TYPES) ? OP_FABS : OP_IABS;
       break;
     }
-    case Intrinsic::MIN: {
-      CoreType argType = GetRegisterType(args[0]);
-      if (mask(argType) & TypeMasks::FLOAT_TYPES)
-        op = OP_FMIN;
-      else if (mask(argType) & TypeMasks::UINT_TYPES)
-        op = OP_UMIN;
-      else
-        op = OP_IMIN;
-      break;
-    }
+    case Intrinsic::MIN:
     case Intrinsic::MAX: {
-      CoreType argType = GetRegisterType(args[0]);
-      if (mask(argType) & TypeMasks::FLOAT_TYPES)
-        op = OP_FMAX;
-      else if (mask(argType) & TypeMasks::UINT_TYPES)
-        op = OP_UMAX;
-      else
-        op = OP_IMAX;
-      break;
+        bool isMin = intrinsic == Intrinsic::MIN;
+        CoreType argType = GetRegisterType(args[0]);
+        // The opcode is picked from the first argument. The backends
+        // splat scalars and convert int/uint, but not float/integer or
+        // bool, so reject those mixes here rather than in SPIR-V
+        // validation.
+        constexpr TypeMask INTEGER_TYPES = TypeMasks::INT_TYPES | TypeMasks::UINT_TYPES;
+        auto numericKind = [&](CoreType type) {
+            if (mask(type) & TypeMasks::FLOAT_TYPES) return 1;
+            if (mask(type) & INTEGER_TYPES) return 2;
+            return 0;
+        };
+        int kind = numericKind(argType);
+        for (u32 i = 0; i < argCount; i++) {
+            CoreType type = GetRegisterType(args[i]);
+            if (numericKind(type) == 0 || numericKind(type) != kind) {
+                char msg[192];
+                snprintf(msg, sizeof(msg),
+                         "Error: '%s' argument %u is %s, but argument 1 is %s; "
+                         "use all float or all integer arguments\n",
+                         isMin ? "min" : "max", i + 1, CoreTypeToString(type),
+                         CoreTypeToString(argType));
+                if (kind == 0)
+                    snprintf(msg, sizeof(msg),
+                             "Error: '%s' argument 1 is %s; expected a float "
+                             "or integer scalar or vector\n",
+                             isMin ? "min" : "max", CoreTypeToString(argType));
+                ReportErrorAt(call.arguments[i], msg);
+                return 0;
+            }
+        }
+        if (kind == 1)
+            op = isMin ? OP_FMIN : OP_FMAX;
+        else if (mask(argType) & TypeMasks::UINT_TYPES)
+            op = isMin ? OP_UMIN : OP_UMAX;
+        else
+            op = isMin ? OP_IMIN : OP_IMAX;
+        // min/max are variadic: reduce left to right, min(a, b, c) =
+        // min(min(a, b), c). The last step is emitted below like any binary
+        // intrinsic, so clear consumed arguments out of its operand slots.
+        for (u32 i = 2; i < argCount; i++) {
+            u16 partial = AllocateRegister();
+            builder.EmitInstruction(op, partial, args[0], args[1]);
+            SetRegisterType(partial, argType);
+            args[0] = partial;
+            args[1] = args[i];
+            args[i] = 0xFFFF;
+        }
+        break;
     }
     case Intrinsic::CLAMP: {
       CoreType argType = GetRegisterType(args[0]);
@@ -1096,6 +1131,8 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
                                 argCount == 1;
 
       if (isScalarConversion) {
+        u16 constant = TryConvertScalarConstant(args[0], constructedType);
+        if (constant != 0xFFFF) return constant;
         // Scalar type conversion - emit appropriate conversion opcode
         CoreType srcType = GetRegisterType(args[0]);
         if (srcType == constructedType) {
@@ -1364,8 +1401,17 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         {
           u32 targetWidth = GetVectorDimension(constructedType);
           u32 providedComponents = 0;
+          // An argument that already failed to lower (e.g. an unresolved
+          // call) has no type and would count as one component, turning
+          // its error into a misleading arity error as well.
+          bool hasFailedArg = false;
           for (u32 i = 0; i < argCount; i++) {
-            providedComponents += GetVectorDimension(GetRegisterType(args[i]));
+            CoreType argType = GetRegisterType(args[i]);
+            hasFailedArg |= argType == CoreType::INVALID;
+            providedComponents += GetVectorDimension(argType);
+          }
+          if (hasFailedArg && hadError) {
+            return 0;
           }
           bool validArity;
           if (argCount == 1) {
@@ -1395,6 +1441,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         // Store arg count in metadata for SPIR-V backend
         program.metadata[builder.currentInstruction - 1] = argCount;
         SetRegisterType(dest, constructedType);
+        RecordConstantVector(dest);
       }
     } else {
       u32 callHash = call.name.nameHash;
@@ -1504,6 +1551,9 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         snprintf(msg, sizeof(msg), "Error: Function not found: %s\n",
                  functionName.c_str());
         ReportError(msg);
+        // Leave the result untyped so enclosing constructors don't report
+        // follow-on arity errors for it.
+        SetRegisterType(dest, CoreType::INVALID);
       }
     }
   }
@@ -1632,6 +1682,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   auto savedVariableRegisters = variableRegisters;
   auto savedVariableStructTypes = variableStructTypes;
   auto savedConstVariables = constVariables;
+  auto savedInitializedVariables = initializedVariables;
   auto savedNodeRegisters = nodeRegisters;
   u32 savedStructMethodTypeHash = currentStructMethodTypeHash;
   u16 savedStructMethodSelfReg = currentStructMethodSelfReg;
@@ -1640,6 +1691,10 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   u32 selfHash = Utils::HashStr("self");
   variableRegisters[selfHash] = receiverReg;
   variableStructTypes[selfHash] = receiverStructHash;
+  // `self` aliases the receiver, which already holds a value. Without this,
+  // the first `self.field = ...` would zero-initialize it and overwrite the
+  // receiver's other fields.
+  initializedVariables.insert(selfHash);
   if (receiverReg < MAX_REGISTERS) {
     program.registerStructTypes[receiverReg] = receiverStructHash;
   }
@@ -1657,6 +1712,8 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
     u16 paramReg = CopyArgumentValue(args[i]);
     variableRegisters[paramNameHash] = paramReg;
     constVariables.erase(paramNameHash);
+    initializedVariables.insert(paramNameHash); // holds the argument's value
+    program.registerNameHashes[paramReg] = paramNameHash; // its own variable
 
     u32 paramTypeHash = 0;
     CoreType paramType =
@@ -1678,14 +1735,17 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   u16 savedReturnReg = inlineReturnReg;
   u16 savedReturnFlagReg = inlineReturnFlagReg;
   u32 savedReturnCounter = inlineReturnCounter;
+  u32 savedReturnFlagReads = inlineReturnFlagReads;
   u32 savedModuleIndex = inlineModuleIndex;
 
   inlineReturnReg = returnReg;
   inlineReturnFlagReg = AllocateRegister();
   SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
+  u32 inlineFirstInstruction = builder.currentInstruction;
   builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg,
                           builder.EmitConstantBool(false));
   inlineReturnCounter = 0;
+  inlineReturnFlagReads = 0;
   inlineModuleIndex = methodModuleIndex;
   inlineDepth++;
   if (inlineStackDepth < MAX_INLINE_DEPTH) {
@@ -1707,13 +1767,16 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
     inlineStackDepth--;
   }
   inlineDepth--;
+  DropUnreadReturnFlag(inlineFirstInstruction);
   inlineReturnReg = savedReturnReg;
   inlineReturnFlagReg = savedReturnFlagReg;
   inlineReturnCounter = savedReturnCounter;
+  inlineReturnFlagReads = savedReturnFlagReads;
   inlineModuleIndex = savedModuleIndex;
   variableRegisters = savedVariableRegisters;
   variableStructTypes = savedVariableStructTypes;
   constVariables = savedConstVariables;
+  initializedVariables = savedInitializedVariables;
   nodeRegisters = savedNodeRegisters;
   currentStructMethodTypeHash = savedStructMethodTypeHash;
   currentStructMethodSelfReg = savedStructMethodSelfReg;
@@ -1764,7 +1827,18 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
       0xFFFFFFFF; // Track which module we found the function in
   std::vector<OverloadTypeMask> argMasks;
   argMasks.reserve(argCount);
+  // Texture and sampler handles aren't real registers, so their type comes
+  // from the argument expression; a texture handle would otherwise read as
+  // a uint constant and match no texture2D parameter.
+  CoreType argHandleTypes[16];
   for (u32 i = 0; i < argCount; i++) {
+    argHandleTypes[i] = i < call.arguments.count
+                            ? GetResourceHandleType(call.arguments[i], args[i])
+                            : CoreType::INVALID;
+    if (argHandleTypes[i] != CoreType::INVALID) {
+      argMasks.push_back(MakeOverloadMask(argHandleTypes[i]));
+      continue;
+    }
     CoreType argType = GetRegisterType(args[i]);
     u32 customHash = 0;
     if (argType == CoreType::CUSTOM) {
@@ -1980,6 +2054,8 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   auto savedVariableRegisters = variableRegisters;
   auto savedVariableStructTypes = variableStructTypes;
   auto savedConstVariables = constVariables;
+  auto savedInitializedVariables = initializedVariables;
+  auto savedResourceHandleVariables = resourceHandleVariables;
   auto savedNodeRegisters = nodeRegisters;
   u32 savedStructMethodTypeHash = currentStructMethodTypeHash;
   u16 savedStructMethodSelfReg = currentStructMethodSelfReg;
@@ -1994,9 +2070,20 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   for (u32 i = 0; i < paramCount; i++) {
     const auto &param = func.parameters[i];
     u32 paramNameHash = param.first.nameHash; // Parameter name
+    if (argHandleTypes[i] != CoreType::INVALID) {
+      // Texture functions read the slot from the handle, so bind it as is.
+      variableRegisters[paramNameHash] = args[i];
+      resourceHandleVariables[paramNameHash] = {args[i], argHandleTypes[i]};
+      constVariables.erase(paramNameHash);
+      initializedVariables.insert(paramNameHash);
+      continue;
+    }
+    resourceHandleVariables.erase(paramNameHash);
     u16 paramReg = CopyArgumentValue(args[i]);
     variableRegisters[paramNameHash] = paramReg;
     constVariables.erase(paramNameHash);
+    initializedVariables.insert(paramNameHash); // holds the argument's value
+    program.registerNameHashes[paramReg] = paramNameHash; // its own variable
 
     // Also set the type for the parameter based on the type name
     // The second element of the pair is the type name (e.g., "uint",
@@ -2028,13 +2115,16 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   u16 savedReturnReg = inlineReturnReg;
   u16 savedReturnFlagReg = inlineReturnFlagReg;
   u32 savedReturnCounter = inlineReturnCounter;
+  u32 savedReturnFlagReads = inlineReturnFlagReads;
   u32 savedModuleIndex = inlineModuleIndex;
   inlineReturnReg = returnReg;
   inlineReturnFlagReg = AllocateRegister();
   SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
+  u32 inlineFirstInstruction = builder.currentInstruction;
   builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg,
                           builder.EmitConstantBool(false));
   inlineReturnCounter = 0;
+  inlineReturnFlagReads = 0;
   inlineModuleIndex =
       foundModuleIndex; // Set module context for nested unqualified calls
   inlineDepth++;
@@ -2075,13 +2165,17 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
     inlineStackDepth--;
   }
   inlineDepth--;
+  DropUnreadReturnFlag(inlineFirstInstruction);
   inlineReturnReg = savedReturnReg;
   inlineReturnFlagReg = savedReturnFlagReg;
   inlineReturnCounter = savedReturnCounter;
+  inlineReturnFlagReads = savedReturnFlagReads;
   inlineModuleIndex = savedModuleIndex;
   variableRegisters = savedVariableRegisters;
   variableStructTypes = savedVariableStructTypes;
   constVariables = savedConstVariables;
+  initializedVariables = savedInitializedVariables;
+  resourceHandleVariables = savedResourceHandleVariables;
   nodeRegisters = savedNodeRegisters;
   currentStructMethodTypeHash = savedStructMethodTypeHash;
   currentStructMethodSelfReg = savedStructMethodSelfReg;
@@ -2228,22 +2322,173 @@ inline NodeRef IRLowering::TryResolveGenericFunction(const FunctionCallData &cal
 }
 
 inline u16 IRLowering::LowerTextureSample(NodeRef ref) {
+    const FunctionCallData &call = ast->GetFunctionCall(ref);
+
+    u16 texReg = LowerExpression(call.arguments[0]);
+    u16 coordReg = LowerExpression(call.arguments[1]);
+    u16 dest = AllocateRegister();
+
+    // IR format: s0 = texture (with 0x6000 marker for slot), s1 = coordinate
+    if (IR::IsUintConstant(texReg)) {
+        // texReg already has 0x6000 marker, pass it directly
+        builder.EmitInstruction(OP_TEX_SAMPLE, dest, texReg, coordReg);
+    } else {
+        // Bindless - texReg is a register containing texture handle
+        builder.EmitInstruction(OP_TEX_SAMPLE, dest, texReg, coordReg);
+    }
+
+    return dest;
+}
+
+// ============= Texture arrays =============
+
+inline const ResourceData *IRLowering::FindTextureArrayResource(NodeRef expr) const {
+  if (expr.IsNull() || expr.Type() != ASTNodeType::MEMBER_ACCESS)
+    return nullptr;
+  const MemberAccessData &access = ast->GetMemberAccess(expr);
+  if (access.object.IsNull() || access.object.Type() != ASTNodeType::IDENTIFIER ||
+      ast->GetIdentifier(access.object).identifierKind != SpecialIdentifier::RESOURCES)
+    return nullptr;
+  Symbol *sym = SymbolTable::LookupByHash(const_cast<SymbolTableData *>(symbols),
+                                          access.member.nameHash);
+  if (!sym || sym->kind != SymbolKind::RESOURCE || sym->index >= symbols->resources.count)
+    return nullptr;
+  const ResourceData &resource = symbols->resources[sym->index];
+  if (resource.type != ResourceBinding::Texture || resource.arraySize == 0)
+    return nullptr;
+  return &resource;
+}
+
+inline CoreType IRLowering::GetResourceHandleType(NodeRef expr, u16 reg) const {
+    if (expr.IsNull())
+        return CoreType::INVALID;
+    if (expr.Type() == ASTNodeType::IDENTIFIER) {
+        auto it = resourceHandleVariables.find(ast->GetIdentifier(expr).name.nameHash);
+        // A later local with the same name rebinds the variable to another
+        // register, so the handle must still match.
+        if (it != resourceHandleVariables.end() && it->second.handle == reg)
+            return it->second.type;
+        return CoreType::INVALID;
+    }
+    if (expr.Type() == ASTNodeType::ARRAY_ACCESS) {
+        const ResourceData* textures = FindTextureArrayResource(ast->GetArrayAccess(expr).array);
+        return textures ? static_cast<CoreType>(textures->coreType) : CoreType::INVALID;
+    }
+    if (expr.Type() != ASTNodeType::MEMBER_ACCESS)
+        return CoreType::INVALID;
+    const MemberAccessData& access = ast->GetMemberAccess(expr);
+    if (access.object.IsNull() || access.object.Type() != ASTNodeType::IDENTIFIER ||
+        ast->GetIdentifier(access.object).identifierKind != SpecialIdentifier::RESOURCES)
+        return CoreType::INVALID;
+    Symbol* sym = SymbolTable::LookupByHash(const_cast<SymbolTableData*>(symbols),
+                                            access.member.nameHash);
+    if (!sym || sym->kind != SymbolKind::RESOURCE || sym->index >= symbols->resources.count)
+        return CoreType::INVALID;
+    const ResourceData& resource = symbols->resources[sym->index];
+    // An unindexed texture array is not a handle; its access already reported.
+    if ((resource.type == ResourceBinding::Texture && resource.arraySize == 0) ||
+        resource.type == ResourceBinding::Sampler)
+        return static_cast<CoreType>(resource.coreType);
+    return CoreType::INVALID;
+}
+
+inline u16 IRLowering::LowerTextureArrayElement(NodeRef ref) {
+  const ArrayAccessData &access = ast->GetArrayAccess(ref);
+  const ResourceData *textures = FindTextureArrayResource(access.array);
+  const std::string name = ast->GetMemberAccess(access.array).member.ToString();
+  if (textures->bindingIndex >= 32) {
+    ReportErrorAt(ref, ("Error: texture array 'resources." + name +
+                        "' has no binding slot; list it in the pass's 'use resources'\n").c_str());
+    return 0;
+  }
+  s64 index = 0;
+  if (!TryGetConstIndex(LowerExpression(access.index), access.index, &index)) {
+    // TryLowerDynamicTextureArrayCall handles the supported dynamic case
+    // before the argument is lowered.
+    ReportErrorAt(ref, ("Error: texture array 'resources." + name +
+                        "' indexed with a non-constant index can only be passed directly "
+                        "to a texture function, e.g. sample(resources." + name + "[i], uv)\n").c_str());
+    return 0;
+  }
+  if (index < 0 || index >= static_cast<s64>(textures->arraySize)) {
+    ReportErrorAt(ref, ("Error: index " + std::to_string(index) + " is out of bounds for texture array 'resources." +
+                        name + "' of length " + std::to_string(textures->arraySize) + "\n").c_str());
+    return 0;
+  }
+  u16 texture = 0x6000 | static_cast<u16>(textures->bindingIndex + index);
+  SetRegisterType(texture, static_cast<CoreType>(textures->coreType));
+  return texture;
+}
+
+// GLSL ES 3.00 only indexes sampler arrays with constants, and Vulkan needs
+// a dynamically uniform index, so a dynamic index becomes an if/else chain
+// with one constant-index call per element, like a hand-written switch.
+// Out-of-range indices take the last element.
+inline bool IRLowering::TryLowerDynamicTextureArrayCall(NodeRef ref, u16 *result) {
   const FunctionCallData &call = ast->GetFunctionCall(ref);
-
-  u16 texReg = LowerExpression(call.arguments[0]);
-  u16 coordReg = LowerExpression(call.arguments[1]);
-  u16 dest = AllocateRegister();
-
-  // IR format: s0 = texture (with 0x6000 marker for slot), s1 = coordinate
-  if (IR::IsUintConstant(texReg)) {
-    // texReg already has 0x6000 marker, pass it directly
-    builder.EmitInstruction(OP_TEX_SAMPLE, dest, texReg, coordReg);
-  } else {
-    // Bindless - texReg is a register containing texture handle
-    builder.EmitInstruction(OP_TEX_SAMPLE, dest, texReg, coordReg);
+  if (!(call.flags & FunctionCallFlags::IS_INTRINSIC) || call.arguments.count == 0)
+    return false;
+  NodeRef element = call.arguments[0];
+  if (element.IsNull() || element.Type() != ASTNodeType::ARRAY_ACCESS ||
+      nodeRegisters.count(element.packed))  // already inside an element's branch
+    return false;
+  const ArrayAccessData &access = ast->GetArrayAccess(element);
+  const ResourceData *textures = FindTextureArrayResource(access.array);
+  if (!textures || textures->bindingIndex >= 32)
+    return false;
+  u16 indexReg = LowerExpression(access.index);
+  s64 constIndex;
+  if (TryGetConstIndex(indexReg, access.index, &constIndex))
+    return false;
+  CoreType indexType = GetRegisterType(indexReg);
+  if (indexType != CoreType::INT && indexType != CoreType::UINT) {
+    ReportErrorAt(access.index, "Error: texture array index must be an int or uint scalar\n");
+    *result = 0;
+    return true;
   }
 
-  return dest;
+  // Lower the other arguments once, ahead of the branches, so every
+  // element's call reuses them.
+  for (u32 i = 1; i < call.arguments.count; i++)
+    LowerExpression(call.arguments[i]);
+
+  auto dominatingNodes = nodeRegisters;
+  u16 selected = AllocateRegister();
+  auto lowerElement = [&](u32 elementIndex) {
+    nodeRegisters = dominatingNodes;
+    nodeRegisters[element.packed] = 0x6000 | static_cast<u16>(textures->bindingIndex + elementIndex);
+    u16 value = LowerFunctionCall(ref);
+    SetRegisterType(selected, GetRegisterType(value));
+    builder.EmitInstruction(OP_STORE_REG, selected, value);
+  };
+  auto lowerFrom = [&](auto &&self, u32 elementIndex) -> void {
+    if (elementIndex + 1 == textures->arraySize) {
+      lowerElement(elementIndex);
+      return;
+    }
+    u16 expected = indexType == CoreType::UINT ? EmitConstantUint(elementIndex)
+                                               : EmitConstantInt(elementIndex);
+    u16 equal = AllocateRegister();
+    SetRegisterType(equal, CoreType::BOOL);
+    builder.EmitInstruction(OP_IEQ, equal, indexReg, expected);
+    u32 branch = builder.currentInstruction;
+    builder.EmitInstruction(OP_BRANCH, 0, equal);
+    u32 trueTarget = builder.currentInstruction;
+    lowerElement(elementIndex);
+    u32 jump = builder.currentInstruction;
+    builder.EmitInstruction(OP_JUMP, 0, 0);
+    u32 falseTarget = builder.currentInstruction;
+    self(self, elementIndex + 1);
+    u32 merge = builder.currentInstruction;
+    builder.EmitInstruction(OP_NOP, 0, 0);
+    program.SetBranchTargets(branch, trueTarget, falseTarget);
+    program.structureInfo[branch] = IRProgram::PackStructure(IRProgram::STRUCT_IF_HEADER, merge);
+    program.metadata[jump] = merge;
+  };
+  lowerFrom(lowerFrom, 0);
+  nodeRegisters = std::move(dominatingNodes);
+  *result = selected;
+  return true;
 }
 
 inline OpCode IRLowering::IntrinsicToOpcode(StdLib::Intrinsic intrinsic) {

@@ -1,0 +1,30 @@
+// ddx_fine is not expressible in GLSL ES 3.00 through SPIRV-Cross, so -gles
+// falls back to the direct emitter for the fragment stage only. The vertex
+// stage still comes from SPIRV-Cross, so both emitters must agree on names.
+pipeline GLInterfaceNamesMixed {
+    attributes {
+        position: float3
+        uv: float2
+    }
+
+    resources {
+        tint: float4
+        atlas: texture2D
+        atlasSampler: sampler
+    }
+
+    pass "Main" {
+        use attributes { position, uv }
+        use resources { tint, atlas, atlasSampler }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.uv;
+        }
+
+        fragment {
+            float edge = ddx_fine(input.uv.x);
+            output.color = sample(resources.atlas, resources.atlasSampler, input.uv) * resources.tint + float4(edge);
+        }
+    }
+}

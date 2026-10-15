@@ -182,6 +182,23 @@ void GLESBuilder::EmitRegisterType(u16 reg) {
     EmitType(static_cast<u16>(regType));
 }
 
+// Same names as the SPIR-V backend's OpNames (see core/bwsl_gl_names.h), so
+// passes mixing both GLES emitters link and bind the same objects.
+void GLESBuilder::EmitGLName(GLNameKind kind, const char* source) {
+    out.Str(GL_NAME_KINDS[static_cast<u32>(kind)].prefix);
+    out.Str(source);
+}
+
+void GLESBuilder::EmitAttributeName(u32 attributeIndex) {
+    if (attributeIndex < 16 && (attributeNameMask & (1u << attributeIndex))) {
+        EmitGLName(GLNameKind::ATTRIBUTE,
+                   attributeNames[attributeIndex].ToString().c_str());
+        return;
+    }
+    out.Lit("attr");
+    out.Uint(attributeIndex);
+}
+
 void GLESBuilder::EmitTextureLevelsUniformName(u16 texReg) {
     out.Lit("bwsl_texture_levels_");
     if ((texReg & 0xF000) == 0x6000) {
@@ -196,8 +213,24 @@ void GLESBuilder::EmitStructDeclarations() {
         return;
     }
 
-    for (u32 s = 0; s < ir->structTypeCount; s++) {
+    // IR registers a parent before its field types. GLSL requires the
+    // field types to be declared first, including nested arrays of structs.
+    u8* visited = static_cast<u8*>(arena->Allocate(ir->structTypeCount));
+    memset(visited, 0, ir->structTypeCount);
+    auto emit = [&](auto&& emitType, u32 s) -> void {
+        if (visited[s]) return;
+        visited[s] = 1;
         const IR::IRProgram::StructTypeInfo& info = ir->structTypes[s];
+        for (u32 f = 0; f < info.fieldCount; f++) {
+            u32 hash = ir->structFieldTypeHashes[info.fieldOffset + f];
+            if (!hash) continue;
+            for (u32 nested = 0; nested < ir->structTypeCount; nested++) {
+                if (ir->structTypes[nested].nameHash == hash) {
+                    emitType(emitType, nested);
+                    break;
+                }
+            }
+        }
         out.Lit("struct ");
         EmitStructTypeName(info.nameHash);
         out.Lit(" {\n");
@@ -214,10 +247,16 @@ void GLESBuilder::EmitStructDeclarations() {
             }
             out.Chr(' ');
             EmitStructFieldName(ir->structFieldNameHashes[fieldIdx]);
+            if (ir->structFieldArraySizes && ir->structFieldArraySizes[fieldIdx]) {
+                out.Chr('[');
+                out.Uint(ir->structFieldArraySizes[fieldIdx]);
+                out.Chr(']');
+            }
             out.Lit(";\n");
         }
         out.Lit("};\n\n");
-    }
+    };
+    for (u32 s = 0; s < ir->structTypeCount; s++) emit(emit, s);
 }
 
 // ============================================================================
@@ -239,8 +278,8 @@ void GLESBuilder::EmitInputs() {
                     out.Uint(i);
                     out.Lit(") in ");
                     EmitType(static_cast<u16>(type));
-                    out.Lit(" attr");
-                    out.Uint(i);
+                    out.Chr(' ');
+                    EmitAttributeName(i);
                     out.Lit(";\n");
                 }
             }
@@ -252,8 +291,8 @@ void GLESBuilder::EmitInputs() {
                 out.Str(InterpolationQualifier(varyings->varyings[i].interpolation));
                 out.Lit("in ");
                 EmitType(static_cast<u16>(varyings->varyings[i].type));
-                out.Lit(" v_");
-                out.Str(varyings->varyings[i].name);
+                out.Chr(' ');
+                EmitGLName(GLNameKind::VARYING, varyings->varyings[i].name);
                 out.Lit(";\n");
             }
         }
@@ -308,8 +347,8 @@ void GLESBuilder::EmitOutputs() {
                 out.Str(InterpolationQualifier(varyings->varyings[i].interpolation));
                 out.Lit("out ");
                 EmitType(static_cast<u16>(varyings->varyings[i].type));
-                out.Lit(" v_");
-                out.Str(varyings->varyings[i].name);
+                out.Chr(' ');
+                EmitGLName(GLNameKind::VARYING, varyings->varyings[i].name);
                 out.Lit(";\n");
             }
         }
@@ -413,27 +452,31 @@ void GLESBuilder::EmitUniforms() {
 
             if (!stageMatch) continue;
 
-            // Emit as std140 uniform block
-            out.Lit("layout(std140) uniform UB_");
-            out.Str(ub.name.c_str());
-            out.Lit(" {\n");
-            out.Lit("    ");
+            // Emit only live uniform blocks, as the SPIR-V path does. An
+            // unused struct uniform need not have a type registered in this IR.
+            u16 uniformReg = 0xFFFF;
+            for (u32 i = 0; i < ir->instructionCount; i++) {
+                if (ir->opcodes[i] == IR::OP_LOAD_UNIFORM &&
+                    Op(i, 0) == ub.bindingIndex) {
+                    uniformReg = ir->destinations[i];
+                    break;
+                }
+            }
+            if (uniformReg == 0xFFFF) continue;
 
-            // Map type name to GLSL type
-            const char* glslType = "float";
-            if (ub.typeName == "mat4") glslType = "mat4";
-            else if (ub.typeName == "mat3") glslType = "mat3";
-            else if (ub.typeName == "float4" || ub.typeName == "vec4") glslType = "vec4";
-            else if (ub.typeName == "float3" || ub.typeName == "vec3") glslType = "vec3";
-            else if (ub.typeName == "float2" || ub.typeName == "vec2") glslType = "vec2";
-            else if (ub.typeName == "int") glslType = "int";
-            else if (ub.typeName == "uint") glslType = "uint";
-
-            out.Str(glslType);
-            out.Lit(" u_");
-            out.Str(ub.name.c_str());
-            out.Lit(";\n} ub_");
-            out.Str(ub.name.c_str());
+            out.Lit("layout(std140) uniform ");
+            EmitGLName(GLNameKind::UNIFORM_BLOCK, ub.name.c_str());
+            out.Lit(" {\n    ");
+            EmitRegisterType(uniformReg);
+            out.Chr(' ');
+            EmitGLName(GLNameKind::UNIFORM_MEMBER, ub.name.c_str());
+            if (ub.bindingIndex < 32 && ir->uniformArrayLengths[ub.bindingIndex]) {
+                out.Chr('[');
+                out.Uint(ir->uniformArrayLengths[ub.bindingIndex]);
+                out.Chr(']');
+            }
+            out.Lit(";\n} ");
+            EmitGLName(GLNameKind::UNIFORM_INSTANCE, ub.name.c_str());
             out.Lit(";\n");
         }
 
@@ -448,13 +491,24 @@ void GLESBuilder::EmitUniforms() {
                 continue;
             }
 
+            // Texture array elements share one declaration and sampler type.
+            const u32 slotCount = std::max<u32>(tex.arraySize, 1);
+            bool shadow = false;
+            for (u32 slot = texSlot; slot < texSlot + slotCount && slot < 32; ++slot)
+                shadow |= shadowTextures[slot];
             auto emitSampler = [&](u32 metadata) {
                 out.Lit("uniform highp ");
-                if (tex.isCubemap) out.Str(shadowTextures[texSlot] ? "samplerCubeShadow" : "samplerCube");
-                else if (tex.isArray) out.Str(shadowTextures[texSlot] ? "sampler2DArrayShadow" : "sampler2DArray");
+                if (tex.isCubemap) out.Str(shadow ? "samplerCubeShadow" : "samplerCube");
+                else if (tex.isArray) out.Str(shadow ? "sampler2DArrayShadow" : "sampler2DArray");
                 else if (tex.isVolume) out.Lit("sampler3D");
-                else out.Str(shadowTextures[texSlot] ? "sampler2DShadow" : "sampler2D");
-                out.Chr(' '); EmitTexture(static_cast<u16>(0x6000 | texSlot), metadata);
+                else out.Str(shadow ? "sampler2DShadow" : "sampler2D");
+                out.Chr(' ');
+                if (tex.arraySize > 0) {
+                    EmitGLName(GLNameKind::COMBINED_TEXTURE, tex.name.c_str());
+                    out.Chr('['); out.Uint(tex.arraySize); out.Chr(']');
+                } else {
+                    EmitTexture(static_cast<u16>(0x6000 | texSlot), metadata);
+                }
                 out.Lit(";\n");
             };
             if (tex.separateSampler) {
@@ -472,12 +526,14 @@ void GLESBuilder::EmitUniforms() {
                     emitSampler(metadata);
                 }
             } else emitSampler(0);
-            if (texSlot < 32 && usedTextureLevels[texSlot]) {
-                out.Lit("uniform int ");
-                EmitTextureLevelsUniformName(static_cast<u16>(0x6000 | texSlot));
-                out.Lit(";\n");
+            for (u32 slot = texSlot; slot < texSlot + slotCount && slot < 32; ++slot) {
+                if (usedTextureLevels[slot]) {
+                    out.Lit("uniform int ");
+                    EmitTextureLevelsUniformName(static_cast<u16>(0x6000 | slot));
+                    out.Lit(";\n");
+                }
+                emittedTextures[slot] = true;
             }
-            if (texSlot < 32) emittedTextures[texSlot] = true;
         }
         out.NL(0);
     } else {
@@ -517,9 +573,63 @@ void GLESBuilder::EmitUniforms() {
 // Main Function Emission
 // ============================================================================
 
+void GLESBuilder::PrepareArrayRegisters() {
+    for (u32 i = 0; i < ir->localArrayCount; ++i) {
+        u16 reg = ir->localArrayRegisters[i];
+        if (reg < regCount) regInfo[reg].arraySize = ir->localArraySizes[i];
+    }
+    // Discover field-array shapes before control flow hoists declarations.
+    for (u32 i = 0; i < ir->instructionCount; ++i) {
+        if (ir->opcodes[i] != IR::OP_STRUCT_EXTRACT) continue;
+        u16 dest = Dest(i), base = Op(i, 0), field = Op(i, 1);
+        if (dest >= regCount || base >= regCount || !ir->registerStructTypes ||
+            !ir->structFieldArraySizes) continue;
+        u32 hash = ir->registerStructTypes[base];
+        for (u32 s = 0; s < ir->structTypeCount; ++s) {
+            const auto& info = ir->structTypes[s];
+            if (info.nameHash == hash && field < info.fieldCount) {
+                regInfo[dest].arraySize = ir->structFieldArraySizes[info.fieldOffset + field];
+                break;
+            }
+        }
+    }
+}
+
+u32 GLESBuilder::EmitArrayStoreSequence(u32 first, u32 end) {
+    if (ir->opcodes[first] != IR::OP_ARRAY_STORE) return 0;
+    u16 base = Dest(first);
+    if (base >= regCount || !ir->registerStorageInfo ||
+        !(ir->registerStorageInfo[base] & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY)) return 0;
+    u32 array = ir->registerStorageInfo[base] >> IR::IRProgram::STORAGE_BINDING_SHIFT;
+    if (array >= ir->localArrayCount) return 0;
+    u32 count = ir->localArraySizes[array];
+    if (!count || count > end - first) return 0;
+    // Only combine complete, ordered writes within this basic block. Values
+    // were evaluated before the stores, so no reads or side effects move.
+    for (u32 i = 0; i < count; ++i) {
+        u32 inst = first + i;
+        if (ir->opcodes[inst] != IR::OP_ARRAY_STORE || Dest(inst) != base) return 0;
+        u16 index = Op(inst, 0);
+        if (!IR::IsUintConstant(index) || ir->uintConstants[index & 0x1FFF] != i ||
+            !IsValidOperand(Op(inst, 1))) return 0;
+    }
+    out.NL(indent); EmitReg(base); out.Lit(" = ");
+    if (ir->localArrayStructTypes && ir->localArrayStructTypes[array])
+        EmitStructTypeName(ir->localArrayStructTypes[array]);
+    else EmitType(ir->localArrayTypes[array]);
+    out.Chr('['); out.Uint(count); out.Lit("](");
+    for (u32 i = 0; i < count; ++i) {
+        if (i) out.Lit(", ");
+        EmitExpr(Op(first + i, 1));
+    }
+    out.Lit(");");
+    return count;
+}
+
 void GLESBuilder::EmitMain() {
     out.Lit("void main() {\n");
     indent = 1;
+    PrepareArrayRegisters();
 
     // Array registers carry their element CoreType; declare actual array storage.
     for (u32 i = 0; i < ir->localArrayCount; ++i) {
@@ -536,7 +646,10 @@ void GLESBuilder::EmitMain() {
     if (cfg && cfg->blockCount > 0) {
         EmitControlFlow();
     } else {
-        for (u32 i = 0; i < ir->instructionCount; ++i) EmitInstruction(i);
+        for (u32 i = 0; i < ir->instructionCount;) {
+            if (u32 count = EmitArrayStoreSequence(i, ir->instructionCount)) i += count;
+            else EmitInstruction(i++);
+        }
     }
     out.NL(0);
     out.Lit("}\n");
@@ -612,12 +725,25 @@ bool GLESBuilder::EmitStructuredRegion(u32 block, u32 stopBlock,
                 EmitInstruction(i);
                 return false;
             }
-            if (op != IR::OP_PHI) EmitInstruction(i);
+            if (u32 count = EmitArrayStoreSequence(i, cfg->lastInst[block] + 1)) i += count - 1;
+            else if (op != IR::OP_PHI) EmitInstruction(i);
         }
         u16 op = terminal == NO_BLOCK ? IR::OP_NOP : ir->opcodes[terminal];
         if (op == IR::OP_RET || cfg->TotalSuccessorCount(block) == 0) {
             out.NL(indent); out.Lit("return;");
             return false;
+        }
+        // A constant condition or selector (usually left by constant
+        // propagation) always takes one edge. Loop headers keep the branch
+        // that exits the loop.
+        u32 constantTarget;
+        if (terminal != NO_BLOCK && IR::TryGetConstantTarget(ir, terminal, &constantTarget)) {
+            u32 taken = cfg->instToBlock[constantTarget];
+            bool falls = EmitBlockEdge(block, taken, merge != NO_BLOCK ? merge : stopBlock, loop, depth);
+            if (merge == NO_BLOCK) return falls;
+            if (!falls) return false;
+            block = merge;
+            continue;
         }
         if (op == IR::OP_SWITCH) {
             // Case bodies are mutually exclusive, with no source fallthrough.
@@ -673,7 +799,9 @@ bool GLESBuilder::EmitStructuredRegion(u32 block, u32 stopBlock,
 void GLESBuilder::EmitControlFlow() {
     // Registers must survive loop edges and both arms of a selection.
     for (u32 reg = 0; reg < regCount; ++reg) {
-        if (regInfo[reg].flags & REG_DECLARED) continue;
+        if ((regInfo[reg].flags & REG_DECLARED) ||
+            regInfo[reg].uniformPointerInstruction ||
+            regInfo[reg].localPointerInstruction) continue;
         u16 type = ir->registerTypes ? ir->registerTypes[reg] : 0;
         if (type == 0 || type == static_cast<u16>(CoreType::VOID)) continue;
         out.NL(indent); EmitRegWithDecl(static_cast<u16>(reg)); out.Chr(';');
@@ -722,6 +850,17 @@ void GLESBuilder::EmitUndefDeclarations() {
         regInfo[reg].flags |= REG_DECLARED;
         
         out.NL(indent);
+        if (type == static_cast<u16>(CoreType::CUSTOM) ||
+            type == static_cast<u16>(CoreType::ENUM)) {
+            // A struct has no scalar default; it's only a base that every
+            // field is written over (see EmitZeroStruct), so leave it
+            // uninitialized.
+            EmitRegisterType(reg);
+            out.Chr(' ');
+            EmitReg(reg);
+            out.Chr(';');
+            continue;
+        }
         EmitType(type);
         out.Chr(' ');
         EmitReg(reg);
@@ -833,8 +972,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
                     bool found = false;
                     for (u32 i = 0; i < varyings->count; i++) {
                         if (varyings->varyings[i].slot == varyingSlot) {
-                            out.Lit("v_");
-                            out.Str(varyings->varyings[i].name);
+                            EmitGLName(GLNameKind::VARYING, varyings->varyings[i].name);
                             out.Lit(" = ");
                             found = true;
                             break;
@@ -861,6 +999,8 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_LOAD_ATTR:
         case IR::OP_LOAD_INPUT:
         case IR::OP_LOAD_UNIFORM:
+            // An array root is an address, not a scalar value to materialize.
+            if (dest < regCount && regInfo[dest].uniformPointerInstruction) return;
             // Materialize loads at their definition, like all other SSA values.
             if (dest < regCount) {
                 EmitRegWithDecl(dest);
@@ -891,8 +1031,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
                 bool found = false;
                 for (u32 i = 0; i < varyings->count; i++) {
                     if (varyings->varyings[i].slot == varyingSlot) {
-                        out.Lit("v_");
-                        out.Str(varyings->varyings[i].name);
+                        EmitGLName(GLNameKind::VARYING, varyings->varyings[i].name);
                         found = true;
                         break;
                     }
@@ -1164,16 +1303,22 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             EmitBinaryAssign(instIdx, dest, ">=");
             return;
 
-        // ===== Bitwise =====
-        case IR::OP_AND:
-            EmitBinaryAssign(instIdx, dest, "&");
+        // ===== Bitwise (logical on bool scalars, which GLSL requires) =====
+        case IR::OP_AND: {
+            bool logical = static_cast<CoreType>(Type(instIdx)) == CoreType::BOOL;
+            EmitBinaryAssign(instIdx, dest, logical ? "&&" : "&");
             return;
-        case IR::OP_OR:
-            EmitBinaryAssign(instIdx, dest, "|");
+        }
+        case IR::OP_OR: {
+            bool logical = static_cast<CoreType>(Type(instIdx)) == CoreType::BOOL;
+            EmitBinaryAssign(instIdx, dest, logical ? "||" : "|");
             return;
-        case IR::OP_XOR:
-            EmitBinaryAssign(instIdx, dest, "^");
+        }
+        case IR::OP_XOR: {
+            bool logical = static_cast<CoreType>(Type(instIdx)) == CoreType::BOOL;
+            EmitBinaryAssign(instIdx, dest, logical ? "^^" : "^");
             return;
+        }
         case IR::OP_NOT: {
             CoreType type = static_cast<CoreType>(Type(instIdx));
             if (type == CoreType::BOOL)
@@ -1526,14 +1671,9 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));  // lod
             out.Chr(')');
-            if (renderConfig && Type(instIdx) == static_cast<u16>(CoreType::INT2)) {
-                u16 slot = Op(instIdx, 0) & 0x0FFF;
-                for (const auto& texture : renderConfig->textures) {
-                    if (texture.bindingIndex == slot && (texture.isVolume || texture.isArray)) {
-                        out.Lit(".xy");
-                        break;
-                    }
-                }
+            if (Type(instIdx) == static_cast<u16>(CoreType::INT2)) {
+                const TextureBinding* texture = FindTextureBinding(Op(instIdx, 0) & 0x0FFF);
+                if (texture && (texture->isVolume || texture->isArray)) out.Lit(".xy");
             }
             out.Chr(';');
             return;
@@ -1891,10 +2031,26 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         // ===== Storage Buffer Operations =====
-        case IR::OP_STORAGE_PTR:
         case IR::OP_STORAGE_FIELD:
         case IR::OP_STORAGE_INDEX:
-        case IR::OP_STORAGE_LOAD:
+            if (dest < regCount && regInfo[dest].uniformPointerInstruction) return;
+            out.Lit("// Storage buffer op not fully supported in GLES 300");
+            return;
+
+        case IR::OP_STORAGE_LOAD: {
+            u16 pointer = Op(instIdx, 0);
+            if (pointer < regCount && regInfo[pointer].uniformPointerInstruction) {
+                EmitRegWithDecl(dest);
+                out.Lit(" = ");
+                EmitExpr(pointer);
+                out.Lit(";");
+                return;
+            }
+            out.Lit("// Storage buffer op not fully supported in GLES 300");
+            return;
+        }
+
+        case IR::OP_STORAGE_PTR:
             // These require SSBO support - emit as placeholder
             out.Lit("// Storage buffer op not fully supported in GLES 300");
             return;
@@ -1923,6 +2079,26 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_WAVE_SUM:
         case IR::OP_WAVE_MUL:
             out.Lit("// Wave ops not supported in GLSL ES 300");
+            return;
+
+        // ===== Local struct variables, accessed in place =====
+        case IR::OP_LOCAL_FIELD_PTR:
+        case IR::OP_LOCAL_INDEX_PTR:
+            // Emitted where used, as an access path (see EmitExpr).
+            return;
+
+        case IR::OP_LOCAL_LOAD:
+            EmitRegWithDecl(dest);
+            out.Lit(" = ");
+            EmitExpr(Op(instIdx, 0));
+            out.Chr(';');
+            return;
+
+        case IR::OP_LOCAL_STORE:
+            EmitExpr(Op(instIdx, 0));
+            out.Lit(" = ");
+            EmitExpr(Op(instIdx, 1));
+            out.Chr(';');
             return;
 
         // ===== Call (function calls - should be inlined) =====
@@ -1979,6 +2155,40 @@ void GLESBuilder::EmitExpr(u16 reg) {
         return;
     }
 
+    if (reg < regCount && regInfo[reg].uniformPointerInstruction) {
+        u32 instIdx = regInfo[reg].uniformPointerInstruction - 1;
+        u16 opcode = ir->opcodes[instIdx];
+        if (opcode == IR::OP_LOAD_UNIFORM) {
+            EmitLoadExpr(instIdx);
+        } else {
+            EmitExpr(Op(instIdx, 0));
+            if (opcode == IR::OP_STORAGE_INDEX) {
+                out.Chr('[');
+                EmitExpr(Op(instIdx, 1));
+                out.Chr(']');
+            } else {
+                out.Chr('.');
+                EmitStructFieldNameByIndex(ir->metadata[instIdx], Op(instIdx, 1));
+            }
+        }
+        return;
+    }
+
+    // A pointer into a local struct variable is its access path.
+    if (reg < regCount && regInfo[reg].localPointerInstruction) {
+        u32 instIdx = regInfo[reg].localPointerInstruction - 1;
+        EmitExpr(Op(instIdx, 0));
+        if (ir->opcodes[instIdx] == IR::OP_LOCAL_INDEX_PTR) {
+            out.Chr('[');
+            EmitExpr(Op(instIdx, 1));
+            out.Chr(']');
+        } else {
+            out.Chr('.');
+            EmitStructFieldNameByIndex(ir->metadata[instIdx], Op(instIdx, 1));
+        }
+        return;
+    }
+
     // Keep values at their defining instruction, including mutable reads and
     // values crossing loop edges. The driver can optimize the temporaries.
     EmitReg(reg);
@@ -1996,9 +2206,7 @@ void GLESBuilder::EmitLoadExpr(u32 instIdx) {
         }
 
         case IR::OP_LOAD_ATTR: {
-            u16 attrIdx = Op(instIdx, 0);
-            out.Lit("attr");
-            out.Uint(attrIdx);
+            EmitAttributeName(Op(instIdx, 0));
             return;
         }
 
@@ -2010,6 +2218,7 @@ void GLESBuilder::EmitLoadExpr(u32 instIdx) {
                 switch (inputIdx) {
                     case 0x80: out.Lit("uint(gl_VertexID)"); return;
                     case 0x81: out.Lit("uint(gl_InstanceID)"); return;
+                    case BuiltinInputSlot::FRAG_COORD: out.Lit("gl_FragCoord"); return;
                     case 0x90: out.Lit("gl_GlobalInvocationID"); return;
                     case 0x91: out.Lit("gl_LocalInvocationID"); return;
                     case 0x92: out.Lit("gl_WorkGroupID"); return;
@@ -2026,8 +2235,7 @@ void GLESBuilder::EmitLoadExpr(u32 instIdx) {
             if (varyings) {
                 for (u32 i = 0; i < varyings->count; i++) {
                     if (varyings->varyings[i].slot == varyingSlot) {
-                        out.Lit("v_");
-                        out.Str(varyings->varyings[i].name);
+                        EmitGLName(GLNameKind::VARYING, varyings->varyings[i].name);
                         return;
                     }
                 }
@@ -2044,8 +2252,9 @@ void GLESBuilder::EmitLoadExpr(u32 instIdx) {
             if (renderConfig) {
                 for (const auto& ub : renderConfig->uniformBuffers) {
                     if (ub.bindingIndex != uniformIdx) continue;
-                    out.Lit("ub_"); out.Str(ub.name.c_str());
-                    out.Lit(".u_"); out.Str(ub.name.c_str());
+                    EmitGLName(GLNameKind::UNIFORM_INSTANCE, ub.name.c_str());
+                    out.Chr('.');
+                    EmitGLName(GLNameKind::UNIFORM_MEMBER, ub.name.c_str());
                     return;
                 }
             }
@@ -2150,6 +2359,7 @@ bool GLESBuilder::EmitConstantExpr(u16 reg, u32 depth) {
     } else {
         const char* operation = nullptr;
         bool unary = false;
+        bool logical = static_cast<CoreType>(ir->types[definition]) == CoreType::BOOL;
         switch (op) {
             case IR::OP_INEG: case IR::OP_FNEG: operation = "-"; unary = true; break;
             case IR::OP_IADD: case IR::OP_FADD: operation = " + "; break;
@@ -2159,9 +2369,9 @@ bool GLESBuilder::EmitConstantExpr(u16 reg, u32 depth) {
             case IR::OP_IMOD: operation = " % "; break;
             case IR::OP_SHL: operation = " << "; break;
             case IR::OP_SHR: case IR::OP_ASR: operation = " >> "; break;
-            case IR::OP_AND: operation = " & "; break;
-            case IR::OP_OR: operation = " | "; break;
-            case IR::OP_XOR: operation = " ^ "; break;
+            case IR::OP_AND: operation = logical ? " && " : " & "; break;
+            case IR::OP_OR: operation = logical ? " || " : " | "; break;
+            case IR::OP_XOR: operation = logical ? " ^^ " : " ^ "; break;
             case IR::OP_NOT: operation = "~"; unary = true; break;
             default: break;
         }
@@ -2185,9 +2395,24 @@ void GLESBuilder::EmitTextureOffset(u16 reg) {
     if (!EmitConstantExpr(reg)) EmitExpr(reg);
 }
 
+const TextureBinding* GLESBuilder::FindTextureBinding(u16 slot) const {
+    if (!renderConfig) return nullptr;
+    for (const auto& texture : renderConfig->textures) {
+        if (slot >= texture.bindingIndex &&
+            slot < texture.bindingIndex + std::max<u32>(texture.arraySize, 1)) return &texture;
+    }
+    return nullptr;
+}
+
 void GLESBuilder::EmitTexture(u16 reg, u32 metadata) {
     u16 slot = reg & 0x0FFF;
     if (renderConfig) {
+        if (const TextureBinding* texture = FindTextureBinding(slot); texture && texture->arraySize > 0) {
+            // Element indices are constants, as GLSL ES 3.00 requires.
+            EmitGLName(GLNameKind::COMBINED_TEXTURE, texture->name.c_str());
+            out.Chr('['); out.Uint(slot - texture->bindingIndex); out.Chr(']');
+            return;
+        }
         for (const auto& texture : renderConfig->textures) {
             if (texture.bindingIndex != slot) continue;
             if (texture.separateSampler) {
@@ -2201,7 +2426,7 @@ void GLESBuilder::EmitTexture(u16 reg, u32 metadata) {
                 out.Lit("_sampler_2_"); out.Uint(binding);
                 return;
             }
-            out.Lit("u_"); out.Str(texture.name.c_str());
+            EmitGLName(GLNameKind::COMBINED_TEXTURE, texture.name.c_str());
             return;
         }
     }

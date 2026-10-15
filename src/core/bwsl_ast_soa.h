@@ -126,6 +126,7 @@ struct VariableDeclData {
     u8 arrayDimensions;
     u32 arrayLength;
     u32 arrayElementTypeHash;
+    ArenaArray<u32> arraySizes{}; // Written dimensions, in outer-to-inner order
     u32 typePosition;  // Packed line/column (AST::PackPosition) of the declared
     u32 namePosition;  // type and the variable name; 0 when synthesized.
 };
@@ -152,12 +153,13 @@ struct AttributeDeclData {
     u8 _pad[2];
 };
 
-// 24 bytes
 struct ResourceDeclData {
     ArenaString name;
     ArenaString typeName;
     u8 resourceIndex;
     u8 _pad[3];
+    u32 typePosition;  // First token of the resource type.
+    u32 payloadTypePosition;  // Element type inside buffer/cbuffer, otherwise typePosition.
 };
 
 struct FragmentOutputDeclData {
@@ -223,8 +225,10 @@ struct FunctionDeclData {
     ArenaString name;
     ArenaArray<std::pair<ArenaString, ArenaString>> parameters;
     ArenaArray<ParameterSourcePositions> parameterPositions;
+    ArenaArray<ArenaArray<u32>> parameterArraySizes;
     CoreType returnType;
     u32 returnTypeHash;
+    u32 returnTypeNameHash = 0; // Written custom type/alias before resolution
     u32 returnTypePosition; // Packed line/column of the written return type, 0 when synthesized
     u32 ownerStructTypeHash;
     NodeRef body;
@@ -240,6 +244,7 @@ struct StructFieldData {
     u32 arraySize;  // 0 = not an array, >0 = fixed-size array
     u32 namePosition = 0;  // Packed line/column (AST::PackPosition) of the
     u32 typePosition = 0;  // field name and its type; 0 when synthesized.
+    u32 typeNameHash = 0; // Written type/alias before resolution
 };
 
 // Struct declaration - 20 bytes + ArenaArray
@@ -329,6 +334,15 @@ struct ModuleNameSite {
     u32 position;        // Packed line/column of the written name
     ArenaString name;    // As written (module name or alias)
     u32 moduleNameHash;  // Resolved module name, or 0 when unresolved
+    u32 sourceFile = 0;  // sourceFiles index + 1 for file-local positions
+};
+
+struct TypeAliasSite {
+    NodeRef owner;
+    ArenaString name;
+    ArenaString target;
+    u32 targetPosition;
+    u32 sourceFile;
 };
 
 // Module - 20 bytes + ArenaArrays
@@ -551,6 +565,7 @@ struct AST {
 
     // Type-specific pools (cold, only touched when you need that node type)
     ArenaArray<IdentifierData> identifiers;
+    ArenaArray<u32> identifierConstBindingHashes; // Qualified array-const binding, zero otherwise.
     ArenaArray<LiteralData> literals;
     ArenaArray<BinaryOpData> binaryOps;
     ArenaArray<UnaryOpData> unaryOps;
@@ -595,7 +610,8 @@ struct AST {
     ArenaArray<u32> docsTextLengths;
 
     // Position of the name token for named nodes, where it differs from the
-    // node's primary position (keyword, type, '.', '::', ...). Tooling only.
+    // node's primary position (keyword, type, '.', '::', ...). Used by
+    // diagnostics and tooling.
     NodeU32Map namePositions;
 
     // Source files that contributed declarations: the scanned document,
@@ -612,6 +628,7 @@ struct AST {
     // Written module qualifiers of declared `Module::Type` types, keyed by
     // position (also the declaration's recorded type position).
     ArenaArray<ModuleNameSite> typeQualifiers;
+    ArenaArray<TypeAliasSite> typeAliases;
 
     // Return statements reuse AssignmentData (target unused, value is the return expr)
     // If statements reuse BlockData (first statement is condition, rest is body)
@@ -639,6 +656,7 @@ struct AST {
 
         // Initialize pools with reasonable defaults based on typical usage
         identifiers.Init(arena, 64);        // Very common
+        identifierConstBindingHashes.Init(arena, 64);
         literals.Init(arena, 32);           // Common
         binaryOps.Init(arena, 32);          // Common
         unaryOps.Init(arena, 8);            // Less common
@@ -678,6 +696,7 @@ struct AST {
 
         namePositions.Init(arena, NextPowerOfTwo(estimatedNodes));
         sourceFiles.Init(arena, 4);
+        typeAliases.Init(arena, 4);
         declarationSources.Init(arena, 64);
         foldedConstants.Init(arena, 8);
         typeQualifiers.Init(arena, 8);
@@ -811,17 +830,23 @@ struct AST {
     }
 
     const FoldedConstantData* FindFoldedConstant(NodeRef literal) const {
-        if (literal.Type() != ASTNodeType::LITERAL) return nullptr;
+        // Vector constants fold to a constructor call rather than a literal.
+        if (literal.Type() != ASTNodeType::LITERAL &&
+            literal.Type() != ASTNodeType::FUNCTION_CALL) return nullptr;
         for (u32 i = 0; i < foldedConstants.count; i++) {
             if (foldedConstants[i].literal == literal.packed) return &foldedConstants[i];
         }
         return nullptr;
     }
 
-    const ModuleNameSite* FindTypeQualifier(u32 position) const {
+    const ModuleNameSite* FindTypeQualifier(u32 position, const char* sourceFile = nullptr) const {
         if (position == 0) return nullptr;
         for (u32 i = 0; i < typeQualifiers.count; i++) {
-            if (typeQualifiers[i].position == position) return &typeQualifiers[i];
+            const ModuleNameSite& site = typeQualifiers[i];
+            if (site.position != position) continue;
+            if (sourceFile && site.sourceFile != 0 &&
+                strcmp(sourceFiles[site.sourceFile - 1], sourceFile) != 0) continue;
+            return &site;
         }
         return nullptr;
     }
@@ -1063,6 +1088,7 @@ namespace ASTFactory {
         data.name = name;
         data.identifierKind = SpecialIdentifier::NONE;
         ast->identifiers.Push(ast->arena, data);
+        ast->identifierConstBindingHashes.Push(ast->arena, 0u);
 
         // Store position
         if (ast->nodeCount >= ast->nodeCapacity) {
@@ -1512,7 +1538,7 @@ namespace ASTFactory {
     inline NodeRef MakeResourceDecl(AST* ast, const std::string& name, const std::string& type,
                                     u32 line = 0, u32 col = 0) {
         u32 index = ast->resourceDecls.count;
-        ResourceDeclData data;
+        ResourceDeclData data{};
         data.name = ArenaString::MakeHashOnly(name);
         data.typeName = ArenaString::MakeHashOnly(type);
         data.resourceIndex = 0xFF;
@@ -1627,6 +1653,7 @@ namespace ASTFactory {
         data.ownerStructTypeHash = 0;
         data.parameters.Init(ast->arena, 4);
         data.parameterPositions.Init(ast->arena, 0);
+        data.parameterArraySizes.Init(ast->arena, 0);
         data.body = NodeRef::Null();
         data.isEval = false;
         data.isStructMethod = false;
@@ -2121,6 +2148,7 @@ namespace ASTClone {
         VariableDeclData& newData = ctx.ast->GetVariableDecl(newVar);
         newData.typePosition = src.typePosition;
         newData.namePosition = src.namePosition;
+        newData.arraySizes = src.arraySizes;
 
         return newVar;
     }
@@ -2245,7 +2273,10 @@ namespace ASTClone {
                 const IdentifierData& src = ctx.ast->GetIdentifier(node);
                 u32 line = ctx.ast->GetLine(node);
                 u32 col = ctx.ast->GetColumn(node);
-                return ASTFactory::MakeIdentifier(ctx.ast, src.name, line, col);
+                NodeRef copy = ASTFactory::MakeIdentifier(ctx.ast, src.name, line, col);
+                ctx.ast->identifierConstBindingHashes[copy.Index()] =
+                    ctx.ast->identifierConstBindingHashes[node.Index()];
+                return copy;
             }
 
             case ASTNodeType::LITERAL: {
@@ -2386,6 +2417,7 @@ namespace ASTClone {
 
         dst.isEval = src.isEval;
         dst.parameterPositions = src.parameterPositions;
+        dst.parameterArraySizes = src.parameterArraySizes;
         dst.returnTypePosition = src.returnTypePosition;
 
         // Clone parameters with type substitution

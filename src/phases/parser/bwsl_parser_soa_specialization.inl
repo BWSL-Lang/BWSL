@@ -230,6 +230,8 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
             // still recognize special identifiers after cloning.
             NodeRef cloned = ASTFactory::MakeIdentifier(ast, src.name, line, col);
             ast->GetIdentifier(cloned).identifierKind = src.identifierKind;
+            ast->identifierConstBindingHashes[cloned.Index()] =
+                ast->identifierConstBindingHashes[node.Index()];
             return cloned;
         }
 
@@ -351,6 +353,10 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
             clonedData.isEval = src.isEval;
             clonedData.typePosition = src.typePosition;
             clonedData.namePosition = src.namePosition;
+            clonedData.arraySizes = src.arraySizes;
+            if (const char* sourceFile = ast->GetDeclarationSource(node)) {
+                ast->SetDeclarationSource(cloned, ast->InternSourceFile(sourceFile));
+            }
             return cloned;
         }
 
@@ -652,7 +658,9 @@ NodeRef Parser::ClonePassWithParamsAndRemap(NodeRef passRef, const ParamSubstitu
             dstFn.parameters.Push(arena, srcFn.parameters[j]);
         }
         dstFn.parameterPositions = srcFn.parameterPositions;
+        dstFn.parameterArraySizes = srcFn.parameterArraySizes;
         dstFn.returnTypePosition = srcFn.returnTypePosition;
+        dstFn.returnTypeNameHash = srcFn.returnTypeNameHash;
         dstFn.isEval = srcFn.isEval;
         if (srcFn.body.IsValid() &&
             (srcFn.body.Type() == ASTNodeType::VERTEX_STAGE ||
@@ -1218,7 +1226,9 @@ NodeRef Parser::ClonePassWithActiveVariants(NodeRef passRef) {
             dstFn.parameters.Push(arena, srcFn.parameters[j]);
         }
         dstFn.parameterPositions = srcFn.parameterPositions;
+        dstFn.parameterArraySizes = srcFn.parameterArraySizes;
         dstFn.returnTypePosition = srcFn.returnTypePosition;
+        dstFn.returnTypeNameHash = srcFn.returnTypeNameHash;
         dstFn.isEval = srcFn.isEval;
         dstFn.body = CloneNodeWithParams(srcFn.body, nullptr, 0);
         dstPass.functions.Push(arena, newFn);
@@ -1335,7 +1345,9 @@ NodeRef Parser::SpecializePipelineForVariants(NodeRef pipeline,
             dstFn.parameters.Push(arena, srcFn.parameters[j]);
         }
         dstFn.parameterPositions = srcFn.parameterPositions;
+        dstFn.parameterArraySizes = srcFn.parameterArraySizes;
         dstFn.returnTypePosition = srcFn.returnTypePosition;
+        dstFn.returnTypeNameHash = srcFn.returnTypeNameHash;
         dstFn.isEval = srcFn.isEval;
         dstFn.body = CloneNodeWithParams(srcFn.body, nullptr, 0);
         dstPipeline.functions.Push(arena, newFn);

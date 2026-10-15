@@ -260,6 +260,7 @@ namespace BWSL{
         {Utils::HashStr("tangent"), "tangent"},
         {Utils::HashStr("texcoord"), "texcoord"},
         {Utils::HashStr("texture2D"), "texture2D"},
+        {Utils::HashStr("texture2DArray"), "texture2DArray"},
         {Utils::HashStr("texture3D"), "texture3D"},
         {Utils::HashStr("textureCube"), "textureCube"},
         {Utils::HashStr("uint"), "uint"},

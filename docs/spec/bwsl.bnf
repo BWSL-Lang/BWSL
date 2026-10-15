@@ -18,9 +18,8 @@
 # - The lexer recognizes 'void', but the parser's current declaration/return
 #   type masks do not accept it in normal type positions. It is therefore not
 #   included in <core-type> below.
-# - Resource declarations parse their type text until ';', '}', or the next
-#   resource-name ':' pair. The productions below describe the supported type
-#   text used by the compiler.
+# - Module members use '::'. Resource payload types also accept the deprecated
+#   '.' qualifier as a compatibility alias.
 
 <document> ::= <file-item-list>
 
@@ -114,16 +113,26 @@
 <resource-decl> ::= <identifier> ':' <resource-type> <semicolon-opt>
 
 <resource-type> ::= 'sampler'
-                  | 'texture2D'
-                  | 'texture3D'
-                  | 'textureCube'
-                  | 'texture2DArray'
+                  | <texture-type> <texture-array-suffix-opt>
                   | 'image2D'
                   | 'buffer' '<' <resource-element-type> '>'
                   | 'cbuffer' '<' <resource-element-type> '>'
-                  | <qualified-type-name> <fixed-array-suffix-list>
+                  | <resource-element-type>
 
-<resource-element-type> ::= <type-ref> <fixed-array-suffix-list>
+<texture-type> ::= 'texture2D'
+                 | 'texture3D'
+                 | 'textureCube'
+                 | 'texture2DArray'
+
+# One dimension, at most 32 elements; each element uses a binding slot.
+<texture-array-suffix-opt> ::= <fixed-array-suffix>
+                             | <empty>
+
+<resource-element-type> ::= <resource-payload-type> <fixed-array-suffix-list>
+
+<resource-payload-type> ::= <core-type>
+                        | <qualified-type-name>
+                        | <identifier> '.' <identifier>
 
 <variants-block> ::= 'variants' '{' <variant-item-list> '}'
 
@@ -291,11 +300,14 @@
 
 # Constants, constraints, functions, structs, enums
 
-<pipeline-const-decl> ::= 'const' <core-type> <identifier> '=' <expression> ';'
+<pipeline-const-decl> ::= 'const' <core-type> <fixed-array-suffix-list> <identifier> '=' <const-initializer> ';'
 
-<pass-const-decl> ::= 'const' <core-type> <identifier> '=' <expression> ';'
+<pass-const-decl> ::= 'const' <core-type> <fixed-array-suffix-list> <identifier> '=' <const-initializer> ';'
 
-<module-const-decl> ::= 'const' <core-type> <identifier> '=' <expression> ';'
+<module-const-decl> ::= 'const' <core-type> <fixed-array-suffix-list> <identifier> '=' <const-initializer> ';'
+
+<const-initializer> ::= <expression>
+                      | '{' <expression-list> '}'
 
 <constraint-decl> ::= 'constraint' <identifier> '=' <constraint-type-expr> ';'
 
@@ -479,7 +491,7 @@
 
 <discard-stmt> ::= 'discard' ';'
 
-<const-local-decl> ::= 'const' <type-ref> <identifier> '=' <expression> ';'
+<const-local-decl> ::= 'const' <type-ref> <fixed-array-suffix-list> <identifier> '=' <const-initializer> ';'
 
 <if-stmt> ::= 'if' '(' <expression> ')' <statement-body> <else-clause-opt>
 
@@ -680,7 +692,6 @@
 
 <qualified-type-name> ::= <identifier>
                         | <identifier> '::' <identifier>
-                        | <identifier> '.' <identifier>
 
 <core-type> ::= <scalar-type>
               | <vector-type>

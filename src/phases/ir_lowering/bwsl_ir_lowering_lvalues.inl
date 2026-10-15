@@ -46,6 +46,29 @@ inline bool DecodeSwizzleByHash(u32 nameHash, u16 lengthHint, u8 outIndices[4],
   return false;
 }
 
+// Reports an error and returns false if a swizzle on a vector of
+// `vectorType` uses a component past its end, e.g. .z or .xyzw on a float2.
+// Scalars are left to the callers. `node` is the swizzle's member access.
+inline bool CheckSwizzleInRange(IRLowering *lowering, NodeRef node,
+                                CoreType vectorType, const u8 *indices,
+                                u32 length) {
+    u32 count = lowering->GetVectorDimension(vectorType);
+    if (count < 2) return true;
+    for (u32 i = 0; i < length; i++) {
+        if (indices[i] >= count) {
+            char msg[192];
+            snprintf(msg, sizeof(msg),
+                     "Error: invalid swizzle - component '%c' ('%c') is out "
+                     "of range for %s, which has %u components\n",
+                     "xyzw"[indices[i]], "rgba"[indices[i]],
+                     CoreTypeToString(vectorType), count);
+            lowering->ReportErrorAt(node, msg);
+            return false;
+        }
+    }
+    return true;
+}
+
 inline u32 FindStructTypeIndex(IRLowering *lowering, u32 structTypeHash) {
   if (!lowering || structTypeHash == 0) return 0xFFFFFFFF;
 
@@ -149,8 +172,26 @@ inline u32 ResolveStaticArrayLength(IRLowering *lowering, NodeRef expr) {
 
   if (expr.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &ident = lowering->ast->GetIdentifier(expr);
-    Symbol *sym = SymbolTable::LookupAny(
-        const_cast<SymbolTableData *>(lowering->symbols), ident.name);
+    u32 bindingHash = lowering->ast->identifierConstBindingHashes[expr.Index()];
+    // Local arrays are declared during lowering, so the symbol table doesn't
+    // know them; their length is in the lowering's local-array table.
+    auto local = lowering->variableRegisters.find(
+        bindingHash ? bindingHash : ident.name.nameHash);
+    if (local != lowering->variableRegisters.end() &&
+        local->second < MAX_REGISTERS &&
+        lowering->program.registerStorageInfo) {
+      u32 info = lowering->program.registerStorageInfo[local->second];
+      u32 arrayIdx = info >> IRProgram::STORAGE_BINDING_SHIFT;
+      if ((info & IRProgram::STORAGE_IS_LOCAL_ARRAY) &&
+          arrayIdx < lowering->program.localArrayCount) {
+        return lowering->program.localArraySizes[arrayIdx];
+      }
+    }
+    Symbol *sym = bindingHash
+        ? SymbolTable::LookupByHash(
+              const_cast<SymbolTableData *>(lowering->symbols), bindingHash)
+        : SymbolTable::LookupAny(
+              const_cast<SymbolTableData *>(lowering->symbols), ident.name);
     if (sym && sym->kind == SymbolKind::VARIABLE &&
         sym->index < lowering->symbols->variables.count) {
       return lowering->symbols->variables[sym->index].typeInfo.arrayLength;
@@ -163,6 +204,18 @@ inline u32 ResolveStaticArrayLength(IRLowering *lowering, NodeRef expr) {
   }
 
   const MemberAccessData &access = lowering->ast->GetMemberAccess(expr);
+  if (access.isModuleQualified &&
+      access.object.Type() == ASTNodeType::IDENTIFIER &&
+      SymbolTable::ResolveModuleIndexByHashInScope(
+          const_cast<SymbolTableData *>(lowering->symbols),
+          lowering->ast->GetIdentifier(access.object).name.nameHash,
+          lowering->AliasOwnerKind(), lowering->AliasOwnerModuleIndex()) !=
+          INVALID_INDEX) {
+    Symbol *sym = SymbolTable::LookupByHash(
+        const_cast<SymbolTableData *>(lowering->symbols), access.qualifiedNameHash);
+    if (sym && sym->kind == SymbolKind::VARIABLE)
+      return lowering->symbols->variables[sym->index].typeInfo.arrayLength;
+  }
   u32 objectStructHash =
       ResolveStructHashForStaticAccess(lowering, access.object);
   u32 structIdx = FindStructTypeIndex(lowering, objectStructHash);
@@ -343,14 +396,192 @@ inline u16 IRLowering::TryLowerLocalFieldAddressOf(NodeRef memberRef) {
   return dest;
 }
 
-inline void IRLowering::LowerVariableDecl(NodeRef ref) {
+// ============= In-place struct variables =============
+
+// A register that holds a struct variable's own value: a declared local, a
+// parameter copy or `self`. Declarations and parameter copies get a fresh
+// register (registerNameHashes marks it), so writing it in place can't affect
+// another value. Pointers, arrays and shared or uniform storage don't qualify.
+inline bool IRLowering::IsInPlaceStructVariable(u16 reg) const {
+  if ((reg & 0xC000) != 0 || reg >= MAX_REGISTERS) return false;
+  if (program.registerNameHashes[reg] == 0) return false;
+  if (static_cast<CoreType>(program.registerTypes[reg]) != CoreType::CUSTOM)
+    return false;
+  u32 structHash = program.registerStructTypes[reg];
+  if (structHash == 0 || structTypeMap.find(structHash) == structTypeMap.end())
+    return false;
+  constexpr u32 notInPlace =
+      IRProgram::STORAGE_IS_PTR | IRProgram::STORAGE_IS_SHARED |
+      IRProgram::STORAGE_IS_LOCAL_ARRAY | IRProgram::STORAGE_IS_FIELD_PTR |
+      IRProgram::STORAGE_IS_UNIFORM_ARRAY;
+  return (program.registerStorageInfo[reg] & notInPlace) == 0;
+}
+
+inline bool IRLowering::ResolveLocalField(const LocalPlace &base,
+                                          u32 memberHash, bool emit,
+                                          LocalPlace *out) {
+  if (base.type != CoreType::CUSTOM || base.structHash == 0 ||
+      base.arrayLength != 0) {
+    return false;
+  }
+  auto structIt = structTypeMap.find(base.structHash);
+  if (structIt == structTypeMap.end()) return false;
+  const IRProgram::StructTypeInfo &info = program.structTypes[structIt->second];
+  for (u32 i = 0; i < info.fieldCount; i++) {
+    u32 field = info.fieldOffset + i;
+    if (program.structFieldNameHashes[field] != memberHash) continue;
+    CoreType fieldType = static_cast<CoreType>(program.structFieldTypes[field]);
+    u32 fieldTypeHash =
+        program.structFieldTypeHashes ? program.structFieldTypeHashes[field] : 0;
+    *out = base;
+    out->isPointer = true;
+    out->type = fieldType;
+    out->structHash = (fieldType == CoreType::CUSTOM ||
+                       fieldType == CoreType::ENUM) ? fieldTypeHash : 0;
+    out->arrayLength =
+        program.structFieldArraySizes ? program.structFieldArraySizes[field] : 0;
+    if (!emit) return true;
+
+    u16 dest = AllocateRegister();
+    if (dest >= MAX_REGISTERS) return false;
+    builder.EmitInstruction(OP_LOCAL_FIELD_PTR, dest, base.reg,
+                            static_cast<u16>(i));
+    program.metadata[builder.currentInstruction - 1] = base.structHash;
+    SetRegisterType(dest, CoreType::CUSTOM);
+    program.registerStorageInfo[dest] =
+        (static_cast<u32>(base.reg) << 16) |
+        (static_cast<u32>(fieldType) << 8) | IRProgram::STORAGE_IS_PTR |
+        IRProgram::STORAGE_IS_FIELD_PTR;
+    program.registerStructTypes[dest] = out->structHash;
+    if (!base.isPointer) {
+      // The variable now lives in memory; SSA leaves it alone.
+      program.registerStorageInfo[base.reg] |=
+          IRProgram::STORAGE_IS_ADDRESS_TAKEN;
+    }
+    out->reg = dest;
+    return true;
+  }
+  return false;
+}
+
+inline bool IRLowering::ResolveLocalPlace(NodeRef expr, bool emit,
+                                          LocalPlace *out) {
+  switch (expr.Type()) {
+  case ASTNodeType::IDENTIFIER: {
+    const IdentifierData &ident = ast->GetIdentifier(expr);
+    if (ident.identifierKind != SpecialIdentifier::NONE &&
+        ident.identifierKind != SpecialIdentifier::SELF) {
+      return false;
+    }
+    auto var = variableRegisters.find(ident.name.nameHash);
+    if (var != variableRegisters.end()) {
+      if (!IsInPlaceStructVariable(var->second)) return false;
+      *out = {};
+      out->reg = out->rootReg = var->second;
+      out->type = CoreType::CUSTOM;
+      out->structHash = program.registerStructTypes[var->second];
+      out->rootNameHash = ident.name.nameHash;
+      return true;
+    }
+    // A receiver field named without `self.` inside a struct method.
+    if (currentStructMethodTypeHash == 0 ||
+        !IsInPlaceStructVariable(currentStructMethodSelfReg)) {
+      return false;
+    }
+    LocalPlace self;
+    self.reg = self.rootReg = currentStructMethodSelfReg;
+    self.type = CoreType::CUSTOM;
+    self.structHash = program.registerStructTypes[currentStructMethodSelfReg];
+    self.rootNameHash = Utils::HashStr("self");
+    return ResolveLocalField(self, ident.name.nameHash, emit, out);
+  }
+  case ASTNodeType::MEMBER_ACCESS: {
+    const MemberAccessData &access = ast->GetMemberAccess(expr);
+    if (access.isModuleQualified) return false;
+    LocalPlace base;
+    return ResolveLocalPlace(access.object, emit, &base) &&
+           ResolveLocalField(base, access.member.nameHash, emit, out);
+  }
+  case ASTNodeType::ARRAY_ACCESS: {
+    const ArrayAccessData &access = ast->GetArrayAccess(expr);
+    LocalPlace base;
+    if (!ResolveLocalPlace(access.array, emit, &base) || base.arrayLength == 0)
+      return false;
+    *out = base;
+    out->arrayLength = 0;
+    if (!emit) return true;
+
+    u16 index = LowerExpression(access.index);
+    CheckConstIndexInBounds(index, access.index, base.arrayLength);
+    u16 dest = AllocateRegister();
+    if (dest >= MAX_REGISTERS) return false;
+    builder.EmitInstruction(OP_LOCAL_INDEX_PTR, dest, base.reg, index);
+    SetRegisterType(dest, CoreType::CUSTOM);
+    program.registerStorageInfo[dest] =
+        (static_cast<u32>(base.reg) << 16) |
+        (static_cast<u32>(base.type) << 8) | IRProgram::STORAGE_IS_PTR |
+        IRProgram::STORAGE_IS_FIELD_PTR;
+    program.registerStructTypes[dest] = base.structHash;
+    out->reg = dest;
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+
+inline u16 IRLowering::TryLoadLocalPlace(NodeRef expr) {
+  LocalPlace place;
+  if (!ResolveLocalPlace(expr, false, &place) || !place.isPointer ||
+      place.arrayLength != 0) {
+    return 0xFFFF;
+  }
+  ResolveLocalPlace(expr, true, &place);
+  u16 dest = AllocateRegister();
+  builder.EmitInstruction(OP_LOCAL_LOAD, dest, place.reg);
+  SetRegisterType(dest, place.type);
+  if (dest < MAX_REGISTERS) program.registerStructTypes[dest] = place.structHash;
+  return dest;
+}
+
+inline bool IRLowering::TryStoreLocalPlace(NodeRef target, u16 valueReg) {
+  LocalPlace place;
+  if (!ResolveLocalPlace(target, false, &place) || !place.isPointer ||
+      place.arrayLength != 0) {
+    return false;
+  }
+  // A const variable keeps its existing diagnostics.
+  if (constVariables.find(place.rootNameHash) != constVariables.end() &&
+      !(currentStructMethodIsConst &&
+        place.rootReg == currentStructMethodSelfReg)) {
+    return false;
+  }
+  if (currentStructMethodIsConst && place.rootReg == currentStructMethodSelfReg) {
+    ReportError("Error: cannot assign to receiver field inside const method\n");
+    return true;
+  }
+  if (initializedVariables.find(place.rootNameHash) == initializedVariables.end()) {
+    builder.EmitInstruction(OP_STORE_REG, place.rootReg,
+                            EmitZeroStruct(program.registerStructTypes[place.rootReg]));
+    initializedVariables.insert(place.rootNameHash);
+  }
+  ResolveLocalPlace(target, true, &place);
+  if (place.type != CoreType::CUSTOM && place.type != CoreType::ENUM)
+    valueReg = ConvertRegisterToType(valueReg, place.type);
+  builder.EmitInstruction(OP_LOCAL_STORE, 0, place.reg, valueReg);
+  return true;
+}
+
+inline void IRLowering::LowerVariableDecl(NodeRef ref, u32 bindingNameHash,
+                                          const VariableData *bindingData) {
   const VariableDeclData &varDecl = ast->GetVariableDecl(ref);
+  const u32 nameHash = bindingNameHash ? bindingNameHash : varDecl.name.nameHash;
 
   Symbol *sym = SymbolTable::LookupByHash(
       const_cast<SymbolTableData *>(symbols), varDecl.name.nameHash);
-  const VariableData *varData = (sym && sym->kind == SymbolKind::VARIABLE)
-                                    ? &symbols->variables[sym->index]
-                                    : nullptr;
+  const VariableData *varData = bindingData ? bindingData :
+      ((sym && sym->kind == SymbolKind::VARIABLE) ?
+          &symbols->variables[sym->index] : nullptr);
   bool isShared = (varDecl.storageClass == StorageClass::Shared) ||
                   (varData && varData->storageClass == StorageClass::Shared);
   bool isArray = varData && IsArray(varData->typeInfo);
@@ -364,9 +595,9 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
   u16 varReg = AllocateRegister();
 
   // Store mapping from variable name hash to register
-  variableRegisters[varDecl.name.nameHash] = varReg;
+  variableRegisters[nameHash] = varReg;
   if (varDecl.isConst) {
-    constVariables.insert(varDecl.name.nameHash);
+    constVariables.insert(nameHash);
   }
 
   // Track type from the declaration first to avoid symbol-table collisions
@@ -421,7 +652,7 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
     }
 
     u32 sharedIndex = program.sharedVarCount++;
-    program.sharedNameHashes[sharedIndex] = varDecl.name.nameHash;
+    program.sharedNameHashes[sharedIndex] = nameHash;
     program.sharedTypes[sharedIndex] = static_cast<u16>(coreType);
     program.sharedArraySizes[sharedIndex] = isArray ? arrayLength : 0;
     program.sharedRegisters[sharedIndex] = varReg;
@@ -432,6 +663,13 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
     return;
   }
 
+  // This register remains the assignment target throughout lowering, so later
+  // stores and component updates retain the declaration's local identity.
+  // Arrays have their own declaration table; shared variables are handled above.
+  if (!isArray) {
+    program.registerNameHashes[varReg] = nameHash;
+  }
+
   // Check if this is a struct or enum sum type
   if (coreType == CoreType::CUSTOM || coreType == CoreType::INVALID) {
     u32 lookupHash =
@@ -439,7 +677,7 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
     u32 structTypeHash = LookupOrRegisterStructType(lookupHash);
     if (structTypeHash != 0) {
       coreType = CoreType::CUSTOM;
-      variableStructTypes[varDecl.name.nameHash] = structTypeHash;
+      variableStructTypes[nameHash] = structTypeHash;
       program.registerStructTypes[varReg] = structTypeHash;
     }
   }
@@ -471,26 +709,28 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
     }
 
     RegisterLocalArray(varReg, arrayElementType, arrayElementStructHash,
-                       arrayLength, varDecl.name.nameHash);
+                       arrayLength, nameHash);
   }
 
   // If there's an initializer, evaluate it
   if (!varDecl.initializer.IsNull()) {
     // Check for array initializer (BLOCK node with element expressions)
     if (isArray && varDecl.initializer.Type() == ASTNodeType::BLOCK) {
-      // Array with block initializer - emit element-by-element stores
+      // Array with block initializer. Evaluate every element before storing
+      // any, so the stores form one uninterrupted run that the backend can
+      // emit as a single whole-array store.
       const BlockData &initBlock = ast->GetBlock(varDecl.initializer);
-      for (u32 i = 0; i < initBlock.statements.count && i < arrayLength;
-           i++) {
-        NodeRef elementExpr = initBlock.statements[i];
-        u16 elementReg = LowerExpression(elementExpr);
-        elementReg = ConvertRegisterToType(elementReg, arrayElementType);
-
-        // Emit array store: store element at index i
-        u16 indexReg = EmitConstantUint(i);
-        builder.EmitInstruction(OP_ARRAY_STORE, varReg, indexReg, elementReg);
+      u32 elementCount = std::min(initBlock.statements.count, arrayLength);
+      std::vector<u16> elementRegs(elementCount);
+      for (u32 i = 0; i < elementCount; i++) {
+        u16 elementReg = LowerExpression(initBlock.statements[i]);
+        elementRegs[i] = ConvertRegisterToType(elementReg, arrayElementType);
       }
-      initializedVariables.insert(varDecl.name.nameHash);
+      for (u32 i = 0; i < elementCount; i++) {
+        u16 indexReg = EmitConstantUint(i);
+        builder.EmitInstruction(OP_ARRAY_STORE, varReg, indexReg, elementRegs[i]);
+      }
+      initializedVariables.insert(nameHash);
     } else {
       u16 initReg = LowerExpression(varDecl.initializer);
 
@@ -498,13 +738,13 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
       // propagate the struct type to the initializer result. This handles
       // cases like loading from untyped storage buffers into typed variables.
       if (coreType == CoreType::CUSTOM && initReg < MAX_REGISTERS) {
-        u32 varStructHash = variableStructTypes[varDecl.name.nameHash];
+        u32 varStructHash = variableStructTypes[nameHash];
         if (varStructHash == 0) {
           varStructHash = program.registerStructTypes[varReg];
         }
         if (varStructHash == 0 && program.registerStructTypes[initReg] != 0) {
           varStructHash = program.registerStructTypes[initReg];
-          variableStructTypes[varDecl.name.nameHash] = varStructHash;
+          variableStructTypes[nameHash] = varStructHash;
           program.registerStructTypes[varReg] = varStructHash;
         }
         if (varStructHash != 0 && program.registerStructTypes[initReg] == 0) {
@@ -565,20 +805,20 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
               program.registerStructTypes[initReg];
         }
       }
-      initializedVariables.insert(varDecl.name.nameHash);
+      initializedVariables.insert(nameHash);
     }
   } else if (!isArray && coreType == CoreType::CUSTOM) {
     // For single struct types without initializer, emit a zero/undef struct
     // value. Note: struct arrays are handled differently - they are
     // pointer-based and individual elements are stored via ARRAY_STORE.
-    u32 structTypeHash = variableStructTypes[varDecl.name.nameHash];
+    u32 structTypeHash = variableStructTypes[nameHash];
     if (structTypeHash == 0 && varReg < MAX_REGISTERS) {
       structTypeHash = program.registerStructTypes[varReg];
     }
     if (structTypeHash != 0) {
       u16 zeroStruct = EmitZeroStruct(structTypeHash);
       builder.EmitInstruction(OP_STORE_REG, varReg, zeroStruct);
-      initializedVariables.insert(varDecl.name.nameHash);
+      initializedVariables.insert(nameHash);
     }
   } else if (!isArray &&
              (coreType == CoreType::FLOAT2 || coreType == CoreType::FLOAT3 ||
@@ -592,8 +832,20 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref) {
                                                           : 4;
     builder.EmitInstruction(OP_VEC_CONSTRUCT, varReg, zero, zero, zero, zero);
     program.metadata[program.instructionCount - 1] = componentCount;
-    initializedVariables.insert(varDecl.name.nameHash);
+    initializedVariables.insert(nameHash);
   }
+}
+
+inline u16 IRLowering::LowerModuleArrayConstant(const VariableData &data,
+                                                u32 bindingNameHash) {
+  auto found = variableRegisters.find(bindingNameHash);
+  if (found != variableRegisters.end()) return found->second;
+  if (!data.constDecl.IsValid()) {
+    ReportError("Error: module array constant has no declaration\n");
+    return 0;
+  }
+  LowerVariableDecl(data.constDecl, bindingNameHash, &data);
+  return variableRegisters[bindingNameHash];
 }
 
 inline void IRLowering::LowerAssignment(NodeRef ref) {
@@ -610,6 +862,45 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
 
 inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
                                   InterpolationMode interpolation) {
+  // Array element and nested field writes must honor the root declaration's
+  // const flag. The direct identifier path below only covers whole values.
+  NodeRef root = target;
+  bool indexed = false;
+  while (root.Type() == ASTNodeType::ARRAY_ACCESS ||
+         root.Type() == ASTNodeType::MEMBER_ACCESS) {
+    if (root.Type() == ASTNodeType::ARRAY_ACCESS) {
+      indexed = true;
+      root = ast->GetArrayAccess(root).array;
+    } else {
+      const MemberAccessData &member = ast->GetMemberAccess(root);
+      if (member.isModuleQualified) break;
+      root = member.object;
+    }
+  }
+  if (indexed) {
+    u32 rootHash = 0;
+    if (root.Type() == ASTNodeType::IDENTIFIER) {
+      u32 boundHash = ast->identifierConstBindingHashes[root.Index()];
+      rootHash = boundHash ? boundHash : ast->GetIdentifier(root).name.nameHash;
+    } else if (root.Type() == ASTNodeType::MEMBER_ACCESS &&
+             ast->GetMemberAccess(root).isModuleQualified)
+      rootHash = ast->GetMemberAccess(root).qualifiedNameHash;
+    if (rootHash != 0) {
+      bool knownLocal = variableRegisters.find(rootHash) != variableRegisters.end();
+      bool immutable = constVariables.find(rootHash) != constVariables.end();
+      if (!knownLocal) {
+        Symbol *sym = SymbolTable::LookupByHash(
+            const_cast<SymbolTableData *>(symbols), rootHash);
+        immutable = immutable || (sym && sym->kind == SymbolKind::VARIABLE &&
+                                  symbols->variables[sym->index].isConst);
+      }
+      if (immutable) {
+        ReportError("Error: cannot assign to a const declaration\n");
+        return;
+      }
+    }
+  }
+  if (TryStoreLocalPlace(target, valueReg)) return;
 
   if (target.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &ident = ast->GetIdentifier(target);
@@ -716,6 +1007,8 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
         u32 length = 0;
         if (DecodeSwizzleByHash(access.member.nameHash, access.member.nameLength,
                                 indices, &length)) {
+          if (!CheckSwizzleInRange(this, target, objectType, indices, length))
+              return;
           for (u32 j = 0; j < length; ++j) {
             for (u32 k = 0; k < j; ++k) {
               if (indices[j] == indices[k]) {
@@ -796,6 +1089,9 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
             componentIndex = 3;
 
           if (componentIndex != 0xFFFF) {
+            u8 index = static_cast<u8>(componentIndex);
+            if (!CheckSwizzleInRange(this, target, outputType, &index, 1))
+                return;
             u32 numComponents = GetVectorDimension(outputType);
             if (numComponents < 2) {
               builder.EmitInstruction(OP_STORE_OUTPUT, valueReg, slot);
@@ -817,6 +1113,8 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           u32 swizzleLen = 0;
           if (DecodeSwizzleByHash(memberHash, access.member.nameLength,
                                   swizzleIndices, &swizzleLen)) {
+            if (!CheckSwizzleInRange(this, target, outputType, swizzleIndices, swizzleLen))
+                return;
             // A repeated component in a swizzle store would silently drop
             // one of the writes.
             for (u32 i = 0; i < swizzleLen; i++) {
@@ -986,6 +1284,9 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           // Vector component assignment: vec.x = value
           // We need to insert the component into the vector and store back
           CoreType varType = GetRegisterType(objReg);
+          u8 index = static_cast<u8>(componentIndex);
+          if (!CheckSwizzleInRange(this, target, varType, &index, 1))
+              return;
 
           // Create a new vector with the component inserted
           u16 newVecReg = AllocateRegister();
@@ -1024,6 +1325,8 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
             }
 
             CoreType varType = GetRegisterType(objReg);
+            if (!CheckSwizzleInRange(this, target, varType, targetIdx, swizzleLen))
+                return;
             u32 numComponents = GetVectorDimension(varType);
             if (numComponents < 2) {
               builder.EmitInstruction(OP_STORE_REG, objReg, valueReg);
@@ -1362,6 +1665,11 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
 
 inline u16 IRLowering::LowerArrayAccess(NodeRef ref) {
   const ArrayAccessData &access = ast->GetArrayAccess(ref);
+  if (FindTextureArrayResource(access.array))
+    return LowerTextureArrayElement(ref);
+
+  u16 inPlace = TryLoadLocalPlace(ref);
+  if (inPlace != 0xFFFF) return inPlace;
 
   // `s.field[i]` where `field` is an array held by value in a struct
   // register: emit a fused two-level extract instead of materializing the
@@ -1594,10 +1902,15 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
 
   if (access.member.nameHash == HASH_LENGTH) {
     u32 arrayLength = ResolveStaticArrayLength(this, access.object);
+    if (const ResourceData *textures = FindTextureArrayResource(access.object))
+      arrayLength = textures->arraySize;
     if (arrayLength > 0) {
       return EmitConstantInt(arrayLength);
     }
   }
+
+  u16 inPlace = TryLoadLocalPlace(ref);
+  if (inPlace != 0xFFFF) return inPlace;
 
   // Sum-type enum variant with no payload, e.g. `Curve::Linear`.
   // Payload variants with arguments lower through LowerFunctionCall.
@@ -1607,6 +1920,18 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       access.object.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &enumIdent = ast->GetIdentifier(access.object);
     u32 qualifierHash = enumIdent.name.nameHash;
+    u32 visibleModule = SymbolTable::ResolveModuleIndexByHashInScope(
+        const_cast<SymbolTableData *>(symbols), qualifierHash,
+        AliasOwnerKind(), AliasOwnerModuleIndex());
+    if (visibleModule != INVALID_INDEX) {
+      Symbol *constant = SymbolTable::LookupByHash(
+          const_cast<SymbolTableData *>(symbols), access.qualifiedNameHash);
+      if (constant && constant->kind == SymbolKind::VARIABLE) {
+        const VariableData &data = symbols->variables[constant->index];
+        if (data.isConst && IsArray(data.typeInfo) && data.constDecl.IsValid())
+          return LowerModuleArrayConstant(data, access.qualifiedNameHash);
+      }
+    }
     Symbol *enumSym = SymbolTable::LookupByHash(
         const_cast<SymbolTableData *>(symbols), qualifierHash);
     if (enumSym && (enumSym->kind == SymbolKind::ENUM ||
@@ -1819,6 +2144,9 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
           (mask(srcType) & TypeMasks::SCALAR_TYPES) && componentIndex == 0) {
         return srcReg;
       }
+      u8 index = static_cast<u8>(componentIndex);
+      if (!CheckSwizzleInRange(this, ref, srcType, &index, 1))
+          return srcReg;
       u16 dest = AllocateRegister();
       builder.EmitInstruction(OP_VEC_EXTRACT, dest, srcReg, componentIndex);
       // Get the scalar type from the vector type
@@ -1845,6 +2173,8 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
           SetRegisterType(srcReg, loadType);
           builder.EmitInstruction(OP_STORAGE_LOAD, srcReg, objectReg);
         }
+        if (!CheckSwizzleInRange(this, ref, GetRegisterType(srcReg), indices, swizzleLen))
+            return srcReg;
         u16 dest = AllocateRegister();
         u32 shuffleMask = 0;
         for (u32 i = 0; i < swizzleLen; i++) {
@@ -1950,6 +2280,9 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       if ((mask(objType) & TypeMasks::SCALAR_TYPES) && componentIndex == 0) {
         return objectReg;
       }
+      u8 index = static_cast<u8>(componentIndex);
+      if (!CheckSwizzleInRange(this, ref, objType, &index, 1))
+          return objectReg;
       u16 dest = AllocateRegister();
       builder.EmitInstruction(OP_VEC_EXTRACT, dest, objectReg,
                               componentIndex);
@@ -1960,41 +2293,45 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       return dest;
     }
 
-    // Check for multi-component swizzle (rgb, xyz, etc.)
-    static const u32 HASH_RGB = Utils::HashStr("rgb");
-    static const u32 HASH_XYZ = Utils::HashStr("xyz");
-    static const u32 HASH_XY = Utils::HashStr("xy");
-    static const u32 HASH_RG = Utils::HashStr("rg");
-
-    if (memberHash == HASH_RGB || memberHash == HASH_XYZ) {
-      // Extract first 3 components (vec4 -> vec3)
-      u16 dest = AllocateRegister();
-      // For VEC_SHUFFLE: operand0 = src0, operand1 = src1 (same for
-      // single-source swizzle) Metadata = shuffle mask (4 bits per component)
-      u32 shuffleMask = (0 << 0) | (1 << 4) | (2 << 8); // components 0, 1, 2
-      builder.EmitInstruction(OP_VEC_SHUFFLE, dest, objectReg, objectReg);
-      program.metadata[builder.currentInstruction - 1] = shuffleMask;
-      // Get the scalar type and build the appropriate vec3 type
-      CoreType vectorType = GetRegisterType(objectReg);
-      CoreType scalarType = GetScalarComponentType(vectorType);
-      SetRegisterType(dest, GetVectorType(scalarType, 3));
-      return dest;
+    // Multi-component swizzle: any 2-4 components from xyzw or rgba, like
+    // swizzles on variables. Only .xyz/.rgb/.xy/.rg used to be handled
+    // here, so float2(...).xyxy kept the constructor's type.
+    {
+        u8 indices[4] = {0, 0, 0, 0};
+        u32 swizzleLen = 0;
+        if (DecodeSwizzleByHash(memberHash, access.member.nameLength, indices,
+                                &swizzleLen)) {
+            if (!CheckSwizzleInRange(this, ref, GetRegisterType(objectReg), indices,
+                                     swizzleLen))
+                return objectReg;
+            u16 dest = AllocateRegister();
+            u32 shuffleMask = 0;
+            for (u32 i = 0; i < swizzleLen; i++) {
+                shuffleMask |= (indices[i] & 0xF) << (i * 4);
+            }
+            builder.EmitInstruction(OP_VEC_SHUFFLE, dest, objectReg, objectReg);
+            program.metadata[builder.currentInstruction - 1] = shuffleMask;
+            CoreType vectorType = GetRegisterType(objectReg);
+            CoreType scalarType = GetScalarComponentType(vectorType);
+            SetRegisterType(dest, GetVectorType(scalarType, swizzleLen));
+            return dest;
+        }
     }
 
-    if (memberHash == HASH_XY || memberHash == HASH_RG) {
-      // Extract first 2 components (vec4/vec3 -> vec2)
-      u16 dest = AllocateRegister();
-      u32 shuffleMask = (0 << 0) | (1 << 4); // components 0, 1
-      builder.EmitInstruction(OP_VEC_SHUFFLE, dest, objectReg, objectReg);
-      program.metadata[builder.currentInstruction - 1] = shuffleMask;
-      // Get the scalar type and build the appropriate vec2 type
-      CoreType vectorType = GetRegisterType(objectReg);
-      CoreType scalarType = GetScalarComponentType(vectorType);
-      SetRegisterType(dest, GetVectorType(scalarType, 2));
-      return dest;
+    // Vector and scalar values only support swizzle member access, so a
+    // member that didn't decode above is invalid.
+    {
+        CoreType objType = GetRegisterType(objectReg);
+        if (mask(objType) &
+            (TypeMasks::FLOAT_VECTORS | TypeMasks::INT_VECTORS |
+             TypeMasks::UINT_VECTORS | TypeMasks::BOOL_VECTORS |
+             TypeMasks::SCALAR_TYPES)) {
+            ReportErrorAt(ref, "Error: invalid swizzle - swizzles use 1-4 components from a single naming set (xyzw or rgba)\n");
+            return objectReg;
+        }
     }
 
-    // No swizzle or unknown member, return object as-is
+    // Unknown member, return object as-is
     return objectReg;
   }
 
@@ -2004,6 +2341,10 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
   case SpecialIdentifier::ATTRIBUTES: {
     u16 dest = AllocateRegister();
     u32 attrIndex = GetAttributeIndex(access.member.nameHash);
+    if (attrIndex >= 16) {
+        ReportErrorAt(ref, "Error: vertex attribute index exceeds the supported limit of 16 attributes\n");
+        return 0;
+    }
     builder.EmitInstruction(OP_LOAD_ATTR, dest, (u16)attrIndex);
 
     // Check if attribute is compressed - if so, return raw uint type
@@ -2099,14 +2440,22 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       break;
 
     case ResourceBinding::Texture:
-      // Traditional bound texture - encode slot in register
-      dest = 0x6000 | (u16)resData.bindingIndex;
-      break;
+        if (resData.arraySize > 0) {
+          // Elements are lowered by LowerTextureArrayElement.
+          std::string name = access.member.ToString();
+          ReportErrorAt(ref, ("Error: texture array 'resources." + name +
+                              "' must be indexed, e.g. resources." + name +
+                              "[0]\n").c_str());
+          return 0;
+        }
+        // Traditional bound texture - encode slot in register
+        dest = 0x6000 | (u16)resData.bindingIndex;
+        break;
 
     case ResourceBinding::StorageImage:
-      // Storage image (read/write texture) - encode slot same as texture
-      dest = 0x6000 | (u16)resData.bindingIndex;
-      break;
+        // Storage image (read/write texture) - encode slot same as texture
+        dest = 0x6000 | (u16)resData.bindingIndex;
+        break;
 
     case ResourceBinding::Sampler:
       dest = 0x3000 | (u16)resData.bindingIndex;
@@ -2256,6 +2605,19 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
     // Fragment shader reading interpolated varyings from vertex output
     // input.xxx -> OP_LOAD_INPUT with slot index
 
+    // A name the vertex stage never wrote has no slot; GetInputSlotIndex would
+    // fall back to a guessed slot and type that the vertex stage doesn't declare.
+    if (currentPassVaryings && currentPassVaryings->vertexStageLowered &&
+        currentPassVaryings->GetSlot(memberHash) < 0) {
+      std::string memberName = ReverseLookup::GetString(memberHash);
+      std::string message = "Error: varying '" + memberName +
+                            "' is read in the fragment stage but never written "
+                            "by the vertex stage - assign output." +
+                            memberName + " in the vertex stage\n";
+      ReportErrorAt(ref, message.c_str());
+      return 0;
+    }
+
     // Map varying name to slot index using pass context if available
     u16 inputSlot = (u16)GetInputSlotIndex(memberHash);
     builder.EmitInstruction(OP_LOAD_INPUT, dest, inputSlot);
@@ -2357,6 +2719,9 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       if ((mask(objType) & TypeMasks::SCALAR_TYPES) && componentIndex == 0) {
         return objReg;
       }
+      u8 index = static_cast<u8>(componentIndex);
+      if (!CheckSwizzleInRange(this, ref, objType, &index, 1))
+          return 0;
       u16 dest = AllocateRegister();
       builder.EmitInstruction(OP_VEC_EXTRACT, dest, objReg, componentIndex);
       // Get the scalar type from the vector type
@@ -2374,6 +2739,8 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       u32 swizzleLen = 0;
       if (DecodeSwizzleByHash(access.member.nameHash, access.member.nameLength,
                               indices, &swizzleLen)) {
+        if (!CheckSwizzleInRange(this, ref, GetRegisterType(objReg), indices, swizzleLen))
+            return 0;
         u16 dest = AllocateRegister();
         u32 shuffleMask = 0;
         for (u32 i = 0; i < swizzleLen; i++) {
@@ -2542,9 +2909,13 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
     bool conflict = false;
     bool typeConflict = false;
     CoreType existingType = CoreType::INVALID;
+    u32 varyingCount = currentPassVaryings->count;
     u32 varyingIndex = currentPassVaryings->AddOrGetSlot(
         nameHash, valueType, nameStr, interpolation, &conflict, &typeConflict,
         &existingType);
+    if (currentPassVaryings->count > varyingCount) {
+      CheckVaryingGLName(varyingIndex, diagnosticNode);
+    }
     if (conflict) {
       ReportErrorAt(diagnosticNode,
                     "Error: conflicting interpolation decorators for varying\n");
@@ -2575,6 +2946,39 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
     return slot;
   }
   return OutputSlot::VARYING0;
+}
+
+// A varying is emitted as v_<name> (stored truncated to 31 characters), which
+// must not repeat a pipeline-level GL name or another varying's name.
+inline void IRLowering::CheckVaryingGLName(u32 varyingIndex,
+                                           NodeRef diagnosticNode) {
+  const VaryingInfo &varying = currentPassVaryings->varyings[varyingIndex];
+  // The emitted name uses the stored (possibly truncated) text; the
+  // diagnostic names the varying as written.
+  GLReservedName entry{};
+  entry.kind = GLNameKind::VARYING;
+  entry.name = GLNames::MakeName(GLNameKind::VARYING,
+                                 ArenaString::MakeHashOnly(varying.name));
+  entry.source = ArenaString::MakeHashOnly(varying.nameHash);
+  std::string collision;
+  if (currentPassVaryings->reservedGLNames) {
+    if (const GLReservedName *earlier = GLNames::FindName(
+            *currentPassVaryings->reservedGLNames, entry.name)) {
+      collision = GLNames::DescribeCollision(entry, *earlier);
+    }
+  }
+  for (u32 i = 0; i < currentPassVaryings->count && collision.empty(); i++) {
+    const VaryingInfo &other = currentPassVaryings->varyings[i];
+    if (i != varyingIndex && strcmp(other.name, varying.name) == 0) {
+      collision = "GL name '" + entry.name.ToString() + "' of " +
+                  GLNames::DescribeOwner(entry) +
+                  " collides with another varying; varying names must "
+                  "differ within their first 31 characters";
+    }
+  }
+  if (!collision.empty()) {
+    ReportErrorAt(diagnosticNode, ("Error: " + collision + "\n").c_str());
+  }
 }
 
 inline u32 IRLowering::ResolveOutputSlotForLoad(u32 nameHash) {

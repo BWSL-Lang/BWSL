@@ -100,3 +100,8 @@ select(false_value, true_value, condition)
 
 This ordering is part of the implementation today and should be documented
 exactly as such.
+
+Function and method declarations must not use a built-in intrinsic name,
+even in a module or when the declaration is unused. Such declarations are
+errors at the function name. Use a distinct name, such as `blend` instead
+of `lerp`, or `signed_distance` instead of `distance` for an SDF method.

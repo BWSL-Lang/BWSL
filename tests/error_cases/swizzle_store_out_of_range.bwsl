@@ -1,0 +1,12 @@
+// A swizzle store past the end of a vector is a source error. v.xz = ...
+// on a float2 used to drop the z write silently.
+pipeline SwizzleStoreOutOfRange {
+    pass "Main" {
+        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+        fragment {
+            float2 v = float2(0.0, 0.0);
+            v.xz = float2(1.0, 2.0);
+            output.color = float4(v, 0.0, 1.0);
+        }
+    }
+}

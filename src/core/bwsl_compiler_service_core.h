@@ -4,7 +4,9 @@
 #include "bwsl_ir_lowering.h"
 #include "bwsl_ir_analysis.h"
 #include "bwsl_cfg.h"
+#include "bwsl_gl_names.h"
 #include "bwsl_ssa.h"
+#include "phases/optimization/bwsl_constant_propagation.h"
 #include "bwsl_parser_soa.h"
 #include "bwsl_comptime_interpreter.h"
 #include "bwsl_resource_reflection.h"
@@ -42,7 +44,7 @@ struct VertexPullingConfig {
     
     // Which attributes are active (bitmask from VertexAttributeType)
     // e.g., AttributeMask(POSITION) | AttributeMask(NORMAL) | AttributeMask(TEXCOORD)
-    u8 attributeMask = 0;
+    u16 attributeMask = 0;
     
     // Base binding index for attribute buffers
     // For SeparateBuffers: position at baseBinding, normal at baseBinding+1, etc.
@@ -230,7 +232,7 @@ public:
     CompiledVariant* GetOrCompileVariant(
         const std::string& pipelineName,
         const std::string& passName,
-        u8 attributeMask,
+        u16 attributeMask,
         const CompilationConfig& config = CompilationConfig()
     ) {
         // Find pipeline shader set
@@ -269,7 +271,7 @@ public:
         const std::vector<VertexAttributeType>& activeAttributes,
         const CompilationConfig& config = CompilationConfig()
     ) {
-        u8 mask = CalculateAttributeMask(activeAttributes);
+        u16 mask = CalculateAttributeMask(activeAttributes);
         return GetOrCompileVariant(pipelineName, passName, mask, config);
     }
     
@@ -376,7 +378,7 @@ private:
     struct VariantUsage {
         std::string pipelineName;
         std::string passName;
-        u8 attributeMask;
+        u16 attributeMask;
         u32 frameLastUsed;
     };
     std::vector<VariantUsage> recentVariants;
@@ -386,21 +388,21 @@ private:
     // Internal Implementation
     // ========================================================================
     
-    static std::string MakeVariantKey(const std::string& pipeline, const std::string& pass, u8 mask) {
+    static std::string MakeVariantKey(const std::string& pipeline, const std::string& pass, u16 mask) {
         char buffer[128];
         snprintf(buffer, sizeof(buffer), "%s.%s.0x%02X", pipeline.c_str(), pass.c_str(), mask);
         return buffer;
     }
     
-    static u8 CalculateAttributeMask(const std::vector<VertexAttributeType>& attributes) {
-        u8 mask = 0;
+    static u16 CalculateAttributeMask(const std::vector<VertexAttributeType>& attributes) {
+        u16 mask = 0;
         for (auto attr : attributes) {
             mask |= AttributeMask(attr);
         }
         return mask;
     }
     
-    void TrackVariantUsage(const std::string& pipeline, const std::string& pass, u8 mask) {
+    void TrackVariantUsage(const std::string& pipeline, const std::string& pass, u16 mask) {
         // Remove old entry if exists
         recentVariants.erase(
             std::remove_if(recentVariants.begin(), recentVariants.end(),
@@ -485,11 +487,14 @@ private:
         shaderSet.cachedParser->Init(shaderSet.cachedLexer.get(), shaderSet.cachedTokens.get(),
                                     shaderSet.cachedContext.get());
         
+        shaderSet.cachedParser->currentSourceName = shaderSet.bwslPath;
         shaderSet.cachedParser->ParseDocument();
         
         if (shaderSet.cachedParser->hadError) {
             return false;
         }
+
+        shaderSet.cachedParser->DiagnoseShadowing();
 
         std::string variantResolveError;
         if (!shaderSet.cachedParser->ResolveVariants(shaderSet.cachedContext->root,
@@ -504,7 +509,34 @@ private:
                                               &comptimeError)) {
             return false;
         }
+        const bool namesValid = shaderSet.cachedParser->ValidateNames();
+        {
+            const DiagnosticStream& diagnostics = shaderSet.cachedContext->Diag();
+            for (u32 i = 0; i < diagnostics.Count(); i++) {
+                fprintf(stderr, "%s:%u:%u: %s: %s\n", diagnostics.GetFile(i).c_str(),
+                        diagnostics.lines[i], diagnostics.columns[i],
+                        DiagnosticStream::SeverityName(diagnostics.GetSeverity(i)),
+                        diagnostics.FormatMessage(i).c_str());
+            }
+        }
+        if (!namesValid) return false;
         shaderSet.cachedParser->ResolveShaderStages(shaderSet.cachedContext->root);
+
+        AST& ast = shaderSet.cachedContext->ast;
+        if (ast.pipelines.count > 0) {
+            std::vector<GLReservedName> glNames;
+            std::string glNameError;
+            u32 glNamePosition = 0;
+            if (!GLNames::CheckPipelineNames(ast, ast.pipelines[0],
+                                             shaderSet.cachedParser->symbolTable, &glNames,
+                                             &glNameError, &glNamePosition)) {
+                u32 line = 0, column = 0;
+                AST::UnpackPosition(glNamePosition, line, column);
+                fprintf(stderr, "BWSL Compiler Error: %s:%u:%u: %s\n",
+                        shaderSet.pipelineName.c_str(), line, column, glNameError.c_str());
+                return false;
+            }
+        }
         
         shaderSet.astCached = true;
         return true;
@@ -517,7 +549,7 @@ private:
             return false;
         }
         
-        u8 attributeMask = config.vertexPulling.attributeMask;
+        u16 attributeMask = config.vertexPulling.attributeMask;
         std::string variantKey = MakeVariantKey(shaderSet.pipelineName, passName, attributeMask);
         
         // Find the pass in AST
@@ -555,12 +587,17 @@ private:
         std::vector<ExplicitSamplerUse> reflectionSamplerUses;
         bool hasVertexAnalysis = false;
         bool hasFragmentAnalysis = false;
+        IR::PassVaryingContext passVaryings;
+        std::vector<GLReservedName> glNames;
+        GLNames::CollectPipelineNames(ast, pipeline,
+                                     shaderSet.cachedParser->symbolTable, &glNames);
+        passVaryings.reservedGLNames = &glNames;
 
         // Compile vertex shader if present
         if (!targetPass.vertexShader.IsNull()) {
             if (!CompileShaderStage(shaderSet, targetPass.vertexShader, 
                                     ShaderStage::Vertex, config, variant.vertexSpirv,
-                                    &vertexAnalysis, &reflectionSamplerUses)) {
+                                    &vertexAnalysis, &reflectionSamplerUses, &passVaryings)) {
                 shaderSet.variants.erase(variantKey);
                 return false;
             }
@@ -573,7 +610,7 @@ private:
             fragConfig.stage = ShaderStage::Fragment;
             if (!CompileShaderStage(shaderSet, targetPass.fragmentShader,
                                     ShaderStage::Fragment, fragConfig, variant.fragmentSpirv,
-                                    &fragmentAnalysis, &reflectionSamplerUses)) {
+                                    &fragmentAnalysis, &reflectionSamplerUses, &passVaryings)) {
                 shaderSet.variants.erase(variantKey);
                 return false;
             }
@@ -595,7 +632,8 @@ private:
                            ShaderStage stage, const CompilationConfig& config,
                            std::vector<u32>& outSpirv,
                            IRAnalysis* outAnalysis = nullptr,
-                           std::vector<ExplicitSamplerUse>* outExplicitSamplerUses = nullptr) {
+                           std::vector<ExplicitSamplerUse>* outExplicitSamplerUses = nullptr,
+                           IR::PassVaryingContext* passVaryings = nullptr) {
         AST& ast = shaderSet.cachedContext->ast;
         const ShaderStageData& shaderStage = ast.GetShaderStage(stageRef);
         
@@ -611,6 +649,7 @@ private:
         lowering.Initialize(&irPool, &shaderSet.cachedParser->symbolTable, &ast,
                             shaderSet.cachedSource.data());
         lowering.currentStage = stage;
+        lowering.currentPassVaryings = passVaryings;
 
         const PassData* owningPass = nullptr;
         if (ast.pipelines.count > 0) {
@@ -621,6 +660,8 @@ private:
                     pass.fragmentShader == stageRef ||
                     pass.computeShader == stageRef) {
                     owningPass = &pass;
+                    lowering.currentPipeline = NodeRef(ASTNodeType::PIPELINE, 0);
+                    lowering.currentPass = pipeline.passes[i];
                     break;
                 }
             }
@@ -628,6 +669,7 @@ private:
 
         if (owningPass) {
             lowering.currentPassData = owningPass;
+            lowering.LowerGlobalArrayConstants(shaderStage.body, *owningPass);
             for (u32 i = 0; i < owningPass->consts.count; i++) {
                 lowering.LowerStatement(owningPass->consts[i]);
             }
@@ -639,6 +681,9 @@ private:
             lowering.LowerStatement(block.statements[i]);
         }
         if (lowering.hadError) return false;
+        if (stage == ShaderStage::Vertex && passVaryings) {
+            passVaryings->vertexStageLowered = true;
+        }
         
         // Ensure return at end
         if (lowering.program.instructionCount == 0 ||
@@ -652,8 +697,10 @@ private:
         
         // --- CFG Construction ---
         Memory::BWEMemoryArena cfgArena;
-        char cfgMem[512 * 1024];
-        cfgArena.Initialize(cfgMem, sizeof(cfgMem));
+        const size_t stageScratchBytes = std::max<size_t>(512 * 1024,
+            static_cast<size_t>(lowering.program.instructionCount) * 512);
+        std::vector<char> cfgMem(stageScratchBytes);
+        cfgArena.Initialize(cfgMem.data(), cfgMem.size());
         
         CFGBuilder cfgBuilder;
         cfgBuilder.Init(&lowering.program, &cfgArena);
@@ -664,9 +711,12 @@ private:
         // actual value producer. SSA handles unreachable blocks after specialization.
         if (cfgBuilder.cfg.blockCount > 1 &&
             !SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena)) {
-            fprintf(stderr, "BWSL Compiler Error: SSA register limit exceeded (16383 registers).\n");
+            NodeRef node;
+            node.packed = lowering.program.ssaFailureSourceNode;
+            lowering.ReportErrorAt(node, "SSA register limit exceeded (16383 registers). Split or simplify the shader.\n");
             return false;
         }
+        Optimization::PropagateConstants(&lowering.builder, &cfgBuilder.cfg);
 
         if (outExplicitSamplerUses) {
             std::vector<ExplicitSamplerUse> stageUses =
@@ -677,12 +727,25 @@ private:
         
         // --- Generate SPIR-V ---
         Memory::BWEMemoryArena spirvArena;
-        char spirvMem[512 * 1024];
-        spirvArena.Initialize(spirvMem, sizeof(spirvMem));
+        std::vector<char> spirvMem(stageScratchBytes);
+        spirvArena.Initialize(spirvMem.data(), spirvMem.size());
         
         SPIRVBuilder builder;
         builder.Initialize(&spirvArena, &lowering.program, stage,
                           &shaderSet.cachedParser->symbolTable, &cfgBuilder.cfg);
+        if (passVaryings) {
+            for (u32 i = 0; i < passVaryings->count; i++) {
+                builder.SetVaryingName(passVaryings->varyings[i].slot,
+                                       passVaryings->varyings[i].name);
+            }
+        }
+        if (ast.pipelines.count) {
+            const PipelineData& pipeline = ast.pipelines[0];
+            for (u32 i = 0; i < pipeline.attributes.count; i++) {
+                const AttributeDeclData& attribute = ast.GetAttributeDecl(pipeline.attributes[i]);
+                builder.SetAttributeName(attribute.attributeIndex, attribute.name);
+            }
+        }
 
         // Configure vertex pulling mode
         ConfigureVertexPulling(builder, config);
@@ -774,7 +837,7 @@ private:
             : ResourceReflectionConfig::VertexPullingMode::SeparateBuffers;
         reflectionConfig.attributeMask = config.vertexPulling.attributeMask;
         if (reflectionConfig.attributeMask == 0 && vertexAnalysis) {
-            reflectionConfig.attributeMask = static_cast<u8>(vertexAnalysis->usedAttributeMask);
+            reflectionConfig.attributeMask = static_cast<u16>(vertexAnalysis->usedAttributeMask);
         }
         reflectionConfig.baseBufferBinding = config.vertexPulling.baseBufferBinding;
         reflectionConfig.descriptorSet = config.vertexPulling.descriptorSet;

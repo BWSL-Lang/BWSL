@@ -1,0 +1,40 @@
+// Regression: `.length` on a local array was lowered as a swizzle
+// ("invalid swizzle - swizzles use 1-4 components ..."). It only worked on
+// arrays the symbol table knows about, such as resource and struct fields.
+// Array parameters of a function are local arrays too.
+pipeline EquivLocalArrayLength {
+
+    sumAll :: (float[3] v) -> float {
+        float s = 0.0;
+        for (int i = 0; i < v.length; i++) {
+            s += v[i];
+        }
+        return s;
+    }
+
+    resources {
+        output: buffer<float>
+    }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+
+            float[3] a = { 1.0, 2.0, 3.0 };
+            int[2] w = { 4, 5 };
+
+            float[6] t;
+            for (int i = 0; i < t.length; i++) {
+                t[i] = float(i);
+            }
+
+            float sum = 0.0;
+            for (int i = 0; i < a.length; i++) {
+                sum += a[i];
+            }
+
+            float[4] results = { float(a.length), float(t.length), sum + sumAll(a) + t[5], float(w.length) };
+            resources.output[idx] = results[idx];
+        }
+    }
+}

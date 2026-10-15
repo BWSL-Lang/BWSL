@@ -1,0 +1,26 @@
+// A short-name constant from another module must not hide a local type V.
+module Constants {
+    const float V = 5.0;
+}
+
+// Same-file module types must resolve exactly as imported module types do.
+module NestedTypes {
+    struct Inner { float x; }
+    struct V { float z; }
+    struct Outer { Inner inner; V value; float y; }
+    total :: (Outer value) -> float { return value.inner.x + value.value.z + value.y; }
+}
+pipeline NestedTypesTest {
+    import NestedTypes
+    resources { result: buffer<float> }
+    pass "Main" {
+        use resources { result }
+        compute "Main" [1, 1, 1] {
+            NestedTypes::Outer value;
+            value.inner.x = 2.0;
+            value.value.z = 1.0;
+            value.y = 3.0;
+            resources.result[0] = NestedTypes::total(value);
+        }
+    }
+}

@@ -808,30 +808,30 @@ inline u32 IRLowering::GetCoreTypeNameHash(CoreType type) {
 }
 
 inline u16 IRLowering::AllocateRegister() {
-  // Do not enter the tagged-constant range or return the legacy invalid marker.
-  if (builder.nextRegister >= MAX_REGISTERS) {
-    if (!hadError) ReportError("Shader register limit exceeded (16383 registers).\n");
-    return 0;
-  }
-  u16 reg = builder.nextRegister++;
-  program.registerTypes[reg] = static_cast<u16>(CoreType::FLOAT);
-  program.registerStructTypes[reg] = 0;
-  program.registerStorageInfo[reg] = 0;
-  if (reg >= program.registerCount) {
-    program.registerCount = reg + 1;
-  }
-  return reg;
+    // Do not enter the tagged-constant range or return the invalid marker.
+    if (builder.nextRegister >= MAX_REGISTERS) {
+        NodeRef node;
+        node.packed = builder.currentSourceNode;
+        if (!hadError) ReportErrorAt(node, "Shader register limit exceeded (16383 registers). Split or simplify the shader.\n");
+        return 0;
+    }
+    u16 reg = builder.nextRegister++;
+    program.registerTypes[reg] = static_cast<u16>(CoreType::FLOAT);
+    program.registerStructTypes[reg] = 0;
+    program.registerStorageInfo[reg] = 0;
+    if (reg >= program.registerCount) {
+        program.registerCount = reg + 1;
+    }
+    return reg;
 }
 
 inline u16 IRLowering::EmitConstantInt(u32 value) {
-  for (u16 i = 0; i < program.intCount; i++) {
-    if (program.intConstants[i] == value) {
-      return 0x4000 | i;
-    }
-  }
-  u32 slot = program.intCount++;
-  program.intConstants[slot] = value;
-  return 0x4000 | (u16)slot;
+    u16 constant = builder.EmitConstantInteger(value, false);
+    if (constant != 0xFFFF) return constant;
+    NodeRef node;
+    node.packed = builder.currentSourceNode;
+    if (!hadError) ReportErrorAt(node, "Signed integer constant limit exceeded (8192 values). Split or simplify the shader.\n");
+    return 0x4000;
 }
 
 // Fold only pure integer ASTs. In particular, do not infer constants from a
@@ -941,22 +941,37 @@ inline bool IRLowering::CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
   if (!(info & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY)) return true;
   u32 arrayIdx = info >> IR::IRProgram::STORAGE_BINDING_SHIFT;
   if (arrayIdx >= program.localArrayCount) return true;
-  u32 length = program.localArraySizes[arrayIdx];
+  return CheckConstIndexInBounds(indexReg, indexExpr,
+                                 program.localArraySizes[arrayIdx]);
+}
+
+// Reads the value of an index that is a constant register or folds to one.
+inline bool IRLowering::TryGetConstIndex(u16 indexReg, NodeRef indexExpr,
+                                         s64* value) {
+    if (IR::IsIntConstant(indexReg)) {
+        u16 slot = indexReg & 0x3FFF;
+        if (slot >= program.intCount) return false;
+        *value = static_cast<s32>(program.intConstants[slot]);
+        return true;
+    }
+    if (IR::IsUintConstant(indexReg)) {
+        u16 slot = indexReg & 0x1FFF;
+        if (slot >= program.uintCount) return false;
+        *value = program.uintConstants[slot];
+        return true;
+    }
+    bool isUnsigned;
+    return !indexExpr.IsNull() && TryFoldArrayIndex(ast, indexExpr, value, &isUnsigned);
+}
+
+// Reports an error when a constant index is negative or >= length. Returns
+// true when the index is fine or not a constant.
+inline bool IRLowering::CheckConstIndexInBounds(u16 indexReg, NodeRef indexExpr,
+                                                u32 length) {
   if (length == 0) return true;
 
   s64 indexValue;
-  if (IR::IsIntConstant(indexReg)) {
-    u16 slot = indexReg & 0x3FFF;
-    if (slot >= program.intCount) return true;
-    indexValue = static_cast<s32>(program.intConstants[slot]);
-  } else if (IR::IsUintConstant(indexReg)) {
-    u16 slot = indexReg & 0x1FFF;
-    if (slot >= program.uintCount) return true;
-    indexValue = program.uintConstants[slot];
-  } else {
-    bool isUnsigned;
-    if (!TryFoldArrayIndex(ast, indexExpr, &indexValue, &isUnsigned)) return true;
-  }
+  if (!TryGetConstIndex(indexReg, indexExpr, &indexValue)) return true;
 
   if (indexValue < 0 || indexValue >= static_cast<s64>(length)) {
     char msg[160];
@@ -971,14 +986,142 @@ inline bool IRLowering::CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
 }
 
 inline u16 IRLowering::EmitConstantUint(u32 value) {
-  for (u16 i = 0; i < program.uintCount; i++) {
-    if (program.uintConstants[i] == value) {
-      return 0x6000 | i;
-    }
+    u16 constant = builder.EmitConstantInteger(value, true);
+    if (constant != 0xFFFF) return constant;
+    NodeRef node;
+    node.packed = builder.currentSourceNode;
+    if (!hadError) ReportErrorAt(node, "Unsigned integer constant limit exceeded (8192 values). Split or simplify the shader.\n");
+    return 0x6000;
+}
+
+inline u16 IRLowering::TryConvertScalarConstant(u16 reg, CoreType targetType) {
+  if (reg == 0xFFFF || !IR::IsConstant(reg)) return 0xFFFF;
+  CoreType sourceType = GetRegisterType(reg);
+  if (sourceType == targetType) return reg;
+  double value;
+  if (sourceType == CoreType::FLOAT) value = program.floatConstants[reg & 0x7FFF];
+  else if (sourceType == CoreType::INT) value = static_cast<s32>(program.intConstants[reg & 0x1FFF]);
+  else if (sourceType == CoreType::UINT) value = program.uintConstants[reg & 0x1FFF];
+  else if (sourceType == CoreType::BOOL) value = program.boolConstants[reg & 0x3FFF];
+  else return 0xFFFF;
+  if (targetType == CoreType::FLOAT) return builder.EmitConstant(static_cast<float>(value));
+  if (targetType != CoreType::INT && targetType != CoreType::UINT) return 0xFFFF;
+  if (sourceType == CoreType::FLOAT) {
+    // Float-to-integer conversion is undefined outside the target's range.
+    // Do not invoke an undefined host cast while compiling those expressions.
+    value = std::trunc(value);
+    if (!std::isfinite(value) ||
+        (targetType == CoreType::INT && (value < INT32_MIN || value > INT32_MAX)) ||
+        (targetType == CoreType::UINT && (value < 0 || value > UINT32_MAX))) return 0xFFFF;
   }
-  u32 slot = program.uintCount++;
-  program.uintConstants[slot] = value;
-  return 0x6000 | (u16)slot;
+  u32 bits = sourceType == CoreType::INT ||
+                     (sourceType == CoreType::FLOAT && targetType == CoreType::INT)
+                 ? static_cast<u32>(static_cast<s32>(value))
+                 : static_cast<u32>(value);
+  return targetType == CoreType::INT ? EmitConstantInt(bits) : EmitConstantUint(bits);
+}
+
+inline u16 IRLowering::TryFoldScalarArithmetic(OpCode op, u16 left, u16 right) {
+  if (left == 0xFFFF || right == 0xFFFF || !IR::IsConstant(left) ||
+      !IR::IsConstant(right) || GetRegisterType(left) != GetRegisterType(right)) return 0xFFFF;
+  CoreType type = GetRegisterType(left);
+  if (type == CoreType::FLOAT) {
+    float a = program.floatConstants[left & 0x7FFF], b = program.floatConstants[right & 0x7FFF];
+    float result;
+    switch (op) {
+    case OP_FADD: result = a + b; break;
+    case OP_FSUB: result = a - b; break;
+    case OP_FMUL: result = a * b; break;
+    case OP_FDIV: if (b == 0) return 0xFFFF; result = a / b; break;
+    default: return 0xFFFF;
+    }
+    if (!std::isfinite(result)) return 0xFFFF;
+    return builder.EmitConstant(result);
+  }
+  if (type == CoreType::UINT) {
+    u32 a = program.uintConstants[left & 0x1FFF], b = program.uintConstants[right & 0x1FFF];
+    u32 result;
+    switch (op) {
+    case OP_IADD: result = a + b; break;
+    case OP_ISUB: result = a - b; break;
+    case OP_IMUL: result = a * b; break;
+    case OP_IDIV: if (!b) return 0xFFFF; result = a / b; break;
+    case OP_IMOD: if (!b) return 0xFFFF; result = a % b; break;
+    default: return 0xFFFF;
+    }
+    return EmitConstantUint(result);
+  }
+  if (type == CoreType::INT) {
+    s64 a = static_cast<s32>(program.intConstants[left & 0x1FFF]);
+    s64 b = static_cast<s32>(program.intConstants[right & 0x1FFF]);
+    s64 result;
+    switch (op) {
+    case OP_IADD: result = a + b; break;
+    case OP_ISUB: result = a - b; break;
+    case OP_IMUL: result = a * b; break;
+    case OP_IDIV:
+    case OP_IMOD:
+      if (!b || (a == INT32_MIN && b == -1)) return 0xFFFF;
+      result = op == OP_IDIV ? a / b : a % b;
+      break;
+    default: return 0xFFFF;
+    }
+    if (result < INT32_MIN || result > INT32_MAX) return 0xFFFF;
+    return EmitConstantInt(static_cast<u32>(result));
+  }
+  return 0xFFFF;
+}
+
+// Call right after emitting the OP_VEC_CONSTRUCT that writes `reg`, a fresh
+// temporary. Records it when every component is a scalar constant.
+inline void IRLowering::RecordConstantVector(u16 reg) {
+  u32 inst = builder.currentInstruction - 1;
+  CoreType type = GetRegisterType(reg);
+  CoreType scalarType = GetScalarComponentType(type);
+  u32 width = GetVectorDimension(type);
+  u32 count = program.metadata[inst];
+  if (width < 2 || (count != 1 && count != width)) return;
+  for (u32 i = 0; i < count; i++) {
+    u16 component = program.GetOperand(inst, i);
+    if (component == 0xFFFF || !IR::IsConstant(component) ||
+        GetRegisterType(component) != scalarType) return;
+  }
+  constantVectors[reg] = inst;
+}
+
+inline bool IRLowering::GetConstantVectorComponents(u16 reg, u16 components[4],
+                                                    u32 *width) {
+  auto it = constantVectors.find(reg);
+  if (it == constantVectors.end()) return false;
+  *width = GetVectorDimension(GetRegisterType(reg));
+  bool splat = program.metadata[it->second] == 1;
+  for (u32 i = 0; i < *width; i++) {
+    components[i] = program.GetOperand(it->second, splat ? 0 : i);
+  }
+  return true;
+}
+
+// Folds componentwise arithmetic on two constant vectors (a scalar operand is
+// already splatted by then) into a new constant vector.
+inline u16 IRLowering::TryFoldVectorArithmetic(OpCode op, u16 left, u16 right) {
+  u16 a[4], b[4], folded[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+  u32 width, rightWidth;
+  if (!GetConstantVectorComponents(left, a, &width) ||
+      !GetConstantVectorComponents(right, b, &rightWidth) ||
+      width != rightWidth || GetRegisterType(left) != GetRegisterType(right)) {
+    return 0xFFFF;
+  }
+  for (u32 i = 0; i < width; i++) {
+    folded[i] = TryFoldScalarArithmetic(op, a[i], b[i]);
+    if (folded[i] == 0xFFFF) return 0xFFFF;
+  }
+  u16 dest = AllocateRegister();
+  builder.EmitInstruction(OP_VEC_CONSTRUCT, dest, folded[0], folded[1],
+                          folded[2], folded[3]);
+  program.metadata[builder.currentInstruction - 1] = width;
+  SetRegisterType(dest, GetRegisterType(left));
+  RecordConstantVector(dest);
+  return dest;
 }
 
 inline u16 IRLowering::ConvertRegisterToType(u16 reg, CoreType targetType) {
@@ -1006,6 +1149,8 @@ inline u16 IRLowering::ConvertRegisterToType(u16 reg, CoreType targetType) {
     return reg;
   }
 
+  u16 constant = TryConvertScalarConstant(reg, targetType);
+  if (constant != 0xFFFF) return constant;
   u16 converted = AllocateRegister();
   builder.EmitInstruction(convOp, converted, reg);
   SetRegisterType(converted, targetType);
@@ -1023,21 +1168,21 @@ inline u16 IRLowering::GetOrAllocateVariable(u32 nameHash) {
 }
 
 inline CoreType IRLowering::GetRegisterType(u16 reg) {
-  // Constants have type encoded in high bits
-  // Check order matters: bool (0xC000) must be checked before float (0x8000)
-  if ((reg & 0xC000) == 0xC000)
-    return CoreType::BOOL; // Bool constant (0xC000 prefix)
-  if (reg & 0x8000)
-    return CoreType::FLOAT; // Float constant (0x8000 prefix)
-  if (IR::IsIntConstant(reg))
-    return CoreType::INT; // Int constant (0x4000 prefix)
-  if (IR::IsUintConstant(reg))
-    return CoreType::UINT; // Uint constant (0x6000 prefix)
+    // Constants have type encoded in high bits
+    // Check order matters: bool (0xC000) must be checked before float (0x8000)
+    if ((reg & 0xC000) == 0xC000)
+        return CoreType::BOOL; // Bool constant (0xC000 prefix)
+    if (reg & 0x8000)
+        return CoreType::FLOAT; // Float constant (0x8000 prefix)
+    if (IR::IsIntConstant(reg))
+        return CoreType::INT; // Int constant (0x4000 prefix)
+    if (IR::IsUintConstant(reg))
+        return CoreType::UINT; // Uint constant (0x6000 prefix)
 
-  if (reg < program.registerCount) {
-    return static_cast<CoreType>(program.registerTypes[reg]);
-  }
-  return CoreType::FLOAT; // Default
+    if (reg < program.registerCount) {
+        return static_cast<CoreType>(program.registerTypes[reg]);
+    }
+    return CoreType::FLOAT; // Default
 }
 
 inline void IRLowering::SetRegisterType(u16 reg, CoreType type) {
@@ -1232,7 +1377,7 @@ inline CoreType IRLowering::GetVectorTypeWithDimension(CoreType baseType, u32 di
   return baseType; // Return as-is if unknown
 }
 
-inline CoreType IRLowering::LookupCoreType(u32 typeHash) {
+inline CoreType IRLowering::LookupCoreType(u32 typeHash) const {
   // Use TypeHashes from bwsl_types.h
   for (u32 i = 0; i < TypeHashes::HASH_TABLE_SIZE; i++) {
     if (TypeHashes::HASH_TABLE[i].hash == typeHash) {

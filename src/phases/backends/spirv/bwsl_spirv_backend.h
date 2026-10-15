@@ -8,6 +8,7 @@
 #include "core/bwsl_defs.h"
 #include "core/bwsl_compiler_types.h"  // For ShaderStage, VertexAttributeType
 #include "core/bwsl_arena.h"
+#include "core/bwsl_gl_names.h"
 #include "SPIRV-Headers/include/spirv/unified1/spirv.hpp"
 #include <vector>
 #include <unordered_map>
@@ -27,6 +28,8 @@ struct SPIRVBuilder {
     alignas(64) bool* hasPreAllocatedId; // True if register has pre-allocated ID needing definition
     alignas(64) u32* localVarIds;        // Maps IR register -> OpVariable ID (for address-taken vars)
     alignas(64) u32* localArrayVarIds;   // SPIR-V IDs for local array variables
+    alignas(64) u32* localArrayTypeIds;  // Value types for whole-array initialization
+    alignas(64) bool* constantComposites; // Register is an OpConstantComposite
     alignas(64) u32* localArrayElemPtrTypes;  // Pointer types for local array elements
     // Rebound local pointers carry a runtime producer tag, without requiring
     // VariablePointers support in downstream GLSL/HLSL/Metal compilers.
@@ -102,6 +105,10 @@ struct SPIRVBuilder {
     bool textureIsCubemap[32] = {false};
     bool textureIsVolume[32] = {false};
     bool textureIsSeparate[32] = {false};
+    // Texture array elements: every element slot maps to the array's one
+    // variable in textureIds; the length is 0 for slots of plain textures.
+    u8 textureArrayLength[32] = {};
+    u8 textureArrayElement[32] = {};
     u32 defaultSamplerIds[32] = {};
 
     // Built-in input type IDs (cached for reuse)
@@ -215,6 +222,21 @@ struct SPIRVBuilder {
 
     // ============= Debug Options =============
     bool emitDebugNames = false;  // Emit OpName/OpMemberName for debugging
+    // Suffix local debug names that are reserved in GLSL ("vec4" -> "vec4_").
+    // SPIRV-Cross does not rename OpNames on plain result IDs, so these would
+    // reach GLSL/ESSL output verbatim and fail to compile.
+    bool avoidGlslReservedNames = false;
+
+    // ============= Interface Names =============
+    // Source names of vertex->fragment varyings, indexed by 0-based varying
+    // slot. Both stages of a pass must receive the same names, so the driver
+    // fills them from the shared PassVaryingContext. Unset slots fall back
+    // to "varying<N>".
+    const char* varyingNames[16] = {};
+    // Source names of vertex attributes, indexed by attribute location.
+    // Bit i of attributeNameMask says whether attributeNames[i] is set.
+    ArenaString attributeNames[16] = {};
+    u16 attributeNameMask = 0;
 
     // ============= Layout Options =============
     bool useStd430Padding = true;   // Use 16-byte stride for vec3[] in SSBOs.
@@ -242,7 +264,7 @@ struct SPIRVBuilder {
     
     struct VertexPullingConfig {
         VertexInputMode mode = VertexInputMode::SeparateBuffers;
-        u8 attributeMask = 0;          // Which attributes are active
+        u16 attributeMask = 0;         // Which attributes are active (bit per slot 0-15)
         u32 baseBufferBinding = 0;     // Starting binding index for attribute buffers
         u32 descriptorSet = 0;         // Descriptor set for vertex buffers
         u32 vertexIdBinding = 0;       // Binding for vertex ID (when using pulling)
@@ -250,9 +272,9 @@ struct SPIRVBuilder {
     
     VertexPullingConfig vertexPullingConfig;
     
-    // Storage buffer IDs for vertex pulling (one per attribute)
-    u32 attributeBufferIds[8] = {0};
-    u32 attributeBufferPtrTypeIds[8] = {0};
+    // Storage buffer IDs for vertex pulling (one per attribute slot)
+    u32 attributeBufferIds[16] = {0};
+    u32 attributeBufferPtrTypeIds[16] = {0};
     
     // Built-in input variables (vertex shader)
     u32 vertexIdVarId = 0;     // BuiltIn VertexIndex (gl_VertexID)
@@ -286,6 +308,7 @@ struct SPIRVBuilder {
 
     // Struct type management
     u32 GetStructTypeId(u32 structTypeHash);  // Get or create SPIR-V struct type from IR struct info
+    u32 GetStructMemberTypeId(u32 structTypeHash, u32 fieldIndex);
 
     // Texture type management
     u32 GetImageTypeId();               // Get OpTypeImage ID for 2D sampled texture
@@ -327,6 +350,7 @@ struct SPIRVBuilder {
     
     // IR translation
     void TranslateInstruction(u32 ir_idx);
+    u32 TranslateArrayStoreSequence(u32 first, u32 end);
     u32 LocalPointerValueType(u16 reg);
     u32 LocalPointerTag(u16 reg);
     u32 LocalPointerTarget(u32 producer, u32 index = 0, u32 depth = 0);
@@ -336,6 +360,7 @@ struct SPIRVBuilder {
     // Control flow
     u32 GetOrCreateBlockLabel(u32 ir_idx);
     void EmitBranch(u32 ir_idx);
+    bool DropsPhiEdge(u32 branchInst, u32 targetInst) const;
     void EmitStructuredControlFlow(u32 ir_idx);
     
     // PHI nodes
@@ -344,6 +369,7 @@ struct SPIRVBuilder {
     
     // Function emission
     void EmitFunction();
+    void EmitLocalNames();
     void EmitFunctionBody();
     
     // Preamble (capabilities, imports, memory model)
@@ -359,6 +385,23 @@ struct SPIRVBuilder {
     
     // Debug options
     void SetEmitDebugNames(bool emit) { emitDebugNames = emit; }
+    void SetAvoidGlslReservedNames(bool avoid) { avoidGlslReservedNames = avoid; }
+
+    // Interface names. These are emitted regardless of emitDebugNames:
+    // GL hosts without layout(binding) look blocks and samplers up by name,
+    // and ES 3.00 links varyings by name.
+    void SetVaryingName(u32 slot, const char* name) {
+        if (slot < 16) varyingNames[slot] = name;
+    }
+    void SetAttributeName(u32 attributeIndex, ArenaString name) {
+        if (attributeIndex >= 16) return;
+        attributeNames[attributeIndex] = name;
+        attributeNameMask |= static_cast<u16>(1u << attributeIndex);
+    }
+    bool FindResourceName(ResourceBinding::Type type, u32 bindingIndex,
+                          ArenaString* name) const;
+    void EmitGLName(u32 id, GLNameKind kind, ArenaString source);
+    void EmitVaryingName(u32 varId, u32 varyingSlot, u32 fallbackIndex);
 
     // Layout options
     void SetUseStd430Padding(bool use) { useStd430Padding = use; }

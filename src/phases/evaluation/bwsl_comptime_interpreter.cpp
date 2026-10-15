@@ -349,7 +349,28 @@ static NodeRef CloneBlockLike(ComptimeState* state, NodeRef node, bool evalBlock
     return cloned;
 }
 
+static NodeRef CloneNodeImpl(ComptimeState* state, NodeRef node);
+
 static NodeRef CloneNode(ComptimeState* state, NodeRef node) {
+    NodeRef cloned = CloneNodeImpl(state, node);
+    if (cloned.IsNull() || cloned == node) return cloned;
+    AST& ast = *state->ast;
+    const u32 namePosition = ast.GetNamePosition(node);
+    if (namePosition != 0) ast.namePositions.Set(state->arena, cloned.packed, namePosition);
+    if (ast.FindEndPosition(node) != 0) {
+        ast.SetEndPosition(cloned, ast.GetEndLine(node), ast.GetEndColumn(node));
+    }
+    if (const char* file = ast.GetDeclarationSource(node)) {
+        ast.SetDeclarationSource(cloned, ast.InternSourceFile(file));
+    }
+    if (node.Type() == ASTNodeType::VARIABLE_DECL && cloned.Type() == node.Type()) {
+        ast.GetVariableDecl(cloned).typePosition = ast.GetVariableDecl(node).typePosition;
+        ast.GetVariableDecl(cloned).namePosition = ast.GetVariableDecl(node).namePosition;
+    }
+    return cloned;
+}
+
+static NodeRef CloneNodeImpl(ComptimeState* state, NodeRef node) {
     if (node.IsNull()) return NodeRef::Null();
     if (state->budget.cloneDepth >= state->budget.maxCloneDepth) {
         Report(state, node, "Comptime clone depth exceeded");
@@ -379,6 +400,8 @@ static NodeRef CloneNode(ComptimeState* state, NodeRef node) {
             }
             NodeRef cloned = ASTFactory::MakeIdentifier(state->ast, src.name, line, col);
             state->ast->GetIdentifier(cloned).identifierKind = src.identifierKind;
+            state->ast->identifierConstBindingHashes[cloned.Index()] =
+                state->ast->identifierConstBindingHashes[node.Index()];
             return cloned;
         }
         case ASTNodeType::LITERAL: {
@@ -431,13 +454,14 @@ static NodeRef CloneNode(ComptimeState* state, NodeRef node) {
         case ASTNodeType::EVAL_BLOCK:
             return CloneBlockLike(state, node, true);
         case ASTNodeType::VARIABLE_DECL: {
-            const VariableDeclData& src = state->ast->GetVariableDecl(node);
+            const VariableDeclData src = state->ast->GetVariableDecl(node);
             NodeRef cloned = ASTFactory::MakeVariableDecl(state->ast, src.name, src.type,
                                                           CloneNode(state, src.initializer),
                                                           src.isConst, line, col, src.storageClass,
                                                           src.arrayDimensions, src.arrayLength,
                                                           src.arrayElementTypeHash);
             state->ast->GetVariableDecl(cloned).isEval = src.isEval;
+            state->ast->GetVariableDecl(cloned).arraySizes = src.arraySizes;
             return cloned;
         }
         case ASTNodeType::FUNCTION_CALL: {

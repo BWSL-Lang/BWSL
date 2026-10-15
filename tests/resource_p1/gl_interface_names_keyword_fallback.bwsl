@@ -1,0 +1,8 @@
+pipeline KeywordFallback {
+    resources { input: float4 }
+    pass "Main" {
+        use resources { input }
+        vertex { output.position = float4(1.0); }
+        fragment { output.color = float4(ldexp(resources.input.x, 1)); }
+    }
+}

@@ -1,0 +1,49 @@
+// Regression (#143): mutating a struct in a loop must update it in place.
+// Before, every field write rebuilt the whole struct, and each merge and loop
+// header copied it (an OpPhi of the struct type), including Item[8].
+pipeline StructInPlaceMutation {
+    resources { v: float4 }
+
+    struct Item {
+        int kind;
+        float2 center;
+    };
+
+    struct State {
+        Item[8] items;
+        float2 closestVec;
+        int closestIndex;
+
+        // Finds the closest item of a different kind than item 0.
+        findClosest :: (float2 p) -> void {
+            float closest = 1000000.0;
+            self.closestIndex = -1;
+            for (int i = 1; i < 8; i++) {
+                if (self.items[i].kind != self.items[0].kind) {
+                    float2 d = self.items[i].center - p;
+                    float dist = length(d);
+                    if (dist < closest) {
+                        closest = dist;
+                        self.closestIndex = i;
+                        self.closestVec = d;
+                    }
+                }
+            }
+        }
+    };
+
+    pass "Main" {
+        use resources { v }
+        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+        fragment {
+            State s;
+            for (int i = 0; i < 8; i++) {
+                s.items[i].kind = i % 3;
+                s.items[i].center = float2(float(i), resources.v.x * float(i));
+            }
+            s.findClosest(input.position.xy);
+            output.color = float4(s.closestVec, float(s.closestIndex), 1.0);
+        }
+    }
+}
+

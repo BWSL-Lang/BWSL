@@ -27,3 +27,41 @@
 #include "bwsl_parser_soa_types.inl"
 #include "bwsl_parser_soa_modules_generics.inl"
 #include "bwsl_parser_soa_specialization.inl"
+
+#include "core/bwsl_ast_reference_index.h"
+
+bool BWSL::Parser::ValidateNames() {
+    std::vector<AstReferenceIndex::NameDiagnostic> nameErrors;
+    AstReferenceIndex::Builder(*ast, &nameErrors).Build();
+    for (const auto& error : nameErrors) {
+        DiagnosticSpan span{};
+        AST::UnpackPosition(error.position, span.line, span.column);
+        span.endLine = span.line;
+        span.endColumn = span.column + error.length;
+        span.SetLocation();
+        span.SetEndLocation();
+        context->Diag().AddRaw(DiagnosticSeverity::Error, DiagnosticPhase::Compile,
+                              error.message, span,
+                              error.file.empty() ? currentSourceName : error.file);
+    }
+    if (!nameErrors.empty()) hadError = true;
+    return nameErrors.empty();
+}
+
+// Run on written syntax, before comptime unrolling/specialization can clone or
+// remove loop declarations. Notes never affect name validation or hadError.
+void BWSL::Parser::DiagnoseShadowing() {
+    std::vector<AstReferenceIndex::NameDiagnostic> notes;
+    AstReferenceIndex::Builder(*ast, nullptr, &notes).Build();
+    for (const auto& note : notes) {
+        DiagnosticSpan span{};
+        AST::UnpackPosition(note.position, span.line, span.column);
+        span.endLine = span.line;
+        span.endColumn = span.column + note.length;
+        span.SetLocation();
+        span.SetEndLocation();
+        context->Diag().AddRaw(DiagnosticSeverity::Note, DiagnosticPhase::Compile,
+                              note.message, span,
+                              note.file.empty() ? currentSourceName : note.file);
+    }
+}

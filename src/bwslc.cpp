@@ -61,6 +61,7 @@ namespace spirv_cross_wrapper {
 #include "phases/ir_generation/bwsl_ir_analysis.h"
 #include "phases/control_flow/bwsl_cfg.h"
 #include "phases/ssa/bwsl_ssa.h"
+#include "phases/optimization/bwsl_constant_propagation.h"
 #include "phases/parser/bwsl_parser_soa.h"
 #include "core/bwsl_ast_json.h"
 #include "core/bwsl_resource_reflection.h"
@@ -85,6 +86,7 @@ namespace spirv_cross_wrapper {
 #include "phases/ir_generation/bwsl_ir_analysis.cpp"
 #include "phases/control_flow/bwsl_cfg.cpp"
 #include "phases/ssa/bwsl_ssa.cpp"
+#include "phases/optimization/bwsl_constant_propagation.cpp"
 #include "phases/backends/spirv/bwsl_spirv_backend.cpp"
 #include "phases/backends/gles/bwsl_gles_backend.cpp"
 #include "phases/backends/wgsl/bwsl_wgsl_backend.cpp"
@@ -1518,16 +1520,20 @@ static void PrintDiagnosticsText(const CompilerConfig& config,
 
     u32 shown = 0;
     std::unordered_map<std::string, std::vector<std::string>> sourceLineCache;
-    for (u32 i = 0; i < diagnostics.Count(); i++) {
-        if (shown >= maxDiagnostics) break;
-        const std::vector<std::string>* diagnosticSourceLines =
-            ResolveDiagnosticSourceLines(config, diagnostics, i,
-                                         sourceLines, sourceLineCache);
-        const TokenStream* diagnosticStream =
-            ResolveDiagnosticTokenStream(config, diagnostics, i, stream);
-        PrintDiagnosticText(config, diagnostics, i,
-                            diagnosticStream, diagnosticSourceLines);
-        shown++;
+    // Non-blocking notes must not consume the display limit before errors.
+    for (DiagnosticSeverity severity : {DiagnosticSeverity::Error, DiagnosticSeverity::Warning,
+                                       DiagnosticSeverity::Note, DiagnosticSeverity::Hint}) {
+        for (u32 i = 0; i < diagnostics.Count() && shown < maxDiagnostics; i++) {
+            if (diagnostics.GetSeverity(i) != severity) continue;
+            const std::vector<std::string>* diagnosticSourceLines =
+                ResolveDiagnosticSourceLines(config, diagnostics, i,
+                                             sourceLines, sourceLineCache);
+            const TokenStream* diagnosticStream =
+                ResolveDiagnosticTokenStream(config, diagnostics, i, stream);
+            PrintDiagnosticText(config, diagnostics, i,
+                                diagnosticStream, diagnosticSourceLines);
+            shown++;
+        }
     }
 
     if (diagnostics.Count() > shown) {
@@ -1705,7 +1711,22 @@ static void PrintDiagnosticsJson(const CompilerConfig& config,
                                       stream, sourceLines).c_str());
 }
 
-static u8 BuildPassAttributeMask(const AST& ast, NodeRef pipelineRef, NodeRef passRef) {
+// Gives a backend the source name of every pipeline attribute so vertex
+// inputs are emitted as "a_<name>" (SPIRVBuilder and GLES::GLESBuilder).
+template <typename Builder>
+static void SetAttributeNames(Builder& builder, const AST& ast, NodeRef pipelineRef) {
+    if (pipelineRef.IsNull()) {
+        return;
+    }
+    const PipelineData& pipeline = ast.GetPipeline(pipelineRef);
+    for (u32 i = 0; i < pipeline.attributes.count; i++) {
+        if (pipeline.attributes[i].Type() != ASTNodeType::ATTRIBUTE_DECL) continue;
+        const AttributeDeclData& attr = ast.GetAttributeDecl(pipeline.attributes[i]);
+        builder.SetAttributeName(attr.attributeIndex, attr.name);
+    }
+}
+
+static u16 BuildPassAttributeMask(const AST& ast, NodeRef pipelineRef, NodeRef passRef) {
     if (pipelineRef.IsNull() || passRef.IsNull()) {
         return 0;
     }
@@ -1713,13 +1734,16 @@ static u8 BuildPassAttributeMask(const AST& ast, NodeRef pipelineRef, NodeRef pa
     const PipelineData& pipeline = ast.GetPipeline(pipelineRef);
     const PassData& pass = ast.GetPass(passRef);
 
-    u8 mask = 0;
+    u16 mask = 0;
 
     auto addAttributeMask = [&](const ArenaString& attributeName) {
         for (u32 i = 0; i < pipeline.attributes.count; i++) {
             const AttributeDeclData& attr = ast.GetAttributeDecl(pipeline.attributes[i]);
             if (attr.name.nameHash == attributeName.nameHash) {
-                mask |= (1u << attr.attributeIndex);
+                // Slots past 16 are reported by IR lowering; keep the shift in range.
+                if (attr.attributeIndex < 16) {
+                    mask |= static_cast<u16>(1u << attr.attributeIndex);
+                }
                 return;
             }
         }
@@ -1734,7 +1758,9 @@ static u8 BuildPassAttributeMask(const AST& ast, NodeRef pipelineRef, NodeRef pa
 
     for (u32 i = 0; i < pipeline.attributes.count; i++) {
         const AttributeDeclData& attr = ast.GetAttributeDecl(pipeline.attributes[i]);
-        mask |= (1u << attr.attributeIndex);
+        if (attr.attributeIndex < 16) {
+            mask |= static_cast<u16>(1u << attr.attributeIndex);
+        }
     }
 
     return mask;
@@ -2194,7 +2220,8 @@ CompileResult CompileShaderStage(
     bool suppressDiagnostics = false,
     bool generateWgsl = false,
     bool generateSpirv = true,
-    bool captureWgslBindings = false
+    bool captureWgslBindings = false,
+    bool avoidGlslReservedNames = false  // Rename local debug names reserved in GLSL
 ) {
     using Clock = std::chrono::high_resolution_clock;
     auto shaderStart = Clock::now();
@@ -2281,6 +2308,7 @@ CompileResult CompileShaderStage(
     lowering.currentPassData = &pass;
     lowering.currentPassVaryings = varyingContext;  // Set varying context for vertex->fragment data flow
 
+    lowering.LowerGlobalArrayConstants(shaderBody, pass);
     for (u32 i = 0; i < pass.consts.count; i++) {
         lowering.LowerStatement(pass.consts[i]);
     }
@@ -2305,6 +2333,9 @@ CompileResult CompileShaderStage(
         result.diagnosticsAlreadyReported = (diagnosticStream != nullptr);
         result.error = "IR lowering failed. See diagnostic above.";
         return result;
+    }
+    if (stage == ShaderStage::Vertex && varyingContext) {
+        varyingContext->vertexStageLowered = true;
     }
 
     // Ensure return
@@ -2364,7 +2395,11 @@ CompileResult CompileShaderStage(
             SSA::SSAConstructor ssa;
             ssa.Init(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena);
             if (!ssa.ConvertToSSA()) {
-                result.error = "SSA register limit exceeded (16383 registers). Split or simplify the shader.";
+                NodeRef node;
+                node.packed = lowering.program.ssaFailureSourceNode;
+                lowering.ReportErrorAt(node, "SSA register limit exceeded (16383 registers). Split or simplify the shader.\n");
+                result.error = lowering.diagnostics.back();
+                result.diagnosticsAlreadyReported = diagnosticStream != nullptr;
                 return result;
             }
             if (generateWgsl) {
@@ -2376,7 +2411,7 @@ CompileResult CompileShaderStage(
                     if (lowering.program.opcodes[instruction] != OP_STORE_REG) continue;
                     const u16 destination = lowering.program.destinations[instruction];
                     if (destination < originalRegisterCount &&
-                        ssa.regToVariable[destination] != 0xFFFF) {
+                        ssa.GetVariable(destination) != 0xFFFF) {
                         lowering.program.opcodes[instruction] = OP_NOP;
                         lowering.program.destinations[instruction] = 0xFFFF;
                         lowering.program.types[instruction] = static_cast<u16>(CoreType::VOID);
@@ -2390,6 +2425,12 @@ CompileResult CompileShaderStage(
             printf("    --- Post-SSA IR ---");
             DumpIR(lowering.program);
         }
+    }
+
+    Optimization::PropagateConstants(&lowering.builder, cfgPtr);
+    if (dumpIr) {
+        printf("    --- Post-optimization IR ---");
+        DumpIR(lowering.program);
     }
 
     auto cfgEnd = Clock::now();
@@ -2446,21 +2487,10 @@ CompileResult CompileShaderStage(
         return result;
     }
 
-    bool hasLocalPointers = false;
-    for (u32 i = 0; i < lowering.program.instructionCount; ++i) {
-        switch (static_cast<IR::OpCode>(lowering.program.opcodes[i])) {
-            case IR::OP_LOCAL_VAR_PTR:
-            case IR::OP_LOCAL_FIELD_PTR:
-            case IR::OP_LOCAL_LOAD:
-            case IR::OP_LOCAL_STORE:
-                hasLocalPointers = true;
-                break;
-            default: break;
-        }
-    }
-    // Local pointer identity is represented by the SPIR-V memory lowering.
-    // Reuse that path until the direct emitter has equivalent pointer support.
-    const bool emitDirectGles = !hasLocalPointers &&
+    // Pointers the direct emitter can't express (`^var`, copied pointers)
+    // need the SPIR-V path, which tracks their targets at run time.
+    const bool hasUnsupportedPointers = !GLES::SupportsLocalPointers(lowering.program);
+    const bool emitDirectGles = !hasUnsupportedPointers &&
         (useDirectGles || (allowDirectGlesFallback && ProgramNeedsDirectGLESFallback(lowering.program)));
 
     // Direct GLES output (bypasses SPIRV-Cross)
@@ -2473,7 +2503,10 @@ CompileResult CompileShaderStage(
 
         // Create GLES arena
         Memory::BWEMemoryArena glesArena;
-        std::vector<char> glesMem(128 * 1024);
+        const size_t glesScratchBytes = std::max<size_t>(128 * 1024,
+            static_cast<size_t>(lowering.program.registerCount) * sizeof(GLES::RegInfo) +
+            lowering.program.structTypeCount + 128);
+        std::vector<char> glesMem(glesScratchBytes);
         glesArena.Initialize(glesMem.data(), glesMem.size());
 
         // Initialize and emit GLES
@@ -2481,6 +2514,7 @@ CompileResult CompileShaderStage(
         glesBuilder.Initialize(&glesArena, parser.sourceBase(),
                                &lowering.program, cfgPtr, stage,
                                &pass, renderConfig, &glesAnalysis, varyingContext);
+        SetAttributeNames(glesBuilder, context.ast, pipelineRef);
         if (stage == ShaderStage::Compute && shaderStageData) {
             glesBuilder.SetComputeWorkgroupSize(shaderStageData->workgroupSizeX,
                                                 shaderStageData->workgroupSizeY,
@@ -2519,6 +2553,8 @@ CompileResult CompileShaderStage(
 
     // Configure vertex input mode
     // WebGL/GLES uses traditional interleaved inputs (in vec3 position;)
+    // Use this resource layout in every stage: fragment texture bindings must
+    // not reserve vertex-pulling slots when the vertex stage uses interleaved inputs.
     // Other backends use vertex pulling via storage buffers
     SPIRVBuilder::VertexPullingConfig vpConfig;
     vpConfig.mode = useInterleavedVertices
@@ -2529,6 +2565,14 @@ CompileResult CompileShaderStage(
     vpConfig.descriptorSet = 0;
     builder.SetVertexPullingConfig(vpConfig);
     builder.SetEmitDebugNames(debugNames);
+    builder.SetAvoidGlslReservedNames(avoidGlslReservedNames);
+    if (varyingContext) {
+        for (u32 i = 0; i < varyingContext->count; i++) {
+            builder.SetVaryingName(varyingContext->varyings[i].slot,
+                                   varyingContext->varyings[i].name);
+        }
+    }
+    SetAttributeNames(builder, context.ast, pipelineRef);
     builder.SetUseStd430Padding(useStd430Padding);
 
     builder.EmitFunction();
@@ -3744,6 +3788,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
         return outcome;
     }
 
+    parser.DiagnoseShadowing();
+
     bool isModule = (context.ast.pipelines.count == 0 && context.ast.modules.count > 0);
 
     if (!isModule && context.root.IsValid()) {
@@ -3785,12 +3831,15 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
         return fail(&stream, &sourceLines);
     }
 
+    if (!parser.ValidateNames()) return fail(&stream, &sourceLines);
+
     // Handle module files differently - they don't have pipelines to compile
     if (isModule) {
         if (config.errorsJson) {
             outcome.json = BuildDiagnosticsJson(config, diagnostics, true,
                                                 nullptr, nullptr, includeJsonHeader);
         } else {
+            PrintDiagnosticsText(config, diagnostics, &stream, &sourceLines);
             printf("Module '%s' parsed successfully.\n", baseName.c_str());
             printf("Note: Modules define reusable functions/structs but have no shaders to compile.\n");
             printf("To compile shaders, use a pipeline file that imports this module.\n");
@@ -3884,6 +3933,24 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                       sourceBase,
                                                       "Pipeline");
 
+    // Interface names are API on GL (see core/bwsl_gl_names.h), so two
+    // declarations that would produce the same one are an error.
+    std::vector<GLReservedName> glReservedNames;
+    std::string glNameError;
+    u32 glNamePosition = 0;
+    if (!GLNames::CheckPipelineNames(context.ast, pipeline, parser.symbolTable,
+                                     &glReservedNames, &glNameError, &glNamePosition)) {
+        DiagnosticSpan span{};
+        AST::UnpackPosition(glNamePosition, span.line, span.column);
+        if (span.line != 0) span.SetLocation();
+        diagnostics.AddRaw(DiagnosticSeverity::Error,
+                           DiagnosticPhase::Compile,
+                           glNameError,
+                           span,
+                           config.inputFile);
+        return fail(&stream, &sourceLines);
+    }
+
     ComputeGraphCompileResult graphResult = CompileComputeGraph(
         context.ast, context.ast.GetPipeline(originalPipelineRef), config.renderConfig, sourceBase);
     if (!graphResult.success) {
@@ -3969,6 +4036,7 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
         passVaryings.diagnosticStream = &diagnostics;
         passVaryings.diagnosticPassName = passName;
         passVaryings.diagnosticStageName = "vertex";
+        passVaryings.reservedGLNames = &glReservedNames;
         IRAnalysis vertexReflectionAnalysis{};
         IRAnalysis fragmentReflectionAnalysis{};
         IRAnalysis computeReflectionAnalysis{};
@@ -4013,7 +4081,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        &diagnostics,
                                                        passName,
                                                        config.errorsJson, config.outputWgsl,
-                                                       config.generateSpirv, config.outputBindings);
+                                                       config.generateSpirv, config.outputBindings,
+                                                       config.outputGlsl || config.outputGlslEs);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "vertex");
@@ -4049,13 +4118,14 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
             }
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Fragment, config.verbose, config.dumpIr, config.debugNames,
-                                                       true, false, specializedPipelineRef,
+                                                       true, config.outputGlslEs, specializedPipelineRef,
                                                        pipeline.passes[passIdx], &passVaryings, config.outputInternals,
                                                        config.useDirectGles, config.outputGlslEs, &config.renderConfig,
                                                        &diagnostics,
                                                        passName,
                                                        config.errorsJson, config.outputWgsl,
-                                                       config.generateSpirv, config.outputBindings);
+                                                       config.generateSpirv, config.outputBindings,
+                                                       config.outputGlsl || config.outputGlslEs);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "fragment");
@@ -4091,13 +4161,14 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
             }
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Compute, config.verbose, config.dumpIr, config.debugNames,
-                                                       true, false, specializedPipelineRef,
+                                                       true, config.outputGlslEs, specializedPipelineRef,
                                                        pipeline.passes[passIdx], nullptr, config.outputInternals,
                                                        config.useDirectGles, config.outputGlslEs, &config.renderConfig,
                                                        &diagnostics,
                                                        passName,
                                                        config.errorsJson, config.outputWgsl,
-                                                       config.generateSpirv, config.outputBindings);
+                                                       config.generateSpirv, config.outputBindings,
+                                                       config.outputGlsl || config.outputGlslEs);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "compute");
@@ -4131,7 +4202,7 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
             reflectionConfig.attributeMask = 0;
             if (!config.outputGlslEs) {
                 reflectionConfig.attributeMask = haveVertexReflectionAnalysis
-                    ? static_cast<u8>(vertexReflectionAnalysis.usedAttributeMask)
+                    ? static_cast<u16>(vertexReflectionAnalysis.usedAttributeMask)
                     : BuildPassAttributeMask(context.ast, specializedPipelineRef, pipeline.passes[passIdx]);
             }
             reflectionConfig.baseBufferBinding = 0;

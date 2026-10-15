@@ -6,7 +6,15 @@
 #include "bwsl_utils.h"
 #include <array>
 #include "SPIRV-Headers/include/spirv/1.2/GLSL.std.450.h"
-#include "SPIRV-Headers/include/spirv/1.2/spirv.hpp"
+// Include the unified definitions and opcode result metadata together. The
+// unity build reaches this header before the SPIR-V backend.
+#ifndef SPV_ENABLE_UTILITY_CODE
+#define SPV_ENABLE_UTILITY_CODE
+#include "SPIRV-Headers/include/spirv/unified1/spirv.hpp"
+#undef SPV_ENABLE_UTILITY_CODE
+#else
+#include "SPIRV-Headers/include/spirv/unified1/spirv.hpp"
+#endif
 
 // Sentinel values for opcodes that are not applicable
 constexpr spv::Op SPV_OP_NONE = spv::OpMax;
@@ -425,8 +433,8 @@ constexpr IntrinsicData INTRINSICS[] = {
     INTRINSIC_FIXED(CLAMP, "clamp", TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450FClamp)), // FClamp for float, SClamp/UClamp for int
     INTRINSIC_FIXED(SIGN, "sign", TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450FSign)), // FSign for float, SSign for int
     INTRINSIC_FIXED(ABS, "abs", TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450FAbs)), // FAbs for float, SAbs for int
-    INTRINSIC_VAR(MIN, "min", 2, 0xFF, TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, 0, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450FMin)), // FMin/SMin/UMin
-    INTRINSIC_VAR(MAX, "max", 2, 0xFF, TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, 0, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450FMax)), // FMax/SMax/UMax
+    INTRINSIC_VAR(MIN, "min", 2, 16, TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, 0, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450FMin)), // FMin/SMin/UMin
+    INTRINSIC_VAR(MAX, "max", 2, 16, TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, TypeMasks::ANY_NUMERIC, 0, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450FMax)), // FMax/SMax/UMax
     INTRINSIC_FIXED(FLOOR, "floor", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Floor)),
     INTRINSIC_FIXED(CEIL, "ceil", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450Ceil)),
     INTRINSIC_FIXED(ROUND, "round", TypeMasks::FLOAT_TYPES, TypeMasks::FLOAT_TYPES, 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450RoundEven)),

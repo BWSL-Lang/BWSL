@@ -82,14 +82,15 @@ VARIANT_REFLECTION_TESTS = {
                 "vert_hlsl_not_contains": ["float4(0.25f, 0.0f, 0.0f, 1.0f)"],
                 "vert_ir_contains": ["Instructions: 3", "[0] = 0.5"],
                 "vert_ir_not_contains": ["BRANCH", "[0] = 0.25"],
+                # Constant propagation folds brightness (0.5 + 0.25) and blue
+                # into the output, so the result shows which branches survived.
                 "frag_ir_contains": [
                     "[  0] STORE_REG        r0           <- 0.5",
-                    "FADD             r1           <- r0, 0.25",
-                    "[  3] STORE_REG        r2           <- 0.5",
+                    "<- (0.75, 0, 0.5, 1)",
                 ],
-                "frag_ir_not_contains": ["BRANCH", "0.75"],
-                "frag_spirv_contains": ["OpFAdd %float %float_0_5 %float_0_25"],
-                "frag_spirv_not_contains": ["OpBranchConditional", "%float_0_75"],
+                "frag_ir_not_contains": ["BRANCH"],
+                "frag_spirv_contains": ["OpConstantComposite %v4float %float_0_75 %float_0 %float_0_5 %float_1"],
+                "frag_spirv_not_contains": ["OpBranchConditional", "OpFAdd"],
             },
             "override": {
                 "vert_metal_contains": ["float4(0.25, 0.0, 0.0, 1.0)"],
@@ -100,11 +101,11 @@ VARIANT_REFLECTION_TESTS = {
                 "vert_ir_not_contains": ["BRANCH", "[0] = 0.5"],
                 "frag_ir_contains": [
                     "[  1] STORE_REG        r0           <- 0.75",
-                    "[  4] STORE_REG        r2           <- 1",
+                    "<- (1, 0, 1, 1)",
                 ],
-                "frag_ir_not_contains": ["BRANCH", "[  3] STORE_REG        r2           <- 0.5"],
-                "frag_spirv_contains": ["OpFAdd %float %float_0_75 %float_0_25"],
-                "frag_spirv_not_contains": ["OpBranchConditional", "OpFAdd %float %float_0_5 %float_0_25"],
+                "frag_ir_not_contains": ["BRANCH"],
+                "frag_spirv_contains": ["OpConstantComposite %v4float %float_1 %float_0 %float_1 %float_1"],
+                "frag_spirv_not_contains": ["OpBranchConditional", "OpFAdd"],
             },
         },
     },
@@ -154,7 +155,7 @@ VARIANT_REFLECTION_TESTS = {
                 "frag_hlsl_not_contains": ["float4(0.25f, 0.0f, 0.0f, 1.0f)", "float4(0.75f, 0.0f, 0.0f, 1.0f)", "float4(1.0f, 0.0f, 0.0f, 1.0f)"],
                 "frag_ir_contains": ["[  1] STORE_REG        r0           <- 0.5"],
                 "frag_ir_not_contains": ["SWITCH", "BRANCH", "0.25", "0.75"],
-                "frag_spirv_contains": ["OpCompositeConstruct %v4float %float_0_5"],
+                "frag_spirv_contains": ["OpConstantComposite %v4float %float_0_5"],
                 "frag_spirv_not_contains": ["OpSwitch", "OpBranchConditional", "%float_0_75", "%float_0_25"],
             },
             "override": {
@@ -164,7 +165,7 @@ VARIANT_REFLECTION_TESTS = {
                 "frag_hlsl_not_contains": ["float4(0.25f, 0.0f, 0.0f, 1.0f)", "float4(0.5f, 0.0f, 0.0f, 1.0f)", "float4(0.75f, 0.0f, 0.0f, 1.0f)"],
                 "frag_ir_contains": ["[  1] STORE_REG        r0           <- 1"],
                 "frag_ir_not_contains": ["SWITCH", "BRANCH", "0.25", "0.5", "0.75"],
-                "frag_spirv_contains": ["OpCompositeConstruct %v4float %float_1"],
+                "frag_spirv_contains": ["OpConstantComposite %v4float %float_1"],
                 "frag_spirv_not_contains": ["OpSwitch", "OpBranchConditional", "%float_0_75", "%float_0_5", "%float_0_25"],
             },
         },
@@ -179,19 +180,31 @@ VARIANT_ERROR_TESTS = {
 }
 
 ERROR_CASE_TESTS = {
+    "texture_array_unindexed.bwsl": "texture array 'resources.textures' must be indexed",
+    "texture_param_type_mismatch.bwsl": "Function not found: sampleClamped",
+    "texture_array_index_out_of_bounds.bwsl": "index 4 is out of bounds for texture array",
+    "texture_array_dynamic_outside_call.bwsl": "non-constant index can only be passed directly to a texture function",
+    "texture_array_shared_sampler.bwsl": "can't share a sampler with other textures",
+    "texture_array_slot_limit.bwsl": "each texture array element counts as one",
+    "sampler_array.bwsl": "Arrays of sampler resources are not supported",
+    "intrinsic_function_name.bwsl": "reserved for a built-in intrinsic",
+    "intrinsic_module_function_name.bwsl": "reserved for a built-in intrinsic",
+    "intrinsic_struct_method_name.bwsl": "reserved for a built-in intrinsic",
+    "intrinsic_enum_method_name.bwsl": "reserved for a built-in intrinsic",
+    "attribute_capacity.bwsl": "supported limit of 16 attributes",
     "array_negative_remainder_index.bwsl": "out of bounds",
     'function_void_return_value.bwsl': 'Void function cannot return a value',
     'remaining_float_bitwise.bwsl': 'Bitwise operators require integer operands',
     'remaining_float_bitwise_not.bwsl': 'Bitwise operators require integer operands',
     'remaining_float_shift.bwsl': 'Bitwise operators require integer operands',
-    "backend_spelling_alias_rejected.bwsl": "Function not found: mix",
+    "backend_spelling_alias_rejected.bwsl": "Unknown function 'mix'",
     "invalid_intrinsic_arity.bwsl": "'sin' accepts at most 1 arguments, got 2",
     "missing_semicolon.bwsl": "Expected ';' after expression",
     "unknown_module_import.bwsl": "Unknown module 'DoesNotExist'",
     "import_alias_conflict.bwsl": "Module alias 'Tools' conflicts",
     "using_without_import.bwsl": "Module 'Debug' must be imported before it can be used",
-    "import_without_using_unqualified.bwsl": "Function not found",
-    "module_alias_scope_isolation.bwsl": "Unknown module or enum: M",
+    "import_without_using_unqualified.bwsl": "Unknown function",
+    "module_alias_scope_isolation.bwsl": "Unknown module 'M'",
     "submodule_duplicate_different_parent.bwsl": "Duplicate submodule declaration for 'DuplicateSubmoduleCrossParent'",
     "submodule_duplicate_same_parent.bwsl": "Duplicate submodule declaration for 'DuplicateSubmodule'",
     "submodule_extends_unknown_parent.bwsl": "Unknown parent module 'DoesNotExist'",
@@ -202,6 +215,7 @@ ERROR_CASE_TESTS = {
     "type_alias_scope_isolation.bwsl": "Unknown type 'Material' in using alias",
     "workgroup_id_wrong_stage.bwsl": "input.workgroup_id is only available in compute shaders",
     "input_attribute_in_vertex_stage.bwsl": "input.position is not available in vertex shaders - use attributes.position",
+    "varying_read_never_written.bwsl": "varying 'tint' is read in the fragment stage but never written by the vertex stage",
     "local_id_wrong_stage.bwsl": "input.local_id is only available in compute shaders",
     "matrix_alias_rejected.bwsl": "Matrix aliases float2x2/float3x3/float4x4 are not supported",
     "dereference_non_pointer.bwsl": "dereference (`^` postfix) applied to a non-pointer value",
@@ -237,7 +251,7 @@ ERROR_CASE_TESTS = {
     "pass_block_ternary_instantiation.bwsl": "pass_block instantiation must use a direct function call",
     "pass_block_type_mismatch.bwsl": "pass_block attribute mapping type mismatch",
     "pass_block_variant_type_mismatch.bwsl": "pass_block variant mapping type mismatch",
-    "struct_method_unknown.bwsl": "unknown struct method",
+    "struct_method_unknown.bwsl": "Unknown method",
     "struct_method_duplicate_const.bwsl": "Struct method overload already declared",
     "struct_method_nonconst_on_const.bwsl": "cannot call non-const struct method on const receiver",
     "struct_method_assign_in_const.bwsl": "cannot assign to receiver field inside const method",
@@ -247,6 +261,12 @@ ERROR_CASE_TESTS = {
     "use_unknown_resource.bwsl": "Unknown resource in 'use resources'",
     "duplicate_fragment_output_name.bwsl": "Duplicate fragment output name",
     "duplicate_fragment_output_location.bwsl": "Duplicate fragment output location",
+    "min_max_too_many_arguments.bwsl": "'max' accepts at most 16 arguments, got 17",
+    "min_max_mixed_argument_types.bwsl": "'min' argument 3 is INT, but argument 1 is FLOAT",
+    "gl_name_sampler_vs_texture.bwsl": "GL name 't_atlas' of sampler 't_atlas' collides with texture 'atlas'",
+    "gl_name_struct_vs_attribute.bwsl": "GL name 'a_position' of struct 'a_position' collides with attribute 'position'",
+    "gl_name_varying_vs_struct.bwsl": "GL name 'v_uv' of varying 'uv' collides with struct 'v_uv'",
+    "gl_name_varying_truncated.bwsl": "varying names must differ within their first 31 characters",
     "outputs_declares_depth.bwsl": "output.depth is a builtin depth output and is not declared in outputs",
     "intrinsic_too_few_args.bwsl": "'clamp' requires at least 3 arguments, got 2",
     "workgroup_size_zero.bwsl": "Workgroup size components must be greater than 0",
@@ -254,7 +274,8 @@ ERROR_CASE_TESTS = {
     "shared_array_initializer.bwsl": "Shared arrays cannot have initializers",
     "shared_non_array.bwsl": "shared variables must be declared as arrays",
     "barrier_in_fragment.bwsl": "barrier intrinsics are only available in compute shaders",
-    "module_const_nonliteral.bwsl": "Module constants must have literal initializers",
+    "module_const_not_constant.bwsl": "vector arithmetic and swizzles are not supported here",
+    "module_const_type_mismatch.bwsl": "Module constant 'TINT' is declared float3 but its initializer is float2",
     "eval_for_step_zero.bwsl": "Eval for step must not be zero",
     "eval_infinite_loop.bwsl": "Infinite eval loops require an until condition",
     "array_size_zero.bwsl": "Invalid array size. Max 256k elements",
@@ -267,16 +288,18 @@ ERROR_CASE_TESTS = {
     "num_workgroups_wrong_stage.bwsl": "input.num_workgroups is only available in compute shaders",
     "vertex_function_wrong_block.bwsl": "Expected 'vertex' block in vertex_function",
     "use_before_declaration.bwsl": "Unknown identifier 'lateVar'",
-    "unknown_function_call.bwsl": "Function not found: notAFunction",
+    "unknown_function_call.bwsl": "Unknown function 'notAFunction'",
     "mutual_recursion.bwsl": "recursion is not supported",
     "derivative_in_vertex_stage.bwsl": "Intrinsic not available in this shader stage",
     "pipeline_scope_mutable_var.bwsl": "Expected 'import', 'using', 'attributes', 'resources'",
-    "keyword_as_variable_name.bwsl": "Expected variable name",
+    "keyword_as_variable_name.bwsl": "'pass' is a keyword and cannot be used as a variable name",
     "overload_no_viable_match.bwsl": "Function not found: pickone",
-    "swizzle_component_out_of_range.bwsl": "SPIR-V validation failed",
-    "ternary_branch_type_mismatch.bwsl": "SPIR-V validation failed",
+    "swizzle_component_out_of_range.bwsl": "component 'z' ('b') is out of range for FLOAT2, which has 2 components",
+    "swizzle_out_of_range_expression.bwsl": "component 'z' ('b') is out of range for FLOAT2, which has 2 components",
+    "swizzle_store_out_of_range.bwsl": "component 'z' ('b') is out of range for FLOAT2, which has 2 components",
+    "ternary_branch_type_mismatch.bwsl": "ternary arms have different types (float3 and float2)",
     "bool_assigned_to_float.bwsl": "SPIR-V validation failed",
-    "unknown_struct_field.bwsl": "SPIR-V validation failed",
+    "unknown_struct_field.bwsl": "Unknown field 'missing'",
     "shared_in_fragment.bwsl": "shared variables are only allowed in compute shaders",
     "struct_unknown_field_type.bwsl": "Unknown field type 'Missing'",
     "unknown_enum_variant.bwsl": "Unknown enum variant 'Missing'",
@@ -390,6 +413,12 @@ ERROR_CASE_EXTRA_EXPECTATIONS = {
     ],
 }
 
+# Follow-on diagnostics that must not appear alongside the expected error.
+ERROR_CASE_FORBIDDEN_OUTPUT = {
+    # An unresolved call has no type; the enclosing float4(...) must not also
+    # report a component-count error for it.
+    "texture_param_type_mismatch.bwsl": ["vector constructor expects"],
+}
 
 def diagnostic_output_contains(output: str, expected: str) -> bool:
     if expected in output:
@@ -570,6 +599,13 @@ STAGE_SUFFIXES = ("vert", "frag", "comp")
 KNOWN_TEST_STEMS: set[str] = set()
 
 TRANSLATION_EXPECTATION_TESTS = {
+    "struct_in_place_mutation": {
+        "frag": {
+            "ir_contains": ["LOCAL_INDEX_PTR", "LOCAL_STORE"],
+            "ir_not_contains": ["STRUCT_ARRAY_INSERT", "STRUCT_ARRAY_EXTRACT"],
+            "spirv_not_contains": ["OpPhi %State", "OpPhi %Item"],
+        },
+    },
     "uniform_struct_dynamic_index": {
         "frag": {
             "spirv_contains": ["OpAccessChain %_ptr_Uniform_v4float", "OpAccessChain %_ptr_Uniform_mat4v4float"],
@@ -579,45 +615,47 @@ TRANSLATION_EXPECTATION_TESTS = {
     "interpolation_decorators": {
         "vert": {
             "spirv_contains": [
-                "OpDecorate %varying0 Flat",
-                "OpDecorate %varying1 NoPerspective",
+                "OpDecorate %v_materialIndex Flat",
+                "OpDecorate %v_screenUV NoPerspective",
             ],
             "hlsl_contains": [
-                "nointerpolation float varying0 : TEXCOORD0",
-                "noperspective float2 varying1 : TEXCOORD1",
+                "nointerpolation float v_materialIndex : TEXCOORD0",
+                "noperspective float2 v_screenUV : TEXCOORD1",
             ],
             "glsl_contains": [
-                "layout(location = 0) flat out float varying0",
-                "layout(location = 1) noperspective out vec2 varying1",
+                "layout(location = 0) flat out float v_materialIndex",
+                "layout(location = 1) noperspective out vec2 v_screenUV",
             ],
             "gles_contains": [
                 "#extension GL_NV_shader_noperspective_interpolation : require",
-                "flat out float varying0",
-                "noperspective out vec2 varying1",
+                "flat out float v_materialIndex",
+                "noperspective out vec2 v_screenUV",
             ],
         },
         "frag": {
             "spirv_contains": [
-                "OpDecorate %varying0 Flat",
-                "OpDecorate %varying1 NoPerspective",
+                "OpDecorate %v_materialIndex Flat",
+                "OpDecorate %v_screenUV NoPerspective",
             ],
             "metal_contains": [
-                "float varying0 [[user(locn0), flat]]",
-                "float2 varying1 [[user(locn1), center_no_perspective]]",
+                "float v_materialIndex [[user(locn0), flat]]",
+                "float2 v_screenUV [[user(locn1), center_no_perspective]]",
             ],
             "hlsl_contains": [
-                "nointerpolation float varying0 : TEXCOORD0",
-                "noperspective float2 varying1 : TEXCOORD1",
+                "nointerpolation float v_materialIndex : TEXCOORD0",
+                "noperspective float2 v_screenUV : TEXCOORD1",
             ],
             "glsl_contains": [
-                "layout(location = 0) flat in float varying0",
-                "layout(location = 1) noperspective in vec2 varying1",
+                "layout(location = 0) flat in float v_materialIndex",
+                "layout(location = 1) noperspective in vec2 v_screenUV",
             ],
             "gles_contains": [
                 "#extension GL_NV_shader_noperspective_interpolation : require",
-                "flat in highp float varying0",
-                "noperspective in highp vec2 varying1",
+                "precision highp float;",
+                "flat in float v_materialIndex",
+                "noperspective in vec2 v_screenUV",
             ],
+            "gles_not_contains": ["mediump"],
         },
     },
     "output_depth_builtin": {
@@ -638,6 +676,14 @@ TRANSLATION_EXPECTATION_TESTS = {
             "spirv_contains": ["OpPhi"],
             "hlsl_count_at_least": {"for (": 4, "if (": 8, "break;": 2},
             "glsl_count_at_least": {"for (": 4, "if (": 8, "break;": 2},
+        },
+    },
+    # Issue #160: only the loop-carried `sum` and `i` (twice) and the
+    # inlined functions' own merges get phis, not their locals or return flag.
+    "ssa_dead_loop_phis": {
+        "frag": {
+            "ir_count_exactly": {"  PHI r": 6},
+            "spirv_count_exactly": {"OpPhi": 6},
         },
     },
     "types_matrices": {
@@ -724,9 +770,11 @@ TRANSLATION_EXPECTATION_TESTS = {
             "metal_contains": ["length(", "sqrt(", "dot("],
         },
     },
+    # The vertex stage's seeds are constants, so its hashes fold away; the
+    # fragment stage seeds one call from the pixel position.
     "module_random_live": {
         "vert": {
-            "ir_contains": ["XOR", "SHR", "IMUL", "SIN", "COS"],
+            "ir_contains": ["SIN", "COS"],
             "hlsl_contains": ["sin(", "cos("],
         },
         "frag": {
@@ -1027,10 +1075,16 @@ def check_inline_return_jump(path: Path) -> tuple[bool, str]:
 
     ir = data.get("ir", "")
     branch_count = sum(1 for line in ir.splitlines() if " BRANCH " in line)
-    if " JUMP " in ir:
-        return False, "Unexpected inline return jump in IR"
-    if branch_count < 2:
-        return False, f"Expected return guard branch, found {branch_count}"
+    # A return must not jump out of the inlined body. The only jumps allowed
+    # are those over an else, which an early return folded into an if/else
+    # (issue #156) produces: the instruction after one is a branch's false
+    # target.
+    else_starts = {int(m.group(1)) for m in re.finditer(r"\bBRANCH\s+\S+\s+\? -> \d+ : (\d+)", ir)}
+    for m in re.finditer(r"\[\s*(\d+)\]\s+JUMP\b", ir):
+        if int(m.group(1)) + 1 not in else_starts:
+            return False, "Unexpected inline return jump in IR"
+    if branch_count < 1:
+        return False, f"Expected a branch around the early return, found {branch_count}"
     return True, ""
 
 
@@ -1326,11 +1380,16 @@ def check_text_patterns(label: str, text: str,
 
 
 def check_pattern_counts(label: str, text: str,
-                         count_at_least: dict[str, int] | None = None) -> tuple[bool, str]:
+                         count_at_least: dict[str, int] | None = None,
+                         count_exactly: dict[str, int] | None = None) -> tuple[bool, str]:
     for pattern, expected in (count_at_least or {}).items():
         actual = text.count(pattern)
         if actual < expected:
             return False, f"{label} contains '{pattern}' {actual} times, expected at least {expected}"
+    for pattern, expected in (count_exactly or {}).items():
+        actual = text.count(pattern)
+        if actual != expected:
+            return False, f"{label} contains '{pattern}' {actual} times, expected exactly {expected}"
     return True, ""
 
 
@@ -1346,7 +1405,7 @@ def find_stage_file(output_dir: Path, test_name: str, stage: str, suffix: str) -
 
 def find_text_golden_files(golden_dir: Path, test_name: str) -> list[Path]:
     return sorted(
-        path for path in golden_dir.glob(f"{test_name}_*.*")
+        path for path in golden_dir.glob(f"{test_name}*.*")
         if path.suffix in TEXT_GOLDEN_SUFFIXES and output_belongs_to_test(path, test_name)
     )
 
@@ -1397,6 +1456,7 @@ def check_translation_expectations(output_dir: Path, test_name: str,
                 f"{stage} {label}",
                 texts[key],
                 expectations.get(f"{key}_count_at_least"),
+                expectations.get(f"{key}_count_exactly"),
             )
             if not ok:
                 return False, message
@@ -3306,6 +3366,16 @@ def main() -> int:
                 failed += 1
                 continue
 
+            forbidden_output = [
+                forbidden for forbidden in ERROR_CASE_FORBIDDEN_OUTPUT.get(test_file.name, [])
+                if forbidden in result.stdout
+            ]
+            if forbidden_output:
+                print(f"[{RED}FAIL{NC}] error_cases/{test_file.stem}")
+                print(f"       Error: expected diagnostic output not to include {forbidden_output}, got: {result.stdout.strip()}")
+                failed += 1
+                continue
+
             print(f"[{GREEN}PASS{NC}] error_cases/{test_file.stem}")
             passed += 1
 
@@ -3461,6 +3531,41 @@ def main() -> int:
     module_passed, module_failed = run_parser_module_tests(bwslc)
     passed += module_passed
     failed += module_failed
+
+    from name_validation_tests import run_name_validation_suite
+    names_passed, names_failed = run_name_validation_suite(bwslc)
+    passed += names_passed
+    failed += names_failed
+
+    from local_debug_names_tests import run_local_debug_names_tests
+    local_names_passed, local_names_failed = run_local_debug_names_tests(bwslc)
+    passed += local_names_passed
+    failed += local_names_failed
+
+    from array_initializer_tests import run_array_initializer_tests
+    array_passed, array_failed = run_array_initializer_tests(bwslc)
+    passed += array_passed
+    failed += array_failed
+
+    from inline_return_tests import run_inline_return_tests
+    inline_return_passed, inline_return_failed = run_inline_return_tests(bwslc)
+    passed += inline_return_passed
+    failed += inline_return_failed
+
+    from logical_operator_tests import run_logical_operator_tests
+    logical_passed, logical_failed = run_logical_operator_tests(bwslc)
+    passed += logical_passed
+    failed += logical_failed
+
+    from ternary_select_tests import run_ternary_select_tests
+    ternary_passed, ternary_failed = run_ternary_select_tests(bwslc)
+    passed += ternary_passed
+    failed += ternary_failed
+
+    from constant_propagation_tests import run_constant_propagation_tests
+    constprop_passed, constprop_failed = run_constant_propagation_tests(bwslc)
+    passed += constprop_passed
+    failed += constprop_failed
 
     from p1_regression_tests import run_p1_regression_tests
     p1_passed, p1_failed = run_p1_regression_tests(bwslc, output_dir / "p1_validation")

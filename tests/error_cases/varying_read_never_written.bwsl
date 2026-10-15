@@ -1,0 +1,14 @@
+// Regression for #140: reading a varying the vertex stage never writes must
+// error at the read instead of inventing a vec3 'varying0' fragment input.
+pipeline MissingVarying {
+    attributes { position: float2 }
+    pass "Main" {
+        use attributes { position }
+        vertex {
+            output.position = float4(attributes.position, 1.0, 1.0);
+        }
+        fragment {
+            output.color = input.tint;
+        }
+    }
+}

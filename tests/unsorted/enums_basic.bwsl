@@ -93,7 +93,11 @@ pipeline EnumsBasic {
         vertex {
             // Declare enum variables
             BlendMode currentMode = BlendMode::Normal;
+            // Run-time enum values, so constant propagation keeps the comparisons.
             LightType lightType = LightType::Point;
+            if (attributes.position.x > 0.0) {
+                lightType = LightType::Spot;
+            }
             MaterialType matType = MaterialType::Metal;
             Priority prio = Priority::High;
 
@@ -115,7 +119,7 @@ pipeline EnumsBasic {
             float lightAtten = getLightAttenuation(lightType, 10.0);
 
             // Get enum from function
-            MaterialType classified = classifyMaterial(0.8, 0.1);
+            MaterialType classified = classifyMaterial(attributes.position.y, attributes.position.z);
             bool emissiveCheck = isEmissive(classified);
 
             // Enum reassignment
@@ -134,12 +138,14 @@ pipeline EnumsBasic {
             // Priority enum usage
             bool isUrgent = prio == Priority::High || prio == Priority::Critical;
 
-            output.position = float4(attributes.position, 1.0);
+            float used = attenuation + lightAtten + result1.x + result2.y +
+                         select(0.0, 1.0, emissiveCheck);
+            output.position = float4(attributes.position, 1.0 + used * 0.001);
         }
 
         fragment {
             // Enum usage in fragment shader
-            MaterialType surfaceType = MaterialType::Diffuse;
+            MaterialType surfaceType = classifyMaterial(input.position.x, input.position.y);
             BlendMode blendMode = BlendMode::Screen;
 
             float3 baseColor = float3(0.8, 0.6, 0.4);

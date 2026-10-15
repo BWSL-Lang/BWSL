@@ -30,6 +30,7 @@
 #include "phases/ir_lowering/bwsl_ir_lowering.h"
 #include "phases/control_flow/bwsl_cfg.h"
 #include "phases/ssa/bwsl_ssa.h"
+#include "phases/optimization/bwsl_constant_propagation.h"
 #include "phases/ir_generation/bwsl_ir_analysis.h"
 #include "phases/backends/spirv/bwsl_spirv_backend.h"
 
@@ -44,6 +45,7 @@
 #include "phases/ir_generation/bwsl_ir_analysis.cpp"
 #include "phases/control_flow/bwsl_cfg.cpp"
 #include "phases/ssa/bwsl_ssa.cpp"
+#include "phases/optimization/bwsl_constant_propagation.cpp"
 #include "phases/backends/spirv/bwsl_spirv_backend.cpp"
 
 using namespace BWSL;
@@ -93,6 +95,7 @@ static void CompileOneStage(CompilationContext& context, Parser& parser,
     lowering.currentPipeline = pipelineRef;
     lowering.currentPass = passRef;
 
+    lowering.LowerGlobalArrayConstants(stageData.body, pass);
     for (u32 i = 0; i < pass.consts.count; i++) {
         lowering.LowerStatement(pass.consts[i]);
     }
@@ -128,6 +131,7 @@ static void CompileOneStage(CompilationContext& context, Parser& parser,
                                    &cfgArena)) return;
         }
     }
+    Optimization::PropagateConstants(&lowering.builder, cfgPtr);
 
     // SPIR-V emit. 16 MB covers pathological fuzz inputs that emit tens of
     // thousands of IR instructions; real shaders use well under 1 MB. The
@@ -171,6 +175,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     (void) parser.ParseDocument();
 
     if (parser.hadError) return 0;
+    parser.DiagnoseShadowing();
     if (context.ast.pipelines.count == 0) return 0;
 
     // Only the first pipeline is compiled — the point is to cover backend
@@ -181,6 +186,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     if (!parser.ResolveVariants(pipelineRef, &variantResolveError)) return 0;
     std::string comptimeError;
     if (!BWSL::Comptime::RunComptimeInterpreter(&context, &parser, pipelineRef, &comptimeError)) return 0;
+    if (!parser.ValidateNames()) return 0;
     parser.ResolveShaderStages(pipelineRef);
 
     const PipelineData& pipeline = context.ast.GetPipeline(pipelineRef);

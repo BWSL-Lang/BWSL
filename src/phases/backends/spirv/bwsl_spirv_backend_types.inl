@@ -201,13 +201,12 @@ u32 SPIRVBuilder::GetStructTypeId(u32 structTypeHash) {
 
   EmitToSection(&typesConstants, spv::OpTypeStruct, ops, 1 + fieldCount);
 
-  // Emit struct name for debugging (use ReverseLookup to convert hash back to
-  // string)
-  if (emitDebugNames) {
-    std::string structName = ReverseLookup::GetString(structTypeHash);
-    if (!structName.empty()) {
-      EmitName(struct_type_id, structName.c_str());
-    }
+  // Struct names are part of the GL interface too: nested uniform member
+  // types must have the same name in independently compiled shader stages.
+  // SPIR-V IDs differ between stages, so anonymous names cannot link reliably.
+  std::string structName = ReverseLookup::GetString(structTypeHash);
+  if (!structName.empty()) {
+    EmitName(struct_type_id, structName.c_str());
   }
 
   // Emit member offset decorations and member names for std140 layout
@@ -229,8 +228,9 @@ u32 SPIRVBuilder::GetStructTypeId(u32 structTypeHash) {
       EmitToSection(&decorations, spv::OpMemberDecorate, matrix_stride_ops, 4);
     }
 
-    // Emit member name for debugging
-    if (emitDebugNames && ir->structFieldNameHashes) {
+    // Match member names in the direct GLES emitter, including when only
+    // one stage of a pass falls back to it.
+    if (ir->structFieldNameHashes) {
       u32 fieldNameHash =
           ir->structFieldNameHashes[structInfo->fieldOffset + i];
       std::string fieldName = ReverseLookup::GetString(fieldNameHash);
@@ -255,6 +255,19 @@ u32 SPIRVBuilder::GetStructTypeId(u32 structTypeHash) {
   }
 
   return struct_type_id;
+}
+
+// The type a struct declares for a member. Array members are the struct's own
+// OpTypeArray (with its ArrayStride), which an access chain must match.
+// Returns 0 when the struct isn't in the field-type cache.
+u32 SPIRVBuilder::GetStructMemberTypeId(u32 structTypeHash, u32 fieldIndex) {
+  if (fieldIndex >= MAX_FIELDS_PER_STRUCT || GetStructTypeId(structTypeHash) == 0)
+    return 0;
+  for (u32 i = 0; i < structTypeCount; i++) {
+    if (structTypeHashes[i] == structTypeHash)
+      return structFieldTypeIds[i * MAX_FIELDS_PER_STRUCT + fieldIndex];
+  }
+  return 0;
 }
 
 // ============= Texture Type Management =============
@@ -420,6 +433,16 @@ bool SPIRVBuilder::LoadSampledTexture(u16 texReg, CoreType missingResultType,
   }
 
   GetSampledTextureTypeIds(load.slot, &load.sampledImageTypeId, &load.imageTypeId);
+
+  if (textureArrayLength[load.slot] > 0) {
+    // Element slots share the array's variable; load through a
+    // constant-index access chain.
+    u32 elementType = textureIsSeparate[load.slot] ? load.imageTypeId : load.sampledImageTypeId;
+    u32 element = AllocateId();
+    Emit(spv::OpAccessChain, GetPointerTypeId(elementType, spv::StorageClassUniformConstant),
+         element, load.variableId, GetIntConstantId(textureArrayElement[load.slot], true));
+    load.variableId = element;
+  }
 
   if (textureIsSeparate[load.slot]) {
     load.imageId = AllocateId();

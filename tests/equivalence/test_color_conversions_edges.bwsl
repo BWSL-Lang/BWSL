@@ -1,0 +1,30 @@
+// HSLuv/HPLuv to RGB at the lightness edges (black, white, out of range) and
+// hues around 0/360. Inputs come from a buffer so drivers can't fold the
+// conversion at compile time with exact arithmetic. Expected values are from
+// the revision-4 reference algorithm (https://github.com/hsluv/hsluv-python).
+pipeline EquivColorConversionEdges {
+    import Color
+
+    resources {
+        inbuf: buffer<float4>
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { inbuf, output }
+
+        compute "Main" [19, 1, 1] {
+            uint i = input.global_id.x;
+            float3 hsl = resources.inbuf[i].xyz;
+            float3 hsluv = Color::hsluvToRgb(hsl);
+            float3 hpluv = Color::hpluvToRgb(hsl);
+            uint o = i * 6u;
+            resources.output[o] = hsluv.x;
+            resources.output[o + 1u] = hsluv.y;
+            resources.output[o + 2u] = hsluv.z;
+            resources.output[o + 3u] = hpluv.x;
+            resources.output[o + 4u] = hpluv.y;
+            resources.output[o + 5u] = hpluv.z;
+        }
+    }
+}

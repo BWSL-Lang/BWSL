@@ -24,7 +24,7 @@ pipeline IdealSDFSumtypeComputeEquiv {
             }
 
             float3 p = float3(t - 0.5, t * 0.25, 0.2 - t * 0.1);
-            float d = shape.distance(p);
+            float d = shape.signed_distance(p);
             float3 n = shape.normal(p, 0.01);
 
             resources.output[idx] = d + n.x * 0.1 + n.y * 0.01 + n.z * 0.001;

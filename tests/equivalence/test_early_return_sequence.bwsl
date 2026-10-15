@@ -1,0 +1,61 @@
+// Early returns followed by several statements, including a second early
+// return among them and one in a nested block, in a function and in a
+// mutating struct method (issue #152: the statements after a return are
+// guarded together, with a nested guard after each further return).
+pipeline EquivEarlyReturnSequence {
+
+    resources {
+        output: buffer<float>
+    }
+
+    struct Accumulator {
+        float sum;
+
+        add :: (float v) -> void {
+            if (v < 0.0) {
+                self.sum += 100.0;
+                return;
+            }
+            self.sum += v;
+            if (v > 3.0) {
+                return;
+            }
+            self.sum += 0.5;
+        }
+    };
+
+    steps :: (int v) -> float {
+        if (v < 0) {
+            return -1.0;
+        }
+        float a = float(v) * 2.0;
+        float b = a + 1.0;
+        if (b > 9.0) {
+            return b * 10.0;
+        }
+        float c = b * b;
+        if (v != 100) {
+            if (c > 40.0) {
+                return c + 0.5;
+            }
+            c += 1.0;
+        }
+        return a + b + c;
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int v = int(idx) - 2;
+            resources.output[idx] = steps(v);
+
+            Accumulator acc;
+            acc.sum = 0.0;
+            for (int i = 0; i < 3; i++) {
+                acc.add(float(v + i));
+            }
+            resources.output[idx + 8u] = acc.sum;
+        }
+    }
+}

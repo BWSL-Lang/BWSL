@@ -28,6 +28,7 @@ TRANSLATION_UNITS = [
     "src/spirv_cross_wrapper.cpp",
     "src/bwslc_fuzz.cpp",
     "src/equiv_runner.cpp",
+    "src/bench_runner.cpp",
 ]
 
 

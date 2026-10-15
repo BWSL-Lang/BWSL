@@ -1,0 +1,18 @@
+{
+    "groups": [
+        1,
+        1,
+        1
+    ],
+    "output_binding": 0,
+    "output_size": 20,
+    "output_type": "float",
+    "expected_values": [
+        4.0,
+        -0.2,
+        -0.2,
+        2.0,
+        2.0
+    ],
+    "tolerance": 0.0001
+}

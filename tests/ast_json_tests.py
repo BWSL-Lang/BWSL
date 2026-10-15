@@ -59,6 +59,171 @@ class AstJsonTests(unittest.TestCase):
     def assert_edge(self, data, source, target, role):
         self.assertIn({'from': source, 'to': target, 'role': role}, self.edges(data))
 
+    def assert_type_shape(self, info, element, sizes):
+        self.assertEqual(info['elementType'], element)
+        self.assertEqual(info['arraySizes'], sizes)
+        self.assertEqual(info['arrayDimensions'], len(sizes))
+        length = 0 if not sizes else 1
+        for size in sizes:
+            length *= size
+        self.assertEqual(info['arrayLength'], length)
+
+    def test_array_metadata_across_parameters_locals_fields_and_symbols(self):
+        data = self.parse('''module Arrays {
+            struct Light { float3 color; float[4] weights; }
+            sum :: (float[3] values, Light[2] lights, float scale) -> float {
+                float[2] local;
+                Light[2] localLights;
+                float total = values[0] * scale + local[1] + lights[0].color.x
+                    + localLights[1].weights[0];
+                return total;
+            }
+        }''')
+        function = self.nodes(data, 'FUNCTION', 'sum')[0]
+        fields = self.nodes(data, 'STRUCT_DECL', 'Light')[0]['fields']
+        declarations = [
+            (function['parameters'][0], 'float', [3], 'dataType'),
+            (function['parameters'][1], 'Light', [2], 'dataType'),
+            (function['parameters'][2], 'float', [], 'dataType'),
+            (self.nodes(data, 'VARIABLE_DECL', 'local')[0], 'float', [2], 'declaredType'),
+            (self.nodes(data, 'VARIABLE_DECL', 'localLights')[0], 'Light', [2], 'declaredType'),
+            (self.nodes(data, 'VARIABLE_DECL', 'total')[0], 'float', [], 'declaredType'),
+            (fields[0], 'float3', [], 'dataType'),
+            (fields[1], 'float', [4], 'dataType'),
+        ]
+        symbols = {symbol['id']: symbol for symbol in data['referenceIndex']['symbols']}
+        for declaration, element, sizes, type_key in declarations:
+            with self.subTest(name=declaration['name']):
+                self.assertEqual(declaration[type_key], element)
+                self.assert_type_shape(declaration['typeInfo'], element, sizes)
+                symbol = symbols[declaration['id']]
+                self.assertEqual(symbol['type'], element)
+                self.assert_type_shape(symbol['typeInfo'], element, sizes)
+        self.assertEqual(fields[0]['typeInfo']['componentCount'], 3)
+        self.assertEqual(fields[1]['arraySize'], 4)  # Legacy field retained.
+        self.assert_type_shape(function['returnTypeInfo'], 'float', [])
+        self.assertIn('sum(float[3],Light[2],float)', symbols[function['id']]['stableId'])
+
+    def test_multidimensional_array_shapes_and_parameter_syntaxes(self):
+        data = self.parse('''module Arrays {
+            const int ROWS = 2;
+            struct Light { float x; }
+            inspect :: (float[ROWS][3] values, lights: Arrays::Light[2][4],
+                        Arrays::Light[5] qualified, float[6]) -> void {
+                float[2][3] local;
+                Light[3][4] custom;
+            }
+        }''')
+        function = self.nodes(data, 'FUNCTION', 'inspect')[0]
+        for parameter, element, sizes in zip(function['parameters'],
+                ['float', 'Arrays::Light', 'Arrays::Light', 'float'],
+                [[2, 3], [2, 4], [5], [6]]):
+            self.assert_type_shape(parameter['typeInfo'], element, sizes)
+        for name, element, sizes in [('local', 'float', [2, 3]), ('custom', 'Light', [3, 4])]:
+            node = self.nodes(data, 'VARIABLE_DECL', name)[0]
+            self.assert_type_shape(node['typeInfo'], element, sizes)
+            self.assertEqual(node['arrayDimensions'], len(sizes))
+            self.assertEqual(node['arrayLength'], node['typeInfo']['arrayLength'])
+
+    def test_imported_and_aliased_array_element_types(self):
+        data = self.parse('''pipeline P { import Geometry as G
+            using Position = G::Point
+            struct Container { G::Point[3] points; }
+            inspect :: (G::Point[2] points, Position[4] aliases) -> G::Point {
+                G::Point[5] local;
+                Position[6] aliasLocal;
+                return points[0];
+            }
+        }''', {'Geometry.bwsl': 'module Geometry { struct Point { float x; } }'})
+        function = self.nodes(data, 'FUNCTION', 'inspect')[0]
+        for parameter, element, sizes in zip(function['parameters'],
+                ['Geometry::Point', 'Position'], [[2], [4]]):
+            self.assert_type_shape(parameter['typeInfo'], element, sizes)
+        local = self.nodes(data, 'VARIABLE_DECL', 'local')[0]
+        self.assert_type_shape(local['typeInfo'], 'Geometry::Point', [5])
+        alias = self.nodes(data, 'VARIABLE_DECL', 'aliasLocal')[0]
+        self.assert_type_shape(alias['typeInfo'], 'Position', [6])
+        field = self.nodes(data, 'STRUCT_DECL', 'Container')[0]['fields'][0]
+        self.assert_type_shape(field['typeInfo'], 'Geometry::Point', [3])
+        point = self.nodes(data, 'STRUCT_DECL', 'Point')[0]
+        for declaration in [*function['parameters'], local, alias, field]:
+            self.assert_edge(data, declaration['id'], point['id'], 'type')
+        self.assert_type_shape(function['returnTypeInfo'], 'Geometry::Point', [])
+
+    def test_vector_matrix_and_return_types_are_not_arrays(self):
+        data = self.parse('''module Shapes {
+            struct Vectors { float3 direction; mat4 transform; float3[2] points; }
+            identity :: (float3 value, mat4 transform) -> float3 {
+                float3 direction = value;
+                mat4 matrix = transform;
+                return direction;
+            }
+        }''')
+        function = self.nodes(data, 'FUNCTION', 'identity')[0]
+        for parameter in function['parameters']:
+            self.assert_type_shape(parameter['typeInfo'], parameter['dataType'], [])
+        for field, sizes in zip(self.nodes(data, 'STRUCT_DECL')[0]['fields'], [[], [], [2]]):
+            self.assert_type_shape(field['typeInfo'], field['dataType'], sizes)
+        for name in ['direction', 'matrix']:
+            node = self.nodes(data, 'VARIABLE_DECL', name)[0]
+            self.assert_type_shape(node['typeInfo'], node['declaredType'], [])
+        self.assert_type_shape(function['returnTypeInfo'], 'float3', [])
+
+    def test_array_parameter_sizes_use_parsed_constant_values(self):
+        data = self.parse('''module Arrays {
+            const int COUNT = 4;
+            inspect :: (float[COUNT] named, float[0x10] hex, float[0b11] binary) -> void {}
+        }''')
+        for parameter, sizes in zip(self.nodes(data, 'FUNCTION')[0]['parameters'], [[4], [16], [3]]):
+            self.assert_type_shape(parameter['typeInfo'], 'float', sizes)
+
+    def test_array_method_parameters_and_imported_local_metadata(self):
+        data = self.parse("pipeline P { import Geometry }", {
+            'Geometry.bwsl': """module Geometry {
+                struct Point {
+                    float x;
+                    combine :: (float3[2] vectors, weights: float[3]) -> float {
+                        float3[2] scratch;
+                        return x;
+                    }
+                }
+            }""",
+        })
+        method = self.nodes(data, 'FUNCTION', 'combine')[0]
+        self.assertTrue(method['sourceFile'].endswith('Geometry.bwsl'))
+        symbols = {symbol['id']: symbol for symbol in data['referenceIndex']['symbols']}
+        for parameter, element, sizes in zip(method['parameters'], ['float3', 'float'], [[2], [3]]):
+            self.assert_type_shape(parameter['typeInfo'], element, sizes)
+            self.assert_type_shape(symbols[parameter['id']]['typeInfo'], element, sizes)
+        local = self.nodes(data, 'VARIABLE_DECL', 'scratch')[0]
+        self.assert_type_shape(local['typeInfo'], 'float3', [2])
+        self.assert_type_shape(symbols[local['id']]['typeInfo'], 'float3', [2])
+
+    def test_imported_array_qualifiers_with_identical_source_positions(self):
+        data = self.parse('pipeline P { import A, B }', {
+            'A.bwsl': 'module A { import First\nstruct Box { First::Point[2] points; }\n}',
+            'B.bwsl': 'module B { import Other\nstruct Box { Other::Point[3] points; }\n}',
+            'First.bwsl': 'module First { struct Point { float x; } }',
+            'Other.bwsl': 'module Other { struct Point { float y; } }',
+        })
+        boxes = self.nodes(data, 'STRUCT_DECL', 'Box')
+        symbols = {symbol['id']: symbol for symbol in data['referenceIndex']['symbols']}
+        for box, element, sizes in zip(boxes, ['First::Point', 'Other::Point'], [[2], [3]]):
+            field = box['fields'][0]
+            self.assertEqual(field['dataType'], element)
+            self.assert_type_shape(field['typeInfo'], element, sizes)
+            self.assert_type_shape(symbols[field['id']]['typeInfo'], element, sizes)
+
+    def test_array_parameter_rejects_invalid_and_overflowing_sizes(self):
+        for suffix in ['[0]', '[262145]', '[512][513]', '[1.5]']:
+            with self.subTest(suffix=suffix), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'invalid.bwsl'
+                path.write_text(f'module M {{ inspect :: (float{suffix} values) -> void {{}} }}')
+                result = subprocess.run([str(COMPILER), str(path), '-check', '-errors-json'],
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertFalse(json.loads(result.stdout)['success'])
+
     def test_document_roots_in_source_order_exclude_imported_modules(self):
         data = self.parse('''
             pipeline First { import Dependency }
@@ -153,6 +318,104 @@ class AstJsonTests(unittest.TestCase):
         self.assert_edge(data, identifiers[0]['id'], field['id'], 'read')
         self.assert_edge(data, identifiers[1]['id'], 'FUNCTION:1/parameter:0', 'read')
         self.assert_edge(data, identifiers[2]['id'], 'VARIABLE_DECL:0', 'read')
+
+    def test_struct_self_field_and_method_references(self):
+        data = self.parse("""
+            module Self {
+                struct Light {
+                    float intensity;
+                    float3 color;
+                    twice :: () -> float { return intensity * 2.0; }
+                    scaled :: (float k) -> float {
+                        float a = intensity * k;
+                        float b = self.intensity * k;
+                        float c = self.color.x;
+                        float d = self.twice();
+                        return a + b + c + d;
+                    }
+                }
+                consume :: (Light l) -> float { return l.intensity + l.twice(); }
+            }
+        """)
+        structure = self.nodes(data, 'STRUCT_DECL', 'Light')[0]
+        fields = {field['name']: field['id'] for field in structure['fields']}
+        for node in self.nodes(data, 'IDENTIFIER', 'intensity'):
+            self.assert_edge(data, node['id'], fields['intensity'], 'read')
+        for node in self.nodes(data, 'MEMBER_ACCESS'):
+            if node['member'] in fields:
+                self.assert_edge(data, node['id'], fields[node['member']], 'member')
+            else:  # Swizzles have no declaration target.
+                self.assertFalse(any(e['from'] == node['id'] for e in self.edges(data)))
+        method = self.nodes(data, 'FUNCTION', 'twice')[0]
+        for call in self.nodes(data, 'FUNCTION_CALL', 'twice'):
+            self.assert_edge(data, call['id'], method['id'], 'call')
+        receivers = self.nodes(data, 'IDENTIFIER', 'self')
+        self.assertEqual(len(receivers), 3)
+        for receiver in receivers:
+            self.assert_edge(data, receiver['id'], structure['id'], 'type')
+
+    def test_struct_self_bypasses_parameter_and_local_shadowing(self):
+        data = self.parse("""
+            module M {
+                struct Box {
+                    float size;
+                    parameter :: (float size) -> float {
+                        self.size = size;
+                        return self.size;
+                    }
+                    local :: () -> float {
+                        float size = 3.0;
+                        self.size = size;
+                        return self.size;
+                    }
+                }
+            }
+        """)
+        structure = self.nodes(data, 'STRUCT_DECL', 'Box')[0]
+        field = structure['fields'][0]
+        members = self.nodes(data, 'MEMBER_ACCESS')
+        self.assertEqual(len(members), 4)
+        for member, role in zip(members, ['write', 'member', 'write', 'member']):
+            self.assert_edge(data, member['id'], field['id'], role)
+        parameter = self.nodes(data, 'FUNCTION', 'parameter')[0]['parameters'][0]
+        local = self.nodes(data, 'VARIABLE_DECL', 'size')[0]
+        for node, target in zip(self.nodes(data, 'IDENTIFIER', 'size'), [parameter, local]):
+            self.assert_edge(data, node['id'], target['id'], 'read')
+
+    def test_struct_self_uses_enclosing_struct_in_modules_and_pipelines(self):
+        data = self.parse("""
+            module A {
+                struct Box {
+                    float size;
+                    value :: () -> float { return self.size; }
+                    run :: () -> float { return self.value(); }
+                }
+            }
+            module B {
+                struct Box {
+                    int size;
+                    value :: () -> int { return self.size; }
+                    run :: () -> int { return self.value(); }
+                }
+            }
+            pipeline P {
+                struct Box {
+                    float3 size;
+                    value :: () -> float3 { return self.size; }
+                    run :: () -> float3 { return self.value(); }
+                }
+            }
+        """)
+        structures = self.nodes(data, 'STRUCT_DECL', 'Box')
+        members = self.nodes(data, 'MEMBER_ACCESS')
+        calls = self.nodes(data, 'FUNCTION_CALL', 'value')
+        self.assertEqual((len(structures), len(members), len(calls)), (3, 3, 3))
+        for structure, member, call in zip(structures, members, calls):
+            self.assert_edge(data, member['id'], structure['fields'][0]['id'], 'member')
+            method = next(m for m in structure['methods'] if m['name'] == 'value')
+            self.assert_edge(data, call['id'], method['id'], 'call')
+            for receiver in self.nodes({'modules': [structure], 'pipelines': []}, 'IDENTIFIER', 'self'):
+                self.assert_edge(data, receiver['id'], structure['id'], 'type')
 
     def test_qualified_call_serializes_qualifier(self):
         data = self.parse('''
@@ -372,6 +635,53 @@ class AstJsonTests(unittest.TestCase):
         line_key, column_key = (prefix + 'Line', prefix + 'Column') if prefix else ('line', 'column')
         self.assertEqual((entry.get(line_key), entry.get(column_key)), expected, entry)
 
+    def test_type_qualifier_nodes_and_edges_use_the_declarations_source_file(self):
+        data = self.parse('pipeline P { import Qualified import Plain }', {
+            'Shared.bwsl': 'module Shared { struct Box { float value; } }',
+            'Qualified.bwsl': '''module Qualified {
+import Shared as S
+struct Holder {
+    S::Box field;
+}
+identity :: (S::Box box) -> S::Box { return box; }
+value :: () -> float {
+    S::Box local;
+    local.value = 1.0;
+    return identity(local).value;
+}
+}''',
+            # Same positions, and equally wide type spellings, as Qualified.
+            'Plain.bwsl': '''module Plain {
+
+struct Holder {
+    float2 field;
+}
+identity :: (float2 box) -> float2 { return box; }
+value :: () -> float {
+    float2 local = float2(1.0);
+    return identity(local).x;
+}
+}''',
+        })
+        modules = {m['name']: m for m in data['modules']}
+        plain_nodes = list(objects(modules['Plain']))
+        for node in plain_nodes:
+            self.assertNotIn('typeQualifier', node)
+            self.assertNotIn('returnTypeQualifier', node)
+        plain_ids = {n['id'] for n in plain_nodes if 'id' in n}
+        qualifier_edges = self.edges(data, 'qualifier')
+        self.assertFalse(any(e['from'].rsplit('/', 1)[0] in plain_ids
+                             for e in qualifier_edges))
+        qualified_nodes = list(objects(modules['Qualified']))
+        qualifiers = [n[key] for n in qualified_nodes
+                      for key in ('typeQualifier', 'returnTypeQualifier') if key in n]
+        self.assertEqual(len(qualifiers), 4)  # field, parameter, return type, local
+        for qualifier in qualifiers:
+            self.assertEqual(qualifier['name'], 'S')
+            self.assertTrue(any(e['from'] == qualifier['id'] and
+                                e['to'] == modules['Shared']['id']
+                                for e in qualifier_edges))
+
     def test_declarations_record_their_source_file(self):
         data = self.parse('''
             pipeline P { import Dependency import Random }
@@ -480,6 +790,134 @@ class AstJsonTests(unittest.TestCase):
         self.assertNotIn('type', parameter)
         box = self.nodes(data, 'STRUCT_DECL', 'Box')[0]['id']
         self.assert_edge(data, field['id'], box, 'type')
+
+    def test_resource_payload_positions_and_references(self):
+        for owner in ('module', 'pipeline'):
+            for spelling in ('Lib::Item', 'Lib.Item', 'L::Item', 'L.Item'):
+                for form in ('{}', '{}[2]', 'buffer<{}>', 'cbuffer<{}[2]>'):
+                    with self.subTest(owner=owner, spelling=spelling, form=form):
+                        resource_type = form.format(spelling)
+                        source = f'''{owner} Main {{
+    import Lib as L
+    resources {{
+        item: {resource_type};
+        scale: float
+    }}
+}}'''
+                        data = self.parse(source, {'Lib.bwsl':
+                            'module Lib { struct Item { float4 mask; float w; } }'})
+                        resource = self.nodes(data, 'RESOURCE_DECL', 'item')[0]
+                        self.assertEqual(resource['typeName'], form.format('Lib::Item'))
+                        self.assert_position(resource, self.position(source, 4, resource_type), 'type')
+                        qualifier = resource['typeQualifier']
+                        self.assertEqual(qualifier['name'], spelling.split('::')[0].split('.')[0])
+                        self.assert_position(qualifier, self.position(source, 4, spelling))
+                        self.assert_edge(data, qualifier['id'],
+                                         self.nodes(data, 'MODULE', 'Lib')[0]['id'], 'qualifier')
+                        self.assert_edge(data, resource['id'],
+                                         self.nodes(data, 'STRUCT_DECL', 'Item')[0]['id'], 'type')
+                        scale = self.nodes(data, 'RESOURCE_DECL', 'scale')[0]
+                        self.assert_edge(data, scale['id'], 'builtin:type:float', 'type')
+
+    def test_resource_builtin_and_local_payload_types(self):
+        data = self.parse('''pipeline Main {
+            struct Item { float value; }
+            resources {
+                item: Item
+                items: buffer<Item>
+                constants: cbuffer<float4[2]>
+                tex2: texture2D
+                tex3: texture3D
+                cube: textureCube
+                layers: texture2DArray
+                samp: sampler
+                image: image2D
+                wide: double
+            }
+        }''')
+        item = self.nodes(data, 'STRUCT_DECL', 'Item')[0]['id']
+        for name in ('item', 'items'):
+            self.assert_edge(data, self.nodes(data, 'RESOURCE_DECL', name)[0]['id'], item, 'type')
+        self.assertEqual(len(self.nodes(data, 'RESOURCE_DECL')), 10)
+
+    def test_resource_forward_payload_declarations(self):
+        for owner in ('pipeline', 'module'):
+            with self.subTest(owner=owner):
+                data = self.parse(f'''{owner} Main {{
+                    resources {{ local: Local external: L.Item buffered: buffer<L::Item> }}
+                    struct Local {{ float value; }}
+                    import Lib as L
+                }}''', {'Lib.bwsl': 'module Lib { struct Item { float value; } }'})
+                local = self.nodes(data, 'RESOURCE_DECL', 'local')[0]
+                self.assert_edge(data, local['id'],
+                                 self.nodes(data, 'STRUCT_DECL', 'Local')[0]['id'], 'type')
+                for name, expected in (('external', 'Lib::Item'), ('buffered', 'buffer<Lib::Item>')):
+                    resource = self.nodes(data, 'RESOURCE_DECL', name)[0]
+                    self.assertEqual(resource['typeName'], expected)
+                    self.assert_edge(data, resource['id'],
+                                     self.nodes(data, 'STRUCT_DECL', 'Item')[0]['id'], 'type')
+                    self.assert_edge(data, resource['typeQualifier']['id'],
+                                     self.nodes(data, 'MODULE', 'Lib')[0]['id'], 'qualifier')
+
+    def test_unknown_resource_payloads_are_diagnosed(self):
+        with tempfile.TemporaryDirectory(prefix='bwsl-resource-types-') as directory:
+            folder = Path(directory)
+            (folder / 'Lib.bwsl').write_text('module Lib { struct Item { float w; } }')
+            for owner in ('pipeline', 'module'):
+                for spelling in ('Lib.Missing', 'Lib::Missing', 'L.Missing', 'L::Missing',
+                                 'Nope::Item', 'Nope.Item', 'Missing', 'T'):
+                    for form in ('{}', '{}[2]', 'buffer<{}>', 'cbuffer<{}>'):
+                        with self.subTest(owner=owner, spelling=spelling, form=form):
+                            path = folder / 'main.bwsl'
+                            path.write_text(f'''{owner} Main {{
+    import Lib as L
+    resources {{ item: {form.format(spelling)} }}
+}}''')
+                            result = subprocess.run(
+                                [str(COMPILER), str(path), '-modules', directory,
+                                 '-errors-json', '-no-validate', '-check'],
+                                capture_output=True, text=True, timeout=30)
+                            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                            diagnostics = json.loads(result.stdout)
+                            error = next(d for d in diagnostics['diagnostics']
+                                         if 'Unknown resource type' in d['message'])
+                            self.assertEqual(error['severity'], 'error')
+                            self.assertEqual(error['line'], 3)
+                            self.assertEqual(error['column'],
+                                             path.read_text().splitlines()[2].index(spelling) + 1)
+
+    def test_resource_qualifier_spellings_generate_identical_shaders(self):
+        with tempfile.TemporaryDirectory(prefix='bwsl-resource-codegen-') as directory:
+            folder = Path(directory)
+            (folder / 'Lib.bwsl').write_text(
+                'module Lib { struct Item { float4 mask; float w; } }')
+            outputs = []
+            for spelling in ('Lib.Item', 'Lib::Item', 'L.Item', 'L::Item'):
+                path = folder / 'main.bwsl'
+                path.write_text(f'''pipeline Main {{
+    import Lib as L
+    resources {{ item: {spelling} }}
+    attributes {{ position: float4 }}
+    pass "Main" {{
+        use attributes {{ position }}
+        use resources {{ item }}
+        outputs {{ c: float4 }}
+        vertex {{ output.pos = attributes.position; }}
+        fragment {{ output.c = float4(resources.item.w) * resources.item.mask; }}
+    }}
+}}''')
+                out = folder / str(len(outputs))
+                result = subprocess.run(
+                    [str(COMPILER), str(path), '-modules', directory,
+                     '-glsl', '-spv', '-validation', 'strict', '-o', str(out)],
+                    capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                shaders = {p.name: p.read_bytes() for p in out.iterdir()
+                           if p.suffix in ('.spv', '.vert', '.frag')}
+                self.assertEqual(len(shaders), 4)
+                outputs.append(shaders)
+            for output in outputs[1:]:
+                self.assertEqual(output, outputs[0])
 
     def test_return_types_have_positions_and_qualifier_edges(self):
         source = '''
@@ -604,6 +1042,43 @@ class AstJsonTests(unittest.TestCase):
         self.assert_position(qualified, self.position(source, 16, 'BASE'))
         self.assertEqual(qualified['qualifier']['name'], 'C')
         self.assert_edge(data, qualified['qualifier']['id'], 'MODULE:0', 'qualifier')
+
+    def test_vector_constants_fold_to_navigable_constructor_calls(self):
+        source = '''
+            module Dirs {
+                const float2 NORTH = float2(0.0, -1.0);
+                flip :: (float2 v) -> float2 { return v * NORTH; }
+            }
+            pipeline P {
+                import Dirs
+                attributes {
+                    position: float2
+                }
+                pass "Main" {
+                    use attributes { position }
+                    vertex {
+                        float2 p = Dirs::flip(attributes.position) + Dirs::NORTH.yx;
+                        output.position = float4(p, 0.0, 1.0);
+                    }
+                }
+            }
+        '''
+        data = self.parse(source)
+        north = self.nodes(data, 'MODULE', 'Dirs')[0]['consts'][0]
+        folded = {}
+        for call in self.nodes(data, 'FUNCTION_CALL'):
+            if 'foldedFrom' in call:
+                self.assertEqual(call['name'], 'float2')
+                use = call['foldedFrom']
+                self.assertEqual((use['type'], use['id']), ('IDENTIFIER', call['id'] + '/folded-constant'))
+                folded[(use['name'], use['line'])] = use
+        # The unqualified use inside the module, then the swizzled qualified use.
+        self.assertEqual(set(folded), {('NORTH', 3), ('NORTH', 13)})
+        for use in folded.values():
+            self.assert_edge(data, use['id'], north['id'], 'read')
+        self.assert_position(folded[('NORTH', 3)], self.position(source, 3, 'NORTH'))
+        self.assert_position(folded[('NORTH', 13)], self.position(source, 13, 'NORTH'))
+        self.assertEqual(folded[('NORTH', 13)]['qualifier']['name'], 'Dirs')
 
     def test_named_nodes_report_name_positions(self):
         source = '''

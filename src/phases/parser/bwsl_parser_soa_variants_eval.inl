@@ -1339,6 +1339,7 @@ NodeRef Parser::ParseEvalStatement() {
         ArenaString::MakeHashOnly(varName),
         ArenaString::MakeHashOnly(typeName),
         expr, true, line, col);
+    RecordDeclarationSource(varDecl);
     ast->GetVariableDecl(varDecl).isEval = true;
 
     // Add to symbol table
@@ -1434,7 +1435,7 @@ NodeRef Parser::ParseForStatement(bool isEval) {
             SymbolTable::EnterScope(&symbolTable);
             scopesToExit++;
 
-            Consume(TokenType::IDENTIFIER, "Expected iterator variable in foreach");
+            ConsumeDeclarationName("variable", "Expected iterator variable in foreach");
             std::string varName(stream->GetValue(previous));
             SourceLocation loc = getLocation(stream->GetOffset(previous));
 
@@ -1511,7 +1512,7 @@ NodeRef Parser::ParseForStatement(bool isEval) {
                 typeStr += "^";
             }
 
-            Consume(TokenType::IDENTIFIER, "Expected variable name in for loop init");
+            ConsumeDeclarationName("variable", "Expected variable name in for loop init");
             std::string varName(stream->GetValue(previous));
             const SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
 
@@ -1524,6 +1525,7 @@ NodeRef Parser::ParseForStatement(bool isEval) {
                 ArenaString::MakeHashOnly(varName),
                 ArenaString::MakeHashOnly(typeStr),
                 initializer, false, line, col);
+            RecordDeclarationSource(firstPart);
             ast->GetVariableDecl(firstPart).typePosition = AST::PackPosition(line, col);
             ast->GetVariableDecl(firstPart).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
 
@@ -1620,7 +1622,7 @@ return ASTFactory::MakeForCollection(ast, firstPart, rangeStart, body, isEval, l
         // length lookup below.)
         SourceLocation loc = getLocation(stream->GetOffset(previous));
         std::string varName = "it";
-        NodeRef iteratorVar = ASTFactory::MakeIdentifier(ast, varName, loc.line, loc.column);
+        NodeRef iteratorVar = ASTFactory::MakeIdentifier(ast, varName);
 
         Consume(TokenType::RIGHT_PAREN, "Expected ')'");
         Consume(TokenType::LEFT_BRACE, "Expected '{' after for");

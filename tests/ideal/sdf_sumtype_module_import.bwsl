@@ -18,9 +18,9 @@ pipeline IdealSDFSumtypeModuleImport {
             SDFIdeal::SDFShape torus = SDFShape::Torus(0.6, 0.15);
 
             float3 p = attributes.position;
-            float d0 = sphere.distance(p);
-            float d1 = box.distance(p - float3(0.25, 0.0, 0.0));
-            float d2 = torus.distance(p);
+            float d0 = sphere.signed_distance(p);
+            float d1 = box.signed_distance(p - float3(0.25, 0.0, 0.0));
+            float d2 = torus.signed_distance(p);
             float combined = min(d0, min(d1, d2));
             float3 n = sphere.normal(p, 0.01);
 

@@ -1,0 +1,129 @@
+// Vertex-bound: a 1024x1024 grid whose vertex shader does all the work. Three
+// 4-octave fbm evaluations displace the vertex and give it a normal, eight
+// "bones" (3x4 affine rows in the uniform buffer) are blended by distance,
+// and four lights shade the vertex. The fragment shader only writes the
+// interpolated color.
+pipeline VertexHeavyBench {
+    attributes {
+        position: float3
+        uv: float2
+    }
+
+    struct Scene {
+        // Rows of the view-projection matrix.
+        float4 viewX;
+        float4 viewY;
+        float4 viewZ;
+        float4 viewW;
+        // time, height scale, noise scale, shininess
+        float4 params;
+        float4 eye;
+        float4[4] lightDir;
+        // rgb, specular strength
+        float4[4] lightColor;
+        // Eight bones, three affine rows each (offsets from identity).
+        float4[24] bones;
+    };
+
+    resources {
+        scene: Scene
+    }
+
+    const int OCTAVES = 4;
+    const int BONES = 8;
+    const int LIGHTS = 4;
+
+    pcg2d :: (uint2 v) -> uint2 {
+        v = v * 1664525u + 1013904223u;
+        v.x += v.y * 1664525u;
+        v.y += v.x * 1664525u;
+        v = v ^ (v >> 16u);
+        v.x += v.y * 1664525u;
+        v.y += v.x * 1664525u;
+        v = v ^ (v >> 16u);
+        return v;
+    }
+
+    cellRandom :: (float2 cell) -> float2 {
+        uint2 h = pcg2d(uint2(int2(cell)));
+        return float2(float(h.x >> 24u), float(h.y >> 24u)) / 127.5 - 1.0;
+    }
+
+    gradientNoise :: (float2 p) -> float {
+        float2 i = floor(p);
+        float2 f = p - i;
+        float2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+        float a = dot(cellRandom(i), f);
+        float b = dot(cellRandom(i + float2(1.0, 0.0)), f - float2(1.0, 0.0));
+        float c = dot(cellRandom(i + float2(0.0, 1.0)), f - float2(0.0, 1.0));
+        float d = dot(cellRandom(i + float2(1.0, 1.0)), f - float2(1.0, 1.0));
+        return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+    }
+
+    terrainHeight :: (float2 uv, float4 params) -> float {
+        float2 p = uv * params.z + params.x * 0.1;
+        float sum = 0.0;
+        float amplitude = 0.5;
+        for (int octave = 0; octave < OCTAVES; octave++) {
+            sum += amplitude * gradientNoise(p);
+            p = float2(0.8 * p.x - 0.6 * p.y, 0.6 * p.x + 0.8 * p.y) * 2.02;
+            amplitude *= 0.5;
+        }
+        return sum * params.y;
+    }
+
+    pass "Main" {
+        use attributes { position, uv }
+        use resources { scene }
+
+        vertex {
+            float4 params = resources.scene.params;
+            float2 uv = attributes.uv;
+            float step = 1.0 / 256.0;
+            float h = terrainHeight(uv, params);
+            float hx = terrainHeight(uv + float2(step, 0.0), params);
+            float hy = terrainHeight(uv + float2(0.0, step), params);
+            float3 n = normalize(float3(h - hx, h - hy, step * 2.0));
+            float3 pos = float3(attributes.position.xy, h);
+
+            float4 p4 = float4(pos, 1.0);
+            float3 offset = float3(0.0);
+            float3 normalOffset = float3(0.0);
+            float total = 0.0;
+            for (int b = 0; b < BONES; b++) {
+                float2 center = float2(fract(float(b) * 0.618034), fract(float(b) * 0.381966 + 0.25));
+                float2 d = uv - center;
+                float w = exp(-dot(d, d) * 12.0);
+                float4 rx = resources.scene.bones[b * 3];
+                float4 ry = resources.scene.bones[b * 3 + 1];
+                float4 rz = resources.scene.bones[b * 3 + 2];
+                offset += w * float3(dot(rx, p4), dot(ry, p4), dot(rz, p4));
+                normalOffset += w * float3(dot(rx.xyz, n), dot(ry.xyz, n), dot(rz.xyz, n));
+                total += w;
+            }
+            float inv = 1.0 / max(total, 0.001);
+            pos += offset * inv;
+            n = normalize(n + normalOffset * inv);
+
+            float3 eye = resources.scene.eye.xyz;
+            float3 color = float3(0.03, 0.035, 0.05);
+            for (int l = 0; l < LIGHTS; l++) {
+                float3 L = normalize(resources.scene.lightDir[l].xyz);
+                float4 lc = resources.scene.lightColor[l];
+                float diffuse = max(dot(n, L), 0.0);
+                float3 H = normalize(L + eye);
+                float specular = pow(max(dot(n, H), 0.0), params.w);
+                color += lc.rgb * (diffuse + specular * lc.a);
+            }
+
+            float4 world = float4(pos, 1.0);
+            output.position = float4(dot(resources.scene.viewX, world), dot(resources.scene.viewY, world),
+                                     dot(resources.scene.viewZ, world), dot(resources.scene.viewW, world));
+            output.shade = color;
+        }
+
+        fragment {
+            output.color = float4(input.shade, 1.0);
+        }
+    }
+}

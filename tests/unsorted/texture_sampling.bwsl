@@ -6,44 +6,51 @@ pipeline TextureSampling {
         position: float3
         texcoord: float2
     }
+    resources {
+        albedo: texture2D
+        environment: textureCube
+        volume: texture3D
+        layers: texture2DArray
+    }
 
     // Function that takes texture and sampler as parameters
-    sampleTexture2D :: (sampler2D tex, float2 uv) -> float4 {
-        return texture2D(tex, uv);
+    sampleTexture2D :: (texture2D tex, float2 uv) -> float4 {
+        return sample(tex, uv);
     }
 
     // Sample with explicit LOD
-    sampleWithLod :: (sampler2D tex, float2 uv, float lod) -> float4 {
+    sampleWithLod :: (texture2D tex, float2 uv, float lod) -> float4 {
         return sample_lod(tex, uv, lod);
     }
 
     // Sample with gradients
-    sampleWithGrad :: (sampler2D tex, float2 uv, float2 ddxUV, float2 ddyUV) -> float4 {
+    sampleWithGrad :: (texture2D tex, float2 uv, float2 ddxUV, float2 ddyUV) -> float4 {
         return sample_grad(tex, uv, ddxUV, ddyUV);
     }
 
     // Cubemap sampling
-    sampleCubemap :: (samplerCube cube, float3 direction) -> float4 {
-        return textureCube(cube, direction);
+    sampleCubemap :: (textureCube cube, float3 direction) -> float4 {
+        return sample(cube, direction);
     }
 
     // Cubemap with LOD
-    sampleCubemapLod :: (samplerCube cube, float3 direction, float lod) -> float4 {
+    sampleCubemapLod :: (textureCube cube, float3 direction, float lod) -> float4 {
         return sample_lod(cube, direction, lod);
     }
 
     // 3D texture sampling
-    sampleTexture3D :: (sampler3D vol, float3 uvw) -> float4 {
-        return texture3D(vol, uvw);
+    sampleTexture3D :: (texture3D vol, float3 uvw) -> float4 {
+        return sample(vol, uvw);
     }
 
     // Texture array sampling
-    sampleTextureArray :: (sampler2DArray arr, float3 uvLayer) -> float4 {
-        return texture2DArray(arr, uvLayer);
+    sampleTextureArray :: (texture2DArray arr, float3 uvLayer) -> float4 {
+        return sample(arr, uvLayer);
     }
 
     pass "Main" {
         use attributes { position, texcoord }
+        use resources { albedo, environment, volume, layers }
 
         vertex {
             // Pass through position and texcoord
@@ -85,8 +92,18 @@ pipeline TextureSampling {
             // Test fwidth for automatic LOD selection
             float fw = fwidth(uv.x);
 
+            // Sample through the helpers above
+            float4 base = sampleTexture2D(resources.albedo, scaledUV);
+            float4 detail = sampleWithLod(resources.albedo, offsetUV, detailLod);
+            float4 graded = sampleWithGrad(resources.albedo, mirroredUV, ddxUV, ddyUV);
+            float4 env = sampleCubemap(resources.environment, reflectDir);
+            float4 blurredEnv = sampleCubemapLod(resources.environment, cubeDir, blurLod);
+            float4 vol = sampleTexture3D(resources.volume, volumeUVW);
+            float4 layer = sampleTextureArray(resources.layers, arrayUVLayer);
+
             // Combine results
-            float4 finalColor = float4(uv, fw, 1.0);
+            float4 finalColor = float4(uv, fw, 1.0) + base + detail + graded +
+                                env + blurredEnv + vol + layer;
 
             output.color = finalColor;
         }

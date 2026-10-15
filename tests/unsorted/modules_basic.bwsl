@@ -23,7 +23,7 @@ module TestMath {
     }
 
     // Function with multiple parameters
-    lerp :: (float a, float b, float t) -> float {
+    blend :: (float a, float b, float t) -> float {
         return a + (b - a) * t;
     }
 
@@ -64,7 +64,7 @@ pipeline ModulesBasic {
             float area = TestMath::circleArea(1.0);  // PI
 
             // Use function with multiple params
-            float interp = TestMath::lerp(0.0, 10.0, 0.5);  // 5.0
+            float interp = TestMath::blend(0.0, 10.0, 0.5);  // 5.0
 
             // Use function that calls other functions
             float smooth = TestMath::smoothSquare(2.0);  // 16.0

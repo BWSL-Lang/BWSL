@@ -41,6 +41,27 @@ static u32 ResolveVertexPullingCollisionBinding(
   return binding;
 }
 
+bool SPIRVBuilder::FindResourceName(ResourceBinding::Type type,
+                                    u32 bindingIndex, ArenaString *name) const {
+  if (!symbols)
+    return false;
+  for (u32 s = 0; s < symbols->symbols.count; s++) {
+    const Symbol &sym = symbols->symbols[s];
+    if (sym.kind != SymbolKind::RESOURCE || sym.index >= symbols->resources.count)
+      continue;
+    const ResourceData &resource = symbols->resources[sym.index];
+    if (resource.type == type && resource.bindingIndex == bindingIndex) {
+      *name = sym.name;
+      return true;
+    }
+  }
+  return false;
+}
+
+void SPIRVBuilder::EmitGLName(u32 id, GLNameKind kind, ArenaString source) {
+  EmitName(id, GLNames::MakeName(kind, source).ToString().c_str());
+}
+
 void SPIRVBuilder::DeclareResources() {
   // Declare resources based on IR analysis results
   // Each uniform binding in BWSL is a single typed value
@@ -92,6 +113,16 @@ void SPIRVBuilder::DeclareResources() {
       if (uniformType == CoreType::MAT2) arrayStride = 32;
       else if (uniformType == CoreType::MAT3) arrayStride = 48;
       else if (uniformType == CoreType::MAT4) arrayStride = 64;
+        // Struct elements can exceed 16 bytes; round their full size to std140 alignment.
+        if (uniformType == CoreType::CUSTOM || uniformType == CoreType::ENUM) {
+            u32 structHash = analysis.uniformTypeHashes[binding];
+            for (u32 i = 0; i < ir->structTypeCount; i++) {
+                if (ir->structTypes[i].nameHash == structHash) {
+                    arrayStride = (ir->structTypes[i].totalSize + 15) & ~15u;
+                    break;
+                }
+            }
+        }
       u32 stride_ops[] = {array_type_id, spv::DecorationArrayStride,
                           arrayStride};
       EmitToSection(&decorations, spv::OpDecorate, stride_ops, 3);
@@ -145,6 +176,20 @@ void SPIRVBuilder::DeclareResources() {
     EmitDecoration(var_id, spv::DecorationDescriptorSet, set_val, 1);
     EmitDecoration(var_id, spv::DecorationBinding, bind_val, 1);
 
+    // Name the block after its resource. Block and instance get prefixes
+    // because GLSL puts block names, struct type names and variables in one
+    // namespace. Prefix the member too, so resource names can be GLSL keywords:
+    //   uniform ub_render { Render bwsl_u_render; } bwsl_ub_render;
+    ArenaString resourceName;
+    if (FindResourceName(ResourceBinding::UniformBuffer, binding, &resourceName)) {
+      EmitGLName(struct_type_id, GLNameKind::UNIFORM_BLOCK, resourceName);
+        EmitMemberName(
+            struct_type_id, 0,
+            GLNames::MakeName(GLNameKind::UNIFORM_MEMBER, resourceName)
+                .ToString().c_str());
+      EmitGLName(var_id, GLNameKind::UNIFORM_INSTANCE, resourceName);
+    }
+
     uniformBufferIds[binding] = var_id;
     bindingSets[resourceCount] = 0;
     bindingIndices[resourceCount] = (u8)actualBinding;
@@ -155,21 +200,40 @@ void SPIRVBuilder::DeclareResources() {
   // sampler reused with different partners needs independent descriptors.
   SeparateSamplerPlan samplerPlan;
   if (symbols) samplerPlan = BuildSeparateSamplerPlan(*symbols, CollectExplicitSamplerUses(*ir, stage));
+  // A texture array is declared once, at its first slot, when any of its
+  // element slots is used.
+  u32 usedTextureMask = analysis.usedTextureMask;
+  if (symbols) for (u32 r = 0; r < symbols->resources.count; ++r) {
+    const auto& resource = symbols->resources[r];
+    if (resource.type != ResourceBinding::Texture || resource.arraySize == 0 ||
+        resource.bindingIndex >= 32 || resource.bindingIndex + resource.arraySize > 32) continue;
+    const u32 elements = ((1ull << resource.arraySize) - 1) << resource.bindingIndex;
+    usedTextureMask &= ~elements;
+    if (analysis.usedTextureMask & elements) usedTextureMask |= 1u << resource.bindingIndex;
+  }
   for (u32 binding = 0; binding < 32; ++binding) {
-    if (!(analysis.usedTextureMask & (1u << binding))) continue;
+    if (!(usedTextureMask & (1u << binding))) continue;
+    u32 arrayLength = 0;
     if (symbols) for (u32 r = 0; r < symbols->resources.count; ++r) {
       const auto& resource = symbols->resources[r];
       if (resource.bindingIndex != binding || resource.type != ResourceBinding::Texture) continue;
       textureIsArray[binding] = resource.isArrayTexture;
       textureIsCubemap[binding] = resource.isCubemapTexture;
       textureIsVolume[binding] = static_cast<CoreType>(resource.coreType) == CoreType::TEXTURE3D;
+      arrayLength = resource.arraySize;
       break;
     }
     textureIsSeparate[binding] = (samplerPlan.textures & (1u << binding)) != 0;
     u32 sampledType = 0, imageType = 0;
     GetSampledTextureTypeIds(binding, &sampledType, &imageType);
-    u32 pointerType = GetPointerTypeId(textureIsSeparate[binding] ? imageType : sampledType,
-                                      spv::StorageClassUniformConstant);
+    u32 variableType = textureIsSeparate[binding] ? imageType : sampledType;
+    if (arrayLength > 0) {
+      u32 arrayType = AllocateId();
+      u32 arrayOps[] = {arrayType, variableType, GetIntConstantId(arrayLength, true)};
+      EmitToSection(&typesConstants, spv::OpTypeArray, arrayOps, 3);
+      variableType = arrayType;
+    }
+    u32 pointerType = GetPointerTypeId(variableType, spv::StorageClassUniformConstant);
     u32 variable = AllocateId();
     u32 ops[] = {pointerType, variable, spv::StorageClassUniformConstant};
     EmitToSection(&globals, spv::OpVariable, ops, 3);
@@ -177,15 +241,39 @@ void SPIRVBuilder::DeclareResources() {
     u32 resolved = ResolveVertexPullingCollisionBinding(vertexPullingConfig, set, binding);
     EmitDecoration(variable, spv::DecorationDescriptorSet, &set, 1);
     EmitDecoration(variable, spv::DecorationBinding, &resolved, 1);
+    // A one-to-one pair stays a combined image, so GLSL declares it under
+    // this name. The prefix keeps it clear of GLSL keywords and builtins
+    // (a resource named "texture" would otherwise be renamed by
+    // SPIRV-Cross). Separate pairs are renamed by the GLSL wrapper after
+    // build_combined_image_samplers().
+    ArenaString textureName;
+    if (FindResourceName(ResourceBinding::Texture, binding, &textureName))
+      EmitGLName(variable, GLNameKind::COMBINED_TEXTURE, textureName);
     textureIds[binding] = variable;
+    for (u32 element = 1; element < arrayLength; ++element) {
+      const u32 slot = binding + element;
+      textureIds[slot] = variable;
+      textureIsArray[slot] = textureIsArray[binding];
+      textureIsCubemap[slot] = textureIsCubemap[binding];
+      textureIsVolume[slot] = textureIsVolume[binding];
+      textureIsSeparate[slot] = textureIsSeparate[binding];
+      textureArrayLength[slot] = static_cast<u8>(arrayLength);
+      textureArrayElement[slot] = static_cast<u8>(element);
+    }
+    textureArrayLength[binding] = static_cast<u8>(arrayLength);
     bindingSets[resourceCount] = 0;
     bindingIndices[resourceCount++] = static_cast<u8>(resolved);
   }
-  auto declareSampler = [&](u32 binding) {
+  // Named after the resource of `nameType` at `nameBinding`, if there is one.
+  auto declareSampler = [&](u32 binding, GLNameKind kind,
+                            ResourceBinding::Type nameType, u32 nameBinding) {
     u32 variable = AllocateId();
     u32 pointer = GetPointerTypeId(GetSamplerTypeId(), spv::StorageClassUniformConstant);
     u32 ops[] = {pointer, variable, spv::StorageClassUniformConstant};
     EmitToSection(&globals, spv::OpVariable, ops, 3);
+    ArenaString name;
+    if (FindResourceName(nameType, nameBinding, &name))
+      EmitGLName(variable, kind, name);
     u32 set = 2;
     EmitDecoration(variable, spv::DecorationDescriptorSet, &set, 1);
     EmitDecoration(variable, spv::DecorationBinding, &binding, 1);
@@ -195,9 +283,13 @@ void SPIRVBuilder::DeclareResources() {
   };
   if (symbols) for (u32 binding = 0; binding < 32; ++binding) {
     if (samplerPlan.samplers & (1u << binding))
-      samplerIds[binding] = declareSampler(ResolveSeparateSamplerBinding(*symbols, binding));
+      samplerIds[binding] = declareSampler(ResolveSeparateSamplerBinding(*symbols, binding),
+                                           GLNameKind::SAMPLER,
+                                           ResourceBinding::Sampler, binding);
     if (samplerPlan.defaults & (1u << binding))
-      defaultSamplerIds[binding] = declareSampler(ResolveDefaultSamplerBinding(*symbols, binding));
+      defaultSamplerIds[binding] = declareSampler(
+          ResolveDefaultSamplerBinding(*symbols, binding),
+          GLNameKind::DEFAULT_SAMPLER, ResourceBinding::Texture, binding);
   }
 
   // ============= Storage Buffers =============

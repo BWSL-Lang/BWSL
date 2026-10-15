@@ -1,0 +1,14 @@
+// Texture `atlas` is emitted as t_atlas, and sampler names are emitted as
+// written, so a sampler named `t_atlas` would clash with it.
+pipeline GLNameSamplerVsTexture {
+    resources {
+        atlas: texture2D
+        t_atlas: sampler
+    }
+
+    pass "Main" {
+        use resources { atlas, t_atlas }
+        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+        fragment { output.color = sample(resources.atlas, resources.t_atlas, float2(0.5, 0.5)); }
+    }
+}

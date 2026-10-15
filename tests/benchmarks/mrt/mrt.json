@@ -1,0 +1,28 @@
+{
+  "description": "G-buffer pass: 4 RGBA16F render targets, 3 textures (25 taps), constant-array AO ring",
+  "targets": 4,
+  "format": "rgba16f",
+  "mesh": {"type": "fullscreen"},
+  "attributes": [
+    {"name": "position", "type": "float2"}
+  ],
+  "uniforms": [
+    {
+      "name": "params",
+      "values": [
+        3.0, 6.0, 0.004, 0,
+        "1 / 1024", "1 / 1024", 7.0, 0.35,
+        0.45, 0.62, 0.30, 1,
+        0.55, 0.50, 0.47, 1,
+        4.0, 1.2, 0.3, 1
+      ]
+    }
+  ],
+  "textures": [
+    {"name": "heightMap", "size": [1024, 1024], "format": "rgba8", "gen": "smooth", "detail": 12, "waves": 10, "wrap": "repeat", "mipmaps": true, "seed": 11},
+    {"name": "detailNormals", "size": [512, 512], "format": "rgba8", "gen": "smooth", "detail": 40, "noise": 0.2, "wrap": "repeat", "mipmaps": true, "seed": 12},
+    {"name": "albedoAtlas", "size": [1024, 1024], "format": "rgba8", "gen": "smooth", "detail": 30, "noise": 0.15, "wrap": "repeat", "mipmaps": true, "seed": 13}
+  ],
+  "tolerance": 0.006,
+  "tolerance_note": "Bilinear weights are quantized (8 bits on NVIDIA), so a last-bit difference in a texture coordinate moves a read by up to 1/256 of the neighbouring texel difference. The AO sum of 16 reads amplifies that to ~0.004; fp16 targets add up to 0.002 at the emissive values (~4)."
+}

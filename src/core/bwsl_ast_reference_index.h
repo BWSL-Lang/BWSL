@@ -3,6 +3,7 @@
 #include "bwsl_ast_soa.h"
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <iterator>
 #include <string>
 #include <unordered_map>
@@ -13,8 +14,8 @@
 namespace BWSL::AstReferenceIndex {
 
 // Semantic references are deliberately kept outside the AST.  This model is
-// constructed only by the AST JSON serializer, so normal compilation does not
-// add a field to NodeRef, a parallel allocation, or work to the parser hot path.
+// shared by AST JSON and the name-validation pass. Validation walks every
+// declaration, including functions that shader lowering never reaches.
 struct Symbol {
     std::string id;
     std::string kind;
@@ -27,6 +28,7 @@ struct Symbol {
     // sidecar mapping for caches spanning compiler invocations; local syntax
     // continues to use the compact TYPE:index ID above.
     std::string stableId;
+    std::vector<u32> arraySizes;
 
     Symbol() = default;
     Symbol(std::string symbolId, std::string symbolKind, std::string symbolName,
@@ -185,19 +187,34 @@ inline std::string IntrinsicResultType(const StdLib::IntrinsicData& intrinsic,
 
 // Prefixes the module of a `Module::Type` written at `typePosition`; resolved
 // type hashes only keep the unqualified custom type name.
-inline std::string QualifiedTypeName(const AST& ast, std::string name, u32 typePosition) {
-    const ModuleNameSite* qualifier = ast.FindTypeQualifier(typePosition);
-    if (qualifier && qualifier->moduleNameHash != 0 && name.find("::") == std::string::npos) {
-        name = ReverseLookup::GetString(qualifier->moduleNameHash) + "::" + name;
+inline std::string QualifiedTypeName(const AST& ast, std::string name, u32 typePosition,
+                                     const char* sourceFile = nullptr) {
+    const ModuleNameSite* qualifier = ast.FindTypeQualifier(typePosition, sourceFile);
+    if (qualifier && name.find("::") == std::string::npos) {
+        name = (qualifier->moduleNameHash != 0
+            ? ReverseLookup::GetString(qualifier->moduleNameHash) : ResolveName(qualifier->name)) + "::" + name;
     }
     return name;
 }
 
-inline std::string ReturnTypeName(const AST& ast, const FunctionDeclData& function) {
+inline ArenaString GetResourcePayloadTypeName(ArenaString typeName) {
+    std::string name = typeName.ToString();
+    if ((name.rfind("buffer<", 0) == 0 || name.rfind("cbuffer<", 0) == 0) &&
+        name.back() == '>') {
+        size_t start = name.find('<') + 1;
+        name = name.substr(start, name.size() - start - 1);
+    }
+    size_t array = name.find('[');
+    if (array != std::string::npos) name.resize(array);
+    return ArenaString::MakeHashOnly(name);
+}
+
+inline std::string ReturnTypeName(const AST& ast, const FunctionDeclData& function,
+                                  const char* sourceFile = nullptr) {
     if (function.returnTypeHash != 0) {
         std::string result = ReverseLookup::GetString(function.returnTypeHash);
         if (result.find("<hash:") == std::string::npos) {
-            return QualifiedTypeName(ast, result, function.returnTypePosition);
+            return QualifiedTypeName(ast, result, function.returnTypePosition, sourceFile);
         }
     }
     return SourceTypeName(function.returnType);
@@ -205,15 +222,25 @@ inline std::string ReturnTypeName(const AST& ast, const FunctionDeclData& functi
 
 // Source spelling of a struct field type, qualified when it was written as
 // `Module::Type`.
-inline std::string StructFieldTypeName(const AST& ast, const StructFieldData& field) {
+inline std::string StructFieldTypeName(const AST& ast, const StructFieldData& field,
+                                       const char* sourceFile = nullptr) {
     if (field.type.customTypeHash == 0) return SourceTypeName(field.type.coreType);
     return QualifiedTypeName(ast, ReverseLookup::GetString(field.type.customTypeHash),
-                             field.typePosition);
+                             field.typePosition, sourceFile);
 }
+
+struct NameDiagnostic {
+    std::string message;
+    std::string file;
+    u32 position;
+    u32 length;
+};
 
 class Builder {
 public:
-    explicit Builder(const AST& ast) : ast_(ast) {}
+    explicit Builder(const AST& ast, std::vector<NameDiagnostic>* errors = nullptr,
+                     std::vector<NameDiagnostic>* shadowNotes = nullptr)
+        : ast_(ast), errors_(errors), shadowNotes_(shadowNotes) {}
 
     Index Build() {
         for (u32 i = 0; i < ast_.foldedConstants.count; i++) {
@@ -232,7 +259,7 @@ public:
         // detached from a container array.
         for (u32 i = 0; i < ast_.variableDecls.count; i++) {
             NodeRef ref(ASTNodeType::VARIABLE_DECL, i);
-            if (visitedVariables_.find(ref.packed) == visitedVariables_.end()) {
+            if (!errors_ && !shadowNotes_ && visitedVariables_.find(ref.packed) == visitedVariables_.end()) {
                 PushScope();
                 VisitVariableDecl(ref);
                 PopScope();
@@ -268,6 +295,132 @@ private:
     };
 
     const AST& ast_;
+    std::vector<NameDiagnostic>* errors_ = nullptr;
+    std::vector<NameDiagnostic>* shadowNotes_ = nullptr;
+    struct DeclarationSite {
+        std::string file;
+        u32 position;
+    };
+    std::unordered_map<std::string, DeclarationSite> declarationSites_;
+
+    void RememberDeclaration(const std::string& id, NodeRef node, u32 position) {
+        if (!shadowNotes_) return;
+        const char* file = ast_.GetDeclarationSource(node);
+        if (!file) file = ast_.GetDeclarationSource(sourceDeclaration_);
+        declarationSites_[id] = {file ? file : "", position};
+    }
+
+    void CheckShadowing(NodeRef node, const std::string& id, const std::string& name,
+                        u32 position, const char* declarationKind) {
+        if (!shadowNotes_ || name.empty() || position == 0) return;
+        RememberDeclaration(id, node, position);
+        Binding hidden;
+        for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+            auto found = scope->find(name);
+            if (found != scope->end() && found->second.id != id) {
+                hidden = found->second;
+                break;
+            }
+        }
+        if (hidden.id.empty()) {
+            for (const auto& owner : VisibleScopes(CurrentOwner())) {
+                auto field = fields_.find(ScopedKey(owner, name));
+                if (field != fields_.end() && field->second.id != id) {
+                    hidden = field->second;
+                    break;
+                }
+                auto constant = consts_.find(ScopedKey(owner, name));
+                if (constant != consts_.end() && constant->second.id != id) {
+                    hidden = constant->second;
+                    break;
+                }
+            }
+        }
+        const Symbol* previous = FindSymbol(hidden.id);
+        if (!previous) return;
+        const auto site = declarationSites_.find(hidden.id);
+        if (site == declarationSites_.end() || site->second.position == 0) return;
+        u32 line = 0, column = 0;
+        AST::UnpackPosition(site->second.position, line, column);
+        std::string kind = previous->kind == "loop-iterator" ? "loop variable" :
+                           previous->kind == "struct-field" ? "field" : previous->kind;
+        std::string message = std::string(declarationKind) + " '" + name + "' shadows " + kind +
+            " declared at " + (site->second.file.empty() ? "" : site->second.file + ":") +
+            std::to_string(line) + ":" + std::to_string(column);
+        const DeclarationSite& current = declarationSites_.at(id);
+        const std::string key = current.file + ":" + std::to_string(position) + ":" + message;
+        if (shadowKeys_.insert(key).second) {
+            shadowNotes_->push_back({message, current.file, position, static_cast<u32>(name.size())});
+        }
+    }
+    std::unordered_set<std::string> shadowKeys_;
+    NodeRef sourceDeclaration_;
+    std::unordered_set<std::string> errorKeys_;
+
+    void Error(NodeRef node, const std::string& message, const std::string& name,
+               u32 position = 0, const char* sourceFile = nullptr) {
+        if (!errors_) return;
+        if (position == 0) position = ast_.GetNamePosition(node);
+        if (position == 0) position = ast_.FindPosition(node);
+        if (position == 0) return; // Synthesized syntax has no written name.
+        const char* file = sourceFile ? sourceFile : ast_.GetDeclarationSource(node);
+        if (!file) file = ast_.GetDeclarationSource(sourceDeclaration_);
+        const std::string path = file ? file : "";
+        const std::string key = path + ":" + std::to_string(position) + ":" + message;
+        if (errorKeys_.insert(key).second) {
+            errors_->push_back({message, path, position, static_cast<u32>(name.size())});
+        }
+    }
+
+    void CheckType(NodeRef declaration, std::string name, u32 position,
+                   const char* sourceFile = nullptr) {
+        if (!errors_ || position == 0 || name.empty() || name == "void" || name == "invalid") return;
+        // Pointer/array shape is checked elsewhere; name resolution uses the element type.
+        const size_t suffix = name.find_first_of("^[");
+        if (suffix != std::string::npos) name.resize(suffix);
+        const char* file = sourceFile ? sourceFile : ast_.GetDeclarationSource(declaration);
+        if (!file) file = ast_.GetDeclarationSource(sourceDeclaration_);
+        name = QualifiedTypeName(ast_, name, position, file);
+        if (name == "T" || name == "U" || name == "V") return;
+        if (!EnsureType(name).id.empty()) return;
+        const size_t separator = name.find("::");
+        if (separator != std::string::npos) {
+            const ModuleNameSite* qualifier = ast_.FindTypeQualifier(position, file);
+            const std::string module = name.substr(0, separator);
+            const std::string written = qualifier ? ResolveName(qualifier->name) : module;
+            if (modulesByName_.find(module) == modulesByName_.end()) {
+                Error(declaration, "Unknown module '" + written + "'", written, position, file);
+                return;
+            }
+            position += static_cast<u32>(written.size() + 2);
+            Error(declaration, "Unknown type '" + name + "'", name.substr(separator + 2), position, file);
+            return;
+        }
+        Error(declaration, "Unknown type '" + name + "'", name, position, file);
+    }
+
+    bool HasFunction(const std::string& scope, const std::string& name) const {
+        const auto visible = scope.empty() ? VisibleScopes(CurrentOwner())
+                                          : std::vector<std::string>{scope};
+        for (const std::string& owner : visible) {
+            if (functionsByScope_.find(ScopedKey(owner, name)) != functionsByScope_.end()) return true;
+        }
+        return false;
+    }
+
+    std::string FunctionReturnType(NodeRef ref) const {
+        const auto& function = ast_.GetFunction(ref);
+        if (errors_ && function.returnTypeNameHash != 0) {
+            return ReverseLookup::GetString(function.returnTypeNameHash);
+        }
+        return ReturnTypeName(ast_, function, ast_.GetDeclarationSource(ref));
+    }
+
+    std::string FieldTypeName(NodeRef owner, const StructFieldData& field) const {
+        if (errors_ && field.typeNameHash != 0) return ReverseLookup::GetString(field.typeNameHash);
+        return StructFieldTypeName(ast_, field, ast_.GetDeclarationSource(owner));
+    }
+
     Index index_;
     std::unordered_map<std::string, size_t> symbolIndices_;
     std::unordered_set<std::string> referenceKeys_;
@@ -276,6 +429,7 @@ private:
     std::vector<NodeRef> functionRefs_;
 
     std::unordered_map<std::string, Binding> typesByScope_;
+    std::unordered_map<std::string, std::string> typeAliases_;
     std::unordered_map<std::string, std::vector<std::string>> usingScopes_;
     std::unordered_map<std::string, Binding> typesByName_;
     std::unordered_map<std::string, std::string> modulesByName_;
@@ -300,6 +454,7 @@ private:
     std::string currentPipeline_;
     std::string currentPass_;
     ASTNodeType currentStage_ = ASTNodeType::INVALID;
+    bool inVariantRule_ = false;
 
     static std::string ScopedKey(const std::string& owner, const std::string& name) {
         return owner + "\n" + name;
@@ -334,13 +489,14 @@ private:
     }
 
     void SetStableId(const std::string& id, const std::string& stableId) {
+        if (errors_) return;
         Symbol* symbol = FindSymbol(id);
         if (symbol && symbol->stableId.empty()) symbol->stableId = stableId;
     }
 
     void AddReference(const std::string& from, const std::string& to,
                       const std::string& role) {
-        if (from.empty() || to.empty()) return;
+        if (errors_ || from.empty() || to.empty()) return;
         const std::string key = from + "\n" + to + "\n" + role;
         if (referenceKeys_.insert(key).second) {
             index_.references.push_back({from, to, role});
@@ -348,6 +504,7 @@ private:
     }
 
     void AddDefinition(const std::string& symbolId, const std::string& nodeId) {
+        if (errors_) return;
         Symbol* symbol = FindSymbol(symbolId);
         if (!symbol || nodeId.empty()) return;
         if (std::find(symbol->definitions.begin(), symbol->definitions.end(), nodeId) ==
@@ -383,7 +540,7 @@ private:
         const std::string name = ResolveName(function.name);
         FunctionTarget target;
         target.id = NodeId(ref);
-        target.returnType = CanonicalType(ReturnTypeName(ast_, function), owner);
+        target.returnType = CanonicalType(FunctionReturnType(ref), owner);
         for (u32 i = 0; i < function.parameters.count; i++) {
             target.parameterTypes.push_back(CanonicalType(ResolveName(function.parameters[i].second), owner));
         }
@@ -400,8 +557,12 @@ private:
         for (u32 i = 0; i < function.parameters.count; i++) {
             if (i > 0) result += ",";
             result += ResolveName(function.parameters[i].second);
+            if (i < function.parameterArraySizes.count) {
+                const auto& sizes = function.parameterArraySizes[i];
+                for (u32 j = 0; j < sizes.count; j++) result += "[" + std::to_string(sizes[j]) + "]";
+            }
         }
-        result += ")->" + ReturnTypeName(ast_, function);
+        result += ")->" + FunctionReturnType(ref);
         return result;
     }
 
@@ -507,9 +668,12 @@ private:
                 const StructFieldData& field = structure.fields[fieldIndex];
                 const std::string fieldId = id + "/field:" + std::to_string(fieldIndex);
                 const std::string fieldName = ResolveName(field.name);
-                const std::string fieldType = StructFieldTypeName(ast_, field);
+                const std::string fieldType = FieldTypeName(ref, field);
                 AddSymbol({fieldId, "struct-field", fieldName, fieldId, id, fieldType, {}});
-                AddQualifierReference(fieldId, field.typePosition);
+                RememberDeclaration(fieldId, ref, field.namePosition);
+                if (field.arraySize != 0) FindSymbol(fieldId)->arraySizes = {field.arraySize};
+                AddQualifierReference(fieldId, field.typePosition,
+                                      "/type-qualifier", ast_.GetDeclarationSource(ref));
                 const std::string stableStruct = StableIdOf(id);
                 if (!stableStruct.empty()) {
                     SetStableId(fieldId, stableStruct + "/field:" + fieldName);
@@ -550,11 +714,23 @@ private:
             }
         }
 
+        for (u32 i = 0; i < ast_.enumDecls.count; i++) {
+            const EnumDeclData& enumeration = ast_.enumDecls[i];
+            const std::string id = NodeId(NodeRef(ASTNodeType::ENUM_DECL, i));
+            SetOwners(enumeration.methods, id, ResolveName(enumeration.name));
+            for (u32 j = 0; j < enumeration.methods.count; j++) {
+                functionRefs_[enumeration.methods[j].Index()] = enumeration.methods[j];
+            }
+        }
+
         for (u32 i = 0; i < ast_.constraintDecls.count; i++) {
             NodeRef ref(ASTNodeType::CONSTRAINT_DECL, i);
             AddSymbol({NodeId(ref), "constraint",
                        ResolveName(ast_.GetConstraintDecl(ref).name), NodeId(ref),
                        OwnerOf(ref), {}, {}});
+            typesByScope_[ScopedKey(OwnerOf(ref), ResolveName(ast_.GetConstraintDecl(ref).name))] =
+                {NodeId(ref), NodeId(ref)};
+            typesByName_[NodeId(ref)] = {NodeId(ref), NodeId(ref)};
             const std::string stableOwner = StableIdOf(OwnerOf(ref));
             if (!stableOwner.empty()) {
                 SetStableId(NodeId(ref), stableOwner + "/constraint:" +
@@ -586,15 +762,22 @@ private:
                 SetStableId(binding.id, stableOwner + "/resource:" + ResolveName(resource.name));
             }
             resources_[ScopedKey(OwnerOf(ref), ResolveName(resource.name))] = binding;
+            AddQualifierReference(binding.id, resource.payloadTypePosition,
+                                  "/type-qualifier", ast_.GetDeclarationSource(ref));
         }
 
         for (u32 i = 0; i < ast_.variableDecls.count; i++) {
             NodeRef ref(ASTNodeType::VARIABLE_DECL, i);
             const VariableDeclData& variable = ast_.GetVariableDecl(ref);
             const std::string name = ResolveName(variable.name);
-            const std::string type = ResolveName(variable.type);
+            const std::string type = QualifiedTypeName(ast_, ResolveName(variable.type),
+                variable.typePosition, ast_.GetDeclarationSource(ref));
             AddSymbol({NodeId(ref), variable.isConst ? "constant" : "variable", name,
                        NodeId(ref), OwnerOf(ref), type, {}});
+            RememberDeclaration(NodeId(ref), ref, variable.namePosition);
+            for (u32 j = 0; j < variable.arraySizes.count; j++) {
+                FindSymbol(NodeId(ref))->arraySizes.push_back(variable.arraySizes[j]);
+            }
             const std::string stableOwner = StableIdOf(OwnerOf(ref));
             if (variable.isConst && !stableOwner.empty()) {
                 SetStableId(NodeId(ref), stableOwner + "/const:" + name);
@@ -614,13 +797,18 @@ private:
             declareConsts(ast_.pipelines[i].consts, NodeId(NodeRef(ASTNodeType::PIPELINE, i)));
         }
 
+        for (u32 i = 0; i < ast_.typeAliases.count; i++) {
+            const TypeAliasSite& alias = ast_.typeAliases[i];
+            typeAliases_[ScopedKey(NodeId(alias.owner), ResolveName(alias.name))] = ResolveName(alias.target);
+        }
+
         for (u32 i = 0; i < ast_.functions.count; i++) {
             NodeRef ref = functionRefs_[i];
             const FunctionDeclData& function = ast_.GetFunction(ref);
             const std::string owner = OwnerOf(ref);
             AddSymbol({NodeId(ref), function.isStructMethod ? "method" : "function",
                        ResolveName(function.name), NodeId(ref), owner,
-                       ReturnTypeName(ast_, function), {}});
+                       FunctionReturnType(ref), {}});
             SetStableId(NodeId(ref), FunctionStableId(ref, owner));
             AddFunctionTarget(ref, owner);
         }
@@ -659,13 +847,48 @@ private:
             }
         }
 
+        auto declareVariants = [&](const std::string& owner,
+                                   const ArenaArray<PipelineVariantDeclData>& declarations,
+                                   const ArenaArray<NodeRef>& attributes,
+                                   const ArenaArray<NodeRef>& resources) {
+            for (u32 i = 0; i < declarations.count; i++) {
+                const std::string name = ResolveName(declarations[i].name);
+                variants_[ScopedKey(owner, name)] = {owner + "/variant:" + std::to_string(i),
+                                                    ResolveName(declarations[i].typeName)};
+            }
+            for (u32 i = 0; i < attributes.count; i++) {
+                const std::string name = "has_" + ResolveName(ast_.GetAttributeDecl(attributes[i]).name);
+                variants_[ScopedKey(owner, name)] = {owner + "/implicit:" + name, "bool"};
+            }
+            for (u32 i = 0; i < resources.count; i++) {
+                const std::string name = "has_resource_" + ResolveName(ast_.GetResourceDecl(resources[i]).name);
+                variants_[ScopedKey(owner, name)] = {owner + "/implicit:" + name, "bool"};
+            }
+        };
+        // Implicit variant symbols are only needed for validation; AST JSON
+        // retains its existing sidecar schema.
+        if (errors_) {
+            for (u32 i = 0; i < ast_.modules.count; i++) {
+                const auto& module = ast_.modules[i];
+                declareVariants(NodeId(NodeRef(ASTNodeType::MODULE, i)), module.variantDecls,
+                                module.attributes, module.resources);
+            }
+            for (u32 i = 0; i < ast_.pipelines.count; i++) {
+                const auto& pipeline = ast_.pipelines[i];
+                declareVariants(NodeId(NodeRef(ASTNodeType::PIPELINE, i)), pipeline.variantDecls,
+                                pipeline.attributes, pipeline.resources);
+            }
+        }
+
         // Declaration-to-type edges are useful even when the declaration is
         // never referenced by executable code.
         for (const Symbol& symbol : std::vector<Symbol>(index_.symbols)) {
             // Locals need their lexical context, which is only available when visited.
             if (!symbol.type.empty() && symbol.kind != "function" && symbol.kind != "method" &&
                 symbol.kind != "variable" && symbol.kind != "constant") {
-                AddReference(symbol.id, EnsureType(symbol.type, symbol.owner).id, "type");
+                const std::string type = symbol.kind == "resource"
+                    ? GetResourcePayloadTypeName(ArenaString::MakeHashOnly(symbol.type)).ToString() : symbol.type;
+                AddReference(symbol.id, EnsureType(type, symbol.owner).id, "type");
             }
         }
         for (auto& entry : fields_) {
@@ -704,12 +927,17 @@ private:
         return result;
     }
 
-    Binding EnsureType(const std::string& typeName, const std::string& owner) {
+    Binding EnsureType(const std::string& typeName, const std::string& owner, u32 aliasDepth = 0) {
         if (typeName.empty() || typeName == "void" || typeName == "invalid") return {};
         auto exact = typesByName_.find(typeName);
         if (exact != typesByName_.end()) return exact->second;
         if (typeName.find("::") != std::string::npos) return {};
         for (const auto& scope : VisibleScopes(owner)) {
+            auto alias = typeAliases_.find(ScopedKey(scope, typeName));
+            if (alias != typeAliases_.end()) {
+                if (aliasDepth >= 32) return {};
+                return EnsureType(alias->second, scope, aliasDepth + 1);
+            }
             auto found = typesByScope_.find(ScopedKey(scope, typeName));
             if (found != typesByScope_.end()) return found->second;
         }
@@ -720,7 +948,14 @@ private:
             CoreType core = static_cast<CoreType>(i);
             if (core == CoreType::CUSTOM || core == CoreType::ENUM ||
                 core == CoreType::CONSTRAINT) continue;
-            if (SourceTypeName(core) == typeName) { builtin = true; break; }
+            if (SourceTypeName(core) == typeName ||
+                (core == CoreType::TEXTURE2D && typeName == "texture2D") ||
+                (core == CoreType::TEXTURE3D && typeName == "texture3D") ||
+                (core == CoreType::TEXTURECUBE && typeName == "textureCube") ||
+                (core == CoreType::TEXTURE2DARRAY && typeName == "texture2DArray")) {
+                builtin = true;
+                break;
+            }
         }
         if (!builtin) return {};
         const std::string id = "builtin:type:" + typeName;
@@ -777,6 +1012,18 @@ private:
             auto constant = consts_.find(ScopedKey(scope, name));
             if (constant != consts_.end()) return constant->second;
         }
+        if (errors_ && currentStage_ != ASTNodeType::INVALID) {
+            for (const auto& scope : visible) {
+                auto attribute = attributes_.find(ScopedKey(scope, name));
+                if (attribute != attributes_.end()) return attribute->second;
+            }
+        }
+        if (errors_ && inVariantRule_) {
+            for (const auto& scope : visible) {
+                auto variant = variants_.find(ScopedKey(scope, name));
+                if (variant != variants_.end()) return variant->second;
+            }
+        }
         return {};
     }
 
@@ -790,8 +1037,9 @@ private:
     // The qualifier occurrence is `<owner>/type-qualifier`, or
     // `<function>/return-type-qualifier` for a function's return type.
     void AddQualifierReference(const std::string& owner, u32 typePosition,
-                               const char* suffix = "/type-qualifier") {
-        const ModuleNameSite* qualifier = ast_.FindTypeQualifier(typePosition);
+                               const char* suffix = "/type-qualifier",
+                               const char* sourceFile = nullptr) {
+        const ModuleNameSite* qualifier = ast_.FindTypeQualifier(typePosition, sourceFile);
         if (!qualifier) return;
         AddReference(owner + suffix, ModuleIdByNameHash(qualifier->moduleNameHash),
                      "qualifier");
@@ -818,6 +1066,8 @@ private:
             if (!visitedVariables_.insert(ref.packed).second) continue;
             const VariableDeclData& variable = ast_.GetVariableDecl(ref);
             VisitExpr(variable.initializer, "read");
+            CheckShadowing(ref, NodeId(ref), ResolveName(variable.name), variable.namePosition, "Constant");
+            CheckType(ref, ResolveName(variable.type), variable.typePosition);
             AddTypeReference(NodeId(ref), ResolveName(variable.type), "type");
         }
     }
@@ -869,6 +1119,16 @@ private:
         return module == modulesByName_.end() ? std::string() : module->second;
     }
 
+    void VisitAliases(NodeRef owner) {
+        if (!errors_) return;
+        for (u32 i = 0; i < ast_.typeAliases.count; i++) {
+            const TypeAliasSite& alias = ast_.typeAliases[i];
+            if (alias.owner != owner) continue;
+            CheckType(owner, ResolveName(alias.target), alias.targetPosition,
+                      ast_.sourceFiles[alias.sourceFile]);
+        }
+    }
+
     void VisitImports(const std::string& owner, const ArenaArray<ArenaString>& imports,
                       const ArenaArray<ArenaString>& usingImports) {
         for (u32 i = 0; i < imports.count; i++) {
@@ -889,18 +1149,26 @@ private:
     void VisitModule(NodeRef ref) {
         const ModuleNodeData& module = ast_.GetModule(ref);
         const std::string previousModule = currentModule_;
+        const NodeRef previousSource = sourceDeclaration_;
+        sourceDeclaration_ = ref;
         currentModule_ = NodeId(ref);
+        VisitAliases(ref);
         VisitImports(currentModule_, module.imports, module.usingImports);
         VisitConstDecls(module.consts);
         for (u32 i = 0; i < module.functions.count; i++) VisitFunction(module.functions[i], currentModule_);
         for (u32 i = 0; i < module.structs.count; i++) VisitStructMethods(module.structs[i]);
+        if (errors_) VisitVariants(module.variantDecls, module.variantRules);
         currentModule_ = previousModule;
+        sourceDeclaration_ = previousSource;
     }
 
     void VisitPipeline(NodeRef ref) {
         const PipelineData& pipeline = ast_.GetPipeline(ref);
         const std::string previousPipeline = currentPipeline_;
+        const NodeRef previousSource = sourceDeclaration_;
+        sourceDeclaration_ = ref;
         currentPipeline_ = NodeId(ref);
+        VisitAliases(ref);
         VisitImports(currentPipeline_, pipeline.imports, pipeline.usingImports);
         VisitConstDecls(pipeline.consts);
 
@@ -908,25 +1176,43 @@ private:
             VisitFunction(pipeline.functions[i], currentPipeline_);
         }
         for (u32 i = 0; i < pipeline.structs.count; i++) VisitStructMethods(pipeline.structs[i]);
-        for (u32 i = 0; i < pipeline.variantDecls.count; i++) {
-            const PipelineVariantDeclData& variant = pipeline.variantDecls[i];
-            VisitExpr(variant.defaultExpr, "read");
-        }
-        for (u32 i = 0; i < pipeline.variantRules.count; i++) {
-            VisitExpr(pipeline.variantRules[i].lhs, "read");
-            VisitExpr(pipeline.variantRules[i].rhs, "read");
-        }
+        VisitVariants(pipeline.variantDecls, pipeline.variantRules);
         for (u32 i = 0; i < pipeline.passes.count; i++) VisitPass(pipeline.passes[i]);
         VisitNode(pipeline.computeGraph);
         currentPipeline_ = previousPipeline;
+        sourceDeclaration_ = previousSource;
+    }
+
+    void VisitVariants(const ArenaArray<PipelineVariantDeclData>& declarations,
+                       const ArenaArray<VariantRuleData>& rules) {
+        for (u32 i = 0; i < declarations.count; i++) {
+            const PipelineVariantDeclData& variant = declarations[i];
+            VisitExpr(variant.defaultExpr, "read");
+        }
+        const bool previousRule = inVariantRule_;
+        inVariantRule_ = true;
+        for (u32 i = 0; i < rules.count; i++) {
+            VisitExpr(rules[i].lhs, "read");
+            VisitExpr(rules[i].rhs, "read");
+        }
+        inVariantRule_ = previousRule;
     }
 
     void VisitStructMethods(NodeRef ref) {
         if (ref.IsNull() || ref.Type() != ASTNodeType::STRUCT_DECL) return;
         const StructDeclData& structure = ast_.GetStructDecl(ref);
+        const NodeRef previousSource = sourceDeclaration_;
+        sourceDeclaration_ = ref;
+        const std::string previousOwner = currentOwner_;
+        currentOwner_ = NodeId(ref);
+        for (u32 i = 0; i < structure.fields.count; i++) {
+            CheckType(ref, FieldTypeName(ref, structure.fields[i]), structure.fields[i].typePosition);
+        }
         for (u32 i = 0; i < structure.methods.count; i++) {
             VisitFunction(structure.methods[i], NodeId(ref));
         }
+        currentOwner_ = previousOwner;
+        sourceDeclaration_ = previousSource;
     }
 
     void VisitPass(NodeRef ref) {
@@ -971,6 +1257,8 @@ private:
         if (ref.IsNull() || !visitedFunctions_.insert(ref.packed).second) return;
         const FunctionDeclData& function = ast_.GetFunction(ref);
         const std::string functionId = NodeId(ref);
+        const NodeRef previousSource = sourceDeclaration_;
+        sourceDeclaration_ = ref;
         const std::string previousOwner = currentOwner_;
         currentOwner_ = functionId;
         const std::string previousModule = currentModule_;
@@ -980,27 +1268,39 @@ private:
         if (owner.rfind("PIPELINE:", 0) == 0) currentPipeline_ = owner;
         if (owner.rfind("PASS:", 0) == 0) currentPass_ = owner;
 
-        AddTypeReference(functionId, ReturnTypeName(ast_, function), "return-type");
-        AddQualifierReference(functionId, function.returnTypePosition, "/return-type-qualifier");
+        CheckType(ref, FunctionReturnType(ref), function.returnTypePosition);
+        AddTypeReference(functionId, FunctionReturnType(ref), "return-type");
+        AddQualifierReference(functionId, function.returnTypePosition,
+                              "/return-type-qualifier", ast_.GetDeclarationSource(ref));
         PushScope();
         for (u32 i = 0; i < function.parameters.count; i++) {
             const std::string parameterId = functionId + "/parameter:" + std::to_string(i);
             const std::string name = ResolveName(function.parameters[i].first);
             const std::string type = ResolveName(function.parameters[i].second);
             AddSymbol({parameterId, "parameter", name, parameterId, functionId, type, {}});
+            if (i < function.parameterArraySizes.count) {
+                const auto& sizes = function.parameterArraySizes[i];
+                for (u32 j = 0; j < sizes.count; j++) FindSymbol(parameterId)->arraySizes.push_back(sizes[j]);
+            }
             const std::string stableFunction = StableIdOf(functionId);
             if (!stableFunction.empty()) {
                 SetStableId(parameterId, stableFunction + "/parameter:" + std::to_string(i));
             }
             AddTypeReference(parameterId, type, "type");
             if (i < function.parameterPositions.count) {
-                AddQualifierReference(parameterId, function.parameterPositions[i].typePosition);
+                CheckType(ref, type, function.parameterPositions[i].typePosition);
+                AddQualifierReference(parameterId, function.parameterPositions[i].typePosition,
+                                      "/type-qualifier", ast_.GetDeclarationSource(ref));
+            }
+            if (i < function.parameterPositions.count) {
+                CheckShadowing(ref, parameterId, name, function.parameterPositions[i].namePosition, "Parameter");
             }
             Bind(name, {parameterId, CanonicalType(type, functionId)});
         }
         VisitNode(function.body);
         PopScope();
 
+        sourceDeclaration_ = previousSource;
         currentOwner_ = previousOwner;
         currentModule_ = previousModule;
         currentPipeline_ = previousPipeline;
@@ -1013,9 +1313,13 @@ private:
         const VariableDeclData& variable = ast_.GetVariableDecl(ref);
         VisitExpr(variable.initializer, "read");
         const std::string name = ResolveName(variable.name);
-        const std::string type = ResolveName(variable.type);
+        const std::string type = QualifiedTypeName(ast_, ResolveName(variable.type),
+            variable.typePosition, ast_.GetDeclarationSource(ref));
+        CheckType(ref, type, variable.typePosition);
         AddTypeReference(NodeId(ref), type, "type");
-        AddQualifierReference(NodeId(ref), variable.typePosition);
+        AddQualifierReference(NodeId(ref), variable.typePosition,
+                              "/type-qualifier", ast_.GetDeclarationSource(ref));
+        CheckShadowing(ref, NodeId(ref), name, variable.namePosition, "Variable");
         Bind(name, {NodeId(ref), CanonicalType(type, CurrentOwner())});
     }
 
@@ -1052,18 +1356,25 @@ private:
         if (member.object.Type() == ASTNodeType::IDENTIFIER) {
             const IdentifierData& object = ast_.GetIdentifier(member.object);
             Binding target;
+            auto visibleBinding = [&](const auto& bindings) -> Binding {
+                for (const auto& owner : VisibleScopes(CurrentOwner())) {
+                    auto found = bindings.find(ScopedKey(owner, memberName));
+                    if (found != bindings.end()) return found->second;
+                }
+                return {};
+            };
             std::string edgeRole = role;
             switch (object.identifierKind) {
                 case SpecialIdentifier::ATTRIBUTES:
-                    target = attributes_[ScopedKey(currentPipeline_, memberName)];
+                    target = visibleBinding(attributes_);
                     edgeRole = "attribute";
                     break;
                 case SpecialIdentifier::RESOURCES:
-                    target = resources_[ScopedKey(currentPipeline_, memberName)];
+                    target = visibleBinding(resources_);
                     edgeRole = "resource";
                     break;
                 case SpecialIdentifier::VARIANTS:
-                    target = variants_[ScopedKey(currentPipeline_, memberName)];
+                    target = visibleBinding(variants_);
                     edgeRole = "variant";
                     break;
                 case SpecialIdentifier::INPUT:
@@ -1083,6 +1394,20 @@ private:
                 return {target.type, target.id};
             }
 
+            if (errors_ && member.isModuleQualified) {
+                Binding enumType = EnsureType(ResolveName(object.name));
+                if (enumType.id.rfind("ENUM_DECL:", 0) == 0) {
+                    const u32 index = static_cast<u32>(std::strtoul(enumType.id.c_str() + 10, nullptr, 10));
+                    const EnumDeclData& enumeration = ast_.enumDecls[index];
+                    for (u32 i = 0; i < enumeration.variants.count; i++) {
+                        if (ResolveName(ast_.GetEnumDecl(enumeration.variants[i]).currentVariant.name) == memberName) {
+                            return {enumType.type, NodeId(enumeration.variants[i])};
+                        }
+                    }
+                    Error(ref, "Unknown enum variant '" + memberName + "'", memberName);
+                    return {};
+                }
+            }
             if (member.isModuleQualified) {
                 const std::string module = ResolveQualifiedModule(object.name, member.qualifiedNameHash);
                 if (!module.empty()) {
@@ -1097,7 +1422,20 @@ private:
                         AddReference(NodeId(ref), type->second.id, "type");
                         return {type->second.type, type->second.id};
                     }
+                    auto constant = consts_.find(ScopedKey(module, memberName));
+                    if (constant != consts_.end()) return {constant->second.type, constant->second.id};
+                    Error(ref, "Unknown name '" + ResolveName(object.name) + "::" + memberName + "'", memberName);
+                } else {
+                    const std::string name = ResolveName(object.name);
+                    Error(member.object, "Unknown module '" + name + "'", name);
                 }
+                return {};
+            }
+            if (object.identifierKind == SpecialIdentifier::ATTRIBUTES ||
+                object.identifierKind == SpecialIdentifier::RESOURCES ||
+                object.identifierKind == SpecialIdentifier::VARIANTS) {
+                Error(ref, "Unknown member '" + memberName + "'", memberName);
+                return {};
             }
         }
 
@@ -1109,6 +1447,9 @@ private:
             return {field->second.type, field->second.id};
         }
 
+        if (type.id.rfind("STRUCT_DECL:", 0) == 0) {
+            Error(ref, "Unknown field '" + memberName + "' on type '" + TypeSpelling(type.id) + "'", memberName);
+        }
         // Vector component/swizzle access is structural, not a declaration, so
         // it intentionally has no semantic target in the sidecar.
         return {};
@@ -1123,6 +1464,25 @@ private:
         }
 
         const std::string name = ResolveName(call.name);
+        if (errors_ && (call.flags & FunctionCallFlags::IS_MODULE_FUNCTION) != 0) {
+            Binding type;
+            if (call.moduleObject.Type() == ASTNodeType::IDENTIFIER) {
+                type = EnsureType(ResolveName(ast_.GetIdentifier(call.moduleObject).name));
+            } else if (call.moduleObject.Type() == ASTNodeType::MEMBER_ACCESS) {
+                type = EnsureType(VisitMember(call.moduleObject, "type").type);
+            }
+            if (type.id.rfind("ENUM_DECL:", 0) == 0) {
+                const u32 enumIndex = static_cast<u32>(std::strtoul(type.id.c_str() + 10, nullptr, 10));
+                const EnumDeclData& enumeration = ast_.enumDecls[enumIndex];
+                for (u32 i = 0; i < enumeration.variants.count; i++) {
+                    if (ResolveName(ast_.GetEnumDecl(enumeration.variants[i]).currentVariant.name) == name) {
+                        return {type.type, NodeId(enumeration.variants[i])};
+                    }
+                }
+                Error(ref, "Unknown enum variant '" + name + "'", name);
+                return {};
+            }
+        }
         if ((call.flags & FunctionCallFlags::IS_MODULE_FUNCTION) != 0 &&
             call.moduleObject.Type() == ASTNodeType::IDENTIFIER) {
             const std::string module = ResolveQualifiedModule(
@@ -1134,6 +1494,12 @@ private:
                     AddReference(NodeId(ref), target.id, "call");
                     return {target.returnType, target.id};
                 }
+                if (!HasFunction(module, name) && typesByScope_.find(ScopedKey(module, name)) == typesByScope_.end()) {
+                    Error(ref, "Unknown function '" + ResolveName(ast_.GetIdentifier(call.moduleObject).name) + "::" + name + "'", name);
+                }
+            } else {
+                const std::string written = ResolveName(ast_.GetIdentifier(call.moduleObject).name);
+                Error(call.moduleObject, "Unknown module '" + written + "'", written);
             }
             return {};
         }
@@ -1146,6 +1512,9 @@ private:
             if (!target.id.empty()) {
                 AddReference(NodeId(ref), target.id, "call");
                 return {target.returnType, target.id};
+            }
+            if (receiverType.id.rfind("STRUCT_DECL:", 0) == 0 && !HasFunction(receiverType.id, name)) {
+                Error(ref, "Unknown method '" + name + "' on type '" + TypeSpelling(receiverType.id) + "'", name);
             }
             return {};
         }
@@ -1166,6 +1535,9 @@ private:
         // emitted only when used, keeping the sidecar compact.
         if ((call.flags & FunctionCallFlags::IS_INTRINSIC) == 0) {
             Binding type = EnsureType(name);
+            if (type.id.empty() && !HasFunction({}, name)) {
+                Error(ref, "Unknown function '" + name + "'", name);
+            }
             AddReference(NodeId(ref), type.id, "construct");
             return {name, type.id};
         }
@@ -1186,9 +1558,27 @@ private:
         switch (ref.Type()) {
             case ASTNodeType::IDENTIFIER: {
                 const IdentifierData& identifier = ast_.GetIdentifier(ref);
-                if (identifier.identifierKind != SpecialIdentifier::NONE) return {};
+                if (identifier.identifierKind != SpecialIdentifier::NONE) {
+                    if (identifier.identifierKind == SpecialIdentifier::SELF) {
+                        // Receiver typing is needed by AST export as well as validation.
+                        for (const auto& owner : VisibleScopes(CurrentOwner())) {
+                            if (owner.rfind("STRUCT_DECL:", 0) == 0 || owner.rfind("ENUM_DECL:", 0) == 0) {
+                                AddReference(NodeId(ref), owner, "type");
+                                return {owner, {}};
+                            }
+                        }
+                    }
+                    if (identifier.identifierKind == SpecialIdentifier::ATTRIBUTES ||
+                        identifier.identifierKind == SpecialIdentifier::RESOURCES ||
+                        identifier.identifierKind == SpecialIdentifier::VARIANTS) {
+                        const std::string name = ResolveName(identifier.name);
+                        Error(ref, "'" + name + "' cannot be used as a value", name);
+                    }
+                    return {};
+                }
                 Binding binding = Lookup(ResolveName(identifier.name));
                 if (!binding.id.empty()) AddReference(NodeId(ref), binding.id, role);
+                else Error(ref, "Unknown identifier '" + ResolveName(identifier.name) + "'", ResolveName(identifier.name));
                 return {binding.type, binding.id};
             }
             case ASTNodeType::LITERAL: {
@@ -1245,8 +1635,16 @@ private:
                 VisitExpr(access.index, "read");
                 return array;
             }
-            case ASTNodeType::FUNCTION_CALL:
+            case ASTNodeType::FUNCTION_CALL: {
+                // A folded vector constant is a synthesized constructor call;
+                // index the constant it was written as, not the constructor.
+                auto folded = foldedConstants_.find(ref.packed);
+                if (folded != foldedConstants_.end()) {
+                    ExprInfo constant = VisitFoldedConstant(ref, *folded->second);
+                    if (!constant.type.empty()) return constant;
+                }
                 return VisitCall(ref);
+            }
             default:
                 VisitNode(ref);
                 return {};
@@ -1310,6 +1708,7 @@ private:
                     const std::string id = NodeId(ref) + "/iterator:0";
                     const std::string name = ResolveName(ast_.GetIdentifier(loop.iteratorVar).name);
                     AddSymbol({id, "loop-iterator", name, id, NodeId(ref), {}, {}});
+                    CheckShadowing(loop.iteratorVar, id, name, ast_.FindPosition(loop.iteratorVar), "Loop variable");
                     Bind(name, {id, {}});
                 }
                 VisitNode(loop.body);
@@ -1326,6 +1725,7 @@ private:
                     const std::string id = NodeId(ref) + "/iterator:0";
                     const std::string name = ResolveName(ast_.GetIdentifier(loop.iteratorVar).name);
                     AddSymbol({id, "loop-iterator", name, id, NodeId(ref), {}, {}});
+                    CheckShadowing(loop.iteratorVar, id, name, ast_.FindPosition(loop.iteratorVar), "Loop variable");
                     Bind(name, {id, {}});
                 }
                 VisitNode(loop.body);
@@ -1382,6 +1782,9 @@ private:
                 VisitNode(switchCase.body);
                 break;
             }
+            case ASTNodeType::PASS:
+                VisitPass(ref);
+                break;
             case ASTNodeType::FUNCTION:
             case ASTNodeType::MODULE_FUNCTION:
                 VisitFunction(ref, OwnerOf(ref));

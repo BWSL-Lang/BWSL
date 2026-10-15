@@ -1,8 +1,8 @@
 # AST JSON for editor integrations
 
 Run `bwslc source.bwsl -ast-json` to export the parsed AST as `bwsl.ast.v3`.
-This export includes a `referenceIndex` (`bwsl.references.v1`); normal shader
-compilation does not build that index.
+This export includes a `referenceIndex` (`bwsl.references.v1`). Its declaration
+walk is also used to validate names during normal compilation.
 
 ## Changes from v2
 
@@ -63,10 +63,16 @@ Positions are one-based.
   module; `writtenName` is present when the source used an import alias.
 - Module-qualified function calls retain `moduleName` and include a `qualifier`
   identifier node, which is the source of the module's `qualifier` edge.
-- A declaration written with a `Module::Type` type (variable, parameter, or
-  struct field) has a `typeQualifier` identifier object with its own `id`,
+- Resource declarations include `typeLine`/`typeColumn` for the first token of
+  their type. Their `type` reference targets the payload type, including inside
+  `buffer<...>`, `cbuffer<...>`, and fixed arrays. Resource `typeName` uses
+  canonical `Module::Type` spelling, including when an import alias was written.
+- A declaration written with a `Module::Type` type (variable, parameter,
+  resource, or struct field) has a `typeQualifier` identifier object with its own `id`,
   position, and the qualifier as written; it is the source of a `qualifier`
   edge to the module.
+  Resource declarations also retain this occurrence for the legacy `Module.Type`
+  spelling and for qualified buffer element types.
 - Functions and methods include `returnTypeLine`/`returnTypeColumn`, the first
   token of the written return type (the source of the function's
   `return-type` edge). `returnType` keeps a `Module::Type` qualification, and
@@ -89,6 +95,44 @@ return types); folded constant uses use
 `LITERAL:n/folded-constant`. These IDs are local to an export. Externally
 addressable symbols also have `stableId` values for cross-invocation identity.
 
+## Array and declaration types
+
+Parameters, local/constant declarations, and struct fields include the same
+`typeInfo` shape. Functions have `returnTypeInfo` with that shape. Corresponding
+`parameter`, `variable`, `constant`, `struct-field`, `function`, and `method`
+symbols in `referenceIndex` include `typeInfo` too (a function symbol describes
+its return type).
+
+```json
+{
+  "elementType": "float3",
+  "coreType": "FLOAT3",
+  "componentCount": 3,
+  "arrayDimensions": 2,
+  "arrayLength": 6,
+  "arraySizes": [2, 3],
+  "arrayStride": 0
+}
+```
+
+This describes `float3[2][3]`. `arraySizes` preserves dimensions in source
+order; `arrayDimensions` is their count and `arrayLength` is their product.
+Non-arrays, including vectors and matrices, have `arraySizes: []`,
+`arrayDimensions: 0`, and `arrayLength: 0`. Sizes are resolved integer values,
+including when written using named constants. `arrayStride: 0` means no storage
+stride has been computed; this parsed type metadata is not a buffer layout.
+
+`dataType` on parameters/fields, `declaredType` on locals, and `type` on reference
+symbols keep the element type, including module qualification. An array local
+therefore reports `float` or `Light`, never the placeholder `array`. Existing
+local `arrayDimensions`/`arrayLength` and field `arraySize` properties remain
+for compatibility; use `typeInfo` for a consistent representation. Field
+`typeInfo.arrayDimensions` now describes actual arrays instead of marking
+vectors as arrays. Function stable IDs include parameter dimensions.
+
+This export describes supported syntax; it does not add array return types or
+change array argument/overload checking.
+
 ## Reference resolution
 
 Unqualified names resolve within their lexical scope and explicit `using`
@@ -96,7 +140,11 @@ imports. Locals do not escape their functions. A module qualifier or method
 receiver restricts lookup to that declaration's scope. Struct identities are
 preserved through parameters, variables, fields, and function returns even
 when different modules declare the same short name. Bare field names in methods
-respect local and parameter shadowing.
+respect local and parameter shadowing. Explicit `self` receivers resolve to
+the enclosing struct even when a local or parameter shadows a field name.
+`self.field` has a `member` edge (or `write` when assigned), and
+`self.method()` has a `call` edge, just like accesses through a typed variable.
+Each `self` identifier also has a `type` edge to its enclosing declaration.
 
 Stage-interface symbols take their `type` from the first value assigned to
 them. Intrinsic calls are typed from the standard-library table: a fixed

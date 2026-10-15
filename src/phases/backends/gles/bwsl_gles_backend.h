@@ -19,6 +19,7 @@
 #include "phases/control_flow/bwsl_cfg.h"
 #include "core/bwsl_render_config.h"
 #include "core/bwsl_ast_soa.h"
+#include "core/bwsl_gl_names.h"
 #include "core/bwsl_resource_reflection.h"
 #include "phases/ir_lowering/bwsl_ir_lowering.h"  // For PassVaryingContext, VaryingInfo
 #include "phases/ir_generation/bwsl_ir_analysis.h"  // For IRAnalysis
@@ -240,12 +241,71 @@ struct StringBuilder {
 };
 
 // ============================================================================
-// Register use tracking for SSA → expression inlining
+// Register declarations and uniform-array pointer aliases
 // ============================================================================
 
 struct RegInfo {
     u8 flags;
+    // Array registers otherwise carry only their element CoreType.
+    u32 arraySize;
+    // Uniform-array pointer definition + 1; zero denotes an ordinary value.
+    u32 uniformPointerInstruction;
+    // Definition + 1 of a pointer into a local struct variable
+    // (OP_LOCAL_FIELD_PTR / OP_LOCAL_INDEX_PTR); zero for other registers.
+    // It is emitted as the access path itself, e.g. `r3.items[r7].kind`.
+    u32 localPointerInstruction;
 };
+
+// Whether the direct emitter can express the program's local pointers: field
+// and element pointers into a local struct variable, used directly by loads,
+// stores and further field/element pointers. A pointer to a whole variable
+// (`^var`) or a pointer that is copied (assigned, passed, merged in a phi)
+// needs the SPIR-V path, which tracks its target at run time.
+inline bool SupportsLocalPointers(const IR::IRProgram& program) {
+    // Operands carry tag bits for constants and markers, and registerCount
+    // can exceed the register range, so decode an operand before using it
+    // as a register index.
+    auto isRegister = [&](u16 reg) {
+        return !IR::IsConstant(reg) && reg < IR::RegisterLimit &&
+               reg < program.registerCount;
+    };
+    auto isAccessPointer = [&](u16 reg) {
+        if (!isRegister(reg)) return false;
+        for (u32 i = 0; i < program.instructionCount; i++) {
+            u16 op = program.opcodes[i];
+            if ((op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_LOCAL_INDEX_PTR) &&
+                program.destinations[i] == reg)
+                return true;
+        }
+        return false;
+    };
+    for (u32 i = 0; i < program.instructionCount; i++) {
+        u16 op = program.opcodes[i];
+        if (op == IR::OP_LOCAL_VAR_PTR) return false;
+        bool usesPointerOperand = op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_LOCAL_INDEX_PTR ||
+                                  op == IR::OP_LOCAL_LOAD || op == IR::OP_LOCAL_STORE;
+        for (u32 operand = 0; operand < 4; operand++) {
+            u16 reg = program.GetOperand(i, operand);
+            if (!isRegister(reg) || !program.registerStorageInfo ||
+                !(program.registerStorageInfo[reg] & IR::IRProgram::STORAGE_IS_FIELD_PTR))
+                continue;
+            // A field/element pointer may only be the address operand.
+            if (!usesPointerOperand || operand != 0) return false;
+        }
+        if ((op == IR::OP_LOCAL_LOAD || op == IR::OP_LOCAL_STORE) &&
+            !isAccessPointer(program.GetOperand(i, 0)))
+            return false;
+    }
+    for (u32 phi = 0; phi < program.phiCount; phi++) {
+        for (u32 i = 0; i < program.GetPhiOperandCount(phi); i++) {
+            u16 reg = program.GetPhiOperandValue(phi, i);
+            if (isRegister(reg) && program.registerStorageInfo &&
+                (program.registerStorageInfo[reg] & IR::IRProgram::STORAGE_IS_PTR))
+                return false;
+        }
+    }
+    return true;
+}
 
 static constexpr u8 REG_DECLARED = 0x01;
 
@@ -276,6 +336,8 @@ struct GLESBuilder {
     const RenderConfig* renderConfig;
     const IRAnalysis* analysis;              // For attribute/output types
     IR::PassVaryingContext* varyings;        // Vertex→Fragment varyings
+    ArenaString attributeNames[16] = {};     // Source names by attribute location
+    u16 attributeNameMask = 0;               // Bit i: attributeNames[i] is set
     u32 workgroupSizeX;
     u32 workgroupSizeY;
     u32 workgroupSizeZ;
@@ -313,11 +375,38 @@ struct GLESBuilder {
             regInfo[i] = {};
         }
 
+        // Uniform arrays use storage-pointer IR operations, but their reads
+        // are legal in ES 3.00. Track only aliases rooted at those uniforms.
+        for (u32 i = 0; i < ir->instructionCount; i++) {
+            u16 dest = ir->destinations[i];
+            if (dest >= regCount) continue;
+            u16 opcode = ir->opcodes[i];
+            if (opcode == IR::OP_LOCAL_FIELD_PTR || opcode == IR::OP_LOCAL_INDEX_PTR)
+                regInfo[dest].localPointerInstruction = i + 1;
+            if (opcode != IR::OP_LOAD_UNIFORM && opcode != IR::OP_STORAGE_INDEX &&
+                opcode != IR::OP_STORAGE_FIELD) continue;
+            u16 base = ir->GetOperand(i, 0);
+            if ((opcode == IR::OP_LOAD_UNIFORM && base < 32 &&
+                 ir->uniformArrayLengths[base] != 0) ||
+                ((opcode == IR::OP_STORAGE_INDEX || opcode == IR::OP_STORAGE_FIELD) &&
+                 base < regCount && regInfo[base].uniformPointerInstruction != 0)) {
+                regInfo[dest].uniformPointerInstruction = i + 1;
+            }
+        }
+
         out.Init(arena, 64 * 1024);  // 64KB output buffer
         indent = 0;
     }
 
     std::string_view Emit();
+
+    // Vertex inputs are emitted as "a_<name>" to match the SPIR-V path;
+    // locations without a name fall back to "attr<N>".
+    void SetAttributeName(u32 attributeIndex, ArenaString name) {
+        if (attributeIndex >= 16) return;
+        attributeNames[attributeIndex] = name;
+        attributeNameMask |= static_cast<u16>(1u << attributeIndex);
+    }
 
     void SetComputeWorkgroupSize(u32 x, u32 y, u32 z) {
         workgroupSizeX = x;
@@ -334,6 +423,8 @@ private:
     void EmitOutputs();
     void EmitUniforms();
     void EmitMain();
+    void PrepareArrayRegisters();
+    u32 EmitArrayStoreSequence(u32 first, u32 end);
     void EmitControlFlow();
     struct LoopScope {
         u32 header;
@@ -355,11 +446,15 @@ private:
     void EmitStructFieldName(u32 fieldHash);
     void EmitStructFieldNameByIndex(u32 structHash, u16 fieldIdx);
     void EmitRegisterType(u16 reg);
+    void EmitAttributeName(u32 attributeIndex);
+    void EmitGLName(GLNameKind kind, const char* source);
     void EmitTextureLevelsUniformName(u16 texReg);
 
     // ===== Expression Emission =====
     void EmitExpr(u16 reg);
     void EmitTexture(u16 reg, u32 metadata = 0);
+    // The texture whose slots include `slot` (texture arrays have one per element).
+    const TextureBinding* FindTextureBinding(u16 slot) const;
     bool EmitConstantExpr(u16 reg, u32 depth = 0);
     void EmitTextureOffset(u16 reg);
     void EmitSelect(u32 instIdx);
@@ -405,6 +500,9 @@ private:
                 out.Chr(' ');
             }
             EmitReg(reg);
+            if (regInfo[reg].arraySize) {
+                out.Chr('['); out.Uint(regInfo[reg].arraySize); out.Chr(']');
+            }
             return true;
         }
         EmitReg(reg);

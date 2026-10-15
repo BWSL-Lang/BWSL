@@ -240,7 +240,19 @@ NodeRef Parser::ParseStatement() {
             typeStr += "^";
         }
 
-        Consume(TokenType::IDENTIFIER, "Expected variable name");
+        if (constType.coreType != CoreType::INVALID &&
+            constType.coreType != CoreType::CUSTOM && Match(TokenType::LEFT_BRACKET)) {
+            NodeRef arrayDecl = ParseArrayDeclaration(constType.coreType,
+                                                       StorageClass::Default, true);
+            if (arrayDecl.IsValid()) {
+                ast->IndexPosition(arrayDecl, line, col);
+                ast->GetVariableDecl(arrayDecl).typePosition =
+                    AST::PackPosition(typeLoc.line, typeLoc.column);
+            }
+            return arrayDecl;
+        }
+
+        ConsumeDeclarationName("variable", "Expected variable name");
         SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
         std::string varName = std::string(stream->GetValue(previous));
 
@@ -258,6 +270,7 @@ NodeRef Parser::ParseStatement() {
         NodeRef varDecl = ASTFactory::MakeVariableDecl(ast, varNameStr,
             ArenaString::MakeHashOnly(typeStr),
             value, true, line, col);
+        RecordDeclarationSource(varDecl);
         ast->GetVariableDecl(varDecl).typePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
         ast->GetVariableDecl(varDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
 
@@ -376,7 +389,9 @@ NodeRef Parser::ParseStatement() {
             NodeRef call = ParseExpression();
             if (call.IsValid()) Consume(TokenType::SEMICOLON, "Expected ';' after function call");
             return call;
-        } else if (stream->GetType(next) == TokenType::IDENTIFIER) {
+        } else if (stream->GetType(next) == TokenType::IDENTIFIER ||
+                   (IsKeywordNameToken(stream->GetType(next)) &&
+                    ResolveType(std::string(CurrentValue())).coreType != CoreType::INVALID)) {
             // Could be custom type variable declaration: TypeName varName;
             return ParseCustomTypeVarDecl();
         } else if (stream->GetType(next) == TokenType::LEFT_BRACKET) {
@@ -402,7 +417,8 @@ NodeRef Parser::ParseStatement() {
                 }
             }
             if (probe < stream->Count() &&
-                stream->GetType(probe) == TokenType::IDENTIFIER) {
+                (stream->GetType(probe) == TokenType::IDENTIFIER ||
+                 IsKeywordNameToken(stream->GetType(probe)))) {
                 return ParseCustomTypeVarDecl();
             }
         } else if (stream->GetType(next) == TokenType::DOUBLE_COLON) {
@@ -418,7 +434,9 @@ NodeRef Parser::ParseStatement() {
             while (probe < stream->Count() && stream->GetType(probe) == TokenType::BITWISE_XOR) {
                 probe++;
             }
-            if (probe < stream->Count() && stream->GetType(probe) == TokenType::IDENTIFIER) {
+            if (probe < stream->Count() &&
+                (stream->GetType(probe) == TokenType::IDENTIFIER ||
+                 IsKeywordNameToken(stream->GetType(probe)))) {
                 TokenRef afterName = probe + 1;
                 if (afterName < stream->Count() &&
                     (stream->GetType(afterName) == TokenType::ASSIGN ||
@@ -474,7 +492,7 @@ NodeRef Parser::ParseStatement() {
             return arrayDecl;
         }
 
-        Consume(TokenType::IDENTIFIER, "Expected variable name");
+        ConsumeDeclarationName("variable", "Expected variable name");
         SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
         std::string varName(stream->GetValue(previous));
 
@@ -495,6 +513,7 @@ NodeRef Parser::ParseStatement() {
             ArenaString::MakeHashOnly(varName),
             ArenaString::MakeHashOnly(typeStr),
             initializer, false, line, col, storageClass);
+        RecordDeclarationSource(varDecl);
         ast->GetVariableDecl(varDecl).typePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
         ast->GetVariableDecl(varDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
 
@@ -592,7 +611,7 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
     }
 
     // Now expect variable name
-    Consume(TokenType::IDENTIFIER, "Expected variable name");
+    ConsumeDeclarationName("variable", "Expected variable name");
     SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
     std::string varName(stream->GetValue(previous));
 
@@ -686,7 +705,7 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
     if (!arrayDims.empty()) {
         varDecl = ASTFactory::MakeVariableDecl(ast,
             ArenaString::MakeHashOnly(varName),
-            ArenaString::MakeHashOnly("array"),
+            ArenaString::MakeHashOnly(typeName),
             initializer, false, line, col, StorageClass::Default,
             static_cast<u8>(arrayDims.size()), totalSize, arrayElementTypeHash);
     } else {
@@ -695,6 +714,8 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
             ArenaString::MakeHashOnly(typeName),
             initializer, false, line, col);
     }
+    RecordDeclarationSource(varDecl);
+    for (u32 dim : arrayDims) ast->GetVariableDecl(varDecl).arraySizes.Push(arena, dim);
     ast->GetVariableDecl(varDecl).typePosition = AST::PackPosition(line, col);
     ast->GetVariableDecl(varDecl).namePosition = AST::PackPosition(nameLoc.line, nameLoc.column);
 

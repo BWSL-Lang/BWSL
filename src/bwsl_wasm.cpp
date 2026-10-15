@@ -30,21 +30,15 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <fstream>
 #include <algorithm>
 
 // SPIRV-Cross wrapper (compiled separately to avoid macro conflicts)
 #ifdef USE_SPIRV_CROSS_LIB
-#include <unordered_map>
 namespace spirv_cross_wrapper {
     std::string CompileToMSL(const std::vector<uint32_t>& spirv);
     std::string CompileToHLSL(const std::vector<uint32_t>& spirv, int shaderModel);
     std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, bool es);
-    std::string CompileToGLSLWithVaryings(
-        const std::vector<uint32_t>& spirv,
-        int glslVersion,
-        bool es,
-        const std::unordered_map<uint32_t, std::string>& varyingNames,
-        bool isVertex);
 }
 #endif
 
@@ -61,6 +55,7 @@ static constexpr bool USE_DIRECT_GLES = false;
 #include "phases/ir_generation/bwsl_ir_analysis.h"
 #include "phases/control_flow/bwsl_cfg.h"
 #include "phases/ssa/bwsl_ssa.h"
+#include "phases/optimization/bwsl_constant_propagation.h"
 #include "phases/parser/bwsl_parser_soa.h"
 #include "core/bwsl_resource_reflection.h"
 #include "core/bwsl_reflection_json.h"
@@ -84,6 +79,7 @@ static constexpr bool USE_DIRECT_GLES = false;
 #include "phases/ir_generation/bwsl_ir_analysis.cpp"
 #include "phases/control_flow/bwsl_cfg.cpp"
 #include "phases/ssa/bwsl_ssa.cpp"
+#include "phases/optimization/bwsl_constant_propagation.cpp"
 #include "phases/backends/spirv/bwsl_spirv_backend.cpp"
 #include "phases/ir_generation/bwsl_compute_graph.cpp"
 #include "core/bwsl_variant_system.cpp"
@@ -203,6 +199,7 @@ static std::string BuildStageOutputFileName(const std::string& outputStem,
 }
 
 static bool CanUseDirectGLESFallback(const IRProgram& program, ShaderStage stage) {
+    if (!GLES::SupportsLocalPointers(program)) return false;
     for (u32 i = 0; i < program.instructionCount; i++) {
         IR::OpCode op = static_cast<IR::OpCode>(program.opcodes[i]);
         switch (op) {
@@ -239,18 +236,29 @@ static std::string EmitDirectGLES(IRProgram& program,
                                   IRAnalysis& analysis,
                                   IR::PassVaryingContext* varyingContext,
                                   const ShaderStageData* shaderStageData,
-                                  const char* sourceBase) {
+                                  const char* sourceBase,
+                                  const AST& ast, NodeRef pipelineRef) {
     if (!CanUseDirectGLESFallback(program, stage)) {
         return {};
     }
 
     Memory::BWEMemoryArena glesArena;
-    char glesMem[128 * 1024];
-    glesArena.Initialize(glesMem, sizeof(glesMem));
+    const size_t glesScratchBytes = std::max<size_t>(128 * 1024,
+        static_cast<size_t>(program.registerCount) * sizeof(GLES::RegInfo) +
+        program.structTypeCount + 128);
+    std::vector<char> glesMem(glesScratchBytes);
+    glesArena.Initialize(glesMem.data(), glesMem.size());
 
     GLES::GLESBuilder glesBuilder;
     glesBuilder.Initialize(&glesArena, sourceBase, &program, cfgPtr, stage,
                            &pass, &renderConfig, &analysis, varyingContext);
+    if (!pipelineRef.IsNull()) {
+        const PipelineData& pipeline = ast.GetPipeline(pipelineRef);
+        for (u32 i = 0; i < pipeline.attributes.count; i++) {
+            const AttributeDeclData& attribute = ast.GetAttributeDecl(pipeline.attributes[i]);
+            glesBuilder.SetAttributeName(attribute.attributeIndex, attribute.name);
+        }
+    }
     if (stage == ShaderStage::Compute && shaderStageData) {
         glesBuilder.SetComputeWorkgroupSize(shaderStageData->workgroupSizeX,
                                             shaderStageData->workgroupSizeY,
@@ -537,6 +545,7 @@ static ShaderOutput CompileShaderStage(
     lowering.currentPassData = &pass;
     lowering.currentPassVaryings = varyingContext;
 
+    lowering.LowerGlobalArrayConstants(shaderBody, pass);
     for (u32 i = 0; i < pass.consts.count; i++) {
         lowering.LowerStatement(pass.consts[i]);
     }
@@ -551,6 +560,9 @@ static ShaderOutput CompileShaderStage(
         for (const auto& diagnostic : lowering.diagnostics) output.error += "\n" + diagnostic;
         return output;
     }
+    if (stage == ShaderStage::Vertex && varyingContext) {
+        varyingContext->vertexStageLowered = true;
+    }
 
     // Ensure return
     if (lowering.program.instructionCount == 0 ||
@@ -562,7 +574,9 @@ static ShaderOutput CompileShaderStage(
     Memory::BWEMemoryArena cfgArena;
     // Match the native compiler's CFG/SSA budget without consuming the
     // constrained WebAssembly stack. Selected-arm expressions add blocks.
-    std::vector<char> cfgMem(512 * 1024);
+    const size_t stageScratchBytes = std::max<size_t>(512 * 1024,
+        static_cast<size_t>(lowering.program.instructionCount) * 512);
+    std::vector<char> cfgMem(stageScratchBytes);
     cfgArena.Initialize(cfgMem.data(), cfgMem.size());
 
     CFGBuilder cfgBuilder;
@@ -584,15 +598,20 @@ static ShaderOutput CompileShaderStage(
 
         if (cfgBuilder.cfg.blockCount > 1) {
             if (!SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena)) {
-                output.error = "SSA register limit exceeded (16383 registers). Split or simplify the shader.";
+                NodeRef node;
+                node.packed = lowering.program.ssaFailureSourceNode;
+                lowering.ReportErrorAt(node, "SSA register limit exceeded (16383 registers). Split or simplify the shader.\n");
+                output.error = lowering.diagnostics.back();
                 return output;
             }
         }
     }
 
+    Optimization::PropagateConstants(&lowering.builder, cfgPtr);
+
     // Generate SPIR-V
     Memory::BWEMemoryArena spirvArena;
-    std::vector<char> spirvMem(512 * 1024);
+    std::vector<char> spirvMem(stageScratchBytes);
     spirvArena.Initialize(spirvMem.data(), spirvMem.size());
 
     SPIRVBuilder builder;
@@ -611,6 +630,20 @@ static ShaderOutput CompileShaderStage(
     vpConfig.descriptorSet = 0;
     builder.SetVertexPullingConfig(vpConfig);
     builder.SetUseStd430Padding(true);  // For GLSL ES compatibility
+    if (varyingContext) {
+        for (u32 i = 0; i < varyingContext->count; i++) {
+            builder.SetVaryingName(varyingContext->varyings[i].slot,
+                                   varyingContext->varyings[i].name);
+        }
+    }
+    if (!pipelineRef.IsNull()) {
+        const PipelineData& pipelineData = context.ast.GetPipeline(pipelineRef);
+        for (u32 i = 0; i < pipelineData.attributes.count; i++) {
+            if (pipelineData.attributes[i].Type() != ASTNodeType::ATTRIBUTE_DECL) continue;
+            const AttributeDeclData& attr = context.ast.GetAttributeDecl(pipelineData.attributes[i]);
+            builder.SetAttributeName(attr.attributeIndex, attr.name);
+        }
+    }
 
     builder.EmitFunction();
     std::vector<u32> spirv = builder.Finalize();
@@ -637,7 +670,7 @@ static ShaderOutput CompileShaderStage(
     if constexpr (USE_DIRECT_GLES) {
         glslSource = EmitDirectGLES(lowering.program, cfgPtr, stage, pass,
                                     renderConfig, output.analysis, varyingContext,
-                                    shaderStageData, sourceBase);
+                                    shaderStageData, sourceBase, context.ast, pipelineRef);
         if (glslSource.empty()) {
             output.error = "Direct GLES generation failed";
             return output;
@@ -648,20 +681,8 @@ static ShaderOutput CompileShaderStage(
         std::vector<uint32_t> spirvData(spirv.begin(), spirv.end());
 
         if (stage == ShaderStage::Vertex || stage == ShaderStage::Fragment) {
-            // Build varying name map for clean output names
-            std::unordered_map<uint32_t, std::string> varyingNames;
-            if (varyingContext) {
-                for (u32 i = 0; i < varyingContext->count; i++) {
-                    const auto& varying = varyingContext->varyings[i];
-                    if (varying.name[0] != '\0') {
-                        varyingNames[varying.slot] = std::string("v_") + varying.name;
-                    }
-                }
-            }
-
-            bool isVertex = (stage == ShaderStage::Vertex);
-            glslSource = spirv_cross_wrapper::CompileToGLSLWithVaryings(
-                spirvData, 300, true, varyingNames, isVertex);
+            // Varyings carry their v_<name> OpNames from the SPIR-V backend.
+            glslSource = spirv_cross_wrapper::CompileToGLSL(spirvData, 300, true);
         } else if (stage == ShaderStage::Compute) {
             glslSource = spirv_cross_wrapper::CompileToGLSL(spirvData, 310, true);
         }
@@ -669,7 +690,7 @@ static ShaderOutput CompileShaderStage(
         if (glslSource.empty() || glslSource.find("error:") == 0) {
             std::string fallback = EmitDirectGLES(lowering.program, cfgPtr, stage, pass,
                                                   renderConfig, output.analysis, varyingContext,
-                                                  shaderStageData, sourceBase);
+                                                  shaderStageData, sourceBase, context.ast, pipelineRef);
             if (!fallback.empty()) {
                 glslSource = fallback;
             }
@@ -699,6 +720,66 @@ static ShaderOutput CompileShaderStage(
 
 // ============= Main Compile Function =============
 
+// Keep parser and semantic diagnostics tied to the file that supplied the
+// token. Imported module offsets do not belong to the main source buffer.
+static std::string BuildNameDiagnosticsArrayJson(const DiagnosticStream& diagnostics,
+                                                const std::string& source,
+                                                const std::string& sourceFileName,
+                                                bool errorsOnly = false) {
+    std::string json = "[";
+    bool first = true;
+    for (u32 i = 0; i < diagnostics.Count(); i++) {
+        if (errorsOnly && diagnostics.GetSeverity(i) != DiagnosticSeverity::Error) continue;
+        if (!first) json += ",";
+        first = false;
+        const std::string file = diagnostics.GetFile(i);
+        json += "{\"severity\":\"" + std::string(DiagnosticStream::SeverityName(diagnostics.GetSeverity(i))) +
+                "\",\"message\":\"" + EscapeJsonString(diagnostics.FormatMessage(i)) +
+                "\",\"file\":\"" + EscapeJsonString(file) + "\"";
+        if (DiagnosticSpan::HasAll(diagnostics.spanFlags[i], DiagnosticSpan::HasLocationFlag)) {
+            json += ",\"line\":" + std::to_string(diagnostics.lines[i]) +
+                    ",\"column\":" + std::to_string(diagnostics.columns[i]);
+            if (DiagnosticSpan::HasAll(diagnostics.spanFlags[i], DiagnosticSpan::HasEndLocationFlag)) {
+                json += ",\"endLine\":" + std::to_string(diagnostics.endLines[i]) +
+                        ",\"endColumn\":" + std::to_string(diagnostics.endColumns[i]);
+            }
+            std::string contents = source;
+            if (!file.empty() && file != sourceFileName) {
+                std::ifstream input(file);
+                contents.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+            }
+            std::istringstream input(contents);
+            std::vector<std::string> lines;
+            for (std::string line; std::getline(input, line);) lines.push_back(line);
+            const u32 line = diagnostics.lines[i];
+            const u32 column = diagnostics.columns[i];
+            if (line > 0 && line <= lines.size() && column > 0 && column <= lines[line - 1].size() &&
+                diagnostics.endLines[i] == line && diagnostics.endColumns[i] >= column) {
+                json += ",\"token\":\"" + EscapeJsonString(lines[line - 1].substr(
+                    column - 1, diagnostics.endColumns[i] - column)) + "\"";
+            }
+            json += ",\"context\":[";
+            bool firstLine = true;
+            for (u32 n = line > 1 ? line - 1 : 1; n <= line + 1 && n <= lines.size(); n++) {
+                if (!firstLine) json += ",";
+                firstLine = false;
+                json += "\"" + EscapeJsonString(lines[n - 1]) + "\"";
+            }
+            json += "]";
+        }
+        json += "}";
+    }
+    return json + "]";
+}
+
+static std::string BuildNameDiagnosticsJson(const DiagnosticStream& diagnostics,
+                                           const std::string& source,
+                                           const std::string& sourceFileName) {
+    return "{\"success\":false,\"errors\":" +
+        BuildNameDiagnosticsArrayJson(diagnostics, source, sourceFileName, true) +
+        ",\"diagnostics\":" + BuildNameDiagnosticsArrayJson(diagnostics, source, sourceFileName) + "}";
+}
+
 static std::string CompileToJson(const char* bwslSource,
                                  const char* rcfgSource,
                                  bool emitInternals = false,
@@ -724,51 +805,15 @@ static std::string CompileToJson(const char* bwslSource,
     lexer.Tokenize();
     Parser parser;
     parser.Init(&lexer, &stream, &context);
+    parser.currentSourceName = sourceFileName;
 
     parser.ParseDocument();
 
     if (parser.hadError) {
-        std::string errorJson = "{\"success\":false,\"errors\":[";
-        for (u32 i = 0; i < parser.errors.count && i < 10; i++) {
-            if (i > 0) errorJson += ",";
-            const ParseError& err = parser.errors[i];
-            std::string msg = err.message ? err.message : "Parse error";
-
-            // Get token text for the error
-            std::string tokenText;
-            if (err.token != INVALID_TOKEN) {
-                std::string_view tokenView = stream.GetValue(err.token);
-                tokenText = std::string(tokenView);
-            }
-
-            // Get context lines (1 before, error line, 1 after)
-            std::string lineBefore = err.line > 1 ? lexer.GetLine(err.line - 1) : "";
-            std::string sourceLine = lexer.GetLine(err.line);
-            std::string lineAfter = lexer.GetLine(err.line + 1);
-
-            errorJson += "{\"line\":" + std::to_string(err.line) +
-                         ",\"column\":" + std::to_string(err.column) +
-                         ",\"message\":\"" + EscapeJsonString(msg) + "\"";
-            if (!tokenText.empty()) {
-                errorJson += ",\"token\":\"" + EscapeJsonString(tokenText) + "\"";
-            }
-
-            // Add context array with line before, error line, and line after
-            errorJson += ",\"context\":[";
-            if (!lineBefore.empty()) {
-                errorJson += "\"" + EscapeJsonString(lineBefore) + "\",";
-            }
-            errorJson += "\"" + EscapeJsonString(sourceLine) + "\"";
-            if (!lineAfter.empty()) {
-                errorJson += ",\"" + EscapeJsonString(lineAfter) + "\"";
-            }
-            errorJson += "]";
-
-            errorJson += "}";
-        }
-        errorJson += "]}";
-        return errorJson;
+        return BuildNameDiagnosticsJson(context.Diag(), source, sourceFileName);
     }
+
+    parser.DiagnoseShadowing();
 
     if (context.root.IsValid()) {
         std::string variantResolveError;
@@ -782,6 +827,10 @@ static std::string CompileToJson(const char* bwslSource,
     if (!BWSL::Comptime::RunComptimeInterpreter(&context, &parser, context.root, &comptimeError)) {
         std::string msg = !comptimeError.empty() ? comptimeError : "Comptime interpretation failed";
         return "{\"success\":false,\"errors\":[\"" + EscapeJsonString(msg) + "\"]}";
+    }
+
+    if (!parser.ValidateNames()) {
+        return BuildNameDiagnosticsJson(context.Diag(), source, sourceFileName);
     }
 
     if (context.ast.pipelines.count == 0) {
@@ -821,6 +870,17 @@ static std::string CompileToJson(const char* bwslSource,
                                                             parser.symbolTable,
                                                             sourceBase,
                                                             "Demo");
+    std::vector<GLReservedName> glReservedNames;
+    std::string glNameError;
+    u32 glNamePosition = 0;
+    if (!GLNames::CheckPipelineNames(context.ast, pipeline, parser.symbolTable,
+                                     &glReservedNames, &glNameError, &glNamePosition)) {
+        u32 line = 0, column = 0;
+        AST::UnpackPosition(glNamePosition, line, column);
+        return "{\"success\":false,\"errors\":[{\"line\":" + std::to_string(line) +
+               ",\"column\":" + std::to_string(column) +
+               ",\"message\":\"" + EscapeJsonString(glNameError) + "\"}]}";
+    }
     const ComputeGraphData* graphData = nullptr;
     ComputeGraphCompileResult graphResult = CompileComputeGraph(context.ast,
                                                                pipeline,
@@ -839,7 +899,9 @@ static std::string CompileToJson(const char* bwslSource,
     bool firstFile = true;
     std::string baseName = StemFromPath(sourceFileName);
 
-    json << "{\"success\":true,\"shaders\":{";
+    json << "{\"success\":true,\"diagnostics\":"
+         << BuildNameDiagnosticsArrayJson(context.Diag(), source, sourceFileName)
+         << ",\"shaders\":{";
 
     bool firstPass = true;
     for (u32 passIdx = 0; passIdx < pipeline.passes.count; passIdx++) {
@@ -853,6 +915,7 @@ static std::string CompileToJson(const char* bwslSource,
 
         // Create varying context for vertex->fragment data flow
         PassVaryingContext passVaryings;
+        passVaryings.reservedGLNames = &glReservedNames;
 
         ShaderOutput vertResult;
         ShaderOutput fragResult;

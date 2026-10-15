@@ -234,6 +234,7 @@ inline const char* OpCodeToString(IR::OpCode op) {
         case IR::OP_LOCAL_LOAD:      return "LOCAL_LOAD";
         case IR::OP_LOCAL_STORE:     return "LOCAL_STORE";
         case IR::OP_LOCAL_FIELD_PTR: return "LOCAL_FIELD_PTR";
+        case IR::OP_LOCAL_INDEX_PTR: return "LOCAL_INDEX_PTR";
 
         case IR::OP_BARRIER:         return "BARRIER";
         case IR::OP_MEM_FENCE:       return "MEM_FENCE";
@@ -461,6 +462,7 @@ inline RenderConfig CreateSyntheticRenderConfig(const AST& ast,
                 binding.isCubemap = resource.isCubemapTexture;
                 binding.isVolume = static_cast<CoreType>(resource.coreType) == CoreType::TEXTURE3D;
                 binding.separateSampler = resource.separateSampler;
+                binding.arraySize = resource.arraySize;
                 binding.defaultSamplerBinding = ResolveDefaultSamplerBinding(symbols, resource.bindingIndex);
                 binding.stages = resource.stageFlags;
                 config.textures.push_back(std::move(binding));

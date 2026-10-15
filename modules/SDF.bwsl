@@ -96,7 +96,7 @@ enum SDFShape {
     Plane(float3 normal, float offset),
 
     /// Evaluates signed distance for this shape at point p.
-    eval distance :: (float3 p) -> float {
+    eval signed_distance :: (float3 p) -> float {
         Sphere(radius): sd_sphere(p, radius)
         Box(halfExtents): sd_box(p, halfExtents)
         RoundBox(halfExtents, radius): sd_round_box(p, halfExtents, radius)
@@ -112,9 +112,9 @@ enum SDFShape {
         float3 ey = float3(0.0, eps, 0.0);
         float3 ez = float3(0.0, 0.0, eps);
         return Math::safe_normalize(float3(
-            self.distance(p + ex) - self.distance(p - ex),
-            self.distance(p + ey) - self.distance(p - ey),
-            self.distance(p + ez) - self.distance(p - ez)
+            self.signed_distance(p + ex) - self.signed_distance(p - ex),
+            self.signed_distance(p + ey) - self.signed_distance(p - ey),
+            self.signed_distance(p + ez) - self.signed_distance(p - ez)
         ));
     }
 }
@@ -267,7 +267,7 @@ raymarch_shape :: (SDFShape shape, Ray ray, float minDistance, float maxDistance
     float t = minDistance;
     for (int i = 0; i < maxSteps; i++) {
         float3 p = ray.origin + ray.direction * t;
-        float d = shape.distance(p);
+        float d = shape.signed_distance(p);
 
         result.steps = i + 1;
         result.distance = t;

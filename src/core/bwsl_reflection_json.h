@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bwsl_gl_names.h"
 #include "bwsl_resource_reflection.h"
 #include <cstdio>
 #include <sstream>
@@ -106,6 +107,22 @@ inline void AppendHLSLResourcesJson(std::ostringstream& json,
     if (!first) json << "]";
 }
 
+// Name the GL/GLES output declares a resource under. GL hosts without
+// layout(binding) need it for glGetUniformBlockIndex/glGetUniformLocation.
+// Separate texture/sampler pairs are listed in combinedSamplerUniforms
+// instead, and plain samplers have no GL declaration of their own.
+inline bool FindGLName(const ReflectedResourceBinding& resource, ArenaString* glName) {
+    GLNameKind kind;
+    if (resource.type == ::ResourceBinding::UniformBuffer)
+        kind = GLNameKind::UNIFORM_BLOCK;
+    else if (resource.type == ::ResourceBinding::Texture && !resource.separateImageSampler)
+        kind = GLNameKind::COMBINED_TEXTURE;
+    else
+        return false;
+    *glName = BWSL::GLNames::MakeName(kind, ArenaString::MakeHashOnly(resource.name));
+    return true;
+}
+
 inline void AppendCompactResourceReflectionJson(
     std::ostringstream& json,
     const std::vector<ReflectedResourceBinding>& resources) {
@@ -121,8 +138,12 @@ inline void AppendCompactResourceReflectionJson(
         json << "\"type\":\"" << ResourceTypeToString(resource.type) << "\",";
         json << "\"set\":" << resource.set << ",";
         json << "\"binding\":" << resource.binding << ",";
+        if (resource.arraySize > 0) json << "\"count\":" << resource.arraySize << ",";
         json << "\"stages\":" << StageFlagsToJsonArray(resource.stages) << ",";
         json << "\"access\":\"" << ResourceAccessToString(resource.access) << "\"";
+        ArenaString glName;
+        if (FindGLName(resource, &glName))
+            json << ",\"glName\":\"" << EscapeJsonString(glName.ToString()) << "\"";
         if (resource.combinedSampledImage) {
             json << ",\"abi\":\"combined_sampled_image\"";
             if (!resource.combinedWith.empty()) {
@@ -157,8 +178,13 @@ inline std::string BuildPrettyResourceBindingsJson(
         json += "      \"type\": \"" + std::string(ResourceTypeToString(binding.type)) + "\",\n";
         json += "      \"set\": " + std::to_string(binding.set) + ",\n";
         json += "      \"binding\": " + std::to_string(binding.binding) + ",\n";
+        if (binding.arraySize > 0)
+            json += "      \"count\": " + std::to_string(binding.arraySize) + ",\n";
         json += "      \"stages\": " + StageFlagsToJsonArray(binding.stages, true) + ",\n";
         json += "      \"access\": \"" + std::string(ResourceAccessToString(binding.access)) + "\"";
+        ArenaString glName;
+        if (FindGLName(binding, &glName))
+            json += ",\n      \"glName\": \"" + EscapeJsonString(glName.ToString()) + "\"";
         if (binding.combinedSampledImage) {
             json += ",\n      \"abi\": \"combined_sampled_image\"";
             if (!binding.combinedWith.empty()) {

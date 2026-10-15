@@ -182,11 +182,12 @@ inline std::string CoreTypeToSourceString(CoreType type) {
     return value;
 }
 
-inline std::string FunctionReturnTypeToString(const AST& ast, const FunctionDeclData& function) {
+inline std::string FunctionReturnTypeToString(const AST& ast, const FunctionDeclData& function,
+                                               const char* sourceFile = nullptr) {
     if (function.returnTypeHash != 0) {
         std::string resolved = ReverseLookup::GetString(function.returnTypeHash);
         if (resolved.find("<hash:") == std::string::npos) {
-            return AstReferenceIndex::QualifiedTypeName(ast, resolved, function.returnTypePosition);
+            return AstReferenceIndex::QualifiedTypeName(ast, resolved, function.returnTypePosition, sourceFile);
         }
     }
     return CoreTypeToSourceString(function.returnType);
@@ -240,6 +241,44 @@ inline void AppendTypeInfo(std::ostringstream& json, const TypeInfo& typeInfo) {
     AppendUIntField(json, first, "arrayLength", typeInfo.arrayLength);
     AppendUIntField(json, first, "arrayStride", typeInfo.arrayStride);
     json << "}";
+}
+
+// TypeInfo's internal indexability flag also marks vectors. Tooling array
+// metadata comes exclusively from declaration dimensions, never that flag.
+inline void AppendDeclarationTypeInfo(std::ostringstream& json, const std::string& elementType,
+                                      const std::vector<u32>& sizes = {},
+                                      const TypeInfo* resolved = nullptr) {
+    CoreType core = AstReferenceIndex::BuiltinTypeFromName(elementType);
+    if (core == CoreType::INVALID) core = resolved ? resolved->coreType : CoreType::CUSTOM;
+    u32 length = sizes.empty() ? 0 : 1;
+    for (u32 size : sizes) length *= size;
+    bool first = true;
+    json << "{";
+    AppendStringField(json, first, "elementType", elementType);
+    AppendStringField(json, first, "coreType", CoreTypeToString(core));
+    AppendUIntField(json, first, "componentCount", resolved ? resolved->componentCount :
+        (core == CoreType::CUSTOM ? 1 : CoreTypeComponentCount(core)));
+    if (resolved && resolved->customTypeHash != 0) {
+        AppendStringField(json, first, "customTypeName", ReverseLookup::GetString(resolved->customTypeHash));
+    } else if (core == CoreType::CUSTOM) {
+        AppendStringField(json, first, "customTypeName", elementType);
+    }
+    AppendUIntField(json, first, "arrayDimensions", sizes.size());
+    AppendUIntField(json, first, "arrayLength", length);
+    AppendUIntField(json, first, "arrayStride", resolved && !sizes.empty() ? resolved->arrayStride : 0);
+    AppendFieldName(json, first, "arraySizes");
+    json << "[";
+    for (size_t i = 0; i < sizes.size(); i++) {
+        if (i != 0) json << ",";
+        json << sizes[i];
+    }
+    json << "]}";
+}
+
+inline std::vector<u32> ArraySizes(const ArenaArray<u32>& sizes) {
+    std::vector<u32> result;
+    for (u32 i = 0; i < sizes.count; i++) result.push_back(sizes[i]);
+    return result;
 }
 
 inline void AppendLiteralValue(std::ostringstream& json, const LiteralValue& value) {
@@ -469,8 +508,9 @@ inline void AppendTypeQualifierField(std::ostringstream& json, bool& first,
                                      const AST& ast, u32 typePosition,
                                      const std::string& owner,
                                      const char* field = "typeQualifier",
-                                     const char* suffix = "/type-qualifier") {
-    const ModuleNameSite* qualifier = ast.FindTypeQualifier(typePosition);
+                                     const char* suffix = "/type-qualifier",
+                                     const char* sourceFile = nullptr) {
+    const ModuleNameSite* qualifier = ast.FindTypeQualifier(typePosition, sourceFile);
     if (!qualifier) return;
     AppendFieldName(json, first, field);
     bool qualifierFirst = true;
@@ -488,7 +528,9 @@ inline void AppendTypeQualifierField(std::ostringstream& json, bool& first,
 inline void AppendFunctionParameters(std::ostringstream& json, const AST& ast,
     const ArenaArray<std::pair<ArenaString, ArenaString>>& params,
     const std::string& idPrefix,
-    const ArenaArray<ParameterSourcePositions>* positions = nullptr) {
+    const ArenaArray<ParameterSourcePositions>* positions = nullptr,
+    const ArenaArray<ArenaArray<u32>>* arraySizes = nullptr,
+    const char* sourceFile = nullptr) {
     json << "[";
     for (u32 i = 0; i < params.count; i++) {
         if (i > 0) json << ",";
@@ -503,10 +545,15 @@ inline void AppendFunctionParameters(std::ostringstream& json, const AST& ast,
                 "line", "column");
             AppendPackedPosition(json, first, position.namePosition, "nameLine", "nameColumn");
             AppendPackedPosition(json, first, position.typePosition, "typeLine", "typeColumn");
-            AppendTypeQualifierField(json, first, ast, position.typePosition, id);
+            AppendTypeQualifierField(json, first, ast, position.typePosition, id,
+                                     "typeQualifier", "/type-qualifier", sourceFile);
         }
         AppendArenaStringFields(json, first, "name", params[i].first);
-        AppendArenaStringFields(json, first, "dataType", params[i].second);
+        const std::string elementType = ResolveArenaString(params[i].second);
+        AppendStringField(json, first, "dataType", elementType);
+        AppendFieldName(json, first, "typeInfo");
+        AppendDeclarationTypeInfo(json, elementType,
+            arraySizes && i < arraySizes->count ? ArraySizes((*arraySizes)[i]) : std::vector<u32>{});
         json << "}";
     }
     json << "]";
@@ -514,7 +561,7 @@ inline void AppendFunctionParameters(std::ostringstream& json, const AST& ast,
 
 inline void AppendStructFields(std::ostringstream& json, const AST& ast,
                                const ArenaArray<StructFieldData>& fields,
-                               const std::string& owner) {
+                               const std::string& owner, const char* sourceFile = nullptr) {
     json << "[";
     for (u32 i = 0; i < fields.count; i++) {
         if (i > 0) json << ",";
@@ -525,11 +572,14 @@ inline void AppendStructFields(std::ostringstream& json, const AST& ast,
         AppendPackedPosition(json, first, fields[i].namePosition, "line", "column");
         AppendPackedPosition(json, first, fields[i].namePosition, "nameLine", "nameColumn");
         AppendPackedPosition(json, first, fields[i].typePosition, "typeLine", "typeColumn");
-        AppendTypeQualifierField(json, first, ast, fields[i].typePosition, id);
+        AppendTypeQualifierField(json, first, ast, fields[i].typePosition, id,
+                                 "typeQualifier", "/type-qualifier", sourceFile);
         AppendArenaStringFields(json, first, "name", fields[i].name);
-        AppendStringField(json, first, "dataType", AstReferenceIndex::StructFieldTypeName(ast, fields[i]));
+        AppendStringField(json, first, "dataType", AstReferenceIndex::StructFieldTypeName(ast, fields[i], sourceFile));
         AppendFieldName(json, first, "typeInfo");
-        AppendTypeInfo(json, fields[i].type);
+        AppendDeclarationTypeInfo(json, AstReferenceIndex::StructFieldTypeName(ast, fields[i], sourceFile),
+            fields[i].arraySize != 0 ? std::vector<u32>{fields[i].arraySize} : std::vector<u32>{},
+            &fields[i].type);
         AppendUIntField(json, first, "arraySize", fields[i].arraySize);
         json << "}";
     }
@@ -805,6 +855,28 @@ inline bool IsDeclarationWithSource(ASTNodeType type) {
     }
 }
 
+// A named constant folded to this literal (or, for a vector constant, this
+// constructor call) while parsing: keep the written name as a positioned
+// IDENTIFIER occurrence.
+inline void AppendFoldedFromField(std::ostringstream& json, bool& first,
+                                  const AST& ast, NodeRef ref, u32 depth) {
+    const FoldedConstantData* folded = ast.FindFoldedConstant(ref);
+    if (!folded) return;
+    AppendFieldName(json, first, "foldedFrom");
+    bool foldedFirst = true;
+    json << "{";
+    AppendStringField(json, foldedFirst, "id", AstReferenceIndex::FoldedConstantId(ref));
+    AppendStringField(json, foldedFirst, "type", "IDENTIFIER");
+    AppendPackedPosition(json, foldedFirst, folded->namePosition, "line", "column");
+    AppendPackedPosition(json, foldedFirst, folded->namePosition, "nameLine", "nameColumn");
+    AppendArenaStringFields(json, foldedFirst, "name", folded->name);
+    AppendStringField(json, foldedFirst, "identifierKind", "NONE");
+    if (folded->qualifier.IsValid()) {
+        AppendNodeField(json, foldedFirst, "qualifier", ast, folded->qualifier, depth);
+    }
+    json << "}";
+}
+
 inline void AppendCommonNodeFields(std::ostringstream& json, bool& first,
                                    const AST& ast, NodeRef ref) {
     AppendStringField(json, first, "id", NodeRefId(ref));
@@ -855,24 +927,7 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
         case ASTNodeType::LITERAL: {
             AppendFieldName(json, first, "literal");
             AppendLiteralValue(json, ast.GetLiteral(ref).value);
-            // A named constant folded to this literal while parsing: keep the
-            // written name as a positioned IDENTIFIER occurrence.
-            const FoldedConstantData* folded = ast.FindFoldedConstant(ref);
-            if (folded) {
-                AppendFieldName(json, first, "foldedFrom");
-                bool foldedFirst = true;
-                json << "{";
-                AppendStringField(json, foldedFirst, "id", AstReferenceIndex::FoldedConstantId(ref));
-                AppendStringField(json, foldedFirst, "type", "IDENTIFIER");
-                AppendPackedPosition(json, foldedFirst, folded->namePosition, "line", "column");
-                AppendPackedPosition(json, foldedFirst, folded->namePosition, "nameLine", "nameColumn");
-                AppendArenaStringFields(json, foldedFirst, "name", folded->name);
-                AppendStringField(json, foldedFirst, "identifierKind", "NONE");
-                if (folded->qualifier.IsValid()) {
-                    AppendNodeField(json, foldedFirst, "qualifier", ast, folded->qualifier, depth);
-                }
-                json << "}";
-            }
+            AppendFoldedFromField(json, first, ast, ref, depth);
             break;
         }
         case ASTNodeType::BINARY_OP: {
@@ -954,13 +1009,19 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
                        node.moduleObject.IsValid()) {
                 AppendNodeField(json, first, "receiver", ast, node.moduleObject, depth);
             }
+            AppendFoldedFromField(json, first, ast, ref, depth);
             break;
         }
         case ASTNodeType::VARIABLE_DECL: {
             const VariableDeclData& node = ast.GetVariableDecl(ref);
             AppendArenaStringFields(json, first, "name", node.name);
-            AppendArenaStringFields(json, first, "declaredType", node.type);
-            AppendTypeQualifierField(json, first, ast, node.typePosition, NodeRefId(ref));
+            const std::string elementType = AstReferenceIndex::QualifiedTypeName(ast,
+                ResolveArenaString(node.type), node.typePosition, ast.GetDeclarationSource(ref));
+            AppendStringField(json, first, "declaredType", elementType);
+            AppendFieldName(json, first, "typeInfo");
+            AppendDeclarationTypeInfo(json, elementType, ArraySizes(node.arraySizes));
+            AppendTypeQualifierField(json, first, ast, node.typePosition, NodeRefId(ref),
+                                     "typeQualifier", "/type-qualifier", ast.GetDeclarationSource(ref));
             if (node.typePosition != 0) {
                 u32 typeLine = 0, typeColumn = 0;
                 AST::UnpackPosition(node.typePosition, typeLine, typeColumn);
@@ -1015,6 +1076,9 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             const ResourceDeclData& node = ast.GetResourceDecl(ref);
             AppendArenaStringFields(json, first, "name", node.name);
             AppendArenaStringFields(json, first, "typeName", node.typeName);
+            AppendPackedPosition(json, first, node.typePosition, "typeLine", "typeColumn");
+            AppendTypeQualifierField(json, first, ast, node.payloadTypePosition, NodeRefId(ref),
+                                     "typeQualifier", "/type-qualifier", ast.GetDeclarationSource(ref));
             AppendUIntField(json, first, "resourceIndex", node.resourceIndex);
             break;
         }
@@ -1062,12 +1126,15 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             AppendArenaStringFields(json, first, "name", node.name);
             AppendFieldName(json, first, "parameters");
             AppendFunctionParameters(json, ast, node.parameters, NodeRefId(ref) + "/parameter:",
-                                     &node.parameterPositions);
-            AppendStringField(json, first, "returnType", FunctionReturnTypeToString(ast, node));
+                                     &node.parameterPositions, &node.parameterArraySizes, ast.GetDeclarationSource(ref));
+            const std::string returnType = FunctionReturnTypeToString(ast, node, ast.GetDeclarationSource(ref));
+            AppendStringField(json, first, "returnType", returnType);
+            AppendFieldName(json, first, "returnTypeInfo");
+            AppendDeclarationTypeInfo(json, returnType);
             AppendPackedPosition(json, first, node.returnTypePosition,
                                  "returnTypeLine", "returnTypeColumn");
             AppendTypeQualifierField(json, first, ast, node.returnTypePosition, NodeRefId(ref),
-                                     "returnTypeQualifier", "/return-type-qualifier");
+                                     "returnTypeQualifier", "/return-type-qualifier", ast.GetDeclarationSource(ref));
             AppendNodeField(json, first, "body", ast, node.body, depth);
             AppendBoolField(json, first, "isEval", node.isEval);
             AppendBoolField(json, first, "isStructMethod", node.isStructMethod);
@@ -1078,7 +1145,7 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             const StructDeclData& node = ast.GetStructDecl(ref);
             AppendArenaStringFields(json, first, "name", node.name);
             AppendFieldName(json, first, "fields");
-            AppendStructFields(json, ast, node.fields, NodeRefId(ref));
+            AppendStructFields(json, ast, node.fields, NodeRefId(ref), ast.GetDeclarationSource(ref));
             AppendNodeArrayField(json, first, "methods", ast, node.methods, depth);
             break;
         }
@@ -1305,6 +1372,11 @@ inline void AppendReferenceIndex(std::ostringstream& json, const AST& ast,
         }
         if (!symbol.type.empty()) {
             AppendStringField(json, symbolFirst, "type", symbol.type);
+            if (symbol.kind == "parameter" || symbol.kind == "variable" || symbol.kind == "constant" ||
+                symbol.kind == "struct-field" || symbol.kind == "function" || symbol.kind == "method") {
+                AppendFieldName(json, symbolFirst, "typeInfo");
+                AppendDeclarationTypeInfo(json, symbol.type, symbol.arraySizes);
+            }
         }
         if (!symbol.stableId.empty()) {
             AppendStringField(json, symbolFirst, "stableId", symbol.stableId);

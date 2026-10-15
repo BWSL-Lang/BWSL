@@ -1,0 +1,22 @@
+// Error case: module constant initializers can't use vector arithmetic; only
+// scalar arithmetic and constructors are folded.
+module BadConsts {
+    const float2 NORTH = float2(0.0, -1.0);
+    const float2 SOUTH = NORTH * -1.0;
+}
+
+pipeline ModuleConstNotConstant {
+    import BadConsts
+
+    attributes {
+        position: float2
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position + BadConsts::SOUTH, 0.0, 1.0);
+        }
+    }
+}

@@ -1,0 +1,20 @@
+// Error case: a module constant's initializer must match its declared type.
+module BadConsts {
+    const float3 TINT = float2(1.0, 0.5);
+}
+
+pipeline ModuleConstTypeMismatch {
+    import BadConsts
+
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position * BadConsts::TINT, 1.0);
+        }
+    }
+}

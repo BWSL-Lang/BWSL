@@ -4,12 +4,15 @@
 #include "core/bwsl_custom_type_registry.h"
 #include "core/bwsl_defs.h"
 #include "core/bwsl_diagnostics.h"
+#include "core/bwsl_gl_names.h"
 #include "phases/ir_generation/bwsl_ir_analysis.h" // For OutputSlot constants
 #include "phases/ir_generation/bwsl_ir_gen.h"
 #include "core/bwsl_mem_pool.h"
 #include "core/bwsl_resource_reflection.h"
 #include "core/bwsl_symbol_table.h"
+#include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -49,6 +52,12 @@ struct PassVaryingContext {
   std::string diagnosticPassName;
   const char *diagnosticStageName = "vertex";
   bool varyingLimitDiagnosed = false;
+  // Set by the driver once the vertex stage lowered cleanly, so the varying
+  // table is complete and a fragment read of a missing name is a user error.
+  // Stays false when the vertex stage was skipped (-stage fragment) or failed.
+  bool vertexStageLowered = false;
+  // Pipeline-level GL names a new varying's v_<name> must not repeat.
+  const std::vector<GLReservedName> *reservedGLNames = nullptr;
 
   // Add a new varying or return existing slot
   // `typeConflict` reports a store whose type differs from the varying's
@@ -153,6 +162,17 @@ struct IRLowering {
   // without a cap. Guarded in LowerExpression with MAX_LOWER_DEPTH.
   u32 lowerDepth = 0;
 
+    struct SourceNodeGuard {
+        IRBuilder& builder;
+        u32 savedNode;
+        SourceNodeGuard(IRBuilder& target, NodeRef node)
+            : builder(target), savedNode(target.currentSourceNode) {
+            builder.currentSourceNode = node.packed;
+        }
+        ~SourceNodeGuard() { builder.currentSourceNode = savedNode; }
+    };
+
+
   // Map AST node refs to registers (keyed by packed NodeRef value)
   std::unordered_map<u32, u16> nodeRegisters;
 
@@ -160,6 +180,18 @@ struct IRLowering {
   std::unordered_map<u32, u16> variableRegisters;
   std::unordered_set<u32> initializedVariables;
   std::unordered_set<u32> constVariables;
+
+  // Texture and sampler parameters of an inlined function, keyed by name
+  // hash. They bind to the caller's resource handle (0x6000 | slot for
+  // textures, 0x3000 | slot for samplers) rather than a copy. The texture
+  // encoding is shared with uint constants, so the register alone can't say
+  // it holds a texture; this records the handle and its type for overload
+  // resolution in nested calls.
+  struct ResourceHandleVariable {
+    u16 handle;
+    CoreType type;
+  };
+  std::unordered_map<u32, ResourceHandleVariable> resourceHandleVariables;
 
   // Array base registers (var hash -> base reg)
   std::unordered_map<u32, u32> arrayBaseRegisters;
@@ -185,6 +217,11 @@ struct IRLowering {
     u32 elemStructHash;
   };
   std::unordered_map<u16, StructArrayValueInfo> structArrayValueRegs;
+
+  // Vector temporaries built from scalar constants only, mapped to the
+  // OP_VEC_CONSTRUCT that defines them. These registers are written once, so
+  // arithmetic on them can be folded into another constant vector.
+  std::unordered_map<u16, u32> constantVectors;
 
   // Record `dest` as a struct-field array value when the extracted field is
   // an array. Call after emitting OP_STRUCT_EXTRACT for a struct field.
@@ -215,11 +252,16 @@ struct IRLowering {
       0xFFFF; // Register to store return value during inlining
   u16 inlineReturnFlagReg = 0xFFFF; // Bool register for early-return tracking
   u32 inlineReturnCounter = 0;    // Counts returns seen during current inlining
+  u32 inlineReturnFlagReads = 0;  // Counts reads of inlineReturnFlagReg
   u32 inlineReturnGuardDepth = 0; // Suppress nested return guards
   u32 inlineDepth = 0; // Current inlining depth (for recursion detection)
   u32 inlineModuleIndex =
       0xFFFFFFFF; // Module index during inlining (for unqualified calls)
   static constexpr u32 MAX_INLINE_DEPTH = 8;
+  // Largest right operand of `&&`/`||`, or pair of `?:` arms, evaluated
+  // without a branch. A few comparisons of locals fit; anything bigger keeps
+  // branching so the operand that isn't needed still skips the work.
+  static constexpr u32 MAX_SPECULATED_OPERAND_NODES = 16;
 
   // Stack of currently-inlining function AST nodes, for direct /
   // indirect recursion detection. Packed NodeRefs are 32-bit, so a
@@ -286,6 +328,7 @@ struct IRLowering {
   IRProgram *LowerPipeline(NodeRef pipelineRef);
 
   void LowerPassConstants(const PassData &pass);
+  void LowerGlobalArrayConstants(NodeRef stageBody, const PassData &pass);
 
   void LowerPass(NodeRef passRef);
 
@@ -299,7 +342,25 @@ struct IRLowering {
 
   void LowerStatement(NodeRef ref);
 
-  void LowerStatementWithReturnGuard(NodeRef ref);
+  // Lowers block.statements[first..]. With guardReturns (inside an inlined
+  // call), the statements after one that may have returned are guarded.
+  void LowerStatements(const BlockData &block, u32 first, bool guardReturns);
+
+  // Lowers block.statements[first..] under one "not returned yet" guard
+  // (inside an inlined call, after a statement that may have returned).
+  void LowerStatementsWithReturnGuard(const BlockData &block, u32 first);
+
+  // Inside an inlined call, lowers `if (c) { ...; return; } rest` as
+  // `if (c) { ...; return; } else { rest }`: one branch and no flag check.
+  // Returns false, emitting nothing, when the if doesn't have that shape.
+  bool LowerIfWithEarlyReturn(NodeRef ifRef, const BlockData &block,
+                              u32 restFirst);
+
+  bool HasTrailingReturn(NodeRef ref) const;
+
+  // Turns the stores to the return flag into NOPs when nothing read it
+  // (every return was folded into an if/else).
+  void DropUnreadReturnFlag(u32 firstInstruction);
 
   void LowerBreak();
 
@@ -340,11 +401,43 @@ struct IRLowering {
   // object). The caller falls back to the legacy ADDRESS_OF path on 0.
   u16 TryLowerLocalFieldAddressOf(NodeRef memberRef);
 
+  // ============= In-place struct variables =============
+  // A struct local (a declared variable, a parameter copy or `self`) keeps
+  // its value in memory, and field reads and writes go through an access
+  // chain instead of rebuilding the whole struct value. A rebuilt value is a
+  // whole-struct copy at every merge and loop header once SSA runs (#143).
+  //
+  // A place is the variable itself or a pointer to one of its fields or to an
+  // element of an array field.
+  struct LocalPlace {
+    u16 reg = 0xFFFF;         // Root variable, or the pointer register
+    bool isPointer = false;   // false: reg is the root variable
+    CoreType type = CoreType::INVALID;  // Value type (element type of an array field)
+    u32 structHash = 0;       // Struct type when type is CUSTOM
+    u32 arrayLength = 0;      // > 0: an array field, which isn't loaded as a value
+    u16 rootReg = 0xFFFF;
+    u32 rootNameHash = 0;
+  };
+  bool IsInPlaceStructVariable(u16 reg) const;
+  // Resolves `expr` to a place without emitting anything when !emit, or
+  // emits the pointer chain when emit. Fails for anything else (swizzles,
+  // resources, pointers, non-struct variables), which lowers as before.
+  bool ResolveLocalPlace(NodeRef expr, bool emit, LocalPlace *out);
+  bool ResolveLocalField(const LocalPlace &base, u32 memberHash, bool emit,
+                         LocalPlace *out);
+  // Loads `expr` in place; returns 0xFFFF when it isn't a loadable place.
+  u16 TryLoadLocalPlace(NodeRef expr);
+  // Stores `valueReg` to `target` in place; returns false when `target`
+  // isn't a place, so the caller lowers the store as before.
+  bool TryStoreLocalPlace(NodeRef target, u16 valueReg);
+
   u16 LowerUnaryOp(NodeRef ref);
 
   u16 LowerIdentifier(NodeRef ref);
 
-  void LowerVariableDecl(NodeRef ref);
+  void LowerVariableDecl(NodeRef ref, u32 bindingNameHash = 0,
+                         const VariableData *bindingData = nullptr);
+  u16 LowerModuleArrayConstant(const VariableData &data, u32 bindingNameHash);
 
   u16 EmitZeroStruct(u32 structTypeHash);
 
@@ -401,6 +494,10 @@ struct IRLowering {
                    InterpolationMode interpolation = InterpolationMode::Default);
 
   void LowerIfStatement(NodeRef ref);
+  // Lowers an if, with block.statements[restFirst..] appended to its then
+  // branch (restInThen) or its else branch (rest null: a plain if).
+  void LowerIfWithRest(NodeRef ref, const BlockData *rest, u32 restFirst,
+                       bool restInThen);
 
   void LowerReturn(NodeRef ref);
 
@@ -438,11 +535,31 @@ struct IRLowering {
 
   u16 LowerTextureSample(NodeRef ref);
 
+  // Texture arrays ("textures: texture2D[4]") bind element i at slot
+  // bindingIndex + i. A constant index lowers to that slot's texture; a
+  // dynamic one, only allowed as a texture function's texture argument,
+  // branches to one call per element.
+  const ResourceData* FindTextureArrayResource(NodeRef expr) const;
+  // Returns the texture or sampler type of an argument expression that
+  // lowered to resource handle `reg` (a bound resource, a constant texture
+  // array element, or a texture/sampler parameter), or INVALID otherwise.
+  CoreType GetResourceHandleType(NodeRef expr, u16 reg) const;
+  u16 LowerTextureArrayElement(NodeRef ref);
+  bool TryLowerDynamicTextureArrayCall(NodeRef ref, u16* result);
+
   //==========================================================================
   // Helper functions
   //==========================================================================
 
   u16 EnsureBoolCondition(u16 condReg);
+
+  // True when `ref` can be evaluated unconditionally: no side effects, no
+  // loads that a guard could be protecting (array indexing, dereference),
+  // and small enough that skipping it never pays for a branch. `budget` is
+  // the node count still allowed and is decremented as nodes are visited.
+  bool IsSpeculatableExpression(NodeRef ref, u32* budget) const;
+  bool IsNonzeroLiteral(NodeRef ref) const;
+  u16 LowerTernaryBranches(NodeRef ref, u16 condReg, u16 trueReg, u16 falseReg);
 
   u16 CombineLoopCondition(u16 condReg);
 
@@ -451,10 +568,17 @@ struct IRLowering {
   u16 EmitConstantInt(u32 value);
   bool CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
                                  NodeRef indexExpr = NodeRef::Null());
+  bool CheckConstIndexInBounds(u16 indexReg, NodeRef indexExpr, u32 length);
+  bool TryGetConstIndex(u16 indexReg, NodeRef indexExpr, s64* value);
 
   u16 EmitConstantUint(u32 value);
 
   u16 ConvertRegisterToType(u16 reg, CoreType targetType);
+  u16 TryConvertScalarConstant(u16 reg, CoreType targetType);
+  u16 TryFoldScalarArithmetic(OpCode op, u16 left, u16 right);
+  void RecordConstantVector(u16 reg);
+  bool GetConstantVectorComponents(u16 reg, u16 components[4], u32 *width);
+  u16 TryFoldVectorArithmetic(OpCode op, u16 left, u16 right);
 
   u16 GetOrAllocateVariable(u32 nameHash);
 
@@ -476,6 +600,7 @@ struct IRLowering {
   bool IsAllowedFragmentOutput(u32 nameHash) const;
   CoreType GetFragmentOutputType(u32 nameHash) const;
 
+  void CheckVaryingGLName(u32 varyingIndex, NodeRef diagnosticNode);
   u32 ResolveOutputSlotForStore(u32 nameHash, CoreType valueType,
                                 const char *nameStr,
                                 InterpolationMode interpolation,
@@ -526,7 +651,7 @@ struct IRLowering {
   // Get the vector type with a specific dimension for a base scalar/vector type
   CoreType GetVectorTypeWithDimension(CoreType baseType, u32 dim);
 
-  CoreType LookupCoreType(u32 typeHash);
+  CoreType LookupCoreType(u32 typeHash) const;
 
   CoreType ResolveCoreTypeFromHash(u32 typeHash, u32 *outCustomHash = nullptr);
 

@@ -81,6 +81,7 @@ Source (.bwsl)
   → IR lowering      (phases/ir_lowering)
   → CFG              (phases/control_flow)
   → SSA              (phases/ssa)
+  → Optimization     (phases/optimization)
   → SPIR-V backend   (phases/backends/spirv)
   → Cross-compile    (SPIRV-Cross → Metal/HLSL/GLSL,
                       phases/backends/gles for GLSL ES / WebGL)
@@ -95,6 +96,7 @@ Source (.bwsl)
 - **ir_lowering/** — `bwsl_ir_lowering.h` plus `*.inl` shards (`_calls`, `_control`, `_core`, `_expr`, `_lvalues`, `_types`). AST → IR lowering, split across `.inl` files included from the header to keep each file reviewable.
 - **control_flow/** — `bwsl_cfg.{h,cpp}`. Control-flow graph construction over the IR.
 - **ssa/** — `bwsl_ssa.{h,cpp}`, `bwsl_ssa_verify.cpp`. SSA conversion with phi insertion and renaming, plus a verifier pass.
+- **optimization/** — `bwsl_constant_propagation.{h,cpp}`. Sparse conditional constant propagation over the SSA IR (a forward walk for single-block stages), then removal of values nothing reads. Branches with a constant condition stay in the IR; the backends emit only the arm taken.
 - **backends/spirv/** — `bwsl_spirv_backend.{h,cpp}`. SPIR-V binary emission. Driven by an opcode table (`IR_TO_SPV_OP_TABLE`).
 - **backends/gles/** — `bwsl_gles_backend.{h,cpp}`. Direct GLSL ES emission for WebGL targets where SPIRV-Cross's GLSL output is insufficient.
 
@@ -139,12 +141,17 @@ python3 tests/run_tests.py
 
 # Equivalence suite (requires Vulkan + dxc + glslang)
 ./tests/run_tests.sh --equivalence
+
+# GPU benchmarks: hand-written GLSL ES vs BWSL output on GL and Vulkan,
+# GPU-timed, outputs compared (see tests/benchmarks/README.md)
+python3 tests/benchmarks/run.py
 ```
 
 Test categories under `tests/`:
 
 - top-level `*.bwsl` — regression / smoke tests
 - `equivalence/` — multi-backend GPU equivalence tests
+- `benchmarks/` — GPU performance benchmarks (`run.py` + one directory per case)
 - `error_cases/` — inputs that must fail with a specific diagnostic
 - `ast_json/` — fixtures whose `-ast-json` node positions are asserted
 - `fuzz_regressions/` — minimized inputs from past fuzzer crashes
@@ -169,4 +176,13 @@ Defined in `core/bwsl_defs.h`: `u8`, `u16`, `u32`, `u64`, `s8`, `s16`, `s32`, `s
 
 ## Coding Style
 
-See [CODING_STANDARDS.md](CODING_STANDARDS.md). The codebase is data-oriented: data lives in plain structs (frequently SoA), operations live in free functions inside namespaces, and all allocation routes through the arena. Prefer that style when adding code.
+See [coding-conventions.md](docs/conventions/coding-conventions.md). 
+TLDR: 
+The codebase is data-oriented: data lives in plain structs (frequently SoA), 
+operations live in free functions inside namespaces,
+and all allocation routes through the arena. 
+Prefer that style when adding code.
+
+## Writing changelogs
+
+See [changelog-conventions.md](docs/conventions/changelog-conventions.md).

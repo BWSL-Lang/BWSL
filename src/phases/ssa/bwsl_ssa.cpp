@@ -10,6 +10,8 @@ namespace SSA {
 
 void SSAConstructor::Init(IR::IRProgram* program, CFG* controlFlow, CFGBuilder* builder, BWSL_Arena* alloc) {
     ir = program;
+    originalRegisterCount = program->registerCount;
+    registerLimitExceeded = false;
     cfg = controlFlow;
     cfgBuilder = builder;
     arena = alloc;
@@ -45,6 +47,7 @@ bool SSAConstructor::ConvertToSSA() {
     IdentifyVariables();
     PlacePhis();
     Rename();
+    EliminateDeadPhis();
     return !registerLimitExceeded;
 }
 
@@ -355,6 +358,7 @@ void SSAConstructor::Rename() {
 
     // Start new register numbers after the existing ones
     state.Init(variableCount, arena, stackCaps, static_cast<u16>(ir->registerCount));
+    if (ir->sourceNodes && ir->instructionCount > 0) state.currentSourceNode = ir->sourceNodes[0];
 
     // Expand registerTypes array to accommodate new SSA registers.
     // Each variable definition becomes a fresh SSA register in Rename,
@@ -391,7 +395,6 @@ void SSAConstructor::Rename() {
         memset(newStructTypes + oldRegisterCount, 0, estimatedNewRegs * sizeof(u32));
         ir->registerStructTypes = newStructTypes;
     }
-    ir->registerCount = newCapacity;
     if (ir->registerStorageInfo) {
         // Lowering initializes live registers on allocation. SSA creates its
         // own slots and exposes spare capacity through registerCount, so give
@@ -402,6 +405,13 @@ void SSAConstructor::Rename() {
         memset(newStorageInfo + oldRegisterCount, 0, estimatedNewRegs * sizeof(u32));
         ir->registerStorageInfo = newStorageInfo;
     }
+    if (ir->registerNameHashes) {
+        u32* newNames = (u32*)arena->Allocate(newCapacity * sizeof(u32), 64);
+        memcpy(newNames, ir->registerNameHashes, oldRegisterCount * sizeof(u32));
+        memset(newNames + oldRegisterCount, 0, estimatedNewRegs * sizeof(u32));
+        ir->registerNameHashes = newNames;
+    }
+    ir->registerCount = newCapacity;
 
     // SSA can introduce one undef per variable without an entry definition,
     // plus more for unfilled PHI operands. The IR starts with a small fixed
@@ -438,6 +448,8 @@ void SSAConstructor::Rename() {
             // Allocate an "undef" register for this variable
             // We'll use the IR's undef tracking to mark this
             u16 undefReg = state.AllocateNewRegister();
+
+            ir->InheritRegisterName(undefReg, variables[v].originalReg);
 
             // Copy type info to the new register
             if (ir->registerTypes && undefReg < ir->registerCount) {
@@ -561,10 +573,15 @@ void SSAConstructor::Rename() {
     for (u32 p = 0; p < phiCount; p++) {
         u32 phiBlock = phiBlocks[p];
         if (phiBlock < cfg->blockCount && blockVisited[phiBlock]) continue;
+        if (ir->sourceNodes && phiBlock < cfg->blockCount &&
+            cfg->firstInst[phiBlock] < ir->instructionCount) {
+            state.currentSourceNode = ir->sourceNodes[cfg->firstInst[phiBlock]];
+        }
 
         u32 varIdx = phiVariables[p];
         u16 newReg = state.AllocateNewRegister();
         ir->phiResultRegs[p] = newReg;
+        ir->InheritRegisterName(newReg, variables[varIdx].originalReg);
         if (ir->registerTypes && newReg < ir->registerCount) {
             ir->registerTypes[newReg] = variables[varIdx].type;
         }
@@ -579,12 +596,17 @@ void SSAConstructor::Rename() {
     for (u32 p = 0; p < phiCount; p++) {
         u32 varIdx = phiVariables[p];
         u16 varType = variables[varIdx].type;
+        u32 firstInst = cfg->firstInst[phiBlocks[p]];
+        if (ir->sourceNodes && firstInst < ir->instructionCount) {
+            state.currentSourceNode = ir->sourceNodes[firstInst];
+        }
         u32 opStart = ir->phiOperandOffsets[p];
         u32 opEnd = ir->phiOperandOffsets[p + 1];
         for (u32 opIdx = opStart; opIdx < opEnd; opIdx++) {
             if (ir->phiOperandValues[opIdx] != 0xFFFF) continue;
 
             u16 undefReg = state.AllocateNewRegister();
+            ir->InheritRegisterName(undefReg, variables[varIdx].originalReg);
             if (ir->registerTypes && undefReg < ir->registerCount) {
                 ir->registerTypes[undefReg] = varType;
             }
@@ -627,6 +649,7 @@ void SSAConstructor::Rename() {
         u32 firstInst = cfg->firstInst[b];
         u32 lastInst = cfg->lastInst[b];
         for (u32 i = firstInst; i <= lastInst && i < ir->instructionCount; i++) {
+            if (ir->sourceNodes) state.currentSourceNode = ir->sourceNodes[i];
             u16 op = ir->opcodes[i];
             // Keep block terminators — the backend still needs a valid
             // branch to wire up the unreachable-block label.
@@ -669,6 +692,7 @@ void SSAConstructor::Rename() {
     // Note: We're keeping original registers and adding new ones for PHI results
     // A more complete implementation would remap all registers
     registerLimitExceeded = state.registerLimitExceeded;
+    ir->ssaFailureSourceNode = state.failureSourceNode;
 }
 
 void SSAConstructor::RenameBlock(u32 block, RenameState& state,
@@ -682,6 +706,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
 
     u32 firstInst = cfg->firstInst[block];
     u32 lastInst = cfg->lastInst[block];
+    if (ir->sourceNodes && firstInst < ir->instructionCount) state.currentSourceNode = ir->sourceNodes[firstInst];
     u32 instCount = (lastInst >= firstInst) ? (lastInst - firstInst + 1) : 0;
     // A block can push once per instruction and once per PHI. Reserving the
     // entire function's variable count for every block made this temporary
@@ -703,6 +728,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             // Allocate new register for PHI result
             u16 newReg = state.AllocateNewRegister();
             ir->phiResultRegs[p] = newReg;
+            ir->InheritRegisterName(newReg, variables[varIdx].originalReg);
 
             // Set the type for the new PHI result register
             // Type is inherited from the variable's type
@@ -727,6 +753,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
     
     // 2. Process instructions in this block
     for (u32 i = firstInst; i <= lastInst; i++) {
+        if (ir->sourceNodes) state.currentSourceNode = ir->sourceNodes[i];
         u16 op = ir->opcodes[i];
         if (op == IR::OP_NOP) continue;
         
@@ -738,7 +765,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
         if (op == IR::OP_STORE_OUTPUT) {
             u16 destReg = ir->destinations[i];
             if ((destReg & 0xC000) == 0 && destReg < ir->registerCount) {
-                u16 varIdx = regToVariable[destReg];
+                u16 varIdx = GetVariable(destReg);
                 if (varIdx != 0xFFFF) {
                     u16 currentReg = state.GetCurrentRegister(varIdx);
                     if (currentReg != 0xFFFF && currentReg != destReg) {
@@ -796,7 +823,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             op == IR::OP_STRUCT_CONSTRUCT ||                // Struct positional constructor
             op == IR::OP_STORAGE_FIELD || op == IR::OP_STORAGE_INDEX || op == IR::OP_STORAGE_LOAD ||
             op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_LOAD || op == IR::OP_LOCAL_STORE ||  // Pointer operations
-            op == IR::OP_LOCAL_FIELD_PTR ||                                                     // Struct-field pointer
+            op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_LOCAL_INDEX_PTR ||                     // Struct-field pointers
             op == IR::OP_ARRAY_LOAD || op == IR::OP_ARRAY_STORE) {  // Array operations with register indices
             shouldRenameOperands = true;
         }
@@ -823,7 +850,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                 if (opReg >= ir->registerCount) continue;
 
                 // Check if this operand is a tracked variable
-                u16 varIdx = regToVariable[opReg];
+                u16 varIdx = GetVariable(opReg);
                 if (varIdx != 0xFFFF) {
                     // Get the current version of this variable
                     u16 currentReg = state.GetCurrentRegister(varIdx);
@@ -842,14 +869,14 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
         u16 dest = ir->destinations[i];
         // Skip constant references, but allow register 0
         if ((dest & 0xC000) == 0 && dest < ir->registerCount) {
-            u16 varIdx = regToVariable[dest];
+            u16 varIdx = GetVariable(dest);
 
             // Special case: STORE_REG where dest is NOT a tracked variable
             // We still need to rename the source operand if it's a variable
             if (varIdx == 0xFFFF && op == IR::OP_STORE_REG) {
                 u16 srcReg = ir->GetOperand(i, 0);
                 if ((srcReg & 0xC000) == 0 && srcReg < ir->registerCount) {
-                    u16 srcVarIdx = regToVariable[srcReg];
+                    u16 srcVarIdx = GetVariable(srcReg);
                     if (srcVarIdx != 0xFFFF) {
                         u16 currentSrc = state.GetCurrentRegister(srcVarIdx);
                         if (currentSrc != 0xFFFF && currentSrc != srcReg) {
@@ -870,8 +897,14 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                 
                 // Check if source is a constant reference
                 bool srcIsConstant = (srcReg & 0xC000) != 0;
+                // An address-taken source lives in memory and can change after
+                // this copy, so it can't stand in for the copied value (in a
+                // phi or a later read). Snapshot it like a constant.
+                bool srcInMemory = !srcIsConstant && srcReg < ir->registerCount &&
+                    ir->registerStorageInfo &&
+                    (ir->registerStorageInfo[srcReg] & IR::IRProgram::STORAGE_IS_ADDRESS_TAKEN);
                 
-                if (srcIsConstant) {
+                if (srcIsConstant || srcInMemory) {
                     // Source is a constant - allocate a new SSA register for this definition.
                     // This is critical for phi nodes: they need a typed register reference,
                     // not a raw constant reference.
@@ -898,7 +931,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                 } else {
                     // Source is a register - rename to current SSA version if tracked
                     if (srcReg < ir->registerCount) {
-                        u16 srcVarIdx = regToVariable[srcReg];
+                        u16 srcVarIdx = GetVariable(srcReg);
                         if (srcVarIdx != 0xFFFF) {
                             u16 currentSrc = state.GetCurrentRegister(srcVarIdx);
                             if (currentSrc != 0xFFFF) {
@@ -928,6 +961,8 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                         }
                     }
                 }
+
+                ir->InheritRegisterName(valueReg, variables[varIdx].originalReg);
 
                 // Push the value register onto the stack
                 state.PushRegister(varIdx, valueReg);
@@ -972,6 +1007,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                         // Don't use originalReg here - it might only be defined in a different
                         // path and would cause a "forward reference not defined" SPIR-V error.
                         u16 undefReg = state.AllocateNewRegister();
+                        ir->InheritRegisterName(undefReg, variables[varIdx].originalReg);
 
                         // Copy type info to the new register
                         if (ir->registerTypes && undefReg < ir->registerCount) {
@@ -1011,6 +1047,89 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
     for (u32 i = 0; i < pushedCount; i++) {
         state.PopVersion(pushedVars[i]);
     }
+}
+
+//==============================================================================
+// Phase 4: Dead PHI Elimination
+//==============================================================================
+
+// Minimal SSA places a phi at every join in a variable's iterated dominance
+// frontier, whether or not the variable is live there. An inlined call's
+// locals and return flag are written before they're read on every call, so
+// a loop calling the function gets loop-header phis whose results nothing
+// reads. They survive into SPIR-V, and SPIRV-Cross turns each into a copy
+// in the loop increment (issue #160). Mark-and-sweep removes them: a phi is
+// live if an instruction references its result, or a live phi does.
+void SSAConstructor::EliminateDeadPhis() {
+    if (ir->phiCount == 0) return;
+
+    u32 regCount = ir->registerCount;
+    bool* regUsed = (bool*)arena->Allocate(regCount * sizeof(bool), 64);
+    memset(regUsed, 0, regCount * sizeof(bool));
+
+    // Any appearance in an instruction counts as a use, destination slots
+    // included: STORE_OUTPUT and LOCAL_STORE carry a value register there.
+    // Over-approximating only keeps a phi that could have gone.
+    for (u32 i = 0; i < ir->instructionCount; i++) {
+        if (ir->opcodes[i] == IR::OP_NOP) continue;
+        u16 dest = ir->destinations[i];
+        if ((dest & 0xC000) == 0 && dest < regCount) regUsed[dest] = true;
+        for (u32 opIdx = 0; opIdx < 4; opIdx++) {
+            u16 opReg = ir->GetOperand(i, opIdx);
+            if (opReg == 0xFFFF || (opReg & 0xC000) != 0 || opReg >= regCount) continue;
+            regUsed[opReg] = true;
+        }
+    }
+
+    // Instructions define a phi result only through the phi itself, so a
+    // phi whose result appears in an instruction is read there.
+    u32* regToPhi = (u32*)arena->Allocate(regCount * sizeof(u32), 64);
+    memset(regToPhi, 0xFF, regCount * sizeof(u32));
+    bool* phiLive = (bool*)arena->Allocate(ir->phiCount * sizeof(bool), 64);
+    u32* phiWorklist = (u32*)arena->Allocate(ir->phiCount * sizeof(u32), 64);
+    u32 workTail = 0;
+    for (u32 p = 0; p < ir->phiCount; p++) {
+        u16 resultReg = ir->phiResultRegs[p];
+        phiLive[p] = resultReg < regCount && regUsed[resultReg];
+        if (resultReg < regCount) regToPhi[resultReg] = p;
+        if (phiLive[p]) phiWorklist[workTail++] = p;
+    }
+
+    // A live phi keeps the phis feeding it alive.
+    u32 workHead = 0;
+    while (workHead < workTail) {
+        u32 p = phiWorklist[workHead++];
+        for (u32 opIdx = ir->phiOperandOffsets[p]; opIdx < ir->phiOperandOffsets[p + 1]; opIdx++) {
+            u16 valueReg = ir->phiOperandValues[opIdx];
+            if (valueReg >= regCount) continue;
+            u32 source = regToPhi[valueReg];
+            if (source == 0xFFFFFFFF || phiLive[source]) continue;
+            phiLive[source] = true;
+            phiWorklist[workTail++] = source;
+        }
+    }
+    if (workTail == ir->phiCount) return;
+
+    // Compact the phi arrays in place, keeping their order.
+    u32 keptPhis = 0;
+    u32 keptOperands = 0;
+    for (u32 p = 0; p < ir->phiCount; p++) {
+        if (!phiLive[p]) continue;
+        u32 opStart = ir->phiOperandOffsets[p];
+        u32 opEnd = ir->phiOperandOffsets[p + 1];
+        ir->phiBlockIndices[keptPhis] = ir->phiBlockIndices[p];
+        ir->phiResultRegs[keptPhis] = ir->phiResultRegs[p];
+        ir->phiTypes[keptPhis] = ir->phiTypes[p];
+        ir->phiOperandOffsets[keptPhis] = keptOperands;
+        for (u32 opIdx = opStart; opIdx < opEnd; opIdx++) {
+            ir->phiOperandValues[keptOperands] = ir->phiOperandValues[opIdx];
+            ir->phiOperandBlocks[keptOperands] = ir->phiOperandBlocks[opIdx];
+            keptOperands++;
+        }
+        keptPhis++;
+    }
+    ir->phiOperandOffsets[keptPhis] = keptOperands;
+    ir->phiCount = keptPhis;
 }
 
 }  // namespace SSA

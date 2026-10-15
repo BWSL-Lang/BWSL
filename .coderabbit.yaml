@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - docs/conventions/coding-conventions.md
+
+reviews:
+  path_instructions:
+    - path: "src/**"
+      instructions: |
+        Read docs/conventions/coding-conventions.md before reviewing and
+        check changes against it. In particular:
+        - Includes, naming and function-naming rules.
+        - No new exceptions, virtual functions or raw new/delete; no new
+          std:: containers in CFG, SSA or the SPIR-V backend.
+        - New diagnostics carry a source location (ErrorAt / ReportErrorAt).
+        - New intrinsics keep the parallel tables in bwsl_stdlib.h in sync.
+        - New and changed code uses 4-space indentation, also in files that
+          still use 2 spaces. Don't ask for unrelated lines to be reformatted.
+        - If the change is visible to users of the compiler (a new feature,
+          changed behaviour, a user-facing bug fix, a new or changed
+          diagnostic, CLI flag or AST JSON field), check that CHANGELOG.md
+          has a matching entry in its "unreleased" section. Purely internal
+          changes (refactors, tests, build tweaks) don't need one.
+    - path: "modules/**"
+      instructions: |
+        New or changed standard-library functions, and changed behaviour of
+        existing ones, need a matching entry in the "unreleased" section of
+        CHANGELOG.md.

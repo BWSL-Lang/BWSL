@@ -62,7 +62,10 @@ Current `const` rules include:
 - `const` declarations require an initializer
 - top-level and pass-level `const` values are parsed and may be compile-time
   evaluated when possible
-- module-level `const` declarations currently require literal initializers
+- module-level `const` declarations are folded at compile time. Their type
+  must be a scalar or a `float`, `int` or `uint` vector. The initializer may
+  use literals, other constants, scalar arithmetic, and scalar or vector
+  constructors; vector arithmetic, swizzles and matrices are not supported yet
 - assignments, increments and stores through members or swizzles cannot modify
   a const value; taking a mutable address of a const value is also rejected
 - a const pointer cannot be rebound, but its mutable pointee can be written
@@ -70,6 +73,20 @@ Current `const` rules include:
 Local names must be unique within their lexical scope. Nested blocks, shader
 stages and switch arms have separate scopes; sibling scopes may reuse a name.
 Duplicate struct names are rejected.
+
+A written local, parameter, or loop variable that hides a visible variable,
+parameter, loop variable, constant, or struct field produces a non-blocking
+`DiagnosticSeverity.Note`. The note points at the new name and identifies the
+hidden declaration's file and position. This also applies to unused functions
+and imported modules. Sibling scopes and unrelated functions or stages may
+reuse names without a note. Compile-time unrolling reports the written
+declaration once; implicit, synthesized iterator names have no name diagnostic.
+
+CLI `-errors-json` includes these notes in `diagnostics` while keeping
+`success: true` and zero errors/warnings when compilation succeeds. WASM results
+also include a `diagnostics` array with severity and source spans; notes are
+excluded from its legacy `errors` array. The compiler service prints notes
+without rejecting or invalidating a compiled variant.
 
 ## Arrays
 

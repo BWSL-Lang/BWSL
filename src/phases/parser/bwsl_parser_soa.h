@@ -206,6 +206,11 @@ struct Parser {
     NodeRef currentPipeline;
     std::unordered_map<std::string, u16> variableRegisters;
     std::unordered_map<u32, std::vector<u32>> multiDimArrayDims;
+    struct ResourceTypeSite {
+        TokenRef token;
+        u32 qualifierIndex;
+    };
+    std::unordered_map<u32, ResourceTypeSite> resourceTypeSites;
 
     struct TypeCache {
         static constexpr u32 CACHE_SIZE = 128;
@@ -261,6 +266,8 @@ struct Parser {
         hasLookahead = false;
         has3TokenLookahead = false;
         multiDimArrayDims.clear();
+        resourceTypeSites.clear();
+        recoveredKeywordNames.clear();
         evalBindings.clear();
         evalBindingScopeStarts.clear();
         activeVariantBindings.clear();
@@ -288,6 +295,8 @@ struct Parser {
 
     // Main parse functions
     NodeRef ParseDocument();
+    bool ValidateNames();
+    void DiagnoseShadowing();
     NodeRef ParsePipeline();
 
     // Parse a standalone module or submodule file
@@ -332,6 +341,12 @@ private:
     bool Check(TokenType type) const { return stream->GetType(current) == type; }
     bool Match(TokenType type);
     bool Consume(TokenType type, const char* message);
+    static bool IsKeywordNameToken(TokenType type);
+    bool ConsumeDeclarationName(const char* role, const char* message);
+    bool CheckRecoveredKeywordName() const;
+    // Only populated after rejecting a declaration. References to those names
+    // can then be parsed without cascading errors; compilation still fails.
+    std::unordered_set<TokenType> recoveredKeywordNames;
     void MarkNodeEndAtToken(NodeRef node, TokenRef token);
     void MarkNodeEndAtPreviousToken(NodeRef node);
     void Synchronize();
@@ -365,7 +380,7 @@ private:
     void ParseModuleImportList(NodeRef owner, bool ownerIsPipeline);
     void ParseUsingDeclaration(NodeRef owner, bool ownerIsPipeline);
     void ParseUsingModuleList(NodeRef owner, bool ownerIsPipeline);
-    void ParseUsingTypeAliasList();
+    void ParseUsingTypeAliasList(NodeRef owner);
     void ParseAttributes(NodeRef owner, bool ownerIsPipeline = true);
     void ParseResources(NodeRef owner, bool ownerIsPipeline = true);
     void RegisterParsedResource(const std::string& resourceName,
@@ -393,6 +408,7 @@ private:
     void ParsePassOutputs(NodeRef pass);
     NodeRef ParseAttributeDecl();
     NodeRef ParseResourceDecl();
+    void ValidateResourceTypes(NodeRef owner, bool ownerIsPipeline, u32 firstResource = 0);
     NodeRef ParseBlock(bool createScope = true);
     NodeRef ParseStatement();
     NodeRef ParseCustomTypeVarDecl();
@@ -446,7 +462,8 @@ private:
     NodeRef ParseWhereClause();
     NodeRef ParseArrayInitializer();
     NodeRef ParseInlineArrayConstruction();
-    NodeRef ParseArrayDeclaration(CoreType elementType, StorageClass storageClass = StorageClass::Default);
+    NodeRef ParseArrayDeclaration(CoreType elementType, StorageClass storageClass = StorageClass::Default,
+                                  bool isConst = false, bool registerSymbol = true);
     // Parse one array-size token: an integer literal or a compile-time
     // integer constant name (optionally module-qualified). Validates the
     // value against MAX_ARRAY_SIZE, reports an error and returns false on
