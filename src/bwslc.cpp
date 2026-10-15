@@ -2317,6 +2317,8 @@ CompileResult CompileShaderStage(
 
     // Configure vertex input mode
     // WebGL/GLES uses traditional interleaved inputs (in vec3 position;)
+    // Use this resource layout in every stage: fragment texture bindings must
+    // not reserve vertex-pulling slots when the vertex stage uses interleaved inputs.
     // Other backends use vertex pulling via storage buffers
     SPIRVBuilder::VertexPullingConfig vpConfig;
     vpConfig.mode = useInterleavedVertices
@@ -3803,7 +3805,7 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
             }
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Fragment, config.verbose, config.dumpIr, config.debugNames,
-                                                       true, false, specializedPipelineRef,
+                                                       true, config.outputGlslEs, specializedPipelineRef,
                                                        pipeline.passes[passIdx], &passVaryings, config.outputInternals,
                                                        config.useDirectGles, config.outputGlslEs, &config.renderConfig,
                                                        &diagnostics,
@@ -3845,7 +3847,7 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
             }
             CompileResult result = CompileShaderStage(context, parser, pass,
                                                        ShaderStage::Compute, config.verbose, config.dumpIr, config.debugNames,
-                                                       true, false, specializedPipelineRef,
+                                                       true, config.outputGlslEs, specializedPipelineRef,
                                                        pipeline.passes[passIdx], nullptr, config.outputInternals,
                                                        config.useDirectGles, config.outputGlslEs, &config.renderConfig,
                                                        &diagnostics,

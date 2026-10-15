@@ -13,7 +13,7 @@ struct main0_in
     float2 v_texcoord [[user(locn0)]];
 };
 
-fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> t_albedo [[texture(2)]], texturecube<float> t_environment [[texture(3)]], texture3d<float> t_volume [[texture(4)]], texture2d_array<float> t_layers [[texture(5)]], sampler t_albedoSmplr [[sampler(0)]], sampler t_environmentSmplr [[sampler(1)]], sampler t_volumeSmplr [[sampler(2)]], sampler t_layersSmplr [[sampler(3)]])
+fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> t_albedo [[texture(0)]], texturecube<float> t_environment [[texture(1)]], texture3d<float> t_volume [[texture(2)]], texture2d_array<float> t_layers [[texture(3)]], sampler t_albedoSmplr [[sampler(0)]], sampler t_environmentSmplr [[sampler(1)]], sampler t_volumeSmplr [[sampler(2)]], sampler t_layersSmplr [[sampler(3)]])
 {
     main0_out out = {};
     float3 _76 = float3(in.v_texcoord, 0.0);
