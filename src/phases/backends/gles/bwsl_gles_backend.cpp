@@ -675,6 +675,18 @@ bool GLESBuilder::EmitStructuredRegion(u32 block, u32 stopBlock,
             out.NL(indent); out.Lit("return;");
             return false;
         }
+        // A constant condition or selector (usually left by constant
+        // propagation) always takes one edge. Loop headers keep the branch
+        // that exits the loop.
+        u32 constantTarget;
+        if (terminal != NO_BLOCK && IR::TryGetConstantTarget(ir, terminal, &constantTarget)) {
+            u32 taken = cfg->instToBlock[constantTarget];
+            bool falls = EmitBlockEdge(block, taken, merge != NO_BLOCK ? merge : stopBlock, loop, depth);
+            if (merge == NO_BLOCK) return falls;
+            if (!falls) return false;
+            block = merge;
+            continue;
+        }
         if (op == IR::OP_SWITCH) {
             // Case bodies are mutually exclusive, with no source fallthrough.
             // Using if/else also lets a case's loop break/skip target its loop

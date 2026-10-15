@@ -10,7 +10,8 @@ pipeline SSAComplex {
         use attributes { position }
 
         vertex {
-            float cond = 0.5;
+            // A runtime value, so constant propagation keeps every diamond.
+            float cond = attributes.position.x;
 
             // Diamond CFG pattern with modifications
             float diamond = 0.0;

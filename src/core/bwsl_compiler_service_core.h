@@ -6,6 +6,7 @@
 #include "bwsl_cfg.h"
 #include "bwsl_gl_names.h"
 #include "bwsl_ssa.h"
+#include "phases/optimization/bwsl_constant_propagation.h"
 #include "bwsl_parser_soa.h"
 #include "bwsl_comptime_interpreter.h"
 #include "bwsl_resource_reflection.h"
@@ -715,6 +716,7 @@ private:
             lowering.ReportErrorAt(node, "SSA register limit exceeded (16383 registers). Split or simplify the shader.\n");
             return false;
         }
+        Optimization::PropagateConstants(&lowering.builder, &cfgBuilder.cfg);
 
         if (outExplicitSamplerUses) {
             std::vector<ExplicitSamplerUse> stageUses =

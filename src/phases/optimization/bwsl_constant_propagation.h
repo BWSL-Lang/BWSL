@@ -1,0 +1,24 @@
+#pragma once
+
+#include "phases/control_flow/bwsl_cfg.h"
+#include "phases/ir_generation/bwsl_ir_gen.h"
+
+namespace BWSL {
+namespace Optimization {
+
+// Sparse conditional constant propagation (Wegman & Zadeck) over the IR
+// after SSA. It folds scalar instructions whose operands are constant,
+// resolves phis from the edges that can actually run, and makes branch
+// conditions constant where they are. Uses of a constant register are
+// replaced by the constant, then the scalar instructions and phis nothing
+// reads any more are removed.
+//
+// The CFG and block layout are left alone: a branch or switch with a
+// constant condition stays one, and the backends emit only the edge it takes.
+// `cfg` is null for straight-line stages, which skip CFG and SSA. Those,
+// and single-block stages, get one forward walk instead, since a register
+// there can be assigned more than once.
+void PropagateConstants(IR::IRBuilder* builder, CFG* cfg);
+
+}  // namespace Optimization
+}  // namespace BWSL
