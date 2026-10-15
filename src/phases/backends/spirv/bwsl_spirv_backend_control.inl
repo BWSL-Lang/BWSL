@@ -78,11 +78,37 @@ u32 SPIRVBuilder::GetOrCreateBlockLabel(u32 ir_idx) {
   return label_id;
 }
 
+// True when jumping straight to `targetInst` would drop an edge a phi reads:
+// the phi would then name a block that no longer branches to it.
+bool SPIRVBuilder::DropsPhiEdge(u32 branchInst, u32 targetInst) const {
+    if (!cfg || !ir->phiBlockIndices) return false;
+    u32 fromBlock = cfg->instToBlock[branchInst];
+    u32 toBlock = cfg->instToBlock[targetInst];
+    for (u32 phi = 0; phi < ir->phiCount; phi++) {
+        if (ir->phiBlockIndices[phi] == toBlock) continue;
+        for (u32 op = 0; op < ir->GetPhiOperandCount(phi); op++) {
+            if (ir->GetPhiOperandBlock(phi, op) == fromBlock) return true;
+        }
+    }
+    return false;
+}
+
 void SPIRVBuilder::EmitBranch(u32 ir_idx) {
   // For OP_BRANCH, we may need to convert the condition to bool BEFORE
   // emitting OpSelectionMerge, since SPIR-V requires OpSelectionMerge
   // to be immediately followed by OpBranchConditional
   IR::OpCode op = static_cast<IR::OpCode>(ir->opcodes[ir_idx]);
+
+  // A constant condition or selector (usually left by constant propagation)
+  // always takes one edge, which needs no selection construct; the rest are
+  // unreachable. This also keeps a literal selector out of HLSL, where older
+  // DXC rejects `switch (2)`.
+  u32 constantTarget;
+  if (IR::TryGetConstantTarget(ir, ir_idx, &constantTarget) &&
+      !DropsPhiEdge(ir_idx, constantTarget)) {
+    Emit(spv::OpBranch, GetOrCreateBlockLabel(constantTarget));
+    return;
+  }
 
   if (op == IR::OP_BRANCH) {
     // Check if this is an empty if-block (both targets are the same)

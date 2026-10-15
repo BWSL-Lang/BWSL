@@ -179,6 +179,9 @@ BWSLC_SANITIZE_OUT = $(BUILD_DIR)/bwslc-sanitize$(EXE_EXT)
 EQUIV_RUNNER_SRC = src/equiv_runner.cpp
 EQUIV_RUNNER_OUT = $(BUILD_DIR)/equiv_runner$(EXE_EXT)
 
+BENCH_RUNNER_SRC = src/bench_runner.cpp
+BENCH_RUNNER_OUT = $(BUILD_DIR)/bench_runner$(EXE_EXT)
+
 # Vulkan SDK location (override by exporting VULKAN_SDK)
 ifeq ($(HOST_OS),macos)
 VULKAN_SDK ?= $(HOME)/VulkanSDK/1.3.243.0/macOS
@@ -190,6 +193,13 @@ VULKAN_LIBS = $(if $(VULKAN_SDK),-L$(VULKAN_SDK)/lib,) -lvulkan
 else
 VULKAN_INCLUDE =
 VULKAN_LIBS =
+endif
+
+# bench_runner also needs OpenGL: EGL on Linux, none on macOS (Vulkan only).
+ifeq ($(HOST_OS),linux)
+BENCH_RUNNER_LIBS = $(VULKAN_LIBS) -lEGL
+else
+BENCH_RUNNER_LIBS = $(VULKAN_LIBS)
 endif
 
 # SPIRV-Cross integration for cross-compilation
@@ -354,7 +364,7 @@ WASM_SPIRV_INCLUDES = $(BWSL_INCLUDE_DIRS)
 
 .PHONY: all help build bwslc-sanitize \
 	clean wasm wasm-debug test test-sanitize test-symbol-table test-symbol-table-sanitize \
-	install equiv_runner spirv-tools clangd-config benchmark-backend
+	install equiv_runner bench_runner spirv-tools clangd-config benchmark-backend
 
 all: build
 
@@ -368,6 +378,7 @@ help:
 	@echo "  make spirv-tools        Build SPIRV-Tools library and CLI tools"
 	@echo "  make install DOCS_DIR=/path/to/site/public/wasm"
 	@echo "  make benchmark-backend  Benchmark backend cache/validation overlap"
+	@echo "  make bench_runner       GPU benchmark runner for tests/benchmarks/run.py"
 	@echo "  make clean              Remove build artifacts"
 
 build: $(ACTIVE_WRAPPER_OBJ) $(ACTIVE_OBJ)
@@ -426,6 +437,12 @@ equiv_runner: | $(BUILD_DIR_MARKER)
 	$(CXX) $(CXXFLAGS) $(VULKAN_INCLUDE) -o $(EQUIV_RUNNER_OUT) \
 		$(EQUIV_RUNNER_SRC) $(VULKAN_LIBS)
 	@echo "Built: $(EQUIV_RUNNER_OUT)"
+
+# GPU benchmark runner for tests/benchmarks/run.py (Windows: build.bat bench_runner).
+bench_runner: | $(BUILD_DIR_MARKER)
+	$(CXX) $(CXXFLAGS) $(VULKAN_INCLUDE) -o $(BENCH_RUNNER_OUT) \
+		$(BENCH_RUNNER_SRC) $(BENCH_RUNNER_LIBS)
+	@echo "Built: $(BENCH_RUNNER_OUT)"
 
 spirv-tools: $(SPIRV_TOOLS_STAMP)
 

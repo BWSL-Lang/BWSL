@@ -82,14 +82,15 @@ VARIANT_REFLECTION_TESTS = {
                 "vert_hlsl_not_contains": ["float4(0.25f, 0.0f, 0.0f, 1.0f)"],
                 "vert_ir_contains": ["Instructions: 3", "[0] = 0.5"],
                 "vert_ir_not_contains": ["BRANCH", "[0] = 0.25"],
+                # Constant propagation folds brightness (0.5 + 0.25) and blue
+                # into the output, so the result shows which branches survived.
                 "frag_ir_contains": [
                     "[  0] STORE_REG        r0           <- 0.5",
-                    "FADD             r1           <- r0, 0.25",
-                    "[  3] STORE_REG        r2           <- 0.5",
+                    "<- (0.75, 0, 0.5, 1)",
                 ],
-                "frag_ir_not_contains": ["BRANCH", "0.75"],
-                "frag_spirv_contains": ["OpFAdd %float %float_0_5 %float_0_25"],
-                "frag_spirv_not_contains": ["OpBranchConditional", "%float_0_75"],
+                "frag_ir_not_contains": ["BRANCH"],
+                "frag_spirv_contains": ["OpConstantComposite %v4float %float_0_75 %float_0 %float_0_5 %float_1"],
+                "frag_spirv_not_contains": ["OpBranchConditional", "OpFAdd"],
             },
             "override": {
                 "vert_metal_contains": ["float4(0.25, 0.0, 0.0, 1.0)"],
@@ -100,11 +101,11 @@ VARIANT_REFLECTION_TESTS = {
                 "vert_ir_not_contains": ["BRANCH", "[0] = 0.5"],
                 "frag_ir_contains": [
                     "[  1] STORE_REG        r0           <- 0.75",
-                    "[  4] STORE_REG        r2           <- 1",
+                    "<- (1, 0, 1, 1)",
                 ],
-                "frag_ir_not_contains": ["BRANCH", "[  3] STORE_REG        r2           <- 0.5"],
-                "frag_spirv_contains": ["OpFAdd %float %float_0_75 %float_0_25"],
-                "frag_spirv_not_contains": ["OpBranchConditional", "OpFAdd %float %float_0_5 %float_0_25"],
+                "frag_ir_not_contains": ["BRANCH"],
+                "frag_spirv_contains": ["OpConstantComposite %v4float %float_1 %float_0 %float_1 %float_1"],
+                "frag_spirv_not_contains": ["OpBranchConditional", "OpFAdd"],
             },
         },
     },
@@ -154,7 +155,7 @@ VARIANT_REFLECTION_TESTS = {
                 "frag_hlsl_not_contains": ["float4(0.25f, 0.0f, 0.0f, 1.0f)", "float4(0.75f, 0.0f, 0.0f, 1.0f)", "float4(1.0f, 0.0f, 0.0f, 1.0f)"],
                 "frag_ir_contains": ["[  1] STORE_REG        r0           <- 0.5"],
                 "frag_ir_not_contains": ["SWITCH", "BRANCH", "0.25", "0.75"],
-                "frag_spirv_contains": ["OpCompositeConstruct %v4float %float_0_5"],
+                "frag_spirv_contains": ["OpConstantComposite %v4float %float_0_5"],
                 "frag_spirv_not_contains": ["OpSwitch", "OpBranchConditional", "%float_0_75", "%float_0_25"],
             },
             "override": {
@@ -164,7 +165,7 @@ VARIANT_REFLECTION_TESTS = {
                 "frag_hlsl_not_contains": ["float4(0.25f, 0.0f, 0.0f, 1.0f)", "float4(0.5f, 0.0f, 0.0f, 1.0f)", "float4(0.75f, 0.0f, 0.0f, 1.0f)"],
                 "frag_ir_contains": ["[  1] STORE_REG        r0           <- 1"],
                 "frag_ir_not_contains": ["SWITCH", "BRANCH", "0.25", "0.5", "0.75"],
-                "frag_spirv_contains": ["OpCompositeConstruct %v4float %float_1"],
+                "frag_spirv_contains": ["OpConstantComposite %v4float %float_1"],
                 "frag_spirv_not_contains": ["OpSwitch", "OpBranchConditional", "%float_0_75", "%float_0_5", "%float_0_25"],
             },
         },
@@ -296,7 +297,7 @@ ERROR_CASE_TESTS = {
     "swizzle_component_out_of_range.bwsl": "component 'z' ('b') is out of range for FLOAT2, which has 2 components",
     "swizzle_out_of_range_expression.bwsl": "component 'z' ('b') is out of range for FLOAT2, which has 2 components",
     "swizzle_store_out_of_range.bwsl": "component 'z' ('b') is out of range for FLOAT2, which has 2 components",
-    "ternary_branch_type_mismatch.bwsl": "SPIR-V validation failed",
+    "ternary_branch_type_mismatch.bwsl": "ternary arms have different types (float3 and float2)",
     "bool_assigned_to_float.bwsl": "SPIR-V validation failed",
     "unknown_struct_field.bwsl": "Unknown field 'missing'",
     "shared_in_fragment.bwsl": "shared variables are only allowed in compute shaders",
@@ -650,9 +651,11 @@ TRANSLATION_EXPECTATION_TESTS = {
             ],
             "gles_contains": [
                 "#extension GL_NV_shader_noperspective_interpolation : require",
-                "flat in highp float v_materialIndex",
-                "noperspective in highp vec2 v_screenUV",
+                "precision highp float;",
+                "flat in float v_materialIndex",
+                "noperspective in vec2 v_screenUV",
             ],
+            "gles_not_contains": ["mediump"],
         },
     },
     "output_depth_builtin": {
@@ -767,9 +770,11 @@ TRANSLATION_EXPECTATION_TESTS = {
             "metal_contains": ["length(", "sqrt(", "dot("],
         },
     },
+    # The vertex stage's seeds are constants, so its hashes fold away; the
+    # fragment stage seeds one call from the pixel position.
     "module_random_live": {
         "vert": {
-            "ir_contains": ["XOR", "SHR", "IMUL", "SIN", "COS"],
+            "ir_contains": ["SIN", "COS"],
             "hlsl_contains": ["sin(", "cos("],
         },
         "frag": {
@@ -3556,6 +3561,11 @@ def main() -> int:
     ternary_passed, ternary_failed = run_ternary_select_tests(bwslc)
     passed += ternary_passed
     failed += ternary_failed
+
+    from constant_propagation_tests import run_constant_propagation_tests
+    constprop_passed, constprop_failed = run_constant_propagation_tests(bwslc)
+    passed += constprop_passed
+    failed += constprop_failed
 
     from p1_regression_tests import run_p1_regression_tests
     p1_passed, p1_failed = run_p1_regression_tests(bwslc, output_dir / "p1_validation")

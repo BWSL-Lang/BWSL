@@ -472,6 +472,11 @@ std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, b
     glslOpts.es = es;
     glslOpts.vulkan_semantics = false;
     glslOpts.separate_shader_objects = true;
+    // ES fragment shaders otherwise default to mediump float while vertex
+    // shaders default to highp; drivers that resolve varying precision from
+    // the stage default (Intel iGPUs) then reject or truncate the interface.
+    glslOpts.fragment.default_float_precision = spirv_cross::CompilerGLSL::Options::Highp;
+    glslOpts.fragment.default_int_precision = spirv_cross::CompilerGLSL::Options::Highp;
     compiler.set_common_options(glslOpts);
     combineGLSLSamplers(compiler);
         std::string result = compiler.compile();
@@ -494,6 +499,11 @@ std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, b
         glslOpts.es = es;
         glslOpts.vulkan_semantics = false;
         glslOpts.separate_shader_objects = true;
+        // ES fragment shaders otherwise default to mediump float while vertex
+        // shaders default to highp; drivers that resolve varying precision from
+        // the stage default (Intel iGPUs) then reject or truncate the interface.
+        glslOpts.fragment.default_float_precision = spirv_cross::CompilerGLSL::Options::Highp;
+        glslOpts.fragment.default_int_precision = spirv_cross::CompilerGLSL::Options::Highp;
         compiler.set_common_options(glslOpts);
         combineGLSLSamplers(compiler);
         std::string result = compiler.compile();

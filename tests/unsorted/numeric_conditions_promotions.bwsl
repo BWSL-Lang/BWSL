@@ -13,7 +13,7 @@ pipeline NumericConditionsPromotions {
 
         vertex {
             // Integer condition: nonzero is true
-            int n = 3;
+            int n = int(attributes.position.x);  // Run-time, so the if stays
             float r = 0.0;
             if (n) {
                 r = 1.0;

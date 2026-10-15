@@ -1585,10 +1585,10 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u32 operand = GetSpirvId(operand_reg);
     u32 glsl_op = IR_TO_GLSL_STD_450_TABLE[static_cast<u32>(op)];
 
-    // sign() is polymorphic: FSign for float, SSign for signed int.
-    if (op == IR::OP_SIGN && ir->registerTypes &&
-        operand_reg < ir->registerCount) {
-      CoreType t = static_cast<CoreType>(ir->registerTypes[operand_reg]);
+    // sign() is polymorphic: FSign for float, SSign for signed int. The
+    // operand may be a constant (`sign(-3)`), which has no register type.
+    if (op == IR::OP_SIGN) {
+      CoreType t = GetOperandType(operand_reg);
       if (t == CoreType::INT || t == CoreType::INT2 ||
           t == CoreType::INT3 || t == CoreType::INT4) {
         glsl_op = GLSLstd450SSign;
