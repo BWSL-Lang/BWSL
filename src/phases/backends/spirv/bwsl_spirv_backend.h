@@ -219,10 +219,15 @@ struct SPIRVBuilder {
     IRAnalysis analysis;
     const SymbolTableData* symbols;
     CFG* cfg;  // Control flow graph for proper block ordering and PHI emission
-    // What EmitFunctionBody emits as reachable: blocks, and CFG edges
-    // (parallel to cfg->predecessorData). Blocks a constant branch skips
-    // aren't. See FindEmittedBlocks.
-    bool* blockEmitted = nullptr;
+    // How EmitFunctionBody emits each block, and which CFG edges it emits
+    // (parallel to cfg->predecessorData). See FindEmittedBlocks.
+    enum class BlockEmission : u8 {
+        SKIPPED,      // A constant branch skips it: label and OpUnreachable
+        REACHABLE,    // Emitted in full
+        BACK_EDGE,    // An unreachable continue target: label and the back edge
+    };
+    BlockEmission* blockEmission = nullptr;
+    u32* backEdgeTargets = nullptr;  // [blockCount] header block of a BACK_EDGE block
     bool* edgeEmitted = nullptr;
 
     // ============= Debug Options =============
@@ -369,6 +374,17 @@ struct SPIRVBuilder {
     bool TakesConstantEdge(u32 branchInst, u32* targetInst) const;
     void FindEmittedBlocks();
     bool IsEdgeEmitted(u32 fromBlock, u32 toBlock) const;
+    bool IsBackEdgeOnly(u32 fromBlock, u32 toBlock) const;
+    enum class PhiShape : u8 {
+        EMPTY,       // No operands
+        TRIVIAL,     // Every emitted edge carries one value
+        MIXED,       // Emitted edges carry different values
+        UNDEFINED,   // No emitted edge carries a value
+    };
+    PhiShape GetPhiShape(u32 phi, u16* trivialValue) const;
+    u32 GetPhiTypeId(u32 phi);
+    u32 EmitUndefConstant(u32 typeId);
+    void DropBlockBody(u32 firstInst, u32 lastInst);
     void EmitStructuredControlFlow(u32 ir_idx);
     
     // PHI nodes
