@@ -28,10 +28,10 @@ fragment main0_out main0(main0_in in [[stage_in]])
     {
         _12 = _14;
     }
-    float _51 = 1.0 - fast::max(dot(float3(0.0, 0.0, 1.0), fast::normalize(_24 + float3(0.0, 0.0, 1.0))), 0.0);
-    float _53 = _51 * _51;
-    float3 _62 = float3(0.039999999105930328369140625) + ((float3(1.0) - float3(0.039999999105930328369140625)) * float3((_53 * _53) * _51));
-    out.m_9 = float4((float3(_12) * (float3(1.0) - _62)) + _62, 1.0);
+    float _50 = 1.0 - fast::max(dot(float3(0.0, 0.0, 1.0), fast::normalize(_24 + float3(0.0, 0.0, 1.0))), 0.0);
+    float _52 = _50 * _50;
+    float3 _61 = float3(0.039999999105930328369140625) + ((float3(1.0) - float3(0.039999999105930328369140625)) * float3((_52 * _52) * _50));
+    out.m_9 = float4((float3(_12) * (float3(1.0) - _61)) + _61, 1.0);
     return out;
 }
 

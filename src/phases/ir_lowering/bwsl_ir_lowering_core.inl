@@ -154,6 +154,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   program.boolConstants =
       (u8 *)pool->Allocate(8 * sizeof(u8), 64); // Only need 2 (true/false)
   program.floatCount = 0;
+    program.floatCapacity = 256;
     program.intCapacity = 256;
     program.uintCapacity = 256;
   program.intCount = 0;

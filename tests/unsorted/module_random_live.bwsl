@@ -27,7 +27,9 @@ pipeline ModuleRandomLive {
         }
 
         fragment {
-            float2 randomUv = Random::rand_float2(17u);
+            // Seeded per pixel, so the hash runs at run time; the vertex
+            // stage's constant seeds fold away.
+            float2 randomUv = Random::rand_float2(uint(input.position.x) + 17u);
             float chanceValue = Random::rand_range(23u, 0.2, 0.8);
             float lit = saturate(dot(normalize(input.normal), Random::rand_hemisphere(31u, normalize(input.normal))));
 

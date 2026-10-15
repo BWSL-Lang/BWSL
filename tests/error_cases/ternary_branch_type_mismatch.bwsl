@@ -1,6 +1,5 @@
-// Error case: ternary arms of different vector widths must not compile to a
-// valid shader. Currently caught by SPIR-V validation rather than a
-// front-end diagnostic (see tests/known_issues/README.md).
+// Error case: ternary arms of different vector widths must not compile, even
+// when the condition is constant and one arm could be dropped.
 pipeline TernaryBranchTypeMismatch {
     attributes {
         position: float3

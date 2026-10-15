@@ -61,6 +61,7 @@ namespace spirv_cross_wrapper {
 #include "phases/ir_generation/bwsl_ir_analysis.h"
 #include "phases/control_flow/bwsl_cfg.h"
 #include "phases/ssa/bwsl_ssa.h"
+#include "phases/optimization/bwsl_constant_propagation.h"
 #include "phases/parser/bwsl_parser_soa.h"
 #include "core/bwsl_ast_json.h"
 #include "core/bwsl_resource_reflection.h"
@@ -85,6 +86,7 @@ namespace spirv_cross_wrapper {
 #include "phases/ir_generation/bwsl_ir_analysis.cpp"
 #include "phases/control_flow/bwsl_cfg.cpp"
 #include "phases/ssa/bwsl_ssa.cpp"
+#include "phases/optimization/bwsl_constant_propagation.cpp"
 #include "phases/backends/spirv/bwsl_spirv_backend.cpp"
 #include "phases/backends/gles/bwsl_gles_backend.cpp"
 #include "phases/ir_generation/bwsl_compute_graph.cpp"
@@ -2231,6 +2233,12 @@ CompileResult CompileShaderStage(
             printf("    --- Post-SSA IR ---");
             DumpIR(lowering.program);
         }
+    }
+
+    Optimization::PropagateConstants(&lowering.builder, cfgPtr);
+    if (dumpIr) {
+        printf("    --- Post-optimization IR ---");
+        DumpIR(lowering.program);
     }
 
     auto cfgEnd = Clock::now();
