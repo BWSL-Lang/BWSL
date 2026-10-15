@@ -1,0 +1,51 @@
+// HSLuv round trips with the stdlib Color module: a color from the pixel
+// position goes HSLuv -> RGB -> HSLuv, gets its hue rotated and saturation
+// scaled, and goes back to RGB. The alpha channel holds the hue's maximum
+// lightness from the stdlib's 72-entry table (dynamically indexed).
+pipeline HsluvBench {
+    import Color
+
+    attributes {
+        position: float2
+    }
+
+    struct Params {
+        // hue shift (degrees), saturation scale, unused, unused
+        float4 shift;
+    };
+
+    resources {
+        params: Params
+    }
+
+    wrapHue :: (float hue) -> float {
+        return hue - floor(hue / 360.0) * 360.0;
+    }
+
+    pass "Main" {
+        use attributes { position }
+        use resources { params }
+
+        vertex {
+            output.position = float4(attributes.position, 0.0, 1.0);
+            output.uv = attributes.position * 0.5 + 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float4 shift = resources.params.shift;
+
+            float3 hsl = float3(uv.x * 360.0, 20.0 + 75.0 * uv.y,
+                                10.0 + 80.0 * fract(uv.x * 7.0 + uv.y * 3.0));
+            float3 rgb = Color::hsluvToRgb(hsl);
+
+            float3 back = Color::rgbToHsluv(rgb);
+            back.x = wrapHue(back.x + shift.x);
+            back.y = clamp(back.y * shift.y, 0.0, 100.0);
+            float3 shifted = Color::hsluvToRgb(back);
+
+            float maxL = Color::hsluv_maxLForH(back.x);
+            output.color = float4(clamp(lerp(rgb, shifted, 0.5), 0.0, 1.0), maxL / 100.0);
+        }
+    }
+}

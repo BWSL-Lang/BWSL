@@ -1,0 +1,28 @@
+{
+  "description": "Final post-processing pass: 4 textures (15 taps), tone mapping, grading, grain",
+  "format": "rgba8",
+  "mesh": {"type": "fullscreen"},
+  "attributes": [
+    {"name": "position", "type": "float2"}
+  ],
+  "uniforms": [
+    {
+      "name": "params",
+      "values": [
+        "1 / width", "1 / height", "width", "height",
+        1.4, 0.35, 0.6, 0.06,
+        0.02, 0.01, 0.03, 0,
+        1.1, 1.0, 0.9, 1,
+        1.05, 1.0, 0.95, 0,
+        0.04, 17, 0.12, 0.8
+      ]
+    }
+  ],
+  "textures": [
+    {"name": "scene", "size": "target", "format": "rgba16f", "gen": "smooth", "detail": 24, "noise": 0.05, "range": [0, 4], "seed": 1},
+    {"name": "bloom", "size": "half", "format": "rgba16f", "gen": "smooth", "detail": 6, "range": [0, 2], "seed": 2},
+    {"name": "dirt", "size": [512, 512], "format": "rgba8", "gen": "smooth", "detail": 32, "noise": 0.3, "wrap": "repeat", "mipmaps": true, "seed": 3},
+    {"name": "history", "size": "target", "format": "rgba8", "gen": "smooth", "detail": 16, "seed": 4}
+  ],
+  "tolerance": 0.0079
+}

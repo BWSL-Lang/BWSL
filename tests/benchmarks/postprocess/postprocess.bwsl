@@ -1,0 +1,104 @@
+// Final post-processing pass: chromatic aberration on the HDR scene, a tent
+// upsample of the half-resolution bloom, lens dirt, exposure, ACES tone
+// mapping, lift/gamma/gain grading, vignette, film grain, a blend with the
+// previous frame and sRGB encoding. Four textures, one output.
+pipeline PostProcessBench {
+    attributes {
+        position: float2
+    }
+
+    // Matches the "params" uniform in postprocess.json (std140, all float4).
+    struct Params {
+        // 1/width, 1/height, width, height
+        float4 texel;
+        // exposure, bloom strength, vignette strength, grain strength
+        float4 grade;
+        float4 lift;
+        float4 gamma;
+        float4 gain;
+        // chromatic aberration, frame seed, history blend, dirt strength
+        float4 misc;
+    };
+
+    resources {
+        params: Params
+        scene: texture2D
+        bloom: texture2D
+        dirt: texture2D
+        history: texture2D
+    }
+
+    // PCG hash (O'Neill), integer-exact on every backend.
+    pcgHash :: (uint v) -> uint {
+        uint state = v * 747796405u + 2891336453u;
+        uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+        return (word >> 22u) ^ word;
+    }
+
+    acesFitted :: (float3 x) -> float3 {
+        return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+    }
+
+    linearToSrgb :: (float c) -> float {
+        return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+    }
+
+    pass "Main" {
+        use attributes { position }
+        use resources { params, scene, bloom, dirt, history }
+
+        vertex {
+            output.position = float4(attributes.position, 0.0, 1.0);
+            output.uv = attributes.position * 0.5 + 0.5;
+        }
+
+        fragment {
+            Params p = resources.params;
+            float2 uv = input.uv;
+            float aspect = p.texel.z * p.texel.y;
+
+            // Chromatic aberration grows with the squared distance from the
+            // center.
+            float2 centered = uv - 0.5;
+            float2 shift = centered * dot(centered, centered) * p.misc.x;
+            float3 color = float3(
+                sample(resources.scene, uv + shift).r,
+                sample(resources.scene, uv).g,
+                sample(resources.scene, uv - shift).b);
+
+            // 3x3 tent filter over the half-resolution bloom texture.
+            float2 bloomTexel = p.texel.xy * 2.0;
+            float3 bloomColor = float3(0.0);
+            for (int y = -1; y <= 1; y++) {
+                for (int x = -1; x <= 1; x++) {
+                    float weight = float((2 - abs(x)) * (2 - abs(y))) / 16.0;
+                    bloomColor += sample(resources.bloom, uv + float2(float(x), float(y)) * bloomTexel).rgb * weight;
+                }
+            }
+            float3 dirtColor = sample(resources.dirt, uv * float2(aspect, 1.0) * 2.0).rgb;
+            color += bloomColor * (p.grade.y + dirtColor * p.misc.w);
+
+            color = acesFitted(color * p.grade.x);
+
+            // Lift, gamma, gain.
+            color = p.gain.rgb * (color + p.lift.rgb * (1.0 - color));
+            color = pow(max(color, float3(0.0)), 1.0 / p.gamma.rgb);
+
+            float vignette = 1.0 - smoothstep(0.3, 1.0, length(centered * float2(aspect, 1.0))) * p.grade.z;
+            color *= vignette;
+
+            uint2 pixel = uint2(uv * p.texel.zw);
+            uint seed = uint(p.misc.y);
+            uint h = pcgHash(pixel.x + pcgHash(pixel.y + pcgHash(seed)));
+            float grain = (float(h & 65535u) / 65535.0 - 0.5) * p.grade.w;
+            color += grain;
+
+            float3 previous = sample(resources.history, uv).rgb;
+            color = lerp(color, previous, p.misc.z);
+            color = clamp(color, 0.0, 1.0);
+
+            float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
+            output.color = float4(linearToSrgb(color.r), linearToSrgb(color.g), linearToSrgb(color.b), luma);
+        }
+    }
+}

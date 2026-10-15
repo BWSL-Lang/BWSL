@@ -1,0 +1,12 @@
+{
+  "description": "HSLuv round trips (stdlib Color module): 2x hsluvToRgb, rgbToHsluv, 72-entry hue table",
+  "format": "rgba8",
+  "mesh": {"type": "fullscreen"},
+  "attributes": [
+    {"name": "position", "type": "float2"}
+  ],
+  "uniforms": [
+    {"name": "params", "values": [137.5, 0.8, 0, 0]}
+  ],
+  "tolerance": 0.0079
+}
