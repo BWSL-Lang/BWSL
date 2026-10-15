@@ -5,7 +5,8 @@
 ### Backends
 - Constant values are propagated through the whole shader, including across
   branches, loops and inlined functions. Arithmetic, comparisons and
-  conversions on constants are folded, an `if` whose condition is constant
+  conversions on constants are folded, `x && true`, `x || false` and their
+  integer counterparts become `x`, an `if` whose condition is constant
   keeps only the arm it takes, and values that nothing reads are removed.
   For example, `gain` set to `2.0` on both sides of an `if` becomes the
   constant `2.0`. Folding skips results that can differ between GPUs:

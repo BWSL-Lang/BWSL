@@ -138,6 +138,42 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             self.assertNotIn("if (", gles)
             self.assertNotIn("vec3(1.0, 0.0, 1.0)", gles)
 
+        def test_bitwise_identities_fold(self):
+            ops, target = self.fragment_ops('''
+                bool enabled = true;
+                bool off = false;
+                int mask = -1;
+                bool wide = input.uv.x > 0.5;
+                int bits = (int(input.uv.y * 8.0) & mask) | 0;
+                float v = 0.0;
+                if ((wide && enabled) || off) { v = 1.0; }
+                if (wide && off) { v = 2.0; }
+                output.color = float4(v, float(bits), 0.0, 1.0);
+            ''')
+            self.assertEqual(ops.count(OP_BRANCH_CONDITIONAL), 1)
+            glsl = (target / "constprop.glsl.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertNotIn("true", body)
+            self.assertNotIn("false", body)
+            self.assertNotIn("&", body)
+            self.assertNotIn("|", body)
+            self.assertNotIn("2.0", body)
+
+        def test_loop_in_inlined_function_has_plain_condition(self):
+            # An inlined function's loop also checks the function's return
+            # flag, which is a constant `false` when the loop can't return.
+            target = self.compile(shader('''
+                output.color = float4(sum5(input.uv.x));
+            ''', '''
+                sum5 :: (float x) -> float {
+                    float s = 0.0;
+                    for (int i = 0; i < 5; i++) { s += x * float(i); }
+                    return s;
+                }
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            self.assertNotIn("true", glsl)
+
         def test_many_float_constants_keep_int_constants(self):
             # The float pool started at 256 entries and overflowed into the
             # int constants, so `+ 7` came out as the bits of a float.

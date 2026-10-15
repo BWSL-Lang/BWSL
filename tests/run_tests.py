@@ -1101,7 +1101,13 @@ def check_inline_return_loop(path: Path) -> tuple[bool, str]:
     if has_spirv_disassembly:
         if "OpLogicalAnd" in spirv:
             return True, ""
-        return False, "Missing return guard logical AND in SPIR-V"
+        # A loop whose own condition is always true (`loop { } until`)
+        # branches on the negated return flag alone, right after its merge.
+        negated = set(re.findall(r"(%\w+) = OpLogicalNot", spirv))
+        header = re.search(r"OpLoopMerge[^\n]*\n\s*OpBranchConditional (%\w+)", spirv)
+        if header and header.group(1) in negated:
+            return True, ""
+        return False, "Missing return guard in the loop condition in SPIR-V"
 
     and_match = re.search(r"\bAND\s+(r\d+)\s+<-", ir)
     branch_match = re.search(r"\bBRANCH\s+(r\d+)\s+\? ->", ir)

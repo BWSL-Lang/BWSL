@@ -370,9 +370,45 @@ static bool FoldOperation(u16 op, const ConstantValue* in, ConstantValue* out) {
     }
 }
 
+// The constant of `type` with every bit set: true for bools.
+static u32 AllOnes(CoreType type) {
+    return type == CoreType::BOOL ? 1u : 0xFFFFFFFFu;
+}
+
+// `x & 0` and `x | all-ones` don't depend on x, and `x & all-ones`,
+// `x | 0` and `x ^ 0` are x. Returns false when `known` doesn't decide the
+// result that way.
+static bool EvaluateBitwiseIdentity(u16 op, ConstantValue known, ConstantValue other,
+                                    CoreType type, ConstantValue* out) {
+    if (known.state != ValueState::CONSTANT || known.type != type) return false;
+    if (!(IsIntegerType(type) || type == CoreType::BOOL)) return false;
+    u32 ones = AllOnes(type);
+    if ((op == IR::OP_AND && known.bits == 0) || (op == IR::OP_OR && known.bits == ones)) {
+        *out = known;
+        return true;
+    }
+    if ((op == IR::OP_AND && known.bits == ones) ||
+        ((op == IR::OP_OR || op == IR::OP_XOR) && known.bits == 0)) {
+        *out = other;
+        return true;
+    }
+    return false;
+}
+
 static ConstantValue EvaluateInstruction(const ConstantPropagationData* data, u32 inst) {
     const IRProgram* ir = data->ir;
     u16 op = ir->opcodes[inst];
+
+    if (op == IR::OP_AND || op == IR::OP_OR || op == IR::OP_XOR) {
+        CoreType type = GetRegisterType(ir, ir->destinations[inst]);
+        ConstantValue a = GetValue(data, ir->GetOperand(inst, 0));
+        ConstantValue b = GetValue(data, ir->GetOperand(inst, 1));
+        ConstantValue result;
+        if (EvaluateBitwiseIdentity(op, a, b, type, &result) ||
+            EvaluateBitwiseIdentity(op, b, a, type, &result)) {
+            return result;
+        }
+    }
 
     // SELECT(falseValue, trueValue, condition)
     if (op == IR::OP_SELECT) {
@@ -650,9 +686,50 @@ static void MakeConstantCopy(ConstantPropagationData* data, u32 inst, u16 consta
     for (u32 slot = 1; slot < 4; slot++) ir->SetOperand(inst, slot, 0xFFFF);
 }
 
+// A register that stands for a variable or pointer, which a copy can't alias.
+static bool IsMemoryBacked(const IRProgram* ir, u16 reg) {
+    return ir->registerStorageInfo && ir->registerStorageInfo[reg] != 0;
+}
+
+// After operands are rewritten, `x & true`, `x | false` and the like (see
+// EvaluateBitwiseIdentity) become copies of x, which the backends alias.
+static void RewriteBitwiseIdentity(ConstantPropagationData* data, u32 inst) {
+    IRProgram* ir = data->ir;
+    u16 op = ir->opcodes[inst];
+    if (op != IR::OP_AND && op != IR::OP_OR && op != IR::OP_XOR) return;
+    u16 dest = ir->destinations[inst];
+    if (!IsRegisterOperand(data, dest) || IsMemoryBacked(ir, dest)) return;
+    CoreType type = GetRegisterType(ir, dest);
+    for (u32 slot = 0; slot < 2; slot++) {
+        u16 known = ir->GetOperand(inst, slot);
+        u16 other = ir->GetOperand(inst, 1 - slot);
+        if (!IR::IsConstant(known) || !IsRegisterOperand(data, other) ||
+            IsMemoryBacked(ir, other) || GetRegisterType(ir, other) != type) {
+            continue;
+        }
+        ConstantValue copy = OVERDEFINED_VALUE;
+        ConstantValue result;
+        if (!EvaluateBitwiseIdentity(op, DecodeConstant(ir, known), copy, type, &result) ||
+            result.state != ValueState::OVERDEFINED) {
+            continue;
+        }
+        ir->opcodes[inst] = IR::OP_LOAD_REG;
+        ir->metadata[inst] = 0;
+        ir->SetOperand(inst, 0, other);
+        for (u32 s = 1; s < 4; s++) ir->SetOperand(inst, s, 0xFFFF);
+        return;
+    }
+}
+
 static void RewriteConstants(ConstantPropagationData* data) {
     IRProgram* ir = data->ir;
-    for (u32 i = 0; i < ir->instructionCount; i++) RewriteOperands(data, i);
+    for (u32 i = 0; i < ir->instructionCount; i++) {
+        RewriteOperands(data, i);
+        u16 dest = ir->destinations[i];
+        if (!IsRegisterOperand(data, dest) || data->states[dest] != ValueState::CONSTANT) {
+            RewriteBitwiseIdentity(data, i);
+        }
+    }
 
     // A phi with a constant result gets the constant on every edge, which
     // the backends treat as a copy of it.
@@ -824,6 +901,7 @@ static void PropagateStraightLine(ConstantPropagationData* data) {
         u16 op = ir->opcodes[i];
         if (op == IR::OP_NOP) continue;
         RewriteOperands(data, i);
+        RewriteBitwiseIdentity(data, i);
         u16 dest = ir->destinations[i];
         if (!IsRegisterOperand(data, dest) || !data->tracked[dest] || IsUseInDestination(op) ||
             op == IR::OP_JUMP || op == IR::OP_BRANCH || op == IR::OP_SWITCH || op == IR::OP_RET) {
