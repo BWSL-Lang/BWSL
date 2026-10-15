@@ -13,7 +13,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = "af01c4ef653550c1e9bf6c04065e7b4f054ea1e8"
-REMOTE = "https://dawn.googlesource.com/dawn"
+REMOTE = "https://github.com/google/dawn.git"
 
 
 def run(command: list[str]) -> None:

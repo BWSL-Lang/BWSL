@@ -352,7 +352,8 @@ downloads Dawn and its pinned dependencies into ignored `build/wgsl-tools/`, and
 builds only the standalone Tint CLI and our timing driver. It installs nothing
 globally and refuses to replace a different existing checkout. The first build
 is substantial. The fixed Dawn revision is
-`af01c4ef653550c1e9bf6c04065e7b4f054ea1e8`; update it deliberately together with the
+`af01c4ef653550c1e9bf6c04065e7b4f054ea1e8` from Google's GitHub mirror;
+update it deliberately together with the
 driver API usage. Naga and wgpu versions and transitive dependencies are locked by
 `tools/wgsl-oracle/Cargo.lock`.
 
