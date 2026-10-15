@@ -573,9 +573,63 @@ void GLESBuilder::EmitUniforms() {
 // Main Function Emission
 // ============================================================================
 
+void GLESBuilder::PrepareArrayRegisters() {
+    for (u32 i = 0; i < ir->localArrayCount; ++i) {
+        u16 reg = ir->localArrayRegisters[i];
+        if (reg < regCount) regInfo[reg].arraySize = ir->localArraySizes[i];
+    }
+    // Discover field-array shapes before control flow hoists declarations.
+    for (u32 i = 0; i < ir->instructionCount; ++i) {
+        if (ir->opcodes[i] != IR::OP_STRUCT_EXTRACT) continue;
+        u16 dest = Dest(i), base = Op(i, 0), field = Op(i, 1);
+        if (dest >= regCount || base >= regCount || !ir->registerStructTypes ||
+            !ir->structFieldArraySizes) continue;
+        u32 hash = ir->registerStructTypes[base];
+        for (u32 s = 0; s < ir->structTypeCount; ++s) {
+            const auto& info = ir->structTypes[s];
+            if (info.nameHash == hash && field < info.fieldCount) {
+                regInfo[dest].arraySize = ir->structFieldArraySizes[info.fieldOffset + field];
+                break;
+            }
+        }
+    }
+}
+
+u32 GLESBuilder::EmitArrayStoreSequence(u32 first, u32 end) {
+    if (ir->opcodes[first] != IR::OP_ARRAY_STORE) return 0;
+    u16 base = Dest(first);
+    if (base >= regCount || !ir->registerStorageInfo ||
+        !(ir->registerStorageInfo[base] & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY)) return 0;
+    u32 array = ir->registerStorageInfo[base] >> IR::IRProgram::STORAGE_BINDING_SHIFT;
+    if (array >= ir->localArrayCount) return 0;
+    u32 count = ir->localArraySizes[array];
+    if (!count || count > end - first) return 0;
+    // Only combine complete, ordered writes within this basic block. Values
+    // were evaluated before the stores, so no reads or side effects move.
+    for (u32 i = 0; i < count; ++i) {
+        u32 inst = first + i;
+        if (ir->opcodes[inst] != IR::OP_ARRAY_STORE || Dest(inst) != base) return 0;
+        u16 index = Op(inst, 0);
+        if (!IR::IsUintConstant(index) || ir->uintConstants[index & 0x1FFF] != i ||
+            !IsValidOperand(Op(inst, 1))) return 0;
+    }
+    out.NL(indent); EmitReg(base); out.Lit(" = ");
+    if (ir->localArrayStructTypes && ir->localArrayStructTypes[array])
+        EmitStructTypeName(ir->localArrayStructTypes[array]);
+    else EmitType(ir->localArrayTypes[array]);
+    out.Chr('['); out.Uint(count); out.Lit("](");
+    for (u32 i = 0; i < count; ++i) {
+        if (i) out.Lit(", ");
+        EmitExpr(Op(first + i, 1));
+    }
+    out.Lit(");");
+    return count;
+}
+
 void GLESBuilder::EmitMain() {
     out.Lit("void main() {\n");
     indent = 1;
+    PrepareArrayRegisters();
 
     // Array registers carry their element CoreType; declare actual array storage.
     for (u32 i = 0; i < ir->localArrayCount; ++i) {
@@ -592,7 +646,10 @@ void GLESBuilder::EmitMain() {
     if (cfg && cfg->blockCount > 0) {
         EmitControlFlow();
     } else {
-        for (u32 i = 0; i < ir->instructionCount; ++i) EmitInstruction(i);
+        for (u32 i = 0; i < ir->instructionCount;) {
+            if (u32 count = EmitArrayStoreSequence(i, ir->instructionCount)) i += count;
+            else EmitInstruction(i++);
+        }
     }
     out.NL(0);
     out.Lit("}\n");
@@ -668,7 +725,8 @@ bool GLESBuilder::EmitStructuredRegion(u32 block, u32 stopBlock,
                 EmitInstruction(i);
                 return false;
             }
-            if (op != IR::OP_PHI) EmitInstruction(i);
+            if (u32 count = EmitArrayStoreSequence(i, cfg->lastInst[block] + 1)) i += count - 1;
+            else if (op != IR::OP_PHI) EmitInstruction(i);
         }
         u16 op = terminal == NO_BLOCK ? IR::OP_NOP : ir->opcodes[terminal];
         if (op == IR::OP_RET || cfg->TotalSuccessorCount(block) == 0) {
@@ -1798,24 +1856,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             u32 structHash = (ir->registerStructTypes && structReg < ir->registerCount)
                                  ? ir->registerStructTypes[structReg]
                                  : 0;
-            u32 arraySize = 0;
-            for (u32 s = 0; s < ir->structTypeCount; s++) {
-                const auto& info = ir->structTypes[s];
-                if (info.nameHash == structHash && fieldIdx < info.fieldCount &&
-                    ir->structFieldArraySizes) {
-                    arraySize = ir->structFieldArraySizes[info.fieldOffset + fieldIdx];
-                    break;
-                }
-            }
-            if (arraySize && !(regInfo[dest].flags & REG_DECLARED)) {
-                EmitRegisterType(dest);
-                out.Chr(' ');
-                EmitReg(dest);
-                out.Chr('['); out.Uint(arraySize); out.Chr(']');
-                regInfo[dest].flags |= REG_DECLARED;
-            } else {
-                EmitRegWithDecl(dest);
-            }
+            EmitRegWithDecl(dest);
             out.Lit(" = ");
             EmitExpr(structReg);
             out.Chr('.');

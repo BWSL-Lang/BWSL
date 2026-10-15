@@ -8,6 +8,7 @@ from pathlib import Path
 import argparse
 import json
 import math
+import re
 import struct
 import subprocess
 
@@ -21,6 +22,20 @@ CASES = {
         [v for _ in range(4) for pixel in ([17,29,41,53], [17,29,41,53],
                                          [67,79,91,103], [67,79,91,103]) for v in pixel]),
     "loop_break_skip": ("float r=0.0; for(int i=0;i<8;i++){ if(i==3){skip;} if(i==6){break;} r+=float(i); } output.color=float4(r);", [12]*4),
+    "constant_float_table": ("float[8] a={0.1,0.4,0.2,0.9,0.7,0.3,0.8,0.5};int i=int((input.uv.x+1.0)*4.0);output.color=float4(a[i]);",
+                             [v for _ in range(4) for x in (0.4,0.9,0.3,0.5) for v in [x]*4]),
+    "constant_vector_table": ("float2[4] a={float2(1.0,2.0),float2(3.0,4.0),float2(5.0,6.0),float2(7.0,8.0)};int i=int((input.uv.x+1.0)*2.0);output.color=float4(a[i],a[i]);",
+                              [v for _ in range(4) for x,y in ((1,2),(3,4),(5,6),(7,8)) for v in (x,y,x,y)]),
+    "constant_int_table": ("int[4] a={-3,2,-1,4};int i=int((input.uv.x+1.0)*2.0);output.color=float4(float(a[i]));",
+                           [v for _ in range(4) for x in (-3,2,-1,4) for v in [x]*4]),
+    "constant_table_in_loop": ("float r=0.0;for(int i=0;i<4;i++){float[4] a={1.0,2.0,3.0,4.0};r+=a[i];}output.color=float4(r);", [10]*4),
+    "runtime_table": ("float x=input.uv.x;float[4] a={x,x+1.0,x+2.0,x+3.0};output.color=float4(a[0],a[1],a[2],a[3]);",
+                      [v for _ in range(4) for x in (-0.75,-0.25,0.25,0.75) for v in (x,x+1,x+2,x+3)]),
+    "array_interleaved_updates": ("float[2] a={1.0,2.0};a[0]=a[1]+3.0;a[1]=a[0]+4.0;output.color=float4(a[0],a[1],0.0,1.0);", [5,9,0,1]),
+    "array_partial_fill": ("float[4] a; a[0]=input.uv.x;a[1]=2.0;output.color=float4(a[0],a[1],0.0,1.0);",
+                          [v for _ in range(4) for x in (-0.75,-0.25,0.25,0.75) for v in (x,2,0,1)]),
+    "array_branch_fill": ("float[2] a;if(input.uv.x<0.0){a[0]=1.0;a[1]=2.0;}else{a[0]=3.0;a[1]=4.0;}output.color=float4(a[0],a[1],0.0,1.0);",
+                         [v for _ in range(4) for x,y in ((1,2),(1,2),(3,4),(3,4)) for v in (x,y,0,1)]),
     "array_loop": ("float[4] a; for(int i=0;i<4;i++){a[i]=float(i);} float r=0.0; for(int i=0;i<4;i++){r+=a[i];} output.color=float4(r);", [6]*4),
     "nested_while": ("int i=0; float r=0.0; while(i<3){int j=0; while(j<4){r+=float(i+j);j++;}i++;} output.color=float4(r);", [30]*4),
     "loop_phi_swap": ("float a=1.0; float b=2.0; for(int i=0;i<3;i++){float t=a;a=b;b=t;} output.color=float4(a,b,a,b);", [2,1,2,1]),
@@ -101,6 +116,17 @@ def run_gles_regression_tests(compiler: Path, output: Path, runner: Path | None 
                           + '} fragment { ' + body + ' } } }')
         try:
             run([compiler, source, '-gles-direct', '-spv', '-bindings', '-validation', 'strict', '-o', folder])
+            constructors = {
+                'constant_float_table': ('float', 8), 'constant_vector_table': ('vec2', 4),
+                'constant_int_table': ('int', 4), 'constant_table_in_loop': ('float', 4),
+                'runtime_table': ('float', 4),
+            }
+            if name in constructors:
+                kind, count = constructors[name]
+                fragment_text = (folder / f'{name}.frag').read_text()
+                match = re.search(r'(r\d+) = ' + kind + r'\[' + str(count) + r'\]\(', fragment_text)
+                assert match, 'Complete array fill did not become a constructor assignment'
+                assert not re.search(r'\b' + match[1] + r'\[[^]]+\] = ', fragment_text), 'Per-element table stores remain'
             if name == 'large_output':
                 assert (folder / f'{name}.frag').stat().st_size > 65536, 'Output-growth path was not exercised'
             for stage in ('vert', 'frag'):
@@ -143,6 +169,45 @@ def run_gles_regression_tests(compiler: Path, output: Path, runner: Path | None 
                     assert all(math.isfinite(a) and abs(a-e) <= tolerance for a, e in zip(actual, expected)), (backend, actual[:4], expected_pixel)
             results.append({'case': name, 'ok': True, 'cpu_oracle': runner is not None})
             print(f'[PASS] direct GLES/{name}' + (' (native + direct CPU oracle)' if runner else ' (syntax)'))
+        except (AssertionError, OSError, subprocess.TimeoutExpired) as error:
+            results.append({'case': name, 'ok': False, 'error': str(error)})
+            print(f'[FAIL] direct GLES/{name}: {error}')
+    # Exercise the reported field-array temporary in both shader stages.
+    for stage in ('vertex', 'fragment'):
+        name = 'uniform_struct_array_loop_' + stage
+        folder = output / name
+        folder.mkdir(exist_ok=True)
+        source = folder / f'{name}.bwsl'
+        loop = ('float4 sum=float4(0.0);for(int i=0;i<4;i++){sum+=resources.scene.colors[i];}'
+                + ('output.col' if stage == 'vertex' else 'output.color') + '=sum*resources.scene.tint;')
+        source.write_text('pipeline UniformArrayLoop { attributes { position: float3 } '
+                          'struct Scene { float4 tint; float4[4] colors; }; resources { scene: Scene } '
+                          'pass "Main" { use attributes { position } use resources { scene } '
+                          'vertex { output.position=float4(attributes.position,1.0);'
+                          + (loop if stage == 'vertex' else '') + ' } fragment {'
+                          + ('output.color=input.col;' if stage == 'vertex' else loop) + ' } } }')
+        try:
+            run([compiler, source, '-gles-direct', '-validation', 'strict', '-o', folder])
+            for suffix in ('vert', 'frag'):
+                shader = folder / f'{name}.{suffix}'
+                run(['glslangValidator', '-S', suffix, shader])
+                if runner:
+                    runtime = folder / f'runtime.{suffix}'
+                    runtime.write_text(shader.read_text().replace('#version 300 es', '#version 310 es'))
+                    run(['glslangValidator', '-V', '--auto-map-locations', '--auto-map-bindings',
+                         '-S', suffix, runtime, '-o', folder / f'{suffix}.spv'])
+            if runner:
+                vbo, ubo, readback = folder / 'vbo.bin', folder / 'ubo.bin', folder / 'result.bin'
+                vbo.write_bytes(struct.pack('<9f', -1,-1,0, 3,-1,0, -1,3,0))
+                ubo.write_bytes(struct.pack('<20f', 0.5,1,2,4, *[v for i in (1,2,3,4) for v in (i,2*i,3*i,4*i)]))
+                run([runner, '--raster', '--vert-spirv', folder / 'vert.spv', '--frag-spirv', folder / 'frag.spv',
+                     '--width', '4', '--height', '4', '--output', readback, '--output-size', '256', '--set', '0',
+                     '--raster-ubo', ubo, '0', '--raster-vbo', vbo, '3', '12',
+                     '--raster-vbo-attr', '0', 'R32G32B32_SFLOAT', '0'])
+                actual = struct.unpack('<64f', readback.read_bytes())
+                assert all(abs(a-e) < 1e-5 for a,e in zip(actual, [5,20,60,160]*16)), actual[:4]
+            results.append({'case': name, 'ok': True, 'cpu_oracle': runner is not None})
+            print(f'[PASS] direct GLES/{name}' + (' (CPU oracle)' if runner else ' (syntax)'))
         except (AssertionError, OSError, subprocess.TimeoutExpired) as error:
             results.append({'case': name, 'ok': False, 'error': str(error)})
             print(f'[FAIL] direct GLES/{name}: {error}')

@@ -246,6 +246,8 @@ struct StringBuilder {
 
 struct RegInfo {
     u8 flags;
+    // Array registers otherwise carry only their element CoreType.
+    u32 arraySize;
     // Uniform-array pointer definition + 1; zero denotes an ordinary value.
     u32 uniformPointerInstruction;
     // Definition + 1 of a pointer into a local struct variable
@@ -421,6 +423,8 @@ private:
     void EmitOutputs();
     void EmitUniforms();
     void EmitMain();
+    void PrepareArrayRegisters();
+    u32 EmitArrayStoreSequence(u32 first, u32 end);
     void EmitControlFlow();
     struct LoopScope {
         u32 header;
@@ -496,6 +500,9 @@ private:
                 out.Chr(' ');
             }
             EmitReg(reg);
+            if (regInfo[reg].arraySize) {
+                out.Chr('['); out.Uint(regInfo[reg].arraySize); out.Chr(']');
+            }
             return true;
         }
         EmitReg(reg);
