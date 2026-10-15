@@ -29,8 +29,8 @@ pipeline TypesMatrices {
                 0.0, 0.0, 1.0
             );
 
-            // 3x3 matrix - rotation around Z axis
-            float angle = 0.5;
+            // 3x3 matrix - rotation around Z axis, by a run-time angle
+            float angle = attributes.position.x * 0.5;
             float c = cos(angle);
             float s = sin(angle);
             mat3 m3_rot = mat3(
@@ -72,7 +72,7 @@ pipeline TypesMatrices {
             // Matrix-matrix multiplication
             mat4 combined = m4_translate * m4_scale;
 
-            output.position = combined * pos;
+            output.position = combined * float4(m3_rot * attributes.position, 1.0);
         }
 
         fragment {

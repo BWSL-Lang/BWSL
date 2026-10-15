@@ -1,0 +1,39 @@
+// Vector and matrix constants fold: construction, swizzles, component
+// access and insertion, arithmetic with a splatted scalar, comparisons and
+// select, dot and cross, and matrix columns, products and transposes. Only
+// idx stays a run-time value. Every value is exact in float.
+pipeline EquivConstantVectorFolding {
+
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float x = float(idx);
+
+            mat3 m = mat3(float3(1.0, 2.0, 3.0), float3(4.0, 5.0, 6.0), float3(7.0, 8.0, 9.0));
+            float3 a = float3(2.0) * m[0] - float3(0.5) * m[2];      // (-1.5, 0, 1.5)
+            float3 b = m * float3(1.0, 0.0, 2.0);                    // (15, 18, 21)
+            float3 bt = float3(1.0, 0.0, 2.0) * m;                   // (7, 16, 25)
+            float d = dot(a, b);                                     // 9
+            float3 c = float3(0.25, 0.5, 0.75).zyx + a.xxy;          // (-0.75, -1, 0.25)
+            float3 k = cross(float3(1.0, 0.0, 0.0), float3(0.0, 1.0, 0.0));  // (0, 0, 1)
+            mat2 p = mat2(float2(1.0, 2.0), float2(3.0, 4.0)) * mat2(float2(0.0, 1.0), float2(1.0, 0.0));
+            mat2 pt = transpose(p);                                  // p = ((3,4),(1,2)), pt[0] = (3,1)
+            float4 v = float4(1.0, 2.0, 3.0, 4.0);
+            v.y = 10.0;                                              // (1, 10, 3, 4)
+            int3 iv = int3(7, -3, 2) * int3(2) + int3(1);            // (15, -5, 5)
+            bool3 gt = b > float3(16.0);
+            float3 picked = select(float3(0.0), float3(1.0), gt);    // (0, 1, 1)
+
+            float sum = a.x + a.z + b.y + bt.z + d + c.x + c.y + k.z  // -1.5+1.5+18+25+9-0.75-1+1 = 51.25
+                      + pt[0].x + pt[0].y + v.y + v.w                 // 3+1+10+4 = 18
+                      + float(iv.x + iv.y + iv.z)                     // 15
+                      + picked.x + picked.y + picked.z;               // 2
+            resources.output[idx] = sum + x * float3(1.0, 2.0, 3.0).y;  // 86.25 + 2 * idx
+        }
+    }
+}

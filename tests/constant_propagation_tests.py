@@ -16,6 +16,8 @@ OP_BRANCH_CONDITIONAL = 250
 OP_SWITCH = 251
 OP_FADD = 129
 OP_SDIV = 135
+OP_MATRIX_TIMES_VECTOR = 145
+OP_DOT = 148
 
 
 def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
@@ -173,6 +175,33 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             '''), "-glsl")
             glsl = (target / "constprop.frag").read_text(encoding="utf-8")
             self.assertNotIn("true", glsl)
+
+        def test_vector_and_matrix_constants_fold(self):
+            ops, target = self.fragment_ops('''
+                mat3 m = mat3(float3(1.0, 2.0, 3.0), float3(4.0, 5.0, 6.0), float3(7.0, 8.0, 9.0));
+                float3 a = float3(2.0) * m[0] - float3(0.5) * m[2];
+                float3 b = m * float3(1.0, 0.0, 2.0);
+                float d = dot(a, b);
+                float3 c = float3(0.25, 0.5, 0.75).zyx + a.xxy;
+                output.color = float4(a * input.uv.x + c, d);
+            ''')
+            self.assertNotIn(OP_MATRIX_TIMES_VECTOR, ops)
+            self.assertNotIn(OP_DOT, ops)
+            glsl = (target / "constprop.glsl.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertIn("vec3(-1.5, 0.0, 1.5)", body)
+            self.assertIn("vec3(-0.75, -1.0, 0.25)", body)
+            self.assertIn("9.0", body)
+            self.assertNotIn("mat3", body)
+
+        def test_vectors_with_runtime_components_stay(self):
+            ops, target = self.fragment_ops('''
+                mat2 m = mat2(float2(1.0, 2.0), float2(3.0, input.uv.x));
+                float2 v = m * float2(1.0, 1.0);
+                output.color = float4(v, dot(v, float2(2.0, 0.5)), 1.0);
+            ''')
+            self.assertIn(OP_MATRIX_TIMES_VECTOR, ops)
+            self.assertIn(OP_DOT, ops)
 
         def test_many_float_constants_keep_int_constants(self):
             # The float pool started at 256 entries and overflowed into the
