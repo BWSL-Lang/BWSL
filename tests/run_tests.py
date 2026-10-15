@@ -651,9 +651,11 @@ TRANSLATION_EXPECTATION_TESTS = {
             ],
             "gles_contains": [
                 "#extension GL_NV_shader_noperspective_interpolation : require",
-                "flat in highp float v_materialIndex",
-                "noperspective in highp vec2 v_screenUV",
+                "precision highp float;",
+                "flat in float v_materialIndex",
+                "noperspective in vec2 v_screenUV",
             ],
+            "gles_not_contains": ["mediump"],
         },
     },
     "output_depth_builtin": {
