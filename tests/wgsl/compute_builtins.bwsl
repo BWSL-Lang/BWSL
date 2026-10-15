@@ -1,0 +1,15 @@
+pipeline ComputeBuiltins {
+    resources {
+        result: buffer<uint>
+    }
+    pass "Compute" {
+        use resources { result }
+        compute "Main" [4, 2, 1] {
+            uint index = input.global_id.x + input.global_id.y * 12u;
+            uint value = input.local_id.x + input.local_id.y * 10u;
+            value = value + input.workgroup_id.x * 100u + input.workgroup_id.y * 1000u;
+            value = value + input.num_workgroups.x * 10000u + input.num_workgroups.y * 100000u;
+            resources.result[index] = value;
+        }
+    }
+}

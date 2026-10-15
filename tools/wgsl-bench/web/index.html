@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BWSL / WGSL browser benchmark</title>
+    <style>
+        :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+        body { max-width: 1120px; margin: 48px auto; padding: 0 24px; line-height: 1.5; }
+        h1 { margin-bottom: 8px; letter-spacing: -0.035em; }
+        p { max-width: 86ch; }
+        .subtle { opacity: 0.72; }
+        form { display: flex; flex-wrap: wrap; gap: 20px; align-items: end; margin: 28px 0; }
+        label { display: flex; flex-direction: column; gap: 6px; font-size: 0.9rem; }
+        input, select, button { font: inherit; padding: 9px 12px; border: 1px solid #8888; border-radius: 6px; }
+        input { width: 80px; }
+        button { cursor: pointer; }
+        button:disabled { cursor: default; opacity: 0.5; }
+        #run { background: #2563eb; border-color: #2563eb; color: white; }
+        #status { padding: 14px 18px; background: #8881; border-left: 3px solid #2563eb; white-space: pre-wrap; }
+        .scroll { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; margin: 18px 0 30px; font-variant-numeric: tabular-nums; }
+        th, td { padding: 12px; text-align: right; border-bottom: 1px solid #8885; white-space: nowrap; }
+        th:first-child, td:first-child { text-align: left; }
+        th { font-size: 0.85rem; font-weight: 600; }
+        pre { font: 12px/1.5 ui-monospace, monospace; overflow: auto; background: #8881; padding: 16px; }
+        details { margin: 18px 0; }
+        summary { cursor: pointer; }
+        a { color: #568bff; }
+    </style>
+</head>
+<body>
+    <h1>BWSL / WGSL browser benchmark</h1>
+    <p id="intro" class="subtle">Handwritten WGSL and native BWSL-generated WGSL run directly through this browser’s WebGPU API. Full compilation measurements include fresh BWSL translation by the local server.</p>
+    <p>Both variants use the same device, buffers, bindings, workgroups and independent CPU expectations. GPU batches alternate order. Shader and pipeline creation are measured separately.</p>
+    <p id="baseline-style" class="subtle"></p>
+    <form id="settings">
+        <label>Invocations
+            <select id="elements">
+                <option value="65536">65,536</option>
+                <option value="262144">262,144</option>
+                <option value="1048576" selected>1,048,576</option>
+                <option value="2097152">2,097,152</option>
+            </select>
+        </label>
+        <label>Measured pairs <input id="samples" type="number" min="5" max="200" value="30"></label>
+        <label>Warmup pairs <input id="warmup" type="number" min="1" max="30" value="5"></label>
+        <button id="run" type="submit" disabled>Run browser benchmark</button>
+        <button id="stop" type="button" disabled>Stop</button>
+        <button id="download" type="button" disabled>Download JSON</button>
+    </form>
+    <div id="status" role="status" aria-live="polite">Loading matched shaders…</div>
+    <p id="device" class="subtle"></p>
+    <h2>GPU execution</h2>
+    <p class="subtle">GPU timestamp batch duration divided by dispatch count, in µs per dispatch. Batches adapt to exceed roughly 10 ms where possible. Browser timestamp quantization still limits precision.</p>
+    <div class="scroll"><table>
+        <thead><tr><th>Kernel</th><th data-reference>Handwritten WGSL</th><th>BWSL → WGSL</th><th>BWSL / reference</th><th>Dispatches / batch</th><th>Correctness</th></tr></thead>
+        <tbody id="gpu-results"></tbody>
+    </table></div>
+    <h2>Full source request → pipeline ready</h2>
+    <p id="full-compile-method" class="subtle">Repeated-source median milliseconds, measured from the browser. Both paths fetch source from localhost; the BWSL path also launches the native compiler, reads BWSL and writes WGSL. Request/JSON overhead is included. Browser/driver caches may already be warm.</p>
+    <div class="scroll"><table>
+        <thead><tr><th>Kernel</th><th data-reference>Handwritten WGSL</th><th>BWSL → WGSL</th><th>BWSL server preparation</th><th>Paired ratio</th></tr></thead>
+        <tbody id="full-compile-results"></tbody>
+    </table></div>
+    <h2>Browser shader / pipeline readiness</h2>
+    <p class="subtle">Elapsed module creation + compilation-info wait + asynchronous pipeline creation. First observed and repeated-source median timings are shown in milliseconds. Browser/driver caches may already be warm; these are not guaranteed cold compile measurements.</p>
+    <div class="scroll"><table>
+        <thead><tr><th>Kernel</th><th data-reference data-suffix=" first observed">WGSL first observed</th><th>BWSL first observed</th><th data-reference data-suffix=" repeated median">WGSL repeated median</th><th>BWSL repeated median</th></tr></thead>
+        <tbody id="compile-results"></tbody>
+    </table></div>
+    <details>
+        <summary>CPU command encoding, submission and GPU wait</summary>
+        <p>Milliseconds per batch, including command encoding, submission, synchronization and timestamp resolving. Buffer readback/mapping is excluded. This is the fallback metric if GPU timestamps are unavailable.</p>
+        <div class="scroll"><table>
+            <thead><tr><th>Kernel</th><th data-reference data-suffix=" median">Handwritten median</th><th>BWSL median</th><th data-reference data-suffix=" p95">Handwritten p95</th><th>BWSL p95</th></tr></thead>
+            <tbody id="cpu-results"></tbody>
+        </table></div>
+    </details>
+    <details><summary>Method and limitations</summary>
+        <p>The corpus includes SAXPY, unsigned hash, vector affine, a 25-tap RGBA Gaussian filter, four-bone skinning and four-light GGX shading. These are compute entry points; skinning and lighting here do not test the vertex/fragment pipeline. BWSL fixed-size work is explicitly unrolled because the native backend currently supports straight-line compute only.</p>
+        <p>Inputs are checked bit-for-bit before and after timing. Outputs are exact except GGX, which allows 0.0002 absolute + 0.0002 relative float error against a double-precision CPU formula. Both shader variants are also compared directly. NaN sentinels catch missing writes. Repeated dispatches overwrite the same output buffers, so this measures warm-buffer throughput.</p>
+        <p>Each sample pair runs both variants in randomized AB/BA order with a fixed seed. The JSON contains raw samples, paired bootstrap intervals, source hashes, compiler hash, browser details and exposed GPU information. A single browser/GPU and this small corpus cannot establish general parity.</p>
+        <p>The page uses normal browser settings. It does not disable timestamp quantization or require experimental flags. Keep this tab visible; backgrounding aborts the run.</p>
+        <p><a href="https://www.w3.org/TR/webgpu/#dom-gpudevice-createcomputepipelineasync">WebGPU pipeline readiness</a> · <a href="https://developer.chrome.com/docs/web-platform/webgpu/developer-features">Browser timestamp precision</a></p>
+    </details>
+    <details><summary>Shader sources used in this run</summary><div id="sources"></div></details>
+    <script type="module" src="benchmark.mjs"></script>
+</body>
+</html>

@@ -1,0 +1,156 @@
+// Instanced affine skinning and four point-light GGX fragment shading.
+pipeline RenderSkinnedGgx {
+    resources {
+        palette: buffer<float4>
+        lights: buffer<float4>
+    }
+
+    attributes {
+        position: float4
+        normal: float3
+        weights: float4
+        joints: uint4
+    }
+
+    pass "Draw" {
+        use resources { palette, lights }
+        use attributes { position, normal, weights, joints }
+
+        vertex {
+            float4 position = attributes.position;
+            float4 weights = attributes.weights;
+            uint4 joints = attributes.joints;
+            float4 normal = float4(attributes.normal, 0.0);
+
+            uint base0 = joints.x * 3u;
+            float4 row0x = resources.palette[base0];
+            float4 row0y = resources.palette[base0 + 1u];
+            float4 row0z = resources.palette[base0 + 2u];
+            float3 point0 = float3(dot(row0x, position), dot(row0y, position), dot(row0z, position));
+            float3 normal0 = float3(dot(row0x, normal), dot(row0y, normal), dot(row0z, normal));
+
+            uint base1 = joints.y * 3u;
+            float4 row1x = resources.palette[base1];
+            float4 row1y = resources.palette[base1 + 1u];
+            float4 row1z = resources.palette[base1 + 2u];
+            float3 point1 = float3(dot(row1x, position), dot(row1y, position), dot(row1z, position));
+            float3 normal1 = float3(dot(row1x, normal), dot(row1y, normal), dot(row1z, normal));
+
+            uint base2 = joints.z * 3u;
+            float4 row2x = resources.palette[base2];
+            float4 row2y = resources.palette[base2 + 1u];
+            float4 row2z = resources.palette[base2 + 2u];
+            float3 point2 = float3(dot(row2x, position), dot(row2y, position), dot(row2z, position));
+            float3 normal2 = float3(dot(row2x, normal), dot(row2y, normal), dot(row2z, normal));
+
+            uint base3 = joints.w * 3u;
+            float4 row3x = resources.palette[base3];
+            float4 row3y = resources.palette[base3 + 1u];
+            float4 row3z = resources.palette[base3 + 2u];
+            float3 point3 = float3(dot(row3x, position), dot(row3y, position), dot(row3z, position));
+            float3 normal3 = float3(dot(row3x, normal), dot(row3y, normal), dot(row3z, normal));
+
+            float3 worldPosition = point0 * weights.x + point1 * weights.y + point2 * weights.z + point3 * weights.w;
+            float3 worldNormal = normal0 * weights.x + normal1 * weights.y + normal2 * weights.z + normal3 * weights.w;
+            float2 offset = float2(float(input.instance_id & 1u), float((input.instance_id >> 1u) & 1u)) - 0.5;
+            output.position = float4(worldPosition.xy * 0.375 + offset, 0.4 + worldPosition.z * 0.0625, 1.0);
+            output.world_position = worldPosition;
+            output.world_normal = worldNormal;
+        }
+
+        fragment {
+            float3 position = input.world_position;
+            float3 normal = normalize(input.world_normal);
+            float3 view = normalize(float3(0.0, 0.0, 6.0) - position);
+            float roughness = clamp(0.45 + position.y * 0.1, 0.25, 0.8);
+            float metallic = 0.35;
+            float3 albedo = float3(0.5 + position.x * 0.25, 0.35 + position.y * 0.2, 0.6);
+            float alpha = roughness * roughness;
+            float alpha2 = alpha * alpha;
+            float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+            float ndv = max(dot(normal, view), 0.001);
+            float gv = ndv / (ndv * (1.0 - k) + k);
+            float3 f0 = float3(0.04) * (1.0 - metallic) + albedo * metallic;
+            float3 color = albedo * 0.03;
+
+            float4 light0 = resources.lights[0u];
+            float3 delta0 = light0.xyz - position;
+            float distance2_0 = max(dot(delta0, delta0), 0.01);
+            float3 direction0 = normalize(delta0);
+            float3 halfway0 = normalize(view + direction0);
+            float ndl0 = max(dot(normal, direction0), 0.0);
+            float ndh0 = max(dot(normal, halfway0), 0.0);
+            float vdh0 = max(dot(view, halfway0), 0.0);
+            float denominator0 = ndh0 * ndh0 * (alpha2 - 1.0) + 1.0;
+            float distribution0 = alpha2 / (3.14159265 * denominator0 * denominator0);
+            float geometry0 = gv * ndl0 / (ndl0 * (1.0 - k) + k);
+            float fresnelBase0 = 1.0 - vdh0;
+            float fresnel2_0 = fresnelBase0 * fresnelBase0;
+            float fresnel5_0 = fresnel2_0 * fresnel2_0 * fresnelBase0;
+            float3 fresnel0 = f0 + (float3(1.0) - f0) * fresnel5_0;
+            float3 specular0 = fresnel0 * (distribution0 * geometry0 / max(4.0 * ndv * ndl0, 0.001));
+            float3 diffuse0 = (float3(1.0) - fresnel0) * ((1.0 - metallic) / 3.14159265) * albedo;
+            color = color + (diffuse0 + specular0) * (light0.w * ndl0 / distance2_0);
+
+            float4 light1 = resources.lights[1u];
+            float3 delta1 = light1.xyz - position;
+            float distance2_1 = max(dot(delta1, delta1), 0.01);
+            float3 direction1 = normalize(delta1);
+            float3 halfway1 = normalize(view + direction1);
+            float ndl1 = max(dot(normal, direction1), 0.0);
+            float ndh1 = max(dot(normal, halfway1), 0.0);
+            float vdh1 = max(dot(view, halfway1), 0.0);
+            float denominator1 = ndh1 * ndh1 * (alpha2 - 1.0) + 1.0;
+            float distribution1 = alpha2 / (3.14159265 * denominator1 * denominator1);
+            float geometry1 = gv * ndl1 / (ndl1 * (1.0 - k) + k);
+            float fresnelBase1 = 1.0 - vdh1;
+            float fresnel2_1 = fresnelBase1 * fresnelBase1;
+            float fresnel5_1 = fresnel2_1 * fresnel2_1 * fresnelBase1;
+            float3 fresnel1 = f0 + (float3(1.0) - f0) * fresnel5_1;
+            float3 specular1 = fresnel1 * (distribution1 * geometry1 / max(4.0 * ndv * ndl1, 0.001));
+            float3 diffuse1 = (float3(1.0) - fresnel1) * ((1.0 - metallic) / 3.14159265) * albedo;
+            color = color + (diffuse1 + specular1) * (light1.w * ndl1 / distance2_1);
+
+            float4 light2 = resources.lights[2u];
+            float3 delta2 = light2.xyz - position;
+            float distance2_2 = max(dot(delta2, delta2), 0.01);
+            float3 direction2 = normalize(delta2);
+            float3 halfway2 = normalize(view + direction2);
+            float ndl2 = max(dot(normal, direction2), 0.0);
+            float ndh2 = max(dot(normal, halfway2), 0.0);
+            float vdh2 = max(dot(view, halfway2), 0.0);
+            float denominator2 = ndh2 * ndh2 * (alpha2 - 1.0) + 1.0;
+            float distribution2 = alpha2 / (3.14159265 * denominator2 * denominator2);
+            float geometry2 = gv * ndl2 / (ndl2 * (1.0 - k) + k);
+            float fresnelBase2 = 1.0 - vdh2;
+            float fresnel2_2 = fresnelBase2 * fresnelBase2;
+            float fresnel5_2 = fresnel2_2 * fresnel2_2 * fresnelBase2;
+            float3 fresnel2 = f0 + (float3(1.0) - f0) * fresnel5_2;
+            float3 specular2 = fresnel2 * (distribution2 * geometry2 / max(4.0 * ndv * ndl2, 0.001));
+            float3 diffuse2 = (float3(1.0) - fresnel2) * ((1.0 - metallic) / 3.14159265) * albedo;
+            color = color + (diffuse2 + specular2) * (light2.w * ndl2 / distance2_2);
+
+            float4 light3 = resources.lights[3u];
+            float3 delta3 = light3.xyz - position;
+            float distance2_3 = max(dot(delta3, delta3), 0.01);
+            float3 direction3 = normalize(delta3);
+            float3 halfway3 = normalize(view + direction3);
+            float ndl3 = max(dot(normal, direction3), 0.0);
+            float ndh3 = max(dot(normal, halfway3), 0.0);
+            float vdh3 = max(dot(view, halfway3), 0.0);
+            float denominator3 = ndh3 * ndh3 * (alpha2 - 1.0) + 1.0;
+            float distribution3 = alpha2 / (3.14159265 * denominator3 * denominator3);
+            float geometry3 = gv * ndl3 / (ndl3 * (1.0 - k) + k);
+            float fresnelBase3 = 1.0 - vdh3;
+            float fresnel2_3 = fresnelBase3 * fresnelBase3;
+            float fresnel5_3 = fresnel2_3 * fresnel2_3 * fresnelBase3;
+            float3 fresnel3 = f0 + (float3(1.0) - f0) * fresnel5_3;
+            float3 specular3 = fresnel3 * (distribution3 * geometry3 / max(4.0 * ndv * ndl3, 0.001));
+            float3 diffuse3 = (float3(1.0) - fresnel3) * ((1.0 - metallic) / 3.14159265) * albedo;
+            color = color + (diffuse3 + specular3) * (light3.w * ndl3 / distance2_3);
+
+            float3 mapped = color / (float3(1.0) + color);
+            output.color = float4(mapped, 1.0);
+        }
+    }
+}

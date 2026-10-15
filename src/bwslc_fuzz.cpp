@@ -124,8 +124,8 @@ static void CompileOneStage(CompilationContext& context, Parser& parser,
         cfgBuilder.Build();
         cfgPtr = &cfgBuilder.cfg;
         if (cfgBuilder.cfg.blockCount > 1) {
-            SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder,
-                              &cfgArena);
+            if (!SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder,
+                                   &cfgArena)) return;
         }
     }
 

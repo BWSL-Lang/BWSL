@@ -1,0 +1,14 @@
+pipeline BitcastSigned {
+    resources {
+        source: buffer<float>
+        result: buffer<int>
+    }
+    pass "Compute" {
+        use resources { source, result }
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            int bits = asint(resources.source[index]);
+            resources.result[index] = (bits >> 8) ^ int(index);
+        }
+    }
+}

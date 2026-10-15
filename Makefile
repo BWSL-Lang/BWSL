@@ -491,7 +491,58 @@ test-symbol-table:
 test-symbol-table-sanitize:
 	python3 tests/run_symbol_table_tests.py --sanitize
 
-test: build $(SPIRV_TEST_DEPS) test-symbol-table
+.PHONY: wgsl-oracle wgsl-tint test-wgsl-unit test-wgsl-unit-sanitize test-wgsl test-wgsl-full benchmark-wgsl
+.PHONY: benchmark-wgsl-web test-wgsl-web benchmark-wgsl-render test-wgsl-render
+.PHONY: wgsl-inprocess test-wgsl-features benchmark-wgsl-inprocess
+
+wgsl-inprocess: $(EMBEDDED_MODULE_HEADER) | $(BUILD_DIR_MARKER)
+	$(CXX) $(CXXFLAGS) $(VERSION_FLAGS) $(BWSL_INCLUDE_DIRS) tools/wgsl-bench/inprocess.cpp -o $(BUILD_DIR)/wgsl-inprocess$(EXE_EXT)
+
+wgsl-oracle:
+	cargo build --release --locked --manifest-path tools/wgsl-oracle/Cargo.toml --target-dir $(BUILD_DIR)/wgsl-oracle
+
+wgsl-tint:
+	python3 tools/wgsl-bench/bootstrap_tint.py --root $(BUILD_DIR)/wgsl-tools
+
+test-wgsl-unit:
+	python3 tests/run_wgsl_unit_tests.py
+
+test-wgsl-unit-sanitize:
+	python3 tests/run_wgsl_unit_tests.py --sanitize
+
+test-wgsl: build wgsl-oracle test-wgsl-unit
+	python3 tests/wgsl_backend_tests.py --compiler $(BWSLC_OUT) --oracle $(BUILD_DIR)/wgsl-oracle/release/wgsl-oracle$(EXE_EXT)
+
+test-wgsl-full: build wgsl-oracle wgsl-tint test-wgsl-unit-sanitize test-wgsl-features
+	python3 tests/wgsl_backend_tests.py --compiler $(BWSLC_OUT) --oracle $(BUILD_DIR)/wgsl-oracle/release/wgsl-oracle$(EXE_EXT) --require-gpu --require-tint --tint $(BUILD_DIR)/wgsl-tools/tint/dawn/tint$(EXE_EXT)
+
+benchmark-wgsl: build wgsl-oracle wgsl-tint
+	python3 scripts/benchmark_wgsl.py --compiler $(BWSLC_OUT) --oracle $(BUILD_DIR)/wgsl-oracle/release/wgsl-oracle$(EXE_EXT) --tint $(BUILD_DIR)/wgsl-tools/tint/bwsl-tint-bench$(EXE_EXT)
+
+benchmark-wgsl-web: build
+	python3 scripts/benchmark_wgsl_web.py --compiler $(BWSLC_OUT)
+
+test-wgsl-web:
+	node --test tests/webgpu_benchmark_tests.mjs
+	node --test tests/webgpu_render_tests.mjs
+	python3 tests/wgsl_web_server_tests.py
+	python3 tests/wgsl_web_analysis_tests.py
+	python3 tests/wgsl_render_server_tests.py
+
+test-wgsl-features: build wgsl-oracle wgsl-tint
+	python3 tests/wgsl_control_flow_tests.py --compiler $(BWSLC_OUT) --oracle $(BUILD_DIR)/wgsl-oracle/release/wgsl-oracle$(EXE_EXT) --tint $(BUILD_DIR)/wgsl-tools/tint/bwsl-tint-bench$(EXE_EXT)
+	python3 tests/wgsl_resource_tests.py --compiler $(BWSLC_OUT) --oracle $(BUILD_DIR)/wgsl-oracle/release/wgsl-oracle$(EXE_EXT) --tint $(BUILD_DIR)/wgsl-tools/tint/bwsl-tint-bench$(EXE_EXT)
+
+test-wgsl-render: build wgsl-oracle wgsl-tint test-wgsl-unit-sanitize test-wgsl-web test-wgsl-features
+	python3 tests/wgsl_render_tests.py --compiler $(BWSLC_OUT) --naga $(BUILD_DIR)/wgsl-oracle/release/wgsl-oracle$(EXE_EXT) --tint $(BUILD_DIR)/wgsl-tools/tint/bwsl-tint-bench$(EXE_EXT)
+
+benchmark-wgsl-render: build wgsl-oracle wgsl-tint
+	python3 scripts/benchmark_wgsl_render.py --compiler $(BWSLC_OUT) --naga $(BUILD_DIR)/wgsl-oracle/release/wgsl-oracle$(EXE_EXT) --tint $(BUILD_DIR)/wgsl-tools/tint/bwsl-tint-bench$(EXE_EXT)
+
+benchmark-wgsl-inprocess: build wgsl-inprocess wgsl-oracle wgsl-tint
+	python3 scripts/benchmark_wgsl_inprocess.py --compiler $(BWSLC_OUT) --driver $(BUILD_DIR)/wgsl-inprocess$(EXE_EXT) --naga $(BUILD_DIR)/wgsl-oracle/release/wgsl-oracle$(EXE_EXT) --tint $(BUILD_DIR)/wgsl-tools/tint/bwsl-tint-bench$(EXE_EXT)
+
+test: build $(SPIRV_TEST_DEPS) test-symbol-table test-wgsl-unit
 	PATH="$(abspath $(SPIRV_TOOLS_BUILD)/tools):$$PATH" ./tests/run_tests.sh
 
 # ============================================================================

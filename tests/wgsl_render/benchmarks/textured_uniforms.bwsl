@@ -1,0 +1,36 @@
+pipeline TexturedUniforms {
+    struct Material {
+        mat4 transform;
+        float3 tint;
+        float exposure;
+        float[4] weights;
+        uint count;
+    };
+    resources {
+        material: Material
+        color: texture2D
+        nearest: sampler
+    }
+    pass "Draw" {
+        use resources { material, color, nearest }
+        vertex {
+            uint id = input.vertex_id;
+            float2 corner = float2(float((id << 1u) & 2u), float(id & 2u));
+            output.position = resources.material.transform * float4(corner * 2.0 - 1.0, 0.0, 1.0);
+            output.uv = corner;
+        }
+        fragment {
+            float2 uv = input.uv;
+            if (uv.x < 0.125 && uv.y < 0.125) { discard; }
+            float4 color = float4(0.0);
+            for (uint tap = 0u; tap < resources.material.count; tap++) {
+                float2 offset = float2(float(tap & 1u), float(tap >> 1u)) / 64.0;
+                float4 texel = sample_lod(resources.color, resources.nearest, fract(uv + offset), 0.0);
+                color += texel * resources.material.weights[tap];
+            }
+            float3 shaded = color.rgb * resources.material.tint * resources.material.exposure;
+            if (uv.x > 0.5) { shaded = shaded * 0.5; }
+            output.color = float4(shaded, 1.0);
+        }
+    }
+}

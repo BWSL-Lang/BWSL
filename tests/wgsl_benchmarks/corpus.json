@@ -1,0 +1,8 @@
+{
+  "saxpy": {"label": "SAXPY", "strides": [4, 4, 4], "category": "micro"},
+  "hash_u32": {"label": "Unsigned hash", "strides": [4, 4], "category": "micro"},
+  "affine_vec4": {"label": "Vector affine", "strides": [16, 16], "category": "micro"},
+  "gaussian_5x5": {"label": "Gaussian 5×5 RGBA", "strides": [16, 16], "category": "workload"},
+  "skinning_4bone": {"label": "Four-bone skinning", "strides": [16, 16, 16, 16, 16], "category": "workload"},
+  "pbr_4light": {"label": "Four-light GGX", "strides": [16, 16, 16, 16, 16], "category": "workload"}
+}

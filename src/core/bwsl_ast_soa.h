@@ -463,6 +463,17 @@ struct FoldedConstantData {
 };
 
 
+// A NodeRef stores its node kind in the high byte. Mix that byte into the
+// bucket index: masking the raw key sends every type's index N to one bucket
+// and creates long probe clusters during AST cloning and position lookup.
+inline u32 HashNodeKey(u32 key) {
+    key ^= key >> 16;
+    key *= 0x85EBCA6Bu;
+    key ^= key >> 13;
+    key *= 0xC2B2AE35u;
+    return key ^ (key >> 16);
+}
+
 // Arena-backed open-addressing map from NodeRef::packed to a u32 value.
 // Find returns 0 for missing keys, so stored values should be non-zero.
 struct NodeU32Map {
@@ -486,7 +497,7 @@ struct NodeU32Map {
 
     u32 Find(u32 key) const {
         if (capacity == 0) return 0;
-        u32 slot = key & (capacity - 1);
+        u32 slot = HashNodeKey(key) & (capacity - 1);
         for (u32 probe = 0; probe < capacity; probe++) {
             if (keys[slot] == key) return values[slot];
             if (keys[slot] == 0xFFFFFFFFu) return 0;
@@ -497,7 +508,7 @@ struct NodeU32Map {
 
 private:
     void Insert(u32 key, u32 value) {
-        u32 slot = key & (capacity - 1);
+        u32 slot = HashNodeKey(key) & (capacity - 1);
         while (keys[slot] != 0xFFFFFFFFu && keys[slot] != key) {
             slot = (slot + 1) & (capacity - 1);
         }
@@ -735,7 +746,7 @@ struct AST {
 
     u32 FindPosition(NodeRef ref) const {
         if (ref.IsNull() || positionMapCapacity == 0) return 0;
-        u32 slot = ref.packed & (positionMapCapacity - 1);
+        u32 slot = HashNodeKey(ref.packed) & (positionMapCapacity - 1);
         for (u32 probe = 0; probe < positionMapCapacity; probe++) {
             u32 key = positionKeys[slot];
             if (key == ref.packed) {
@@ -751,7 +762,7 @@ struct AST {
 
     u32 FindEndPosition(NodeRef ref) const {
         if (ref.IsNull() || endPositionMapCapacity == 0) return 0;
-        u32 slot = ref.packed & (endPositionMapCapacity - 1);
+        u32 slot = HashNodeKey(ref.packed) & (endPositionMapCapacity - 1);
         for (u32 probe = 0; probe < endPositionMapCapacity; probe++) {
             u32 key = endPositionKeys[slot];
             if (key == ref.packed) {
@@ -876,7 +887,7 @@ struct AST {
 
 private:
     void InsertPosition(u32 key, u32 value) {
-        u32 slot = key & (positionMapCapacity - 1);
+        u32 slot = HashNodeKey(key) & (positionMapCapacity - 1);
         while (positionKeys[slot] != 0xFFFFFFFFu && positionKeys[slot] != key) {
             slot = (slot + 1) & (positionMapCapacity - 1);
         }
@@ -888,7 +899,7 @@ private:
     }
 
     void InsertEndPosition(u32 key, u32 value) {
-        u32 slot = key & (endPositionMapCapacity - 1);
+        u32 slot = HashNodeKey(key) & (endPositionMapCapacity - 1);
         while (endPositionKeys[slot] != 0xFFFFFFFFu && endPositionKeys[slot] != key) {
             slot = (slot + 1) & (endPositionMapCapacity - 1);
         }

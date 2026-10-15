@@ -1,0 +1,15 @@
+pipeline VectorSwizzle {
+    resources {
+        source: buffer<float4>
+        result: buffer<float4>
+    }
+    pass "Compute" {
+        use resources { source, result }
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            float4 value = resources.source[index];
+            float4 shuffled = value.wzyx;
+            resources.result[index] = shuffled * 2.0 + float4(1.0, 2.0, 3.0, 4.0);
+        }
+    }
+}

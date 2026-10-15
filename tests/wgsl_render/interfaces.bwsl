@@ -1,0 +1,34 @@
+pipeline RenderInterfaces {
+    attributes {
+        position: float4
+        uv: float2
+        normal: float3
+        material: uint
+    }
+
+    pass "Draw" {
+        use attributes { position, uv, normal, material }
+        outputs {
+            color: float4
+            material: uint4 @location(2)
+        }
+
+        vertex {
+            output.position = attributes.position;
+            output.unused = attributes.normal;
+            @noperspective output.uv = attributes.uv;
+            output.material = attributes.material + input.instance_id;
+            output.position.x = output.position.x + float(input.vertex_id) * 0.125;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            output.color = float4(uv, input.position.z, 1.0);
+            float4 snapshot = output.color;
+            output.color = float4(0.0);
+            output.color = snapshot;
+            output.material = uint4(input.material, 7u, 9u, 1u);
+            output.depth = 0.5;
+        }
+    }
+}

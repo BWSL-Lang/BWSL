@@ -1,0 +1,22 @@
+pipeline MathSemantics {
+    resources {
+        floats: buffer<float4>
+        integers: buffer<int>
+        result_floats: buffer<float4>
+        result_integers: buffer<int>
+    }
+    pass "Compute" {
+        use resources { floats, integers, result_floats, result_integers }
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            float4 value = resources.floats[index];
+            int signedValue = resources.integers[index];
+            resources.result_floats[index * 3u] = round(value);
+            resources.result_floats[index * 3u + 1u] = mod(value, float4(3.0));
+            resources.result_floats[index * 3u + 2u] = fmod(value, float4(3.0));
+            resources.result_integers[index * 3u] = signedValue / 3;
+            resources.result_integers[index * 3u + 1u] = signedValue % 3;
+            resources.result_integers[index * 3u + 2u] = signedValue >> 2;
+        }
+    }
+}

@@ -1,0 +1,15 @@
+pipeline TextureArrayLayers {
+    resources { layers: texture2DArray nearest: sampler }
+    pass "Draw" {
+        use resources { layers, nearest }
+        vertex {
+            uint id = input.vertex_id;
+            float2 corner = float2(float((id << 1u) & 2u), float(id & 2u));
+            output.position = float4(corner * 2.0 - 1.0, 0.0, 1.0);
+        }
+        fragment {
+            float layer = input.position.x / 8.0 - 1.25;
+            output.color = sample_lod(resources.layers, resources.nearest, float3(0.5, 0.5, layer), 0.0);
+        }
+    }
+}

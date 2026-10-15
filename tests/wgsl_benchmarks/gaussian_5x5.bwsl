@@ -1,0 +1,58 @@
+// RGBA 5x5 binomial Gaussian filter over independent 256x256 images, clamped edges.
+// Fixed-size work is explicitly unrolled for the straight-line WGSL backend.
+pipeline BenchmarkGaussian {
+    resources {
+        image: buffer<float4>
+        result: buffer<float4>
+    }
+
+    pass "Compute" {
+        use resources { image, result }
+
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            uint tile = index & 4294901760u;
+            int x = int(index & 255u);
+            int y = int((index >> 8u) & 255u);
+
+            uint x0 = uint(clamp(x + (-2), 0, 255));
+            uint x1 = uint(clamp(x + (-1), 0, 255));
+            uint x2 = uint(clamp(x + (0), 0, 255));
+            uint x3 = uint(clamp(x + (1), 0, 255));
+            uint x4 = uint(clamp(x + (2), 0, 255));
+            uint y0 = uint(clamp(y + (-2), 0, 255));
+            uint y1 = uint(clamp(y + (-1), 0, 255));
+            uint y2 = uint(clamp(y + (0), 0, 255));
+            uint y3 = uint(clamp(y + (1), 0, 255));
+            uint y4 = uint(clamp(y + (2), 0, 255));
+
+            float4 sum = float4(0.0);
+            sum = sum + resources.image[tile + y0 * 256u + x0] * 1.0;
+            sum = sum + resources.image[tile + y0 * 256u + x1] * 4.0;
+            sum = sum + resources.image[tile + y0 * 256u + x2] * 6.0;
+            sum = sum + resources.image[tile + y0 * 256u + x3] * 4.0;
+            sum = sum + resources.image[tile + y0 * 256u + x4] * 1.0;
+            sum = sum + resources.image[tile + y1 * 256u + x0] * 4.0;
+            sum = sum + resources.image[tile + y1 * 256u + x1] * 16.0;
+            sum = sum + resources.image[tile + y1 * 256u + x2] * 24.0;
+            sum = sum + resources.image[tile + y1 * 256u + x3] * 16.0;
+            sum = sum + resources.image[tile + y1 * 256u + x4] * 4.0;
+            sum = sum + resources.image[tile + y2 * 256u + x0] * 6.0;
+            sum = sum + resources.image[tile + y2 * 256u + x1] * 24.0;
+            sum = sum + resources.image[tile + y2 * 256u + x2] * 36.0;
+            sum = sum + resources.image[tile + y2 * 256u + x3] * 24.0;
+            sum = sum + resources.image[tile + y2 * 256u + x4] * 6.0;
+            sum = sum + resources.image[tile + y3 * 256u + x0] * 4.0;
+            sum = sum + resources.image[tile + y3 * 256u + x1] * 16.0;
+            sum = sum + resources.image[tile + y3 * 256u + x2] * 24.0;
+            sum = sum + resources.image[tile + y3 * 256u + x3] * 16.0;
+            sum = sum + resources.image[tile + y3 * 256u + x4] * 4.0;
+            sum = sum + resources.image[tile + y4 * 256u + x0] * 1.0;
+            sum = sum + resources.image[tile + y4 * 256u + x1] * 4.0;
+            sum = sum + resources.image[tile + y4 * 256u + x2] * 6.0;
+            sum = sum + resources.image[tile + y4 * 256u + x3] * 4.0;
+            sum = sum + resources.image[tile + y4 * 256u + x4] * 1.0;
+            resources.result[index] = sum / 256.0;
+        }
+    }
+}

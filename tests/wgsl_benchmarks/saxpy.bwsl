@@ -1,0 +1,18 @@
+// Matches saxpy.wgsl. Dispatch exactly one invocation per buffer element.
+pipeline BenchmarkSaxpy {
+    resources {
+        x: buffer<float>
+        y: buffer<float>
+        result: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { x, y, result }
+
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            float scaled = resources.x[index] * 2.0;
+            resources.result[index] = scaled + resources.y[index];
+        }
+    }
+}

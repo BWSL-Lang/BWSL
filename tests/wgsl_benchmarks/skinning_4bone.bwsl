@@ -1,0 +1,49 @@
+// Four-influence linear blend skinning with 64 bone transforms stored as three affine rows.
+// Fixed-size work is explicitly unrolled for the straight-line WGSL backend.
+pipeline BenchmarkSkinning {
+    resources {
+        positions: buffer<float4>
+        weights: buffer<float4>
+        joints: buffer<uint4>
+        palette: buffer<float4>
+        result: buffer<float4>
+    }
+
+    pass "Compute" {
+        use resources { positions, weights, joints, palette, result }
+
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            float4 position = resources.positions[index];
+            float4 weights = resources.weights[index];
+            uint4 joints = resources.joints[index];
+
+            uint base0 = joints.x * 3u;
+            float4 row0x = resources.palette[base0];
+            float4 row0y = resources.palette[base0 + 1u];
+            float4 row0z = resources.palette[base0 + 2u];
+            float3 transformed0 = float3(dot(row0x, position), dot(row0y, position), dot(row0z, position));
+
+            uint base1 = joints.y * 3u;
+            float4 row1x = resources.palette[base1];
+            float4 row1y = resources.palette[base1 + 1u];
+            float4 row1z = resources.palette[base1 + 2u];
+            float3 transformed1 = float3(dot(row1x, position), dot(row1y, position), dot(row1z, position));
+
+            uint base2 = joints.z * 3u;
+            float4 row2x = resources.palette[base2];
+            float4 row2y = resources.palette[base2 + 1u];
+            float4 row2z = resources.palette[base2 + 2u];
+            float3 transformed2 = float3(dot(row2x, position), dot(row2y, position), dot(row2z, position));
+
+            uint base3 = joints.w * 3u;
+            float4 row3x = resources.palette[base3];
+            float4 row3y = resources.palette[base3 + 1u];
+            float4 row3z = resources.palette[base3 + 2u];
+            float3 transformed3 = float3(dot(row3x, position), dot(row3y, position), dot(row3z, position));
+
+            float3 blended = transformed0 * weights.x + transformed1 * weights.y + transformed2 * weights.z + transformed3 * weights.w;
+            resources.result[index] = float4(blended, 1.0);
+        }
+    }
+}

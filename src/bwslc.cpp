@@ -1,6 +1,6 @@
 // BWSL Compiler - Command Line Tool
 // BWSL (Brawl Shader Language) is made by Alexander Presthus
-// Compiles .bwsl shader files to SPIR-V and cross-compiles to Metal, HLSL, GLSL, and GLES
+// Compiles .bwsl shaders to SPIR-V or WGSL, and cross-compiles SPIR-V to other targets.
 //
 // Usage: bwslc <input.bwsl> [options]
 //
@@ -87,6 +87,7 @@ namespace spirv_cross_wrapper {
 #include "phases/ssa/bwsl_ssa.cpp"
 #include "phases/backends/spirv/bwsl_spirv_backend.cpp"
 #include "phases/backends/gles/bwsl_gles_backend.cpp"
+#include "phases/backends/wgsl/bwsl_wgsl_backend.cpp"
 #include "phases/ir_generation/bwsl_compute_graph.cpp"
 #include "core/bwsl_custom_type_registry.cpp"
 #include "core/bwsl_variant_system.cpp"
@@ -146,6 +147,8 @@ struct CompilerConfig {
     bool outputHlsl  = false;              // HLSL output (requires -hlsl flag)
     bool outputGlsl  = false;              // GLSL output (requires -glsl flag)
     bool outputGlslEs = false;             // GLSL ES output for WebGL/mobile (requires -gles flag)
+    bool outputWgsl = false;               // Experimental direct compute backend
+    bool generateSpirv = true;            // False for a WGSL-only compilation, including -check
     bool allowTargetCapabilityExclusions = false; // -all may omit documented unavailable GL/ES features
     bool useDirectGles = false;            // Use direct IR→GLES backend (bypass SPIRV-Cross)
     bool verbose     = false;
@@ -167,6 +170,7 @@ struct CompilerConfig {
 
 struct ShaderTiming {
     double irLoweringMs = 0.0;
+    double irSetupMs = 0.0; // Included in IR lowering
     double cfgSsaMs = 0.0;
     double spirvGenMs = 0.0;
     double validationMs = 0.0;
@@ -174,11 +178,15 @@ struct ShaderTiming {
     double hlslCrossMs = 0.0;
     double glslCrossMs = 0.0;
     double glslEsCrossMs = 0.0;
+    double wgslEmitMs = 0.0;
+    size_t wgslArenaBytes = 0;
+    size_t wgslSourceBytes = 0;
     double totalMs = 0.0;
 };
 
 struct TimingInfo {
     double lexMs = 0.0;
+    double frontendSetupMs = 0.0; // Included in lexer initialization
     double parseMs = 0.0;
     double moduleDiscoveryMs = 0.0; // included in parseMs
     double totalMs = 0.0;
@@ -188,6 +196,7 @@ struct TimingInfo {
         printf("\n=== Timing Information ===\n");
         printf("  Lexer + Parser:    %8.3f ms\n", lexMs + parseMs);
         printf("    - Lexer init:    %8.3f ms\n", lexMs);
+        printf("      Frontend setup:%7.3f ms\n", frontendSetupMs);
         printf("    - Parse:         %8.3f ms\n", parseMs);
         printf("      Discovery:     %8.3f ms\n", moduleDiscoveryMs);
         printf("      Parse remaining:%7.3f ms\n", std::max(0.0, parseMs - moduleDiscoveryMs));
@@ -197,13 +206,20 @@ struct TimingInfo {
         double totalMetalMs = 0.0;
         double totalHlslMs = 0.0;
         double totalGlesMs = 0.0;
+        double totalWgslMs = 0.0;
         for (const auto& [name, t] : shaderTimings) {
             printf("    %s:\n", name.c_str());
             printf("      IR lowering:   %8.3f ms\n", t.irLoweringMs);
+            printf("        IR setup:    %8.3f ms\n", t.irSetupMs);
             if (t.cfgSsaMs > 0.001) {
                 printf("      CFG + SSA:     %8.3f ms\n", t.cfgSsaMs);
             }
             printf("      SPIR-V gen:    %8.3f ms\n", t.spirvGenMs);
+            if (t.wgslSourceBytes != 0) {
+                printf("      WGSL emit:     %8.3f ms\n", t.wgslEmitMs);
+                printf("      WGSL arena:    %8zu bytes\n", t.wgslArenaBytes);
+                printf("      WGSL source:   %8zu bytes\n", t.wgslSourceBytes);
+            }
             if (t.validationMs > 0.0) {
                 printf("      Validation:    %8.3f ms\n", t.validationMs);
             }
@@ -217,11 +233,12 @@ struct TimingInfo {
                 printf("      Gles cross:    %8.3f ms\n", t.glslEsCrossMs);
             }
             printf("      Subtotal:      %8.3f ms\n", t.totalMs);
-            totalShaderMs += t.irLoweringMs + t.cfgSsaMs + t.spirvGenMs;
+            totalShaderMs += t.irLoweringMs + t.cfgSsaMs + t.spirvGenMs + t.wgslEmitMs;
             totalValidationMs += t.validationMs;
             totalMetalMs += t.metalCrossMs;
             totalHlslMs += t.hlslCrossMs;
             totalGlesMs += t.glslEsCrossMs;
+            totalWgslMs += t.wgslEmitMs;
         }
         printf("\n  Summary:\n");
         printf("    BWSL compile:    %8.3f ms\n", lexMs + parseMs + totalShaderMs);
@@ -229,6 +246,7 @@ struct TimingInfo {
         printf("    Metal cross:     %8.3f ms\n", totalMetalMs);
         printf("    HLSL cross:      %8.3f ms\n", totalHlslMs);
         printf("    Gles cross:      %8.3f ms\n", totalGlesMs);
+        printf("    WGSL emit:       %8.3f ms\n", totalWgslMs);
         printf("    Total:           %8.3f ms\n", totalMs);
         printf("===========================\n");
     }
@@ -283,7 +301,7 @@ void PrintUsage(const char* programName) {
     printf("  -watch-interval <ms>\n");
     printf("                 File polling interval for -watch (default: 250)\n");
     printf("\n");
-    printf("Output artifact flags (SPIR-V is generated internally for validation/cross-compile):\n");
+    printf("Output artifact flags (WGSL-only compilation bypasses SPIR-V):\n");
     printf("  -spv           Write generated SPIR-V files alongside requested artifacts\n");
     printf("                 (default artifact when no format is requested)\n");
     printf("  -metal         Generate Metal Shading Language output via SPIR-V\n");
@@ -292,11 +310,12 @@ void PrintUsage(const char* programName) {
     printf("  -gles          Generate GLSL ES output for WebGL 2.0 / OpenGL ES 3.0 via SPIR-V\n");
     printf("                 (version 300 es)\n");
     printf("  -gles-direct   Generate GLSL ES from IR (local pointers use SPIRV-Cross)\n");
+    printf("  -wgsl          Generate WGSL directly from IR (experimental native backend)\n");
     printf("  -webgl         Alias for -gles\n");
     printf("  -bindings      Output resolved resource bindings JSON\n");
     printf("  -errors-json   Print machine-readable diagnostics JSON for IDE integrations\n");
     printf("  -ast-json      Print parsed AST JSON for IDE integrations and exit\n");
-    printf("  -all           Generate all outputs\n");
+    printf("  -all           Generate established outputs (add -wgsl explicitly)\n");
     printf("----------------------------------------\n");
     printf("Debug options:\n");
     printf("  -v             Verbose output\n");
@@ -306,7 +325,7 @@ void PrintUsage(const char* programName) {
     printf("  -validation <auto|strict|off>\n");
     printf("                 SPIR-V validation mode (default: auto)\n");
     printf("  -no-validate   Alias for -validation off (faster compilation)\n");
-    printf("  -internals     Output SPIR-V disassembly and BWSL IR dump to JSON file\n");
+    printf("  -internals     Output BWSL IR and target internals to JSON file\n");
     printf("  -h, --help     Show this help\n");
     printf("----------------------------------------\n");
     printf("\nExamples:\n");
@@ -1966,6 +1985,8 @@ struct CompileResult {
     std::string metalSource;
     std::string hlslSource;
     std::string directGlesSource;  // Direct GLES output (bypasses SPIRV-Cross)
+    std::string wgslSource;
+    std::string wgslBindingsJson;
     std::string error;
     std::vector<std::string> loweringDiagnostics;
     bool diagnosticsAlreadyReported = false;
@@ -2007,6 +2028,150 @@ static void AddCompileResultDiagnostics(DiagnosticStream& diagnostics,
                        file, pass, stage);
 }
 
+static std::string BuildWGSLBindingsJson(const WGSL::WGSLBuilder& builder,
+                                         const SymbolTableData& symbols,
+                                         const char* sourceBase,
+                                         const ShaderStageData& stage,
+                                         ShaderStage shaderStage,
+                                         const IR::IRProgram& program) {
+    std::ostringstream json;
+    json << "{\n  \"version\": 3,\n  \"target\": \"wgsl\",\n";
+    const char* stageName = shaderStage == ShaderStage::Vertex ? "vertex" :
+                            shaderStage == ShaderStage::Fragment ? "fragment" : "compute";
+    json << "  \"stage\": \"" << stageName << "\",\n  \"entryPoint\": \"main\",\n  \"workgroupSize\": ";
+    if (shaderStage == ShaderStage::Compute) {
+        json << "[" << stage.workgroupSizeX << ", " << stage.workgroupSizeY << ", "
+             << stage.workgroupSizeZ << "]";
+    } else {
+        json << "null";
+    }
+    const auto writeInterface = [&](const char* name, const WGSL::InterfaceTable& table,
+                                    const WGSL::InterfaceOrigins& origins, bool varying) {
+        json << ",\n  \"" << name << "\": [";
+        for (u32 id = 0; id < table.count; ++id) {
+            const WGSL::InterfaceBuiltin builtin = static_cast<WGSL::InterfaceBuiltin>(table.builtins[id]);
+            json << (id == 0 ? "\n" : ",\n") << "    {\"slot\": " << origins.slots[id]
+                 << ", \"type\": \"" << CoreTypeToString(static_cast<CoreType>(table.types[id]))
+                 << "\", \"location\": ";
+            if (builtin == WGSL::InterfaceBuiltin::None) {
+                json << table.locations[id];
+            } else {
+                json << "null";
+            }
+            json << ", \"builtin\": ";
+            if (builtin == WGSL::InterfaceBuiltin::None) {
+                json << "null";
+            } else {
+                json << "\"" << WGSL::InterfaceBuiltinName(builtin) << "\"";
+            }
+            json << ", \"interpolation\": ";
+            if (varying && builtin == WGSL::InterfaceBuiltin::None) {
+                const InterpolationMode mode = static_cast<InterpolationMode>(table.interpolations[id]);
+                json << "\"" << (mode == InterpolationMode::Flat ? "flat" :
+                                    mode == InterpolationMode::NoPerspective ? "linear" : "perspective") << "\"";
+            } else {
+                json << "null";
+            }
+            json << "}";
+        }
+        json << "\n  ]";
+    };
+    writeInterface("inputs", builder.inputs, builder.inputOrigins, shaderStage == ShaderStage::Fragment);
+    writeInterface("outputs", builder.outputs, builder.outputOrigins, shaderStage == ShaderStage::Vertex);
+    json << ",\n  \"resources\": [";
+    for (u32 id = 0; id < builder.resources.count; ++id) {
+        const u32 slot = builder.resourceOrigins.logicalSlots[id];
+        std::string name;
+        for (u32 index = 0; index < symbols.resources.count; ++index) {
+            const ResourceData& resource = symbols.resources[index];
+            if (resource.type == ::ResourceBinding::StorageBuffer && resource.bindingIndex == slot) {
+                name = GetResourceNameByIndex(symbols, index, sourceBase);
+                break;
+            }
+        }
+        const CoreType type = static_cast<CoreType>(builder.resources.elementTypes[id]);
+        const char* access = (builder.resources.access[id] & WGSL::AccessWrite) ? "read_write" : "read";
+        json << (id == 0 ? "\n" : ",\n")
+             << "    {\"name\": \"" << EscapeJsonString(name)
+             << "\", \"type\": \"storage_buffer\", \"group\": " << builder.resources.groups[id]
+             << ", \"binding\": " << builder.resources.bindings[id]
+             << ", \"logicalSlot\": " << slot << ", \"access\": \"" << access
+             << "\", \"elementType\": \"" << CoreTypeToString(type)
+             << "\", \"stride\": " << builder.resources.strides[id] << "}";
+    }
+    bool haveResource = builder.resources.count != 0;
+    const auto resourceName = [&](::ResourceBinding::Type kind, u32 slot) -> std::string {
+        for (u32 index = 0; index < symbols.resources.count; ++index) {
+            const ResourceData& declaration = symbols.resources[index];
+            if (declaration.type == kind && declaration.bindingIndex == slot) {
+                return GetResourceNameByIndex(symbols, index, sourceBase);
+            }
+        }
+        return {};
+    };
+    for (u32 id = 0; id < builder.uniforms.count; ++id) {
+        const u32 slot = builder.uniforms.slots[id];
+        json << (haveResource ? ",\n" : "\n")
+             << "    {\"name\": \"" << EscapeJsonString(resourceName(::ResourceBinding::UniformBuffer, slot))
+             << "\", \"type\": \"uniform_buffer\", \"group\": 1, \"binding\": " << slot
+             << ", \"logicalSlot\": " << slot << ", \"access\": \"read\", \"layout\": \"std140\", \"byteSize\": "
+             << builder.uniforms.byteSizes[id] << ", \"elementType\": \""
+             << CoreTypeToString(static_cast<CoreType>(builder.uniforms.types[id]))
+             << "\", \"arrayLength\": " << builder.uniforms.arrayLengths[id]
+             << ", \"structTypeHash\": " << builder.uniforms.structTypes[id] << ", \"members\": [";
+        bool firstMember = true;
+        for (u32 structure = 0; structure < program.structTypeCount; ++structure) {
+            if (builder.uniformLayouts.states[structure] != 2) {
+                continue;
+            }
+            const IR::IRProgram::StructTypeInfo& info = program.structTypes[structure];
+            for (u32 member = 0; member < info.fieldCount; ++member) {
+                const u32 field = info.fieldOffset + member;
+                json << (firstMember ? "" : ", ") << "{\"structTypeHash\": " << info.nameHash
+                     << ", \"field\": " << member << ", \"name\": \""
+                     << EscapeJsonString(ReverseLookup::GetString(program.structFieldNameHashes[field]))
+                     << "\", \"type\": \"" << CoreTypeToString(static_cast<CoreType>(program.structFieldTypes[field]))
+                     << "\", \"offset\": " << builder.uniformLayouts.offsets[field]
+                     << ", \"arrayLength\": " << program.structFieldArraySizes[field]
+                     << ", \"stride\": " << builder.uniformLayouts.strides[field]
+                     << ", \"nestedStructTypeHash\": " << program.structFieldTypeHashes[field] << "}";
+                firstMember = false;
+            }
+        }
+        json << "]}";
+        haveResource = true;
+    }
+    for (u32 id = 0; id < builder.textures.count; ++id) {
+        const u32 slot = builder.textures.slots[id];
+        const CoreType type = static_cast<CoreType>(builder.textures.types[id]);
+        const char* dimension = type == CoreType::TEXTURE3D ? "3d" : type == CoreType::TEXTURECUBE ? "cube" :
+                                type == CoreType::TEXTURE2DARRAY ? "2d-array" : "2d";
+        json << (haveResource ? ",\n" : "\n")
+             << "    {\"name\": \"" << EscapeJsonString(resourceName(::ResourceBinding::Texture, slot))
+             << "\", \"type\": \"texture\", \"group\": 2, \"binding\": " << slot
+             << ", \"logicalSlot\": " << slot << ", \"viewDimension\": \"" << dimension
+             << "\", \"sampleType\": \"" << (builder.textures.depth[id] ? "depth" : "float") << "\"}";
+        haveResource = true;
+    }
+    for (u32 id = 0; id < builder.samplers.count; ++id) {
+        const u32 binding = builder.samplers.bindings[id];
+        json << (haveResource ? ",\n" : "\n")
+             << "    {\"name\": \"" << EscapeJsonString(binding < 32 ? resourceName(::ResourceBinding::Sampler, binding) : "")
+             << "\", \"type\": \"sampler\", \"group\": 3, \"binding\": " << binding
+             << ", \"comparison\": " << (builder.samplers.comparison[id] ? "true" : "false")
+             << ", \"defaultForTextureSlot\": ";
+        if (binding >= 32) {
+            json << binding - 32;
+        } else {
+            json << "null";
+        }
+        json << "}";
+        haveResource = true;
+    }
+    json << "\n  ]\n}\n";
+    return json.str();
+}
+
 CompileResult CompileShaderStage(
     const CompilationContext& context,
     const Parser& parser,
@@ -2026,7 +2191,10 @@ CompileResult CompileShaderStage(
     const RenderConfig* renderConfig = nullptr,  // For GLES backend
     DiagnosticStream* diagnosticStream = nullptr,
     const std::string& diagnosticPassName = "",
-    bool suppressDiagnostics = false
+    bool suppressDiagnostics = false,
+    bool generateWgsl = false,
+    bool generateSpirv = true,
+    bool captureWgslBindings = false
 ) {
     using Clock = std::chrono::high_resolution_clock;
     auto shaderStart = Clock::now();
@@ -2102,6 +2270,8 @@ CompileResult CompileShaderStage(
     IRLowering lowering;
     lowering.Initialize(&irPool, const_cast<SymbolTableData*>(&parser.symbolTable),
                         const_cast<AST*>(&context.ast), parser.sourceBase());
+    result.timing.irSetupMs =
+        std::chrono::duration<double, std::milli>(Clock::now() - irStart).count();
     lowering.suppressErrorOutput = suppressDiagnostics || diagnosticStream != nullptr;
     lowering.diagnosticStream = diagnosticStream;
     lowering.diagnosticPassName = diagnosticPassName;
@@ -2163,8 +2333,7 @@ CompileResult CompileShaderStage(
     // Scale scratch with lowered IR instead of exhausting a fixed 512 KiB arena.
     const size_t stageScratchBytes = std::max<size_t>(512 * 1024,
         static_cast<size_t>(lowering.program.instructionCount) * 512);
-    std::vector<char> cfgMem(stageScratchBytes);
-    cfgArena.Initialize(cfgMem.data(), cfgMem.size());
+    std::unique_ptr<u8[]> cfgMemory;
 
     CFGBuilder cfgBuilder;
     CFG* cfgPtr = nullptr;
@@ -2178,7 +2347,11 @@ CompileResult CompileShaderStage(
         }
     }
 
-    if (hasControlFlow) {
+    if (hasControlFlow || generateWgsl) {
+        // CFG/SSA initializes its own arrays. Do not clear an entire scratch
+        // arena, or allocate one for targets which do not need control flow.
+        cfgMemory.reset(new u8[stageScratchBytes]);
+        cfgArena.Initialize(cfgMemory.get(), stageScratchBytes);
         if (verbose) {
             printf("    Building CFG and converting to SSA...\n");
         }
@@ -2186,8 +2359,30 @@ CompileResult CompileShaderStage(
         cfgBuilder.Build();
         cfgPtr = &cfgBuilder.cfg;
 
-        if (cfgBuilder.cfg.blockCount > 1) {
-            SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena);
+        if (cfgBuilder.cfg.blockCount > 1 || generateWgsl) {
+            const u32 originalRegisterCount = lowering.program.registerCount;
+            SSA::SSAConstructor ssa;
+            ssa.Init(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena);
+            if (!ssa.ConvertToSSA()) {
+                result.error = "SSA register limit exceeded (16383 registers). Split or simplify the shader.";
+                return result;
+            }
+            if (generateWgsl) {
+                // SSA rewrites uses of tracked assignments to their source values,
+                // but retains STORE_REG alias markers for the existing backends.
+                // They no longer define a value. Preserve untracked copies and
+                // address-taken stores; the WGSL verifier checks those separately.
+                for (u32 instruction = 0; instruction < lowering.program.instructionCount; ++instruction) {
+                    if (lowering.program.opcodes[instruction] != OP_STORE_REG) continue;
+                    const u16 destination = lowering.program.destinations[instruction];
+                    if (destination < originalRegisterCount &&
+                        ssa.regToVariable[destination] != 0xFFFF) {
+                        lowering.program.opcodes[instruction] = OP_NOP;
+                        lowering.program.destinations[instruction] = 0xFFFF;
+                        lowering.program.types[instruction] = static_cast<u16>(CoreType::VOID);
+                    }
+                }
+            }
         }
 
         // Dump IR after SSA conversion
@@ -2206,6 +2401,50 @@ CompileResult CompileShaderStage(
     }
 
     result.explicitSamplerUses = CollectExplicitSamplerUses(lowering.program, stage);
+
+    if (generateWgsl) {
+        const Clock::time_point wgslStart = Clock::now();
+        std::unique_ptr<u8[]> wgslMemory(new u8[stageScratchBytes]);
+        BWSL_Arena wgslArena;
+        wgslArena.Initialize(wgslMemory.get(), stageScratchBytes);
+
+        WGSL::WGSLBuilder wgslBuilder;
+        if (!wgslBuilder.Initialize(&wgslArena, &lowering.program, cfgPtr,
+                                    &parser.symbolTable, stage)) {
+            result.error = wgslBuilder.Error();
+            return result;
+        }
+        wgslBuilder.SetComputeWorkgroupSize(shaderStageData->workgroupSizeX,
+                                           shaderStageData->workgroupSizeY,
+                                           shaderStageData->workgroupSizeZ);
+        if (!wgslBuilder.Emit()) {
+            result.error = "WGSL: ";
+            result.error += wgslBuilder.Error();
+            if (wgslBuilder.ErrorInstruction() != 0xFFFFFFFFu) {
+                result.error += " (IR instruction ";
+                result.error += std::to_string(wgslBuilder.ErrorInstruction());
+                result.error += ")";
+            }
+            return result;
+        }
+        result.wgslSource.assign(wgslBuilder.Source());
+        result.timing.wgslArenaBytes = wgslArena.allocated;
+        result.timing.wgslSourceBytes = result.wgslSource.size();
+        result.timing.wgslEmitMs =
+            std::chrono::duration<double, std::milli>(Clock::now() - wgslStart).count();
+        if (captureWgslBindings) {
+            result.wgslBindingsJson = BuildWGSLBindingsJson(
+                wgslBuilder, parser.symbolTable, parser.sourceBase(), *shaderStageData, stage, lowering.program);
+        }
+    }
+
+    if (!generateSpirv) {
+        AnalyzeIR(&result.analysis, &lowering.program);
+        result.timing.totalMs =
+            std::chrono::duration<double, std::milli>(Clock::now() - shaderStart).count();
+        result.success = true;
+        return result;
+    }
 
     bool hasLocalPointers = false;
     for (u32 i = 0; i < lowering.program.instructionCount; ++i) {
@@ -2419,6 +2658,48 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
     const std::string stageOutputPath = BuildStageOutputPath(outputStemPath, stageName);
     const bool disambiguateGlslOutputs = config.outputGlsl && config.outputGlslEs;
 
+    if (config.outputWgsl && !config.checkOnly) {
+        const std::string wgslPath = stageOutputPath + ".wgsl";
+        const bool sourceWritten = WriteTextFile(wgslPath, result.wgslSource);
+        const bool bindingsWritten = !config.outputBindings ||
+            WriteTextFile(wgslPath + ".bindings.json", result.wgslBindingsJson);
+        if (!sourceWritten || !bindingsWritten) {
+            if (diagnostics) {
+                AddStageDiagnostic(*diagnostics, DiagnosticSeverity::Error, DiagnosticPhase::IO,
+                                   DiagnosticMessageId::Raw,
+                                   "Could not write WGSL output or binding metadata: " + wgslPath,
+                                   config.inputFile, passName, stageName);
+            }
+            return output;
+        }
+        if (!quiet) {
+            printf("    -> %s\n", wgslPath.c_str());
+            if (config.outputBindings) printf("    -> %s.bindings.json\n", wgslPath.c_str());
+        }
+    }
+
+    if (!config.generateSpirv) {
+        if (config.outputInternals) {
+            std::string json = "{\n  \"pass\": \"" + EscapeJsonString(passName) + "\",\n";
+            json += "  \"stage\": \"" + std::string(stageName) + "\",\n";
+            json += "  \"ir\": \"" + EscapeJsonString(result.irDump) + "\",\n";
+            json += "  \"wgsl\": \"" + EscapeJsonString(result.wgslSource) + "\"\n}\n";
+            const std::string path = stageOutputPath + ".internals.json";
+            if (!WriteTextFile(path, json)) {
+                if (diagnostics) {
+                    AddStageDiagnostic(*diagnostics, DiagnosticSeverity::Error, DiagnosticPhase::IO,
+                                       DiagnosticMessageId::Raw, "Could not write WGSL internals: " + path,
+                                       config.inputFile, passName, stageName);
+                }
+                return output;
+            }
+            if (!quiet) printf("    -> %s\n", path.c_str());
+        }
+        shaderTime.totalMs = shaderTime.irLoweringMs + shaderTime.cfgSsaMs + shaderTime.wgslEmitMs;
+        output.success = true;
+        return output;
+    }
+
     if (!config.outputSpirv &&
         config.validationMode == ValidationMode::Off &&
         !config.outputMetal &&
@@ -2426,7 +2707,7 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         !config.outputGlsl &&
         !config.outputGlslEs &&
         !config.outputInternals) {
-        shaderTime.totalMs = shaderTime.irLoweringMs + shaderTime.cfgSsaMs + shaderTime.spirvGenMs +
+        shaderTime.totalMs = shaderTime.irLoweringMs + shaderTime.cfgSsaMs + shaderTime.spirvGenMs + shaderTime.wgslEmitMs +
                              shaderTime.validationMs + shaderTime.metalCrossMs + shaderTime.hlslCrossMs +
                              shaderTime.glslCrossMs + shaderTime.glslEsCrossMs;
         output.success = true;
@@ -2721,7 +3002,7 @@ static StageOutputResult WriteStageOutputs(const CompilerConfig& config,
         }
     }
 
-    shaderTime.totalMs = shaderTime.irLoweringMs + shaderTime.cfgSsaMs + shaderTime.spirvGenMs +
+    shaderTime.totalMs = shaderTime.irLoweringMs + shaderTime.cfgSsaMs + shaderTime.spirvGenMs + shaderTime.wgslEmitMs +
                          shaderTime.validationMs + shaderTime.metalCrossMs + shaderTime.hlslCrossMs +
                          shaderTime.glslCrossMs + shaderTime.glslEsCrossMs;
 
@@ -2971,6 +3252,8 @@ int main(int argc, char* argv[]) {
             config.stageFilter = argv[++i];
         } else if (arg == "-spv") {
             config.outputSpirv = true;
+        } else if (arg == "-wgsl") {
+            config.outputWgsl = true;
         } else if (arg == "-metal") {
             config.outputMetal = true;
         } else if (arg == "-hlsl") {
@@ -3103,9 +3386,13 @@ int main(int argc, char* argv[]) {
         !config.outputMetal &&
         !config.outputHlsl &&
         !config.outputGlsl &&
-        !config.outputGlslEs) {
+        !config.outputGlslEs &&
+        !config.outputWgsl) {
         config.outputSpirv = true;
     }
+
+    config.generateSpirv = !config.outputWgsl || config.outputSpirv || config.outputMetal ||
+        config.outputHlsl || config.outputGlsl || config.outputGlslEs;
 
     if (config.checkOnly) {
         config.outputSpirv = false;
@@ -3125,6 +3412,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (config.astJson) {
+        config.outputWgsl = false;
         config.outputSpirv = false;
         config.outputMetal = false;
         config.outputHlsl = false;
@@ -3415,10 +3703,15 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
 
     // Lexer initialization
     auto lexStart = Clock::now();
-    CompilationContext context;
+    // Position/name maps grow with the AST. Tiny shaders need much less
+    // initial capacity than a module hierarchy, without changing arena size.
+    const u32 estimatedNodes = static_cast<u32>(std::clamp<size_t>(source.size() / 8, 256, 2048));
+    CompilationContext context(estimatedNodes);
     context.diagnosticSink = &diagnostics;
     TokenStream stream;
     stream.Init(&context.arena, source.c_str(), source.length());
+    timing.frontendSetupMs =
+        std::chrono::duration<double, std::milli>(Clock::now() - lexStart).count();
     Lexer lexer(source, stream);
     lexer.Tokenize();
     auto lexEnd = Clock::now();
@@ -3642,11 +3935,14 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
     const size_t backendCacheArenaSize =
         std::max<size_t>(8ull * 1024ull * 1024ull,
                          static_cast<size_t>(backendCacheEntryCapacity) * 512ull * 1024ull);
-    std::unique_ptr<u8[]> backendCacheMemory(new u8[backendCacheArenaSize]);
+    std::unique_ptr<u8[]> backendCacheMemory;
     BWSL_Arena backendCacheArena;
-    backendCacheArena.Initialize(backendCacheMemory.get(), backendCacheArenaSize);
     BackendCache backendCache;
-    backendCache.Init(&backendCacheArena, backendCacheEntryCapacity);
+    if (config.generateSpirv) {
+        backendCacheMemory.reset(new u8[backendCacheArenaSize]);
+        backendCacheArena.Initialize(backendCacheMemory.get(), backendCacheArenaSize);
+        backendCache.Init(&backendCacheArena, backendCacheEntryCapacity);
+    }
 
     // Compile each pass
     for (u32 passIdx = 0; passIdx < pipeline.passes.count; passIdx++) {
@@ -3683,6 +3979,25 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
         bool haveFragmentReflectionAnalysis = false;
         bool haveComputeReflectionAnalysis = false;
 
+        // A fragment-only WGSL request still needs the vertex lowering's slot,
+        // type and interpolation plan. Prepare that interface without emitting
+        // an unrequested vertex artifact or invoking either backend.
+        if (config.outputWgsl && config.stageFilter == "fragment" &&
+            !pass.vertexShader.IsNull()) {
+            CompileResult interfaceResult = CompileShaderStage(
+                context, parser, pass, ShaderStage::Vertex, config.verbose,
+                false, false, true, false, specializedPipelineRef,
+                pipeline.passes[passIdx], &passVaryings, false, false, false,
+                &config.renderConfig, &diagnostics, passName, config.errorsJson,
+                false, false, false);
+            if (!interfaceResult.success) {
+                AddCompileResultDiagnostics(diagnostics, interfaceResult, config.inputFile, passName, "vertex");
+                ++errorCount;
+                continue;
+            }
+            timing.shaderTimings.push_back({outputStem + ".vertex-interface", interfaceResult.timing});
+        }
+
         // Compile vertex shader
         if ((config.stageFilter.empty() || config.stageFilter == "vertex") &&
             !pass.vertexShader.IsNull()) {
@@ -3697,7 +4012,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        config.useDirectGles, config.outputGlslEs, &config.renderConfig,
                                                        &diagnostics,
                                                        passName,
-                                                       config.errorsJson);
+                                                       config.errorsJson, config.outputWgsl,
+                                                       config.generateSpirv, config.outputBindings);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "vertex");
@@ -3738,7 +4054,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        config.useDirectGles, config.outputGlslEs, &config.renderConfig,
                                                        &diagnostics,
                                                        passName,
-                                                       config.errorsJson);  // Use same varying context populated by vertex shader
+                                                       config.errorsJson, config.outputWgsl,
+                                                       config.generateSpirv, config.outputBindings);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "fragment");
@@ -3779,7 +4096,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        config.useDirectGles, config.outputGlslEs, &config.renderConfig,
                                                        &diagnostics,
                                                        passName,
-                                                       config.errorsJson);
+                                                       config.errorsJson, config.outputWgsl,
+                                                       config.generateSpirv, config.outputBindings);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "compute");
@@ -3805,7 +4123,7 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
             }
         }
 
-        if (!config.checkOnly && (config.outputInternals || config.outputBindings)) {
+        if (!config.checkOnly && config.generateSpirv && (config.outputInternals || config.outputBindings)) {
             ResourceReflectionConfig reflectionConfig;
             reflectionConfig.vertexPullingMode = config.outputGlslEs
                 ? ResourceReflectionConfig::VertexPullingMode::Disabled

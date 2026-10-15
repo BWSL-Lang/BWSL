@@ -65,9 +65,9 @@ void SPIRVBuilder::EmitBranch(u32 ir_idx) {
         condType = CoreType::BOOL;
       } else if (cond_reg & 0x8000) {
         condType = CoreType::FLOAT;
-      } else if (cond_reg & 0x4000) {
+      } else if (IR::IsIntConstant(cond_reg)) {
         condType = CoreType::INT;
-      } else if (cond_reg & 0x2000) {
+      } else if (IR::IsUintConstant(cond_reg)) {
         condType = CoreType::UINT;
       }
     } else if (cond_reg < ir->registerCount && ir->registerTypes) {
@@ -447,8 +447,8 @@ void SPIRVBuilder::EmitFunctionBody() {
       for (u32 op = 0; op < operandCount; op++) {
         u16 valueReg = ir->GetPhiOperandValue(phi_idx, op);
         // Skip constants (they have special encoding and are handled
-        // differently) 0x8000=float, 0x4000=int, 0x2000=uint, 0xC000=bool
-        if (valueReg & 0xE000)
+        // differently) 0x8000=float, 0x4000=int, 0x6000=uint, 0xC000=bool
+        if (valueReg & 0xC000)
           continue;
         // Pre-allocate an ID for this register if it doesn't have one
         // Use GetSpirvId which handles undef registers properly
@@ -668,7 +668,7 @@ void SPIRVBuilder::EmitFunctionBody() {
           continue;
         }
         u16 indexReg = ir->GetOperand(i, 2);
-        if ((indexReg & 0xC000) == 0x4000) {
+        if (IR::IsIntConstant(indexReg)) {
           continue; // Constant index uses OpCompositeExtract/Insert directly
         }
         u32 structHash = ir->metadata[i];

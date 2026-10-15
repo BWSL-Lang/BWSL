@@ -1,0 +1,13 @@
+pipeline StorageOrder {
+    resources { result: buffer<uint> }
+    pass "Compute" {
+        use resources { result }
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            uint original = resources.result[index];
+            resources.result[index] = original * 2u;
+            uint updated = resources.result[index];
+            resources.result[index] = updated + original;
+        }
+    }
+}

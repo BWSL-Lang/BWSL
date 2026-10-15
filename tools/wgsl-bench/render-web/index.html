@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BWSL / WGSL render pipeline benchmark</title>
+    <style>
+        :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+        body { max-width: 1160px; margin: 40px auto; padding: 0 24px; line-height: 1.5; }
+        h1 { letter-spacing: -0.035em; margin-bottom: 8px; }
+        p { max-width: 90ch; }
+        .subtle { opacity: 0.75; }
+        form { display: flex; flex-wrap: wrap; gap: 18px; align-items: end; margin: 28px 0; }
+        label { display: flex; flex-direction: column; gap: 6px; font-size: 0.9rem; }
+        input, select, button { padding: 9px 12px; font: inherit; border: 1px solid #8888; border-radius: 6px; }
+        input { width: 75px; }
+        button { cursor: pointer; }
+        button:disabled { opacity: 0.5; cursor: default; }
+        #run { background: #2563eb; color: white; border-color: #2563eb; }
+        #status { padding: 14px 18px; background: #8881; border-left: 3px solid #2563eb; white-space: pre-wrap; }
+        .scroll { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0 30px; font-variant-numeric: tabular-nums; }
+        th, td { padding: 11px; text-align: right; border-bottom: 1px solid #8885; white-space: nowrap; }
+        th:first-child, td:first-child { text-align: left; }
+        th { font-size: 0.83rem; }
+        details { margin: 20px 0; }
+        summary { cursor: pointer; }
+        pre { font: 12px/1.5 ui-monospace, monospace; overflow: auto; padding: 16px; background: #8881; }
+        .pictures { display: flex; gap: 24px; flex-wrap: wrap; }
+        figure { margin: 0; }
+        canvas { width: 256px; height: 256px; border: 1px solid #8885; margin-top: 8px; }
+        a { color: #568bff; }
+    </style>
+</head>
+<body>
+    <h1>BWSL / WGSL render pipeline benchmark</h1>
+    <p class="subtle">Actual vertex and fragment shaders, rasterization, depth, multiple render targets and alpha blending through browser WebGPU. Both sources go directly to WGSL modules and render pipelines.</p>
+    <p>Handwritten WGSL and BWSL use identical geometry, resources, render state and attachments. Each timed frame clears its targets and completes a render pass. Both stage modules and pipeline creation are measured separately from GPU execution.</p>
+    <form id="settings">
+        <label>Resolution
+            <select id="resolution"><option value="256">256 × 256</option><option value="512" selected>512 × 512</option><option value="1024">1024 × 1024</option></select>
+        </label>
+        <label>Measured pairs <input id="samples" type="number" min="5" max="200" value="30"></label>
+        <label>Warmup pairs <input id="warmup" type="number" min="1" max="30" value="5"></label>
+        <button id="run" type="submit" disabled>Run render benchmark</button>
+        <button id="stop" type="button" disabled>Stop</button>
+        <button id="download" type="button" disabled>Download JSON</button>
+    </form>
+    <div id="status" role="status" aria-live="polite">Loading matched render shaders…</div>
+    <p id="device" class="subtle"></p>
+    <p id="interfaces">Stage interface GPU regression pending.</p>
+    <h2>GPU rendering</h2>
+    <p class="subtle">Microseconds per complete frame, measured over timestamped batches targeting 20 ms. Ratios show paired BWSL / handwritten durations with bootstrap 95% intervals. Normal browser timestamp quantization remains enabled.</p>
+    <div class="scroll"><table>
+        <thead><tr><th>Pipeline</th><th>Handwritten WGSL</th><th>BWSL → WGSL</th><th>Paired ratio [95%]</th><th>Frames / batch</th><th>Image checks</th></tr></thead>
+        <tbody id="gpu-results"></tbody>
+    </table></div>
+    <h2>Full source request → render pipeline ready</h2>
+    <p class="subtle" id="compilation-method">Repeated-source medians in milliseconds. Both paths fetch source from localhost. BWSL additionally launches the native compiler once for both stages, including reflection and file I/O. Browser/driver caches are not cleared: these are not guaranteed cold compilations.</p>
+    <div class="scroll"><table>
+        <thead><tr><th>Pipeline</th><th>WGSL full</th><th>BWSL full</th><th>BWSL server preparation</th><th>WGSL browser readiness</th><th>BWSL browser readiness</th></tr></thead>
+        <tbody id="compile-results"></tbody>
+    </table></div>
+    <details id="image-previews"><summary>Rendered image comparisons</summary><div id="previews"></div></details>
+    <details><summary>CPU encoding, submission and GPU wait</summary>
+        <p>Median milliseconds per batch. This includes encoding, submission, synchronization and timestamp resolving; image readback/mapping is excluded. GPU time is unavailable when timestamps cannot be used.</p>
+        <table><thead><tr><th>Pipeline</th><th>Handwritten WGSL</th><th>BWSL → WGSL</th></tr></thead><tbody id="cpu-results"></tbody></table>
+    </details>
+    <details><summary>Workloads, correctness and limitations</summary>
+        <p>Skinned GGX: four instanced 64×64-cell meshes, four bone influences from a 64-bone palette, 32,768 triangles and four point lights per fragment. Procedural MRT: a fullscreen analytic material, derivative-based antialiasing, color and normal/roughness attachments. Particles: 16,384 billboards in four overlapping layers with alpha blending.</p>
+        <p>All input buffers are checked exactly before and after timing. Every attachment pixel is compared between sources, allowing three RGBA8 levels; integer targets are exact. Procedural MRT and particles also have independent full CPU image references. Skinned GGX has independent software-rasterized interior color probes plus full-image cross-comparison. Reports retain maximum errors, attachment hashes and 256-pixel previews.</p>
+        <p>A separate GPU regression checks sparse varyings, integer flat interpolation, linear interpolation with varying clip W, fragment coordinates and depth, sparse integer MRT, output snapshots and nonzero vertex/instance offsets. It runs before timing.</p>
+        <p>The textured material uses matrix and nested uniform reads, a padded scalar array, explicit-LOD sampling, a runtime loop, and conditional discard. A separate constant nested-loop continue regression runs before timing.</p>
+        <p>Compilation records first-observed and ten repeated-source pairs after two warmups. GPU order alternates AB/BA with a seeded starting order. Neither repeated samples nor confidence intervals account for all thermal/systematic effects. One GPU and these four workloads do not establish general parity.</p>
+        <p>The native WGSL backend supports scalar/vector stages, structured control flow, primitive storage buffers, std140 uniforms and sampled textures. Local arrays, general aggregate values, storage textures, texture offset overloads, workgroup memory and atomics remain unsupported. WGSL uniformity rules still apply to derivatives and implicit-LOD sampling.</p>
+        <p><a href="https://www.w3.org/TR/webgpu/#dom-gpudevice-createrenderpipelineasync">WebGPU render pipeline readiness</a> · <a href="https://www.w3.org/TR/WGSL/#interpolation">WGSL interpolation rules</a></p>
+    </details>
+    <details><summary>Shader sources</summary><div id="sources"></div></details>
+    <script type="module" src="render.mjs"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+// Integer avalanche finalizer; tests unsigned wraparound and logical shifts.
+pipeline BenchmarkHash {
+    resources {
+        values: buffer<uint>
+        result: buffer<uint>
+    }
+
+    pass "Compute" {
+        use resources { values, result }
+
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            uint a = resources.values[index];
+            uint b = (a ^ (a >> 16u)) * 0x7feb352du;
+            uint c = (b ^ (b >> 15u)) * 0x846ca68bu;
+            resources.result[index] = c ^ (c >> 16u);
+        }
+    }
+}

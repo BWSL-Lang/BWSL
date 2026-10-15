@@ -242,6 +242,11 @@ inline const char* OpCodeToString(IR::OpCode op) {
 }
 
 inline std::string FormatOperand(const IR::IRProgram& prog, u16 op, bool allowZeroReg = true) {
+    if (op == 0xFFFF || op == 0x3FFF) return "_";
+    if ((op & 0xC000) == 0xC000) {
+        u16 idx = op & 0x3FFF;
+        return idx < prog.boolCount ? (prog.boolConstants[idx] ? "true" : "false") : "b?";
+    }
     if (op & 0x8000) {
         u16 idx = op & 0x7FFF;
         if (idx < prog.floatCount) {
@@ -251,7 +256,7 @@ inline std::string FormatOperand(const IR::IRProgram& prog, u16 op, bool allowZe
         }
         return "f?";
     }
-    if (op & 0x4000) {
+    if (IR::IsIntConstant(op)) {
         u16 idx = op & 0x3FFF;
         if (idx < prog.intCount) {
             char buf[32];
@@ -259,6 +264,13 @@ inline std::string FormatOperand(const IR::IRProgram& prog, u16 op, bool allowZe
             return buf;
         }
         return "i?";
+    }
+    if (IR::IsUintConstant(op)) {
+        u16 idx = op & 0x1FFF;
+        if (idx >= prog.uintCount) return "u?";
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%uu", prog.uintConstants[idx]);
+        return buf;
     }
     if (op == 0 && !allowZeroReg) return "_";
     char buf[16];

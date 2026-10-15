@@ -1,0 +1,36 @@
+// Analytic material, derivative-based antialiasing and a normal/roughness MRT.
+pipeline RenderProcedural {
+    pass "Draw" {
+        outputs { color: float4 normal_roughness: float4 }
+
+        vertex {
+            uint id = input.vertex_id;
+            float2 point = float2(float((id << 1u) & 2u), float(id & 2u)) * 2.0 - 1.0;
+            float w = 1.0 + float(id) * 0.5;
+            output.position = float4(point * w, 0.5 * w, w);
+            output.unused = float3(0.25, 0.5, 0.75);
+            @noperspective output.uv = point * 0.5 + 0.5;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float2 t = uv * float2(12.0, 9.0);
+            float mixed = t.x * 2.3 + t.y * 1.7;
+            float wave = sin(t.x) * cos(t.y) + 0.5 * sin(mixed);
+            float dx = (cos(t.x) * cos(t.y) + 1.15 * cos(mixed)) * 12.0;
+            float dy = (-sin(t.x) * sin(t.y) + 0.85 * cos(mixed)) * 9.0;
+            float3 normal = normalize(float3(-0.08 * dx, -0.08 * dy, 1.0));
+            float3 light = normalize(float3(0.4, 0.6, 1.0));
+            float3 view = normalize(float3((uv - 0.5) * 0.8, 1.5));
+            float diffuse = max(dot(normal, light), 0.0);
+            float specular = pow(max(dot(reflect(-light, normal), view), 0.0), 32.0);
+            float3 base = lerp(float3(0.07, 0.14, 0.24), float3(0.75, 0.43, 0.12), smoothstep(-0.7, 0.9, wave));
+            float2 edge = abs(fract(uv * 32.0) - 0.5);
+            float2 footprint = fwidth(uv * 32.0);
+            float grid = 1.0 - smoothstep(footprint.x * 0.5, footprint.x * 1.5, min(edge.x, edge.y));
+            float3 color = (base * (0.15 + 0.85 * diffuse) + specular * 0.25) * (0.8 + 0.2 * grid);
+            output.color = float4(color, 1.0);
+            output.normal_roughness = float4(normal * 0.5 + 0.5, 0.6);
+        }
+    }
+}

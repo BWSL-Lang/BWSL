@@ -1,0 +1,122 @@
+name: WGSL backend
+
+on:
+  push:
+    branches: [master, codex/wgsl-backend-design]
+    paths:
+      - 'src/**'
+      - 'tests/wgsl/**'
+      - 'tests/wgsl_benchmarks/**'
+      - 'tests/wgsl_render/**'
+      - 'tests/*wgsl*'
+      - 'tools/wgsl-oracle/**'
+      - 'tools/wgsl-bench/**'
+      - 'scripts/benchmark_wgsl.py'
+      - 'scripts/benchmark_wgsl_web.py'
+      - 'scripts/benchmark_wgsl_render.py'
+      - 'scripts/benchmark_wgsl_inprocess.py'
+      - 'scripts/benchmark_wgsl_batch.py'
+      - 'scripts/analyze_wgsl_web.py'
+      - 'tests/webgpu_benchmark_tests.mjs'
+      - 'tests/webgpu_render_tests.mjs'
+      - 'tests/wgsl_web_server_tests.py'
+      - 'tests/wgsl_web_analysis_tests.py'
+      - 'Makefile'
+      - '.github/workflows/wgsl.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/wgsl/**'
+      - 'tests/wgsl_benchmarks/**'
+      - 'tests/wgsl_render/**'
+      - 'tests/*wgsl*'
+      - 'tools/wgsl-oracle/**'
+      - 'tools/wgsl-bench/**'
+      - 'scripts/benchmark_wgsl.py'
+      - 'scripts/benchmark_wgsl_web.py'
+      - 'scripts/benchmark_wgsl_render.py'
+      - 'scripts/benchmark_wgsl_inprocess.py'
+      - 'scripts/benchmark_wgsl_batch.py'
+      - 'scripts/analyze_wgsl_web.py'
+      - 'tests/webgpu_benchmark_tests.mjs'
+      - 'tests/webgpu_render_tests.mjs'
+      - 'tests/wgsl_web_server_tests.py'
+      - 'tests/wgsl_web_analysis_tests.py'
+      - 'Makefile'
+      - '.github/workflows/wgsl.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wgsl-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validation-and-cpu-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang cmake ninja-build nodejs
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup override set 1.88.0
+
+      - name: Build compiler and pinned reference tools
+        run: make build wgsl-inprocess wgsl-oracle wgsl-tint
+
+      - name: Check backend memory safety
+        run: make test-wgsl-unit-sanitize
+
+      - name: Check browser benchmark expectations and statistics
+        run: make test-wgsl-web
+
+      - name: Validate generated and handwritten WGSL with Naga and Tint
+        run: |
+          python3 tests/wgsl_backend_tests.py --skip-gpu --require-tint \
+            --tint build/wgsl-tools/tint/dawn/tint
+
+      - name: Validate vertex and fragment interfaces and render corpus
+        run: python3 tests/wgsl_render_tests.py --output build/wgsl-render-tests/ci
+
+      - name: Validate structured control flow and resource layouts
+        run: |
+          python3 tests/wgsl_control_flow_tests.py --skip-gpu
+          python3 tests/wgsl_resource_tests.py --skip-gpu
+
+      - name: Check in-process and CLI equivalence and record samples
+        run: |
+          python3 scripts/benchmark_wgsl_inprocess.py --blocks 2 --samples-per-block 5 \
+            --cli-runs 2 --reference-runs 10 --case skinned_ggx --case textured_uniforms \
+            --output build/wgsl-inprocess-benchmarks/ci
+
+      # Hosted CPUs are noisy and no hardware GPU is assumed. Preserve samples
+      # for comparison; local test-wgsl-full/benchmark-wgsl supply GPU evidence.
+      - name: Record CPU performance samples
+        run: |
+          python3 scripts/benchmark_wgsl.py --skip-runtime \
+            --runs 10 --inprocess-runs 50 --warmup 3 \
+            --output build/wgsl-benchmarks/ci
+
+      - name: Save validation and performance reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wgsl-validation-and-cpu-baseline
+          path: |
+            build/wgsl-tests/results.json
+            build/wgsl-render-tests/ci
+            build/wgsl-control-tests
+            build/wgsl-resource-tests
+            build/wgsl-inprocess-benchmarks/ci
+            build/wgsl-benchmarks/ci
+            build/wgsl-tools/tint/build-metadata.json
+          if-no-files-found: warn

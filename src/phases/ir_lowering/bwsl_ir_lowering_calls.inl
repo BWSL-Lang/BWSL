@@ -804,7 +804,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
     case Intrinsic::SAMPLE_LOD_OFFSET:
     case Intrinsic::SAMPLE_BIAS_OFFSET: {
       OpCode texOp = IntrinsicToOpcode(intrinsic);
-      u16 texReg = args[0]; // Texture with 0x2000 marker
+      u16 texReg = args[0]; // Texture with 0x6000 marker
       const bool hasExplicitSampler =
           argCount >= 3 && (args[1] & 0xF000) == 0x3000;
       u16 coordReg = hasExplicitSampler ? args[2] : args[1];
@@ -855,7 +855,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
     case Intrinsic::GATHER:
     case Intrinsic::GATHER_OFFSET: {
       OpCode texOp = IntrinsicToOpcode(intrinsic);
-      u16 texReg = args[0]; // Texture with 0x2000 marker
+      u16 texReg = args[0]; // Texture with 0x6000 marker
       const bool hasExplicitSampler =
           argCount >= 4 && (args[1] & 0xF000) == 0x3000;
       u16 coordReg = hasExplicitSampler ? args[2] : args[1];
@@ -2234,9 +2234,9 @@ inline u16 IRLowering::LowerTextureSample(NodeRef ref) {
   u16 coordReg = LowerExpression(call.arguments[1]);
   u16 dest = AllocateRegister();
 
-  // IR format: s0 = texture (with 0x2000 marker for slot), s1 = coordinate
-  if (texReg & 0x2000) {
-    // texReg already has 0x2000 marker, pass it directly
+  // IR format: s0 = texture (with 0x6000 marker for slot), s1 = coordinate
+  if (IR::IsUintConstant(texReg)) {
+    // texReg already has 0x6000 marker, pass it directly
     builder.EmitInstruction(OP_TEX_SAMPLE, dest, texReg, coordReg);
   } else {
     // Bindless - texReg is a register containing texture handle

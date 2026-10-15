@@ -1,0 +1,113 @@
+// Four point lights, Cook-Torrance GGX/Smith/Schlick shading and Reinhard tone mapping.
+// Fixed-size work is explicitly unrolled for the straight-line WGSL backend.
+pipeline BenchmarkPbr {
+    resources {
+        normal_roughness: buffer<float4>
+        albedo_metallic: buffer<float4>
+        positions: buffer<float4>
+        lights: buffer<float4>
+        result: buffer<float4>
+    }
+
+    pass "Compute" {
+        use resources { normal_roughness, albedo_metallic, positions, lights, result }
+
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            float4 surface = resources.normal_roughness[index];
+            float4 material = resources.albedo_metallic[index];
+            float3 position = resources.positions[index].xyz;
+            float3 normal = normalize(surface.xyz);
+            float3 view = normalize(float3(0.0, 0.0, 6.0) - position);
+            float roughness = surface.w;
+            float metallic = material.w;
+            float3 albedo = material.xyz;
+            float alpha = roughness * roughness;
+            float alpha2 = alpha * alpha;
+            float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+            float ndv = max(dot(normal, view), 0.001);
+            float gv = ndv / (ndv * (1.0 - k) + k);
+            float3 f0 = float3(0.04) * (1.0 - metallic) + albedo * metallic;
+            float3 color = albedo * 0.03;
+
+            float4 light0 = resources.lights[0u];
+            float3 delta0 = light0.xyz - position;
+            float distance2_0 = max(dot(delta0, delta0), 0.01);
+            float3 direction0 = normalize(delta0);
+            float3 halfway0 = normalize(view + direction0);
+            float ndl0 = max(dot(normal, direction0), 0.0);
+            float ndh0 = max(dot(normal, halfway0), 0.0);
+            float vdh0 = max(dot(view, halfway0), 0.0);
+            float denominator0 = ndh0 * ndh0 * (alpha2 - 1.0) + 1.0;
+            float distribution0 = alpha2 / (3.14159265 * denominator0 * denominator0);
+            float geometry0 = gv * ndl0 / (ndl0 * (1.0 - k) + k);
+            float fresnelBase0 = 1.0 - vdh0;
+            float fresnel2_0 = fresnelBase0 * fresnelBase0;
+            float fresnel5_0 = fresnel2_0 * fresnel2_0 * fresnelBase0;
+            float3 fresnel0 = f0 + (float3(1.0) - f0) * fresnel5_0;
+            float3 specular0 = fresnel0 * (distribution0 * geometry0 / max(4.0 * ndv * ndl0, 0.001));
+            float3 diffuse0 = (float3(1.0) - fresnel0) * ((1.0 - metallic) / 3.14159265) * albedo;
+            color = color + (diffuse0 + specular0) * (light0.w * ndl0 / distance2_0);
+
+            float4 light1 = resources.lights[1u];
+            float3 delta1 = light1.xyz - position;
+            float distance2_1 = max(dot(delta1, delta1), 0.01);
+            float3 direction1 = normalize(delta1);
+            float3 halfway1 = normalize(view + direction1);
+            float ndl1 = max(dot(normal, direction1), 0.0);
+            float ndh1 = max(dot(normal, halfway1), 0.0);
+            float vdh1 = max(dot(view, halfway1), 0.0);
+            float denominator1 = ndh1 * ndh1 * (alpha2 - 1.0) + 1.0;
+            float distribution1 = alpha2 / (3.14159265 * denominator1 * denominator1);
+            float geometry1 = gv * ndl1 / (ndl1 * (1.0 - k) + k);
+            float fresnelBase1 = 1.0 - vdh1;
+            float fresnel2_1 = fresnelBase1 * fresnelBase1;
+            float fresnel5_1 = fresnel2_1 * fresnel2_1 * fresnelBase1;
+            float3 fresnel1 = f0 + (float3(1.0) - f0) * fresnel5_1;
+            float3 specular1 = fresnel1 * (distribution1 * geometry1 / max(4.0 * ndv * ndl1, 0.001));
+            float3 diffuse1 = (float3(1.0) - fresnel1) * ((1.0 - metallic) / 3.14159265) * albedo;
+            color = color + (diffuse1 + specular1) * (light1.w * ndl1 / distance2_1);
+
+            float4 light2 = resources.lights[2u];
+            float3 delta2 = light2.xyz - position;
+            float distance2_2 = max(dot(delta2, delta2), 0.01);
+            float3 direction2 = normalize(delta2);
+            float3 halfway2 = normalize(view + direction2);
+            float ndl2 = max(dot(normal, direction2), 0.0);
+            float ndh2 = max(dot(normal, halfway2), 0.0);
+            float vdh2 = max(dot(view, halfway2), 0.0);
+            float denominator2 = ndh2 * ndh2 * (alpha2 - 1.0) + 1.0;
+            float distribution2 = alpha2 / (3.14159265 * denominator2 * denominator2);
+            float geometry2 = gv * ndl2 / (ndl2 * (1.0 - k) + k);
+            float fresnelBase2 = 1.0 - vdh2;
+            float fresnel2_2 = fresnelBase2 * fresnelBase2;
+            float fresnel5_2 = fresnel2_2 * fresnel2_2 * fresnelBase2;
+            float3 fresnel2 = f0 + (float3(1.0) - f0) * fresnel5_2;
+            float3 specular2 = fresnel2 * (distribution2 * geometry2 / max(4.0 * ndv * ndl2, 0.001));
+            float3 diffuse2 = (float3(1.0) - fresnel2) * ((1.0 - metallic) / 3.14159265) * albedo;
+            color = color + (diffuse2 + specular2) * (light2.w * ndl2 / distance2_2);
+
+            float4 light3 = resources.lights[3u];
+            float3 delta3 = light3.xyz - position;
+            float distance2_3 = max(dot(delta3, delta3), 0.01);
+            float3 direction3 = normalize(delta3);
+            float3 halfway3 = normalize(view + direction3);
+            float ndl3 = max(dot(normal, direction3), 0.0);
+            float ndh3 = max(dot(normal, halfway3), 0.0);
+            float vdh3 = max(dot(view, halfway3), 0.0);
+            float denominator3 = ndh3 * ndh3 * (alpha2 - 1.0) + 1.0;
+            float distribution3 = alpha2 / (3.14159265 * denominator3 * denominator3);
+            float geometry3 = gv * ndl3 / (ndl3 * (1.0 - k) + k);
+            float fresnelBase3 = 1.0 - vdh3;
+            float fresnel2_3 = fresnelBase3 * fresnelBase3;
+            float fresnel5_3 = fresnel2_3 * fresnel2_3 * fresnelBase3;
+            float3 fresnel3 = f0 + (float3(1.0) - f0) * fresnel5_3;
+            float3 specular3 = fresnel3 * (distribution3 * geometry3 / max(4.0 * ndv * ndl3, 0.001));
+            float3 diffuse3 = (float3(1.0) - fresnel3) * ((1.0 - metallic) / 3.14159265) * albedo;
+            color = color + (diffuse3 + specular3) * (light3.w * ndl3 / distance2_3);
+
+            float3 mapped = color / (float3(1.0) + color);
+            resources.result[index] = float4(mapped, 1.0);
+        }
+    }
+}

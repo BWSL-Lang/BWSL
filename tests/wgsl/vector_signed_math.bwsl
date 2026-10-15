@@ -1,0 +1,18 @@
+pipeline VectorSignedMath {
+    resources {
+        source: buffer<int4>
+        result: buffer<int4>
+    }
+    pass "Compute" {
+        use resources { source, result }
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            int4 value = resources.source[index];
+            resources.result[index * 5u] = value / int4(3);
+            resources.result[index * 5u + 1u] = value % int4(3);
+            resources.result[index * 5u + 2u] = value >> int4(2);
+            resources.result[index * 5u + 3u] = asint(asuint(value) >> uint4(2u));
+            resources.result[index * 5u + 4u] = asint(-asuint(value));
+        }
+    }
+}
