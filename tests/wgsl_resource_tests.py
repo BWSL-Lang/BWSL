@@ -49,6 +49,18 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     sources = {"uniform_layout": UNIFORMS, "uniform_array_matrix": ARRAY_MATRIX}
+    # textureGather reads mip level zero and is valid in every shader stage:
+    # https://www.w3.org/TR/WGSL/#texturegather
+    for stage, body in (
+        ("vertex", "vertex { output.position = gather(resources.tex, float2(0.5), 0); }"),
+        ("compute", '''compute "Main" [1, 1, 1] {
+            resources.result[0] = gather(resources.tex, float2(0.5), 0);
+        }'''),
+    ):
+        sources[f"texture_gather_{stage}"] = '''pipeline Gather {
+            resources { tex: texture2D result: buffer<float4> }
+            pass "Main" { use resources { tex, result }
+        ''' + body + "}}"
     for name in ("uniform_struct_dynamic_index", "texture_resources_cube_3d_array", "texture_sample_grad_cmp_gather", "texture_query_size_levels"):
         sources[name] = (ROOT / "tests/unsorted" / f"{name}.bwsl").read_text()
     records = []
