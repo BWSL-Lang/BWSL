@@ -106,10 +106,11 @@ struct CompilationContext {
     DiagnosticStream diagnostics;
     DiagnosticStream* diagnosticSink;
 
-    CompilationContext() : root(NodeRef::Null()), diagnosticSink(&diagnostics) {
+    explicit CompilationContext(u32 estimatedNodes = 2048)
+        : root(NodeRef::Null()), diagnosticSink(&diagnostics) {
         memory = malloc(DEFAULT_ARENA_SIZE);
         arena.Initialize(memory, DEFAULT_ARENA_SIZE);
-        ast.Init(&arena, 2048);  // Larger initial capacity for modules
+        ast.Init(&arena, estimatedNodes);
         evalCache.Init();
         diagnostics.Init(&arena);
         // g_customTypes is a static global that stores raw pointers into the

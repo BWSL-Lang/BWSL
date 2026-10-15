@@ -1,0 +1,17 @@
+pipeline ScalarReassignment {
+    resources {
+        source: buffer<uint>
+        result: buffer<uint>
+    }
+    pass "Compute" {
+        use resources { source, result }
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            uint value = resources.source[index];
+            value = value + 17u;
+            value = value * 3u;
+            value = value ^ (value >> 4u);
+            resources.result[index] = value;
+        }
+    }
+}

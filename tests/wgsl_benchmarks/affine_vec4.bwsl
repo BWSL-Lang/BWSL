@@ -1,0 +1,18 @@
+// Vec4 storage stride and independent per-component arithmetic.
+pipeline BenchmarkAffine {
+    resources {
+        values: buffer<float4>
+        result: buffer<float4>
+    }
+
+    pass "Compute" {
+        use resources { values, result }
+
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            float4 scale = float4(2.0, -1.0, 0.5, 4.0);
+            float4 bias = float4(1.0, 2.0, -4.0, 0.25);
+            resources.result[index] = resources.values[index] * scale + bias;
+        }
+    }
+}

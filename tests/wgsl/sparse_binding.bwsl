@@ -1,0 +1,17 @@
+pipeline SparseBinding {
+    resources {
+        unused0: buffer<uint>
+        unused1: buffer<uint>
+        unused2: buffer<uint>
+        unused3: buffer<uint>
+        unused4: buffer<uint>
+        result: buffer<uint>
+    }
+    pass "Compute" {
+        use resources { unused0, unused1, unused2, unused3, unused4, result }
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            resources.result[index] = index * 7u + 1u;
+        }
+    }
+}

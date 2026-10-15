@@ -395,6 +395,16 @@ void SSAConstructor::Rename() {
         memset(newStructTypes + oldRegisterCount, 0, estimatedNewRegs * sizeof(u32));
         ir->registerStructTypes = newStructTypes;
     }
+    if (ir->registerStorageInfo) {
+        // Lowering initializes live registers on allocation. SSA creates its
+        // own slots and exposes spare capacity through registerCount, so give
+        // the storage metadata the same extent and initialize the new range.
+        u32* newStorageInfo =
+            static_cast<u32*>(arena->Allocate(newCapacity * sizeof(u32), 64));
+        memcpy(newStorageInfo, ir->registerStorageInfo, oldRegisterCount * sizeof(u32));
+        memset(newStorageInfo + oldRegisterCount, 0, estimatedNewRegs * sizeof(u32));
+        ir->registerStorageInfo = newStorageInfo;
+    }
     if (ir->registerNameHashes) {
         u32* newNames = (u32*)arena->Allocate(newCapacity * sizeof(u32), 64);
         memcpy(newNames, ir->registerNameHashes, oldRegisterCount * sizeof(u32));
@@ -776,6 +786,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             (op >= IR::OP_FEQ && op <= IR::OP_UGE) ||       // Comparison
             (op >= IR::OP_SQRT && op <= IR::OP_FACEFORWARD) || // Math functions
             op == IR::OP_TANH ||                            // Non-contiguous math function
+            op == IR::OP_ANY || op == IR::OP_ALL ||         // Boolean vector reductions
             op == IR::OP_PACK_UNORM2X16 || op == IR::OP_UNPACK_UNORM2X16 ||
             op == IR::OP_PACK_SNORM2X16 || op == IR::OP_UNPACK_SNORM2X16 ||
             op == IR::OP_FREM || op == IR::OP_LDEXP ||

@@ -1,0 +1,6 @@
+{
+  "skinned_ggx": {"label": "Instanced skinned GGX mesh", "targets": ["rgba8unorm"], "topology": "triangle-list", "depth": true},
+  "procedural_mrt": {"label": "Procedural material + normal MRT", "targets": ["rgba8unorm", "rgba8unorm"], "topology": "triangle-list", "depth": false},
+  "particles": {"label": "Alpha-blended particle billboards", "targets": ["rgba8unorm"], "topology": "triangle-strip", "depth": false, "blend": true},
+  "textured_uniforms": {"label": "Textured material with uniforms and loop", "targets": ["rgba8unorm"], "topology": "triangle-list", "depth": false}
+}

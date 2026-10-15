@@ -816,6 +816,9 @@ inline u16 IRLowering::AllocateRegister() {
         return 0;
     }
     u16 reg = builder.nextRegister++;
+    program.registerTypes[reg] = static_cast<u16>(CoreType::FLOAT);
+    program.registerStructTypes[reg] = 0;
+    program.registerStorageInfo[reg] = 0;
     if (reg >= program.registerCount) {
         program.registerCount = reg + 1;
     }

@@ -1,0 +1,15 @@
+pipeline VectorSelect {
+    resources {
+        source: buffer<float4>
+        result: buffer<float4>
+    }
+    pass "Compute" {
+        use resources { source, result }
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            float4 value = resources.source[index];
+            bool4 negative = value < float4(0.0);
+            resources.result[index] = select(value, -value, negative);
+        }
+    }
+}

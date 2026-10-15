@@ -1,0 +1,20 @@
+pipeline NestedContinue {
+    pass "Draw" {
+        vertex {
+            uint id = input.vertex_id;
+            float2 corner = float2(float((id << 1u) & 2u), float(id & 2u));
+            output.position = float4(corner * 2.0 - 1.0, 0.0, 1.0);
+        }
+        fragment {
+            uint sum = 0u;
+            for (uint i = 0u; i < 3u; i++) {
+                for (uint j = 0u; j < 6u; j++) {
+                    skip if (j == 1u);
+                    break if (j == 4u);
+                    sum += i * 10u + j;
+                }
+            }
+            output.color = float4(float(sum) / 255.0, 0.0, 0.0, 1.0);
+        }
+    }
+}

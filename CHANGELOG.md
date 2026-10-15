@@ -3,6 +3,11 @@
 ## unreleased
 
 ### Backends
+- Experimental native WGSL output is available with `-wgsl` for compute,
+  vertex and fragment shaders, including structured control flow, std140
+  uniforms and sampled textures. `-bindings` emits WebGPU binding metadata.
+  WGSL-only compilation bypasses SPIR-V; request `-spv` or another target
+  alongside `-wgsl` to generate both. `-all` keeps its existing targets.
 - Constant values are propagated through the whole shader, including across
   branches, loops and inlined functions. Arithmetic, comparisons and
   conversions on constants are folded, an `if` whose condition is constant

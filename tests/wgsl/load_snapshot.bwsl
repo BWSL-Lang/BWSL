@@ -1,0 +1,13 @@
+pipeline LoadSnapshot {
+    resources { result: buffer<uint> }
+    pass "Compute" {
+        use resources { result }
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            uint original = resources.result[index];
+            uint delayed = ((original * 3u) + 7u) ^ 11u;
+            resources.result[index] = 19u;
+            resources.result[index] = delayed + resources.result[index];
+        }
+    }
+}

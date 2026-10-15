@@ -1,0 +1,29 @@
+// Four overlapping layers of instanced, alpha-blended soft billboards.
+pipeline RenderParticles {
+    resources {
+        particles: buffer<float4>
+        colors: buffer<float4>
+    }
+    pass "Draw" {
+        use resources { particles, colors }
+
+        vertex {
+            uint id = input.instance_id;
+            float4 point = resources.particles[id];
+            float2 local = float2(float(input.vertex_id & 1u), float((input.vertex_id >> 1u) & 1u)) * 2.0 - 1.0;
+            output.position = float4(point.xy + local * point.w, point.z, 1.0);
+            output.local = local;
+            @flat output.tint = resources.colors[id];
+            output.id = id;
+        }
+
+        fragment {
+            float2 local = input.local;
+            float radius = max(1.0 - dot(local, local), 0.0);
+            uint hash = input.id * 1664525u + 1013904223u;
+            float twinkle = 0.75 + float((hash >> 24u) & 255u) / 1024.0;
+            float4 tint = input.tint;
+            output.color = float4(tint.xyz * twinkle, tint.w * radius * radius * radius);
+        }
+    }
+}
