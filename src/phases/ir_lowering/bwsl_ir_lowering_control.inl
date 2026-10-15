@@ -270,96 +270,165 @@ inline void IRLowering::LowerForCStyle(NodeRef ref) {
   variableRegisters = std::move(savedOuterVariableRegisters);
 }
 
+// Whether adding `step` to an iterator that just passed the loop condition
+// can wrap it. A non-constant end may be anywhere in the iterator's range.
+static bool RangeStepMayWrap(bool isUnsigned, bool inclusive, bool constantEnd,
+                             u32 endBits, s64 step) {
+    s64 lowest = isUnsigned ? 0 : INT32_MIN;
+    s64 highest = isUnsigned ? s64(UINT32_MAX) : INT32_MAX;
+    s64 end = isUnsigned ? s64(endBits) : s64(s32(endBits));
+    if (step > 0) {
+        s64 last = (constantEnd ? end : highest) - (inclusive ? 0 : 1);
+        return last + step > highest;
+    }
+    s64 first = (constantEnd ? end : lowest) + (inclusive ? 0 : 1);
+    return first + step < lowest;
+}
+
 inline void IRLowering::LowerForRange(NodeRef ref) {
-  const ForRangeData &forLoop = ast->GetForRange(ref);
-  auto savedOuterVariableRegisters = variableRegisters;
-  bool isUnsigned = IsExpressionUnsigned(forLoop.rangeEnd);
-  CoreType iterType = isUnsigned ? CoreType::UINT : CoreType::INT;
+    const ForRangeData& forLoop = ast->GetForRange(ref);
+    auto savedOuterVariableRegisters = variableRegisters;
+    bool isUnsigned = IsExpressionUnsigned(forLoop.rangeEnd);
+    CoreType iterType = isUnsigned ? CoreType::UINT : CoreType::INT;
 
-  // A range captures its bounds and step once, in source order. In particular,
-  // a body assignment to the original step variable cannot change direction.
-  u16 start = forLoop.rangeStart.IsNull() ? EmitConstantInt(0) : LowerExpression(forLoop.rangeStart);
-  start = CopyArgumentValue(ConvertRegisterToType(start, iterType));
-  u16 end = CopyArgumentValue(ConvertRegisterToType(LowerExpression(forLoop.rangeEnd), iterType));
-  u16 step = forLoop.step.IsNull() ? EmitConstantInt(1) : LowerExpression(forLoop.step);
-  step = CopyArgumentValue(step);
-  CoreType stepType = GetRegisterType(step);
-  if (stepType != CoreType::INT && stepType != CoreType::UINT)
-    ReportError("Error: range step must be an integer\n");
+    // A range captures its bounds and step once, in source order. In
+    // particular, a body assignment to the original step variable cannot
+    // change direction. Constants need no copy.
+    auto capture = [&](u16 value) { return IR::IsConstant(value) ? value : CopyArgumentValue(value); };
+    u16 start = forLoop.rangeStart.IsNull() ? EmitConstantInt(0) : LowerExpression(forLoop.rangeStart);
+    start = capture(ConvertRegisterToType(start, iterType));
+    u16 end = capture(ConvertRegisterToType(LowerExpression(forLoop.rangeEnd), iterType));
+    u16 step = capture(forLoop.step.IsNull() ? EmitConstantInt(1) : LowerExpression(forLoop.step));
+    CoreType stepType = GetRegisterType(step);
+    if (stepType != CoreType::INT && stepType != CoreType::UINT)
+        ReportError("Error: range step must be an integer\n");
 
-  auto binary = [&](OpCode op, u16 lhs, u16 rhs) {
-    u16 result = AllocateRegister();
-    SetRegisterType(result, CoreType::BOOL);
-    builder.EmitInstruction(op, result, lhs, rhs);
-    return result;
-  };
-  u16 zero = stepType == CoreType::UINT ? EmitConstantUint(0) : EmitConstantInt(0);
-  u16 ascending = binary(stepType == CoreType::UINT ? OP_UGT : OP_IGT, step, zero);
-  u16 descending = stepType == CoreType::UINT ? builder.EmitConstantBool(false)
-                                             : binary(OP_ILT, step, zero);
-  u16 increment = ConvertRegisterToType(step, iterType);
-  u16 iterReg = AllocateRegister();
-  SetRegisterType(iterReg, iterType);
-  builder.EmitInstruction(OP_STORE_REG, iterReg, start);
-  u16 advanceValid = AllocateRegister();
-  SetRegisterType(advanceValid, CoreType::BOOL);
-  builder.EmitInstruction(OP_STORE_REG, advanceValid, builder.EmitConstantBool(true));
-  if (!forLoop.iteratorVar.IsNull()) {
-    const IdentifierData &iter = ast->GetIdentifier(forLoop.iteratorVar);
-    variableRegisters[iter.name.nameHash] = iterReg;
-    program.registerNameHashes[iterReg] = iter.name.nameHash;
-  }
+    auto binary = [&](OpCode op, u16 lhs, u16 rhs) {
+        u16 result = AllocateRegister();
+        SetRegisterType(result, CoreType::BOOL);
+        builder.EmitInstruction(op, result, lhs, rhs);
+        return result;
+    };
 
-  u32 loopHeader = builder.currentInstruction;
-  u16 below = binary(isUnsigned ? (forLoop.inclusive ? OP_ULE : OP_ULT)
-                                : (forLoop.inclusive ? OP_ILE : OP_ILT), iterReg, end);
-  u16 above = binary(isUnsigned ? (forLoop.inclusive ? OP_UGE : OP_UGT)
-                                : (forLoop.inclusive ? OP_IGE : OP_IGT), iterReg, end);
-  u16 forward = binary(OP_AND, ascending, below);
-  u16 backward = binary(OP_AND, descending, above);
-  u16 condReg = binary(OP_AND, binary(OP_OR, forward, backward), advanceValid);
-  if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF)
-    condReg = CombineLoopCondition(condReg);
-  u32 branchIdx = builder.currentInstruction;
-  builder.EmitInstruction(OP_BRANCH, 0, condReg);
-  u32 bodyStart = builder.currentInstruction;
-  loopDepth++;
-  PushLoopContext();
-  if (!forLoop.body.IsNull()) LowerStatement(forLoop.body);
-  loopDepth--;
+    // A constant step fixes the direction here, so the condition and the
+    // wraparound test check only that direction. With a constant end, the
+    // wraparound test is often provably false (see below).
+    u32 stepBits = 0;
+    bool constantStep = IR::TryGetConstantInteger(&program, step, &stepBits);
+    s64 stepValue = stepType == CoreType::UINT ? s64(stepBits) : s64(s32(stepBits));
+    bool knownDirection = constantStep && stepValue != 0;
+    u32 endBits = 0;
+    bool constantEnd = IR::TryGetConstantInteger(&program, end, &endBits);
+    bool mayWrap = !knownDirection ||
+                   RangeStepMayWrap(isUnsigned, forLoop.inclusive, constantEnd, endBits, stepValue);
 
-  u32 continueTarget = builder.currentInstruction;
-  u16 next = AllocateRegister();
-  SetRegisterType(next, iterType);
-  if (isUnsigned) {
-    builder.EmitInstruction(OP_IADD, next, iterReg, increment);
-  } else {
-    // Perform the addition as uint so C-like target optimizers cannot assume
-    // signed overflow never occurs and remove the termination check below.
-    u16 unsignedIter = ConvertRegisterToType(iterReg, CoreType::UINT);
-    u16 unsignedStep = ConvertRegisterToType(increment, CoreType::UINT);
-    u16 unsignedNext = AllocateRegister();
-    SetRegisterType(unsignedNext, CoreType::UINT);
-    builder.EmitInstruction(OP_IADD, unsignedNext, unsignedIter, unsignedStep);
-    builder.EmitInstruction(OP_U2I, next, unsignedNext);
-  }
-  // Stop on wraparound, including inclusive ranges at INT/UINT boundaries.
-  u16 forwardValid = binary(isUnsigned ? OP_UGT : OP_IGT, next, iterReg);
-  u16 backwardValid = binary(isUnsigned ? OP_ULT : OP_ILT, next, iterReg);
-  u16 valid = binary(OP_OR, binary(OP_AND, ascending, forwardValid),
+    u16 ascending = 0xFFFF;
+    u16 descending = 0xFFFF;
+    if (!knownDirection) {
+        u16 zero = stepType == CoreType::UINT ? EmitConstantUint(0) : EmitConstantInt(0);
+        ascending = binary(stepType == CoreType::UINT ? OP_UGT : OP_IGT, step, zero);
+        descending = stepType == CoreType::UINT ? builder.EmitConstantBool(false)
+                                                : binary(OP_ILT, step, zero);
+    }
+    u16 increment = ConvertRegisterToType(step, iterType);
+    u16 iterReg = AllocateRegister();
+    SetRegisterType(iterReg, iterType);
+    builder.EmitInstruction(OP_STORE_REG, iterReg, start);
+    u16 advanceValid = AllocateRegister();
+    SetRegisterType(advanceValid, CoreType::BOOL);
+    u32 advanceValidInit = builder.currentInstruction;
+    builder.EmitInstruction(OP_STORE_REG, advanceValid, builder.EmitConstantBool(true));
+    if (!forLoop.iteratorVar.IsNull()) {
+        const IdentifierData& iter = ast->GetIdentifier(forLoop.iteratorVar);
+        variableRegisters[iter.name.nameHash] = iterReg;
+        program.registerNameHashes[iterReg] = iter.name.nameHash;
+    }
+
+    u32 loopHeader = builder.currentInstruction;
+    OpCode belowOp = isUnsigned ? (forLoop.inclusive ? OP_ULE : OP_ULT)
+                                : (forLoop.inclusive ? OP_ILE : OP_ILT);
+    OpCode aboveOp = isUnsigned ? (forLoop.inclusive ? OP_UGE : OP_UGT)
+                                : (forLoop.inclusive ? OP_IGE : OP_IGT);
+    u16 inRange;
+    if (knownDirection) {
+        inRange = binary(stepValue > 0 ? belowOp : aboveOp, iterReg, end);
+    } else {
+        u16 forward = binary(OP_AND, ascending, binary(belowOp, iterReg, end));
+        u16 backward = binary(OP_AND, descending, binary(aboveOp, iterReg, end));
+        inRange = binary(OP_OR, forward, backward);
+    }
+    // Emitted even when the wraparound test looks unnecessary: the body may
+    // still assign the iterator. Removed below if it doesn't.
+    u32 guardIdx = builder.currentInstruction;
+    u16 condReg = binary(OP_AND, inRange, advanceValid);
+    if (inlineDepth > 0 && inlineReturnFlagReg != 0xFFFF)
+        condReg = CombineLoopCondition(condReg);
+    u32 branchIdx = builder.currentInstruction;
+    builder.EmitInstruction(OP_BRANCH, 0, condReg);
+    u32 bodyStart = builder.currentInstruction;
+    loopDepth++;
+    PushLoopContext();
+    if (!forLoop.body.IsNull()) LowerStatement(forLoop.body);
+    loopDepth--;
+
+    u32 continueTarget = builder.currentInstruction;
+    // The bounds only rule out wraparound while the body leaves the iterator
+    // alone: an assignment or a pointer to it could move it anywhere.
+    bool bodyWritesIterator = program.registerStorageInfo[iterReg] != 0;
+    for (u32 i = bodyStart; i < continueTarget && !bodyWritesIterator; i++) {
+        bodyWritesIterator = program.destinations[i] == iterReg && program.opcodes[i] != OP_NOP;
+    }
+    bool guarded = mayWrap || bodyWritesIterator;
+
+    u16 next = AllocateRegister();
+    SetRegisterType(next, iterType);
+    if (isUnsigned || !guarded) {
+        builder.EmitInstruction(OP_IADD, next, iterReg, increment);
+    } else {
+        // Perform the addition as uint so C-like target optimizers cannot
+        // assume signed overflow never occurs and remove the termination
+        // check below.
+        u16 unsignedIter = ConvertRegisterToType(iterReg, CoreType::UINT);
+        u16 unsignedStep = ConvertRegisterToType(increment, CoreType::UINT);
+        u16 unsignedNext = AllocateRegister();
+        SetRegisterType(unsignedNext, CoreType::UINT);
+        builder.EmitInstruction(OP_IADD, unsignedNext, unsignedIter, unsignedStep);
+        builder.EmitInstruction(OP_U2I, next, unsignedNext);
+    }
+    if (guarded) {
+        // Stop on wraparound, including inclusive ranges at INT/UINT boundaries.
+        u16 valid;
+        if (knownDirection) {
+            OpCode advanced = stepValue > 0 ? (isUnsigned ? OP_UGT : OP_IGT)
+                                            : (isUnsigned ? OP_ULT : OP_ILT);
+            valid = binary(advanced, next, iterReg);
+        } else {
+            u16 forwardValid = binary(isUnsigned ? OP_UGT : OP_IGT, next, iterReg);
+            u16 backwardValid = binary(isUnsigned ? OP_ULT : OP_ILT, next, iterReg);
+            valid = binary(OP_OR, binary(OP_AND, ascending, forwardValid),
                            binary(OP_AND, descending, backwardValid));
-  builder.EmitInstruction(OP_STORE_REG, advanceValid, valid);
-  builder.EmitInstruction(OP_STORE_REG, iterReg, next);
-  u32 backEdgeIdx = builder.currentInstruction;
-  builder.EmitInstruction(OP_JUMP, 0, 0);
-  program.metadata[backEdgeIdx] = loopHeader;
-  u32 loopEnd = builder.currentInstruction;
-  builder.EmitInstruction(OP_NOP, 0, 0);
-  PopLoopContext(continueTarget, loopEnd);
-  program.SetBranchTargets(branchIdx, bodyStart, loopEnd);
-  program.structureInfo[branchIdx] = IRProgram::PackStructure(IRProgram::STRUCT_LOOP_HEADER, loopEnd);
-  program.continueInfo[branchIdx] = continueTarget;
-  variableRegisters = std::move(savedOuterVariableRegisters);
+        }
+        builder.EmitInstruction(OP_STORE_REG, advanceValid, valid);
+    } else {
+        // The condition is the range test alone.
+        program.opcodes[advanceValidInit] = OP_NOP;
+        program.destinations[advanceValidInit] = 0;
+        program.SetOperand(advanceValidInit, 0, 0xFFFF);
+        program.opcodes[guardIdx] = OP_LOAD_REG;
+        program.SetOperand(guardIdx, 0, inRange);
+        program.SetOperand(guardIdx, 1, 0xFFFF);
+    }
+    builder.EmitInstruction(OP_STORE_REG, iterReg, next);
+    u32 backEdgeIdx = builder.currentInstruction;
+    builder.EmitInstruction(OP_JUMP, 0, 0);
+    program.metadata[backEdgeIdx] = loopHeader;
+    u32 loopEnd = builder.currentInstruction;
+    builder.EmitInstruction(OP_NOP, 0, 0);
+    PopLoopContext(continueTarget, loopEnd);
+    program.SetBranchTargets(branchIdx, bodyStart, loopEnd);
+    program.structureInfo[branchIdx] = IRProgram::PackStructure(IRProgram::STRUCT_LOOP_HEADER, loopEnd);
+    program.continueInfo[branchIdx] = continueTarget;
+    variableRegisters = std::move(savedOuterVariableRegisters);
 }
 
 inline void IRLowering::LowerForCollection(NodeRef ref) {

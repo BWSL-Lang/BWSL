@@ -1,0 +1,54 @@
+// Range loops whose step and end are constants. These check only one
+// direction and, when the bounds rule it out, skip the wraparound test. The
+// body may still move the iterator, which brings the test back.
+pipeline EquivRangeConstantBounds {
+
+    resources {
+        output: buffer<int>
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            int grid = 0;
+            for (x in -1..=1) {
+                for (y in -1..=1) {
+                    grid += 1;                                   // 9
+                }
+            }
+
+            int down = 0;
+            for (i in 6..=0 by -2) { down += i; }                // 6+4+2+0 = 12
+
+            uint strided = 0u;
+            for (i in 0u..10u by 3) { strided += i; }            // 0+3+6+9 = 18
+
+            // A body assignment can put the iterator next to the type's
+            // limit even though the bounds are small.
+            int moved = 0;
+            for (i in 0..=10) {
+                moved += 1;
+                if (i == 3) { i = 2147483647; }
+                if (moved > 100) { break; }
+            }                                                    // 4
+
+            int exclusiveDown = 0;
+            for (i in 3..-3 by -2) { exclusiveDown += i; }       // 3+1-1 = 3
+
+            int atLimit = 0;
+            for (i in 2147483645..=2147483647) { atLimit += 1; } // 3
+
+            int lowLimit = 0;
+            for (i in -2147483646..=-2147483648 by -1) { lowLimit += 1; }  // 3
+
+            resources.output[0] = grid;
+            resources.output[1] = down;
+            resources.output[2] = int(strided);
+            resources.output[3] = moved;
+            resources.output[4] = exclusiveDown;
+            resources.output[5] = atLimit;
+            resources.output[6] = lowLimit;
+            resources.output[7] = 7;
+        }
+    }
+}

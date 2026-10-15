@@ -1,0 +1,6 @@
+{
+    "output_size": 32,
+    "output_type": "int",
+    "expected_values": [9, 12, 18, 4, 3, 3, 3, 7],
+    "tolerance": 0.0
+}

@@ -11,6 +11,10 @@
   constant `2.0`. Folding skips results that can differ between GPUs:
   NaN, infinities, denormals, `-0.0`, integer division of negative values
   and conversions that are out of range or inexact.
+- Range loops with a constant step test only the direction they go, and
+  drop the wraparound test when their bounds rule it out, unless the body
+  assigns the iterator. `for (x in -1..=1)` now comes out as
+  `for (int x = -1; x <= 1; x++)`.
 - A shader with more than 256 distinct float constants no longer corrupts
   its integer constants (`+ 7` could become `+ 1132478464`). More than
   16384 distinct float constants is a source error.
