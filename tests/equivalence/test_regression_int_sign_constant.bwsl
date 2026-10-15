@@ -1,0 +1,26 @@
+// sign() of an int constant used GLSL.std.450 FSign, which needs a float
+// result, so `sign(-3)` failed SPIR-V validation. Constants, an int vector
+// constant, a run-time int and a float constant all go through sign() here.
+// No scalar literal is zero or positive: DXC 1.7.2308 (used in CI) crashes
+// on `sign(5)` and `sign(0)` in HLSL; the vector's 7 covers a positive one.
+pipeline EquivIntSignConstant {
+
+    resources {
+        output: buffer<int>
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int n = int(idx) - 4;
+
+            int2 pair = sign(int2(-2, 7));
+            int result = sign(-3) * 100
+                       + pair.x * 1000 + pair.y * 10000
+                       + int(sign(-2.5)) * 100000
+                       + sign(n);
+            resources.output[idx] = result;
+        }
+    }
+}
