@@ -93,19 +93,134 @@ bool SPIRVBuilder::DropsPhiEdge(u32 branchInst, u32 targetInst) const {
     return false;
 }
 
+// A constant condition or selector (usually left by constant propagation)
+// always takes one edge, which needs no selection construct; the rest are
+// unreachable. This also keeps a literal selector out of HLSL, where older
+// DXC rejects `switch (2)`.
+bool SPIRVBuilder::TakesConstantEdge(u32 branchInst, u32* targetInst) const {
+    return IR::TryGetConstantTarget(ir, branchInst, targetInst) &&
+           !DropsPhiEdge(branchInst, *targetInst);
+}
+
+// Marks the blocks reachable from the entry along the edges EmitBranch
+// emits, and those edges. A block a constant branch skips is emitted as a
+// label and OpUnreachable, so its outgoing edges are gone too. SPIR-V still
+// requires the back edge of an emitted loop when nothing reaches its
+// continue target (a body that always breaks), so such a target is emitted
+// as a label and a branch to the loop header, and nothing else: what it
+// computed came from blocks that are skipped.
+void SPIRVBuilder::FindEmittedBlocks() {
+    u32 blockCount = std::max<u32>(cfg->blockCount, 1);
+    u32 edgeCount = std::max<u32>(cfg->predecessorDataCount, 1);
+    blockEmission = (BlockEmission*)arena->Allocate(blockCount * sizeof(BlockEmission), 64);
+    backEdgeTargets = (u32*)arena->Allocate(blockCount * sizeof(u32), 64);
+    edgeEmitted = (bool*)arena->Allocate(edgeCount * sizeof(bool), 64);
+    u32* queue = (u32*)arena->Allocate(blockCount * sizeof(u32), 64);
+    memset(blockEmission, 0, blockCount * sizeof(BlockEmission));
+    memset(backEdgeTargets, 0, blockCount * sizeof(u32));
+    memset(edgeEmitted, 0, edgeCount * sizeof(bool));
+    u32 head = 0, tail = 0;
+    auto emitEdge = [&](u32 from, u32 to) {
+        if (to >= cfg->blockCount) return;
+        for (u32 k = cfg->predecessorOffsets[to]; k < cfg->predecessorOffsets[to + 1]; k++) {
+            if (cfg->predecessorData[k] == from) edgeEmitted[k] = true;
+        }
+        if (blockEmission[to] != BlockEmission::REACHABLE) {
+            blockEmission[to] = BlockEmission::REACHABLE;
+            queue[tail++] = to;
+        }
+    };
+    blockEmission[cfg->entryBlock] = BlockEmission::REACHABLE;
+    queue[tail++] = cfg->entryBlock;
+    while (head < tail) {
+        u32 block = queue[head++];
+        u32 target;
+        if (TakesConstantEdge(cfg->lastInst[block], &target)) {
+            emitEdge(block, cfg->instToBlock[target]);
+            continue;
+        }
+        for (u32 s = 0; s < cfg->TotalSuccessorCount(block); s++) {
+            emitEdge(block, cfg->GetAnySuccessor(block, s));
+        }
+    }
+
+    if (!ir->structureInfo || !ir->continueInfo) return;
+    for (u32 block = 0; block < cfg->blockCount; block++) {
+        if (blockEmission[block] != BlockEmission::REACHABLE) continue;
+        for (u32 i = cfg->firstInst[block]; i <= cfg->lastInst[block]; i++) {
+            if ((ir->structureInfo[i] & IR::IRProgram::STRUCT_TYPE_MASK) !=
+                    IR::IRProgram::STRUCT_LOOP_HEADER ||
+                ir->continueInfo[i] >= ir->instructionCount) {
+                continue;
+            }
+            u32 continueBlock = cfg->instToBlock[ir->continueInfo[i]];
+            if (continueBlock < cfg->blockCount &&
+                blockEmission[continueBlock] == BlockEmission::SKIPPED) {
+                blockEmission[continueBlock] = BlockEmission::BACK_EDGE;
+                backEdgeTargets[continueBlock] = block;
+            }
+        }
+    }
+}
+
+bool SPIRVBuilder::IsEdgeEmitted(u32 fromBlock, u32 toBlock) const {
+    if (!edgeEmitted || toBlock >= cfg->blockCount) return true;
+    for (u32 k = cfg->predecessorOffsets[toBlock]; k < cfg->predecessorOffsets[toBlock + 1]; k++) {
+        if (cfg->predecessorData[k] == fromBlock && edgeEmitted[k]) return true;
+    }
+    return false;
+}
+
+// The edge from an unreachable continue target to its loop header. A phi
+// takes an undefined value on it.
+bool SPIRVBuilder::IsBackEdgeOnly(u32 fromBlock, u32 toBlock) const {
+    return blockEmission && fromBlock < cfg->blockCount &&
+           blockEmission[fromBlock] == BlockEmission::BACK_EDGE &&
+           backEdgeTargets[fromBlock] == toBlock;
+}
+
+// An OpUndef among the module's constants.
+u32 SPIRVBuilder::EmitUndefConstant(u32 typeId) {
+    u32 id = AllocateId();
+    u32 ops[2] = {typeId, id};
+    EmitToSection(&typesConstants, spv::OpUndef, ops, 2);
+    return id;
+}
+
+// Translates a block's instructions, for the module-level declarations
+// they create, then drops their words. The registers they define keep
+// their previous IDs.
+void SPIRVBuilder::DropBlockBody(u32 firstInst, u32 lastInst) {
+    u32 bodyStart = currentFunctionSize;
+    bool endsInTerminator = IR::IsTerminator(static_cast<IR::OpCode>(ir->opcodes[lastInst]));
+    u32 bodyEnd = endsInTerminator ? lastInst : lastInst + 1;
+    u32 count = bodyEnd - firstInst;
+    u32* savedIds = (u32*)arena->Allocate(std::max<u32>(count, 1) * sizeof(u32), 64);
+    for (u32 i = firstInst; i < bodyEnd; i++) {
+        u16 reg = ir->destinations[i];
+        savedIds[i - firstInst] = reg < idCapacity ? spirvIds[reg] : 0;
+    }
+    for (u32 i = firstInst; i < bodyEnd;) {
+        u32 translated = TranslateArrayStoreSequence(i, bodyEnd);
+        if (translated) i += translated;
+        else TranslateInstruction(i++);
+    }
+    currentFunctionSize = bodyStart;
+    // In reverse, so a register defined twice gets its first ID back.
+    for (u32 i = bodyEnd; i > firstInst; i--) {
+        u16 reg = ir->destinations[i - 1];
+        if (reg < idCapacity) spirvIds[reg] = savedIds[i - 1 - firstInst];
+    }
+}
+
 void SPIRVBuilder::EmitBranch(u32 ir_idx) {
   // For OP_BRANCH, we may need to convert the condition to bool BEFORE
   // emitting OpSelectionMerge, since SPIR-V requires OpSelectionMerge
   // to be immediately followed by OpBranchConditional
   IR::OpCode op = static_cast<IR::OpCode>(ir->opcodes[ir_idx]);
 
-  // A constant condition or selector (usually left by constant propagation)
-  // always takes one edge, which needs no selection construct; the rest are
-  // unreachable. This also keeps a literal selector out of HLSL, where older
-  // DXC rejects `switch (2)`.
   u32 constantTarget;
-  if (IR::TryGetConstantTarget(ir, ir_idx, &constantTarget) &&
-      !DropsPhiEdge(ir_idx, constantTarget)) {
+  if (TakesConstantEdge(ir_idx, &constantTarget)) {
     Emit(spv::OpBranch, GetOrCreateBlockLabel(constantTarget));
     return;
   }
@@ -232,6 +347,50 @@ void SPIRVBuilder::EmitStructuredControlFlow(u32 ir_idx) {
   }
 }
 
+u32 SPIRVBuilder::GetPhiTypeId(u32 phi) {
+    CoreType phiType = static_cast<CoreType>(ir->phiTypes[phi]);
+    u32 typeId = 0;
+    u16 firstValueReg = ir->GetPhiOperandCount(phi) > 0 ? ir->GetPhiOperandValue(phi, 0) : 0xFFFF;
+    if (phiType == CoreType::INVALID || phiType == CoreType::VOID) {
+        // Infer from the first operand register's type.
+        if (firstValueReg < ir->registerCount && ir->registerTypes) {
+            phiType = static_cast<CoreType>(ir->registerTypes[firstValueReg]);
+        }
+    }
+    if (phiType == CoreType::CUSTOM || phiType == CoreType::ENUM) {
+        // For struct/custom types, get the type from one of the PHI operands
+        if (firstValueReg < ir->registerCount && ir->registerStructTypes) {
+            typeId = GetStructTypeId(ir->registerStructTypes[firstValueReg]);
+        }
+    } else {
+        typeId = GetTypeId(phiType);
+    }
+    // Final fallback to a safe scalar type
+    return typeId != 0 ? typeId : GetTypeId(CoreType::FLOAT);
+}
+
+// What a phi's emitted incoming edges carry (see FindEmittedBlocks). Edges
+// from skipped blocks don't count, and the back edge from an unreachable
+// continue target carries an undefined value, so it agrees with anything.
+SPIRVBuilder::PhiShape SPIRVBuilder::GetPhiShape(u32 phi, u16* trivialValue) const {
+    u32 operandCount = ir->GetPhiOperandCount(phi);
+    if (operandCount == 0) return PhiShape::EMPTY;
+    u32 block = ir->phiBlockIndices[phi];
+    bool found = false;
+    for (u32 op = 0; op < operandCount; op++) {
+        if (!IsEdgeEmitted(ir->GetPhiOperandBlock(phi, op), block)) continue;
+        u16 value = ir->GetPhiOperandValue(phi, op);
+        if (!found) {
+            *trivialValue = value;
+            found = true;
+        } else if (value != *trivialValue) {
+            return PhiShape::MIXED;
+        }
+    }
+    if (found) return PhiShape::TRIVIAL;
+    return PhiShape::UNDEFINED;
+}
+
 void SPIRVBuilder::EmitPhiNodes(u32 blockIndex) {
   // Emit all PHI nodes for a given block
   // PHI nodes must be emitted at the start of a block, right after OpLabel
@@ -252,35 +411,43 @@ void SPIRVBuilder::EmitPhiNodes(u32 blockIndex) {
     if (ir->phiBlockIndices[phi_idx] != blockIndex)
       continue;
 
-    // Get PHI operand count using the IR program's helper
+    u16 phiResultReg = ir->phiResultRegs[phi_idx];
     u32 operandCount = ir->GetPhiOperandCount(phi_idx);
-    if (operandCount == 0)
+    u16 trivialValue;
+    PhiShape shape = GetPhiShape(phi_idx, &trivialValue);
+    if (shape == PhiShape::EMPTY)
       continue;
 
-    u16 phiResultReg = ir->phiResultRegs[phi_idx];
-
-    {
-      // Check if all PHI operands have the same value (trivial PHI)
-      // This can happen after variant specialization eliminates one branch
-      bool isTrivial = true;
-      u16 firstValueReg = ir->GetPhiOperandValue(phi_idx, 0);
-      for (u32 op = 1; op < operandCount; op++) {
-        if (ir->GetPhiOperandValue(phi_idx, op) != firstValueReg) {
-          isTrivial = false;
-          break;
-        }
+    if (shape == PhiShape::TRIVIAL) {
+      // All operands are the same - just alias the result to the source value
+      // Don't emit an OpPhi, just map the result register to the source's ID
+      u32 source_id = GetSpirvId(trivialValue);
+      if (phiResultReg < idCapacity) {
+        spirvIds[phiResultReg] = source_id;
       }
-
-      if (isTrivial) {
-        // All operands are the same - just alias the result to the source value
-        // Don't emit an OpPhi, just map the result register to the source's ID
-        u32 source_id = GetSpirvId(firstValueReg);
-        if (phiResultReg < idCapacity) {
-          spirvIds[phiResultReg] = source_id;
-        }
-        continue;
-      }
+      continue;
     }
+
+    // No emitted edge brings a value: the block is entered only from
+    // blocks that don't run. Defined, but never read at run time.
+    if (shape == PhiShape::UNDEFINED) {
+      u32 result_id = phiResultReg < idCapacity ? spirvIds[phiResultReg] : 0;
+      if (result_id == 0) result_id = AllocateId();
+      u32 ops[2] = {GetPhiTypeId(phi_idx), result_id};
+      EmitToSection(&typesConstants, spv::OpUndef, ops, 2);
+      if (phiResultReg < idCapacity) spirvIds[phiResultReg] = result_id;
+      continue;
+    }
+
+    // Only emitted edges can feed the phi: a block a constant branch skips
+    // ends in OpUnreachable instead of branching here. An unreachable
+    // continue target still branches back, with an undefined value.
+    auto isLive = [&](u32 op) {
+        return IsEdgeEmitted(ir->GetPhiOperandBlock(phi_idx, op), blockIndex);
+    };
+    auto isBackEdgeOnly = [&](u32 op) {
+        return IsBackEdgeOnly(ir->GetPhiOperandBlock(phi_idx, op), blockIndex);
+    };
 
     // Check if any operand is address-taken (has a localVarId)
     // For address-taken variables, we need to load from the OpVariable instead
@@ -290,7 +457,7 @@ void SPIRVBuilder::EmitPhiNodes(u32 blockIndex) {
     CoreType addressTakenType = CoreType::INT;
     for (u32 op = 0; op < operandCount; op++) {
       u16 valueReg = ir->GetPhiOperandValue(phi_idx, op);
-      if (valueReg < idCapacity && localVarIds[valueReg] != 0) {
+      if (isLive(op) && valueReg < idCapacity && localVarIds[valueReg] != 0) {
         hasAddressTakenOperand = true;
         addressTakenVarId = localVarIds[valueReg];
         // Get the type for the load
@@ -329,43 +496,21 @@ void SPIRVBuilder::EmitPhiNodes(u32 blockIndex) {
         spirvIds[phiResultReg] = result_id;
       }
     }
+    u32 type_id = GetPhiTypeId(phi_idx);
 
-    // Get the PHI result type
-    CoreType phiType = static_cast<CoreType>(ir->phiTypes[phi_idx]);
-    u32 type_id = 0;
-    if (phiType == CoreType::CUSTOM || phiType == CoreType::ENUM) {
-      // For struct/custom types, get the type from one of the PHI operands
-      u16 firstValueReg = ir->GetPhiOperandValue(phi_idx, 0);
-      if (firstValueReg < ir->registerCount && ir->registerStructTypes) {
-        u32 structHash = ir->registerStructTypes[firstValueReg];
-        type_id = GetStructTypeId(structHash);
-      }
-    } else if (phiType == CoreType::INVALID || phiType == CoreType::VOID) {
-      // Try to infer from the first operand register's type
-      u16 firstValueReg = ir->GetPhiOperandValue(phi_idx, 0);
-      if (firstValueReg < ir->registerCount && ir->registerTypes) {
-        CoreType opType =
-            static_cast<CoreType>(ir->registerTypes[firstValueReg]);
-        if (opType == CoreType::CUSTOM || opType == CoreType::ENUM) {
-          if (ir->registerStructTypes) {
-            u32 structHash = ir->registerStructTypes[firstValueReg];
-            type_id = GetStructTypeId(structHash);
-          }
-        } else {
-          type_id = GetTypeId(opType);
-        }
-      }
-    } else {
-      type_id = GetTypeId(phiType);
-    }
-    if (type_id == 0) {
-      // Final fallback to a safe scalar type
-      type_id = GetTypeId(CoreType::FLOAT);
+    // Values first: an undefined one goes to the module's constants.
+    u32* values = (u32*)arena->Allocate(operandCount * sizeof(u32), 64);
+    u32 pairCount = 0;
+    for (u32 op = 0; op < operandCount; op++) {
+      if (isLive(op)) values[op] = GetSpirvId(ir->GetPhiOperandValue(phi_idx, op));
+      else if (isBackEdgeOnly(op)) values[op] = EmitUndefConstant(type_id);
+      else continue;
+      pairCount++;
     }
 
     // Build OpPhi instruction
     // Format: OpPhi result_type result_id (variable_id, parent_block_id)+
-    u32 totalWords = 3 + operandCount * 2; // opcode + type + result + pairs
+    u32 totalWords = 3 + pairCount * 2; // opcode + type + result + pairs
 
     if (currentFunctionSize + totalWords > currentFunctionCapacity) {
       GrowCurrentFunction();
@@ -377,18 +522,15 @@ void SPIRVBuilder::EmitPhiNodes(u32 blockIndex) {
 
     // Emit operand pairs (value, block label)
     for (u32 op = 0; op < operandCount; op++) {
-      u16 valueReg = ir->GetPhiOperandValue(phi_idx, op);
+      if (!isLive(op) && !isBackEdgeOnly(op)) continue;
       u32 sourceBlockIdx = ir->GetPhiOperandBlock(phi_idx, op);
-
-      // Get the SPIR-V ID for the value
-      u32 value_id = GetSpirvId(valueReg);
 
       // Get the block label - the source block's first instruction determines
       // its label
       u32 sourceBlockFirstInst = cfg->firstInst[sourceBlockIdx];
       u32 block_label = GetOrCreateBlockLabel(sourceBlockFirstInst);
 
-      currentFunction[currentFunctionSize++] = value_id;
+      currentFunction[currentFunctionSize++] = values[op];
       currentFunction[currentFunctionSize++] = block_label;
     }
   }
@@ -411,27 +553,15 @@ void SPIRVBuilder::SimplifyTrivialPhis() {
     return;
 
   for (u32 phi_idx = 0; phi_idx < ir->phiCount; phi_idx++) {
-    u32 operandCount = ir->GetPhiOperandCount(phi_idx);
-    if (operandCount == 0)
+    // Only operands on emitted edges count (see GetPhiShape).
+    u16 value;
+    if (GetPhiShape(phi_idx, &value) != PhiShape::TRIVIAL)
       continue;
-
-    // Check if all operands have the same value register
-    u16 firstValueReg = ir->GetPhiOperandValue(phi_idx, 0);
-    bool allSame = true;
-    for (u32 op = 1; op < operandCount; op++) {
-      if (ir->GetPhiOperandValue(phi_idx, op) != firstValueReg) {
-        allSame = false;
-        break;
-      }
-    }
-
-    if (allSame) {
-      // Trivial PHI - map result register to source value's ID
-      u16 phiResultReg = ir->phiResultRegs[phi_idx];
-      u32 source_id = GetSpirvId(firstValueReg);
-      if (phiResultReg < idCapacity) {
-        spirvIds[phiResultReg] = source_id;
-      }
+    // Trivial PHI - map result register to source value's ID
+    u16 phiResultReg = ir->phiResultRegs[phi_idx];
+    u32 source_id = GetSpirvId(value);
+    if (phiResultReg < idCapacity) {
+      spirvIds[phiResultReg] = source_id;
     }
   }
 }
@@ -521,6 +651,7 @@ void SPIRVBuilder::EmitFunction() {
   // 3. Pre-simplify trivial PHIs before function body
   // This handles cases where variant specialization makes a PHI trivial
   // Must be after DeclareInputOutput sets up spirvIds array
+  if (cfg && cfg->blockCount > 0) FindEmittedBlocks();
   SimplifyTrivialPhis();
 
   // 4. Emit function type (void function taking no parameters)
@@ -863,6 +994,22 @@ void SPIRVBuilder::EmitFunctionBody() {
     // Emit block label
     u32 labelId = GetOrCreateBlockLabel(firstInst);
     Emit(spv::OpLabel, labelId);
+
+    // A block a constant branch skips is kept as a label (a construct may
+    // still name it as its merge block) and OpUnreachable. Its values can
+    // only reach other skipped blocks, and SPIRV-Cross fails to place one
+    // that several of those share. An unreachable continue target keeps the
+    // branch back to its loop header instead.
+    if (blockIdx != cfg->entryBlock && blockEmission[blockIdx] != BlockEmission::REACHABLE) {
+        DropBlockBody(firstInst, lastInst);
+        if (blockEmission[blockIdx] == BlockEmission::BACK_EDGE) {
+            u32 header = backEdgeTargets[blockIdx];
+            Emit(spv::OpBranch, GetOrCreateBlockLabel(cfg->firstInst[header]));
+        } else {
+            Emit(spv::OpUnreachable);
+        }
+        continue;
+    }
 
     // Emit all local pointer OpVariables at the start of the FIRST block
     if (blockIdx == 0) {

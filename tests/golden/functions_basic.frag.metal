@@ -30,7 +30,7 @@ fragment main0_out main0(main0_in in [[stage_in]])
     }
     float _50 = 1.0 - fast::max(dot(float3(0.0, 0.0, 1.0), fast::normalize(_24 + float3(0.0, 0.0, 1.0))), 0.0);
     float _52 = _50 * _50;
-    float3 _61 = float3(0.039999999105930328369140625) + ((float3(1.0) - float3(0.039999999105930328369140625)) * float3((_52 * _52) * _50));
+    float3 _61 = float3(0.039999999105930328369140625) + (float3(0.959999978542327880859375) * float3((_52 * _52) * _50));
     out.m_9 = float4((float3(_12) * (float3(1.0) - _61)) + _61, 1.0);
     return out;
 }

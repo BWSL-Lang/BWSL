@@ -1,0 +1,43 @@
+// An inlined function whose first early return is always taken (or never
+// taken). The code a constant branch skips computed a value that two of the
+// skipped blocks share, which SPIRV-Cross failed on.
+pipeline EquivConstantEarlyReturn {
+
+    resources {
+        output: buffer<float>
+    }
+
+    struct Res {
+        bool ok;
+        float v;
+    }
+
+    pick :: (float a, float b, float c) -> Res {
+        Res r;
+        r.ok = false;
+        r.v = 0.0;
+        if (a * a <= 0.5) {
+            return r;
+        }
+        float d = b * c;
+        if (abs(b) <= c) {
+            r.v = d;
+            return r;
+        }
+        r.v = a + d;
+        r.ok = true;
+        return r;
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            Res early = pick(0.0, 3.0, float(idx));              // always returns first
+            Res late = pick(2.0, 3.0, float(idx));               // never does
+            float a = early.ok ? early.v : -1.0;
+            float b = late.ok ? late.v : -1.0;                   // 2 + 3 * idx while idx < 3
+            resources.output[idx] = a + b;
+        }
+    }
+}

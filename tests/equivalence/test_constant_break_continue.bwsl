@@ -1,0 +1,32 @@
+// A loop whose body always breaks, so its continue clause never runs. The
+// clause reads values from body code that a constant branch skips, directly
+// and through a phi. The continue block is emitted only to close the loop.
+pipeline EquivConstantBreakContinue {
+
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int mode = 2;
+
+            float viaPhi = float(idx);
+            for (int i = 0; i < 4; resources.output[i] = viaPhi) {
+                if (mode == 2) { break; }
+                if (viaPhi > 3.0) { viaPhi += 1.0; skip; }
+                viaPhi += 2.0;
+            }
+
+            float direct = float(idx);
+            for (int i = 0; i < 4; resources.output[i] = direct) {
+                if (mode == 2) { break; }
+                direct += 2.0;
+            }
+
+            resources.output[idx] = viaPhi + direct;           // 2 * idx
+        }
+    }
+}
