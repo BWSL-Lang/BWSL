@@ -4,6 +4,15 @@
 namespace BWSL {
 namespace SSA {
 
+// Keep variable discovery and renaming consistent about destination slots.
+// Stores carry a use (or a dummy zero), never a new register definition.
+static bool HasSSADefinition(u16 op) {
+    return op != IR::OP_NOP && op != IR::OP_JUMP && op != IR::OP_RET &&
+           op != IR::OP_BRANCH && op != IR::OP_SWITCH &&
+           op != IR::OP_LOCAL_STORE && op != IR::OP_ARRAY_STORE &&
+           op != IR::OP_STORE_OUTPUT && op != IR::OP_STORE_BUFFER;
+}
+
 //==============================================================================
 // Initialization
 //==============================================================================
@@ -83,10 +92,7 @@ void SSAConstructor::IdentifyVariables() {
         // dest slot as a fresh definition, which corrupts later uses of
         // that register (confirmed: OP_LOCAL_STORE with dest=0 caused
         // r0 = idx to be renamed away at resources.output[idx] writes).
-        if (op == IR::OP_NOP || op == IR::OP_JUMP || op == IR::OP_RET ||
-            op == IR::OP_BRANCH || op == IR::OP_SWITCH ||
-            op == IR::OP_LOCAL_STORE || op == IR::OP_ARRAY_STORE ||
-            op == IR::OP_STORE_OUTPUT || op == IR::OP_STORE_BUFFER) {
+        if (!HasSSADefinition(op)) {
             continue;
         }
 
@@ -863,7 +869,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
         }
         
         // Skip instructions that don't define registers
-        if (op == IR::OP_JUMP || op == IR::OP_RET || op == IR::OP_BRANCH || op == IR::OP_SWITCH) continue;
+        if (!HasSSADefinition(op)) continue;
 
         // For definitions: allocate a new SSA register and update the instruction
         u16 dest = ir->destinations[i];
