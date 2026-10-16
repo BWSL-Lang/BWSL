@@ -1,6 +1,7 @@
 #include "bwsl_constant_propagation.h"
 #include "core/bwsl_arena.h"
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -64,6 +65,7 @@ struct ConstantPropagationData {
     u32* regWork;           // A register is queued each time it drops a level: at most twice
     u32 regWorkHead;
     u32 regWorkTail;
+
 };
 
 static ConstantValue MakeConstant(CoreType type, u32 bits) {
@@ -184,6 +186,23 @@ static bool MakeFloatResult(float value, ConstantValue* out) {
     return true;
 }
 
+// Library functions are evaluated in double and rounded once, which is
+// at least as accurate as any GPU's float version.
+static bool MakeRoundedResult(double value, ConstantValue* out) {
+    return std::isfinite(value) && MakeFloatResult(static_cast<float>(value), out);
+}
+
+// Ties go to even, as RoundEven (SPIR-V) and round (WGSL) do.
+// A negative input that rounds to zero gives -0.0, which doesn't fold.
+static float RoundHalfEven(float value) {
+    float floor = std::floor(value);
+    float difference = value - floor;
+    float result = difference < 0.5f ? floor
+                 : difference > 0.5f ? floor + 1.0f
+                 : std::fmod(floor, 2.0f) == 0.0f ? floor : floor + 1.0f;
+    return std::copysign(result, value);
+}
+
 static ConstantValue DecodeConstant(const IRProgram* ir, u16 operand) {
     if (IR::IsBoolConstant(operand)) {
         u32 index = operand & 0x3FFF;
@@ -239,9 +258,19 @@ static u32 GetFoldArity(u16 op) {
         case IR::OP_TRUNC: case IR::OP_INEG: case IR::OP_IABS: case IR::OP_NOT:
         case IR::OP_F2I: case IR::OP_I2F: case IR::OP_F2U: case IR::OP_U2F:
         case IR::OP_I2U: case IR::OP_U2I:
+        case IR::OP_SQRT: case IR::OP_RSQRT: case IR::OP_EXP: case IR::OP_EXP2:
+        case IR::OP_LOG: case IR::OP_LOG2: case IR::OP_SIN: case IR::OP_COS:
+        case IR::OP_TAN: case IR::OP_ASIN: case IR::OP_ACOS: case IR::OP_ATAN:
+        case IR::OP_SINH: case IR::OP_COSH: case IR::OP_TANH:
+        case IR::OP_ROUND: case IR::OP_FRACT: case IR::OP_SIGN: case IR::OP_SATURATE:
+        case IR::OP_DEGREES: case IR::OP_RADIANS:
+        case IR::OP_ISNAN: case IR::OP_ISINF: case IR::OP_ISFINITE: case IR::OP_ISNORMAL:
+        case IR::OP_POPCNT: case IR::OP_CTZ: case IR::OP_REVERSE_BITS: case IR::OP_BITCAST:
             return 1;
         case IR::OP_FADD: case IR::OP_FSUB: case IR::OP_FMUL: case IR::OP_FDIV:
         case IR::OP_FMIN: case IR::OP_FMAX:
+        case IR::OP_FMOD: case IR::OP_FREM: case IR::OP_POW: case IR::OP_ATAN2:
+        case IR::OP_STEP: case IR::OP_LDEXP:
         case IR::OP_IADD: case IR::OP_ISUB: case IR::OP_IMUL: case IR::OP_IDIV:
         case IR::OP_IMOD: case IR::OP_IMIN: case IR::OP_IMAX: case IR::OP_UMIN:
         case IR::OP_UMAX:
@@ -254,26 +283,51 @@ static u32 GetFoldArity(u16 op) {
         case IR::OP_ULT: case IR::OP_ULE: case IR::OP_UGT: case IR::OP_UGE:
             return 2;
         case IR::OP_FCLAMP: case IR::OP_ICLAMP: case IR::OP_UCLAMP:
+        case IR::OP_LERP: case IR::OP_SMOOTHSTEP: case IR::OP_FMA:
+        case IR::OP_BITFIELD_EXTRACT:
             return 3;
+        case IR::OP_BITFIELD_INSERT:
+            return 4;
         default:
             return 0;
     }
 }
 
-// Evaluates `op` on constant operands. Returns false when the result isn't
-// one every target computes the same way (division by zero, overflowing
-// conversions, negative integer division, ...), or the operand types don't
-// match the operation.
-static bool FoldOperation(u16 op, const ConstantValue* in, ConstantValue* out) {
+// Operations whose scalar operands the backends splat when another operand
+// is a vector.
+static bool SplatsScalarOperands(u16 op) {
+    switch (op) {
+        case IR::OP_FADD: case IR::OP_FSUB: case IR::OP_FMUL: case IR::OP_FDIV:
+        case IR::OP_FMOD: case IR::OP_FREM:
+        case IR::OP_FMIN: case IR::OP_FMAX: case IR::OP_FCLAMP:
+        case IR::OP_IMIN: case IR::OP_IMAX: case IR::OP_ICLAMP:
+        case IR::OP_UMIN: case IR::OP_UMAX: case IR::OP_UCLAMP:
+        case IR::OP_POW: case IR::OP_ATAN2: case IR::OP_STEP: case IR::OP_LDEXP:
+        case IR::OP_LERP: case IR::OP_SMOOTHSTEP: case IR::OP_FMA:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Evaluates `op` on constant operands into a `resultType` scalar. Returns
+// false when the result isn't one every target computes the same way
+// (division by zero, overflowing conversions, negative integer division, a
+// math function outside its domain, ...), or the operand types don't match
+// the operation.
+static bool FoldOperation(u16 op, const ConstantValue* in, CoreType resultType, ConstantValue* out) {
     CoreType type = in[0].type;
     bool sameTypes2 = in[1].type == type;
     bool sameTypes3 = sameTypes2 && in[2].type == type;
     float fa = BitsToFloat(in[0].bits[0]), fb = BitsToFloat(in[1].bits[0]);
     float fc = BitsToFloat(in[2].bits[0]);
+    double da = fa, db = fb;
     s32 sa = static_cast<s32>(in[0].bits[0]), sb = static_cast<s32>(in[1].bits[0]);
     s32 sc = static_cast<s32>(in[2].bits[0]);
     u32 ua = in[0].bits[0], ub = in[1].bits[0], uc = in[2].bits[0];
-    bool isFloat2 = type == CoreType::FLOAT && sameTypes2;
+    bool isFloat = type == CoreType::FLOAT;
+    bool isFloat2 = isFloat && sameTypes2;
+    bool isFloat3 = isFloat && sameTypes3;
     bool isInt2 = type == CoreType::INT && sameTypes2;
     bool isUint2 = type == CoreType::UINT && sameTypes2;
 
@@ -299,6 +353,117 @@ static bool FoldOperation(u16 op, const ConstantValue* in, ConstantValue* out) {
         case IR::OP_FLOOR: return type == CoreType::FLOAT && MakeFloatResult(std::floor(fa), out);
         case IR::OP_CEIL: return type == CoreType::FLOAT && MakeFloatResult(std::ceil(fa), out);
         case IR::OP_TRUNC: return type == CoreType::FLOAT && MakeFloatResult(std::trunc(fa), out);
+        case IR::OP_ROUND: return isFloat && MakeFloatResult(RoundHalfEven(fa), out);
+        case IR::OP_FRACT: return isFloat && MakeFloatResult(fa - std::floor(fa), out);
+        case IR::OP_SATURATE: return isFloat && MakeFloatResult(std::fmin(std::fmax(fa, 0.0f), 1.0f), out);
+        // mod(x, y) = x - y * floor(x / y), and fmod truncates instead.
+        case IR::OP_FMOD:
+            return isFloat2 && fb != 0.0f && MakeFloatResult(fa - fb * std::floor(fa / fb), out);
+        case IR::OP_FREM: return isFloat2 && fb != 0.0f && MakeFloatResult(std::fmod(fa, fb), out);
+        case IR::OP_STEP: return isFloat2 && MakeFloatResult(fb < fa ? 0.0f : 1.0f, out);
+        case IR::OP_LERP: return isFloat3 && MakeFloatResult(fa * (1.0f - fc) + fb * fc, out);
+        case IR::OP_SMOOTHSTEP: {
+            // Undefined unless edge0 < edge1.
+            if (!isFloat3 || !(fa < fb)) return false;
+            float t = std::fmin(std::fmax((fc - fa) / (fb - fa), 0.0f), 1.0f);
+            return MakeFloatResult(t * t * (3.0f - 2.0f * t), out);
+        }
+        case IR::OP_FMA: return isFloat3 && MakeFloatResult(std::fma(fa, fb, fc), out);
+        case IR::OP_LDEXP:
+            return isFloat && in[1].type == CoreType::INT && MakeRoundedResult(std::ldexp(da, sb), out);
+
+        // Math library functions, outside the inputs where they're undefined.
+        case IR::OP_SQRT: return isFloat && fa >= 0.0f && MakeRoundedResult(std::sqrt(da), out);
+        case IR::OP_RSQRT: return isFloat && fa > 0.0f && MakeRoundedResult(1.0 / std::sqrt(da), out);
+        case IR::OP_EXP: return isFloat && MakeRoundedResult(std::exp(da), out);
+        case IR::OP_EXP2: return isFloat && MakeRoundedResult(std::exp2(da), out);
+        case IR::OP_LOG: return isFloat && fa > 0.0f && MakeRoundedResult(std::log(da), out);
+        case IR::OP_LOG2: return isFloat && fa > 0.0f && MakeRoundedResult(std::log2(da), out);
+        case IR::OP_POW:
+            if (!isFloat2 || fa < 0.0f || (fa == 0.0f && fb <= 0.0f)) return false;
+            return MakeRoundedResult(std::pow(da, db), out);
+        case IR::OP_SIN: return isFloat && MakeRoundedResult(std::sin(da), out);
+        case IR::OP_COS: return isFloat && MakeRoundedResult(std::cos(da), out);
+        case IR::OP_TAN: return isFloat && MakeRoundedResult(std::tan(da), out);
+        case IR::OP_ASIN: return isFloat && std::fabs(fa) <= 1.0f && MakeRoundedResult(std::asin(da), out);
+        case IR::OP_ACOS: return isFloat && std::fabs(fa) <= 1.0f && MakeRoundedResult(std::acos(da), out);
+        case IR::OP_ATAN: return isFloat && MakeRoundedResult(std::atan(da), out);
+        case IR::OP_ATAN2:
+            return isFloat2 && !(fa == 0.0f && fb == 0.0f) && MakeRoundedResult(std::atan2(da, db), out);
+        case IR::OP_SINH: return isFloat && MakeRoundedResult(std::sinh(da), out);
+        case IR::OP_COSH: return isFloat && MakeRoundedResult(std::cosh(da), out);
+        case IR::OP_TANH: return isFloat && MakeRoundedResult(std::tanh(da), out);
+        case IR::OP_DEGREES: return isFloat && MakeRoundedResult(da * (180.0 / 3.14159265358979323846), out);
+        case IR::OP_RADIANS: return isFloat && MakeRoundedResult(da * (3.14159265358979323846 / 180.0), out);
+
+        case IR::OP_SIGN:
+            if (isFloat) return MakeFloatResult(fa > 0.0f ? 1.0f : fa < 0.0f ? -1.0f : 0.0f, out);
+            if (type != CoreType::INT) return false;
+            *out = MakeConstant(type, static_cast<u32>(sa > 0 ? 1 : sa < 0 ? -1 : 0));
+            return true;
+
+        // A folded float is never NaN, infinite or denormal.
+        case IR::OP_ISNAN: case IR::OP_ISINF: case IR::OP_ISFINITE: case IR::OP_ISNORMAL: {
+            if (!isFloat) return false;
+            bool result = op == IR::OP_ISFINITE || (op == IR::OP_ISNORMAL && fa != 0.0f);
+            *out = MakeConstant(CoreType::BOOL, result ? 1 : 0);
+            return true;
+        }
+
+        // Bit operations. firstbithigh (OP_CLZ) isn't folded: the backends
+        // disagree on what it returns.
+        case IR::OP_POPCNT:
+            if (!IsIntegerType(type) || !IsIntegerType(resultType)) return false;
+            *out = MakeConstant(resultType, static_cast<u32>(std::popcount(ua)));
+            return true;
+        case IR::OP_CTZ:
+            // Zero has no lowest set bit; the backends return -1 or 32.
+            if (!IsIntegerType(type) || !IsIntegerType(resultType) || ua == 0) return false;
+            *out = MakeConstant(resultType, static_cast<u32>(std::countr_zero(ua)));
+            return true;
+        case IR::OP_REVERSE_BITS: {
+            if (!IsIntegerType(type)) return false;
+            u32 result = 0;
+            for (u32 bit = 0; bit < 32; bit++) result |= ((ua >> bit) & 1u) << (31 - bit);
+            *out = MakeConstant(type, result);
+            return true;
+        }
+        case IR::OP_BITFIELD_EXTRACT:
+        case IR::OP_BITFIELD_INSERT: {
+            // (base, offset, count) and (base, insert, offset, count); the
+            // result is undefined when the field leaves the 32 bits.
+            bool insert = op == IR::OP_BITFIELD_INSERT;
+            const ConstantValue& offsetValue = in[insert ? 2 : 1];
+            const ConstantValue& countValue = in[insert ? 3 : 2];
+            if (!IsIntegerType(type) || !IsIntegerType(offsetValue.type) || !IsIntegerType(countValue.type) ||
+                (insert && in[1].type != type)) {
+                return false;
+            }
+            u32 offset = offsetValue.bits[0], count = countValue.bits[0];
+            if (offset > 32 || count > 32 || offset + count > 32) return false;
+            u32 mask = count == 32 ? 0xFFFFFFFFu : ((1u << count) - 1u);
+            u32 result;
+            if (insert) {
+                result = (ua & ~(mask << offset)) | ((ub & mask) << offset);
+            } else if (count == 0) {
+                result = 0;
+            } else {
+                result = (ua >> offset) & mask;
+                // Signed extraction sign-extends the field.
+                if (type == CoreType::INT && count < 32 && (result >> (count - 1)) & 1u) result |= ~mask;
+            }
+            *out = MakeConstant(type, result);
+            return true;
+        }
+        case IR::OP_BITCAST: {
+            if (GetComponentCount(type) != 1 || GetScalarType(type) == CoreType::BOOL ||
+                (resultType != CoreType::FLOAT && !IsIntegerType(resultType))) {
+                return false;
+            }
+            if (resultType == CoreType::FLOAT) return MakeFloatResult(BitsToFloat(ua), out);
+            *out = MakeConstant(resultType, ua);
+            return true;
+        }
 
         // Integer arithmetic wraps, as it does on the GPU.
         case IR::OP_IADD:
@@ -481,7 +646,7 @@ static bool FoldComponentwise(u16 op, const ConstantValue* in, u32 arity, CoreTy
                               ConstantValue* out) {
     u32 count = GetComponentCount(resultType);
     if (count == 0 || GetMatrixSize(resultType) != 0) return false;
-    bool splats = op == IR::OP_FADD || op == IR::OP_FSUB || op == IR::OP_FMUL || op == IR::OP_FDIV;
+    bool splats = SplatsScalarOperands(op);
     bool full = false;
     for (u32 k = 0; k < arity; k++) {
         if (in[k].count != count && !(splats && in[k].count == 1)) return false;
@@ -491,12 +656,12 @@ static bool FoldComponentwise(u16 op, const ConstantValue* in, u32 arity, CoreTy
     CoreType resultScalar = GetScalarType(resultType);
     *out = {ValueState::CONSTANT, resultType, static_cast<u8>(count), {}};
     for (u32 c = 0; c < count; c++) {
-        ConstantValue scalars[3] = {UNDEFINED_VALUE, UNDEFINED_VALUE, UNDEFINED_VALUE};
+        ConstantValue scalars[4] = {UNDEFINED_VALUE, UNDEFINED_VALUE, UNDEFINED_VALUE, UNDEFINED_VALUE};
         for (u32 k = 0; k < arity; k++) {
             scalars[k] = MakeConstant(GetScalarType(in[k].type), in[k].bits[in[k].count == 1 ? 0 : c]);
         }
         ConstantValue result;
-        if (!FoldOperation(op, scalars, &result) || result.type != resultScalar) return false;
+        if (!FoldOperation(op, scalars, resultScalar, &result) || result.type != resultScalar) return false;
         out->bits[c] = result.bits[0];
     }
     return true;
@@ -644,6 +809,158 @@ static bool FoldMatrixOperation(u16 op, const ConstantValue& a, const ConstantVa
     }
 }
 
+// Square root of dot(v, v) for a float scalar or vector.
+static bool FoldLength(const ConstantValue& v, float* out) {
+    u32 dot;
+    if (!FoldDot(v.bits, 1, v.bits, 1, v.count, &dot)) return false;
+    *out = std::sqrt(BitsToFloat(dot));
+    return IsFoldableFloat(*out);
+}
+
+static bool StoreFloats(const float* values, u32 count, CoreType type, ConstantValue* out) {
+    *out = {ValueState::CONSTANT, type, static_cast<u8>(count), {}};
+    for (u32 c = 0; c < count; c++) {
+        if (!IsFoldableFloat(values[c])) return false;
+        out->bits[c] = FloatToBits(values[c]);
+    }
+    return true;
+}
+
+// determinant and inverse, in double and rounded once. Returns false for a
+// singular matrix.
+static bool FoldMatrixInverse(const ConstantValue& m, bool inverse, CoreType resultType,
+                              ConstantValue* out) {
+    u32 n = GetMatrixSize(m.type);
+    if (n == 0) return false;
+    // Gauss-Jordan on [M | I] with partial pivoting; the determinant is the
+    // product of the pivots.
+    double a[4][8] = {};
+    for (u32 column = 0; column < n; column++) {
+        for (u32 row = 0; row < n; row++) a[row][column] = BitsToFloat(m.bits[column * n + row]);
+        a[column][n + column] = 1.0;
+    }
+    double determinant = 1.0;
+    for (u32 k = 0; k < n; k++) {
+        u32 pivot = k;
+        for (u32 row = k + 1; row < n; row++) {
+            if (std::fabs(a[row][k]) > std::fabs(a[pivot][k])) pivot = row;
+        }
+        if (a[pivot][k] == 0.0) return false;
+        if (pivot != k) {
+            for (u32 c = 0; c < 2 * n; c++) std::swap(a[k][c], a[pivot][c]);
+            determinant = -determinant;
+        }
+        double p = a[k][k];
+        determinant *= p;
+        for (u32 c = 0; c < 2 * n; c++) a[k][c] /= p;
+        for (u32 row = 0; row < n; row++) {
+            if (row == k || a[row][k] == 0.0) continue;
+            double factor = a[row][k];
+            for (u32 c = 0; c < 2 * n; c++) a[row][c] -= factor * a[k][c];
+        }
+    }
+    if (!inverse) {
+        return resultType == CoreType::FLOAT && MakeRoundedResult(determinant, out);
+    }
+    if (resultType != m.type) return false;
+    float values[MAX_COMPONENTS];
+    for (u32 column = 0; column < n; column++) {
+        for (u32 row = 0; row < n; row++) values[column * n + row] = static_cast<float>(a[row][n + column]);
+    }
+    return StoreFloats(values, n * n, resultType, out);
+}
+
+// length, distance, normalize, reflect, refract, faceforward, any and all,
+// on float (or, for any and all, bool) scalars and vectors. Every step rounds
+// to float, as for dot.
+static bool FoldGeometric(u16 op, const ConstantValue* in, CoreType resultType, ConstantValue* out) {
+    const ConstantValue& a = in[0];
+    u32 count = a.count;
+    bool floats = GetScalarType(a.type) == CoreType::FLOAT && GetMatrixSize(a.type) == 0;
+    float values[4];
+    switch (op) {
+        case IR::OP_ANY:
+        case IR::OP_ALL: {
+            if (GetScalarType(a.type) != CoreType::BOOL || resultType != CoreType::BOOL) return false;
+            bool any = false, all = true;
+            for (u32 c = 0; c < count; c++) {
+                any |= a.bits[c] != 0;
+                all &= a.bits[c] != 0;
+            }
+            *out = MakeConstant(CoreType::BOOL, (op == IR::OP_ANY ? any : all) ? 1 : 0);
+            return true;
+        }
+        case IR::OP_LENGTH:
+            return floats && resultType == CoreType::FLOAT && FoldLength(a, &values[0]) &&
+                   StoreFloats(values, 1, resultType, out);
+        case IR::OP_DISTANCE: {
+            if (!floats || in[1].type != a.type || resultType != CoreType::FLOAT) return false;
+            ConstantValue difference = a;
+            for (u32 c = 0; c < count; c++) {
+                float value = BitsToFloat(a.bits[c]) - BitsToFloat(in[1].bits[c]);
+                if (!IsFoldableFloat(value) && value != 0.0f) return false;
+                difference.bits[c] = FloatToBits(value);
+            }
+            return FoldLength(difference, &values[0]) && StoreFloats(values, 1, resultType, out);
+        }
+        case IR::OP_NORMALIZE: {
+            float length;
+            if (!floats || resultType != a.type || !FoldLength(a, &length) || length == 0.0f) return false;
+            for (u32 c = 0; c < count; c++) values[c] = BitsToFloat(a.bits[c]) / length;
+            return StoreFloats(values, count, resultType, out);
+        }
+        case IR::OP_REFLECT: {
+            // I - 2 * dot(N, I) * N
+            const ConstantValue& n = in[1];
+            u32 dot;
+            if (!floats || n.type != a.type || resultType != a.type ||
+                !FoldDot(n.bits, 1, a.bits, 1, count, &dot)) {
+                return false;
+            }
+            float scale = 2.0f * BitsToFloat(dot);
+            for (u32 c = 0; c < count; c++) {
+                values[c] = BitsToFloat(a.bits[c]) - scale * BitsToFloat(n.bits[c]);
+            }
+            return IsFoldableFloat(scale) && StoreFloats(values, count, resultType, out);
+        }
+        case IR::OP_REFRACT: {
+            // k = 1 - eta^2 (1 - dot(N, I)^2); 0 when k < 0, else
+            // eta I - (eta dot(N, I) + sqrt(k)) N.
+            const ConstantValue& n = in[1];
+            u32 dotBits;
+            if (!floats || n.type != a.type || in[2].type != CoreType::FLOAT || resultType != a.type ||
+                !FoldDot(n.bits, 1, a.bits, 1, count, &dotBits)) {
+                return false;
+            }
+            float dot = BitsToFloat(dotBits), eta = BitsToFloat(in[2].bits[0]);
+            float k = 1.0f - eta * eta * (1.0f - dot * dot);
+            if (!IsFoldableFloat(k) && k != 0.0f) return false;
+            if (k < 0.0f) {
+                *out = {ValueState::CONSTANT, resultType, static_cast<u8>(count), {}};
+                return true;
+            }
+            float scale = eta * dot + std::sqrt(k);
+            for (u32 c = 0; c < count; c++) {
+                values[c] = eta * BitsToFloat(a.bits[c]) - scale * BitsToFloat(n.bits[c]);
+            }
+            return IsFoldableFloat(scale) && StoreFloats(values, count, resultType, out);
+        }
+        case IR::OP_FACEFORWARD: {
+            // dot(Nref, I) < 0 ? N : -N
+            u32 dot;
+            if (!floats || in[1].type != a.type || in[2].type != a.type || resultType != a.type ||
+                !FoldDot(in[2].bits, 1, in[1].bits, 1, count, &dot)) {
+                return false;
+            }
+            bool keep = BitsToFloat(dot) < 0.0f;
+            for (u32 c = 0; c < count; c++) values[c] = keep ? BitsToFloat(a.bits[c]) : -BitsToFloat(a.bits[c]);
+            return StoreFloats(values, count, resultType, out);
+        }
+        default:
+            return false;
+    }
+}
+
 // Reads `count` operands. Returns false, with the instruction's result in
 // `result`, when one isn't a known constant.
 static bool GetConstantOperands(const ConstantPropagationData* data, u32 inst, u32 count,
@@ -750,6 +1067,19 @@ static ConstantValue EvaluateVectorInstruction(const ConstantPropagationData* da
         case IR::OP_MAT_TRANSPOSE:
             if (!GetConstantOperands(data, inst, 1, in, &result)) return result;
             return FoldMatrixOperation(op, in[0], in[0], resultType, &result) ? result : OVERDEFINED_VALUE;
+        case IR::OP_MAT_DET:
+        case IR::OP_MAT_INVERSE:
+            if (!GetConstantOperands(data, inst, 1, in, &result)) return result;
+            return FoldMatrixInverse(in[0], op == IR::OP_MAT_INVERSE, resultType, &result) ? result
+                                                                                          : OVERDEFINED_VALUE;
+        case IR::OP_LENGTH: case IR::OP_NORMALIZE: case IR::OP_ANY: case IR::OP_ALL:
+        case IR::OP_DISTANCE: case IR::OP_REFLECT:
+        case IR::OP_REFRACT: case IR::OP_FACEFORWARD: {
+            u32 arity = op == IR::OP_REFRACT || op == IR::OP_FACEFORWARD ? 3
+                      : op == IR::OP_DISTANCE || op == IR::OP_REFLECT ? 2 : 1;
+            if (!GetConstantOperands(data, inst, arity, in, &result)) return result;
+            return FoldGeometric(op, in, resultType, &result) ? result : OVERDEFINED_VALUE;
+        }
         default:
             return OVERDEFINED_VALUE;
     }
@@ -760,7 +1090,8 @@ static bool IsVectorFoldOp(u16 op) {
            op == IR::OP_VEC_SHUFFLE || op == IR::OP_ARRAY_LOAD || op == IR::OP_MAT_CONSTRUCT ||
            op == IR::OP_MAT_MUL || op == IR::OP_MAT_VEC_MUL || op == IR::OP_VEC_MAT_MUL ||
            op == IR::OP_MAT_SCALE || op == IR::OP_MAT_TRANSPOSE || op == IR::OP_DOT ||
-           op == IR::OP_CROSS;
+           op == IR::OP_CROSS || op == IR::OP_MAT_DET || op == IR::OP_MAT_INVERSE ||
+           (op >= IR::OP_LENGTH && op <= IR::OP_FACEFORWARD) || op == IR::OP_ANY || op == IR::OP_ALL;
 }
 
 static ConstantValue EvaluateInstruction(const ConstantPropagationData* data, u32 inst) {
@@ -809,7 +1140,7 @@ static ConstantValue EvaluateInstruction(const ConstantPropagationData* data, u3
 
     u32 arity = GetFoldArity(op);
     if (arity == 0) return OVERDEFINED_VALUE;
-    ConstantValue in[3] = {UNDEFINED_VALUE, UNDEFINED_VALUE, UNDEFINED_VALUE};
+    ConstantValue in[4] = {UNDEFINED_VALUE, UNDEFINED_VALUE, UNDEFINED_VALUE, UNDEFINED_VALUE};
     ConstantValue result;
     if (!GetConstantOperands(data, inst, arity, in, &result)) return result;
 
@@ -818,7 +1149,7 @@ static ConstantValue EvaluateInstruction(const ConstantPropagationData* data, u3
     bool scalars = true;
     for (u32 k = 0; k < arity; k++) scalars &= in[k].count == 1;
     if (scalars && GetComponentCount(resultType) == 1) {
-        return FoldOperation(op, in, &result) ? result : OVERDEFINED_VALUE;
+        return FoldOperation(op, in, resultType, &result) ? result : OVERDEFINED_VALUE;
     }
     return FoldComponentwise(op, in, arity, resultType, &result) ? result : OVERDEFINED_VALUE;
 }
@@ -1018,11 +1349,24 @@ static bool IsPureValueOp(u16 op) {
            (op >= IR::OP_LERP && op <= IR::OP_RADIANS);
 }
 
-// Instructions whose operands may become tagged constants. The backends
-// read the type of a shift's operands from the register table, so shifts
-// only ever fold whole.
+// Folded operations whose operands stay registers unless the whole
+// instruction folds. The backends read the type of a shift's operands, and
+// of these intrinsics', from the register table.
+static bool KeepsRegisterOperands(u16 op) {
+    switch (op) {
+        case IR::OP_SHL: case IR::OP_SHR: case IR::OP_ASR:
+        case IR::OP_ISNAN: case IR::OP_ISINF: case IR::OP_ISFINITE: case IR::OP_ISNORMAL:
+        case IR::OP_POPCNT: case IR::OP_CTZ: case IR::OP_REVERSE_BITS: case IR::OP_BITCAST:
+        case IR::OP_LDEXP: case IR::OP_BITFIELD_EXTRACT: case IR::OP_BITFIELD_INSERT:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Instructions whose operands may become tagged constants.
 static bool IsRewritableOp(u16 op) {
-    if (op == IR::OP_SHL || op == IR::OP_SHR || op == IR::OP_ASR) return false;
+    if (KeepsRegisterOperands(op)) return false;
     return GetFoldArity(op) != 0 || IsPureValueOp(op) || op == IR::OP_BRANCH ||
            op == IR::OP_SWITCH;
 }
@@ -1351,7 +1695,9 @@ static bool IsRemovableDefinition(const ConstantPropagationData* data, u16 reg) 
     u32 definition = data->definitions[reg];
     if (definition & PHI_REFERENCE) return true;
     u16 op = data->ir->opcodes[definition];
-    return GetFoldArity(op) != 0 || IsPureValueOp(op);
+    return GetFoldArity(op) != 0 || IsPureValueOp(op) || op == IR::OP_MAT_DET ||
+           op == IR::OP_MAT_INVERSE || (op >= IR::OP_LENGTH && op <= IR::OP_FACEFORWARD) ||
+           op == IR::OP_ANY || op == IR::OP_ALL;
 }
 
 // Removes the value instructions and phis that nothing reads any more,

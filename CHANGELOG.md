@@ -16,10 +16,15 @@
   Vectors and matrices fold too: construction, swizzles, `dot`, `cross`,
   `transpose` and matrix products. For example, `gain` set to `2.0` on both
   sides of an `if` becomes the constant `2.0`, and `float3(2.0) * m[0]` with
-  a constant `m` becomes a constant vector. Folding skips results that can
-  differ between GPUs:
-  NaN, infinities, denormals, `-0.0`, integer division of negative values
-  and conversions that are out of range or inexact.
+  a constant `m` becomes a constant vector.
+  Intrinsics with constant arguments fold as well, from `clamp` and `max` to
+  `pow`, `sin`, `smoothstep`, `normalize`, `reflect`, `determinant` and the
+  bit operations. Math functions are computed in double precision and
+  rounded once, so they're at least as accurate as the GPU's.
+  Folding skips results that can differ between GPUs:
+  NaN, infinities, denormals, `-0.0`, integer division of negative values,
+  conversions that are out of range or inexact, and math functions outside
+  their domain, such as `sqrt(-1.0)` or `pow(-2.0, 0.5)`.
 - Range loops with a constant step test only the direction they go, and
   drop the wraparound test when their bounds rule it out, unless the body
   assigns the iterator. `for (x in -1..=1)` now comes out as

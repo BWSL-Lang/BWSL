@@ -8,11 +8,11 @@ namespace Optimization {
 
 // Sparse conditional constant propagation (Wegman & Zadeck) over the IR
 // after SSA. It folds instructions whose operands are constant, scalars,
-// vectors and matrices alike, resolves phis from the edges that can
-// actually run, and makes branch conditions constant where they are. Uses
-// of a constant scalar register are replaced by the constant, a constant
-// vector is built from constants, and the value instructions and phis
-// nothing reads any more are removed.
+// vectors and matrices alike, intrinsics included, resolves phis from the
+// edges that can actually run, and makes branch conditions constant where
+// they are. Uses of a constant scalar register are replaced by the
+// constant, a constant vector is built from constants, and the value
+// instructions and phis nothing reads any more are removed.
 //
 // The CFG and block layout are left alone: a branch or switch with a
 // constant condition stays one, and the backends emit only the edge it takes.

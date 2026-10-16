@@ -194,6 +194,44 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             self.assertIn("9.0", body)
             self.assertNotIn("mat3", body)
 
+        def test_intrinsics_fold(self):
+            target = self.compile(shader('''
+                float a = clamp(50.0, 0.0, 100.0) + float(max(0, 10)) + float(clamp(50, 0, 100));
+                float b = sqrt(16.0) + pow(2.0, 3.0) + exp2(3.0) + log2(8.0) + abs(-1.5);
+                float c = lerp(1.0, 3.0, 0.25) + smoothstep(0.0, 1.0, 0.5) + step(0.5, 0.75);
+                float d = length(float2(3.0, 4.0)) + distance(float3(1.0, 2.0, 3.0), float3(1.0, 2.0, 5.0));
+                float3 n = normalize(float3(3.0, 0.0, 4.0));
+                float3 r = reflect(float3(1.0, -1.0, 0.0), float3(0.0, 1.0, 0.0));
+                float e = determinant(mat2(float2(2.0, 0.0), float2(1.0, 3.0))) + float(count_bits(255u));
+                float3 s = saturate(float3(-1.0, 0.5, 2.0)) + pow(float3(1.0, 2.0, 3.0), 2.0);
+                bool f = any(bool2(false, true)) && !isnan(2.0);
+                output.color = float4(a + input.uv.x, b + c, d + e, f ? 1.0 : 0.0) + float4(n + r + s, 0.0);
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            for call in ("clamp", "max", "sqrt", "pow", "exp2", "log2", "abs", "mix", "smoothstep",
+                         "step", "length", "distance", "normalize", "reflect", "determinant",
+                         "bitCount", "any", "isnan"):
+                self.assertNotIn(call + "(", body)
+            self.assertIn("110.0 + v_uv.x", body)           # 50 + 10 + 50
+            self.assertIn("27.5", body)                     # 4 + 8 + 8 + 3 + 1.5 + 1.5 + 0.5 + 1
+            # d + e = 5 + 2 + 6 + 8, and n + r + s = (0.6 + 1 + 1, 0 + 1 + 4.5, 0.8 + 0 + 10)
+            self.assertIn("21.0", body)
+            self.assertIn("vec4(2.599999904632568359375, 5.5, 10.8000001907348632812", body)
+
+        def test_intrinsics_outside_their_domain_stay(self):
+            target = self.compile(shader('''
+                float a = sqrt(-1.0) + log(0.0) + pow(-2.0, 0.5) + asin(2.0);
+                float b = smoothstep(1.0, 0.0, 0.5);
+                float3 n = normalize(float3(0.0));
+                uint high = first_bit_high(8u);
+                output.color = float4(a, b, float(high), 1.0) + float4(n, input.uv.x);
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            for call in ("sqrt(", "log(", "pow(", "asin(", "smoothstep(", "normalize(", "findMSB("):
+                self.assertIn(call, body)
+
         def test_vectors_with_runtime_components_stay(self):
             ops, target = self.fragment_ops('''
                 mat2 m = mat2(float2(1.0, 2.0), float2(3.0, input.uv.x));
