@@ -23,8 +23,9 @@
   rounded once, so they're at least as accurate as the GPU's.
   A loop whose inputs are all constants and that has no side effects runs
   at compile time, so a function like `poly(2.0)` that loops over its
-  argument becomes a constant. The loop itself stays in the output with
-  nothing left in it to run, such as `while (false) {}`.
+  argument becomes a constant. A loop that runs at most once is no longer
+  emitted as a loop: one whose condition is false on entry disappears, and
+  one whose body always breaks becomes the code of its single pass.
   Folding skips results that can differ between GPUs:
   NaN, infinities, denormals, `-0.0`, integer division of negative values,
   conversions that are out of range or inexact, and math functions outside

@@ -1,0 +1,52 @@
+// Loops that run at most once become plain code: a condition that's false
+// on entry, a body that always breaks, a constant `if` that decides the
+// break, an evaluated loop that exits through a break, and a loop that
+// runs once inside one that doesn't run at all. Their bodies have run-time
+// values and stores, so what runs once must still run, in order.
+pipeline EquivDeadLoopRemoval {
+
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float x = float(idx);
+
+            float a = x;
+            for (int i = 0; i < 0; i++) {
+                a = a * 2.0 + 1.0;
+                resources.output[idx] = -1.0;
+            }                                                        // x
+
+            float b = x;
+            for (int i = 0; i < 10; i++) {
+                resources.output[idx] = 100.0;
+                b = b + 3.0;
+                break;
+            }                                                        // x + 3
+
+            int mode = 2;
+            float c = 0.0;
+            loop {
+                c = c + x;
+                if (mode == 2) { break; }
+                c = c - 1000.0;
+            }                                                        // x
+
+            int found = -1;
+            for (k in 0..100) {
+                if (k * k > 50) { found = k; break; }
+            }                                                        // 8
+
+            float d = 1.0;
+            for (int i = 0; i < 0; i++) {
+                for (int j = 0; j < 5; j++) { d += 1.0; break; }
+            }                                                        // 1
+
+            resources.output[idx] = resources.output[idx] + a + b + c + float(found) + d;
+        }
+    }
+}

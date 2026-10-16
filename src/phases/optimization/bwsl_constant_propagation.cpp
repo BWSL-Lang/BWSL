@@ -1901,6 +1901,170 @@ static void DropFoldedBranchEdges(ConstantPropagationData* data, BWSL_Arena* are
     ir->phiOperandOffsets[ir->phiCount] = kept;
 }
 
+// ============= Dead loops =============
+
+// The instruction a block's terminator goes to when that's decided: a jump,
+// a fallthrough, or a branch or switch on a constant, loop headers
+// included. NO_BLOCK otherwise.
+static u32 GetDecidedTarget(const IRProgram* ir, const CFG* cfg, u32 block) {
+    u32 last = cfg->lastInst[block];
+    u16 op = ir->opcodes[last];
+    if (op == IR::OP_JUMP) return ir->metadata[last];
+    if (op == IR::OP_BRANCH) {
+        bool condition;
+        if (!IR::TryGetConstantCondition(ir, ir->GetOperand(last, 0), &condition)) return NO_BLOCK;
+        return condition ? ir->GetBranchTrueTarget(last) : ir->GetBranchFalseTarget(last);
+    }
+    if (op == IR::OP_SWITCH) {
+        u32 selector;
+        u32 switchId = ir->metadata[last];
+        if (!IR::TryGetConstantInteger(ir, ir->GetOperand(last, 0), &selector) ||
+            switchId >= ir->switchCount) {
+            return NO_BLOCK;
+        }
+        u32 target = ir->GetSwitchDefaultTarget(switchId);
+        for (u32 c = 0; c < ir->GetSwitchCaseCount(switchId); c++) {
+            if (static_cast<u32>(ir->GetSwitchCaseValue(switchId, c)) == selector) {
+                return ir->GetSwitchCaseTarget(switchId, c);
+            }
+        }
+        return target;
+    }
+    if (op == IR::OP_RET || op == IR::OP_DISCARD || IR::IsTerminator(static_cast<IR::OpCode>(op))) return NO_BLOCK;
+    // A block without a terminator falls through to the next one.
+    return block + 1 < cfg->blockCount ? cfg->firstInst[block + 1] : NO_BLOCK;
+}
+
+// The loop header annotation in a block, or the instruction count.
+static u32 FindLoopAnnotation(const IRProgram* ir, const CFG* cfg, u32 block) {
+    for (u32 i = cfg->firstInst[block]; i <= cfg->lastInst[block]; i++) {
+        if ((ir->structureInfo[i] & IR::IRProgram::STRUCT_TYPE_MASK) == IR::IRProgram::STRUCT_LOOP_HEADER) {
+            return i;
+        }
+    }
+    return ir->instructionCount;
+}
+
+// A loop runs at most once when every branch from its header on is decided
+// and leads to its merge block without coming back: a condition that's
+// constant on entry, or a body that always breaks (both left by constant
+// propagation and loop evaluation). The blocks on that path become a chain
+// of jumps without structure, so the backends emit them as plain code; the
+// rest of the loop is unreachable. Loops are taken innermost first, so an
+// outer loop's path can run through what was an inner loop.
+static void RemoveDeadLoops(ConstantPropagationData* data, BWSL_Arena* arena) {
+    IRProgram* ir = data->ir;
+    CFG* cfg = data->cfg;
+    if (!ir->structureInfo || !ir->continueInfo) return;
+    u32* path = (u32*)AllocateZeroed(arena, cfg->blockCount * sizeof(u32));
+    u32* next = (u32*)AllocateZeroed(arena, cfg->blockCount * sizeof(u32));
+    bool* onPath = (bool*)AllocateZeroed(arena, cfg->blockCount * sizeof(bool));
+    if (!path || !next || !onPath) return;
+
+    bool anyRemoved = false;
+    for (u32 header = cfg->blockCount; header-- > 0;) {
+        u32 annotation = FindLoopAnnotation(ir, cfg, header);
+        if (annotation >= ir->instructionCount) continue;
+        u32 mergeInst = ir->structureInfo[annotation] & IR::IRProgram::STRUCT_TARGET_MASK;
+        if (mergeInst >= ir->instructionCount) continue;
+        u32 merge = cfg->instToBlock[mergeInst];
+
+        // The blocks of a structured loop lie between its header and merge.
+        u32 length = 0;
+        u32 block = header;
+        bool dead = true;
+        while (block != merge) {
+            if (block < header || block >= merge || onPath[block] ||
+                (block != header && FindLoopAnnotation(ir, cfg, block) < ir->instructionCount)) {
+                dead = false;
+                break;
+            }
+            u32 target = GetDecidedTarget(ir, cfg, block);
+            if (target >= ir->instructionCount) {
+                dead = false;
+                break;
+            }
+            onPath[block] = true;
+            path[length] = block;
+            next[length++] = cfg->instToBlock[target];
+            block = cfg->instToBlock[target];
+        }
+        for (u32 k = 0; k < length; k++) onPath[path[k]] = false;
+        if (!dead) continue;
+
+        for (u32 k = 0; k < length; k++) {
+            u32 b = path[k];
+            for (u32 i = cfg->firstInst[b]; i <= cfg->lastInst[b]; i++) {
+                ir->structureInfo[i] = 0;
+                ir->continueInfo[i] = 0xFFFFFFFF;
+            }
+            u32 last = cfg->lastInst[b];
+            u16 op = ir->opcodes[last];
+            if (op == IR::OP_BRANCH || op == IR::OP_SWITCH) {
+                ir->opcodes[last] = IR::OP_JUMP;
+                ir->metadata[last] = cfg->firstInst[next[k]];
+                for (u32 slot = 0; slot < 4; slot++) ir->SetOperand(last, slot, 0);
+                ir->ClearBranchTargets(last);
+            }
+            cfg->successorCount[b] = 1;
+            cfg->successors[b * 2] = next[k];
+            cfg->successors[b * 2 + 1] = NO_BLOCK;
+        }
+        anyRemoved = true;
+    }
+    if (!anyRemoved) return;
+
+    // Predecessors from the new successors, in place: there are fewer.
+    u32* counts = (u32*)AllocateZeroed(arena, (cfg->blockCount + 1) * sizeof(u32));
+    if (!counts) return;
+    for (u32 b = 0; b < cfg->blockCount; b++) {
+        for (u32 s = 0; s < cfg->TotalSuccessorCount(b); s++) {
+            u32 successor = cfg->GetAnySuccessor(b, s);
+            if (successor < cfg->blockCount) counts[successor + 1]++;
+        }
+    }
+    for (u32 b = 0; b < cfg->blockCount; b++) counts[b + 1] += counts[b];
+    memcpy(cfg->predecessorOffsets, counts, (cfg->blockCount + 1) * sizeof(u32));
+    cfg->predecessorDataCount = counts[cfg->blockCount];
+    for (u32 b = 0; b < cfg->blockCount; b++) {
+        for (u32 s = 0; s < cfg->TotalSuccessorCount(b); s++) {
+            u32 successor = cfg->GetAnySuccessor(b, s);
+            if (successor < cfg->blockCount) cfg->predecessorData[counts[successor]++] = b;
+        }
+    }
+
+    // Phis keep only the operands of edges that still exist. One left with
+    // none is in a block nothing reaches any more.
+    for (u32 p = 0; p < ir->phiCount; p++) {
+        if (data->phiRemoved[p]) continue;
+        u32 block = ir->phiBlockIndices[p];
+        u32 kept = ir->phiOperandOffsets[p];
+        for (u32 j = ir->phiOperandOffsets[p]; j < ir->phiOperandOffsets[p + 1]; j++) {
+            bool edge = false;
+            for (u32 k = cfg->predecessorOffsets[block]; k < cfg->predecessorOffsets[block + 1]; k++) {
+                edge |= cfg->predecessorData[k] == ir->phiOperandBlocks[j];
+            }
+            if (!edge) continue;
+            ir->phiOperandValues[kept] = ir->phiOperandValues[j];
+            ir->phiOperandBlocks[kept] = ir->phiOperandBlocks[j];
+            kept++;
+        }
+        // Shift the later phis' operands down over the dropped ones.
+        u32 dropped = ir->phiOperandOffsets[p + 1] - kept;
+        if (dropped == 0) continue;
+        u32 end = ir->phiOperandOffsets[ir->phiCount];
+        for (u32 j = ir->phiOperandOffsets[p + 1]; j < end; j++) {
+            ir->phiOperandValues[j - dropped] = ir->phiOperandValues[j];
+            ir->phiOperandBlocks[j - dropped] = ir->phiOperandBlocks[j];
+        }
+        for (u32 q = p + 1; q <= ir->phiCount; q++) ir->phiOperandOffsets[q] -= dropped;
+        if (kept == ir->phiOperandOffsets[p]) {
+            data->phiRemoved[p] = true;
+            AddUndefRegister(data, ir->phiResultRegs[p], ir->phiTypes[p]);
+        }
+    }
+}
+
 // A phi whose emitted incoming edges all carry one value is a copy of it.
 // Giving it that value on every edge lets the backends alias the two, so no
 // phi is emitted. The value reaches the phi's block on every emitted path,
@@ -2236,7 +2400,9 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
                    // pinnedPhiOperand; loopFolded, inLoop, blockStack.
                    size_t(regCount) * (sizeof(bool) * 2 + sizeof(ValueState)) +
                    size_t(bitCount) * sizeof(u32) * 2 + size_t(ir->phiCount) * sizeof(u16) +
-                   size_t(blockCount) * (sizeof(bool) * 2 + sizeof(u32)) + 48 * 64;
+                   size_t(blockCount) * (sizeof(bool) * 2 + sizeof(u32)) +
+                   // Dead loops: path, next, onPath, predecessor counts.
+                   size_t(blockCount) * (sizeof(u32) * 3 + sizeof(bool)) + sizeof(u32) + 52 * 64;
     std::vector<char> memory(bytes);
     BWSL_Arena arena;
     arena.Initialize(memory.data(), memory.size());
@@ -2296,6 +2462,7 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
         PropagateWithLoops(&data);
         RewriteConstants(&data);
         DropFoldedBranchEdges(&data, &arena);
+        RemoveDeadLoops(&data, &arena);
         CollapseSingleValuePhis(&data, &arena);
     }
     RemoveDeadValues(&data, &arena);

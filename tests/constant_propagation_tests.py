@@ -254,9 +254,45 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             glsl = (target / "constprop.frag").read_text(encoding="utf-8")
             body = glsl[glsl.index("void main"):]
             # grid = 0 + (0 + 1) + (0 + 2 + 4) = 7, and 1.5^7 = 17.0859375.
-            # The loops stay behind as `while (false)`, which no longer runs.
             self.assertIn("vec4(7.0, 7.0, 17.0859375, v_uv.x)", body)
-            self.assertNotIn("1.5", body)
+            self.assertNotIn("for (", body)
+            self.assertNotIn("while", body)
+
+        def test_loops_that_run_at_most_once_are_removed(self):
+            # A condition that's false on entry, a body that always breaks,
+            # and a loop left by evaluation that exits through a break. The
+            # first two have run-time values and side effects in them.
+            target = self.compile(shader('''
+                float r = input.uv.x;
+                for (int i = 0; i < 0; i++) { r = r * 2.0 + 1.0; output.color = float4(r); }
+                for (int i = 0; i < 10; i++) { r += input.uv.y; break; }
+                int found = -1;
+                for (k in 0..100) {
+                    if (k * k > 50) { found = k; break; }
+                }
+                output.color = float4(r, float(found), 0.0, 1.0);
+            '''), "-glsl", "-gles", "-gles-direct", "-wgsl")
+            for name in ("constprop.glsl.frag", "constprop.gles.frag", "constprop.frag.wgsl"):
+                text = (target / name).read_text(encoding="utf-8")
+                body = text[text.index("main"):]
+                self.assertNotIn("for (", body, name)
+                self.assertNotIn("while", body, name)
+                self.assertNotIn("loop", body, name)
+                self.assertNotIn("* 2.0", body, name)
+                self.assertIn("8.0", body, name)
+
+        def test_loops_that_can_repeat_stay(self):
+            # The body breaks on one path only.
+            target = self.compile(shader('''
+                float r = 0.0;
+                for (int i = 0; i < 4; i++) {
+                    if (input.uv.x > 0.5) { break; }
+                    r += input.uv.y;
+                }
+                output.color = float4(r);
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            self.assertIn("for (", glsl[glsl.index("void main"):])
 
         def test_loops_with_run_time_inputs_stay(self):
             target = self.compile(shader('''

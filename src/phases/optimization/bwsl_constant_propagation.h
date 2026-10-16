@@ -16,8 +16,10 @@ namespace Optimization {
 // vector is built from constants, and the value instructions and phis
 // nothing reads any more are removed.
 //
-// The CFG and block layout are left alone: a branch or switch with a
-// constant condition stays one, and the backends emit only the edge it takes.
+// Block layout is left alone: a branch or switch with a constant condition
+// stays one, and the backends emit only the edge it takes. A loop that runs
+// at most once, though, becomes plain jumps: its blocks lose their loop and
+// selection annotations, and the CFG's edges are updated to match.
 // `cfg` is null for straight-line stages, which skip CFG and SSA. Those,
 // and single-block stages, get one forward walk instead, since a register
 // there can be assigned more than once.
