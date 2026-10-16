@@ -895,6 +895,18 @@ private:
             const Symbol* field = FindSymbol(entry.second.id);
             if (field) entry.second.type = CanonicalType(field->type, field->owner);
         }
+        // Resources and variants are registered by written name; overload
+        // matching compares declaration IDs. Shapes that do not name a single
+        // type (arrays, buffer<T>) keep their written name, as before.
+        auto canonicalize = [&](auto& bindings) {
+            for (auto& entry : bindings) {
+                const std::string owner = entry.first.substr(0, entry.first.find('\n'));
+                const std::string type = CanonicalType(entry.second.type, owner);
+                if (!type.empty()) entry.second.type = type;
+            }
+        };
+        canonicalize(resources_);
+        canonicalize(variants_);
     }
 
     std::string CurrentOwner() const {

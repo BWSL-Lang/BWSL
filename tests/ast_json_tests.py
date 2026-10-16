@@ -919,6 +919,44 @@ value :: () -> float {
             for output in outputs[1:]:
                 self.assertEqual(output, outputs[0])
 
+    def test_resource_and_variant_arguments_resolve_calls(self):
+        # Issue #186: a struct resource or enum variant passed directly as an
+        # argument must match parameters typed by declaration ID.
+        data = self.parse('''pipeline P {
+    import Lib as L
+    struct Data { float v; }
+    enum Quality { Low, High }
+    struct Box { get :: (Data d) -> float { return d.v; } }
+    resources { data: Data item: L.Item }
+    variants { quality: Quality = Quality::Low; }
+    read :: (Data d) -> float { return d.v; }
+    read :: (float x) -> float { return x; }
+    weight :: (Quality q) -> float { return 1.0; }
+    attributes { position: float4 }
+    pass "Main" {
+        use attributes { position }
+        use resources { data, item }
+        outputs { c: float4 }
+        vertex { output.pos = attributes.position; }
+        fragment {
+            Box box;
+            float a = read(resources.data);
+            float b = box.get(resources.data);
+            float c = L::take(resources.item);
+            float d = weight(variants.quality);
+            output.c = float4(a + b + c + d);
+        }
+    }
+}''', {'Lib.bwsl': 'module Lib { struct Item { float w; } take :: (Item i) -> float { return i.w; } }'})
+        functions = {node['name']: node['id'] for node in self.nodes(data, 'FUNCTION')
+                     if node['name'] != 'read'}
+        read = next(node['id'] for node in self.nodes(data, 'FUNCTION', 'read')
+                    if node['parameters'][0]['dataType'] == 'Data')
+        for name, target in (('read', read), ('get', functions['get']),
+                             ('take', functions['take']), ('weight', functions['weight'])):
+            call = self.nodes(data, 'FUNCTION_CALL', name)[0]
+            self.assert_edge(data, call['id'], target, 'call')
+
     def test_return_types_have_positions_and_qualifier_edges(self):
         source = '''
             module Common { struct Box { float size; } }
