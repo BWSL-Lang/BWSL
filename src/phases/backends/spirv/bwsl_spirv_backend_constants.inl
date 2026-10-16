@@ -144,7 +144,8 @@ void SPIRVBuilder::EmitDecoration(u32 id, spv::Decoration decoration,
   u32 *ops = (u32 *)arena->Allocate((2 + param_count) * sizeof(u32));
   ops[0] = id;
   ops[1] = decoration;
-  memcpy(&ops[2], params, param_count * sizeof(u32));
+  // A decoration without operands may pass null, which memcpy must not see.
+  if (param_count > 0) memcpy(&ops[2], params, param_count * sizeof(u32));
 
   EmitToSection(&decorations, spv::OpDecorate, ops, 2 + param_count);
 }

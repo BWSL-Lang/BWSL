@@ -55,7 +55,8 @@ u32 SPIRVBuilder::GetFunctionTypeId(u32 return_type, u32 *param_types,
   u32 *ops = (u32 *)arena->Allocate((2 + param_count) * sizeof(u32));
   ops[0] = func_type_id;
   ops[1] = return_type;
-  memcpy(&ops[2], param_types, param_count * sizeof(u32));
+  // A function without parameters may pass null, which memcpy must not see.
+  if (param_count > 0) memcpy(&ops[2], param_types, param_count * sizeof(u32));
 
   EmitToSection(&typesConstants, spv::OpTypeFunction, ops, 2 + param_count);
   return func_type_id;
