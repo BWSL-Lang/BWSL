@@ -1,4 +1,5 @@
 #include "bwsl_constant_propagation.h"
+#include "bwsl_ir_edit.h"
 #include "core/bwsl_arena.h"
 #include <algorithm>
 #include <bit>
@@ -76,6 +77,10 @@ struct ConstantPropagationData {
     u32* blockStack;        // [blockCount] scratch
     ValueState* savedStates;  // [regCount] scratch: the lattice around an evaluation
     u32* savedBits;           // [bitOffsets[regCount]]
+
+    // Instructions rewrites add, applied once the pass is done with
+    // instruction indices.
+    InstructionInsertions insertions;
 };
 
 static ConstantValue MakeConstant(CoreType type, u32 bits) {
@@ -1877,6 +1882,69 @@ static bool GetExactReciprocal(const ConstantValue& value, float* reciprocal) {
     return IsFoldableFloat(*reciprocal) && *reciprocal * divisor == 1.0f;
 }
 
+// pow(x, n) for an integer n with 3 <= |n| <= 16, or n = -2, as
+// multiplications by squaring (x^5 = (x^2)^2 * x) and, for a negative n,
+// a reciprocal. Each step rounds once, so the result is at least as
+// accurate as the GPU's pow, which computes exp2(n * log2(x)).
+static bool RewritePowerChain(ConstantPropagationData* data, u32 inst) {
+    IRProgram* ir = data->ir;
+    u16 x = ir->GetOperand(inst, 0);
+    u16 dest = ir->destinations[inst];
+    ConstantValue exponent = GetKnownValue(data, ir->GetOperand(inst, 1));
+    if (exponent.state != ValueState::CONSTANT || GetScalarType(exponent.type) != CoreType::FLOAT ||
+        GetMatrixSize(exponent.type) != 0 || !IsRegisterOperand(data, x) ||
+        GetRegisterType(ir, x) != GetRegisterType(ir, dest)) {
+        return false;
+    }
+    for (u32 c = 1; c < exponent.count; c++) {
+        if (exponent.bits[c] != exponent.bits[0]) return false;
+    }
+    float n = BitsToFloat(exponent.bits[0]);
+    if (n != std::trunc(n) || std::fabs(n) > 16.0f || (std::fabs(n) < 3.0f && n != -2.0f)) return false;
+    u32 power = static_cast<u32>(std::fabs(n));
+
+    // Left to right over the exponent's bits below the top one: square,
+    // then multiply by x for a set bit. The last step is `inst` itself,
+    // or the reciprocal after it.
+    CoreType type = GetRegisterType(ir, dest);
+    u32 steps = 0;
+    for (u32 bit = 31 - std::countl_zero(power); bit-- > 0;) steps += (power >> bit) & 1u ? 2 : 1;
+    if (n > 0.0f) steps--;
+    u16 one = n < 0.0f ? InternConstant(data->builder, CoreType::FLOAT, FLOAT_ONE_BITS) : 0;
+    if (one == 0xFFFF) return false;
+    u16 registers[8];
+    for (u32 k = 0; k < steps; k++) {
+        registers[k] = AllocateRegister(data->builder, &data->insertions, type);
+        if (registers[k] == 0xFFFF) return false;
+    }
+    u16 value = x;
+    u32 k = 0;
+    // `inst` is set directly: RewriteAs checks types only up to the
+    // registers the pass started with.
+    auto multiply = [&](u16 a, u16 b) {
+        if (k == steps) {
+            ir->opcodes[inst] = IR::OP_FMUL;
+            ir->metadata[inst] = 0;
+            ir->SetOperand(inst, 0, a);
+            ir->SetOperand(inst, 1, b);
+            return;
+        }
+        QueueInstruction(data->builder, &data->insertions, inst, IR::OP_FMUL, registers[k], a, b);
+        value = registers[k++];
+    };
+    for (u32 bit = 31 - std::countl_zero(power); bit-- > 0;) {
+        multiply(value, value);
+        if ((power >> bit) & 1u) multiply(value, x);
+    }
+    if (n < 0.0f) {
+        ir->opcodes[inst] = IR::OP_FDIV;
+        ir->metadata[inst] = 0;
+        ir->SetOperand(inst, 0, one);
+        ir->SetOperand(inst, 1, value);
+    }
+    return true;
+}
+
 // Simplifies an instruction one of whose operands is a constant that
 // decides it, or whose operands are the same register, into a copy, a
 // cheaper operation or a constant. Only rewrites that give the same value
@@ -1928,6 +1996,7 @@ static void RewriteAlgebraicIdentity(ConstantPropagationData* data, u32 inst) {
         }
         case IR::OP_POW: {
             if (scalar != f) return;
+            if (RewritePowerChain(data, inst)) return;
             if (IsSplat(data, b, f, FLOAT_ONE_BITS)) RewriteAs(data, inst, IR::OP_LOAD_REG, a);
             else if (IsSplat(data, b, f, FLOAT_TWO_BITS)) RewriteAs(data, inst, IR::OP_FMUL, a, a);
             else if (IsSplat(data, b, f, FLOAT_HALF_BITS)) RewriteAs(data, inst, IR::OP_SQRT, a);
@@ -2414,6 +2483,13 @@ static void RemoveDeadValues(ConstantPropagationData* data, BWSL_Arena* arena) {
             if (IsRegisterOperand(data, operand)) useCounts[operand]++;
         }
     }
+    // Instructions still to be inserted read their operands too.
+    for (u32 k = 0; k < data->insertions.count; k++) {
+        for (u32 slot = 0; slot < 4; slot++) {
+            u16 operand = data->insertions.items[k].operands[slot];
+            if (IsRegisterOperand(data, operand)) useCounts[operand]++;
+        }
+    }
 
     u32 workCount = 0;
     for (u32 reg = 0; reg < regCount; reg++) {
@@ -2671,6 +2747,7 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
         CollapseSingleValuePhis(&data, &arena);
     }
     RemoveDeadValues(&data, &arena);
+    ApplyInsertions(builder, cfg, &data.insertions);
 }
 
 }  // namespace Optimization
