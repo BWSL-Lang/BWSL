@@ -1,0 +1,30 @@
+// Operations whose constant operand decides them, or whose operands are
+// the same, simplify: x * 1, x + 0, 0 - x, x / 4, pow with exponents 2,
+// 0.5, -1, 1, 0 and -0.5, integer identities, x ^ x, min(x, x) and double
+// negation. x is negative in half the lanes.
+pipeline EquivAlgebraicIdentities {
+
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float x = float(idx) - 3.5;
+            float p = float(idx) + 1.0;
+            int i = int(idx) - 3;
+
+            float a = x * 1.0 + 0.0;                                  // x
+            float b = (0.0 - x) / 4.0;                                // -x / 4
+            float g = -(-x) + min(x, x) + max(x, x);                  // 3x
+            float d = pow(p, 2.0) + pow(p, 0.5) + pow(p, -1.0) + pow(p, 1.0) + pow(p, 0.0)
+                    + pow(p, -0.5);
+            int f = (i + 0) * 1 - 0 + (i << 0) + (i ^ i) + (i * -1) + (i - i) + i / 1;  // 2i
+            float3 v = float3(x, p, 1.0) * float3(1.0) / -1.0;        // (-x, -p, -1)
+
+            resources.output[idx] = a + b + g + d + float(f) + v.x + v.y + v.z;
+        }
+    }
+}

@@ -26,6 +26,15 @@
   argument becomes a constant. A loop that runs at most once is no longer
   emitted as a loop: one whose condition is false on entry disappears, and
   one whose body always breaks becomes the code of its single pass.
+  Operations that a constant or a repeated operand decides simplify too:
+  `x * 1.0`, `x + 0.0` and `x / 1.0` become `x`, `0.0 - x` and
+  `x * -1.0` become `-x`, `x / 4.0` becomes `x * 0.25`, and
+  `pow(x, 0.5)` becomes `sqrt(x)`, along with the integer identities,
+  `x ^ x`, `min(x, x)` and double negation. `pow` with an integer exponent
+  up to 16, such as Schlick's `pow(1.0 - VdotH, 5.0)`, becomes
+  multiplications, which are faster and more accurate than the GPU's
+  `pow`. `x * 0.0` and `x - x` stay, since they aren't 0 for an infinite
+  or NaN `x`.
   Folding skips results that can differ between GPUs:
   NaN, infinities, denormals, `-0.0`, integer division of negative values,
   conversions that are out of range or inexact, and math functions outside

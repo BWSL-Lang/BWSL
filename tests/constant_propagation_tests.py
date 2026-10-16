@@ -321,6 +321,62 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             self.assertIn("1000000", body)
             self.assertIn("& 3", body)
 
+        def test_algebraic_identities_simplify(self):
+            target = self.compile(shader('''
+                float x = input.uv.x;
+                float3 v = float3(input.uv, x);
+                int i = int(input.uv.y * 8.0);
+                float a = x * 1.0 + 0.0;
+                float b = (0.0 - x) / 4.0;
+                float3 c = v * float3(1.0) / -1.0;
+                float d = pow(x, 2.0) + pow(x, 0.5) + pow(x, -1.0) + pow(x, 1.0) + pow(x, 0.0);
+                float3 e = pow(v, float3(-0.5));
+                int f = (i + 0) * 1 - 0 + (i << 0) + (i ^ i) + (i * -1) + (i - i) + i / 1;
+                float g = -(-x) + min(x, x) + max(x, x);
+                output.color = float4(a + b + d + g, float(f), 0.0, 1.0) + float4(c + e, 0.0);
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            for gone in ("* 1.0", "+ 0.0", "0.0 -", "/ 4.0", "vec3(1.0)", "vec3(-1.0)", "pow(",
+                         "min(", "max(", "-(-", "+ 0)", "* 1)", "- 0)", "<< 0", "^", "* (-1)", "/ 1)"):
+                self.assertNotIn(gone, body)
+            for kept in ("* 0.25", "v_uv.x * v_uv.x", "sqrt(v_uv.x)", "1.0 / v_uv.x",
+                         "inversesqrt(", "(-_"):
+                self.assertIn(kept, body)
+
+        def test_identities_that_need_finite_operands_stay(self):
+            # x * 0 is NaN for an infinite x, x - x too, and x / 3 isn't
+            # exactly x * (1 / 3). pow(x, 2.5) isn't a product, and
+            # pow(x, 17.0) is past the longest chain.
+            target = self.compile(shader('''
+                float x = input.uv.x;
+                output.color = float4(x * 0.0, x - x, x / 3.0, pow(x, 2.5) + pow(x, 17.0));
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            for kept in ("* 0.0", "v_uv.x - v_uv.x", "/ 3.0", "pow(v_uv.x, 2.5)", "pow(v_uv.x, 17.0)"):
+                self.assertIn(kept, body)
+
+        def test_integer_powers_become_products(self):
+            # x^5 = (x^2)^2 * x, x^-3 = 1 / x^3, and a vector power; the
+            # one in the `if` arm is inserted inside that arm.
+            target = self.compile(shader('''
+                float x = input.uv.x;
+                float3 v = float3(input.uv, x);
+                float c = 0.0;
+                if (x > 0.5) { c = pow(1.0 - x, 5.0); }
+                output.color = float4(pow(x, 5.0), pow(x, -3.0), c, 1.0) + float4(pow(v, float3(4.0)), 0.0);
+            '''), "-glsl", "-wgsl", "-gles", "-gles-direct")
+            glsl = (target / "constprop.glsl.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertNotIn("pow(", body)
+            self.assertIn("1.0 / ((v_uv.x * v_uv.x) * v_uv.x)", body)
+            arm = body[body.index("if ("):body.index("else")]
+            self.assertEqual(arm.count(" * "), 3)
+            for name in ("constprop.frag.wgsl", "constprop.gles.frag"):
+                text = (target / name).read_text(encoding="utf-8")
+                self.assertNotIn("pow(", text[text.index("main"):], name)
+
         def test_vectors_with_runtime_components_stay(self):
             ops, target = self.fragment_ops('''
                 mat2 m = mat2(float2(1.0, 2.0), float2(3.0, input.uv.x));
