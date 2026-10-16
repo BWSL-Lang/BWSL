@@ -24,6 +24,11 @@
 - Ternary arms of different types, such as `c ? float3(1.0) : float2(1.0)`,
   are a source error. They previously failed SPIR-V validation.
 
+### AST JSON
+- A call that passes a struct resource or an enum variant directly, such as
+  `read(resources.data)` or `weight(variants.quality)`, now has its `call`
+  edge in `referenceIndex.references`.
+
 ## v0.11.0
 
 ### Breaking changes
