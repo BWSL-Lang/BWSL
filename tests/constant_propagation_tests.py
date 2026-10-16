@@ -194,6 +194,97 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             self.assertIn("9.0", body)
             self.assertNotIn("mat3", body)
 
+        def test_intrinsics_fold(self):
+            target = self.compile(shader('''
+                float a = clamp(50.0, 0.0, 100.0) + float(max(0, 10)) + float(clamp(50, 0, 100));
+                float b = sqrt(16.0) + pow(2.0, 3.0) + exp2(3.0) + log2(8.0) + abs(-1.5);
+                float c = lerp(1.0, 3.0, 0.25) + smoothstep(0.0, 1.0, 0.5) + step(0.5, 0.75);
+                float d = length(float2(3.0, 4.0)) + distance(float3(1.0, 2.0, 3.0), float3(1.0, 2.0, 5.0));
+                float3 n = normalize(float3(3.0, 0.0, 4.0));
+                float3 r = reflect(float3(1.0, -1.0, 0.0), float3(0.0, 1.0, 0.0));
+                float e = determinant(mat2(float2(2.0, 0.0), float2(1.0, 3.0))) + float(count_bits(255u));
+                float3 s = saturate(float3(-1.0, 0.5, 2.0)) + pow(float3(1.0, 2.0, 3.0), 2.0);
+                bool f = any(bool2(false, true)) && !isnan(2.0);
+                output.color = float4(a + input.uv.x, b + c, d + e, f ? 1.0 : 0.0) + float4(n + r + s, 0.0);
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            for call in ("clamp", "max", "sqrt", "pow", "exp2", "log2", "abs", "mix", "smoothstep",
+                         "step", "length", "distance", "normalize", "reflect", "determinant",
+                         "bitCount", "any", "isnan"):
+                self.assertNotIn(call + "(", body)
+            self.assertIn("110.0 + v_uv.x", body)           # 50 + 10 + 50
+            self.assertIn("27.5", body)                     # 4 + 8 + 8 + 3 + 1.5 + 1.5 + 0.5 + 1
+            # d + e = 5 + 2 + 6 + 8, and n + r + s = (0.6 + 1 + 1, 0 + 1 + 4.5, 0.8 + 0 + 10)
+            self.assertIn("21.0", body)
+            self.assertIn("vec4(2.599999904632568359375, 5.5, 10.8000001907348632812", body)
+
+        def test_intrinsics_outside_their_domain_stay(self):
+            target = self.compile(shader('''
+                float a = sqrt(-1.0) + log(0.0) + pow(-2.0, 0.5) + asin(2.0);
+                float b = smoothstep(1.0, 0.0, 0.5);
+                float3 n = normalize(float3(0.0));
+                uint high = first_bit_high(8u);
+                output.color = float4(a, b, float(high), 1.0) + float4(n, input.uv.x);
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            for call in ("sqrt(", "log(", "pow(", "asin(", "smoothstep(", "normalize(", "findMSB("):
+                self.assertIn(call, body)
+
+        def test_loops_with_constant_inputs_fold(self):
+            # A user function's loop, nested loops, and a loop whose bound is
+            # another loop's result.
+            target = self.compile(shader('''
+                float p = poly(2.0);
+                int grid = 0;
+                for (int x = 0; x < 3; x++) {
+                    for (int y = 0; y <= x; y++) { grid += x * y; }
+                }
+                float powers = 1.0;
+                for (int i = 0; i < grid; i++) { powers *= 1.5; }
+                output.color = float4(p, float(grid), powers, input.uv.x);
+            ''', '''
+                poly :: (float x) -> float {
+                    float r = 0.0;
+                    for (int i = 0; i < 3; i++) { r = r * x + 1.0; }
+                    return r;
+                }
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            # grid = 0 + (0 + 1) + (0 + 2 + 4) = 7, and 1.5^7 = 17.0859375.
+            # The loops stay behind as `while (false)`, which no longer runs.
+            self.assertIn("vec4(7.0, 7.0, 17.0859375, v_uv.x)", body)
+            self.assertNotIn("1.5", body)
+
+        def test_loops_with_run_time_inputs_stay(self):
+            target = self.compile(shader('''
+                float r = 0.0;
+                for (int i = 0; i < int(input.uv.x * 4.0); i++) { r = r * 2.0 + 1.0; }
+                float s = input.uv.y;
+                for (int i = 0; i < 3; i++) { s = s * 2.0 + 1.0; }
+                output.color = float4(r, s, 0.0, 1.0);
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertEqual(body.count("* 2.0) + 1.0"), 2)
+
+        def test_long_loops_are_left_to_run_time(self):
+            # Past the evaluation budget, and a loop that never ends: both
+            # compile, and stay loops.
+            target = self.compile(shader('''
+                int n = 0;
+                for (int i = 0; i < 1000000; i++) { n += i & 3; }
+                int m = 0;
+                for (int i = 0; i >= 0; i += 0) { m += 1; }
+                output.color = float4(float(n), float(m), input.uv);
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertIn("1000000", body)
+            self.assertIn("& 3", body)
+
         def test_vectors_with_runtime_components_stay(self):
             ops, target = self.fragment_ops('''
                 mat2 m = mat2(float2(1.0, 2.0), float2(3.0, input.uv.x));

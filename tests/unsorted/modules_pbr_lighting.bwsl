@@ -20,7 +20,9 @@ pipeline ModulesPBRLighting {
 
         fragment {
             float3 N = normalize(input.normal);
-            float3 V = normalize(float3(0.1, 0.2, 1.0));
+            // The view direction comes from the surface position, so the
+            // Fresnel and specular terms aren't constants.
+            float3 V = normalize(float3(0.1, 0.2, 1.0) - input.worldPos);
             float3 L = normalize(float3(-0.4, 0.7, 0.6));
             float3 radiance = float3(2.0, 1.6, 1.2);
 

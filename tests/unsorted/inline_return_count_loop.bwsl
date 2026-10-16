@@ -17,7 +17,8 @@ pipeline InlineReturnCountLoop {
         use attributes { position }
 
         vertex {
-            int v = chooseCount(5);
+            // The limit isn't a constant, so the loop isn't evaluated at compile time.
+            int v = chooseCount(int(attributes.position.y) + 5);
             output.position = float4(attributes.position, 1.0);
             output.position.x = float(v);
         }

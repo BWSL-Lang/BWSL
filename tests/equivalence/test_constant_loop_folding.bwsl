@@ -1,0 +1,68 @@
+// Loops whose inputs are constants are evaluated at compile time: a user
+// function's loop, nested loops, a loop bounded by another loop's result,
+// a range loop with a break, and one whose vector state stays the same.
+// Lanes 0-7 store the folded values; lanes 8-15 run the same loops with a
+// bound that isn't a constant.
+pipeline EquivConstantLoopFolding {
+
+    resources {
+        output: buffer<float>
+    }
+
+    poly :: (float x, int terms) -> float {
+        float r = 0.0;
+        for (int i = 0; i < terms; i++) { r = r * x + 1.0; }
+        return r;
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [16, 1, 1] {
+            uint idx = input.global_id.x;
+            uint i = idx & 7u;
+            int z = int(idx >> 4u);                                  // 0, but not a constant
+
+            float4 folded;
+            folded.x = poly(2.0, 3);                                 // 7
+            int grid = 0;
+            for (int x = 0; x < 3; x++) {
+                for (int y = 0; y <= x; y++) { grid += x * y; }
+            }
+            folded.y = float(grid);                                  // 7
+            float powers = 1.0;
+            for (int k = 0; k < grid; k++) { powers *= 1.5; }
+            folded.z = powers;                                       // 17.0859375
+            int found = -1;
+            for (k in 0..100) {
+                if (k * k > 50) { found = k; break; }
+            }
+            folded.w = float(found);                                 // 8
+
+            float4 computed;
+            computed.x = poly(2.0, 3 + z);
+            int grid2 = 0;
+            for (int x = 0; x < 3 + z; x++) {
+                for (int y = 0; y <= x; y++) { grid2 += x * y; }
+            }
+            computed.y = float(grid2);
+            float powers2 = 1.0;
+            for (int k = 0; k < grid2; k++) { powers2 *= 1.5; }
+            computed.z = powers2;
+            int found2 = -1;
+            for (k in 0..100 + z) {
+                if (k * k > 50) { found2 = k; break; }
+            }
+            computed.w = float(found2);
+
+            float3 tint = float3(0.25, 0.5, 0.75);
+            float bright = 0.0;
+            for (int k = 0; k < 4; k++) { bright += dot(tint, float3(float(k))); }   // 1.5 * 6 = 9
+            float bright2 = 0.0;
+            for (int k = 0; k < 4 + z; k++) { bright2 += dot(tint, float3(float(k))); }
+
+            float4 values = idx < 8u ? folded : computed;
+            float extra = idx < 8u ? bright : bright2;
+            resources.output[idx] = i < 4u ? values[i & 3u] : extra + float(i);
+        }
+    }
+}
