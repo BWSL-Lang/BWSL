@@ -14,6 +14,7 @@ static bool IsDefinitionOp(u16 op) {
         case OP_STORE_OUTPUT:
         case OP_STORE_BUFFER:
         case OP_STORE_LOCAL:
+        case OP_LOCAL_STORE:
         case OP_STORE_SHARED:
         case OP_IMG_STORE:
         case OP_ARRAY_STORE:

@@ -3568,6 +3568,12 @@ def main() -> int:
     passed += ternary_passed
     failed += ternary_failed
 
+    from ssa_store_tests import run_ssa_store_tests
+    store_passed, store_failed = run_ssa_store_tests(
+        bwslc, equiv_runner_path(root) if args.equivalence else None)
+    passed += store_passed
+    failed += store_failed
+
     from constant_propagation_tests import run_constant_propagation_tests
     constprop_passed, constprop_failed = run_constant_propagation_tests(bwslc)
     passed += constprop_passed
