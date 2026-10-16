@@ -1800,6 +1800,209 @@ static void RewriteBitwiseIdentity(ConstantPropagationData* data, u32 inst) {
     }
 }
 
+// ============= Algebraic identities =============
+
+constexpr u32 FLOAT_ZERO_BITS = 0x00000000;
+constexpr u32 FLOAT_ONE_BITS = 0x3F800000;
+constexpr u32 FLOAT_MINUS_ONE_BITS = 0xBF800000;
+constexpr u32 FLOAT_TWO_BITS = 0x40000000;
+constexpr u32 FLOAT_HALF_BITS = 0x3F000000;
+constexpr u32 FLOAT_MINUS_HALF_BITS = 0xBF000000;
+
+// A tagged constant's value, or a register's when propagation found one.
+static ConstantValue GetKnownValue(const ConstantPropagationData* data, u16 operand) {
+    if (IR::IsConstant(operand)) return DecodeConstant(data->ir, operand);
+    if (!IsRegisterOperand(data, operand) || !data->tracked[operand]) return OVERDEFINED_VALUE;
+    return GetRegisterValue(data, operand);
+}
+
+// Whether `operand` is a constant scalar, or vector, with every component
+// `bits` of `scalar` type.
+static bool IsSplat(const ConstantPropagationData* data, u16 operand, CoreType scalar, u32 bits) {
+    ConstantValue value = GetKnownValue(data, operand);
+    if (value.state != ValueState::CONSTANT || GetScalarType(value.type) != scalar ||
+        GetMatrixSize(value.type) != 0) {
+        return false;
+    }
+    for (u32 c = 0; c < value.count; c++) {
+        if (value.bits[c] != bits) return false;
+    }
+    return true;
+}
+
+// Rewrites `inst` in place as `op` on `a` (and `b`), keeping its result.
+// A copy (LOAD_REG) only stands for a register of the result's type that
+// no variable or pointer aliases, which the backends then alias too.
+static bool RewriteAs(ConstantPropagationData* data, u32 inst, u16 op, u16 a, u16 b = 0xFFFF) {
+    IRProgram* ir = data->ir;
+    u16 dest = ir->destinations[inst];
+    if (!IsRegisterOperand(data, a) || GetRegisterType(ir, a) != GetRegisterType(ir, dest)) return false;
+    if (op == IR::OP_LOAD_REG && (IsMemoryBacked(ir, dest) || IsMemoryBacked(ir, a))) return false;
+    ir->opcodes[inst] = op;
+    ir->metadata[inst] = 0;
+    ir->SetOperand(inst, 0, a);
+    ir->SetOperand(inst, 1, b);
+    for (u32 slot = 2; slot < 4; slot++) ir->SetOperand(inst, slot, 0xFFFF);
+    return true;
+}
+
+// A scalar result that doesn't depend on the operands' values.
+static bool RewriteAsConstant(ConstantPropagationData* data, u32 inst, u32 bits) {
+    CoreType type = GetRegisterType(data->ir, data->ir->destinations[inst]);
+    if (GetComponentCount(type) != 1 || GetMatrixSize(type) != 0) return false;
+    u16 constant = InternConstant(data->builder, type, bits);
+    if (constant == 0xFFFF) return false;
+    MakeConstantCopy(data, inst, constant);
+    return true;
+}
+
+// The operand of a single-definition `op` that defines `reg`, or 0xFFFF.
+static u16 GetUnaryInput(const ConstantPropagationData* data, u16 reg, u16 op) {
+    if (!IsRegisterOperand(data, reg) || data->definitionCounts[reg] != 1) return 0xFFFF;
+    u32 definition = data->definitions[reg];
+    if ((definition & PHI_REFERENCE) || data->ir->opcodes[definition] != op) return 0xFFFF;
+    return data->ir->GetOperand(definition, 0);
+}
+
+// For x = ±2^k with 1/x normal, sets `reciprocal` to 1/x, which is exact:
+// dividing by x and multiplying by 1/x round the same real number.
+static bool GetExactReciprocal(const ConstantValue& value, float* reciprocal) {
+    if (value.state != ValueState::CONSTANT || value.count != 1 || value.type != CoreType::FLOAT) {
+        return false;
+    }
+    float divisor = BitsToFloat(value.bits[0]);
+    int exponent;
+    if (std::fabs(std::frexp(divisor, &exponent)) != 0.5f) return false;
+    *reciprocal = 1.0f / divisor;
+    return IsFoldableFloat(*reciprocal) && *reciprocal * divisor == 1.0f;
+}
+
+// Simplifies an instruction one of whose operands is a constant that
+// decides it, or whose operands are the same register, into a copy, a
+// cheaper operation or a constant. Only rewrites that give the same value
+// for every input apply: `x * 0.0` stays, since x may be infinite or NaN.
+// `x + 0.0` and `0.0 - x` only differ from x and -x in the sign of a zero,
+// which the targets don't preserve unless asked to. `pow` with an exponent
+// of 1, 2, 0.5, -0.5 or -1 becomes the operation it amounts to; GLSL leaves
+// pow of a negative base undefined, so x * x for a negative x is one of
+// its results.
+static void RewriteAlgebraicIdentity(ConstantPropagationData* data, u32 inst) {
+    IRProgram* ir = data->ir;
+    u16 op = ir->opcodes[inst];
+    u16 dest = ir->destinations[inst];
+    if (!IsRegisterOperand(data, dest)) return;
+    u16 a = ir->GetOperand(inst, 0), b = ir->GetOperand(inst, 1);
+    CoreType f = CoreType::FLOAT;
+    CoreType scalar = GetScalarType(GetRegisterType(ir, dest));
+    bool isInt = scalar == CoreType::INT, isInteger = isInt || scalar == CoreType::UINT;
+    auto splat = [&](u16 operand, u32 bits) { return IsSplat(data, operand, scalar, bits); };
+    switch (op) {
+        case IR::OP_FADD:
+            if (splat(b, FLOAT_ZERO_BITS) && RewriteAs(data, inst, IR::OP_LOAD_REG, a)) return;
+            if (splat(a, FLOAT_ZERO_BITS)) RewriteAs(data, inst, IR::OP_LOAD_REG, b);
+            return;
+        case IR::OP_FSUB:
+            if (splat(b, FLOAT_ZERO_BITS) && RewriteAs(data, inst, IR::OP_LOAD_REG, a)) return;
+            if (splat(a, FLOAT_ZERO_BITS)) RewriteAs(data, inst, IR::OP_FNEG, b);
+            return;
+        case IR::OP_FMUL:
+            for (u32 slot = 0; slot < 2; slot++) {
+                u16 known = slot == 0 ? b : a, other = slot == 0 ? a : b;
+                if (splat(known, FLOAT_ONE_BITS) && RewriteAs(data, inst, IR::OP_LOAD_REG, other)) return;
+                if (splat(known, FLOAT_MINUS_ONE_BITS) && RewriteAs(data, inst, IR::OP_FNEG, other)) return;
+            }
+            return;
+        case IR::OP_FDIV: {
+            if (splat(b, FLOAT_ONE_BITS) && RewriteAs(data, inst, IR::OP_LOAD_REG, a)) return;
+            if (splat(b, FLOAT_MINUS_ONE_BITS) && RewriteAs(data, inst, IR::OP_FNEG, a)) return;
+            float reciprocal;
+            ConstantValue divisor = GetKnownValue(data, b);
+            if (divisor.state == ValueState::CONSTANT && divisor.count > 1 &&
+                IsSplat(data, b, f, divisor.bits[0])) {
+                divisor = MakeConstant(f, divisor.bits[0]);
+            }
+            if (!GetExactReciprocal(divisor, &reciprocal)) return;
+            u16 constant = InternConstant(data->builder, f, FloatToBits(reciprocal));
+            if (constant != 0xFFFF) RewriteAs(data, inst, IR::OP_FMUL, a, constant);
+            return;
+        }
+        case IR::OP_POW: {
+            if (scalar != f) return;
+            if (IsSplat(data, b, f, FLOAT_ONE_BITS)) RewriteAs(data, inst, IR::OP_LOAD_REG, a);
+            else if (IsSplat(data, b, f, FLOAT_TWO_BITS)) RewriteAs(data, inst, IR::OP_FMUL, a, a);
+            else if (IsSplat(data, b, f, FLOAT_HALF_BITS)) RewriteAs(data, inst, IR::OP_SQRT, a);
+            else if (IsSplat(data, b, f, FLOAT_MINUS_HALF_BITS)) RewriteAs(data, inst, IR::OP_RSQRT, a);
+            else if (IsSplat(data, b, f, FLOAT_ZERO_BITS)) RewriteAsConstant(data, inst, FLOAT_ONE_BITS);
+            else if (IsSplat(data, b, f, FLOAT_MINUS_ONE_BITS)) {
+                // 1 / x, with the scalar 1 splatted.
+                u16 one = InternConstant(data->builder, f, FLOAT_ONE_BITS);
+                if (one == 0xFFFF || !IsRegisterOperand(data, a) ||
+                    GetRegisterType(ir, a) != GetRegisterType(ir, dest)) {
+                    return;
+                }
+                ir->opcodes[inst] = IR::OP_FDIV;
+                ir->metadata[inst] = 0;
+                ir->SetOperand(inst, 0, one);
+                ir->SetOperand(inst, 1, a);
+            }
+            return;
+        }
+        case IR::OP_IADD:
+            if (!isInteger) return;
+            if (splat(b, 0) && RewriteAs(data, inst, IR::OP_LOAD_REG, a)) return;
+            if (splat(a, 0)) RewriteAs(data, inst, IR::OP_LOAD_REG, b);
+            return;
+        case IR::OP_ISUB:
+            if (!isInteger) return;
+            if (a == b && IsRegisterOperand(data, a) && RewriteAsConstant(data, inst, 0)) return;
+            if (splat(b, 0) && RewriteAs(data, inst, IR::OP_LOAD_REG, a)) return;
+            if (isInt && splat(a, 0)) RewriteAs(data, inst, IR::OP_INEG, b);
+            return;
+        case IR::OP_IMUL:
+            if (!isInteger) return;
+            for (u32 slot = 0; slot < 2; slot++) {
+                u16 known = slot == 0 ? b : a, other = slot == 0 ? a : b;
+                if (splat(known, 1) && RewriteAs(data, inst, IR::OP_LOAD_REG, other)) return;
+                if (splat(known, 0) && RewriteAsConstant(data, inst, 0)) return;
+                if (isInt && splat(known, 0xFFFFFFFF) && RewriteAs(data, inst, IR::OP_INEG, other)) return;
+            }
+            return;
+        case IR::OP_IDIV:
+            if (isInteger && splat(b, 1)) RewriteAs(data, inst, IR::OP_LOAD_REG, a);
+            return;
+        case IR::OP_SHL: case IR::OP_SHR: case IR::OP_ASR: {
+            ConstantValue amount = GetKnownValue(data, b);
+            if (amount.state == ValueState::CONSTANT && IsIntegerType(GetScalarType(amount.type)) &&
+                IsSplat(data, b, GetScalarType(amount.type), 0)) {
+                RewriteAs(data, inst, IR::OP_LOAD_REG, a);
+            }
+            return;
+        }
+        case IR::OP_AND: case IR::OP_OR:
+            if (a == b) RewriteAs(data, inst, IR::OP_LOAD_REG, a);
+            return;
+        case IR::OP_XOR:
+            if (a == b && IsRegisterOperand(data, a) && (isInteger || scalar == CoreType::BOOL)) {
+                RewriteAsConstant(data, inst, 0);
+            }
+            return;
+        case IR::OP_FMIN: case IR::OP_FMAX: case IR::OP_IMIN: case IR::OP_IMAX:
+        case IR::OP_UMIN: case IR::OP_UMAX:
+            if (a == b) RewriteAs(data, inst, IR::OP_LOAD_REG, a);
+            return;
+        case IR::OP_SELECT:
+            if (a == b) RewriteAs(data, inst, IR::OP_LOAD_REG, a);
+            return;
+        case IR::OP_NOT: case IR::OP_FNEG: case IR::OP_INEG: {
+            u16 inner = GetUnaryInput(data, a, op);
+            if (inner != 0xFFFF) RewriteAs(data, inst, IR::OP_LOAD_REG, inner);
+            return;
+        }
+        default:
+            return;
+    }
+}
+
 static void RewriteConstants(ConstantPropagationData* data) {
     IRProgram* ir = data->ir;
     for (u32 i = 0; i < ir->instructionCount; i++) {
@@ -1807,6 +2010,7 @@ static void RewriteConstants(ConstantPropagationData* data) {
         u16 dest = ir->destinations[i];
         if (!IsRegisterOperand(data, dest) || data->states[dest] != ValueState::CONSTANT) {
             RewriteBitwiseIdentity(data, i);
+            RewriteAlgebraicIdentity(data, i);
         }
     }
 
@@ -2149,6 +2353,7 @@ static void PropagateStraightLine(ConstantPropagationData* data) {
         if (op == IR::OP_NOP) continue;
         RewriteOperands(data, i);
         RewriteBitwiseIdentity(data, i);
+        RewriteAlgebraicIdentity(data, i);
         u16 dest = ir->destinations[i];
         if (!IsRegisterOperand(data, dest) || !data->tracked[dest] || IsUseInDestination(op) ||
             op == IR::OP_JUMP || op == IR::OP_BRANCH || op == IR::OP_SWITCH || op == IR::OP_RET) {

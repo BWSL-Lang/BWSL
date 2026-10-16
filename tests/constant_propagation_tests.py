@@ -321,6 +321,41 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             self.assertIn("1000000", body)
             self.assertIn("& 3", body)
 
+        def test_algebraic_identities_simplify(self):
+            target = self.compile(shader('''
+                float x = input.uv.x;
+                float3 v = float3(input.uv, x);
+                int i = int(input.uv.y * 8.0);
+                float a = x * 1.0 + 0.0;
+                float b = (0.0 - x) / 4.0;
+                float3 c = v * float3(1.0) / -1.0;
+                float d = pow(x, 2.0) + pow(x, 0.5) + pow(x, -1.0) + pow(x, 1.0) + pow(x, 0.0);
+                float3 e = pow(v, float3(-0.5));
+                int f = (i + 0) * 1 - 0 + (i << 0) + (i ^ i) + (i * -1) + (i - i) + i / 1;
+                float g = -(-x) + min(x, x) + max(x, x);
+                output.color = float4(a + b + d + g, float(f), 0.0, 1.0) + float4(c + e, 0.0);
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            for gone in ("* 1.0", "+ 0.0", "0.0 -", "/ 4.0", "vec3(1.0)", "vec3(-1.0)", "pow(",
+                         "min(", "max(", "-(-", "+ 0)", "* 1)", "- 0)", "<< 0", "^", "* (-1)", "/ 1)"):
+                self.assertNotIn(gone, body)
+            for kept in ("* 0.25", "v_uv.x * v_uv.x", "sqrt(v_uv.x)", "1.0 / v_uv.x",
+                         "inversesqrt(", "(-_"):
+                self.assertIn(kept, body)
+
+        def test_identities_that_need_finite_operands_stay(self):
+            # x * 0 is NaN for an infinite x, x - x too, and x / 3 isn't
+            # exactly x * (1 / 3).
+            target = self.compile(shader('''
+                float x = input.uv.x;
+                output.color = float4(x * 0.0, x - x, x / 3.0, pow(x, 3.0));
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            for kept in ("* 0.0", "v_uv.x - v_uv.x", "/ 3.0", "pow(v_uv.x, 3.0)"):
+                self.assertIn(kept, body)
+
         def test_vectors_with_runtime_components_stay(self):
             ops, target = self.fragment_ops('''
                 mat2 m = mat2(float2(1.0, 2.0), float2(3.0, input.uv.x));
