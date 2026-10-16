@@ -10,9 +10,11 @@ namespace Optimization {
 // after SSA. It folds instructions whose operands are constant, scalars,
 // vectors and matrices alike, intrinsics included, resolves phis from the
 // edges that can actually run, and makes branch conditions constant where
-// they are. Uses of a constant scalar register are replaced by the
-// constant, a constant vector is built from constants, and the value
-// instructions and phis nothing reads any more are removed.
+// they are. A loop whose inputs are all constant and that has no side
+// effects is run at compile time, so code after it sees its results. Uses
+// of a constant scalar register are replaced by the constant, a constant
+// vector is built from constants, and the value instructions and phis
+// nothing reads any more are removed.
 //
 // The CFG and block layout are left alone: a branch or switch with a
 // constant condition stays one, and the backends emit only the edge it takes.

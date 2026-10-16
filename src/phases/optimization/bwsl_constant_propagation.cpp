@@ -66,6 +66,16 @@ struct ConstantPropagationData {
     u32 regWorkHead;
     u32 regWorkTail;
 
+    // Loops evaluated at compile time (see FoldLoop).
+    bool* pinned;           // [regCount] header phi fixed to its value on the header's last visit
+    u32* pinnedBits;        // [bitOffsets[regCount]]
+    u16* pinnedPhiOperand;  // [phiCount] what a pinned phi takes on every edge, else 0xFFFF
+    bool* readAnywhere;     // [regCount] some instruction or phi reads the register
+    bool* loopFolded;       // [blockCount] header of a loop already evaluated
+    bool* inLoop;           // [blockCount] scratch: the loop being evaluated
+    u32* blockStack;        // [blockCount] scratch
+    ValueState* savedStates;  // [regCount] scratch: the lattice around an evaluation
+    u32* savedBits;           // [bitOffsets[regCount]]
 };
 
 static ConstantValue MakeConstant(CoreType type, u32 bits) {
@@ -1184,6 +1194,13 @@ static void EvaluatePhi(ConstantPropagationData* data, u32 phi) {
     const IRProgram* ir = data->ir;
     u16 result = ir->phiResultRegs[phi];
     if (result >= data->regCount || !data->tracked[result]) return;
+    if (data->pinned[result]) {
+        ConstantValue value = {ValueState::CONSTANT, GetRegisterType(ir, result),
+                               static_cast<u8>(data->bitOffsets[result + 1] - data->bitOffsets[result]), {}};
+        memcpy(value.bits, data->pinnedBits + data->bitOffsets[result], value.count * sizeof(u32));
+        UpdateRegister(data, result, value);
+        return;
+    }
     u32 block = ir->phiBlockIndices[phi];
     ConstantValue value = UNDEFINED_VALUE;
     for (u32 j = 0; j < ir->GetPhiOperandCount(phi); j++) {
@@ -1309,6 +1326,298 @@ static void Propagate(ConstantPropagationData* data) {
                 VisitInstruction(data, user);
             }
         }
+    }
+}
+
+// ============= Loops =============
+
+static u16 InternConstant(IR::IRBuilder* builder, CoreType type, u32 bits);
+
+// Instructions a loop evaluated at compile time may hold, beside control
+// flow: values without side effects.
+static bool IsLoopValueOp(u16 op) {
+    return GetFoldArity(op) != 0 || IsVectorFoldOp(op) || op == IR::OP_SELECT;
+}
+
+// Evaluations of one loop's instructions, all iterations together.
+constexpr u32 LOOP_EVALUATION_BUDGET = 1 << 16;
+
+static bool Dominates(const CFG* cfg, u32 dominator, u32 block) {
+    while (block < cfg->blockCount) {
+        if (block == dominator) return true;
+        u32 parent = cfg->immediateDominators[block];
+        if (parent == block) return false;
+        block = parent;
+    }
+    return false;
+}
+
+static bool HasBackEdge(const CFG* cfg, u32 header) {
+    for (u32 k = cfg->predecessorOffsets[header]; k < cfg->predecessorOffsets[header + 1]; k++) {
+        if (Dominates(cfg, header, cfg->predecessorData[k])) return true;
+    }
+    return false;
+}
+
+// Marks the natural loop of `header` in data->inLoop: the blocks that reach
+// one of its back edges without passing through it. Returns false when the
+// header has no back edge.
+static bool CollectLoop(ConstantPropagationData* data, u32 header) {
+    const CFG* cfg = data->cfg;
+    memset(data->inLoop, 0, cfg->blockCount * sizeof(bool));
+    data->inLoop[header] = true;
+    u32 top = 0;
+    for (u32 k = cfg->predecessorOffsets[header]; k < cfg->predecessorOffsets[header + 1]; k++) {
+        u32 latch = cfg->predecessorData[k];
+        if (!Dominates(cfg, header, latch) || data->inLoop[latch]) continue;
+        data->inLoop[latch] = true;
+        data->blockStack[top++] = latch;
+    }
+    if (top == 0) return false;
+    while (top > 0) {
+        u32 block = data->blockStack[--top];
+        for (u32 k = cfg->predecessorOffsets[block]; k < cfg->predecessorOffsets[block + 1]; k++) {
+            u32 predecessor = cfg->predecessorData[k];
+            if (predecessor >= cfg->blockCount || data->inLoop[predecessor]) continue;
+            data->inLoop[predecessor] = true;
+            data->blockStack[top++] = predecessor;
+        }
+    }
+    return true;
+}
+
+// A register the loop defines but nothing else may see: a copy into a
+// variable's register (SSA keeps them for naming) that nothing reads.
+static bool IsUnreadCopy(const ConstantPropagationData* data, u32 inst) {
+    u16 op = data->ir->opcodes[inst];
+    u16 dest = data->ir->destinations[inst];
+    return (op == IR::OP_STORE_REG || op == IR::OP_LOAD_REG) && IsRegisterOperand(data, dest) &&
+           !data->tracked[dest] && !data->readAnywhere[dest];
+}
+
+// Whether every instruction and phi of the marked loop is one the loop can
+// be evaluated through.
+static bool IsPureLoop(const ConstantPropagationData* data) {
+    const IRProgram* ir = data->ir;
+    const CFG* cfg = data->cfg;
+    for (u32 block = 0; block < cfg->blockCount; block++) {
+        if (!data->inLoop[block]) continue;
+        for (u32 k = data->blockPhiOffsets[block]; k < data->blockPhiOffsets[block + 1]; k++) {
+            if (!data->tracked[ir->phiResultRegs[data->blockPhis[k]]]) return false;
+        }
+        for (u32 i = cfg->firstInst[block]; i <= cfg->lastInst[block]; i++) {
+            u16 op = ir->opcodes[i];
+            if (op == IR::OP_NOP || op == IR::OP_JUMP || op == IR::OP_BRANCH || op == IR::OP_SWITCH) continue;
+            if (!IsLoopValueOp(op)) return false;
+            u16 dest = ir->destinations[i];
+            if (!IsRegisterOperand(data, dest)) return false;
+            if (!data->tracked[dest] && !IsUnreadCopy(data, i)) return false;
+        }
+    }
+    return true;
+}
+
+// The block a terminator in `block` goes to, or NO_BLOCK when it can't tell.
+static u32 GetNextBlock(const ConstantPropagationData* data, u32 block) {
+    const IRProgram* ir = data->ir;
+    const CFG* cfg = data->cfg;
+    u32 last = cfg->lastInst[block];
+    u16 op = ir->opcodes[last];
+    if (op == IR::OP_BRANCH || op == IR::OP_SWITCH) {
+        ConstantValue condition = GetValue(data, ir->GetOperand(last, 0));
+        if (condition.state != ValueState::CONSTANT || condition.count != 1) return NO_BLOCK;
+        u32 target;
+        if (op == IR::OP_BRANCH) {
+            target = condition.bits[0] != 0 ? ir->GetBranchTrueTarget(last) : ir->GetBranchFalseTarget(last);
+        } else {
+            u32 switchId = ir->metadata[last];
+            if (!IsIntegerType(condition.type) || switchId >= ir->switchCount) return NO_BLOCK;
+            target = ir->GetSwitchDefaultTarget(switchId);
+            for (u32 c = 0; c < ir->GetSwitchCaseCount(switchId); c++) {
+                if (static_cast<u32>(ir->GetSwitchCaseValue(switchId, c)) == condition.bits[0]) {
+                    target = ir->GetSwitchCaseTarget(switchId, c);
+                    break;
+                }
+            }
+        }
+        return target < ir->instructionCount ? cfg->instToBlock[target] : NO_BLOCK;
+    }
+    if (op == IR::OP_RET || op == IR::OP_DISCARD || cfg->TotalSuccessorCount(block) != 1) return NO_BLOCK;
+    return cfg->GetAnySuccessor(block, 0);
+}
+
+// Runs the marked loop on the lattice's storage, from its entry until it
+// leaves. Registers the loop defines hold their current value as a
+// constant, or UNDEFINED before their first assignment. Returns true when
+// every value it computed was a constant, with the header's phis at their
+// values on its last visit.
+static bool RunLoop(ConstantPropagationData* data, u32 header, u32 entry) {
+    const IRProgram* ir = data->ir;
+    const CFG* cfg = data->cfg;
+    for (u32 block = 0; block < cfg->blockCount; block++) {
+        if (!data->inLoop[block]) continue;
+        for (u32 k = data->blockPhiOffsets[block]; k < data->blockPhiOffsets[block + 1]; k++) {
+            SetRegisterValue(data, ir->phiResultRegs[data->blockPhis[k]], UNDEFINED_VALUE);
+        }
+        for (u32 i = cfg->firstInst[block]; i <= cfg->lastInst[block]; i++) {
+            u16 dest = ir->destinations[i];
+            if (IsLoopValueOp(ir->opcodes[i]) && IsRegisterOperand(data, dest) && data->tracked[dest]) {
+                SetRegisterValue(data, dest, UNDEFINED_VALUE);
+            }
+        }
+    }
+
+    ConstantValue phiValues[64];
+    u32 budget = LOOP_EVALUATION_BUDGET;
+    u32 from = entry, block = header;
+    while (true) {
+        // Phis read their operands before any of them is assigned.
+        u32 phiStart = data->blockPhiOffsets[block], phiEnd = data->blockPhiOffsets[block + 1];
+        if (phiEnd - phiStart > 64) return false;
+        for (u32 k = phiStart; k < phiEnd; k++) {
+            u32 phi = data->blockPhis[k];
+            phiValues[k - phiStart] = UNDEFINED_VALUE;
+            for (u32 j = 0; j < ir->GetPhiOperandCount(phi); j++) {
+                if (ir->GetPhiOperandBlock(phi, j) != from) continue;
+                u16 operand = ir->GetPhiOperandValue(phi, j);
+                if (IsRegisterOperand(data, operand) && data->undef[operand]) break;
+                phiValues[k - phiStart] = GetValue(data, operand);
+                if (phiValues[k - phiStart].state == ValueState::OVERDEFINED) return false;
+                break;
+            }
+        }
+        for (u32 k = phiStart; k < phiEnd; k++) {
+            SetRegisterValue(data, ir->phiResultRegs[data->blockPhis[k]], phiValues[k - phiStart]);
+        }
+
+        for (u32 i = cfg->firstInst[block]; i <= cfg->lastInst[block]; i++) {
+            u16 op = ir->opcodes[i];
+            u16 dest = ir->destinations[i];
+            if (!IsLoopValueOp(op) || !data->tracked[dest]) continue;
+            if (budget-- == 0) return false;
+            ConstantValue value = EvaluateInstruction(data, i);
+            CoreType type = GetRegisterType(ir, dest);
+            if (value.state != ValueState::CONSTANT || value.type != type ||
+                value.count != GetComponentCount(type)) {
+                return false;
+            }
+            SetRegisterValue(data, dest, value);
+        }
+
+        // Visits count too, so a loop without values can't run forever.
+        if (budget-- == 0) return false;
+        u32 next = GetNextBlock(data, block);
+        if (next >= cfg->blockCount) return false;
+        if (!data->inLoop[next]) return true;
+        from = block;
+        block = next;
+    }
+}
+
+// Evaluates the loop at `header` when everything it reads from outside is
+// a constant and it has no side effects, and pins its header phis to their
+// values on the header's last visit. From there, the loop runs what's left
+// of its last iteration and leaves where it did, so propagation follows
+// that one path with constants and the code after the loop sees the
+// results. The back edge no longer runs. A vector or matrix phi stays a
+// phi of its entry operand, so one whose value changed means the loop
+// isn't folded.
+static bool FoldLoop(ConstantPropagationData* data, u32 header) {
+    IRProgram* ir = data->ir;
+    const CFG* cfg = data->cfg;
+    if (!CollectLoop(data, header) || !IsPureLoop(data)) return false;
+
+    // The one executable edge into the loop.
+    u32 entry = NO_BLOCK;
+    for (u32 k = cfg->predecessorOffsets[header]; k < cfg->predecessorOffsets[header + 1]; k++) {
+        u32 predecessor = cfg->predecessorData[k];
+        if (data->inLoop[predecessor] || !data->edgeExecutable[k]) continue;
+        if (entry != NO_BLOCK && entry != predecessor) return false;
+        entry = predecessor;
+    }
+    if (entry == NO_BLOCK) return false;
+
+    memcpy(data->savedStates, data->states, data->regCount * sizeof(ValueState));
+    memcpy(data->savedBits, data->bits, data->bitOffsets[data->regCount] * sizeof(u32));
+    bool folded = RunLoop(data, header, entry);
+
+    u32 phiStart = data->blockPhiOffsets[header], phiEnd = data->blockPhiOffsets[header + 1];
+    for (u32 k = phiStart; k < phiEnd && folded; k++) {
+        u32 phi = data->blockPhis[k];
+        u16 result = ir->phiResultRegs[phi];
+        ConstantValue exitValue = GetRegisterValue(data, result);
+        if (exitValue.state != ValueState::CONSTANT) continue;
+        if (exitValue.count == 1) {
+            // Interned now: a pinned phi that kept its operands would be wrong.
+            data->pinnedPhiOperand[phi] = InternConstant(data->builder, exitValue.type, exitValue.bits[0]);
+            folded = data->pinnedPhiOperand[phi] != 0xFFFF;
+            continue;
+        }
+        ConstantValue entryValue = UNDEFINED_VALUE;
+        u16 entryOperand = 0xFFFF;
+        for (u32 j = 0; j < ir->GetPhiOperandCount(phi); j++) {
+            if (ir->GetPhiOperandBlock(phi, j) != entry) continue;
+            entryOperand = ir->GetPhiOperandValue(phi, j);
+            // Saved: the lattice's value before the run.
+            if (IsRegisterOperand(data, entryOperand) && data->tracked[entryOperand]) {
+                entryValue = {data->savedStates[entryOperand], GetRegisterType(ir, entryOperand),
+                              static_cast<u8>(data->bitOffsets[entryOperand + 1] - data->bitOffsets[entryOperand]), {}};
+                memcpy(entryValue.bits, data->savedBits + data->bitOffsets[entryOperand],
+                       entryValue.count * sizeof(u32));
+            }
+            break;
+        }
+        folded = entryValue.state == ValueState::CONSTANT && HasSameBits(entryValue, exitValue);
+        data->pinnedPhiOperand[phi] = entryOperand;
+    }
+    if (folded) {
+        // Phis left undefined were never assigned, so nothing reads them.
+        for (u32 k = phiStart; k < phiEnd; k++) {
+            u16 result = ir->phiResultRegs[data->blockPhis[k]];
+            if (data->states[result] != ValueState::CONSTANT) continue;
+            data->pinned[result] = true;
+            u32 count = data->bitOffsets[result + 1] - data->bitOffsets[result];
+            memcpy(data->pinnedBits + data->bitOffsets[result], data->bits + data->bitOffsets[result],
+                   count * sizeof(u32));
+        }
+    } else {
+        for (u32 k = phiStart; k < phiEnd; k++) data->pinnedPhiOperand[data->blockPhis[k]] = 0xFFFF;
+    }
+
+    memcpy(data->states, data->savedStates, data->regCount * sizeof(ValueState));
+    memcpy(data->bits, data->savedBits, data->bitOffsets[data->regCount] * sizeof(u32));
+    return folded;
+}
+
+static void ResetPropagation(ConstantPropagationData* data) {
+    const CFG* cfg = data->cfg;
+    memset(data->states, 0, data->regCount * sizeof(ValueState));
+    memset(data->bits, 0, data->bitOffsets[data->regCount] * sizeof(u32));
+    memset(data->blockExecutable, 0, cfg->blockCount * sizeof(bool));
+    memset(data->edgeExecutable, 0, cfg->predecessorDataCount * sizeof(bool));
+    data->blockWorkHead = data->blockWorkTail = 0;
+    data->regWorkHead = data->regWorkTail = 0;
+}
+
+// Propagates, then folds the loops that turned out to have constant inputs
+// and propagates again with their results, until no more loops fold: one
+// loop's result can be another's input.
+static void PropagateWithLoops(ConstantPropagationData* data) {
+    const CFG* cfg = data->cfg;
+    Propagate(data);
+    if (!cfg->dominatorsComputed) return;
+    while (true) {
+        bool anyFolded = false;
+        for (u32 block = 0; block < cfg->blockCount; block++) {
+            if (!data->blockExecutable[block] || data->loopFolded[block] || !HasBackEdge(cfg, block)) continue;
+            if (FoldLoop(data, block)) {
+                data->loopFolded[block] = true;
+                anyFolded = true;
+            }
+        }
+        if (!anyFolded) return;
+        ResetPropagation(data);
+        Propagate(data);
     }
 }
 
@@ -1503,14 +1812,17 @@ static void RewriteConstants(ConstantPropagationData* data) {
 
     // A phi with a constant scalar result gets the constant on every edge,
     // which the backends treat as a copy of it. A vector phi keeps its
-    // operands, whose definitions become constants themselves.
+    // operands, whose definitions become constants themselves, except that
+    // a pinned one (see FoldLoop) takes its entry operand on every edge: its
+    // loop's back edge no longer runs.
     for (u32 reg = 0; reg < data->regCount; reg++) {
         if (!data->tracked[reg] || data->states[reg] != ValueState::CONSTANT) continue;
         u32 definition = data->definitions[reg];
         if (definition & PHI_REFERENCE) {
-            u16 constant = GetConstantOperand(data, static_cast<u16>(reg));
-            if (constant == 0xFFFF) continue;
             u32 phi = definition & ~PHI_REFERENCE;
+            u16 constant = data->pinned[reg] ? data->pinnedPhiOperand[phi]
+                                             : GetConstantOperand(data, static_cast<u16>(reg));
+            if (constant == 0xFFFF) continue;
             for (u32 j = 0; j < ir->GetPhiOperandCount(phi); j++) {
                 ir->SetPhiOperandValue(phi, j, constant);
             }
@@ -1857,6 +2169,28 @@ static void BuildUseLists(ConstantPropagationData* data) {
     offsets[0] = 0;
 }
 
+// Every register something reads: as an operand, a phi operand, or the
+// value an instruction like STORE_OUTPUT carries in its destination.
+static void FindReads(ConstantPropagationData* data) {
+    const IRProgram* ir = data->ir;
+    for (u32 i = 0; i < ir->instructionCount; i++) {
+        u16 op = ir->opcodes[i];
+        if (op == IR::OP_NOP) continue;
+        for (u32 slot = 0; slot < 4 && !HasSlotOperands(op); slot++) {
+            u16 operand = ir->GetOperand(i, slot);
+            if (IsRegisterOperand(data, operand)) data->readAnywhere[operand] = true;
+        }
+        u16 dest = ir->destinations[i];
+        if (IsRegisterOperand(data, dest) && data->definitions[dest] != i) data->readAnywhere[dest] = true;
+    }
+    for (u32 p = 0; p < ir->phiCount; p++) {
+        for (u32 j = 0; j < ir->GetPhiOperandCount(p); j++) {
+            u16 operand = ir->GetPhiOperandValue(p, j);
+            if (IsRegisterOperand(data, operand)) data->readAnywhere[operand] = true;
+        }
+    }
+}
+
 static void GroupPhisByBlock(ConstantPropagationData* data) {
     const IRProgram* ir = data->ir;
     u32 blockCount = data->cfg->blockCount;
@@ -1897,7 +2231,12 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
                    size_t(blockCount) * (sizeof(bool) * 2 + sizeof(u32) * 3) + 2 * sizeof(u32) +
                    size_t(edgeCount) * sizeof(bool) * 2 + size_t(phiOperandCount) * sizeof(bool) +
                    size_t(ir->phiCount) * (sizeof(u32) + sizeof(bool) * 2) +
-                   size_t(regCount + 1 + bitCount) * sizeof(u32) + 32 * 64;
+                   size_t(regCount + 1 + bitCount) * sizeof(u32) +
+                   // Loops: pinned, readAnywhere, savedStates; pinnedBits, savedBits;
+                   // pinnedPhiOperand; loopFolded, inLoop, blockStack.
+                   size_t(regCount) * (sizeof(bool) * 2 + sizeof(ValueState)) +
+                   size_t(bitCount) * sizeof(u32) * 2 + size_t(ir->phiCount) * sizeof(u16) +
+                   size_t(blockCount) * (sizeof(bool) * 2 + sizeof(u32)) + 48 * 64;
     std::vector<char> memory(bytes);
     BWSL_Arena arena;
     arena.Initialize(memory.data(), memory.size());
@@ -1923,13 +2262,25 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
     data.blockPhis = (u32*)AllocateZeroed(&arena, ir->phiCount * sizeof(u32));
     data.phiRemoved = (bool*)AllocateZeroed(&arena, ir->phiCount * sizeof(bool));
     data.blockWork = (u32*)AllocateZeroed(&arena, blockCount * sizeof(u32));
+    data.pinned = (bool*)AllocateZeroed(&arena, regCount * sizeof(bool));
+    data.pinnedBits = (u32*)AllocateZeroed(&arena, bitCount * sizeof(u32));
+    data.pinnedPhiOperand = (u16*)AllocateZeroed(&arena, ir->phiCount * sizeof(u16));
+    data.readAnywhere = (bool*)AllocateZeroed(&arena, regCount * sizeof(bool));
+    data.loopFolded = (bool*)AllocateZeroed(&arena, blockCount * sizeof(bool));
+    data.inLoop = (bool*)AllocateZeroed(&arena, blockCount * sizeof(bool));
+    data.blockStack = (u32*)AllocateZeroed(&arena, blockCount * sizeof(u32));
+    data.savedStates = (ValueState*)AllocateZeroed(&arena, regCount * sizeof(ValueState));
+    data.savedBits = (u32*)AllocateZeroed(&arena, bitCount * sizeof(u32));
     if (!data.states || !data.bitOffsets || !data.bits || !data.tracked || !data.undef || !data.definitions ||
         !data.definitionCounts || !data.useOffsets || !data.useData || !data.regWork ||
         !data.blockExecutable || !data.edgeExecutable || !data.blockPhiOffsets ||
-        !data.blockPhis || !data.phiRemoved || !data.blockWork) {
+        !data.blockPhis || !data.phiRemoved || !data.blockWork || !data.pinned || !data.pinnedBits ||
+        !data.pinnedPhiOperand || !data.readAnywhere || !data.loopFolded || !data.inLoop ||
+        !data.blockStack || !data.savedStates || !data.savedBits) {
         return;
     }
     memset(data.definitions, 0xFF, regCount * sizeof(u32));
+    memset(data.pinnedPhiOperand, 0xFF, ir->phiCount * sizeof(u16));
     for (u32 reg = 0; reg < regCount; reg++) {
         u32 count = std::max<u32>(GetComponentCount(GetRegisterType(ir, static_cast<u16>(reg))), 1);
         data.bitOffsets[reg + 1] = data.bitOffsets[reg] + count;
@@ -1940,8 +2291,9 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
         PropagateStraightLine(&data);
     } else {
         BuildUseLists(&data);
+        FindReads(&data);
         GroupPhisByBlock(&data);
-        Propagate(&data);
+        PropagateWithLoops(&data);
         RewriteConstants(&data);
         DropFoldedBranchEdges(&data, &arena);
         CollapseSingleValuePhis(&data, &arena);
