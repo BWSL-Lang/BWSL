@@ -500,6 +500,118 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             glsl = (target / "constprop.frag").read_text(encoding="utf-8")
             self.assertIn("int(gl_FragCoord.y) + 7", glsl)
 
+        def bounded_main(self, body):
+            target = self.compile('''pipeline Bounds {
+                struct Params {
+                    @bounds(>0, <10) int count;
+                    @bounds(x>=0, y<=1) float2 weights;
+                    float free;
+                    uint bits;
+                }
+                attributes {
+                    position: float3
+                    uv: float2 @bounds(>=0, <=1)
+                }
+                resources {
+                    params: Params
+                    @bounds(>=0, <=1) fade: float
+                }
+                pass "Main" {
+                    use attributes { position, uv }
+                    use resources { params, fade }
+                    vertex {
+                        output.position = float4(attributes.position, 1.0);
+                        output.uv = attributes.uv;
+                    }
+                    fragment {
+                        float f = resources.fade;
+                        float2 w = resources.params.weights;
+                        float x = resources.params.free;
+                        int n = resources.params.count;
+                        ''' + body + '''
+                    }
+                }
+            }''', "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            return glsl[glsl.index("void main"):]
+
+        def test_bounds_remove_calls_that_cant_change_the_value(self):
+            body = self.bounded_main('''
+                float a = clamp(f, 0.0, 1.0) + saturate(f) + step(0.0, f) + abs(f - 2.0);
+                int m = clamp(n, 1, 9) + min(n, 100);
+                output.color = float4(a, float(m), max(f, 0.0), min(f, 2.0));
+            ''')
+            for call in ("clamp(", "min(", "max(", "step(", "abs("):
+                self.assertNotIn(call, body)
+
+        def test_bounds_decide_branches(self):
+            body = self.bounded_main('''
+                float r = f;
+                if (n >= 10) { r += 1000.0; }
+                if (f > 1.0 || n < 1) { r += 2000.0; }
+                output.color = float4(r);
+            ''')
+            self.assertNotIn("1000.0", body)
+            self.assertNotIn("2000.0", body)
+            self.assertNotIn("if (", body)
+
+        def test_bounds_per_component(self):
+            # x is at least 0 and y at most 1; nothing else is known.
+            body = self.bounded_main('''
+                output.color = float4(max(w.x, 0.0), min(w.y, 1.0), max(w.y, 0.0), min(w.x, 1.0));
+            ''')
+            self.assertNotIn("max(bwsl_ub_params.bwsl_u_params.weights.x", body)
+            self.assertNotIn("min(bwsl_ub_params.bwsl_u_params.weights.y", body)
+            self.assertIn("max(bwsl_ub_params.bwsl_u_params.weights.y, 0.0)", body)
+            self.assertIn("min(bwsl_ub_params.bwsl_u_params.weights.x, 1.0)", body)
+
+        def test_branches_narrow_ranges(self):
+            # x > 0.5 holding means x is a number above 0.5; where it
+            # doesn't, x may be NaN.
+            body = self.bounded_main('''
+                float r = 0.0;
+                if (x > 0.5) { r = max(x, 0.25); } else { r = min(x, 0.75); }
+                output.color = float4(r);
+            ''')
+            self.assertNotIn("max(", body)
+            self.assertIn("min(bwsl_ub_params.bwsl_u_params.free, 0.75)", body)
+
+        def test_loop_counters_have_ranges(self):
+            body = self.bounded_main('''
+                float sum = 0.0;
+                for (int i = 0; i < n; i++) {
+                    if (i < 9) { sum += 1.0; }
+                    sum += saturate(float(i) / 16.0);
+                }
+                output.color = float4(sum);
+            ''')
+            self.assertNotIn("min(", body)
+            self.assertNotIn("clamp(", body)
+            self.assertNotIn("< 9", body)
+            self.assertIn("for (", body)
+
+        def test_values_that_may_be_nan_keep_their_clamps(self):
+            # Nothing bounds x, and x * f is NaN for an infinite x and f = 0.
+            body = self.bounded_main('''
+                output.color = float4(clamp(x, 0.0, 1.0), saturate(x * f), max(x, x), 1.0);
+            ''')
+            self.assertIn("clamp(bwsl_ub_params.bwsl_u_params.free, 0.0, 1.0)", body)
+            self.assertIn("clamp(bwsl_ub_params.bwsl_u_params.free * ", body)
+
+        def test_assigned_values_have_ranges(self):
+            # No @bounds: the ranges come from the constants assigned and
+            # from the operations.
+            body = self.bounded_main('''
+                float s = 2.0;
+                if (x > 0.5) { s = 5.0; }
+                int k = int(resources.params.bits & 3u);
+                float t = float(k) * 0.5;
+                output.color = float4(clamp(s, 0.0, 10.0), float(min(k, 3)), max(t, 0.0), min(t, 2.0));
+            ''')
+            self.assertNotIn("min(", body)
+            self.assertNotIn("max(", body)
+            self.assertNotIn("clamp(", body)
+
     result = unittest.TextTestRunner(verbosity=1).run(
         unittest.defaultTestLoader.loadTestsFromTestCase(ConstantPropagationTests))
     failures = len(result.failures) + len(result.errors)
