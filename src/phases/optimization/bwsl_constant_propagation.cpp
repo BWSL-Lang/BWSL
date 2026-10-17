@@ -2061,6 +2061,9 @@ static bool RewriteAs(ConstantPropagationData* data, u32 inst, u16 op, u16 a, u1
 
 // ============= Local stores =============
 
+// Stored fields store forwarding tracks at a time.
+constexpr u32 LOCAL_STORES_TRACKED = 32;
+
 // A field of a local struct, as a field pointer names it: the register its
 // chain starts from (the struct, or a pointer to one) and the field indices.
 struct LocalAddress {
@@ -2101,16 +2104,18 @@ static bool KeepsLocalMemory(u16 op) {
 //
 // A store through a pointer that isn't a field pointer chain forgets every
 // stored value, as does anything else that may write local memory; a store
-// to a field forgets the others but its root's other fields, since another
-// root may be a pointer to the same struct. A chain's root is a struct, or
-// a pointer assigned once. Reassigning a value, a root or a struct a
-// pointer takes the address of forgets what depends on it.
+// to a field forgets what overlaps it: its own root's fields along the same
+// path, and, since a pointer may point to any struct, every field when one
+// of the two roots is a pointer. Two structs are separate memory. A chain's
+// root is a struct, or a pointer assigned once. Reassigning a value or a
+// root forgets what depends on it, and reassigning a struct a pointer
+// takes the address of forgets the fields of pointer roots too.
 static void ForwardLocalStores(ConstantPropagationData* data, BWSL_Arena* arena) {
     IRProgram* ir = data->ir;
     const CFG* cfg = data->cfg;
     u32 regCount = data->regCount;
     u32 blocks = data->straightLine ? 1 : cfg->blockCount;
-    constexpr u32 MAX_STORED = 16;
+    constexpr u32 MAX_STORED = LOCAL_STORES_TRACKED;
     struct Stored { LocalAddress address; u16 value; };
     bool* addressed = (bool*)AllocateZeroed(arena, regCount * sizeof(bool));
     bool* pointerLike = (bool*)AllocateZeroed(arena, regCount * sizeof(bool));
@@ -2263,23 +2268,36 @@ static void ForwardLocalStores(ConstantPropagationData* data, BWSL_Arena* arena)
                         LocalAddress target = *address;
                         u32 kept = 0;
                         for (u32 s = 0; s < storedCount; s++) {
-                            if (Disjoint(stored[s].address, target)) stored[kept++] = stored[s];
+                            u16 root = stored[s].address.root;
+                            bool separate = root != target.root && !pointerLike[root] && !pointerLike[target.root];
+                            if (separate || Disjoint(stored[s].address, target)) stored[kept++] = stored[s];
                         }
                         storedCount = kept;
                         bool forwardable = IR::IsConstant(value) ||
                                            (IsRegisterOperand(data, value) && !addressed[value] && !pointerLike[value] &&
                                             !IsMemoryBacked(ir, value) &&
                                             (data->straightLine || definitionCounts[value] == 1));
-                        if (forwardable && storedCount < MAX_STORED) stored[storedCount++] = {target, value};
+                        if (forwardable) {
+                            // When full, the oldest value goes: a later
+                            // load more likely reads a recent store.
+                            if (storedCount == MAX_STORED) {
+                                memmove(stored, stored + 1, (MAX_STORED - 1) * sizeof(Stored));
+                                storedCount--;
+                            }
+                            stored[storedCount++] = {target, value};
+                        }
                     }
                 } else if (!KeepsLocalMemory(op)) {
                     storedCount = 0;
                 }
                 if (defines(i)) {
-                    if (addressed[dest]) storedCount = 0;  // A struct a pointer can reach changed
+                    // A struct a pointer can reach changed: so may what the
+                    // fields of pointer roots hold.
                     u32 kept = 0;
                     for (u32 s = 0; s < storedCount; s++) {
-                        if (stored[s].value != dest && stored[s].address.root != dest) stored[kept++] = stored[s];
+                        u16 root = stored[s].address.root;
+                        bool keep = stored[s].value != dest && root != dest && !(addressed[dest] && pointerLike[root]);
+                        if (keep) stored[kept++] = stored[s];
                     }
                     storedCount = kept;
                 }
@@ -3359,7 +3377,7 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
                    // Store forwarding: per register flags, counts, definitions and
                    // addresses; per block what it stored.
                    size_t(regCount) * (sizeof(bool) * 2 + 2 + sizeof(u32) + sizeof(LocalAddress)) +
-                   size_t(std::max<u32>(blockCount, 1)) * (16 * (sizeof(LocalAddress) + sizeof(u16) + 2) + 2) + 9 * 64 +
+                   size_t(std::max<u32>(blockCount, 1)) * (LOCAL_STORES_TRACKED * (sizeof(LocalAddress) + sizeof(u16) + 2) + 2) + 9 * 64 +
                    // Ranges: ranges, rangeChanges; blockConstraints, constraints.
                    size_t(bitCount) * sizeof(ValueRange) + size_t(regCount) +
                    size_t(blockCount) * sizeof(u32) + size_t(blockCount * 8 + 16) * sizeof(RangeConstraint) +
