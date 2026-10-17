@@ -1,0 +1,11 @@
+// select(false_value, true_value, condition) with the condition passed first
+// (issue #191) used to compile and fail SPIR-V validation.
+pipeline SelectConditionNotBool {
+    pass "Main" {
+        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+        fragment {
+            float v = select(input.position.x > 0.5, 1.0, 0.0);
+            output.color = float4(v);
+        }
+    }
+}

@@ -2,6 +2,11 @@
 
 ## unreleased
 
+### Breaking changes
+- `select` requires a `bool` (or `bool` vector) condition. A numeric
+  condition used to compile as `condition != 0` and is now an error; write
+  `select(a, b, flag != 0)` instead.
+
 ### Backends
 - Experimental native WGSL output is available with `-wgsl` for compute,
   vertex and fragment shaders, including structured control flow, std140
@@ -31,6 +36,10 @@
 ### Diagnostics
 - Ternary arms of different types, such as `c ? float3(1.0) : float2(1.0)`,
   are a source error. They previously failed SPIR-V validation.
+- `select(false_value, true_value, condition)` reports a source error when
+  the condition isn't a `bool` (for example when it's passed first), when the
+  two values differ in type, or when a `bool` vector condition is narrower or
+  wider than the values. These previously failed SPIR-V validation.
 
 ### AST JSON
 - A call that passes a struct resource or an enum variant directly, such as

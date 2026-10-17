@@ -1005,6 +1005,55 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       SetRegisterType(dest, GetRegisterType(args[0]));
       return dest;
     }
+    case Intrinsic::SELECT: {
+        // select(false_value, true_value, condition). The backends turn a
+        // numeric condition into `!= 0` and don't check the value types, so
+        // a swapped argument order would otherwise only fail SPIR-V
+        // validation.
+        if (argCount != 3) return 0; // The parser reported the count.
+        CoreType falseType = GetRegisterType(args[0]);
+        CoreType trueType = GetRegisterType(args[1]);
+        CoreType condType = GetRegisterType(args[2]);
+        u32 condWidth = (mask(condType) & TypeMasks::BOOL_VECTORS) ? GetVectorDimension(condType)
+                      : condType == CoreType::BOOL                  ? 1
+                                                                    : 0;
+        // Scalar and vector CoreType names are the source spelling in upper case.
+        auto typeName = [](CoreType type) {
+            std::string name = CoreTypeToString(type);
+            for (char& c : name) c = static_cast<char>(tolower(c));
+            return name;
+        };
+        char msg[256];
+        if (condWidth == 0) {
+            snprintf(msg, sizeof(msg),
+                     "Error: 'select' condition (argument 3) is %s, but must be bool; "
+                     "the order is select(false_value, true_value, condition)\n",
+                     typeName(condType).c_str());
+            ReportErrorAt(call.arguments[2], msg);
+            return 0;
+        }
+        if (falseType != trueType ||
+            (falseType == CoreType::CUSTOM &&
+             program.registerStructTypes[args[0]] != program.registerStructTypes[args[1]])) {
+            snprintf(msg, sizeof(msg),
+                     "Error: 'select' arguments 1 and 2 must have the same type, "
+                     "but they are %s and %s\n",
+                     typeName(falseType).c_str(), typeName(trueType).c_str());
+            ReportErrorAt(call.arguments[1], msg);
+            return 0;
+        }
+        u32 valueWidth = GetVectorDimension(falseType);
+        if (condWidth > 1 && condWidth != valueWidth) {
+            snprintf(msg, sizeof(msg),
+                     "Error: 'select' condition is %s, but the values are %s; "
+                     "use a bool or a bool vector of the same width\n",
+                     typeName(condType).c_str(), typeName(falseType).c_str());
+            ReportErrorAt(call.arguments[2], msg);
+            return 0;
+        }
+        op = OP_SELECT;
+        break;
+    }
     default:
       op = IntrinsicToOpcode(intrinsic);
       break;

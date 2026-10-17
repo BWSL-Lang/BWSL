@@ -101,6 +101,11 @@ select(false_value, true_value, condition)
 This ordering is part of the implementation today and should be documented
 exactly as such.
 
+`false_value` and `true_value` must have the same type. `condition` must be
+`bool`, which picks the whole value, or a `bool` vector as wide as the values,
+which picks per component. Anything else, including a numeric condition, is
+an error at the call.
+
 Function and method declarations must not use a built-in intrinsic name,
 even in a module or when the declaration is unused. Such declarations are
 errors at the function name. Use a distinct name, such as `blend` instead
