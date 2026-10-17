@@ -54,7 +54,7 @@ EXAMPLE = '''
     weights[0] = brightness;
     float total = 0.0;
     for (int i = 0; i < 4; i++) {
-        total += tint.x * float(i) + weights[0];
+        total += dot(tint, float3(float(i))) + weights[0];
     }
     output.color = float4(tint * total, 1.0);
 '''

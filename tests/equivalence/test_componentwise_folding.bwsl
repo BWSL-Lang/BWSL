@@ -1,0 +1,50 @@
+// Vectors with some constant components: hsluvToRgb with a variable hue,
+// saturation or lightness folds everything that depends only on the other
+// two. Each lane stores the folded result minus the same conversion with
+// every component a run-time value, so all outputs are 0 up to the GPU's
+// own rounding.
+pipeline EquivComponentwiseFolding {
+    import Color
+
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float z = float(idx >> 4u);                              // 0.0, but not a constant
+            float t = float(idx);
+
+            float hue = 20.0 + t * 45.0;
+            float saturation = 10.0 + t * 12.0;
+            float lightness = 5.0 + t * 12.5;
+
+            float3 a = Color::hsluvToRgb(float3(hue, 100.0, 50.0))
+                     - Color::hsluvToRgb(float3(hue, 100.0 + z, 50.0 + z));
+            float3 b = Color::hsluvToRgb(float3(180.0, saturation, 50.0))
+                     - Color::hsluvToRgb(float3(180.0 + z, saturation, 50.0 + z));
+            float3 c = Color::hsluvToRgb(float3(10.0, 100.0, lightness))
+                     - Color::hsluvToRgb(float3(10.0 + z, 100.0 + z, lightness));
+
+            // Swizzles, inserts and a matrix column of partly known values.
+            float4 v = float4(t, 2.0, 3.0, t);
+            v.w = 4.0;
+            mat2 m = mat2(float2(5.0, t), float2(6.0, 7.0));
+            float d = (v.yzw.x * v.zy.x + v.w) + m[0].x * m[1].y - (2.0 * 3.0 + 4.0 + 35.0);  // 0
+
+            uint base = idx * 10u;
+            resources.output[base + 0u] = a.x;
+            resources.output[base + 1u] = a.y;
+            resources.output[base + 2u] = a.z;
+            resources.output[base + 3u] = b.x;
+            resources.output[base + 4u] = b.y;
+            resources.output[base + 5u] = b.z;
+            resources.output[base + 6u] = c.x;
+            resources.output[base + 7u] = c.y;
+            resources.output[base + 8u] = c.z;
+            resources.output[base + 9u] = d;
+        }
+    }
+}

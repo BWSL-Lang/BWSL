@@ -377,6 +377,62 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
                 text = (target / name).read_text(encoding="utf-8")
                 self.assertNotIn("pow(", text[text.index("main"):], name)
 
+        def test_known_components_of_vectors_fold(self):
+            # Only x varies: the other components fold wherever they're
+            # read, through a swizzle, an insert, a matrix column and a
+            # select whose arms agree on y.
+            target = self.compile(shader('''
+                float x = input.uv.x;
+                float4 v = float4(x, 2.0, 3.0, x);
+                v.w = 4.0;
+                mat2 m = mat2(float2(5.0, x), float2(6.0, 7.0));
+                float3 s = select(float3(x, 1.0, 2.0), float3(-x, 1.0, 3.0), bool3(x > 0.5));
+                output.color = float4(v.yzw.x * v.zy.x + v.w, m[0].x * m[1].y, s.y, s.z);
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertIn("vec4(10.0, 35.0, 1.0, ", body)
+            self.assertNotIn("vec4(v_uv.x, 2.0", body)
+            self.assertNotIn("mat2", body)
+
+        def test_components_a_pointer_can_change_stay(self):
+            # a's components are constants where it's built, but a write
+            # through p can change a before a.x is read.
+            target = self.compile(shader('''
+                float3 a = float3(1.0, 2.0, 3.0);
+                float3 b = float3(4.0, 5.0, 6.0);
+                float3^ p = ^a;
+                if (input.uv.x > 0.5) { p = ^b; }
+                p^ = p^ + float3(input.uv.y);
+                output.color = float4(a.x, b.x, 0.0, 1.0);
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertNotIn("vec4(1.0, 4.0", body)
+
+        def test_hsluv_with_one_varying_component(self):
+            # The conversion depends on each component in different places;
+            # what depends only on the constant ones folds.
+            modules = str(compiler.parent.parent / "modules")
+            cases = {
+                "float3(x, 100.0, 50.0)": (["radians(v_uv.x)"], ["clamp("]),
+                "float3(180.0, x, 50.0)": ([], ["radians(", "clamp(", "min("]),
+                "float3(10.0, 100.0, x)": (["clamp(v_uv.x"], ["radians(", "cos(", "sin("]),
+            }
+            for argument, (kept, gone) in cases.items():
+                with self.subTest(argument=argument):
+                    target = self.compile(shader(f'''
+                        float x = input.uv.x;
+                        output.color = float4(Color::hsluvToRgb({argument}), 1.0);
+                    ''', "import Color"), "-glsl", "-modules", modules)
+                    glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+                    body = glsl[glsl.index("void main"):]
+                    self.assertNotIn("vec3(" + argument.replace("float3(", "").replace("x", "v_uv.x"), body)
+                    for text in kept:
+                        self.assertIn(text, body)
+                    for text in gone:
+                        self.assertNotIn(text, body)
+
         def test_vectors_with_runtime_components_stay(self):
             ops, target = self.fragment_ops('''
                 mat2 m = mat2(float2(1.0, 2.0), float2(3.0, input.uv.x));
