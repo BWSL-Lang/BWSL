@@ -2544,6 +2544,29 @@ static void RemoveDeadLoops(ConstantPropagationData* data, BWSL_Arena* arena) {
         }
         anyRemoved = true;
     }
+
+    // A selection whose branch or switch is constant becomes a jump to the
+    // arm it takes, so every backend sees just that arm (WGSL writes out
+    // both otherwise, and the phis no longer have the other's edge). Loop
+    // exits and `until` conditions keep their branch: WGSL's continuing
+    // block needs it.
+    for (u32 b = 0; b < cfg->blockCount; b++) {
+        u32 last = cfg->lastInst[b];
+        u32 kind = ir->structureInfo[last] & IR::IRProgram::STRUCT_TYPE_MASK;
+        if (kind != IR::IRProgram::STRUCT_IF_HEADER && kind != IR::IRProgram::STRUCT_SWITCH_HEADER) continue;
+        u32 target;
+        if (!IR::TryGetConstantTarget(ir, last, &target) || target >= ir->instructionCount) continue;
+        ir->opcodes[last] = IR::OP_JUMP;
+        ir->metadata[last] = target;
+        for (u32 slot = 0; slot < 4; slot++) ir->SetOperand(last, slot, 0);
+        ir->ClearBranchTargets(last);
+        ir->structureInfo[last] = 0;
+        ir->continueInfo[last] = 0xFFFFFFFF;
+        cfg->successorCount[b] = 1;
+        cfg->successors[b * 2] = cfg->instToBlock[target];
+        cfg->successors[b * 2 + 1] = NO_BLOCK;
+        anyRemoved = true;
+    }
     if (!anyRemoved) return;
 
     // Predecessors from the new successors, in place: there are fewer.
