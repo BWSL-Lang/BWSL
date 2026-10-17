@@ -250,6 +250,11 @@ constants (`float x = 5.0;` is exactly 5), operations (`saturate(x)` is
 between 0 and 1) and the branches it's in (`x` is above 0 inside
 `if (x > 0.0)`).
 
+Built-in inputs have bounds too: `input.local_id` is below the workgroup size
+in each component and `input.local_index` below the number of invocations in
+a workgroup, `input.num_workgroups` is at least 1, and a fragment shader's
+`input.position.xy` is a number inside the framebuffer.
+
 ## Passes
 
 A pass contains one graphics pipeline pair (`vertex` and optional `fragment`)

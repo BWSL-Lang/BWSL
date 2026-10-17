@@ -201,6 +201,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   memset(program.structFieldBounds, 0, fieldCapacity * sizeof(const DeclaredBounds *));
   memset(program.attributeBounds, 0, sizeof(program.attributeBounds));
   memset(program.uniformBounds, 0, sizeof(program.uniformBounds));
+  memset(program.workgroupSize, 0, sizeof(program.workgroupSize));
   program.registerStructTypes =
       (u32 *)pool->Allocate(MAX_REGISTERS * sizeof(u32), 64);
   program.registerStorageInfo =
@@ -478,6 +479,16 @@ inline void IRLowering::LowerPass(NodeRef passRef) {
   currentPassVaryings = nullptr;
   currentPassData = nullptr;
   currentPass = NodeRef::Null();
+}
+
+// The workgroup size the backends declare for this pass's compute stage,
+// which bounds input.local_id and input.local_index.
+inline void IRLowering::RecordWorkgroupSize() {
+  if (!currentPassData || currentPassData->computeShader.IsNull()) return;
+  const ShaderStageData &stage = ast->GetShaderStage(currentPassData->computeShader);
+  program.workgroupSize[0] = stage.workgroupSizeX;
+  program.workgroupSize[1] = stage.workgroupSizeY;
+  program.workgroupSize[2] = stage.workgroupSizeZ;
 }
 
 inline void IRLowering::LowerShaderStage(NodeRef stageRef) {

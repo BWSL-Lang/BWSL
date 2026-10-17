@@ -57,6 +57,10 @@
   `clamp(n, 1, 9)` becomes `n` and `if (n >= 10)` disappears, and in
   `for (int i = 0; i < n; i++)`, `saturate(float(i) / 16.0)` becomes
   `float(i) * 0.0625`. Calls on a value that may be NaN stay.
+  Built-in inputs count too: in a `[8, 1, 1]` compute stage,
+  `input.local_id.y` is 0 and `min(input.local_id.x, 7u)` is
+  `input.local_id.x`, and a fragment shader's `input.position.xy` is never
+  NaN.
   Folding skips results that can differ between GPUs:
   NaN, infinities, denormals, `-0.0`, integer division of negative values,
   conversions that are out of range or inexact, and math functions outside
