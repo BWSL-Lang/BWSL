@@ -791,6 +791,45 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             self.assertNotIn(", 0.0, 2.0)", body)
             self.assertRegex(body, r"_\d+\.other, _\d+\.other\)")
 
+        def test_struct_fields_survive_writes_to_other_structs(self):
+            # Separate structs are separate memory: initializing s and
+            # writing its fields in a loop, directly or in a method, leaves
+            # i.color as stored.
+            for update in ("s.best = min(s.best, float(k) * s.radius);", "s.visit(float(k));"):
+                with self.subTest(update=update):
+                    target = self.compile('''pipeline OtherStructLoop {
+                        attributes {
+                            position: float2
+                            color: float4 @bounds(0<=z<=100)
+                        }
+                        struct Inputs { float4 color; };
+                        struct Sampler {
+                            float best;
+                            float radius;
+                            visit :: (float d) -> void { self.best = min(self.best, d * self.radius); }
+                        };
+                        pass "Main" {
+                            use attributes { position, color }
+                            vertex {
+                                output.position = float4(attributes.position, 0.0, 1.0);
+                                @flat output.vColor = attributes.color;
+                            }
+                            fragment {
+                                Inputs i;
+                                i.color = input.vColor;
+                                Sampler s;
+                                s.best = 1000.0;
+                                s.radius = 2.0;
+                                for (int k = 0; k < (int(input.position.x) & 7); k++) { ''' + update + ''' }
+                                output.color = float4(min(1.0, i.color.z * 0.01), s.best, 0.0, 1.0);
+                            }
+                        }
+                    }''', "-glsl")
+                    glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+                    body = glsl[glsl.index("void main"):]
+                    self.assertNotIn("min(1.0", body)
+                    self.assertRegex(body, r"min\(_\d+\.best, ")
+
     result = unittest.TextTestRunner(verbosity=1).run(
         unittest.defaultTestLoader.loadTestsFromTestCase(ConstantPropagationTests))
     failures = len(result.failures) + len(result.errors)
