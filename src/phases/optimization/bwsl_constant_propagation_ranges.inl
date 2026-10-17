@@ -480,6 +480,10 @@ static const DeclaredBounds* GetLoadBounds(const ConstantPropagationData* data, 
         u16 binding = ir->GetOperand(inst, 0);
         return binding < 32 ? ir->uniformBounds[binding] : nullptr;
     }
+    if (op == IR::OP_LOAD_INPUT) {
+        u16 slot = ir->GetOperand(inst, 0);
+        return slot < 32 ? ir->inputBounds[slot] : nullptr;
+    }
     if (op == IR::OP_STRUCT_EXTRACT && ir->structFieldBounds && ir->registerStructTypes) {
         u16 object = ir->GetOperand(inst, 0);
         u32 field = ir->GetOperand(inst, 1);
@@ -1062,5 +1066,54 @@ static void RewriteWithRanges(ConstantPropagationData* data, u32 inst, u32 block
         }
         default:
             return;
+    }
+}
+
+// ---- Ranges across stages ----
+
+// Adds a store to a varying to the varying's range.
+static void RecordVaryingRange(ConstantPropagationData* data, u32 inst, u32 block) {
+    const IRProgram* ir = data->ir;
+    if (!ir->varyingBoundsOut || ir->opcodes[inst] != IR::OP_STORE_OUTPUT) return;
+    u32 varying = ir->GetOperand(inst, 0) - OutputSlot::VARYING0;
+    u16 value = ir->destinations[inst];
+    if (varying >= 16 || !IsRegisterOperand(data, value)) return;
+    u32 count = GetComponentCount(GetRegisterType(ir, value));
+    if (count == 0 || count > 4 || GetMatrixSize(GetRegisterType(ir, value)) != 0) return;
+    ValueRange* stored = data->varyingRanges + varying * 4;
+    for (u32 c = 0; c < count; c++) stored[c] = Hull(stored[c], GetOperandRange(data, value, c, block));
+    data->varyingCounts[varying] = static_cast<u8>(count);
+}
+
+static void RecordVaryingRanges(ConstantPropagationData* data) {
+    if (!data->ir->varyingBoundsOut || !data->rangesReady) return;
+    const CFG* cfg = data->cfg;
+    for (u32 block = 0; block < cfg->blockCount; block++) {
+        if (!data->blockExecutable[block]) continue;
+        for (u32 i = cfg->firstInst[block]; i <= cfg->lastInst[block]; i++) RecordVaryingRange(data, i, block);
+    }
+}
+
+// Hands the varyings' ranges to the fragment stage, as bounds: a component
+// that may be NaN has none.
+static void ExportVaryingRanges(ConstantPropagationData* data) {
+    const IRProgram* ir = data->ir;
+    if (!ir->varyingBoundsOut) return;
+    for (u32 v = 0; v < 16; v++) {
+        DeclaredBounds& bounds = ir->varyingBoundsOut[v];
+        bounds = {};
+        u32 count = data->varyingCounts[v];
+        for (u32 c = 0; c < count; c++) {
+            const ValueRange& range = data->varyingRanges[v * 4 + c];
+            ComponentBounds& component = bounds.components[c];
+            component = {};
+            if (!(range.flags & ValueRange::KNOWN) || (range.flags & ValueRange::MAY_BE_NAN)) continue;
+            component.low = range.low;
+            component.high = range.high;
+            component.flags = ComponentBounds::HAS_LOW | ComponentBounds::HAS_HIGH;
+            if (range.flags & ValueRange::LOW_EXCLUSIVE) component.flags |= ComponentBounds::LOW_EXCLUSIVE;
+            if (range.flags & ValueRange::HIGH_EXCLUSIVE) component.flags |= ComponentBounds::HIGH_EXCLUSIVE;
+        }
+        bounds.count = static_cast<u8>(count);
     }
 }

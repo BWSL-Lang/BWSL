@@ -255,6 +255,15 @@ in each component and `input.local_index` below the number of invocations in
 a workgroup, `input.num_workgroups` is at least 1, and a fragment shader's
 `input.position.xy` is a number inside the framebuffer.
 
+A fragment shader's `@flat` or integer varying keeps the range the vertex
+stage stored in it. An interpolated float varying doesn't: with MSAA, it can be
+evaluated outside the primitive, beyond its vertices' values.
+
+Division isn't correctly rounded on GPUs, so its result can be a little past
+the exact quotient: `lit / 100.0` with `lit` up to 100 can exceed 1.0, and a
+`min(1.0, lit / 100.0)` stays. Multiplication is correctly rounded, and
+`lit * 0.01` is at most 1.0.
+
 ## Passes
 
 A pass contains one graphics pipeline pair (`vertex` and optional `fragment`)

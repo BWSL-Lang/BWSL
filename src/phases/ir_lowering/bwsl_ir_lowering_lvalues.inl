@@ -2630,6 +2630,16 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       u32 varyingIndex = inputSlot - OutputSlot::VARYING0;
       program.inputInterpolations[inputSlot] =
           static_cast<u8>(currentPassVaryings->GetInterpolation(varyingIndex));
+      // A flat varying (integers always are) is one vertex's value, so it
+      // keeps the range the vertex stage gave it.
+      if (varyingIndex < currentPassVaryings->count &&
+          currentPassVaryings->bounds[varyingIndex].count != 0) {
+        CoreType varyingType = currentPassVaryings->varyings[varyingIndex].type;
+        if (currentPassVaryings->GetInterpolation(varyingIndex) == InterpolationMode::Flat ||
+            CoreTypeScalarType(varyingType) != CoreType::FLOAT) {
+          program.inputBounds[inputSlot] = &currentPassVaryings->bounds[varyingIndex];
+        }
+      }
     }
 
     // Get type from varying context if available (preferred)
@@ -2948,6 +2958,7 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
       program.outputInterpolations[slot] = static_cast<u8>(
           currentPassVaryings->GetInterpolation(varyingIndex));
     }
+    if (currentStage == ShaderStage::Vertex) program.varyingBoundsOut = currentPassVaryings->bounds;
     return slot;
   }
   return OutputSlot::VARYING0;

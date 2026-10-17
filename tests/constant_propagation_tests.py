@@ -656,6 +656,41 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             self.assertIn("clamp(gl_FragCoord.z, 0.0, 1.0)", body)
             self.assertIn("max(gl_FragCoord.w, 0.0)", body)
 
+        def test_flat_varyings_keep_their_ranges(self):
+            # A flat or integer varying is one vertex's value; an interpolated
+            # one can leave its vertices' range under MSAA. Division isn't
+            # correctly rounded on GPUs, so lit / 100.0 can exceed 1.0, while
+            # lit * 0.01 can't.
+            target = self.compile('''pipeline Stages {
+                attributes {
+                    position: float3
+                    lit: float @bounds(>=0, <=100)
+                    id: uint
+                }
+                pass "Main" {
+                    use attributes { position, lit, id }
+                    vertex {
+                        output.position = float4(attributes.position, 1.0);
+                        @flat output.light = attributes.lit * 0.01;
+                        output.shade = saturate(attributes.position.x);
+                        output.index = attributes.id & 7u;
+                        output.ratio = min(1.0, attributes.lit / 100.0);
+                    }
+                    fragment {
+                        output.color = float4(saturate(input.light), saturate(input.shade),
+                                              float(min(input.index, 7u)), input.ratio);
+                    }
+                }
+            }''', "-glsl")
+            vertex = (target / "constprop.vert").read_text(encoding="utf-8")
+            fragment = (target / "constprop.frag").read_text(encoding="utf-8")
+            vertex = vertex[vertex.index("void main"):]
+            fragment = fragment[fragment.index("void main"):]
+            self.assertIn("min(1.0, ", vertex)
+            self.assertNotIn("clamp(v_light", fragment)
+            self.assertNotIn("min(v_index", fragment)
+            self.assertIn("clamp(v_shade, 0.0, 1.0)", fragment)
+
     result = unittest.TextTestRunner(verbosity=1).run(
         unittest.defaultTestLoader.loadTestsFromTestCase(ConstantPropagationTests))
     failures = len(result.failures) + len(result.errors)

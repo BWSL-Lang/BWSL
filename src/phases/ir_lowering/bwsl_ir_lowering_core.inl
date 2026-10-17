@@ -202,6 +202,8 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   memset(program.attributeBounds, 0, sizeof(program.attributeBounds));
   memset(program.uniformBounds, 0, sizeof(program.uniformBounds));
   memset(program.workgroupSize, 0, sizeof(program.workgroupSize));
+  program.varyingBoundsOut = nullptr;
+  memset(program.inputBounds, 0, sizeof(program.inputBounds));
   program.registerStructTypes =
       (u32 *)pool->Allocate(MAX_REGISTERS * sizeof(u32), 64);
   program.registerStorageInfo =
