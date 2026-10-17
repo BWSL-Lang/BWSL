@@ -3,6 +3,7 @@
 #include "core/bwsl_defs.h"
 #include "core/bwsl_mem_pool.h"
 #include "core/bwsl_types.h"
+#include "core/bwsl_value_bounds.h"
 #include <algorithm>
 #include <iostream>
 namespace BWSL{
@@ -93,6 +94,13 @@ struct IRProgram {
     // Interpolation mode per vertex output / fragment input slot.
     u8 outputInterpolations[32];
     u8 inputInterpolations[32];
+
+    // @bounds(...) of the values loads read, for the optimizer; null where a
+    // declaration has none. A load of an uncompressed attribute, of a scalar
+    // or vector uniform, or of a struct field produces a value in them.
+    const DeclaredBounds* attributeBounds[16] = {};  // By attribute index
+    const DeclaredBounds* uniformBounds[32] = {};    // By binding
+    const DeclaredBounds** structFieldBounds = nullptr;  // [structFieldCapacity], parallel to structFieldTypes
 
     alignas(64) u32* structureInfo;  // Packed: type:4 | mergeTarget:28
     alignas(64) u32* continueInfo;   // Continue target for loops (instruction index), 0xFFFFFFFF = none

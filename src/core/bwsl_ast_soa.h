@@ -4,6 +4,7 @@
 #include <variant>
 #include <cstring>
 #include "bwsl_defs.h"
+#include "bwsl_value_bounds.h"
 #include "bwsl_arena.h"
 #include "bwsl_utils.h"
 #include "bwsl_types.h"
@@ -151,6 +152,7 @@ struct AttributeDeclData {
     u8 attributeIndex;
     bool isInstance;
     u8 _pad[2];
+    const DeclaredBounds* bounds = nullptr;  // From @bounds(...); arena-owned
 };
 
 struct ResourceDeclData {
@@ -160,6 +162,7 @@ struct ResourceDeclData {
     u8 _pad[3];
     u32 typePosition;  // First token of the resource type.
     u32 payloadTypePosition;  // Element type inside buffer/cbuffer, otherwise typePosition.
+    const DeclaredBounds* bounds = nullptr;  // From @bounds(...); arena-owned
 };
 
 struct FragmentOutputDeclData {
@@ -245,6 +248,7 @@ struct StructFieldData {
     u32 namePosition = 0;  // Packed line/column (AST::PackPosition) of the
     u32 typePosition = 0;  // field name and its type; 0 when synthesized.
     u32 typeNameHash = 0; // Written type/alias before resolution
+    const DeclaredBounds* bounds = nullptr;  // From @bounds(...); arena-owned
 };
 
 // Struct declaration - 20 bytes + ArenaArray

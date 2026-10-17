@@ -204,6 +204,52 @@ fragment {
   to a function.
 
 
+## Value Bounds
+
+`@bounds(...)` promises the range of an attribute, a scalar or vector
+resource, or a struct field. The compiler uses it to decide comparisons and to
+drop `min`, `max`, `clamp`, `saturate`, `step` and `abs` calls that can't change
+the value:
+
+```bwsl
+attributes {
+    position: float3
+    uv: float2 @bounds(>=0, <=1)
+}
+
+struct Params {
+    @bounds(>0, <10) int count;           // 1 to 9
+    @bounds(>=0, <=1) float4 tint;         // every component in [0, 1]
+    @bounds(x>0, y<=1) float4 weights;     // x above 0, y at most 1, z and w anything
+    @bounds(>0, -10<y<0) float4 offsets;   // y between -10 and 0, the rest above 0
+}
+
+resources {
+    params: Params
+    @bounds(>=0, <=1) fade: float
+}
+```
+
+A clause is `>`, `>=`, `<` or `<=` and a number. It applies to every
+component, or, with a component first (`x>0`, or `r` to `a`), to that one. A
+two-sided clause like `-10<y<0` bounds a component on both sides. Where a
+component has its own clause on a side, the clause for every component doesn't
+apply there, and it also doesn't apply where it contradicts the component's
+own: `@bounds(>0, y<10)` keeps y above 0, while `@bounds(>0, y<0)` doesn't.
+
+`@bounds` goes before the declaration or, for attributes and resources, after
+the type on the same line. It applies to `float`, `int` and `uint` scalars and
+vectors. For a buffer or a struct resource, bound the struct's fields instead.
+
+A bounded component is never NaN, and one bounded on both sides is finite. The
+data a shader receives must keep the promise: if it doesn't, the result is
+undefined.
+
+Every other value has bounds the compiler works out itself, starting from
+constants (`float x = 5.0;` is exactly 5), operations (`saturate(x)` is
+between 0 and 1) and the branches it's in (`x` is above 0 inside
+`if (x > 0.0)`).
+
 ## Passes
 
 A pass contains one graphics pipeline pair (`vertex` and optional `fragment`)
