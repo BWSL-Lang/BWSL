@@ -691,6 +691,67 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             self.assertNotIn("min(v_index", fragment)
             self.assertIn("clamp(v_shade, 0.0, 1.0)", fragment)
 
+        def test_vector_conversions_keep_ranges(self):
+            # int2(q) converts each component, as int(q.x) does. q is in
+            # [0, 65536 / 0.01].
+            target = self.compile('''pipeline VectorConvertBounds {
+                attributes { position: float2 }
+                struct Params { @bounds(>=0.01) float t; };
+                resources { params: Params }
+                pass "Main" {
+                    use attributes { position }
+                    use resources { params }
+                    vertex { output.position = float4(attributes.position, 0.0, 1.0); }
+                    fragment {
+                        float2 q = input.position.xy / resources.params.t;
+                        int a = max(0, int(q.x));
+                        int2 i = int2(q);
+                        uint2 u = uint2(i);
+                        output.color = float4(float(a), float(max(0, i.x)), float(min(u.y, 7000000u)), 1.0);
+                    }
+                }
+            }''', "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertNotIn("max(", body)
+            self.assertNotIn("min(", body)
+
+        def test_struct_fields_carry_what_was_stored(self):
+            # A field read back after a store in the same block is the value
+            # stored. A store through a pointer may change any struct, so
+            # what follows it reads memory again.
+            target = self.compile('''pipeline StructBounds {
+                attributes {
+                    position: float2
+                    color: float4 @bounds(0<=z<=100)
+                }
+                struct Inputs { float4 color; };
+                pass "Main" {
+                    use attributes { position, color }
+                    vertex {
+                        output.position = float4(attributes.position, 0.0, 1.0);
+                        @flat output.vColor = attributes.color;
+                    }
+                    fragment {
+                        Inputs i;
+                        i.color = input.vColor;
+                        float b = min(1.0, i.color.z * 0.01);
+                        float w = i.color.w;
+                        Inputs k;
+                        k.color = float4(0.5);
+                        Inputs^ p = ^k;
+                        p^.color = float4(2.0);
+                        output.color = float4(b, w, k.color.z, 1.0);
+                    }
+                }
+            }''', "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertNotIn("min(", body)
+            self.assertIn("v_vColor.w", body)
+            self.assertNotIn("0.5, 1.0)", body)
+            self.assertIn(".color.z, 1.0)", body)
+
     result = unittest.TextTestRunner(verbosity=1).run(
         unittest.defaultTestLoader.loadTestsFromTestCase(ConstantPropagationTests))
     failures = len(result.failures) + len(result.errors)
