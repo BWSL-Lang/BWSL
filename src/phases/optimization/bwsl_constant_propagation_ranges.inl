@@ -495,6 +495,40 @@ static const DeclaredBounds* GetLoadBounds(const ConstantPropagationData* data, 
     return nullptr;
 }
 
+// The largest framebuffer coordinate: above every API's and device's
+// framebuffer size limit (D3D12 and Metal 16384, Vulkan devices up to 32768).
+constexpr f64 MAX_FRAMEBUFFER_COORDINATE = 65536.0;
+
+// What a built-in input guarantees, from its slot.
+static ValueRange GetBuiltinRange(const ConstantPropagationData* data, u32 slot, u32 component, CoreType scalar) {
+    const IRProgram* ir = data->ir;
+    ValueRange range = FullRange(scalar);
+    u32 size = component < 3 ? ir->workgroupSize[component] : 0;
+    u32 invocations = ir->workgroupSize[0] * ir->workgroupSize[1] * ir->workgroupSize[2];
+    switch (slot) {
+        case BuiltinInputSlot::LOCAL_INVOCATION_ID:
+            if (size != 0) range.high = size - 1.0;
+            return range;
+        case BuiltinInputSlot::LOCAL_INVOCATION_INDEX:
+            if (invocations != 0) range.high = invocations - 1.0;
+            return range;
+        case BuiltinInputSlot::NUM_WORKGROUPS:
+            range.low = 1.0;  // A dispatch of no workgroups runs no invocation
+            return range;
+        case BuiltinInputSlot::FRAG_COORD:
+            // x and y are inside the framebuffer. Depth can leave [0, 1]
+            // with an unrestricted depth range, so z and w keep anything.
+            if (component < 2) {
+                range.low = 0.0;
+                range.high = MAX_FRAMEBUFFER_COORDINATE;
+                range.flags &= ~ValueRange::MAY_BE_NAN;
+            }
+            return range;
+        default:
+            return range;
+    }
+}
+
 // The operations EvaluateComponentRange works out; everything else, loads
 // included (their operands are slots, not registers), is full.
 static bool IsRangeModeled(u16 op) {
@@ -553,6 +587,7 @@ static ValueRange EvaluateComponentRange(const ConstantPropagationData* data, u3
         if (bounds->count == count && component < 4) return FromDeclared(bounds->components[component], scalar);
         return FullRange(scalar);
     }
+    if (op == IR::OP_LOAD_INPUT) return GetBuiltinRange(data, operand(0), component, scalar);
     if (!IsRangeModeled(op)) return FullRange(scalar);
 
     switch (op) {

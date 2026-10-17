@@ -333,6 +333,7 @@ struct IRLowering {
   void LowerPass(NodeRef passRef);
 
   void LowerShaderStage(NodeRef stageRef);
+  void RecordWorkgroupSize();
 
   void LowerBlock(NodeRef blockRef);
 

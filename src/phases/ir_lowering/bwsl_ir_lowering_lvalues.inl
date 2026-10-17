@@ -2530,6 +2530,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       }
       builder.EmitInstruction(OP_LOAD_INPUT, dest,
                               BuiltinInputSlot::LOCAL_INVOCATION_ID);
+      RecordWorkgroupSize();
       SetRegisterType(dest, CoreType::UINT3);
       return dest;
 
@@ -2563,6 +2564,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       }
       builder.EmitInstruction(OP_LOAD_INPUT, dest,
                               BuiltinInputSlot::LOCAL_INVOCATION_INDEX);
+      RecordWorkgroupSize();
       SetRegisterType(dest, CoreType::UINT);
       return dest;
 

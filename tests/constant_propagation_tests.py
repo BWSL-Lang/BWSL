@@ -612,6 +612,50 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             self.assertNotIn("max(", body)
             self.assertNotIn("clamp(", body)
 
+        def test_compute_builtins_have_ranges(self):
+            # local_id is below the workgroup size [8, 2, 1], local_index
+            # below 16, and a dispatch has at least one workgroup.
+            target = self.compile('''pipeline Builtins {
+                resources { data: buffer<uint> }
+                pass "Run" {
+                    use resources { data }
+                    compute "Main" [8, 2, 1] {
+                        uint3 l = input.local_id;
+                        uint a = min(l.x, 7u) + l.z + min(input.local_index, 15u) + max(input.num_workgroups.x, 1u);
+                        uint b = min(l.x, 6u) + min(input.local_index, 14u);
+                        if (l.y >= 2u) { a += 1000u; }
+                        resources.data[input.global_id.x] = a + b;
+                    }
+                }
+            }''', "-glsl")
+            glsl = (target / "constprop.comp").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertNotIn("1000u", body)
+            self.assertNotIn("gl_LocalInvocationID.z", body)
+            self.assertNotIn("max(", body)
+            self.assertEqual(body.count("min("), 2)
+            self.assertIn("min(gl_LocalInvocationID.x, 6u)", body)
+            self.assertIn("min(gl_LocalInvocationIndex, 14u)", body)
+
+        def test_fragment_coordinates_are_numbers_in_the_framebuffer(self):
+            # x and y are inside the framebuffer; depth and w can be anything.
+            target = self.compile('''pipeline FragBuiltins {
+                attributes { position: float3 }
+                pass "Main" {
+                    use attributes { position }
+                    vertex { output.position = float4(attributes.position, 1.0); }
+                    fragment {
+                        float4 p = input.position;
+                        output.color = float4(clamp(p.x, 0.0, 100000.0), max(p.y, 0.0), saturate(p.z), max(p.w, 0.0));
+                    }
+                }
+            }''', "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertIn("gl_FragCoord.xy", body)
+            self.assertIn("clamp(gl_FragCoord.z, 0.0, 1.0)", body)
+            self.assertIn("max(gl_FragCoord.w, 0.0)", body)
+
     result = unittest.TextTestRunner(verbosity=1).run(
         unittest.defaultTestLoader.loadTestsFromTestCase(ConstantPropagationTests))
     failures = len(result.failures) + len(result.errors)

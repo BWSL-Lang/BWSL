@@ -101,6 +101,9 @@ struct IRProgram {
     const DeclaredBounds* attributeBounds[16] = {};  // By attribute index
     const DeclaredBounds* uniformBounds[32] = {};    // By binding
     const DeclaredBounds** structFieldBounds = nullptr;  // [structFieldCapacity], parallel to structFieldTypes
+    // A compute stage's declared workgroup size, recorded where input.local_id
+    // or input.local_index is read; 0 when not known.
+    u32 workgroupSize[3] = {};
 
     alignas(64) u32* structureInfo;  // Packed: type:4 | mergeTarget:28
     alignas(64) u32* continueInfo;   // Continue target for loops (instruction index), 0xFFFFFFFF = none
