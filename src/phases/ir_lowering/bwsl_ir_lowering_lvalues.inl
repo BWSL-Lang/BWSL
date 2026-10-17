@@ -2357,6 +2357,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
     } else {
       // Look up semantic type from AST pipeline attributes
       attrType = GetInputTypeFromAttribute(access.member.nameHash);
+      program.attributeBounds[attrIndex] = GetAttributeBounds(access.member.nameHash);
     }
     SetRegisterType(dest, attrType);
     return dest;
@@ -2389,6 +2390,8 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       // Uniform buffers (declared with "uniform" keyword) contain a single
       // value They emit OP_LOAD_UNIFORM to load the value directly
       builder.EmitInstruction(OP_LOAD_UNIFORM, dest, (u16)resData.bindingIndex);
+      if (resData.bindingIndex < 32 && resData.arraySize == 0)
+        program.uniformBounds[resData.bindingIndex] = resData.bounds;
 
       // Array-typed uniforms (e.g. "weights: float4[8]") are not loaded as a
       // whole; the register becomes a pointer to the UBO so that indexing
@@ -3010,6 +3013,21 @@ inline CoreType IRLowering::ResolveOutputTypeForLoad(u32 nameHash) {
     }
   }
   return CoreType::FLOAT4;
+}
+
+// The @bounds of an attribute of the current pipeline, or null.
+inline const DeclaredBounds *IRLowering::GetAttributeBounds(u32 nameHash) {
+  if (currentPipeline.IsNull())
+    return nullptr;
+  const PipelineData &pipeline = ast->GetPipeline(currentPipeline);
+  for (u32 i = 0; i < pipeline.attributes.count; i++) {
+    NodeRef attrRef = pipeline.attributes[i];
+    if (attrRef.Type() == ASTNodeType::ATTRIBUTE_DECL &&
+        ast->GetAttributeDecl(attrRef).name.nameHash == nameHash) {
+      return ast->GetAttributeDecl(attrRef).bounds;
+    }
+  }
+  return nullptr;
 }
 
 inline u32 IRLowering::GetAttributeIndex(u32 nameHash) {

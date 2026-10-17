@@ -279,6 +279,23 @@ inline u32 CoreTypeScalarComponentCount(CoreType type) {
     }
 }
 
+// The component type of a float, int, uint or bool scalar or vector;
+// INVALID for every other type.
+inline CoreType CoreTypeScalarType(CoreType type) {
+    switch (type) {
+        case CoreType::FLOAT: case CoreType::FLOAT2: case CoreType::FLOAT3: case CoreType::FLOAT4:
+            return CoreType::FLOAT;
+        case CoreType::INT: case CoreType::INT2: case CoreType::INT3: case CoreType::INT4:
+            return CoreType::INT;
+        case CoreType::UINT: case CoreType::UINT2: case CoreType::UINT3: case CoreType::UINT4:
+            return CoreType::UINT;
+        case CoreType::BOOL: case CoreType::BOOL2: case CoreType::BOOL3: case CoreType::BOOL4:
+            return CoreType::BOOL;
+        default:
+            return CoreType::INVALID;
+    }
+}
+
 inline u8 CoreTypeComponentCount(CoreType type) {
     switch (type) {
         case CoreType::INT:

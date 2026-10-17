@@ -611,6 +611,7 @@ struct IRLowering {
   CoreType ResolveOutputTypeForLoad(u32 nameHash);
 
   u32 GetAttributeIndex(u32 nameHash);
+  const DeclaredBounds *GetAttributeBounds(u32 nameHash);
 
   u32 GetInputSlotIndex(u32 nameHash);
 

@@ -1,0 +1,15 @@
+// Error case: @bounds that leave no value.
+pipeline WrongBounds {
+    struct Params {
+        @bounds(>1, <0) float level;
+    }
+
+    resources {
+        params: Params
+    }
+
+    pass "Main" {
+        use resources { params }
+        compute "Main" [1, 1, 1] { }
+    }
+}

@@ -314,6 +314,7 @@ inline u32 IRLowering::RegisterStructTypeFromSymbol(u32 typeNameHash,
         (field.type.coreType == CoreType::CUSTOM) ? field.type.customTypeHash
                                                   : 0;
     program.structFieldArraySizes[fieldOffset + i] = field.arraySize;
+    program.structFieldBounds[fieldOffset + i] = field.bounds;
 
     // std140 alignment rules - for arrays, account for array length
     u32 fieldSize = GetTypeSize(field.type.coreType);
@@ -395,6 +396,7 @@ inline u32 IRLowering::RegisterStructTypeFromData(u32 typeNameHash, StructData *
         (field.type.coreType == CoreType::CUSTOM) ? field.type.customTypeHash
                                                   : 0;
     program.structFieldArraySizes[fieldOffset + i] = field.arraySize;
+    program.structFieldBounds[fieldOffset + i] = field.bounds;
 
     u32 fieldSize = GetTypeSize(field.type.coreType);
     u32 alignment = GetTypeAlignment(field.type.coreType);

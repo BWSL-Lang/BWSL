@@ -269,7 +269,8 @@ inline bool TryParseFloat(std::string_view text, float* outValue) {
 
 void Parser::RegisterParsedResource(const std::string& resourceName,
                                     const std::string& typeName,
-                                    u32 bindingIndex) {
+                                    u32 bindingIndex,
+                                    const DeclaredBounds* bounds) {
     ArenaString resourceArena = ArenaString::MakeHashOnly(resourceName);
     Symbol* sym = SymbolTable::AddResource(&symbolTable, resourceArena);
     if (!sym) {
@@ -362,6 +363,7 @@ void Parser::RegisterParsedResource(const std::string& resourceName,
     data.coreType = static_cast<u8>(coreType);
     data.arraySize = ExtractFixedArraySize(typeName);
     data.structTypeHash = ResolveResourceStructHash(resolvedType, coreType, baseType);
+    data.bounds = bounds;
 }
 
 // Plan pipeline-wide identities before independently lowering its stages.

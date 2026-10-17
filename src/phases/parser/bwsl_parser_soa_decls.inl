@@ -739,7 +739,7 @@ void Parser::ParseResources(NodeRef owner, bool ownerIsPipeline) {
                 const ResourceDeclData& decl = ast->GetResourceDecl(resource);
                 RegisterParsedResource(decl.name.ToString(sourceBase()),
                                        decl.typeName.ToString(sourceBase()),
-                                       resourceIndex);
+                                       resourceIndex, decl.bounds);
             } else {
                 ast->GetModule(owner).resources.Push(arena, resource);
             }
@@ -886,7 +886,13 @@ void Parser::ParseVariantRules(NodeRef owner, bool ownerIsPipeline) {
 }
 
 NodeRef Parser::ParseAttributeDecl() {
-    TokenRef declToken = current;  // Attribute name token; a doc block precedes it
+    TokenRef declToken = current;  // First token of the declaration; a doc block precedes it
+    BoundsSpec bounds;
+    while (IsBoundsDecorator(current)) {
+        Advance();
+        if (!ParseBoundsDecorator(&bounds)) return NodeRef::Null();
+    }
+    TokenRef nameToken = current;
     if (!Consume(TokenType::IDENTIFIER, "Expected attribute name")) {
         if (stream->GetType(current) != TokenType::RIGHT_BRACE && stream->GetType(current) != TokenType::EOF_TOKEN) {
             Advance();
@@ -911,15 +917,19 @@ NodeRef Parser::ParseAttributeDecl() {
     }
 
     SourceLocation loc = getLocation(stream->GetOffset(previous));
+    TypeInfo attributeType = GetTypeInfoFromToken(PreviousTokenType());
     NodeRef attr = ASTFactory::MakeAttributeDecl(ast, name, std::string(stream->GetValue(previous)), loc.line, loc.column);
     AttachDocComment(attr, declToken);
     {
-        SourceLocation nameLoc = getLocation(stream->GetOffset(declToken));
+        SourceLocation nameLoc = getLocation(stream->GetOffset(nameToken));
         ast->SetNamePosition(attr, nameLoc.line, nameLoc.column);
     }
 
-    // Parse decorators
-    while (Match(TokenType::AT)) {
+    // Parse decorators. @bounds on a later line is the next attribute's.
+    const u32 typeLine = loc.line;
+    while (Check(TokenType::AT) &&
+           !(IsBoundsDecorator(current) && getLocation(stream->GetOffset(current)).line != typeLine)) {
+        Advance();
         u32 decoHash = Utils::HashStr(stream->GetValue(previous).data(), static_cast<u16>(stream->GetLength(previous)));
 
         if (decoHash == Utils::HashStr("compressed")) {
@@ -947,12 +957,15 @@ NodeRef Parser::ParseAttributeDecl() {
             }
         } else if (decoHash == Utils::HashStr("instance")) {
             ast->GetAttributeDecl(attr).isInstance = true;
+        } else if (decoHash == Utils::HashStr("bounds")) {
+            if (!ParseBoundsDecorator(&bounds)) break;
         } else {
             Error("Unknown decorator");
         }
 
         if (panicMode) break;
     }
+    ast->GetAttributeDecl(attr).bounds = ResolveBounds(bounds, attributeType);
 
     // Note: attributeIndex is assigned by ParseAttributes() based on declaration order
 
@@ -960,7 +973,12 @@ NodeRef Parser::ParseAttributeDecl() {
 }
 
 NodeRef Parser::ParseResourceDecl() {
-    TokenRef declToken = current;  // Resource name token; a doc block precedes it
+    TokenRef declToken = current;  // First token of the declaration; a doc block precedes it
+    BoundsSpec bounds;
+    while (IsBoundsDecorator(current)) {
+        Advance();
+        if (!ParseBoundsDecorator(&bounds)) return NodeRef::Null();
+    }
     if (!Consume(TokenType::IDENTIFIER, "Expected resource name")) {
         if (stream->GetType(current) != TokenType::RIGHT_BRACE && stream->GetType(current) != TokenType::EOF_TOKEN) {
             Advance();
@@ -1047,6 +1065,12 @@ NodeRef Parser::ParseResourceDecl() {
         return NodeRef::Null();
     }
     std::string typeName = wrapper.empty() ? payloadType : wrapper + "<" + payloadType + ">";
+    // @bounds after the type, on its line; a later line's is the next resource's.
+    const u32 typeLine = getLocation(stream->GetOffset(previous)).line;
+    while (IsBoundsDecorator(current) && getLocation(stream->GetOffset(current)).line == typeLine) {
+        Advance();
+        if (!ParseBoundsDecorator(&bounds)) return NodeRef::Null();
+    }
     Match(TokenType::SEMICOLON);
 
     ReverseLookup::Register(Utils::HashStr(name.c_str()), name.c_str());
@@ -1056,7 +1080,235 @@ NodeRef Parser::ParseResourceDecl() {
     ast->GetResourceDecl(resource).payloadTypePosition = AST::PackPosition(payloadLoc.line, payloadLoc.column);
     resourceTypeSites[resource.packed] = {payloadToken, qualifierIndex};
     AttachDocComment(resource, declToken);
+    if (bounds.present) {
+        // Only a plain scalar or vector has one value to bound; a struct's
+        // fields take their own.
+        TypeInfo payload = TYPE_INFO(CoreType::INVALID, 0, false);
+        if (builtinType && wrapper.empty() && dimensions == 0) payload = GetTypeInfoFromToken(payloadTokenType);
+        if (payload.coreType == CoreType::INVALID) {
+            ErrorAt(bounds.decorator, "@bounds on a resource takes a float, int or uint scalar or vector; "
+                                      "put them on the fields of a struct or buffer element instead");
+        } else {
+            ast->GetResourceDecl(resource).bounds = ResolveBounds(bounds, payload);
+        }
+    }
     return resource;
+}
+
+//==============================================================================
+// @bounds(...)
+//==============================================================================
+
+bool Parser::IsBoundsDecorator(TokenRef token) const {
+    static const u32 HASH_BOUNDS = Utils::HashStr("bounds");
+    return stream->GetType(token) == TokenType::AT &&
+           Utils::HashStr(stream->GetValue(token).data(), static_cast<u16>(stream->GetLength(token))) == HASH_BOUNDS;
+}
+
+// Reads the clauses of `@bounds(...)`, with the decorator already consumed:
+//   >0        every component is greater than 0 (>=, <, <= likewise)
+//   y<=1      just component y
+//   -10<y<0   component y on both sides (< or <=)
+// A clause without a component applies to every component, except on a
+// side a component clause sets, or where it contradicts one; see
+// ResolveBounds.
+bool Parser::ParseBoundsDecorator(BoundsSpec* spec) {
+    spec->present = true;
+    spec->decorator = previous;
+    if (!Consume(TokenType::LEFT_PAREN, "Expected '(' after @bounds")) return false;
+
+    auto parseNumber = [&](f64* value) -> bool {
+        bool negative = Match(TokenType::MINUS);
+        if (!Consume(TokenType::NUMBER, "Expected a number in @bounds")) return false;
+        std::string text(stream->GetValue(previous));
+        char* end = nullptr;
+        f64 parsed = std::strtod(text.c_str(), &end);
+        // Integer suffixes and digit separators aren't part of a bound.
+        if (end == text.c_str() || (*end != '\0' && *end != 'f' && *end != 'u')) {
+            ErrorAtPrevious("Expected a number in @bounds");
+            return false;
+        }
+        *value = negative ? -parsed : parsed;
+        return true;
+    };
+    auto parseComponent = [&](s8* component) -> bool {
+        std::string_view name = stream->GetValue(previous);
+        const char* letters = "xyzwrgba";
+        for (u32 i = 0; i < 8 && name.size() == 1; i++) {
+            if (name[0] == letters[i]) {
+                *component = static_cast<s8>(i % 4);
+                return true;
+            }
+        }
+        ErrorAtPrevious("Expected a component x, y, z or w (or r, g, b, a) in @bounds");
+        return false;
+    };
+    auto isRelation = [&]() {
+        return Check(TokenType::LESS) || Check(TokenType::LESS_EQUAL) ||
+               Check(TokenType::GREATER) || Check(TokenType::GREATER_EQUAL);
+    };
+    // Applies `value <relation> bound` to clause.bounds.
+    auto applyRelation = [&](BoundsClause* clause, TokenType relation, f64 bound) {
+        ComponentBounds& b = clause->bounds;
+        bool exclusive = relation == TokenType::LESS || relation == TokenType::GREATER;
+        if (relation == TokenType::GREATER || relation == TokenType::GREATER_EQUAL) {
+            b.low = bound;
+            b.flags |= ComponentBounds::HAS_LOW | (exclusive ? ComponentBounds::LOW_EXCLUSIVE : 0);
+        } else {
+            b.high = bound;
+            b.flags |= ComponentBounds::HAS_HIGH | (exclusive ? ComponentBounds::HIGH_EXCLUSIVE : 0);
+        }
+    };
+
+    while (!Check(TokenType::RIGHT_PAREN) && !Check(TokenType::EOF_TOKEN)) {
+        ProgressGuard _pg_(this);
+        if (spec->count == 16) {
+            ErrorAtCurrent("Too many clauses in @bounds");
+            return false;
+        }
+        BoundsClause clause = {-1, {0.0, 0.0, 0}, current};
+        if (isRelation()) {
+            TokenType relation = CurrentTokenType();
+            Advance();
+            f64 bound;
+            if (!parseNumber(&bound)) return false;
+            applyRelation(&clause, relation, bound);
+        } else if (Match(TokenType::IDENTIFIER)) {
+            if (!parseComponent(&clause.component)) return false;
+            if (!isRelation()) {
+                ErrorAtCurrent("Expected <, <=, > or >= after the component in @bounds");
+                return false;
+            }
+            TokenType relation = CurrentTokenType();
+            Advance();
+            f64 bound;
+            if (!parseNumber(&bound)) return false;
+            applyRelation(&clause, relation, bound);
+        } else if (Check(TokenType::NUMBER) || Check(TokenType::MINUS)) {
+            // low < component < high
+            f64 low, high;
+            if (!parseNumber(&low)) return false;
+            if (!Check(TokenType::LESS) && !Check(TokenType::LESS_EQUAL)) {
+                ErrorAtCurrent("Expected < or <= in a two-sided bound like '-1<y<1'");
+                return false;
+            }
+            bool lowExclusive = CurrentTokenType() == TokenType::LESS;
+            Advance();
+            if (!Consume(TokenType::IDENTIFIER, "Expected a component in a two-sided bound like '-1<y<1'") ||
+                !parseComponent(&clause.component)) {
+                return false;
+            }
+            if (!Check(TokenType::LESS) && !Check(TokenType::LESS_EQUAL)) {
+                ErrorAtCurrent("Expected < or <= in a two-sided bound like '-1<y<1'");
+                return false;
+            }
+            TokenType relation = CurrentTokenType();
+            Advance();
+            if (!parseNumber(&high)) return false;
+            applyRelation(&clause, lowExclusive ? TokenType::GREATER : TokenType::GREATER_EQUAL, low);
+            applyRelation(&clause, relation, high);
+        } else {
+            ErrorAtCurrent("Expected a bound like '>0', 'x<=1' or '-1<y<1' in @bounds");
+            return false;
+        }
+        spec->clauses[spec->count++] = clause;
+        if (!Match(TokenType::COMMA)) break;
+    }
+    return Consume(TokenType::RIGHT_PAREN, "Expected ')' after @bounds");
+}
+
+// Per component: the clauses naming it, then, on a side they leave open,
+// the clauses for every component when they agree with it. So
+// `@bounds(>0, y<10)` gives y both bounds, while `@bounds(>0, y<0)` keeps
+// y below 0 and the others above it.
+const DeclaredBounds* Parser::ResolveBounds(const BoundsSpec& spec, const TypeInfo& type) {
+    if (!spec.present) return nullptr;
+    CoreType scalar = CoreTypeScalarType(type.coreType);
+    u32 count = CoreTypeScalarComponentCount(type.coreType);
+    bool numeric = scalar == CoreType::FLOAT || scalar == CoreType::INT || scalar == CoreType::UINT;
+    // Vector types set arrayDimensions too, so arrays are ruled out by the
+    // callers, which pass INVALID for them.
+    if (!numeric || CoreTypeComponentCount(type.coreType) != count) {
+        ErrorAt(spec.decorator, "@bounds applies to float, int and uint scalars and vectors");
+        return nullptr;
+    }
+
+    // Two bounds on one side keep the tighter one.
+    auto intersect = [](ComponentBounds* into, const ComponentBounds& with) {
+        if (with.flags & ComponentBounds::HAS_LOW) {
+            bool tighter = !(into->flags & ComponentBounds::HAS_LOW) || with.low > into->low ||
+                           (with.low == into->low && (with.flags & ComponentBounds::LOW_EXCLUSIVE));
+            if (tighter) {
+                into->low = with.low;
+                into->flags = static_cast<u8>((into->flags & ~ComponentBounds::LOW_EXCLUSIVE) |
+                                              ComponentBounds::HAS_LOW |
+                                              (with.flags & ComponentBounds::LOW_EXCLUSIVE));
+            }
+        }
+        if (with.flags & ComponentBounds::HAS_HIGH) {
+            bool tighter = !(into->flags & ComponentBounds::HAS_HIGH) || with.high < into->high ||
+                           (with.high == into->high && (with.flags & ComponentBounds::HIGH_EXCLUSIVE));
+            if (tighter) {
+                into->high = with.high;
+                into->flags = static_cast<u8>((into->flags & ~ComponentBounds::HIGH_EXCLUSIVE) |
+                                              ComponentBounds::HAS_HIGH |
+                                              (with.flags & ComponentBounds::HIGH_EXCLUSIVE));
+            }
+        }
+    };
+    auto isEmpty = [](const ComponentBounds& b) {
+        if (!(b.flags & ComponentBounds::HAS_LOW) || !(b.flags & ComponentBounds::HAS_HIGH)) return false;
+        bool exclusive = b.flags & (ComponentBounds::LOW_EXCLUSIVE | ComponentBounds::HIGH_EXCLUSIVE);
+        return b.low > b.high || (b.low == b.high && exclusive);
+    };
+
+    ComponentBounds general = {0.0, 0.0, 0};
+    for (u32 k = 0; k < spec.count; k++) {
+        const BoundsClause& clause = spec.clauses[k];
+        if (clause.component < 0) {
+            intersect(&general, clause.bounds);
+        } else if (count == 1 || static_cast<u32>(clause.component) >= count) {
+            ErrorAt(clause.token, count == 1 ? std::string("@bounds on a scalar takes no component")
+                                             : "The type has no component " +
+                                                   std::string(1, "xyzw"[clause.component]));
+            return nullptr;
+        }
+    }
+    if (isEmpty(general)) {
+        ErrorAt(spec.decorator, "@bounds leave no value possible");
+        return nullptr;
+    }
+
+    DeclaredBounds* result = (DeclaredBounds*)arena->Allocate(sizeof(DeclaredBounds), alignof(DeclaredBounds));
+    *result = {};
+    result->count = static_cast<u8>(count);
+    for (u32 c = 0; c < count; c++) {
+        ComponentBounds own = {0.0, 0.0, 0};
+        for (u32 k = 0; k < spec.count; k++) {
+            if (spec.clauses[k].component == static_cast<s8>(c)) intersect(&own, spec.clauses[k].bounds);
+        }
+        if (isEmpty(own)) {
+            ErrorAt(spec.decorator, std::string("@bounds leave component ") + "xyzw"[c] + " no value");
+            return nullptr;
+        }
+        ComponentBounds combined = own;
+        ComponentBounds side = general;
+        side.flags &= ~(ComponentBounds::HAS_HIGH | ComponentBounds::HIGH_EXCLUSIVE);
+        if (!(own.flags & ComponentBounds::HAS_LOW) && (side.flags & ComponentBounds::HAS_LOW)) {
+            ComponentBounds candidate = combined;
+            intersect(&candidate, side);
+            if (!isEmpty(candidate)) combined = candidate;
+        }
+        side = general;
+        side.flags &= ~(ComponentBounds::HAS_LOW | ComponentBounds::LOW_EXCLUSIVE);
+        if (!(own.flags & ComponentBounds::HAS_HIGH) && (side.flags & ComponentBounds::HAS_HIGH)) {
+            ComponentBounds candidate = combined;
+            intersect(&candidate, side);
+            if (!isEmpty(candidate)) combined = candidate;
+        }
+        result->components[c] = combined;
+    }
+    return result;
 }
 
 void Parser::ValidateResourceTypes(NodeRef owner, bool ownerIsPipeline, u32 firstResource) {
@@ -1107,7 +1359,8 @@ void Parser::ValidateResourceTypes(NodeRef owner, bool ownerIsPipeline, u32 firs
             panicMode = false;
             ErrorAt(site->second.token, "Unknown resource type '" + canonicalBase + "'");
         } else if (ownerIsPipeline) {
-            RegisterParsedResource(declaration.name.ToString(sourceBase()), typeName, declaration.resourceIndex);
+            RegisterParsedResource(declaration.name.ToString(sourceBase()), typeName, declaration.resourceIndex,
+                                   declaration.bounds);
         }
     }
 }
