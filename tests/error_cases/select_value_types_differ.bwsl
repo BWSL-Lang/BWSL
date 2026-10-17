@@ -1,0 +1,11 @@
+// select's two values must have the same type; the backends don't convert
+// them, so a mix used to fail SPIR-V validation.
+pipeline SelectValueTypesDiffer {
+    pass "Main" {
+        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+        fragment {
+            float v = select(0.0, 1u, input.position.x > 0.5);
+            output.color = float4(v);
+        }
+    }
+}
