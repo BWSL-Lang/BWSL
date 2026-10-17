@@ -1,0 +1,32 @@
+// Repeated calculations are computed once: across commutative operands,
+// from before a branch into both arms, and from before a loop into its
+// body. A calculation repeated after an operand changed stays separate.
+// Every value is exact in float.
+pipeline EquivCommonSubexpressions {
+
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float x = float(idx);
+            float y = float(idx & 3u);
+
+            float a = (x + y) * 2.0 + (y + x) * 2.0;                  // 4(x + y)
+            float before = x * 3.0;
+            float arm;
+            if ((idx & 1u) == 1u) { arm = x * 3.0 + y * 5.0; } else { arm = x * 3.0 - y * 5.0; }
+            float summed = 0.0;
+            for (uint i = 0u; i < (idx & 3u) + 1u; i++) { summed += x * 3.0 + float(i); }
+            float z = x * 2.0;
+            x = x + 1.0;
+            float w = x * 2.0;                                        // 2(x + 1), not z
+            float2 v = float2(z, w) * float2(z, w);
+
+            resources.output[idx] = a + before + arm + summed + z + w + v.x - v.y;
+        }
+    }
+}

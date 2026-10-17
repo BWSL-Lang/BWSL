@@ -1,5 +1,6 @@
 #include "bwsl_constant_propagation.h"
 #include "bwsl_ir_edit.h"
+#include "bwsl_cse.h"
 #include "core/bwsl_arena.h"
 #include <algorithm>
 #include <bit>
@@ -3073,6 +3074,7 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
     RemoveDeadValues(&data, &arena);
     if (straightLine) RemoveUnreadAssignments(&data, &arena);
     ApplyInsertions(builder, cfg, &data.insertions);
+    EliminateCommonSubexpressions(builder, cfg);
 }
 
 }  // namespace Optimization
