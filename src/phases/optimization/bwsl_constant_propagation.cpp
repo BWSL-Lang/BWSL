@@ -2093,9 +2093,11 @@ static bool KeepsLocalMemory(u16 op) {
 
 // A load of a struct field that a store before it on every path wrote
 // becomes a copy of the value stored, so constants and ranges carry
-// through the field. Blocks are walked in reverse postorder; one starts
-// with what all its predecessors stored, and a loop header, whose back
-// edge isn't walked yet, with nothing.
+// through the field. Each block starts with what all its predecessors
+// stored. Blocks are walked in reverse postorder until that settles,
+// starting from the assumption that a block not walked yet keeps
+// everything, so a loop that doesn't write a field keeps it; loads are
+// rewritten in one walk after that.
 //
 // A store through a pointer that isn't a field pointer chain forgets every
 // stored value, as does anything else that may write local memory; a store
@@ -2117,12 +2119,13 @@ static void ForwardLocalStores(ConstantPropagationData* data, BWSL_Arena* arena)
     u8* resolved = (u8*)AllocateZeroed(arena, regCount);  // 0 not yet, 1 an address, 2 none
     LocalAddress* addresses = (LocalAddress*)AllocateZeroed(arena, regCount * sizeof(LocalAddress));
     Stored* outs = (Stored*)AllocateZeroed(arena, size_t(blocks) * MAX_STORED * sizeof(Stored));
-    u8* outCounts = (u8*)AllocateZeroed(arena, blocks);
-    bool* walked = (bool*)AllocateZeroed(arena, blocks * sizeof(bool));
+    u8* outCounts = (u8*)AllocateZeroed(arena, blocks);  // ALL_STORED: not walked yet, keeps everything
+    constexpr u8 ALL_STORED = 0xFF;
     if (!addressed || !pointerLike || !definitionCounts || !definedBy || !resolved || !addresses || !outs ||
-        !outCounts || !walked) {
+        !outCounts) {
         return;
     }
+    memset(outCounts, ALL_STORED, blocks);
     auto isPointerOp = [](u16 op) {
         return op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_LOCAL_INDEX_PTR;
     };
@@ -2194,26 +2197,29 @@ static void ForwardLocalStores(ConstantPropagationData* data, BWSL_Arena* arena)
         return resolved[reg] == 1 ? &addresses[reg] : nullptr;
     };
 
-    Stored stored[MAX_STORED];
-    u32 storedCount = 0;
-    for (u32 k = blocks; k-- > 0;) {
-        u32 block = data->straightLine ? 0 : cfg->postorder[k];
-        if (block >= blocks) continue;
-        // What every predecessor stored, unless one isn't walked yet.
-        storedCount = 0;
-        if (!data->straightLine && block != cfg->entryBlock && cfg->PredecessorCount(block) > 0) {
-            bool all = true;
-            for (u32 e = cfg->predecessorOffsets[block]; e < cfg->predecessorOffsets[block + 1]; e++) {
-                u32 predecessor = cfg->predecessorData[e];
-                all &= predecessor < blocks && walked[predecessor];
-            }
-            if (all) {
-                u32 first = cfg->predecessorData[cfg->predecessorOffsets[block]];
-                storedCount = outCounts[first];
-                memcpy(stored, outs + size_t(first) * MAX_STORED, storedCount * sizeof(Stored));
-                for (u32 e = cfg->predecessorOffsets[block] + 1; e < cfg->predecessorOffsets[block + 1]; e++) {
+    // One walk over the blocks; returns whether a block's result changed.
+    auto walk = [&](bool rewrite) {
+        bool changed = false;
+        Stored stored[MAX_STORED];
+        for (u32 k = blocks; k-- > 0;) {
+            u32 block = data->straightLine ? 0 : cfg->postorder[k];
+            if (block >= blocks) continue;
+            // What every predecessor walked stored. One not walked yet keeps
+            // everything; if none is walked, the block isn't reached and
+            // starts with nothing.
+            u32 storedCount = 0;
+            bool first = true;
+            if (!data->straightLine && block != cfg->entryBlock) {
+                for (u32 e = cfg->predecessorOffsets[block]; e < cfg->predecessorOffsets[block + 1]; e++) {
                     u32 predecessor = cfg->predecessorData[e];
+                    if (predecessor >= blocks || outCounts[predecessor] == ALL_STORED) continue;
                     const Stored* other = outs + size_t(predecessor) * MAX_STORED;
+                    if (first) {
+                        storedCount = outCounts[predecessor];
+                        memcpy(stored, other, storedCount * sizeof(Stored));
+                        first = false;
+                        continue;
+                    }
                     u32 kept = 0;
                     for (u32 s = 0; s < storedCount; s++) {
                         bool found = false;
@@ -2225,63 +2231,77 @@ static void ForwardLocalStores(ConstantPropagationData* data, BWSL_Arena* arena)
                     storedCount = kept;
                 }
             }
-        }
-        u32 first = data->straightLine ? 0 : cfg->firstInst[block];
-        u32 last = data->straightLine ? ir->instructionCount - 1 : cfg->lastInst[block];
-        for (u32 i = first; i <= last && i < ir->instructionCount; i++) {
-            u16 op = ir->opcodes[i];
-            u16 dest = ir->destinations[i];
-            if (op == IR::OP_LOCAL_LOAD) {
-                const LocalAddress* address = resolve(resolve, ir->GetOperand(i, 0), 0);
-                for (u32 s = 0; address && s < storedCount; s++) {
-                    if (!SameAddress(stored[s].address, *address)) continue;
-                    u16 value = stored[s].value;
-                    if (IR::IsConstant(value)) {
-                        CoreType type = GetRegisterType(ir, dest);
-                        if (GetComponentCount(type) == 1 && DecodeConstant(ir, value).type == type &&
-                            !IsMemoryBacked(ir, dest)) {
-                            MakeConstantCopy(data, i, value);
+            u32 firstInst = data->straightLine ? 0 : cfg->firstInst[block];
+            u32 lastInst = data->straightLine ? ir->instructionCount - 1 : cfg->lastInst[block];
+            for (u32 i = firstInst; i <= lastInst && i < ir->instructionCount; i++) {
+                u16 op = ir->opcodes[i];
+                u16 dest = ir->destinations[i];
+                if (op == IR::OP_LOCAL_LOAD && rewrite) {
+                    const LocalAddress* address = resolve(resolve, ir->GetOperand(i, 0), 0);
+                    for (u32 s = 0; address && s < storedCount; s++) {
+                        if (!SameAddress(stored[s].address, *address)) continue;
+                        u16 value = stored[s].value;
+                        if (IR::IsConstant(value)) {
+                            CoreType type = GetRegisterType(ir, dest);
+                            if (GetComponentCount(type) == 1 && DecodeConstant(ir, value).type == type &&
+                                !IsMemoryBacked(ir, dest)) {
+                                MakeConstantCopy(data, i, value);
+                            }
+                        } else {
+                            RewriteAs(data, i, IR::OP_LOAD_REG, value);
                         }
-                    } else {
-                        RewriteAs(data, i, IR::OP_LOAD_REG, value);
+                        op = ir->opcodes[i];
+                        break;
                     }
-                    op = ir->opcodes[i];
-                    break;
                 }
-            }
-            if (op == IR::OP_LOCAL_STORE) {
-                const LocalAddress* address = resolve(resolve, ir->GetOperand(i, 0), 0);
-                u16 value = ir->GetOperand(i, 1);
-                if (!address) {
+                if (op == IR::OP_LOCAL_STORE) {
+                    const LocalAddress* address = resolve(resolve, ir->GetOperand(i, 0), 0);
+                    u16 value = ir->GetOperand(i, 1);
+                    if (!address) {
+                        storedCount = 0;
+                    } else {
+                        LocalAddress target = *address;
+                        u32 kept = 0;
+                        for (u32 s = 0; s < storedCount; s++) {
+                            if (Disjoint(stored[s].address, target)) stored[kept++] = stored[s];
+                        }
+                        storedCount = kept;
+                        bool forwardable = IR::IsConstant(value) ||
+                                           (IsRegisterOperand(data, value) && !addressed[value] && !pointerLike[value] &&
+                                            !IsMemoryBacked(ir, value) &&
+                                            (data->straightLine || definitionCounts[value] == 1));
+                        if (forwardable && storedCount < MAX_STORED) stored[storedCount++] = {target, value};
+                    }
+                } else if (!KeepsLocalMemory(op)) {
                     storedCount = 0;
-                } else {
-                    LocalAddress target = *address;
+                }
+                if (defines(i)) {
+                    if (addressed[dest]) storedCount = 0;  // A struct a pointer can reach changed
                     u32 kept = 0;
                     for (u32 s = 0; s < storedCount; s++) {
-                        if (Disjoint(stored[s].address, target)) stored[kept++] = stored[s];
+                        if (stored[s].value != dest && stored[s].address.root != dest) stored[kept++] = stored[s];
                     }
                     storedCount = kept;
-                    bool forwardable = IR::IsConstant(value) ||
-                                       (IsRegisterOperand(data, value) && !addressed[value] && !pointerLike[value] &&
-                                        !IsMemoryBacked(ir, value) && (data->straightLine || definitionCounts[value] == 1));
-                    if (forwardable && storedCount < MAX_STORED) stored[storedCount++] = {target, value};
                 }
-            } else if (!KeepsLocalMemory(op)) {
-                storedCount = 0;
             }
-            if (defines(i)) {
-                if (addressed[dest]) storedCount = 0;  // A struct a pointer can reach changed
-                u32 kept = 0;
-                for (u32 s = 0; s < storedCount; s++) {
-                    if (stored[s].value != dest && stored[s].address.root != dest) stored[kept++] = stored[s];
-                }
-                storedCount = kept;
+            Stored* out = outs + size_t(block) * MAX_STORED;
+            bool same = outCounts[block] == storedCount;
+            for (u32 s = 0; s < storedCount && same; s++) {
+                same = out[s].value == stored[s].value && SameAddress(out[s].address, stored[s].address);
+            }
+            if (!same) {
+                changed = true;
+                outCounts[block] = static_cast<u8>(storedCount);
+                memcpy(out, stored, storedCount * sizeof(Stored));
             }
         }
-        outCounts[block] = static_cast<u8>(storedCount);
-        memcpy(outs + size_t(block) * MAX_STORED, stored, storedCount * sizeof(Stored));
-        walked[block] = true;
-    }
+        return changed;
+    };
+    // Each walk can only drop entries, so it settles; a stage that hasn't
+    // after many walks is left alone.
+    bool settled = false;
+    for (u32 pass = 0; pass < 64 && !settled; pass++) settled = !walk(false);
+    if (settled) walk(true);
 }
 
 // A scalar result that doesn't depend on the operands' values.

@@ -753,9 +753,9 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             self.assertIn(".color.z, 1.0)", body)
 
         def test_struct_fields_carry_across_branches(self):
-            # A field keeps the value stored before a discard and before a
-            # branch that writes another field. One a branch or a loop
-            # may write is read from memory.
+            # A field keeps the value stored before a discard, a branch that
+            # writes another field and a loop that doesn't touch it. One a
+            # branch or a loop may write is read from memory.
             target = self.compile('''pipeline BranchBounds {
                 attributes {
                     position: float2
@@ -775,7 +775,9 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
                         if (input.position.x > 100.0) { discard; }
                         float a = min(1.0, i.color.z * 0.01);
                         if (input.position.y > 100.0) { i.other = 1.0; }
-                        float b = min(1.0, i.color.z * 0.01);
+                        float sum = 0.0;
+                        for (int m = 0; m < (int(input.position.y) & 7); m++) { sum += float(m); }
+                        float b = min(1.0, i.color.z * 0.01) + sum;
                         Inputs k;
                         k.other = 2.0;
                         for (int n = 0; n < int(input.position.x); n++) { k.other = k.other * 0.5; }
