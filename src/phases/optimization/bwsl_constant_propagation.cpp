@@ -40,6 +40,30 @@ struct ConstantValue {
 constexpr ConstantValue UNDEFINED_VALUE = {ValueState::UNDEFINED, CoreType::INVALID, 0, {}, 0};
 constexpr ConstantValue OVERDEFINED_VALUE = {ValueState::OVERDEFINED, CoreType::INVALID, 0, {}, 0};
 
+// A component's possible values (see bwsl_constant_propagation_ranges.inl):
+// from low to high, each end reached unless it's exclusive, and NaN or not.
+// Integers keep whole, reached ends. Without KNOWN, nothing has reached it yet.
+struct ValueRange {
+    f64 low;
+    f64 high;
+    u8 flags;
+
+    static constexpr u8 KNOWN = 1;
+    static constexpr u8 LOW_EXCLUSIVE = 2;   // value > low rather than >= low
+    static constexpr u8 HIGH_EXCLUSIVE = 4;  // value < high rather than <= high
+    static constexpr u8 MAY_BE_NAN = 8;
+};
+
+// `reg op other` holds (or, with !holds, fails) in a block and the blocks
+// it dominates, linked to the dominator's constraints through parent.
+struct RangeConstraint {
+    u16 reg;
+    u16 op;
+    u16 other;
+    bool holds;
+    u32 parent;
+};
+
 // Marks a definitions[] or use-list entry that names a phi, not an instruction.
 constexpr u32 PHI_REFERENCE = 0x80000000;
 constexpr u32 NO_DEFINITION = 0xFFFFFFFF;
@@ -92,6 +116,16 @@ struct ConstantPropagationData {
     // Instructions rewrites add, applied once the pass is done with
     // instruction indices.
     InstructionInsertions insertions;
+
+    // Value ranges.
+    ValueRange* ranges;         // [bitOffsets[regCount]]
+    u8* rangeChanges;           // [regCount] times a range grew, for widening
+    u32* blockConstraints;      // [blockCount] the block's last constraint, NO_DEFINITION for none
+    RangeConstraint* constraints;
+    u32 constraintCount;
+    u32 constraintCapacity;
+    bool rangesReady;           // ranges hold a settled result (or, straight-line, the walk's)
+    mutable bool sawUnknownRange;  // An evaluation read a range not known yet
 };
 
 static ConstantValue MakeConstant(CoreType type, u32 bits) {
@@ -1448,6 +1482,14 @@ static void VisitInstruction(ConstantPropagationData* data, u32 inst) {
     }
     u16 dest = ir->destinations[inst];
     if (dest < data->regCount && data->tracked[dest] && data->definitions[dest] == inst) {
+        if (data->pinned[dest]) {
+            // A value its range fixes (see PinPointRanges).
+            ConstantValue value = {ValueState::CONSTANT, GetRegisterType(ir, dest),
+                                   static_cast<u8>(data->bitOffsets[dest + 1] - data->bitOffsets[dest]), {}, 0};
+            memcpy(value.bits, data->pinnedBits + data->bitOffsets[dest], value.count * sizeof(u32));
+            UpdateRegister(data, dest, value);
+            return;
+        }
         UpdateRegister(data, dest, EvaluateInstruction(data, inst));
     }
 }
@@ -1490,6 +1532,8 @@ static void Propagate(ConstantPropagationData* data) {
 // ============= Loops =============
 
 static u16 InternConstant(IR::IRBuilder* builder, CoreType type, u32 bits);
+static void ComputeRanges(ConstantPropagationData* data);
+static bool PinPointRanges(ConstantPropagationData* data);
 
 // Instructions a loop evaluated at compile time may hold, beside control
 // flow: values without side effects.
@@ -1767,8 +1811,10 @@ static void PropagateWithLoops(ConstantPropagationData* data) {
     const CFG* cfg = data->cfg;
     Propagate(data);
     if (!cfg->dominatorsComputed) return;
-    while (true) {
-        bool anyFolded = false;
+    for (u32 round = 0; round < 16; round++) {
+        // Values their ranges fix fold like constants.
+        ComputeRanges(data);
+        bool anyFolded = PinPointRanges(data);
         for (u32 block = 0; block < cfg->blockCount; block++) {
             if (!data->blockExecutable[block] || data->loopFolded[block] || !HasBackEdge(cfg, block)) continue;
             if (FoldLoop(data, block)) {
@@ -1776,10 +1822,12 @@ static void PropagateWithLoops(ConstantPropagationData* data) {
                 anyFolded = true;
             }
         }
-        if (!anyFolded) return;
+        if (!anyFolded) break;
         ResetPropagation(data);
         Propagate(data);
     }
+    // Ranges for the rewrites, from the final propagation.
+    ComputeRanges(data);
 }
 
 // ============= Rewriting =============
@@ -2331,6 +2379,8 @@ static void RewriteAlgebraicIdentity(ConstantPropagationData* data, u32 inst) {
     }
 }
 
+#include "bwsl_constant_propagation_ranges.inl"
+
 static void RewriteConstants(ConstantPropagationData* data) {
     IRProgram* ir = data->ir;
     for (u32 i = 0; i < ir->instructionCount; i++) {
@@ -2339,6 +2389,9 @@ static void RewriteConstants(ConstantPropagationData* data) {
         if (!IsRegisterOperand(data, dest) || data->states[dest] != ValueState::CONSTANT) {
             RewriteBitwiseIdentity(data, i);
             RewriteAlgebraicIdentity(data, i);
+            if (data->rangesReady && data->blockExecutable[data->cfg->instToBlock[i]]) {
+                RewriteWithRanges(data, i, data->cfg->instToBlock[i]);
+            }
         }
     }
 
@@ -2708,6 +2761,7 @@ static void PropagateStraightLine(ConstantPropagationData* data) {
         RewriteOperands(data, i);
         RewriteBitwiseIdentity(data, i);
         RewriteAlgebraicIdentity(data, i);
+        RewriteWithRanges(data, i, 0);
         u16 dest = ir->destinations[i];
         if (IsRegisterOperand(data, dest) && !IsUseInDestination(op) && op != IR::OP_JUMP &&
             op != IR::OP_BRANCH && op != IR::OP_SWITCH && op != IR::OP_RET) {
@@ -2724,6 +2778,29 @@ static void PropagateStraightLine(ConstantPropagationData* data) {
         // A vector with some known components keeps them too.
         bool isPartial = value.state == ValueState::OVERDEFINED && value.known != 0 && fits;
         SetRegisterValue(data, dest, isConstant || isPartial ? value : OVERDEFINED_VALUE);
+        // The walk's range for the register from here on; one that's a
+        // single number is a constant. Float zeros aren't: they could be -0.0.
+        if (HasRange(data, dest)) {
+            u32 offset = data->bitOffsets[dest];
+            u32 count = data->bitOffsets[dest + 1] - offset;
+            CoreType scalar = GetScalarType(type);
+            ConstantValue fixed = {ValueState::CONSTANT, type, static_cast<u8>(count), {}, 0};
+            bool point = !isConstant && count == GetComponentCount(type);
+            for (u32 c = 0; c < count; c++) {
+                ValueRange range = isConstant ? PointRange(scalar, value.bits[c]) : EvaluateComponentRange(data, i, c, 0);
+                data->ranges[offset + c] = range;
+                point = point && IsPoint(range) && !(IsFloatScalar(scalar) && range.low == 0.0);
+                if (point) {
+                    fixed.bits[c] = IsFloatScalar(scalar) ? FloatToBits(static_cast<float>(range.low))
+                                  : scalar == CoreType::INT ? static_cast<u32>(static_cast<s32>(range.low))
+                                                            : static_cast<u32>(range.low);
+                }
+            }
+            if (point) {
+                SetRegisterValue(data, dest, fixed);
+                isConstant = true;
+            }
+        }
         if (isConstant) MaterializeConstant(data, i, dest);
     }
 }
@@ -3028,7 +3105,11 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
                    size_t(bitCount) * sizeof(u32) * 2 + size_t(ir->phiCount) * sizeof(u16) +
                    size_t(blockCount) * (sizeof(bool) * 2 + sizeof(u32)) +
                    // Dead loops: path, next, onPath, predecessor counts.
-                   size_t(blockCount) * (sizeof(u32) * 3 + sizeof(bool)) + sizeof(u32) + 52 * 64;
+                   size_t(blockCount) * (sizeof(u32) * 3 + sizeof(bool)) + sizeof(u32) +
+                   // Ranges: ranges, rangeChanges; blockConstraints, constraints.
+                   size_t(bitCount) * sizeof(ValueRange) + size_t(regCount) +
+                   size_t(blockCount) * sizeof(u32) + size_t(blockCount * 8 + 16) * sizeof(RangeConstraint) +
+                   56 * 64;
     std::vector<char> memory(bytes);
     BWSL_Arena arena;
     arena.Initialize(memory.data(), memory.size());
@@ -3051,6 +3132,12 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
     data.regWork = (u32*)AllocateZeroed(&arena, (bitCount + regCount * 2) * sizeof(u32));
     data.known = (u16*)AllocateZeroed(&arena, regCount * sizeof(u16));
     data.savedKnown = (u16*)AllocateZeroed(&arena, regCount * sizeof(u16));
+    data.ranges = (ValueRange*)AllocateZeroed(&arena, bitCount * sizeof(ValueRange));
+    data.rangeChanges = (u8*)AllocateZeroed(&arena, regCount);
+    data.blockConstraints = (u32*)AllocateZeroed(&arena, blockCount * sizeof(u32));
+    data.constraintCapacity = blockCount * 8 + 16;
+    data.constraints = (RangeConstraint*)AllocateZeroed(&arena, data.constraintCapacity * sizeof(RangeConstraint));
+    data.rangesReady = straightLine;
     data.blockExecutable = (bool*)AllocateZeroed(&arena, blockCount * sizeof(bool));
     data.edgeExecutable = (bool*)AllocateZeroed(&arena, edgeCount * sizeof(bool));
     data.blockPhiOffsets = (u32*)AllocateZeroed(&arena, (blockCount + 1) * sizeof(u32));
@@ -3071,7 +3158,8 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
         !data.blockExecutable || !data.edgeExecutable || !data.blockPhiOffsets ||
         !data.blockPhis || !data.phiRemoved || !data.blockWork || !data.pinned || !data.pinnedBits ||
         !data.pinnedPhiOperand || !data.readAnywhere || !data.loopFolded || !data.inLoop ||
-        !data.blockStack || !data.savedStates || !data.savedBits || !data.known || !data.savedKnown) {
+        !data.blockStack || !data.savedStates || !data.savedBits || !data.known || !data.savedKnown ||
+        !data.ranges || !data.rangeChanges || !data.blockConstraints || !data.constraints) {
         return;
     }
     memset(data.definitions, 0xFF, regCount * sizeof(u32));

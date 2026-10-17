@@ -2,6 +2,13 @@
 
 ## unreleased
 
+### Language
+- `@bounds(...)` promises the range of an attribute, a scalar or vector
+  resource, or a struct field: `@bounds(>0, <10) int count;`,
+  `@bounds(>=0, <=1) float4 tint;`, or per component, as in
+  `@bounds(>0, -10<y<0) float4 offsets;`. A bounded component is never
+  NaN. See "Value Bounds" in the language reference.
+
 ### Backends
 - Experimental native WGSL output is available with `-wgsl` for compute,
   vertex and fragment shaders, including structured control flow, std140
@@ -43,6 +50,13 @@
   A calculation repeated where an earlier one with the same operands is
   available, such as `sin(x * 2.0)` twice, or `x * 3.0` before a branch
   and again in its arms, is computed once.
+  Every value's range is tracked, from `@bounds`, constants, operations and
+  the branches it's in, and it removes what can't change the value:
+  `clamp`, `min`, `max`, `saturate`, `step` and `abs` of values already in
+  range, and branches the range decides. With `@bounds(>0, <10) int n`,
+  `clamp(n, 1, 9)` becomes `n` and `if (n >= 10)` disappears, and in
+  `for (int i = 0; i < n; i++)`, `saturate(float(i) / 16.0)` becomes
+  `float(i) * 0.0625`. Calls on a value that may be NaN stay.
   Folding skips results that can differ between GPUs:
   NaN, infinities, denormals, `-0.0`, integer division of negative values,
   conversions that are out of range or inexact, and math functions outside

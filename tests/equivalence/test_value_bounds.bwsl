@@ -1,0 +1,41 @@
+// @bounds and the ranges the compiler works out remove calls that can't
+// change their value: clamps of values already in range, min and max of
+// ordered values, step and abs of values on one side of 0, and branches a
+// range decides. The inputs keep the promised bounds.
+pipeline EquivValueBounds {
+
+    struct Sample {
+        @bounds(>=0, <=1) float value;
+        @bounds(>0, <10) int count;
+    }
+
+    resources {
+        inbuf: buffer<Sample>
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { inbuf, output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float v = resources.inbuf[idx].value;
+            int n = resources.inbuf[idx].count;
+
+            float r = clamp(v, 0.0, 1.0) + saturate(v) + max(v, 0.0) + min(v, 2.0);   // 4v
+            r += step(0.0, v) + abs(v - 2.0);                                           // 1 + 2 - v
+            if (n >= 10) { r += 1000.0; }                                               // never
+            int m = clamp(n, 1, 9) + min(n, 100);                                       // 2n
+            float sum = 0.0;
+            for (int i = 0; i < n; i++) {
+                if (i < 9) { sum += 1.0; }                                              // always
+                sum += saturate(float(i) / 16.0);                                       // i / 16
+            }
+            if (v > 0.5) {
+                r += max(v, 0.25);                                                      // v
+            } else {
+                r += min(v, 0.75);                                                      // v
+            }
+            resources.output[idx] = r + float(m) + sum;
+        }
+    }
+}
