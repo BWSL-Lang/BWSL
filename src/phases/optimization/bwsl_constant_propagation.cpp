@@ -2087,53 +2087,152 @@ static bool KeepsLocalMemory(u16 op) {
     return op == IR::OP_NOP || op == IR::OP_LOAD_REG || op == IR::OP_STORE_REG || op == IR::OP_LOCAL_LOAD ||
            op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_INDEX_PTR ||
            op == IR::OP_LOAD_UNIFORM || op == IR::OP_STRUCT_EXTRACT || op == IR::OP_STRUCT_INSERT ||
-           HasSlotOperands(op) || IsLoopValueOp(op) || IsPureValueOp(op);
+           HasSlotOperands(op) || IsLoopValueOp(op) || IsPureValueOp(op) ||
+           IR::IsTerminator(static_cast<IR::OpCode>(op));
 }
 
-// A load of a struct field its block stored earlier becomes a copy of the
-// value stored, so constants and ranges carry through the field. Any store
-// whose address isn't a field pointer chain of the block, or anything else
-// that may write local memory, forgets every stored value; a store to a
-// field forgets the others but its root's other fields, since another
-// root may be a pointer to the same struct. With registers assigned more
-// than once (a straight-line stage), reassigning the value, the root or a
-// struct a pointer takes the address of forgets what depends on it.
+// A load of a struct field that a store before it on every path wrote
+// becomes a copy of the value stored, so constants and ranges carry
+// through the field. Blocks are walked in reverse postorder; one starts
+// with what all its predecessors stored, and a loop header, whose back
+// edge isn't walked yet, with nothing.
+//
+// A store through a pointer that isn't a field pointer chain forgets every
+// stored value, as does anything else that may write local memory; a store
+// to a field forgets the others but its root's other fields, since another
+// root may be a pointer to the same struct. A chain's root is a struct, or
+// a pointer assigned once. Reassigning a value, a root or a struct a
+// pointer takes the address of forgets what depends on it.
 static void ForwardLocalStores(ConstantPropagationData* data, BWSL_Arena* arena) {
     IRProgram* ir = data->ir;
-    bool* addressed = (bool*)AllocateZeroed(arena, data->regCount * sizeof(bool));
-    if (!addressed) return;
+    const CFG* cfg = data->cfg;
+    u32 regCount = data->regCount;
+    u32 blocks = data->straightLine ? 1 : cfg->blockCount;
+    constexpr u32 MAX_STORED = 16;
+    struct Stored { LocalAddress address; u16 value; };
+    bool* addressed = (bool*)AllocateZeroed(arena, regCount * sizeof(bool));
+    bool* pointerLike = (bool*)AllocateZeroed(arena, regCount * sizeof(bool));
+    u8* definitionCounts = (u8*)AllocateZeroed(arena, regCount);
+    u32* definedBy = (u32*)AllocateZeroed(arena, regCount * sizeof(u32));
+    u8* resolved = (u8*)AllocateZeroed(arena, regCount);  // 0 not yet, 1 an address, 2 none
+    LocalAddress* addresses = (LocalAddress*)AllocateZeroed(arena, regCount * sizeof(LocalAddress));
+    Stored* outs = (Stored*)AllocateZeroed(arena, size_t(blocks) * MAX_STORED * sizeof(Stored));
+    u8* outCounts = (u8*)AllocateZeroed(arena, blocks);
+    bool* walked = (bool*)AllocateZeroed(arena, blocks * sizeof(bool));
+    if (!addressed || !pointerLike || !definitionCounts || !definedBy || !resolved || !addresses || !outs ||
+        !outCounts || !walked) {
+        return;
+    }
+    auto isPointerOp = [](u16 op) {
+        return op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_LOCAL_INDEX_PTR;
+    };
+    auto defines = [&](u32 i) {
+        u16 op = ir->opcodes[i];
+        return op != IR::OP_NOP && !IsUseInDestination(op) && !IR::IsTerminator(static_cast<IR::OpCode>(op)) &&
+               IsRegisterOperand(data, ir->destinations[i]);
+    };
     for (u32 i = 0; i < ir->instructionCount; i++) {
         u16 op = ir->opcodes[i];
         u16 base = ir->GetOperand(i, 0);
-        if ((op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_LOCAL_INDEX_PTR) &&
-            IsRegisterOperand(data, base)) {
-            addressed[base] = true;
+        if (isPointerOp(op) && IsRegisterOperand(data, base)) addressed[base] = true;
+        if (!defines(i)) continue;
+        u16 dest = ir->destinations[i];
+        if (definitionCounts[dest] < 255) definitionCounts[dest]++;
+        definedBy[dest] = i;
+        if (isPointerOp(op)) pointerLike[dest] = true;
+    }
+    for (u32 phi = 0; phi < ir->phiCount; phi++) {
+        u16 result = ir->phiResultRegs[phi];
+        if (IsRegisterOperand(data, result) && definitionCounts[result] < 255) definitionCounts[result] += 2;
+    }
+    // Copies, selects and phis of pointers are pointers too.
+    for (bool changed = true; changed;) {
+        changed = false;
+        auto mark = [&](u16 reg, u16 source) {
+            if (IsRegisterOperand(data, reg) && IsRegisterOperand(data, source) && pointerLike[source] && !pointerLike[reg]) {
+                pointerLike[reg] = changed = true;
+            }
+        };
+        for (u32 i = 0; i < ir->instructionCount; i++) {
+            u16 op = ir->opcodes[i];
+            if (!defines(i)) continue;
+            if (op == IR::OP_LOAD_REG || op == IR::OP_STORE_REG) mark(ir->destinations[i], ir->GetOperand(i, 0));
+            if (op == IR::OP_SELECT) {
+                mark(ir->destinations[i], ir->GetOperand(i, 1));
+                mark(ir->destinations[i], ir->GetOperand(i, 2));
+            }
+        }
+        for (u32 phi = 0; phi < ir->phiCount; phi++) {
+            for (u32 j = 0; j < ir->GetPhiOperandCount(phi); j++) mark(ir->phiResultRegs[phi], ir->GetPhiOperandValue(phi, j));
         }
     }
-    constexpr u32 MAX_POINTERS = 32;
-    constexpr u32 MAX_STORED = 16;
-    struct Pointer { u16 reg; LocalAddress address; };
-    struct Stored { LocalAddress address; u16 value; };
-    Pointer pointers[MAX_POINTERS];
-    Stored stored[MAX_STORED];
-    u32 pointerCount = 0, storedCount = 0;
-    auto find = [&](u16 reg) -> const LocalAddress* {
-        for (u32 p = 0; p < pointerCount; p++) {
-            if (pointers[p].reg == reg) return &pointers[p].address;
+    // The address a field pointer register holds: one assigned once, by a
+    // field pointer of a struct or of a pointer assigned once.
+    auto resolve = [&](auto&& self, u16 reg, u32 depth) -> const LocalAddress* {
+        if (!IsRegisterOperand(data, reg) || depth > 4) return nullptr;
+        if (resolved[reg] == 0) {
+            resolved[reg] = 2;
+            u32 i = definedBy[reg];
+            if (definitionCounts[reg] == 1 && ir->opcodes[i] == IR::OP_LOCAL_FIELD_PTR) {
+                u16 base = ir->GetOperand(i, 0);
+                u16 field = ir->GetOperand(i, 1);
+                LocalAddress address = {};
+                if (const LocalAddress* parent = self(self, base, depth + 1)) {
+                    address = *parent;
+                } else if (IsRegisterOperand(data, base) && (!pointerLike[base] || definitionCounts[base] == 1)) {
+                    address.root = base;
+                } else {
+                    return nullptr;
+                }
+                if (address.depth < 4 && field < 256) {
+                    address.fields[address.depth++] = static_cast<u8>(field);
+                    addresses[reg] = address;
+                    resolved[reg] = 1;
+                }
+            }
         }
-        return nullptr;
+        return resolved[reg] == 1 ? &addresses[reg] : nullptr;
     };
-    const CFG* cfg = data->cfg;
-    u32 blocks = data->straightLine ? 1 : cfg->blockCount;
-    for (u32 block = 0; block < blocks; block++) {
+
+    Stored stored[MAX_STORED];
+    u32 storedCount = 0;
+    for (u32 k = blocks; k-- > 0;) {
+        u32 block = data->straightLine ? 0 : cfg->postorder[k];
+        if (block >= blocks) continue;
+        // What every predecessor stored, unless one isn't walked yet.
+        storedCount = 0;
+        if (!data->straightLine && block != cfg->entryBlock && cfg->PredecessorCount(block) > 0) {
+            bool all = true;
+            for (u32 e = cfg->predecessorOffsets[block]; e < cfg->predecessorOffsets[block + 1]; e++) {
+                u32 predecessor = cfg->predecessorData[e];
+                all &= predecessor < blocks && walked[predecessor];
+            }
+            if (all) {
+                u32 first = cfg->predecessorData[cfg->predecessorOffsets[block]];
+                storedCount = outCounts[first];
+                memcpy(stored, outs + size_t(first) * MAX_STORED, storedCount * sizeof(Stored));
+                for (u32 e = cfg->predecessorOffsets[block] + 1; e < cfg->predecessorOffsets[block + 1]; e++) {
+                    u32 predecessor = cfg->predecessorData[e];
+                    const Stored* other = outs + size_t(predecessor) * MAX_STORED;
+                    u32 kept = 0;
+                    for (u32 s = 0; s < storedCount; s++) {
+                        bool found = false;
+                        for (u32 t = 0; t < outCounts[predecessor] && !found; t++) {
+                            found = other[t].value == stored[s].value && SameAddress(other[t].address, stored[s].address);
+                        }
+                        if (found) stored[kept++] = stored[s];
+                    }
+                    storedCount = kept;
+                }
+            }
+        }
         u32 first = data->straightLine ? 0 : cfg->firstInst[block];
         u32 last = data->straightLine ? ir->instructionCount - 1 : cfg->lastInst[block];
-        pointerCount = storedCount = 0;
         for (u32 i = first; i <= last && i < ir->instructionCount; i++) {
             u16 op = ir->opcodes[i];
             u16 dest = ir->destinations[i];
             if (op == IR::OP_LOCAL_LOAD) {
-                const LocalAddress* address = find(ir->GetOperand(i, 0));
+                const LocalAddress* address = resolve(resolve, ir->GetOperand(i, 0), 0);
                 for (u32 s = 0; address && s < storedCount; s++) {
                     if (!SameAddress(stored[s].address, *address)) continue;
                     u16 value = stored[s].value;
@@ -2150,21 +2249,8 @@ static void ForwardLocalStores(ConstantPropagationData* data, BWSL_Arena* arena)
                     break;
                 }
             }
-            LocalAddress fieldAddress = {};
-            bool isField = false;
-            if (op == IR::OP_LOCAL_FIELD_PTR) {
-                u16 fieldBase = ir->GetOperand(i, 0);
-                u16 field = ir->GetOperand(i, 1);
-                if (const LocalAddress* parent = find(fieldBase)) {
-                    fieldAddress = *parent;
-                } else {
-                    fieldAddress.root = fieldBase;
-                }
-                isField = IsRegisterOperand(data, fieldAddress.root) && fieldAddress.depth < 4 && field < 256;
-                if (isField) fieldAddress.fields[fieldAddress.depth++] = static_cast<u8>(field);
-            }
             if (op == IR::OP_LOCAL_STORE) {
-                const LocalAddress* address = find(ir->GetOperand(i, 0));
+                const LocalAddress* address = resolve(resolve, ir->GetOperand(i, 0), 0);
                 u16 value = ir->GetOperand(i, 1);
                 if (!address) {
                     storedCount = 0;
@@ -2176,29 +2262,25 @@ static void ForwardLocalStores(ConstantPropagationData* data, BWSL_Arena* arena)
                     }
                     storedCount = kept;
                     bool forwardable = IR::IsConstant(value) ||
-                                       (IsRegisterOperand(data, value) && !addressed[value] && !IsMemoryBacked(ir, value));
+                                       (IsRegisterOperand(data, value) && !addressed[value] && !pointerLike[value] &&
+                                        !IsMemoryBacked(ir, value) && (data->straightLine || definitionCounts[value] == 1));
                     if (forwardable && storedCount < MAX_STORED) stored[storedCount++] = {target, value};
                 }
             } else if (!KeepsLocalMemory(op)) {
                 storedCount = 0;
             }
-            bool defines = op != IR::OP_NOP && !IsUseInDestination(op) && !IR::IsTerminator(static_cast<IR::OpCode>(op)) &&
-                           IsRegisterOperand(data, dest);
-            if (defines) {
+            if (defines(i)) {
                 if (addressed[dest]) storedCount = 0;  // A struct a pointer can reach changed
                 u32 kept = 0;
                 for (u32 s = 0; s < storedCount; s++) {
                     if (stored[s].value != dest && stored[s].address.root != dest) stored[kept++] = stored[s];
                 }
                 storedCount = kept;
-                kept = 0;
-                for (u32 p = 0; p < pointerCount; p++) {
-                    if (pointers[p].reg != dest && pointers[p].address.root != dest) pointers[kept++] = pointers[p];
-                }
-                pointerCount = kept;
-                if (isField && pointerCount < MAX_POINTERS) pointers[pointerCount++] = {dest, fieldAddress};
             }
         }
+        outCounts[block] = static_cast<u8>(storedCount);
+        memcpy(outs + size_t(block) * MAX_STORED, stored, storedCount * sizeof(Stored));
+        walked[block] = true;
     }
 }
 
@@ -3238,7 +3320,7 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
     }
 
     // Everything is sized up front, so the arena can't run out.
-    size_t bytes = size_t(regCount) * (sizeof(ValueState) + sizeof(u32) * 4 + sizeof(bool) * 4 + 1) +
+    size_t bytes = size_t(regCount) * (sizeof(ValueState) + sizeof(u32) * 4 + sizeof(bool) * 3 + 1) +
                    size_t(bitCount + regCount * 2) * sizeof(u32) +  // regWork
                    size_t(regCount) * sizeof(u16) * 2 +  // known, savedKnown
                    size_t(regCount) * sizeof(bool) + 64 +  // RemoveUnreadAssignments
@@ -3254,6 +3336,10 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
                    size_t(blockCount) * (sizeof(bool) * 2 + sizeof(u32)) +
                    // Dead loops: path, next, onPath, predecessor counts.
                    size_t(blockCount) * (sizeof(u32) * 3 + sizeof(bool)) + sizeof(u32) +
+                   // Store forwarding: per register flags, counts, definitions and
+                   // addresses; per block what it stored.
+                   size_t(regCount) * (sizeof(bool) * 2 + 2 + sizeof(u32) + sizeof(LocalAddress)) +
+                   size_t(std::max<u32>(blockCount, 1)) * (16 * (sizeof(LocalAddress) + sizeof(u16) + 2) + 2) + 9 * 64 +
                    // Ranges: ranges, rangeChanges; blockConstraints, constraints.
                    size_t(bitCount) * sizeof(ValueRange) + size_t(regCount) +
                    size_t(blockCount) * sizeof(u32) + size_t(blockCount * 8 + 16) * sizeof(RangeConstraint) +
