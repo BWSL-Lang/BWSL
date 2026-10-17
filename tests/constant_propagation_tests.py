@@ -370,7 +370,8 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             glsl = (target / "constprop.glsl.frag").read_text(encoding="utf-8")
             body = glsl[glsl.index("void main"):]
             self.assertNotIn("pow(", body)
-            self.assertIn("1.0 / ((v_uv.x * v_uv.x) * v_uv.x)", body)
+            # x^-3 reuses the x * x that x^5 squares (common subexpressions).
+            self.assertRegex(body, r"1\.0 / \((_\d+|\(v_uv\.x \* v_uv\.x\)) \* v_uv\.x\)")
             arm = body[body.index("if ("):body.index("else")]
             self.assertEqual(arm.count(" * "), 3)
             for name in ("constprop.frag.wgsl", "constprop.gles.frag"):
@@ -432,6 +433,51 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
                         self.assertIn(text, body)
                     for text in gone:
                         self.assertNotIn(text, body)
+
+        def test_repeated_calculations_are_computed_once(self):
+            target = self.compile(shader('''
+                float x = input.uv.x;
+                float y = input.uv.y;
+                float a = sin(x * 2.0) + sin(x * 2.0);
+                float b = (x + y) * (y + x);
+                float3 v = normalize(float3(x, y, 1.0)) + normalize(float3(x, y, 1.0));
+                output.color = float4(a, b, v.x, v.y);
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertEqual(body.count("sin("), 1)
+            self.assertEqual(body.count("* 2.0"), 1)
+            self.assertEqual(body.count("v_uv.x + v_uv.y") + body.count("v_uv.y + v_uv.x"), 1)
+            self.assertEqual(body.count("normalize("), 1)
+
+        def test_common_subexpressions_follow_dominance(self):
+            # x * 3.0 before the branch serves both arms; each arm's x * 5.0
+            # is its own, since neither arm runs before the other.
+            target = self.compile(shader('''
+                float x = input.uv.x;
+                float before = x * 3.0;
+                float r;
+                if (input.uv.y > 0.5) { r = x * 3.0 + x * 5.0; } else { r = x * 3.0 - x * 5.0; }
+                output.color = float4(before, r, 0.0, 1.0);
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertEqual(body.count("* 3.0"), 1)
+            self.assertEqual(body.count("* 5.0"), 2)
+
+        def test_reassigned_operands_are_not_merged(self):
+            # A single-block stage keeps one register for x; after x changes,
+            # x * 2.0 is a different value.
+            target = self.compile(shader('''
+                float x = input.uv.x;
+                float a = x * 2.0;
+                x = x + 1.0;
+                float b = x * 2.0;
+                output.color = float4(a, b, 0.0, 1.0);
+            '''), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertEqual(body.count("* 2.0"), 2)
 
         def test_vectors_with_runtime_components_stay(self):
             ops, target = self.fragment_ops('''

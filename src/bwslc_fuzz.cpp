@@ -32,6 +32,7 @@
 #include "phases/ssa/bwsl_ssa.h"
 #include "phases/optimization/bwsl_constant_propagation.h"
 #include "phases/optimization/bwsl_ir_edit.h"
+#include "phases/optimization/bwsl_cse.h"
 #include "phases/ir_generation/bwsl_ir_analysis.h"
 #include "phases/backends/spirv/bwsl_spirv_backend.h"
 
@@ -47,6 +48,7 @@
 #include "phases/control_flow/bwsl_cfg.cpp"
 #include "phases/ssa/bwsl_ssa.cpp"
 #include "phases/optimization/bwsl_ir_edit.cpp"
+#include "phases/optimization/bwsl_cse.cpp"
 #include "phases/optimization/bwsl_constant_propagation.cpp"
 #include "phases/backends/spirv/bwsl_spirv_backend.cpp"
 

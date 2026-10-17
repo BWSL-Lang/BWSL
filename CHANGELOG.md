@@ -40,6 +40,9 @@
   multiplications, which are faster and more accurate than the GPU's
   `pow`. `x * 0.0` and `x - x` stay, since they aren't 0 for an infinite
   or NaN `x`.
+  A calculation repeated where an earlier one with the same operands is
+  available, such as `sin(x * 2.0)` twice, or `x * 3.0` before a branch
+  and again in its arms, is computed once.
   Folding skips results that can differ between GPUs:
   NaN, infinities, denormals, `-0.0`, integer division of negative values,
   conversions that are out of range or inexact, and math functions outside
