@@ -752,6 +752,43 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             self.assertNotIn("0.5, 1.0)", body)
             self.assertIn(".color.z, 1.0)", body)
 
+        def test_struct_fields_carry_across_branches(self):
+            # A field keeps the value stored before a discard and before a
+            # branch that writes another field. One a branch or a loop
+            # may write is read from memory.
+            target = self.compile('''pipeline BranchBounds {
+                attributes {
+                    position: float2
+                    color: float4 @bounds(0<=z<=100)
+                }
+                struct Inputs { float4 color; float other; };
+                pass "Main" {
+                    use attributes { position, color }
+                    vertex {
+                        output.position = float4(attributes.position, 0.0, 1.0);
+                        @flat output.vColor = attributes.color;
+                    }
+                    fragment {
+                        Inputs i;
+                        i.color = input.vColor;
+                        i.other = 0.0;
+                        if (input.position.x > 100.0) { discard; }
+                        float a = min(1.0, i.color.z * 0.01);
+                        if (input.position.y > 100.0) { i.other = 1.0; }
+                        float b = min(1.0, i.color.z * 0.01);
+                        Inputs k;
+                        k.other = 2.0;
+                        for (int n = 0; n < int(input.position.x); n++) { k.other = k.other * 0.5; }
+                        output.color = float4(a, b, i.other, k.other);
+                    }
+                }
+            }''', "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertNotIn("min(", body)
+            self.assertNotIn(", 0.0, 2.0)", body)
+            self.assertRegex(body, r"_\d+\.other, _\d+\.other\)")
+
     result = unittest.TextTestRunner(verbosity=1).run(
         unittest.defaultTestLoader.loadTestsFromTestCase(ConstantPropagationTests))
     failures = len(result.failures) + len(result.errors)
