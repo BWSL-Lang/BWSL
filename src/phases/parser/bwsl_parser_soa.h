@@ -385,7 +385,8 @@ private:
     void ParseResources(NodeRef owner, bool ownerIsPipeline = true);
     void RegisterParsedResource(const std::string& resourceName,
                                 const std::string& typeName,
-                                    u32 bindingIndex);
+                                u32 bindingIndex,
+                                const DeclaredBounds* bounds = nullptr);
     void FinalizeParsedResourceBindings(NodeRef pipeline, u32 firstMemberAccess, u32 firstFunctionCall);
     void ParseVariants(NodeRef owner, bool ownerIsPipeline = true);
     void ParseVariantRules(NodeRef owner, bool ownerIsPipeline = true);
@@ -408,6 +409,23 @@ private:
     void ParsePassOutputs(NodeRef pass);
     NodeRef ParseAttributeDecl();
     NodeRef ParseResourceDecl();
+
+    // @bounds(...) on attributes, resources and struct fields. Clauses are
+    // read first and resolved once the declaration's type is known.
+    struct BoundsClause {
+        s8 component;            // -1: every component
+        ComponentBounds bounds;
+        TokenRef token;
+    };
+    struct BoundsSpec {
+        BoundsClause clauses[16];
+        u32 count = 0;
+        TokenRef decorator = 0;
+        bool present = false;
+    };
+    bool IsBoundsDecorator(TokenRef token) const;
+    bool ParseBoundsDecorator(BoundsSpec* spec);
+    const DeclaredBounds* ResolveBounds(const BoundsSpec& spec, const TypeInfo& type);
     void ValidateResourceTypes(NodeRef owner, bool ownerIsPipeline, u32 firstResource = 0);
     NodeRef ParseBlock(bool createScope = true);
     NodeRef ParseStatement();

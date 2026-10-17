@@ -2357,6 +2357,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
     } else {
       // Look up semantic type from AST pipeline attributes
       attrType = GetInputTypeFromAttribute(access.member.nameHash);
+      program.attributeBounds[attrIndex] = GetAttributeBounds(access.member.nameHash);
     }
     SetRegisterType(dest, attrType);
     return dest;
@@ -2389,6 +2390,8 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       // Uniform buffers (declared with "uniform" keyword) contain a single
       // value They emit OP_LOAD_UNIFORM to load the value directly
       builder.EmitInstruction(OP_LOAD_UNIFORM, dest, (u16)resData.bindingIndex);
+      if (resData.bindingIndex < 32 && resData.arraySize == 0)
+        program.uniformBounds[resData.bindingIndex] = resData.bounds;
 
       // Array-typed uniforms (e.g. "weights: float4[8]") are not loaded as a
       // whole; the register becomes a pointer to the UBO so that indexing
@@ -2527,6 +2530,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       }
       builder.EmitInstruction(OP_LOAD_INPUT, dest,
                               BuiltinInputSlot::LOCAL_INVOCATION_ID);
+      RecordWorkgroupSize();
       SetRegisterType(dest, CoreType::UINT3);
       return dest;
 
@@ -2560,6 +2564,7 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       }
       builder.EmitInstruction(OP_LOAD_INPUT, dest,
                               BuiltinInputSlot::LOCAL_INVOCATION_INDEX);
+      RecordWorkgroupSize();
       SetRegisterType(dest, CoreType::UINT);
       return dest;
 
@@ -2625,6 +2630,16 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       u32 varyingIndex = inputSlot - OutputSlot::VARYING0;
       program.inputInterpolations[inputSlot] =
           static_cast<u8>(currentPassVaryings->GetInterpolation(varyingIndex));
+      // A flat varying (integers always are) is one vertex's value, so it
+      // keeps the range the vertex stage gave it.
+      if (varyingIndex < currentPassVaryings->count &&
+          currentPassVaryings->bounds[varyingIndex].count != 0) {
+        CoreType varyingType = currentPassVaryings->varyings[varyingIndex].type;
+        if (currentPassVaryings->GetInterpolation(varyingIndex) == InterpolationMode::Flat ||
+            CoreTypeScalarType(varyingType) != CoreType::FLOAT) {
+          program.inputBounds[inputSlot] = &currentPassVaryings->bounds[varyingIndex];
+        }
+      }
     }
 
     // Get type from varying context if available (preferred)
@@ -2943,6 +2958,7 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
       program.outputInterpolations[slot] = static_cast<u8>(
           currentPassVaryings->GetInterpolation(varyingIndex));
     }
+    if (currentStage == ShaderStage::Vertex) program.varyingBoundsOut = currentPassVaryings->bounds;
     return slot;
   }
   return OutputSlot::VARYING0;
@@ -3010,6 +3026,21 @@ inline CoreType IRLowering::ResolveOutputTypeForLoad(u32 nameHash) {
     }
   }
   return CoreType::FLOAT4;
+}
+
+// The @bounds of an attribute of the current pipeline, or null.
+inline const DeclaredBounds *IRLowering::GetAttributeBounds(u32 nameHash) {
+  if (currentPipeline.IsNull())
+    return nullptr;
+  const PipelineData &pipeline = ast->GetPipeline(currentPipeline);
+  for (u32 i = 0; i < pipeline.attributes.count; i++) {
+    NodeRef attrRef = pipeline.attributes[i];
+    if (attrRef.Type() == ASTNodeType::ATTRIBUTE_DECL &&
+        ast->GetAttributeDecl(attrRef).name.nameHash == nameHash) {
+      return ast->GetAttributeDecl(attrRef).bounds;
+    }
+  }
+  return nullptr;
 }
 
 inline u32 IRLowering::GetAttributeIndex(u32 nameHash) {

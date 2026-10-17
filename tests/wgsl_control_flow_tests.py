@@ -44,6 +44,9 @@ CASES = {
         loop(10) { result++; } until (result == 4u);''', lambda index: 4),
     "early_return": ('''if ((id & 1u) == 0u) { resources.result[id] = 99u; return; }
         uint result = 17u;''', lambda index: 99 if index % 2 == 0 else 17),
+    "constant_branch_in_loop": ('''uint result = 0u; int mode = 2;
+        for (uint i = 0u; i < id % 3u + 1u; i++) { if (mode == 2) { result += 2u; } result += 1u; }''',
+        lambda index: (index % 3 + 1) * 3),
 }
 
 

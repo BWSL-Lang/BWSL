@@ -1,0 +1,15 @@
+// Error case: @bounds naming a component the type doesn't have.
+pipeline WrongBounds {
+    struct Params {
+        @bounds(z>0) float2 offset;
+    }
+
+    resources {
+        params: Params
+    }
+
+    pass "Main" {
+        use resources { params }
+        compute "Main" [1, 1, 1] { }
+    }
+}

@@ -4,6 +4,7 @@
 #include "bwsl_utils.h"
 #include "phases/lexing/bwsl_lexer.h"
 #include "bwsl_types.h"
+#include "bwsl_value_bounds.h"
 #include "bwsl_ast_soa.h"
 #include "bwsl_module_cache.h"
 #include <cassert>
@@ -187,6 +188,7 @@ struct ResourceData {
     u32 structTypeHash = 0;  // For struct types (storage buffers), hash of the fully qualified type name
     ArenaString renderTargetName;
     ArenaString typeName;
+    const DeclaredBounds* bounds = nullptr;  // A scalar or vector uniform's @bounds; arena-owned
 };
 
 // Binding slots a resource occupies, starting at bindingIndex. Each texture
@@ -202,6 +204,7 @@ struct StructData {
         ArenaString name;
         TypeInfo type;
         u32 arraySize;  // 0 = not an array, >0 = fixed-size array
+        const DeclaredBounds* bounds = nullptr;  // From @bounds(...); arena-owned
     };
     ArenaArray<Field> fields;
     ArenaArray<u32> methodIndices;

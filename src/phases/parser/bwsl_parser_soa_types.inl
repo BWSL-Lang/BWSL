@@ -1291,6 +1291,21 @@ NodeRef Parser::ParseStruct() {
             continue;
         }
 
+        BoundsSpec fieldBounds;
+        bool boundsFailed = false;
+        while (IsBoundsDecorator(current) && !boundsFailed) {
+            Advance();
+            boundsFailed = !ParseBoundsDecorator(&fieldBounds);
+        }
+        if (boundsFailed) {
+            Synchronize();
+            if (current == loopStart) {
+                if (stream->GetType(current) == TokenType::EOF_TOKEN) break;
+                Advance();
+            }
+            continue;
+        }
+
         // Parse field type (core or custom/module-qualified)
         TypeInfo fieldType = TYPE_INFO(CoreType::INVALID, 0, false);
         std::string fieldTypeName;
@@ -1365,6 +1380,9 @@ NodeRef Parser::ParseStruct() {
         ReverseLookup::Register(field.name.nameHash, fieldNameStr.c_str());
         field.type = fieldType;
         field.arraySize = arraySize;
+        TypeInfo boundedType = fieldType;
+        if (arraySize) boundedType = TYPE_INFO(CoreType::INVALID, 0, false);  // One bound per value, not per array
+        field.bounds = ResolveBounds(fieldBounds, boundedType);
 
         // A repeated field name would resolve silently to one declaration.
         for (u32 i = 0; i < structData.fields.count; i++) {
@@ -1380,6 +1398,7 @@ NodeRef Parser::ParseStruct() {
         astField.type = field.type;
         astField.typeNameHash = ArenaString::MakeHashOnly(fieldTypeName).nameHash;
         astField.arraySize = field.arraySize;
+        astField.bounds = field.bounds;
         astField.namePosition = AST::PackPosition(fieldNameLoc.line, fieldNameLoc.column);
         astField.typePosition = AST::PackPosition(fieldTypeLoc.line, fieldTypeLoc.column);
         ast->GetStructDecl(structNode).fields.Push(arena, astField);

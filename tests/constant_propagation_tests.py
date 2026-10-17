@@ -500,6 +500,336 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             glsl = (target / "constprop.frag").read_text(encoding="utf-8")
             self.assertIn("int(gl_FragCoord.y) + 7", glsl)
 
+        def bounded_main(self, body):
+            target = self.compile('''pipeline Bounds {
+                struct Params {
+                    @bounds(>0, <10) int count;
+                    @bounds(x>=0, y<=1) float2 weights;
+                    float free;
+                    uint bits;
+                }
+                attributes {
+                    position: float3
+                    uv: float2 @bounds(>=0, <=1)
+                }
+                resources {
+                    params: Params
+                    @bounds(>=0, <=1) fade: float
+                }
+                pass "Main" {
+                    use attributes { position, uv }
+                    use resources { params, fade }
+                    vertex {
+                        output.position = float4(attributes.position, 1.0);
+                        output.uv = attributes.uv;
+                    }
+                    fragment {
+                        float f = resources.fade;
+                        float2 w = resources.params.weights;
+                        float x = resources.params.free;
+                        int n = resources.params.count;
+                        ''' + body + '''
+                    }
+                }
+            }''', "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            return glsl[glsl.index("void main"):]
+
+        def test_bounds_remove_calls_that_cant_change_the_value(self):
+            body = self.bounded_main('''
+                float a = clamp(f, 0.0, 1.0) + saturate(f) + step(0.0, f) + abs(f - 2.0);
+                int m = clamp(n, 1, 9) + min(n, 100);
+                output.color = float4(a, float(m), max(f, 0.0), min(f, 2.0));
+            ''')
+            for call in ("clamp(", "min(", "max(", "step(", "abs("):
+                self.assertNotIn(call, body)
+
+        def test_bounds_decide_branches(self):
+            body = self.bounded_main('''
+                float r = f;
+                if (n >= 10) { r += 1000.0; }
+                if (f > 1.0 || n < 1) { r += 2000.0; }
+                output.color = float4(r);
+            ''')
+            self.assertNotIn("1000.0", body)
+            self.assertNotIn("2000.0", body)
+            self.assertNotIn("if (", body)
+
+        def test_bounds_per_component(self):
+            # x is at least 0 and y at most 1; nothing else is known.
+            body = self.bounded_main('''
+                output.color = float4(max(w.x, 0.0), min(w.y, 1.0), max(w.y, 0.0), min(w.x, 1.0));
+            ''')
+            self.assertNotIn("max(bwsl_ub_params.bwsl_u_params.weights.x", body)
+            self.assertNotIn("min(bwsl_ub_params.bwsl_u_params.weights.y", body)
+            self.assertIn("max(bwsl_ub_params.bwsl_u_params.weights.y, 0.0)", body)
+            self.assertIn("min(bwsl_ub_params.bwsl_u_params.weights.x, 1.0)", body)
+
+        def test_branches_narrow_ranges(self):
+            # x > 0.5 holding means x is a number above 0.5; where it
+            # doesn't, x may be NaN.
+            body = self.bounded_main('''
+                float r = 0.0;
+                if (x > 0.5) { r = max(x, 0.25); } else { r = min(x, 0.75); }
+                output.color = float4(r);
+            ''')
+            self.assertNotIn("max(", body)
+            self.assertIn("min(bwsl_ub_params.bwsl_u_params.free, 0.75)", body)
+
+        def test_loop_counters_have_ranges(self):
+            body = self.bounded_main('''
+                float sum = 0.0;
+                for (int i = 0; i < n; i++) {
+                    if (i < 9) { sum += 1.0; }
+                    sum += saturate(float(i) / 16.0);
+                }
+                output.color = float4(sum);
+            ''')
+            self.assertNotIn("min(", body)
+            self.assertNotIn("clamp(", body)
+            self.assertNotIn("< 9", body)
+            self.assertIn("for (", body)
+
+        def test_values_that_may_be_nan_keep_their_clamps(self):
+            # Nothing bounds x, and x * f is NaN for an infinite x and f = 0.
+            body = self.bounded_main('''
+                output.color = float4(clamp(x, 0.0, 1.0), saturate(x * f), max(x, x), 1.0);
+            ''')
+            self.assertIn("clamp(bwsl_ub_params.bwsl_u_params.free, 0.0, 1.0)", body)
+            self.assertIn("clamp(bwsl_ub_params.bwsl_u_params.free * ", body)
+
+        def test_assigned_values_have_ranges(self):
+            # No @bounds: the ranges come from the constants assigned and
+            # from the operations.
+            body = self.bounded_main('''
+                float s = 2.0;
+                if (x > 0.5) { s = 5.0; }
+                int k = int(resources.params.bits & 3u);
+                float t = float(k) * 0.5;
+                output.color = float4(clamp(s, 0.0, 10.0), float(min(k, 3)), max(t, 0.0), min(t, 2.0));
+            ''')
+            self.assertNotIn("min(", body)
+            self.assertNotIn("max(", body)
+            self.assertNotIn("clamp(", body)
+
+        def test_compute_builtins_have_ranges(self):
+            # local_id is below the workgroup size [8, 2, 1], local_index
+            # below 16, and a dispatch has at least one workgroup.
+            target = self.compile('''pipeline Builtins {
+                resources { data: buffer<uint> }
+                pass "Run" {
+                    use resources { data }
+                    compute "Main" [8, 2, 1] {
+                        uint3 l = input.local_id;
+                        uint a = min(l.x, 7u) + l.z + min(input.local_index, 15u) + max(input.num_workgroups.x, 1u);
+                        uint b = min(l.x, 6u) + min(input.local_index, 14u);
+                        if (l.y >= 2u) { a += 1000u; }
+                        resources.data[input.global_id.x] = a + b;
+                    }
+                }
+            }''', "-glsl")
+            glsl = (target / "constprop.comp").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertNotIn("1000u", body)
+            self.assertNotIn("gl_LocalInvocationID.z", body)
+            self.assertNotIn("max(", body)
+            self.assertEqual(body.count("min("), 2)
+            self.assertIn("min(gl_LocalInvocationID.x, 6u)", body)
+            self.assertIn("min(gl_LocalInvocationIndex, 14u)", body)
+
+        def test_fragment_coordinates_are_numbers_in_the_framebuffer(self):
+            # x and y are inside the framebuffer; depth and w can be anything.
+            target = self.compile('''pipeline FragBuiltins {
+                attributes { position: float3 }
+                pass "Main" {
+                    use attributes { position }
+                    vertex { output.position = float4(attributes.position, 1.0); }
+                    fragment {
+                        float4 p = input.position;
+                        output.color = float4(clamp(p.x, 0.0, 100000.0), max(p.y, 0.0), saturate(p.z), max(p.w, 0.0));
+                    }
+                }
+            }''', "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertIn("gl_FragCoord.xy", body)
+            self.assertIn("clamp(gl_FragCoord.z, 0.0, 1.0)", body)
+            self.assertIn("max(gl_FragCoord.w, 0.0)", body)
+
+        def test_flat_varyings_keep_their_ranges(self):
+            # A flat or integer varying is one vertex's value; an interpolated
+            # one can leave its vertices' range under MSAA. Division isn't
+            # correctly rounded on GPUs, so lit / 100.0 can exceed 1.0, while
+            # lit * 0.01 can't.
+            target = self.compile('''pipeline Stages {
+                attributes {
+                    position: float3
+                    lit: float @bounds(>=0, <=100)
+                    id: uint
+                }
+                pass "Main" {
+                    use attributes { position, lit, id }
+                    vertex {
+                        output.position = float4(attributes.position, 1.0);
+                        @flat output.light = attributes.lit * 0.01;
+                        output.shade = saturate(attributes.position.x);
+                        output.index = attributes.id & 7u;
+                        output.ratio = min(1.0, attributes.lit / 100.0);
+                    }
+                    fragment {
+                        output.color = float4(saturate(input.light), saturate(input.shade),
+                                              float(min(input.index, 7u)), input.ratio);
+                    }
+                }
+            }''', "-glsl")
+            vertex = (target / "constprop.vert").read_text(encoding="utf-8")
+            fragment = (target / "constprop.frag").read_text(encoding="utf-8")
+            vertex = vertex[vertex.index("void main"):]
+            fragment = fragment[fragment.index("void main"):]
+            self.assertIn("min(1.0, ", vertex)
+            self.assertNotIn("clamp(v_light", fragment)
+            self.assertNotIn("min(v_index", fragment)
+            self.assertIn("clamp(v_shade, 0.0, 1.0)", fragment)
+
+        def test_vector_conversions_keep_ranges(self):
+            # int2(q) converts each component, as int(q.x) does. q is in
+            # [0, 65536 / 0.01].
+            target = self.compile('''pipeline VectorConvertBounds {
+                attributes { position: float2 }
+                struct Params { @bounds(>=0.01) float t; };
+                resources { params: Params }
+                pass "Main" {
+                    use attributes { position }
+                    use resources { params }
+                    vertex { output.position = float4(attributes.position, 0.0, 1.0); }
+                    fragment {
+                        float2 q = input.position.xy / resources.params.t;
+                        int a = max(0, int(q.x));
+                        int2 i = int2(q);
+                        uint2 u = uint2(i);
+                        output.color = float4(float(a), float(max(0, i.x)), float(min(u.y, 7000000u)), 1.0);
+                    }
+                }
+            }''', "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertNotIn("max(", body)
+            self.assertNotIn("min(", body)
+
+        def test_struct_fields_carry_what_was_stored(self):
+            # A field read back after a store in the same block is the value
+            # stored. A store through a pointer may change any struct, so
+            # what follows it reads memory again.
+            target = self.compile('''pipeline StructBounds {
+                attributes {
+                    position: float2
+                    color: float4 @bounds(0<=z<=100)
+                }
+                struct Inputs { float4 color; };
+                pass "Main" {
+                    use attributes { position, color }
+                    vertex {
+                        output.position = float4(attributes.position, 0.0, 1.0);
+                        @flat output.vColor = attributes.color;
+                    }
+                    fragment {
+                        Inputs i;
+                        i.color = input.vColor;
+                        float b = min(1.0, i.color.z * 0.01);
+                        float w = i.color.w;
+                        Inputs k;
+                        k.color = float4(0.5);
+                        Inputs^ p = ^k;
+                        p^.color = float4(2.0);
+                        output.color = float4(b, w, k.color.z, 1.0);
+                    }
+                }
+            }''', "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertNotIn("min(", body)
+            self.assertIn("v_vColor.w", body)
+            self.assertNotIn("0.5, 1.0)", body)
+            self.assertIn(".color.z, 1.0)", body)
+
+        def test_struct_fields_carry_across_branches(self):
+            # A field keeps the value stored before a discard, a branch that
+            # writes another field and a loop that doesn't touch it. One a
+            # branch or a loop may write is read from memory.
+            target = self.compile('''pipeline BranchBounds {
+                attributes {
+                    position: float2
+                    color: float4 @bounds(0<=z<=100)
+                }
+                struct Inputs { float4 color; float other; };
+                pass "Main" {
+                    use attributes { position, color }
+                    vertex {
+                        output.position = float4(attributes.position, 0.0, 1.0);
+                        @flat output.vColor = attributes.color;
+                    }
+                    fragment {
+                        Inputs i;
+                        i.color = input.vColor;
+                        i.other = 0.0;
+                        if (input.position.x > 100.0) { discard; }
+                        float a = min(1.0, i.color.z * 0.01);
+                        if (input.position.y > 100.0) { i.other = 1.0; }
+                        float sum = 0.0;
+                        for (int m = 0; m < (int(input.position.y) & 7); m++) { sum += float(m); }
+                        float b = min(1.0, i.color.z * 0.01) + sum;
+                        Inputs k;
+                        k.other = 2.0;
+                        for (int n = 0; n < int(input.position.x); n++) { k.other = k.other * 0.5; }
+                        output.color = float4(a, b, i.other, k.other);
+                    }
+                }
+            }''', "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            body = glsl[glsl.index("void main"):]
+            self.assertNotIn("min(", body)
+            self.assertNotIn(", 0.0, 2.0)", body)
+            self.assertRegex(body, r"_\d+\.other, _\d+\.other\)")
+
+        def test_struct_fields_survive_writes_to_other_structs(self):
+            # Separate structs are separate memory: initializing s and
+            # writing its fields in a loop, directly or in a method, leaves
+            # i.color as stored.
+            for update in ("s.best = min(s.best, float(k) * s.radius);", "s.visit(float(k));"):
+                with self.subTest(update=update):
+                    target = self.compile('''pipeline OtherStructLoop {
+                        attributes {
+                            position: float2
+                            color: float4 @bounds(0<=z<=100)
+                        }
+                        struct Inputs { float4 color; };
+                        struct Sampler {
+                            float best;
+                            float radius;
+                            visit :: (float d) -> void { self.best = min(self.best, d * self.radius); }
+                        };
+                        pass "Main" {
+                            use attributes { position, color }
+                            vertex {
+                                output.position = float4(attributes.position, 0.0, 1.0);
+                                @flat output.vColor = attributes.color;
+                            }
+                            fragment {
+                                Inputs i;
+                                i.color = input.vColor;
+                                Sampler s;
+                                s.best = 1000.0;
+                                s.radius = 2.0;
+                                for (int k = 0; k < (int(input.position.x) & 7); k++) { ''' + update + ''' }
+                                output.color = float4(min(1.0, i.color.z * 0.01), s.best, 0.0, 1.0);
+                            }
+                        }
+                    }''', "-glsl")
+                    glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+                    body = glsl[glsl.index("void main"):]
+                    self.assertNotIn("min(1.0", body)
+                    self.assertRegex(body, r"min\(_\d+\.best, ")
+
     result = unittest.TextTestRunner(verbosity=1).run(
         unittest.defaultTestLoader.loadTestsFromTestCase(ConstantPropagationTests))
     failures = len(result.failures) + len(result.errors)
