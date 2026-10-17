@@ -8,9 +8,10 @@ namespace Optimization {
 
 // Sparse conditional constant propagation (Wegman & Zadeck) over the IR
 // after SSA. It folds instructions whose operands are constant, scalars,
-// vectors and matrices alike, intrinsics included, resolves phis from the
-// edges that can actually run, and makes branch conditions constant where
-// they are. A loop whose inputs are all constant and that has no side
+// vectors and matrices alike, intrinsics included, and tracks the constant
+// components of a vector or matrix that isn't one as a whole, so reading
+// such a component folds too. It resolves phis from the edges that can
+// actually run, and makes branch conditions constant where they are. A loop whose inputs are all constant and that has no side
 // effects is run at compile time, so code after it sees its results. Uses
 // of a constant scalar register are replaced by the constant, a constant
 // vector is built from constants, and the value instructions and phis

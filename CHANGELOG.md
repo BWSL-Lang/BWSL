@@ -26,6 +26,11 @@
   argument becomes a constant. A loop that runs at most once is no longer
   emitted as a loop: one whose condition is false on entry disappears, and
   one whose body always breaks becomes the code of its single pass.
+  A vector or matrix with some constant components keeps them: reading one,
+  through a swizzle, component access, `select` or componentwise
+  arithmetic, gives the constant. `Color::hsluvToRgb(float3(180.0, x,
+  50.0))` keeps only the arithmetic on `x`, and its SPIR-V shrinks from
+  4440 to 1920 bytes.
   Operations that a constant or a repeated operand decides simplify too:
   `x * 1.0`, `x + 0.0` and `x / 1.0` become `x`, `0.0 - x` and
   `x * -1.0` become `-x`, `x / 4.0` becomes `x * 0.25`, and

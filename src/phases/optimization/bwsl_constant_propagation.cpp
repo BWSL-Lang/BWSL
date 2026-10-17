@@ -23,15 +23,21 @@ enum class ValueState : u8 {
 // A mat4 has the most components. Matrices are stored column by column.
 constexpr u32 MAX_COMPONENTS = 16;
 
+// A vector or matrix can be overdefined as a whole and still have constant
+// components: `known` marks them, and their bits hold the constants.
+// Everything that needs the whole value treats it as overdefined; what
+// works component by component (construction, swizzles, component access,
+// componentwise arithmetic, select and phis) keeps the known components.
 struct ConstantValue {
     ValueState state;
     CoreType type;
     u8 count;                   // Components in bits: 1 for a scalar
     u32 bits[MAX_COMPONENTS];   // Per component: float bits, two's complement integer, or 0/1 for bool
+    u16 known;                  // Overdefined only: components that are constants
 };
 
-constexpr ConstantValue UNDEFINED_VALUE = {ValueState::UNDEFINED, CoreType::INVALID, 0, {}};
-constexpr ConstantValue OVERDEFINED_VALUE = {ValueState::OVERDEFINED, CoreType::INVALID, 0, {}};
+constexpr ConstantValue UNDEFINED_VALUE = {ValueState::UNDEFINED, CoreType::INVALID, 0, {}, 0};
+constexpr ConstantValue OVERDEFINED_VALUE = {ValueState::OVERDEFINED, CoreType::INVALID, 0, {}, 0};
 
 // Marks a definitions[] or use-list entry that names a phi, not an instruction.
 constexpr u32 PHI_REFERENCE = 0x80000000;
@@ -42,10 +48,12 @@ struct ConstantPropagationData {
     IR::IRBuilder* builder;
     CFG* cfg;
     u32 regCount;
+    bool straightLine;      // One forward walk; definitions[] is the one reaching the walk
 
     ValueState* states;     // [regCount]
     u32* bitOffsets;        // [regCount + 1] where a register's components start in bits
     u32* bits;              // [bitOffsets[regCount]]
+    u16* known;             // [regCount] an overdefined register's constant components
     bool* tracked;          // [regCount] single-definition scalar this pass may fold
     bool* undef;            // [regCount] SSA undef register ("not assigned on this path")
     u32* definitions;       // [regCount] instruction, PHI_REFERENCE | phi, or NO_DEFINITION
@@ -63,7 +71,8 @@ struct ConstantPropagationData {
     u32* blockWork;         // A block is queued once, when it first becomes executable
     u32 blockWorkHead;
     u32 blockWorkTail;
-    u32* regWork;           // A register is queued each time it drops a level: at most twice
+    u32* regWork;           // A register is queued each time it drops a level: at most once
+                            // per component and once more
     u32 regWorkHead;
     u32 regWorkTail;
 
@@ -77,6 +86,7 @@ struct ConstantPropagationData {
     u32* blockStack;        // [blockCount] scratch
     ValueState* savedStates;  // [regCount] scratch: the lattice around an evaluation
     u32* savedBits;           // [bitOffsets[regCount]]
+    u16* savedKnown;          // [regCount]
 
     // Instructions rewrites add, applied once the pass is done with
     // instruction indices.
@@ -84,7 +94,7 @@ struct ConstantPropagationData {
 };
 
 static ConstantValue MakeConstant(CoreType type, u32 bits) {
-    ConstantValue value = {ValueState::CONSTANT, type, 1, {}};
+    ConstantValue value = {ValueState::CONSTANT, type, 1, {}, 0};
     value.bits[0] = bits;
     return value;
 }
@@ -93,13 +103,41 @@ static bool HasSameBits(const ConstantValue& a, const ConstantValue& b) {
     return a.count == b.count && memcmp(a.bits, b.bits, a.count * sizeof(u32)) == 0;
 }
 
+static u16 FullMask(u32 count) {
+    return static_cast<u16>(count >= MAX_COMPONENTS ? 0xFFFF : (1u << count) - 1);
+}
+
+// The components whose value is known: all of a constant's, none of an
+// undefined value's.
+static u16 KnownMask(const ConstantValue& value) {
+    if (value.state == ValueState::CONSTANT) return FullMask(value.count);
+    return value.state == ValueState::OVERDEFINED ? value.known : 0;
+}
+
+// A value with the `known` components of `bits`: a constant when that's all
+// of them, overdefined when it's none.
+static ConstantValue MakePartial(CoreType type, u32 count, u16 known, const u32* bits) {
+    known &= FullMask(count);
+    if (known == 0 || count == 0) return OVERDEFINED_VALUE;
+    ConstantValue value = {known == FullMask(count) ? ValueState::CONSTANT : ValueState::OVERDEFINED,
+                           type, static_cast<u8>(count), {}, 0};
+    for (u32 c = 0; c < count; c++) {
+        if (known & (1u << c)) value.bits[c] = bits[c];
+    }
+    if (value.state == ValueState::OVERDEFINED) value.known = known;
+    return value;
+}
+
+// Components stay known where both values know the same constant.
 static ConstantValue Meet(const ConstantValue& a, const ConstantValue& b) {
     if (a.state == ValueState::UNDEFINED) return b;
     if (b.state == ValueState::UNDEFINED) return a;
-    if (a.state == ValueState::OVERDEFINED || b.state == ValueState::OVERDEFINED) {
-        return OVERDEFINED_VALUE;
+    u16 known = KnownMask(a) & KnownMask(b);
+    if (known == 0 || a.type != b.type || a.count != b.count) return OVERDEFINED_VALUE;
+    for (u32 c = 0; c < a.count; c++) {
+        if (a.bits[c] != b.bits[c]) known &= ~(1u << c);
     }
-    return a.type == b.type && HasSameBits(a, b) ? a : OVERDEFINED_VALUE;
+    return MakePartial(a.type, a.count, known, a.bits);
 }
 
 // ============= Types =============
@@ -240,8 +278,9 @@ static ConstantValue DecodeConstant(const IRProgram* ir, u16 operand) {
 }
 
 static ConstantValue GetRegisterValue(const ConstantPropagationData* data, u16 reg) {
-    ConstantValue value = {data->states[reg], GetRegisterType(data->ir, reg), 0, {}};
-    if (value.state != ValueState::CONSTANT) return value;
+    ConstantValue value = {data->states[reg], GetRegisterType(data->ir, reg), 0, {}, 0};
+    if (value.state == ValueState::OVERDEFINED) value.known = data->known[reg];
+    if (value.state != ValueState::CONSTANT && value.known == 0) return value;
     value.count = static_cast<u8>(data->bitOffsets[reg + 1] - data->bitOffsets[reg]);
     memcpy(value.bits, data->bits + data->bitOffsets[reg], value.count * sizeof(u32));
     return value;
@@ -249,10 +288,11 @@ static ConstantValue GetRegisterValue(const ConstantPropagationData* data, u16 r
 
 static void SetRegisterValue(ConstantPropagationData* data, u16 reg, const ConstantValue& value) {
     data->states[reg] = value.state;
+    data->known[reg] = value.state == ValueState::OVERDEFINED ? value.known : 0;
     u32* bits = data->bits + data->bitOffsets[reg];
     u32 count = data->bitOffsets[reg + 1] - data->bitOffsets[reg];
     memset(bits, 0, count * sizeof(u32));
-    if (value.state == ValueState::CONSTANT) memcpy(bits, value.bits, count * sizeof(u32));
+    if (KnownMask(value) != 0) memcpy(bits, value.bits, std::min<u32>(count, value.count) * sizeof(u32));
 }
 
 static ConstantValue GetValue(const ConstantPropagationData* data, u16 operand) {
@@ -669,7 +709,7 @@ static bool FoldComponentwise(u16 op, const ConstantValue* in, u32 arity, CoreTy
     }
     if (!full) return false;
     CoreType resultScalar = GetScalarType(resultType);
-    *out = {ValueState::CONSTANT, resultType, static_cast<u8>(count), {}};
+    *out = {ValueState::CONSTANT, resultType, static_cast<u8>(count), {}, 0};
     for (u32 c = 0; c < count; c++) {
         ConstantValue scalars[4] = {UNDEFINED_VALUE, UNDEFINED_VALUE, UNDEFINED_VALUE, UNDEFINED_VALUE};
         for (u32 k = 0; k < arity; k++) {
@@ -696,54 +736,9 @@ static bool FoldDot(const u32* a, u32 aStride, const u32* b, u32 bStride, u32 co
     return true;
 }
 
-// Mirrors how the backends build a vector: scalars and vector components
-// fill it in order, a single scalar is splatted, and missing components
-// are zero. Operands of another component type aren't folded.
-static bool FoldVectorConstruct(const ConstantValue* in, u32 inputCount, CoreType resultType,
-                                ConstantValue* out) {
-    u32 count = GetComponentCount(resultType);
-    CoreType scalar = GetScalarType(resultType);
-    if (count == 0 || count > 4) return false;
-    *out = {ValueState::CONSTANT, resultType, static_cast<u8>(count), {}};
-    u32 filled = 0;
-    for (u32 k = 0; k < inputCount && filled < count; k++) {
-        if (GetScalarType(in[k].type) != scalar || GetMatrixSize(in[k].type) != 0) return false;
-        for (u32 c = 0; c < in[k].count && filled < count; c++) out->bits[filled++] = in[k].bits[c];
-    }
-    if (filled == 1) {
-        for (u32 c = 1; c < count; c++) out->bits[c] = out->bits[0];
-    }
-    return true;
-}
-
-// SHUFFLE(first, second): indices past the first operand's components pick
-// from the second. A scalar result takes the first index; for one past the
-// first operand the backends disagree (the SPIR-V backend counts the first
-// operand as four components), so that doesn't fold.
-static bool FoldShuffle(const ConstantValue& first, const ConstantValue& second, u32 mask,
-                        CoreType resultType, ConstantValue* out) {
-    u32 count = GetComponentCount(resultType);
-    if (count == 0 || count > 4 || GetScalarType(first.type) != GetScalarType(resultType) ||
-        GetScalarType(second.type) != GetScalarType(resultType) || !IsVectorType(first.type)) {
-        return false;
-    }
-    *out = {ValueState::CONSTANT, resultType, static_cast<u8>(count), {}};
-    for (u32 c = 0; c < count; c++) {
-        u32 index = (mask >> (c * 4)) & 0xF;
-        if (index < first.count) {
-            out->bits[c] = first.bits[index];
-        } else if (count > 1 && index - first.count < second.count) {
-            out->bits[c] = second.bits[index - first.count];
-        } else {
-            return false;
-        }
-    }
-    return true;
-}
-
 static bool FoldMatrixOperation(u16 op, const ConstantValue& a, const ConstantValue& b,
                                 CoreType resultType, ConstantValue* out) {
-    *out = {ValueState::CONSTANT, resultType, static_cast<u8>(GetComponentCount(resultType)), {}};
+    *out = {ValueState::CONSTANT, resultType, static_cast<u8>(GetComponentCount(resultType)), {}, 0};
     switch (op) {
         case IR::OP_MAT_VEC_MUL: {
             // (M * v)[row] = sum over columns of M[column][row] * v[column]
@@ -833,7 +828,7 @@ static bool FoldLength(const ConstantValue& v, float* out) {
 }
 
 static bool StoreFloats(const float* values, u32 count, CoreType type, ConstantValue* out) {
-    *out = {ValueState::CONSTANT, type, static_cast<u8>(count), {}};
+    *out = {ValueState::CONSTANT, type, static_cast<u8>(count), {}, 0};
     for (u32 c = 0; c < count; c++) {
         if (!IsFoldableFloat(values[c])) return false;
         out->bits[c] = FloatToBits(values[c]);
@@ -951,7 +946,7 @@ static bool FoldGeometric(u16 op, const ConstantValue* in, CoreType resultType, 
             float k = 1.0f - eta * eta * (1.0f - dot * dot);
             if (!IsFoldableFloat(k) && k != 0.0f) return false;
             if (k < 0.0f) {
-                *out = {ValueState::CONSTANT, resultType, static_cast<u8>(count), {}};
+                *out = {ValueState::CONSTANT, resultType, static_cast<u8>(count), {}, 0};
                 return true;
             }
             float scale = eta * dot + std::sqrt(k);
@@ -993,6 +988,22 @@ static bool GetConstantOperands(const ConstantPropagationData* data, u32 inst, u
     return !waiting;
 }
 
+// An operand's value with its type and component count filled in from its
+// register even when nothing about it is known, for the folds that work
+// component by component.
+static ConstantValue GetShapedValue(const ConstantPropagationData* data, u16 operand) {
+    ConstantValue value = GetValue(data, operand);
+    if (value.state != ValueState::UNDEFINED && value.count == 0 && IsRegisterOperand(data, operand)) {
+        value.type = GetRegisterType(data->ir, operand);
+        value.count = static_cast<u8>(GetComponentCount(value.type));
+    }
+    return value;
+}
+
+static bool IsKnown(const ConstantValue& value, u32 component) {
+    return (KnownMask(value) >> component) & 1u;
+}
+
 static ConstantValue EvaluateVectorInstruction(const ConstantPropagationData* data, u32 inst) {
     const IRProgram* ir = data->ir;
     u16 op = ir->opcodes[inst];
@@ -1002,40 +1013,62 @@ static ConstantValue EvaluateVectorInstruction(const ConstantPropagationData* da
     switch (op) {
         case IR::OP_VEC_CONSTRUCT: {
             // Operands up to the argument count in metadata; 0xFFFF is unused.
+            // Mirrors how the backends build a vector: scalars and vector
+            // components fill it in order, a single scalar is splatted, and
+            // missing components are zero. Operands of another component
+            // type aren't folded.
             u32 argumentCount = ir->metadata[inst];
             if (argumentCount == 0 || argumentCount > 4) argumentCount = 4;
-            u32 inputCount = 0;
+            u32 count = GetComponentCount(resultType);
+            CoreType scalar = GetScalarType(resultType);
+            if (count == 0 || count > 4) return OVERDEFINED_VALUE;
+            u32 bits[MAX_COMPONENTS] = {};
+            u16 known = 0;
+            u32 filled = 0;
             bool waiting = false;
-            for (u32 k = 0; k < argumentCount; k++) {
+            for (u32 k = 0; k < argumentCount && filled < count; k++) {
                 u16 operand = ir->GetOperand(inst, k);
                 if (operand == 0xFFFF) continue;
-                in[inputCount] = GetValue(data, operand);
-                if (in[inputCount].state == ValueState::OVERDEFINED) return OVERDEFINED_VALUE;
-                waiting |= in[inputCount].state == ValueState::UNDEFINED;
-                inputCount++;
+                ConstantValue value = GetShapedValue(data, operand);
+                if (value.state == ValueState::UNDEFINED) {
+                    waiting = true;
+                    continue;
+                }
+                if (value.count == 0 || GetScalarType(value.type) != scalar ||
+                    GetMatrixSize(value.type) != 0) {
+                    return OVERDEFINED_VALUE;
+                }
+                for (u32 c = 0; c < value.count && filled < count; c++, filled++) {
+                    if (!IsKnown(value, c)) continue;
+                    bits[filled] = value.bits[c];
+                    known |= 1u << filled;
+                }
             }
             if (waiting) return UNDEFINED_VALUE;
-            return FoldVectorConstruct(in, inputCount, resultType, &result) ? result : OVERDEFINED_VALUE;
+            if (filled == 1) {
+                for (u32 c = 1; c < count; c++) bits[c] = bits[0];
+                known = known ? FullMask(count) : 0;
+            } else {
+                known |= FullMask(count) & ~FullMask(filled);  // Missing components are zero
+            }
+            return MakePartial(resultType, count, known, bits);
         }
         case IR::OP_VEC_EXTRACT: {
             // Operand 1 is the component index itself.
-            in[0] = GetValue(data, ir->GetOperand(inst, 0));
-            if (in[0].state != ValueState::CONSTANT) return in[0];
+            ConstantValue vector = GetShapedValue(data, ir->GetOperand(inst, 0));
+            if (vector.state == ValueState::UNDEFINED) return UNDEFINED_VALUE;
             u32 index = ir->GetOperand(inst, 1);
-            if (!IsVectorType(in[0].type) || index >= in[0].count ||
-                GetScalarType(in[0].type) != resultType) {
+            if (!IsVectorType(vector.type) || index >= vector.count ||
+                GetScalarType(vector.type) != resultType || !IsKnown(vector, index)) {
                 return OVERDEFINED_VALUE;
             }
-            return MakeConstant(resultType, in[0].bits[index]);
+            return MakeConstant(resultType, vector.bits[index]);
         }
         case IR::OP_VEC_INSERT: {
             // INSERT(vector, component index, scalar)
-            ConstantValue vector = GetValue(data, ir->GetOperand(inst, 0));
-            ConstantValue scalar = GetValue(data, ir->GetOperand(inst, 2));
-            if (vector.state == ValueState::OVERDEFINED || scalar.state == ValueState::OVERDEFINED) {
-                return OVERDEFINED_VALUE;
-            }
-            if (vector.state != ValueState::CONSTANT || scalar.state != ValueState::CONSTANT) {
+            ConstantValue vector = GetShapedValue(data, ir->GetOperand(inst, 0));
+            ConstantValue scalar = GetShapedValue(data, ir->GetOperand(inst, 2));
+            if (vector.state == ValueState::UNDEFINED || scalar.state == ValueState::UNDEFINED) {
                 return UNDEFINED_VALUE;
             }
             u32 index = ir->GetOperand(inst, 1);
@@ -1043,37 +1076,88 @@ static ConstantValue EvaluateVectorInstruction(const ConstantPropagationData* da
                 scalar.count != 1 || scalar.type != GetScalarType(resultType)) {
                 return OVERDEFINED_VALUE;
             }
-            vector.bits[index] = scalar.bits[0];
-            return vector;
+            u16 known = KnownMask(vector) & ~(1u << index);
+            if (IsKnown(scalar, 0)) {
+                vector.bits[index] = scalar.bits[0];
+                known |= 1u << index;
+            }
+            return MakePartial(resultType, vector.count, known, vector.bits);
         }
-        case IR::OP_VEC_SHUFFLE:
-            if (!GetConstantOperands(data, inst, 2, in, &result)) return result;
-            return FoldShuffle(in[0], in[1], ir->metadata[inst], resultType, &result) ? result
-                                                                                       : OVERDEFINED_VALUE;
+        case IR::OP_VEC_SHUFFLE: {
+            // SHUFFLE(first, second): indices past the first operand's
+            // components pick from the second. A scalar result takes the
+            // first index; for one past the first operand the backends
+            // disagree (the SPIR-V backend counts the first operand as four
+            // components), so that doesn't fold.
+            ConstantValue first = GetShapedValue(data, ir->GetOperand(inst, 0));
+            ConstantValue second = GetShapedValue(data, ir->GetOperand(inst, 1));
+            u32 count = GetComponentCount(resultType);
+            CoreType scalar = GetScalarType(resultType);
+            if (count == 0 || count > 4 || !IsVectorType(first.type) || GetScalarType(first.type) != scalar) {
+                return first.state == ValueState::UNDEFINED ? UNDEFINED_VALUE : OVERDEFINED_VALUE;
+            }
+            u32 bits[MAX_COMPONENTS] = {};
+            u16 known = 0;
+            bool waiting = false;
+            for (u32 c = 0; c < count; c++) {
+                u32 index = (ir->metadata[inst] >> (c * 4)) & 0xF;
+                const ConstantValue* source = &first;
+                if (index >= first.count) {
+                    if (count == 1 || GetScalarType(second.type) != scalar) {
+                        return second.state == ValueState::UNDEFINED ? UNDEFINED_VALUE : OVERDEFINED_VALUE;
+                    }
+                    source = &second;
+                    index -= first.count;
+                    if (index >= second.count) return OVERDEFINED_VALUE;
+                }
+                waiting |= source->state == ValueState::UNDEFINED;
+                if (!IsKnown(*source, index)) continue;
+                bits[c] = source->bits[index];
+                known |= 1u << c;
+            }
+            if (waiting) return UNDEFINED_VALUE;
+            return MakePartial(resultType, count, known, bits);
+        }
         case IR::OP_ARRAY_LOAD: {
             // A column of a matrix value.
-            if (!GetConstantOperands(data, inst, 2, in, &result)) return result;
-            u32 n = GetMatrixSize(in[0].type);
-            if (n == 0 || !IsIntegerType(in[1].type) || in[1].bits[0] >= n ||
+            ConstantValue matrix = GetShapedValue(data, ir->GetOperand(inst, 0));
+            ConstantValue column = GetValue(data, ir->GetOperand(inst, 1));
+            if (matrix.state == ValueState::UNDEFINED || column.state == ValueState::UNDEFINED) {
+                return UNDEFINED_VALUE;
+            }
+            u32 n = GetMatrixSize(matrix.type);
+            if (n == 0 || column.state != ValueState::CONSTANT || !IsIntegerType(column.type) ||
+                column.bits[0] >= n ||
                 resultType != (n == 2 ? CoreType::FLOAT2 : n == 3 ? CoreType::FLOAT3 : CoreType::FLOAT4)) {
                 return OVERDEFINED_VALUE;
             }
-            result = {ValueState::CONSTANT, resultType, static_cast<u8>(n), {}};
-            memcpy(result.bits, in[0].bits + in[1].bits[0] * n, n * sizeof(u32));
-            return result;
+            u32 offset = column.bits[0] * n;
+            return MakePartial(resultType, n, static_cast<u16>(KnownMask(matrix) >> offset),
+                               matrix.bits + offset);
         }
         case IR::OP_MAT_CONSTRUCT: {
             // Columns are vector operands; metadata holds their count.
             u32 n = GetMatrixSize(resultType);
             if (n == 0 || (ir->metadata[inst] != 0 && ir->metadata[inst] != n)) return OVERDEFINED_VALUE;
-            if (!GetConstantOperands(data, inst, n, in, &result)) return result;
             CoreType columnType = n == 2 ? CoreType::FLOAT2 : n == 3 ? CoreType::FLOAT3 : CoreType::FLOAT4;
-            result = {ValueState::CONSTANT, resultType, static_cast<u8>(n * n), {}};
+            u32 bits[MAX_COMPONENTS] = {};
+            u16 known = 0;
+            bool waiting = false;
             for (u32 column = 0; column < n; column++) {
-                if (in[column].type != columnType) return OVERDEFINED_VALUE;
-                memcpy(result.bits + column * n, in[column].bits, n * sizeof(u32));
+                ConstantValue value = GetShapedValue(data, ir->GetOperand(inst, column));
+                if (value.state == ValueState::UNDEFINED) {
+                    waiting = true;
+                    continue;
+                }
+                if (value.type != columnType) return OVERDEFINED_VALUE;
+                for (u32 row = 0; row < n; row++) {
+                    if (!IsKnown(value, row)) continue;
+                    bits[column * n + row] = value.bits[row];
+                    known |= 1u << (column * n + row);
+                }
             }
-            return result;
+            if (waiting) return UNDEFINED_VALUE;
+            return MakePartial(resultType, n * n, known, bits);
         }
         case IR::OP_MAT_MUL: case IR::OP_MAT_VEC_MUL: case IR::OP_VEC_MAT_MUL:
         case IR::OP_MAT_SCALE: case IR::OP_DOT: case IR::OP_CROSS:
@@ -1109,10 +1193,71 @@ static bool IsVectorFoldOp(u16 op) {
            (op >= IR::OP_LENGTH && op <= IR::OP_FACEFORWARD) || op == IR::OP_ANY || op == IR::OP_ALL;
 }
 
+// The operation applied to each component whose operands are known, the
+// way FoldComponentwise applies it to constants. A component whose fold
+// fails is unknown; the others keep their constants.
+static ConstantValue FoldKnownComponents(u16 op, const ConstantValue* in, u32 arity, CoreType resultType) {
+    u32 count = GetComponentCount(resultType);
+    if (count < 2 || GetMatrixSize(resultType) != 0) return OVERDEFINED_VALUE;
+    bool splats = SplatsScalarOperands(op);
+    for (u32 k = 0; k < arity; k++) {
+        if (in[k].count != count && !(splats && in[k].count == 1)) return OVERDEFINED_VALUE;
+    }
+    CoreType resultScalar = GetScalarType(resultType);
+    u32 bits[MAX_COMPONENTS] = {};
+    u16 known = 0;
+    for (u32 c = 0; c < count; c++) {
+        ConstantValue scalars[4] = {UNDEFINED_VALUE, UNDEFINED_VALUE, UNDEFINED_VALUE, UNDEFINED_VALUE};
+        bool inputsKnown = true;
+        for (u32 k = 0; k < arity && inputsKnown; k++) {
+            u32 component = in[k].count == 1 ? 0 : c;
+            inputsKnown = IsKnown(in[k], component);
+            scalars[k] = MakeConstant(GetScalarType(in[k].type), in[k].bits[component]);
+        }
+        ConstantValue result;
+        if (!inputsKnown || !FoldOperation(op, scalars, resultScalar, &result) || result.type != resultScalar) {
+            continue;
+        }
+        bits[c] = result.bits[0];
+        known |= 1u << c;
+    }
+    return MakePartial(resultType, count, known, bits);
+}
+
+// SELECT per component: a known condition component picks its operand's
+// component, and an unknown one keeps a component both operands agree on.
+static ConstantValue SelectKnownComponents(const ConstantValue& condition, const ConstantValue& falseValue,
+                                           const ConstantValue& trueValue) {
+    if (GetScalarType(condition.type) != CoreType::BOOL || falseValue.type != trueValue.type ||
+        falseValue.count != trueValue.count || falseValue.count == 0 ||
+        (condition.count != 1 && condition.count != falseValue.count)) {
+        return Meet(falseValue, trueValue);
+    }
+    u32 bits[MAX_COMPONENTS] = {};
+    u16 known = 0;
+    for (u32 c = 0; c < falseValue.count; c++) {
+        u32 conditionComponent = condition.count == 1 ? 0 : c;
+        bool value;
+        if (IsKnown(condition, conditionComponent)) {
+            const ConstantValue& picked = condition.bits[conditionComponent] ? trueValue : falseValue;
+            value = IsKnown(picked, c);
+            bits[c] = picked.bits[c];
+        } else {
+            value = IsKnown(falseValue, c) && IsKnown(trueValue, c) && falseValue.bits[c] == trueValue.bits[c];
+            bits[c] = falseValue.bits[c];
+        }
+        if (value) known |= 1u << c;
+    }
+    return MakePartial(falseValue.type, falseValue.count, known, bits);
+}
+
 static ConstantValue EvaluateInstruction(const ConstantPropagationData* data, u32 inst) {
     const IRProgram* ir = data->ir;
     u16 op = ir->opcodes[inst];
     CoreType resultType = GetRegisterType(ir, ir->destinations[inst]);
+
+    // Copies keep any value, matrices and known components included.
+    if (op == IR::OP_LOAD_REG || op == IR::OP_STORE_REG) return GetValue(data, ir->GetOperand(inst, 0));
 
     if (op == IR::OP_AND || op == IR::OP_OR || op == IR::OP_XOR) {
         ConstantValue a = GetValue(data, ir->GetOperand(inst, 0));
@@ -1127,10 +1272,10 @@ static ConstantValue EvaluateInstruction(const ConstantPropagationData* data, u3
     // SELECT(falseValue, trueValue, condition). A bool vector condition picks
     // per component.
     if (op == IR::OP_SELECT) {
-        ConstantValue condition = GetValue(data, ir->GetOperand(inst, 2));
+        ConstantValue condition = GetShapedValue(data, ir->GetOperand(inst, 2));
         if (condition.state == ValueState::UNDEFINED) return UNDEFINED_VALUE;
-        ConstantValue falseValue = GetValue(data, ir->GetOperand(inst, 0));
-        ConstantValue trueValue = GetValue(data, ir->GetOperand(inst, 1));
+        ConstantValue falseValue = GetShapedValue(data, ir->GetOperand(inst, 0));
+        ConstantValue trueValue = GetShapedValue(data, ir->GetOperand(inst, 1));
         if (condition.state == ValueState::CONSTANT && GetScalarType(condition.type) == CoreType::BOOL) {
             bool allTrue = true, allFalse = true;
             for (u32 c = 0; c < condition.count; c++) {
@@ -1148,7 +1293,10 @@ static ConstantValue EvaluateInstruction(const ConstantPropagationData* data, u3
                 return result;
             }
         }
-        return Meet(falseValue, trueValue);
+        if (falseValue.state == ValueState::UNDEFINED || trueValue.state == ValueState::UNDEFINED) {
+            return Meet(falseValue, trueValue);
+        }
+        return SelectKnownComponents(condition, falseValue, trueValue);
     }
 
     if (IsVectorFoldOp(op)) return EvaluateVectorInstruction(data, inst);
@@ -1157,10 +1305,15 @@ static ConstantValue EvaluateInstruction(const ConstantPropagationData* data, u3
     if (arity == 0) return OVERDEFINED_VALUE;
     ConstantValue in[4] = {UNDEFINED_VALUE, UNDEFINED_VALUE, UNDEFINED_VALUE, UNDEFINED_VALUE};
     ConstantValue result;
-    if (!GetConstantOperands(data, inst, arity, in, &result)) return result;
-
-    // Copies keep any value, matrices included.
-    if (op == IR::OP_LOAD_REG || op == IR::OP_STORE_REG) return in[0];
+    if (!GetConstantOperands(data, inst, arity, in, &result)) {
+        if (result.state != ValueState::OVERDEFINED) return result;
+        // Some operand isn't a constant: fold the components that are.
+        for (u32 k = 0; k < arity; k++) {
+            in[k] = GetShapedValue(data, ir->GetOperand(inst, k));
+            if (in[k].state == ValueState::UNDEFINED) return UNDEFINED_VALUE;
+        }
+        return FoldKnownComponents(op, in, arity, resultType);
+    }
     bool scalars = true;
     for (u32 k = 0; k < arity; k++) scalars &= in[k].count == 1;
     if (scalars && GetComponentCount(resultType) == 1) {
@@ -1173,14 +1326,13 @@ static ConstantValue EvaluateInstruction(const ConstantPropagationData* data, u3
 
 static void UpdateRegister(ConstantPropagationData* data, u16 reg, ConstantValue value) {
     CoreType type = GetRegisterType(data->ir, reg);
-    if (value.state == ValueState::CONSTANT &&
-        (value.type != type || value.count != GetComponentCount(type))) {
+    if (KnownMask(value) != 0 && (value.type != type || value.count != GetComponentCount(type))) {
         value = OVERDEFINED_VALUE;
     }
     ConstantValue current = GetRegisterValue(data, reg);
     ConstantValue next = Meet(current, value);
-    if (next.state == current.state &&
-        (next.state != ValueState::CONSTANT || HasSameBits(next, current))) {
+    if (next.state == current.state && KnownMask(next) == KnownMask(current) &&
+        (KnownMask(next) == 0 || HasSameBits(next, current))) {
         return;
     }
     SetRegisterValue(data, reg, next);
@@ -1201,7 +1353,7 @@ static void EvaluatePhi(ConstantPropagationData* data, u32 phi) {
     if (result >= data->regCount || !data->tracked[result]) return;
     if (data->pinned[result]) {
         ConstantValue value = {ValueState::CONSTANT, GetRegisterType(ir, result),
-                               static_cast<u8>(data->bitOffsets[result + 1] - data->bitOffsets[result]), {}};
+                               static_cast<u8>(data->bitOffsets[result + 1] - data->bitOffsets[result]), {}, 0};
         memcpy(value.bits, data->pinnedBits + data->bitOffsets[result], value.count * sizeof(u32));
         UpdateRegister(data, result, value);
         return;
@@ -1544,6 +1696,7 @@ static bool FoldLoop(ConstantPropagationData* data, u32 header) {
 
     memcpy(data->savedStates, data->states, data->regCount * sizeof(ValueState));
     memcpy(data->savedBits, data->bits, data->bitOffsets[data->regCount] * sizeof(u32));
+    memcpy(data->savedKnown, data->known, data->regCount * sizeof(u16));
     bool folded = RunLoop(data, header, entry);
 
     u32 phiStart = data->blockPhiOffsets[header], phiEnd = data->blockPhiOffsets[header + 1];
@@ -1566,7 +1719,7 @@ static bool FoldLoop(ConstantPropagationData* data, u32 header) {
             // Saved: the lattice's value before the run.
             if (IsRegisterOperand(data, entryOperand) && data->tracked[entryOperand]) {
                 entryValue = {data->savedStates[entryOperand], GetRegisterType(ir, entryOperand),
-                              static_cast<u8>(data->bitOffsets[entryOperand + 1] - data->bitOffsets[entryOperand]), {}};
+                              static_cast<u8>(data->bitOffsets[entryOperand + 1] - data->bitOffsets[entryOperand]), {}, 0};
                 memcpy(entryValue.bits, data->savedBits + data->bitOffsets[entryOperand],
                        entryValue.count * sizeof(u32));
             }
@@ -1591,12 +1744,14 @@ static bool FoldLoop(ConstantPropagationData* data, u32 header) {
 
     memcpy(data->states, data->savedStates, data->regCount * sizeof(ValueState));
     memcpy(data->bits, data->savedBits, data->bitOffsets[data->regCount] * sizeof(u32));
+    memcpy(data->known, data->savedKnown, data->regCount * sizeof(u16));
     return folded;
 }
 
 static void ResetPropagation(ConstantPropagationData* data) {
     const CFG* cfg = data->cfg;
     memset(data->states, 0, data->regCount * sizeof(ValueState));
+    memset(data->known, 0, data->regCount * sizeof(u16));
     memset(data->bits, 0, data->bitOffsets[data->regCount] * sizeof(u32));
     memset(data->blockExecutable, 0, cfg->blockCount * sizeof(bool));
     memset(data->edgeExecutable, 0, cfg->predecessorDataCount * sizeof(bool));
@@ -1863,7 +2018,9 @@ static bool RewriteAsConstant(ConstantPropagationData* data, u32 inst, u32 bits)
 
 // The operand of a single-definition `op` that defines `reg`, or 0xFFFF.
 static u16 GetUnaryInput(const ConstantPropagationData* data, u16 reg, u16 op) {
-    if (!IsRegisterOperand(data, reg) || data->definitionCounts[reg] != 1) return 0xFFFF;
+    if (!IsRegisterOperand(data, reg) || data->definitionCounts[reg] != 1 || IsMemoryBacked(data->ir, reg)) {
+        return 0xFFFF;
+    }
     u32 definition = data->definitions[reg];
     if ((definition & PHI_REFERENCE) || data->ir->opcodes[definition] != op) return 0xFFFF;
     return data->ir->GetOperand(definition, 0);
@@ -1943,6 +2100,96 @@ static bool RewritePowerChain(ConstantPropagationData* data, u32 inst) {
         ir->SetOperand(inst, 1, value);
     }
     return true;
+}
+
+// The instruction whose value `reg` holds where it's read: its only
+// definition, or in a straight-line walk the latest one. NO_DEFINITION
+// otherwise.
+static u32 GetReachingDefinition(const ConstantPropagationData* data, u16 reg) {
+    if (!IsRegisterOperand(data, reg)) return NO_DEFINITION;
+    if (!data->straightLine && data->definitionCounts[reg] != 1) return NO_DEFINITION;
+    u32 definition = data->definitions[reg];
+    return definition & PHI_REFERENCE ? NO_DEFINITION : definition;
+}
+
+// Whether `source` still holds, where it's read now, the value it had at
+// instruction `definition`: nothing assigned it since.
+static bool IsUnchangedSince(const ConstantPropagationData* data, u16 source, u32 definition) {
+    if (!IsRegisterOperand(data, source) || IsMemoryBacked(data->ir, source)) return false;
+    if (!data->straightLine) return data->definitionCounts[source] <= 1;
+    u32 written = data->definitions[source];
+    return written == NO_DEFINITION || written < definition;
+}
+
+// A component read from a vector that was just put together reads where
+// the component came from instead: `float3(a, b, c).y` is b, a component
+// a VEC_INSERT wrote is its scalar, one it didn't is the inner vector's,
+// a swizzle's is its source's, and a copy's is the original's. Once nothing
+// reads the whole vector any more, it's removed as dead.
+static void RewriteComponentRead(ConstantPropagationData* data, u32 inst) {
+    IRProgram* ir = data->ir;
+    for (u32 step = 0; step < 8; step++) {
+        u16 vector = ir->GetOperand(inst, 0);
+        u32 index = ir->GetOperand(inst, 1);
+        // A vector a pointer can reach may have changed since it was built.
+        if (IsMemoryBacked(ir, vector)) return;
+        u32 definition = GetReachingDefinition(data, vector);
+        if (definition == NO_DEFINITION || index >= GetComponentCount(GetRegisterType(ir, vector))) return;
+        u16 op = ir->opcodes[definition];
+        u16 source = 0xFFFF;
+        u32 sourceIndex = 0;
+        if (op == IR::OP_VEC_CONSTRUCT) {
+            // Arguments fill the components in order; a lone scalar is a splat.
+            u32 argumentCount = ir->metadata[definition];
+            if (argumentCount == 0 || argumentCount > 4) argumentCount = 4;
+            u32 filled = 0, arguments = 0;
+            for (u32 k = 0; k < argumentCount && source == 0xFFFF; k++) {
+                u16 operand = ir->GetOperand(definition, k);
+                if (operand == 0xFFFF) continue;
+                arguments++;
+                u32 width = IR::IsConstant(operand) ? 1 : GetComponentCount(GetRegisterType(ir, operand));
+                if (width == 0) return;
+                if (index < filled + width) {
+                    source = operand;
+                    sourceIndex = index - filled;
+                }
+                filled += width;
+            }
+            if (filled == 1 && arguments == 1) {
+                source = ir->GetOperand(definition, 0);
+                sourceIndex = 0;
+            }
+        } else if (op == IR::OP_VEC_INSERT) {
+            if (ir->GetOperand(definition, 1) == index) {
+                source = ir->GetOperand(definition, 2);
+            } else {
+                source = ir->GetOperand(definition, 0);
+                sourceIndex = index;
+            }
+        } else if (op == IR::OP_LOAD_REG || op == IR::OP_STORE_REG) {
+            source = ir->GetOperand(definition, 0);
+            sourceIndex = index;
+        } else if (op == IR::OP_VEC_SHUFFLE) {
+            u16 first = ir->GetOperand(definition, 0);
+            u32 firstWidth = IsRegisterOperand(data, first) ? GetComponentCount(GetRegisterType(ir, first)) : 0;
+            u32 picked = (ir->metadata[definition] >> (index * 4)) & 0xF;
+            if (firstWidth == 0 || picked >= firstWidth) return;
+            source = first;
+            sourceIndex = picked;
+        } else {
+            return;
+        }
+        if (!IsUnchangedSince(data, source, definition)) return;
+        CoreType sourceType = GetRegisterType(ir, source);
+        CoreType resultType = GetRegisterType(ir, ir->destinations[inst]);
+        if (GetComponentCount(sourceType) == 1) {
+            if (sourceType == resultType) RewriteAs(data, inst, IR::OP_LOAD_REG, source);
+            return;
+        }
+        if (!IsVectorType(sourceType) || GetScalarType(sourceType) != resultType) return;
+        ir->SetOperand(inst, 0, source);
+        ir->SetOperand(inst, 1, static_cast<u16>(sourceIndex));
+    }
 }
 
 // Simplifies an instruction one of whose operands is a constant that
@@ -2059,8 +2306,19 @@ static void RewriteAlgebraicIdentity(ConstantPropagationData* data, u32 inst) {
         case IR::OP_UMIN: case IR::OP_UMAX:
             if (a == b) RewriteAs(data, inst, IR::OP_LOAD_REG, a);
             return;
-        case IR::OP_SELECT:
-            if (a == b) RewriteAs(data, inst, IR::OP_LOAD_REG, a);
+        case IR::OP_SELECT: {
+            if (a == b && RewriteAs(data, inst, IR::OP_LOAD_REG, a)) return;
+            // A condition that's all true or all false picks one operand.
+            ConstantValue condition = GetKnownValue(data, ir->GetOperand(inst, 2));
+            if (condition.state != ValueState::CONSTANT || GetScalarType(condition.type) != CoreType::BOOL) return;
+            u32 set = 0;
+            for (u32 c = 0; c < condition.count; c++) set += condition.bits[c] != 0;
+            if (set == 0) RewriteAs(data, inst, IR::OP_LOAD_REG, a);
+            else if (set == condition.count) RewriteAs(data, inst, IR::OP_LOAD_REG, b);
+            return;
+        }
+        case IR::OP_VEC_EXTRACT:
+            RewriteComponentRead(data, inst);
             return;
         case IR::OP_NOT: case IR::OP_FNEG: case IR::OP_INEG: {
             u16 inner = GetUnaryInput(data, a, op);
@@ -2416,6 +2674,9 @@ static void PropagateStraightLine(ConstantPropagationData* data) {
     IRProgram* ir = data->ir;
     // A register read before any write holds whatever the backend set up.
     for (u32 reg = 0; reg < data->regCount; reg++) data->states[reg] = ValueState::OVERDEFINED;
+    // definitions[] follows the walk: the assignment reaching each
+    // instruction. It ends where FindDefinitions left it.
+    memset(data->definitions, 0xFF, data->regCount * sizeof(u32));
 
     for (u32 i = 0; i < ir->instructionCount; i++) {
         u16 op = ir->opcodes[i];
@@ -2424,15 +2685,21 @@ static void PropagateStraightLine(ConstantPropagationData* data) {
         RewriteBitwiseIdentity(data, i);
         RewriteAlgebraicIdentity(data, i);
         u16 dest = ir->destinations[i];
+        if (IsRegisterOperand(data, dest) && !IsUseInDestination(op) && op != IR::OP_JUMP &&
+            op != IR::OP_BRANCH && op != IR::OP_SWITCH && op != IR::OP_RET) {
+            data->definitions[dest] = i;
+        }
         if (!IsRegisterOperand(data, dest) || !data->tracked[dest] || IsUseInDestination(op) ||
             op == IR::OP_JUMP || op == IR::OP_BRANCH || op == IR::OP_SWITCH || op == IR::OP_RET) {
             continue;
         }
         ConstantValue value = EvaluateInstruction(data, i);
         CoreType type = GetRegisterType(ir, dest);
-        bool isConstant = value.state == ValueState::CONSTANT && value.type == type &&
-                          value.count == GetComponentCount(type);
-        SetRegisterValue(data, dest, isConstant ? value : OVERDEFINED_VALUE);
+        bool fits = value.type == type && value.count == GetComponentCount(type);
+        bool isConstant = value.state == ValueState::CONSTANT && fits;
+        // A vector with some known components keeps them too.
+        bool isPartial = value.state == ValueState::OVERDEFINED && value.known != 0 && fits;
+        SetRegisterValue(data, dest, isConstant || isPartial ? value : OVERDEFINED_VALUE);
         if (isConstant) MaterializeConstant(data, i, dest);
     }
 }
@@ -2542,6 +2809,58 @@ static void RemoveDeadValues(ConstantPropagationData* data, BWSL_Arena* arena) {
     if (ir->phiCount > 0) {
         ir->phiOperandOffsets[keptPhis] = keptOperands;
         ir->phiCount = keptPhis;
+    }
+}
+
+// A straight-line stage assigns a variable's register more than once, so
+// RemoveDeadValues, which needs one definition, leaves it alone. Walking
+// back from the end instead, an assignment whose value nothing after it
+// reads is dead: the value instructions among those are removed. An
+// assignment that reads the register it writes, like `v.w = 4.0`, is no
+// reason to keep the ones before it alive by itself.
+//
+// A dead copy of a constant into a named local stays, without making
+// anything else live: the backends name the constant after it.
+static void RemoveUnreadAssignments(ConstantPropagationData* data, BWSL_Arena* arena) {
+    IRProgram* ir = data->ir;
+    bool* live = (bool*)AllocateZeroed(arena, data->regCount * sizeof(bool));
+    if (!live) return;
+    auto markRead = [&](u16 operand) {
+        if (IsRegisterOperand(data, operand)) live[operand] = true;
+    };
+    u32 next = data->insertions.count;
+    for (u32 i = ir->instructionCount; i-- > 0;) {
+        u16 op = ir->opcodes[i];
+        u16 dest = ir->destinations[i];
+        if (op != IR::OP_NOP) {
+            // A constant copied into a named local names the constant in the
+            // debug info, and costs nothing, so it stays.
+            bool namesConstant = (op == IR::OP_STORE_REG || op == IR::OP_LOAD_REG) &&
+                                 IR::IsConstant(ir->GetOperand(i, 0)) && ir->registerNameHashes &&
+                                 IsRegisterOperand(data, dest) && ir->registerNameHashes[dest] != 0;
+            bool removable = !IsUseInDestination(op) && IsRegisterOperand(data, dest) &&
+                             !IsMemoryBacked(ir, dest) && !namesConstant &&
+                             (GetFoldArity(op) != 0 || IsPureValueOp(op) || IsVectorFoldOp(op));
+            if (removable && !live[dest]) {
+                ir->opcodes[i] = IR::OP_NOP;
+                ir->destinations[i] = 0;
+                for (u32 slot = 0; slot < 4; slot++) ir->SetOperand(i, slot, 0xFFFF);
+            } else {
+                if (removable) live[dest] = false;  // Overwritten here
+                // Jumps, returns and discards carry no value; their operand
+                // slots aren't registers.
+                bool carriesValues = op != IR::OP_JUMP && op != IR::OP_RET && op != IR::OP_DISCARD;
+                for (u32 slot = 0; slot < 4 && carriesValues && !HasSlotOperands(op); slot++) {
+                    markRead(ir->GetOperand(i, slot));
+                }
+                if (IsUseInDestination(op)) markRead(dest);
+            }
+        }
+        // Instructions still to be inserted in front of this one read too.
+        while (next > 0 && data->insertions.items[next - 1].before == i) {
+            const InsertedInstruction& item = data->insertions.items[--next];
+            for (u32 slot = 0; slot < 4; slot++) markRead(item.operands[slot]);
+        }
     }
 }
 
@@ -2671,7 +2990,9 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
 
     // Everything is sized up front, so the arena can't run out.
     size_t bytes = size_t(regCount) * (sizeof(ValueState) + sizeof(u32) * 4 + sizeof(bool) * 3 + 1) +
-                   size_t(regCount) * 2 * sizeof(u32) +  // regWork
+                   size_t(bitCount + regCount * 2) * sizeof(u32) +  // regWork
+                   size_t(regCount) * sizeof(u16) * 2 +  // known, savedKnown
+                   size_t(regCount) * sizeof(bool) + 64 +  // RemoveUnreadAssignments
                    size_t(regCount + 1) * sizeof(u32) + size_t(maxUses) * sizeof(u32) +
                    size_t(blockCount) * (sizeof(bool) * 2 + sizeof(u32) * 3) + 2 * sizeof(u32) +
                    size_t(edgeCount) * sizeof(bool) * 2 + size_t(phiOperandCount) * sizeof(bool) +
@@ -2693,6 +3014,7 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
     data.builder = builder;
     data.cfg = cfg;
     data.regCount = regCount;
+    data.straightLine = straightLine;
     data.states = (ValueState*)AllocateZeroed(&arena, regCount * sizeof(ValueState));
     data.bitOffsets = (u32*)AllocateZeroed(&arena, (regCount + 1) * sizeof(u32));
     data.bits = (u32*)AllocateZeroed(&arena, bitCount * sizeof(u32));
@@ -2702,7 +3024,9 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
     data.definitionCounts = (u8*)AllocateZeroed(&arena, regCount);
     data.useOffsets = (u32*)AllocateZeroed(&arena, (regCount + 1) * sizeof(u32));
     data.useData = (u32*)AllocateZeroed(&arena, maxUses * sizeof(u32));
-    data.regWork = (u32*)AllocateZeroed(&arena, regCount * 2 * sizeof(u32));
+    data.regWork = (u32*)AllocateZeroed(&arena, (bitCount + regCount * 2) * sizeof(u32));
+    data.known = (u16*)AllocateZeroed(&arena, regCount * sizeof(u16));
+    data.savedKnown = (u16*)AllocateZeroed(&arena, regCount * sizeof(u16));
     data.blockExecutable = (bool*)AllocateZeroed(&arena, blockCount * sizeof(bool));
     data.edgeExecutable = (bool*)AllocateZeroed(&arena, edgeCount * sizeof(bool));
     data.blockPhiOffsets = (u32*)AllocateZeroed(&arena, (blockCount + 1) * sizeof(u32));
@@ -2723,7 +3047,7 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
         !data.blockExecutable || !data.edgeExecutable || !data.blockPhiOffsets ||
         !data.blockPhis || !data.phiRemoved || !data.blockWork || !data.pinned || !data.pinnedBits ||
         !data.pinnedPhiOperand || !data.readAnywhere || !data.loopFolded || !data.inLoop ||
-        !data.blockStack || !data.savedStates || !data.savedBits) {
+        !data.blockStack || !data.savedStates || !data.savedBits || !data.known || !data.savedKnown) {
         return;
     }
     memset(data.definitions, 0xFF, regCount * sizeof(u32));
@@ -2747,6 +3071,7 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
         CollapseSingleValuePhis(&data, &arena);
     }
     RemoveDeadValues(&data, &arena);
+    if (straightLine) RemoveUnreadAssignments(&data, &arena);
     ApplyInsertions(builder, cfg, &data.insertions);
 }
 

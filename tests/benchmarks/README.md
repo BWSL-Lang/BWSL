@@ -87,6 +87,7 @@ mismatch is usually a compiler bug.
 | `postprocess` | Fullscreen pass, 4 textures (15 taps), tone mapping, grading, integer-hash grain |
 | `mrt` | 4 RGBA16F render targets at once, 25 taps, constant array in a loop |
 | `hsluv` | Stdlib `Color` HSLuv conversions, dynamically indexed 72-entry table |
+| `hsluv_components` | `hsluvToRgb` with one varying component (hue, saturation and lightness sweeps); BWSL folds what the constant components decide |
 | `noise` | Loops in loops: 2x2 supersampled domain-warped fbm and Worley noise |
 | `vertex_heavy` | 2.1M triangles; fbm, bone blending and lighting in the vertex shader |
 
