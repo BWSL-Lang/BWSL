@@ -286,6 +286,28 @@ static ValueRange IntegerResult(f64 low, f64 high, CoreType scalar) {
     return range;
 }
 
+// A conversion's result from its source's range: an integer to a float
+// may round either way, a float to an integer truncates (and NaN or an
+// out-of-range value gives anything), and between integers the value
+// stays when the other type holds it.
+static ValueRange ConvertRange(const ValueRange& source, CoreType from, CoreType to) {
+    if (from == to) return source;
+    if (!(source.flags & ValueRange::KNOWN) || to == CoreType::BOOL || from == CoreType::INVALID) return FullRange(to);
+    if (IsFloatScalar(to)) {
+        if (IsFloatScalar(from)) return FullRange(to);
+        ValueRange range = {};
+        range.flags |= ValueRange::KNOWN;
+        range.low = FloatBelow(source.low);
+        range.high = FloatAbove(source.high);
+        return range;
+    }
+    if (IsFloatScalar(from)) {
+        if (source.flags & ValueRange::MAY_BE_NAN) return FullRange(to);
+        return IntegerResult(std::trunc(source.low), std::trunc(source.high), to);
+    }
+    return IntegerResult(source.low, source.high, to);
+}
+
 // ---- Constraints from branches ----
 
 // The constraint a comparison puts on `range` when it holds: `range op bound`.
@@ -586,6 +608,11 @@ static ValueRange EvaluateComponentRange(const ConstantPropagationData* data, u3
         if (scalarOf(value) != scalar) return FullRange(scalar);
         return GetOperandRange(data, value, index, block);
     };
+    // A constructor's argument component, converted to the result's type:
+    // `int2(q)` converts each component of a float2.
+    auto convert = [&](u16 value, u32 index) {
+        return ConvertRange(GetOperandRange(data, value, index, block), scalarOf(value), scalar);
+    };
 
     if (const DeclaredBounds* bounds = GetLoadBounds(data, inst)) {
         if (bounds->count == count && component < 4) return FromDeclared(bounds->components[component], scalar);
@@ -610,11 +637,11 @@ static ValueRange EvaluateComponentRange(const ConstantPropagationData* data, u3
                 if (value == 0xFFFF) continue;
                 u32 w = width(value);
                 if (w == 0) return FullRange(scalar);
-                if (component < filled + w) return move(value, component - filled);
+                if (component < filled + w) return convert(value, component - filled);
                 filled += w;
                 single = k;
             }
-            if (filled == 1) return move(operand(single), 0);  // Splat
+            if (filled == 1) return convert(operand(single), 0);  // Splat
             return PointRange(scalar, 0);  // Missing components are zero
         }
         case IR::OP_VEC_SHUFFLE: {
@@ -741,16 +768,8 @@ static ValueRange EvaluateComponentRange(const ConstantPropagationData* data, u3
                 SetRangeFlag(range, ValueRange::MAY_BE_NAN, op == IR::OP_EXP || op == IR::OP_EXP2 ? (a.flags & ValueRange::MAY_BE_NAN) : true);
                 return range;
             }
-            case IR::OP_I2F: case IR::OP_U2F: {
-                ValueRange source = GetOperandRange(data, operand(0), component, block);
-                // An inexact conversion may round either way, as for
-                // constant folding: only an exact one is a single value.
-                ValueRange range = {};
-                range.flags |= ValueRange::KNOWN;
-                range.low = FloatBelow(source.low);
-                range.high = FloatAbove(source.high);
-                return range;
-            }
+            case IR::OP_I2F: case IR::OP_U2F:
+                return convert(operand(0), width(operand(0)) == 1 ? 0 : component);
             default:
                 return FullRange(scalar);
         }
@@ -799,15 +818,8 @@ static ValueRange EvaluateComponentRange(const ConstantPropagationData* data, u3
                 f64 divisor = std::ldexp(1.0, static_cast<int>(b.low));
                 return IntegerResult(std::floor(a.low / divisor), std::floor(a.high / divisor), scalar);
             }
-            case IR::OP_F2I: case IR::OP_F2U: {
-                ValueRange source = GetOperandRange(data, operand(0), component, block);
-                if (source.flags & ValueRange::MAY_BE_NAN) return FullRange(scalar);
-                return IntegerResult(std::trunc(source.low), std::trunc(source.high), scalar);
-            }
-            case IR::OP_I2U: case IR::OP_U2I: {
-                ValueRange source = GetOperandRange(data, operand(0), component, block);
-                return IntegerResult(source.low, source.high, scalar);
-            }
+            case IR::OP_F2I: case IR::OP_F2U: case IR::OP_I2U: case IR::OP_U2I:
+                return convert(operand(0), width(operand(0)) == 1 ? 0 : component);
             default:
                 return FullRange(scalar);
         }

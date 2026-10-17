@@ -61,6 +61,9 @@
   `input.local_id.y` is 0 and `min(input.local_id.x, 7u)` is
   `input.local_id.x`, and a fragment shader's `input.position.xy` is never
   NaN. A `@flat` or integer varying keeps its range in the fragment stage.
+  Ranges carry through vector conversions such as `int2(q)`, and a struct
+  field read back after a store, as in `i.color = c; ... i.color.z`, is the
+  value stored, so its constant and range carry too.
   Folding skips results that can differ between GPUs:
   NaN, infinities, denormals, `-0.0`, integer division of negative values,
   conversions that are out of range or inexact, and math functions outside

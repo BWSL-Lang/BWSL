@@ -2059,6 +2059,149 @@ static bool RewriteAs(ConstantPropagationData* data, u32 inst, u16 op, u16 a, u1
     return true;
 }
 
+// ============= Local stores =============
+
+// A field of a local struct, as a field pointer names it: the register its
+// chain starts from (the struct, or a pointer to one) and the field indices.
+struct LocalAddress {
+    u16 root;
+    u8 depth;
+    u8 fields[4];
+};
+
+static bool SameAddress(const LocalAddress& a, const LocalAddress& b) {
+    return a.root == b.root && a.depth == b.depth && memcmp(a.fields, b.fields, a.depth) == 0;
+}
+
+// Two addresses of one root that can't overlap: their paths part.
+static bool Disjoint(const LocalAddress& a, const LocalAddress& b) {
+    if (a.root != b.root) return false;
+    for (u32 d = 0; d < a.depth && d < b.depth; d++) {
+        if (a.fields[d] != b.fields[d]) return true;
+    }
+    return false;
+}
+
+// Instructions that don't write local memory.
+static bool KeepsLocalMemory(u16 op) {
+    return op == IR::OP_NOP || op == IR::OP_LOAD_REG || op == IR::OP_STORE_REG || op == IR::OP_LOCAL_LOAD ||
+           op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_INDEX_PTR ||
+           op == IR::OP_LOAD_UNIFORM || op == IR::OP_STRUCT_EXTRACT || op == IR::OP_STRUCT_INSERT ||
+           HasSlotOperands(op) || IsLoopValueOp(op) || IsPureValueOp(op);
+}
+
+// A load of a struct field its block stored earlier becomes a copy of the
+// value stored, so constants and ranges carry through the field. Any store
+// whose address isn't a field pointer chain of the block, or anything else
+// that may write local memory, forgets every stored value; a store to a
+// field forgets the others but its root's other fields, since another
+// root may be a pointer to the same struct. With registers assigned more
+// than once (a straight-line stage), reassigning the value, the root or a
+// struct a pointer takes the address of forgets what depends on it.
+static void ForwardLocalStores(ConstantPropagationData* data, BWSL_Arena* arena) {
+    IRProgram* ir = data->ir;
+    bool* addressed = (bool*)AllocateZeroed(arena, data->regCount * sizeof(bool));
+    if (!addressed) return;
+    for (u32 i = 0; i < ir->instructionCount; i++) {
+        u16 op = ir->opcodes[i];
+        u16 base = ir->GetOperand(i, 0);
+        if ((op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_LOCAL_INDEX_PTR) &&
+            IsRegisterOperand(data, base)) {
+            addressed[base] = true;
+        }
+    }
+    constexpr u32 MAX_POINTERS = 32;
+    constexpr u32 MAX_STORED = 16;
+    struct Pointer { u16 reg; LocalAddress address; };
+    struct Stored { LocalAddress address; u16 value; };
+    Pointer pointers[MAX_POINTERS];
+    Stored stored[MAX_STORED];
+    u32 pointerCount = 0, storedCount = 0;
+    auto find = [&](u16 reg) -> const LocalAddress* {
+        for (u32 p = 0; p < pointerCount; p++) {
+            if (pointers[p].reg == reg) return &pointers[p].address;
+        }
+        return nullptr;
+    };
+    const CFG* cfg = data->cfg;
+    u32 blocks = data->straightLine ? 1 : cfg->blockCount;
+    for (u32 block = 0; block < blocks; block++) {
+        u32 first = data->straightLine ? 0 : cfg->firstInst[block];
+        u32 last = data->straightLine ? ir->instructionCount - 1 : cfg->lastInst[block];
+        pointerCount = storedCount = 0;
+        for (u32 i = first; i <= last && i < ir->instructionCount; i++) {
+            u16 op = ir->opcodes[i];
+            u16 dest = ir->destinations[i];
+            if (op == IR::OP_LOCAL_LOAD) {
+                const LocalAddress* address = find(ir->GetOperand(i, 0));
+                for (u32 s = 0; address && s < storedCount; s++) {
+                    if (!SameAddress(stored[s].address, *address)) continue;
+                    u16 value = stored[s].value;
+                    if (IR::IsConstant(value)) {
+                        CoreType type = GetRegisterType(ir, dest);
+                        if (GetComponentCount(type) == 1 && DecodeConstant(ir, value).type == type &&
+                            !IsMemoryBacked(ir, dest)) {
+                            MakeConstantCopy(data, i, value);
+                        }
+                    } else {
+                        RewriteAs(data, i, IR::OP_LOAD_REG, value);
+                    }
+                    op = ir->opcodes[i];
+                    break;
+                }
+            }
+            LocalAddress fieldAddress = {};
+            bool isField = false;
+            if (op == IR::OP_LOCAL_FIELD_PTR) {
+                u16 fieldBase = ir->GetOperand(i, 0);
+                u16 field = ir->GetOperand(i, 1);
+                if (const LocalAddress* parent = find(fieldBase)) {
+                    fieldAddress = *parent;
+                } else {
+                    fieldAddress.root = fieldBase;
+                }
+                isField = IsRegisterOperand(data, fieldAddress.root) && fieldAddress.depth < 4 && field < 256;
+                if (isField) fieldAddress.fields[fieldAddress.depth++] = static_cast<u8>(field);
+            }
+            if (op == IR::OP_LOCAL_STORE) {
+                const LocalAddress* address = find(ir->GetOperand(i, 0));
+                u16 value = ir->GetOperand(i, 1);
+                if (!address) {
+                    storedCount = 0;
+                } else {
+                    LocalAddress target = *address;
+                    u32 kept = 0;
+                    for (u32 s = 0; s < storedCount; s++) {
+                        if (Disjoint(stored[s].address, target)) stored[kept++] = stored[s];
+                    }
+                    storedCount = kept;
+                    bool forwardable = IR::IsConstant(value) ||
+                                       (IsRegisterOperand(data, value) && !addressed[value] && !IsMemoryBacked(ir, value));
+                    if (forwardable && storedCount < MAX_STORED) stored[storedCount++] = {target, value};
+                }
+            } else if (!KeepsLocalMemory(op)) {
+                storedCount = 0;
+            }
+            bool defines = op != IR::OP_NOP && !IsUseInDestination(op) && !IR::IsTerminator(static_cast<IR::OpCode>(op)) &&
+                           IsRegisterOperand(data, dest);
+            if (defines) {
+                if (addressed[dest]) storedCount = 0;  // A struct a pointer can reach changed
+                u32 kept = 0;
+                for (u32 s = 0; s < storedCount; s++) {
+                    if (stored[s].value != dest && stored[s].address.root != dest) stored[kept++] = stored[s];
+                }
+                storedCount = kept;
+                kept = 0;
+                for (u32 p = 0; p < pointerCount; p++) {
+                    if (pointers[p].reg != dest && pointers[p].address.root != dest) pointers[kept++] = pointers[p];
+                }
+                pointerCount = kept;
+                if (isField && pointerCount < MAX_POINTERS) pointers[pointerCount++] = {dest, fieldAddress};
+            }
+        }
+    }
+}
+
 // A scalar result that doesn't depend on the operands' values.
 static bool RewriteAsConstant(ConstantPropagationData* data, u32 inst, u32 bits) {
     CoreType type = GetRegisterType(data->ir, data->ir->destinations[inst]);
@@ -3095,7 +3238,7 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
     }
 
     // Everything is sized up front, so the arena can't run out.
-    size_t bytes = size_t(regCount) * (sizeof(ValueState) + sizeof(u32) * 4 + sizeof(bool) * 3 + 1) +
+    size_t bytes = size_t(regCount) * (sizeof(ValueState) + sizeof(u32) * 4 + sizeof(bool) * 4 + 1) +
                    size_t(bitCount + regCount * 2) * sizeof(u32) +  // regWork
                    size_t(regCount) * sizeof(u16) * 2 +  // known, savedKnown
                    size_t(regCount) * sizeof(bool) + 64 +  // RemoveUnreadAssignments
@@ -3174,6 +3317,7 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
         data.bitOffsets[reg + 1] = data.bitOffsets[reg] + count;
     }
 
+    ForwardLocalStores(&data, &arena);
     FindDefinitions(&data, straightLine);
     if (straightLine) {
         PropagateStraightLine(&data);
