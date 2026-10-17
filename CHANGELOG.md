@@ -60,7 +60,7 @@
   Built-in inputs count too: in a `[8, 1, 1]` compute stage,
   `input.local_id.y` is 0 and `min(input.local_id.x, 7u)` is
   `input.local_id.x`, and a fragment shader's `input.position.xy` is never
-  NaN.
+  NaN. A `@flat` or integer varying keeps its range in the fragment stage.
   Folding skips results that can differ between GPUs:
   NaN, infinities, denormals, `-0.0`, integer division of negative values,
   conversions that are out of range or inexact, and math functions outside

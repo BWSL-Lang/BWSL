@@ -126,6 +126,10 @@ struct ConstantPropagationData {
     u32 constraintCapacity;
     bool rangesReady;           // ranges hold a settled result (or, straight-line, the walk's)
     mutable bool sawUnknownRange;  // An evaluation read a range not known yet
+    // What the stage stores to each varying, by varying index: the hull of
+    // its stores' ranges, for ir->varyingBoundsOut.
+    ValueRange varyingRanges[16 * 4];
+    u8 varyingCounts[16];       // Components stored, 0 for a varying not stored
 };
 
 static ConstantValue MakeConstant(CoreType type, u32 bits) {
@@ -2761,6 +2765,7 @@ static void PropagateStraightLine(ConstantPropagationData* data) {
         RewriteOperands(data, i);
         RewriteBitwiseIdentity(data, i);
         RewriteAlgebraicIdentity(data, i);
+        RecordVaryingRange(data, i, 0);
         RewriteWithRanges(data, i, 0);
         u16 dest = ir->destinations[i];
         if (IsRegisterOperand(data, dest) && !IsUseInDestination(op) && op != IR::OP_JUMP &&
@@ -3177,11 +3182,13 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
         FindReads(&data);
         GroupPhisByBlock(&data);
         PropagateWithLoops(&data);
+        RecordVaryingRanges(&data);
         RewriteConstants(&data);
         DropFoldedBranchEdges(&data, &arena);
         RemoveDeadLoops(&data, &arena);
         CollapseSingleValuePhis(&data, &arena);
     }
+    ExportVaryingRanges(&data);
     RemoveDeadValues(&data, &arena);
     if (straightLine) RemoveUnreadAssignments(&data, &arena);
     ApplyInsertions(builder, cfg, &data.insertions);

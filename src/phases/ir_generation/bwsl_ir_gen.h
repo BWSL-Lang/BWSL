@@ -104,6 +104,13 @@ struct IRProgram {
     // A compute stage's declared workgroup size, recorded where input.local_id
     // or input.local_index is read; 0 when not known.
     u32 workgroupSize[3] = {};
+    // Ranges across stages. A vertex stage's optimizer records what each
+    // varying holds in varyingBoundsOut (by varying index, count 0 for
+    // nothing known); a fragment stage reads a flat or integer varying's
+    // through inputBounds (by input slot). Interpolated float varyings have
+    // none: MSAA can evaluate them outside the primitive.
+    DeclaredBounds* varyingBoundsOut = nullptr;
+    const DeclaredBounds* inputBounds[32] = {};
 
     alignas(64) u32* structureInfo;  // Packed: type:4 | mergeTarget:28
     alignas(64) u32* continueInfo;   // Continue target for loops (instruction index), 0xFFFFFFFF = none
