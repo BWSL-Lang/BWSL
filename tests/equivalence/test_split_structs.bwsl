@@ -1,0 +1,93 @@
+// Local structs split into one variable per field: fields assigned in a
+// branch and a loop, a copy between split structs, a struct chosen by a
+// ternary, one wider than four fields, a nested struct, a whole struct
+// stored to an array (rebuilt from its fields), and a struct with an array
+// field and one a pointer reaches, which stay structs.
+pipeline EquivSplitStructs {
+
+    struct Pair {
+        float a;
+        float b;
+    }
+
+    struct Wide {
+        float f0;
+        float f1;
+        float f2;
+        float f3;
+        float f4;
+        int count;
+    }
+
+    struct Outer {
+        Pair inner;
+        float scale;
+    }
+
+    struct Holder {
+        float[2] values;
+        float extra;
+    }
+
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float x = float(idx);
+
+            Pair p;
+            p.a = x;
+            p.b = 2.0;
+            if (idx % 2u == 1u) { p.b = x * 3.0; }
+            Pair q = p;
+            q.a += 1.0;
+            Pair r = idx > 3u ? p : q;
+
+            Wide w;
+            w.f0 = 1.0;
+            w.f1 = x;
+            w.f2 = 0.5;
+            w.f3 = w.f1 * 2.0;
+            w.f4 = 0.0;
+            w.count = int(idx);
+            for (int k = 0; k < w.count; k++) { w.f4 += float(k); }
+            Wide v = w;
+            v.f2 = 4.0;
+
+            Outer o;
+            o.inner.a = x;
+            o.inner.b = 0.5;
+            o.scale = 2.0;
+            o.inner.b *= o.scale;
+
+            Pair[2] pairs;
+            pairs[0] = p;
+            pairs[1] = q;
+            Pair picked = pairs[idx & 1u];
+
+            Holder h;
+            h.values[0] = x;
+            h.values[1] = 1.0;
+            h.extra = 3.0;
+            h.values[idx & 1u] += h.extra;
+
+            Pair s;
+            s.a = 5.0;
+            s.b = x;
+            Pair^ ptr = ^s;
+            ptr^.a = ptr^.a + 1.0;
+
+            float total = p.a + p.b * 10.0 + q.a * 100.0 + r.a * 1000.0 + r.b
+                        + w.f0 + w.f3 + w.f4 * 10.0 + v.f2 + float(v.count)
+                        + o.inner.a + o.inner.b * 10.0
+                        + picked.a * 0.5 + picked.b
+                        + h.values[0] + h.values[1] * 10.0
+                        + s.a * 100.0 + s.b;
+            resources.output[idx] = total;
+        }
+    }
+}

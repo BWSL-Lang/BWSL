@@ -64,6 +64,14 @@
   Ranges carry through vector conversions such as `int2(q)`, and a struct
   field read back after a store, as in `i.color = c; ... i.color.z`, is the
   value stored, so its constant and range carry too.
+  Local struct variables become one variable per field, so a struct no
+  longer goes through memory: `Inputs i; i.color = c; ... i.color.z`
+  reads `c.z`, a field assigned in a branch or a loop is merged like any
+  variable, and the copies, zero-initializations and field stores the
+  output used to carry disappear. The struct is built only where it's used
+  whole, such as stored to a buffer or an array. Structs reached through a
+  pointer (`^s`) or with an array field stay as they were. Across the test
+  corpus, SPIR-V is 5% smaller.
   Folding skips results that can differ between GPUs:
   NaN, infinities, denormals, `-0.0`, integer division of negative values,
   conversions that are out of range or inexact, and math functions outside

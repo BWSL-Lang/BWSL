@@ -20,8 +20,9 @@ pipeline ModulesPBRLighting {
 
         fragment {
             float3 N = normalize(input.normal);
-            // The view direction comes from the surface position, so the
-            // Fresnel and specular terms aren't constants.
+            // The view direction and the metallic factor come from the
+            // surface position, so the Fresnel and specular terms aren't
+            // constants.
             float3 V = normalize(float3(0.1, 0.2, 1.0) - input.worldPos);
             float3 L = normalize(float3(-0.4, 0.7, 0.6));
             float3 radiance = float3(2.0, 1.6, 1.2);
@@ -29,7 +30,7 @@ pipeline ModulesPBRLighting {
             PBR::PBRMaterial mat;
             mat.albedo = float3(0.8, 0.45, 0.2);
             mat.roughness = 0.35;
-            mat.metallic = 0.2;
+            mat.metallic = saturate(input.worldPos.y);
             mat.ao = 1.0;
 
             float3 lit = PBR::calculateDirectLighting(mat, N, V, L, radiance);

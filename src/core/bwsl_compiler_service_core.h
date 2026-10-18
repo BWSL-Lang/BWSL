@@ -7,6 +7,7 @@
 #include "bwsl_gl_names.h"
 #include "bwsl_ssa.h"
 #include "phases/optimization/bwsl_constant_propagation.h"
+#include "phases/optimization/bwsl_split_structs.h"
 #include "bwsl_parser_soa.h"
 #include "bwsl_comptime_interpreter.h"
 #include "bwsl_resource_reflection.h"
@@ -690,6 +691,7 @@ private:
             lowering.program.opcodes[lowering.program.instructionCount - 1] != IR::OP_RET) {
             lowering.builder.EmitInstruction(IR::OP_RET, 0, 0);
         }
+        Optimization::SplitLocalStructs(&lowering.builder);
         
         // Specialize for this variant's attribute mask
         IR::OptimizationPass optimizer;
