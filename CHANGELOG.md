@@ -230,7 +230,10 @@
   AMD set but keeps unread values. Names win over the group. Without the
   option, or with no group in the list, `default` applies: every
   optimization not known to slow down any vendor's GPU. The vendor groups
-  start out equal to `default`. `bwslc -h` lists the names.
+  start out equal to `default`. `phi-variables`, in no group yet, keeps a
+  variable carried through loops and branches as one variable in Metal,
+  HLSL and GLSL output, instead of copying it on every edge.
+  `bwslc -h` lists the names.
 
 ### AST JSON
 - A pointer parameter has `isPointer: true` and a `dataType` spelled as

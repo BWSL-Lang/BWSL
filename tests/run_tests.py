@@ -25,6 +25,7 @@ HLSL_SPIRV_OPT = os.environ.get("BWSL_HLSL_SPIRV_OPT")
 EQUIVALENCE_OPTIMIZATIONS: str | None = None
 
 
+
 INLINE_RETURN_TESTS = {
     "inline_return_jump",
     "inline_return_loop",
@@ -686,6 +687,7 @@ KNOWN_TEST_STEMS: set[str] = set()
 # direct GLES backend, and "wgsl_*" keys the native WGSL backend.
 TRANSLATION_EXTRA_ARGS = {
     "interpolation_centroid": ("-gles-direct", "-wgsl"),
+    "phi_variables": ("--optimizations", "phi-variables"),
 }
 
 TRANSLATION_EXPECTATION_TESTS = {
@@ -880,6 +882,14 @@ TRANSLATION_EXPECTATION_TESTS = {
     },
     # Issue #160: only the loop-carried `sum` and `i` (twice) and the
     # inlined functions' own merges get phis, not their locals or return flag.
+    # With phi-variables, SPIRV-Cross's input (-all) keeps
+    # `sum`'s two phis in one Function variable: 4 OpPhi remain.
+    "phi_variables": {
+        "frag": {
+            "spirv_count_exactly": {"OpPhi": 4},
+            "glsl_contains": ["for (int"],
+        },
+    },
     "ssa_dead_loop_phis": {
         "frag": {
             "ir_count_exactly": {"  PHI r": 6},

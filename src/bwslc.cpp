@@ -2271,7 +2271,8 @@ CompileResult CompileShaderStage(
     bool generateSpirv = true,
     bool captureWgslBindings = false,
     bool avoidGlslReservedNames = false,  // Rename local debug names reserved in GLSL
-    OptimizationSet optimizations = Optimizations::Default()
+    OptimizationSet optimizations = Optimizations::Default(),
+    bool forSpirvCross = false  // The SPIR-V goes through SPIRV-Cross (Metal/HLSL/GLSL/GLES)
 ) {
     using Clock = std::chrono::high_resolution_clock;
     auto shaderStart = Clock::now();
@@ -2627,6 +2628,8 @@ CompileResult CompileShaderStage(
     builder.SetEmitDebugNames(debugNames);
     builder.SetAvoidGlslReservedNames(avoidGlslReservedNames);
     builder.SetOptimizations(optimizations);
+    builder.SetPhiVariables(forSpirvCross &&
+                            Optimizations::IsEnabled(optimizations, OptimizationId::PHI_VARIABLES));
     if (varyingContext) {
         for (u32 i = 0; i < varyingContext->count; i++) {
             builder.SetVaryingName(varyingContext->varyings[i].slot,
@@ -4177,7 +4180,9 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        config.errorsJson, config.outputWgsl,
                                                        config.generateSpirv, config.outputBindings,
                                                        config.outputGlsl || config.outputGlslEs,
-                                                       config.optimizations);
+                                                       config.optimizations,
+                                                       config.outputMetal || config.outputHlsl ||
+                                                           config.outputGlsl || config.outputGlslEs);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "vertex");
@@ -4221,7 +4226,9 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        config.errorsJson, config.outputWgsl,
                                                        config.generateSpirv, config.outputBindings,
                                                        config.outputGlsl || config.outputGlslEs,
-                                                       config.optimizations);
+                                                       config.optimizations,
+                                                       config.outputMetal || config.outputHlsl ||
+                                                           config.outputGlsl || config.outputGlslEs);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "fragment");
@@ -4265,7 +4272,9 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        config.errorsJson, config.outputWgsl,
                                                        config.generateSpirv, config.outputBindings,
                                                        config.outputGlsl || config.outputGlslEs,
-                                                       config.optimizations);
+                                                       config.optimizations,
+                                                       config.outputMetal || config.outputHlsl ||
+                                                           config.outputGlsl || config.outputGlslEs);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "compute");
