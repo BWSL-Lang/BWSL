@@ -51,6 +51,12 @@ u16 AllocateRegister(IR::IRBuilder* builder, InstructionInsertions* insertions, 
 
 void QueueInstruction(IR::IRBuilder* builder, InstructionInsertions* insertions, u32 before,
                       u16 opcode, u16 dest, u16 a, u16 b) {
+    const u16 operands[4] = {a, b, 0xFFFF, 0xFFFF};
+    QueueInstruction(builder, insertions, before, opcode, dest, operands, 0);
+}
+
+void QueueInstruction(IR::IRBuilder* builder, InstructionInsertions* insertions, u32 before,
+                      u16 opcode, u16 dest, const u16 operands[4], u32 metadata) {
     if (insertions->count == insertions->capacity) {
         u32 capacity = std::max<u32>(insertions->capacity * 2, 16);
         InsertedInstruction* items =
@@ -59,7 +65,14 @@ void QueueInstruction(IR::IRBuilder* builder, InstructionInsertions* insertions,
         insertions->items = items;
         insertions->capacity = capacity;
     }
-    insertions->items[insertions->count++] = {before, opcode, dest, {a, b, 0xFFFF, 0xFFFF}};
+    insertions->items[insertions->count++] =
+        {before, false, opcode, dest, {operands[0], operands[1], operands[2], operands[3]}, metadata};
+}
+
+void QueueInstructionAfter(IR::IRBuilder* builder, InstructionInsertions* insertions, u32 after,
+                           u16 opcode, u16 dest, const u16 operands[4], u32 metadata) {
+    QueueInstruction(builder, insertions, after + 1, opcode, dest, operands, metadata);
+    insertions->items[insertions->count - 1].after = true;
 }
 
 void ApplyInsertions(IR::IRBuilder* builder, CFG* cfg, InstructionInsertions* insertions) {
@@ -72,12 +85,19 @@ void ApplyInsertions(IR::IRBuilder* builder, CFG* cfg, InstructionInsertions* in
 
     // shift[i]: instructions inserted in front of instructions before i.
     // Instruction i moves to i + shift[i + 1]; a target i becomes
-    // i + shift[i], the first instruction inserted in front of it.
+    // i + shift[i] + afterCount[i], the first instruction inserted in front
+    // of it that isn't one queued after instruction i - 1.
     u32* shift = (u32*)builder->pool->Allocate((oldCount + 2) * sizeof(u32), 64);
+    u32* afterCount = (u32*)builder->pool->Allocate((oldCount + 2) * sizeof(u32), 64);
     memset(shift, 0, (oldCount + 2) * sizeof(u32));
-    for (u32 k = 0; k < inserted; k++) shift[std::min(insertions->items[k].before, oldCount) + 1]++;
+    memset(afterCount, 0, (oldCount + 2) * sizeof(u32));
+    for (u32 k = 0; k < inserted; k++) {
+        u32 before = std::min(insertions->items[k].before, oldCount);
+        shift[before + 1]++;
+        if (insertions->items[k].after) afterCount[before]++;
+    }
     for (u32 i = 0; i <= oldCount; i++) shift[i + 1] += shift[i];
-    auto target = [&](u32 index) { return index <= oldCount ? index + shift[index] : index; };
+    auto target = [&](u32 index) { return index <= oldCount ? index + shift[index] + afterCount[index] : index; };
     auto moved = [&](u32 index) { return index < oldCount ? index + shift[index + 1] : index; };
 
     // Back to front, so nothing is overwritten before it moves.
@@ -108,7 +128,7 @@ void ApplyInsertions(IR::IRBuilder* builder, CFG* cfg, InstructionInsertions* in
         // The instructions queued in front of i, in queue order.
         u32 first = next;
         while (first > 0 && insertions->items[first - 1].before == i) first--;
-        u32 position = target(i);
+        u32 position = i + shift[i];
         for (u32 k = first; k < next; k++, position++) {
             const InsertedInstruction& item = insertions->items[k];
             ir->opcodes[position] = item.opcode;
@@ -116,7 +136,7 @@ void ApplyInsertions(IR::IRBuilder* builder, CFG* cfg, InstructionInsertions* in
             ir->flags[position] = 0;
             ir->destinations[position] = item.dest;
             for (u32 slot = 0; slot < 4; slot++) ir->operands[position * 4 + slot] = item.operands[slot];
-            ir->metadata[position] = 0;
+            ir->metadata[position] = item.metadata;
             ir->ClearBranchTargets(position);
             ir->structureInfo[position] = 0;
             ir->continueInfo[position] = NO_BLOCK;
@@ -146,7 +166,8 @@ void ApplyInsertions(IR::IRBuilder* builder, CFG* cfg, InstructionInsertions* in
     memset(instToBlock, 0xFF, newCount * sizeof(u32));
     for (u32 b = 0; b < cfg->blockCount; b++) {
         cfg->firstInst[b] = target(cfg->firstInst[b]);
-        cfg->lastInst[b] = moved(cfg->lastInst[b]);
+        u32 last = cfg->lastInst[b];
+        cfg->lastInst[b] = moved(last) + (last + 1 <= oldCount ? afterCount[last + 1] : 0);
         for (u32 i = cfg->firstInst[b]; i <= cfg->lastInst[b] && i < newCount; i++) instToBlock[i] = b;
     }
     cfg->instToBlock = instToBlock;

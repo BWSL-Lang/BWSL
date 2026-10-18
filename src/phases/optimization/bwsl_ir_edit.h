@@ -15,9 +15,11 @@ namespace Optimization {
 
 struct InsertedInstruction {
     u32 before;       // The existing instruction it goes in front of
+    bool after;       // Goes after instruction before - 1 instead: a jump to `before` skips it
     u16 opcode;
     u16 dest;
     u16 operands[4];
+    u32 metadata;
 };
 
 struct InstructionInsertions {
@@ -39,6 +41,18 @@ u16 AllocateRegister(IR::IRBuilder* builder, InstructionInsertions* insertions, 
 // ascending `before` order.
 void QueueInstruction(IR::IRBuilder* builder, InstructionInsertions* insertions, u32 before,
                       u16 opcode, u16 dest, u16 a, u16 b = 0xFFFF);
+
+// The same with all four operands and the instruction's metadata, such as
+// the struct type a struct instruction builds.
+void QueueInstruction(IR::IRBuilder* builder, InstructionInsertions* insertions, u32 before,
+                      u16 opcode, u16 dest, const u16 operands[4], u32 metadata);
+
+// Queues an instruction right after instruction `after`, in its block: a
+// jump to the next instruction doesn't run it. Instructions queued after
+// one instruction come before those queued in front of the next, so queue
+// them first.
+void QueueInstructionAfter(IR::IRBuilder* builder, InstructionInsertions* insertions, u32 after,
+                           u16 opcode, u16 dest, const u16 operands[4], u32 metadata);
 
 // Inserts the queued instructions and updates every instruction index the
 // program and `cfg` (null for straight-line stages) hold: branch, jump and
