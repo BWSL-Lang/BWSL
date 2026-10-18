@@ -251,6 +251,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   program.phiBlockIndices = nullptr;
   program.phiResultRegs = nullptr;
   program.phiTypes = nullptr;
+  program.phiVariables = nullptr;
   program.phiOperandOffsets = nullptr;
   program.phiOperandValues = nullptr;
   program.phiOperandBlocks = nullptr;

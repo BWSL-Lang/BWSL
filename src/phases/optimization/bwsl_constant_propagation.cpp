@@ -3168,6 +3168,7 @@ static void RemoveDeadValues(ConstantPropagationData* data, BWSL_Arena* arena) {
         ir->phiBlockIndices[keptPhis] = ir->phiBlockIndices[p];
         ir->phiResultRegs[keptPhis] = ir->phiResultRegs[p];
         ir->phiTypes[keptPhis] = ir->phiTypes[p];
+        if (ir->phiVariables) ir->phiVariables[keptPhis] = ir->phiVariables[p];
         ir->phiOperandOffsets[keptPhis] = keptOperands;
         for (u32 k = opStart; k < opEnd; k++) {
             ir->phiOperandValues[keptOperands] = ir->phiOperandValues[k];

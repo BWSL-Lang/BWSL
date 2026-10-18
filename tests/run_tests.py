@@ -684,10 +684,12 @@ TRANSLATION_EXPECTATION_TESTS = {
     },
     # Issue #160: only the loop-carried `sum` and `i` (twice) and the
     # inlined functions' own merges get phis, not their locals or return flag.
+    # With -all the SPIR-V is SPIRV-Cross's input, which keeps `sum`'s two
+    # phis in one Function variable: 4 OpPhi remain (6 with -spv alone).
     "ssa_dead_loop_phis": {
         "frag": {
             "ir_count_exactly": {"  PHI r": 6},
-            "spirv_count_exactly": {"OpPhi": 6},
+            "spirv_count_exactly": {"OpPhi": 4},
         },
     },
     "types_matrices": {

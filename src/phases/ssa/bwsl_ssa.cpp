@@ -497,6 +497,7 @@ void SSAConstructor::Rename() {
         ir->phiBlockIndices = (u32*)arena->Allocate(phiCount * sizeof(u32), 64);
         ir->phiResultRegs = (u16*)arena->Allocate(phiCount * sizeof(u16), 64);
         ir->phiTypes = (u16*)arena->Allocate(phiCount * sizeof(u16), 64);
+        ir->phiVariables = (u16*)arena->Allocate(phiCount * sizeof(u16), 64);
         ir->phiOperandOffsets = (u32*)arena->Allocate((phiCount + 1) * sizeof(u32), 64);
         
         if (totalPhiOperands > 0) {
@@ -530,6 +531,7 @@ void SSAConstructor::Rename() {
     for (u32 p = 0; p < phiCount; p++) {
         ir->phiBlockIndices[p] = phiBlocks[p];
         ir->phiTypes[p] = variables[phiVariables[p]].type;
+        ir->phiVariables[p] = phiVariables[p];
         ir->phiOperandOffsets[p] = phiOpIdx;
         
         u32 predCount = cfg->PredecessorCount(phiBlocks[p]);
@@ -1126,6 +1128,7 @@ void SSAConstructor::EliminateDeadPhis() {
         ir->phiBlockIndices[keptPhis] = ir->phiBlockIndices[p];
         ir->phiResultRegs[keptPhis] = ir->phiResultRegs[p];
         ir->phiTypes[keptPhis] = ir->phiTypes[p];
+        ir->phiVariables[keptPhis] = ir->phiVariables[p];
         ir->phiOperandOffsets[keptPhis] = keptOperands;
         for (u32 opIdx = opStart; opIdx < opEnd; opIdx++) {
             ir->phiOperandValues[keptOperands] = ir->phiOperandValues[opIdx];

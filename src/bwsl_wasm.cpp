@@ -637,6 +637,7 @@ static ShaderOutput CompileShaderStage(
     vpConfig.descriptorSet = 0;
     builder.SetVertexPullingConfig(vpConfig);
     builder.SetUseStd430Padding(true);  // For GLSL ES compatibility
+    builder.SetPhiVariables(true);      // Translated to GLSL ES by SPIRV-Cross
     if (varyingContext) {
         for (u32 i = 0; i < varyingContext->count; i++) {
             builder.SetVaryingName(varyingContext->varyings[i].slot,
