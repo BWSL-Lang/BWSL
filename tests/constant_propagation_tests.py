@@ -857,7 +857,10 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             body = glsl[glsl.index("void main"):]
             self.assertNotIn("min(", body)
             self.assertNotIn(", 0.0, 2.0)", body)
-            self.assertRegex(body, r"_\d+\.other, _\d+\.other\)")
+            # The structs are split: i.other and k.other are variables the
+            # branch and the loop assign.
+            self.assertNotIn(".other", body)
+            self.assertRegex(body, r"vec4\(_\d+, _\d+ \+ _\d+, _\d+, _\d+\)")
 
         def test_struct_fields_survive_writes_to_other_structs(self):
             # Separate structs are separate memory: initializing s and
@@ -896,7 +899,74 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
                     glsl = (target / "constprop.frag").read_text(encoding="utf-8")
                     body = glsl[glsl.index("void main"):]
                     self.assertNotIn("min(1.0", body)
-                    self.assertRegex(body, r"min\(_\d+\.best, ")
+                    self.assertNotIn(".best", body)
+                    self.assertRegex(body, r"min\(_\d+, float\(")
+
+        def split_main(self, body):
+            target = self.compile('''pipeline Split {
+                struct Pair { float a; float b; };
+                struct Wide { float f0; float f1; float f2; float f3; float f4; };
+                struct Outer { Pair inner; float scale; };
+                struct Holder { float[2] values; float extra; };
+                resources { output: buffer<float> }
+                pass "Compute" {
+                    use resources { output }
+                    compute "Main" [8, 1, 1] {
+                        uint idx = input.global_id.x;
+                        float x = float(idx);
+                        ''' + body + '''
+                    }
+                }
+            }''', "-glsl")
+            glsl = (target / "constprop.comp").read_text(encoding="utf-8")
+            return glsl[glsl.index("void main"):]
+
+        def test_local_structs_become_variables(self):
+            # Fields assigned in a branch, a copy, a nested struct and a
+            # wide one are plain variables; the struct is rebuilt only
+            # where it's stored whole.
+            body = self.split_main('''
+                Pair p;
+                p.a = x;
+                p.b = 2.0;
+                if (idx % 2u == 1u) { p.b = x * 3.0; }
+                Pair q = p;
+                q.a += 1.0;
+                Outer o;
+                o.inner.a = x;
+                o.inner.b = 0.5;
+                o.scale = 2.0;
+                o.inner.b *= o.scale;
+                Wide w;
+                w.f0 = x; w.f1 = 1.0; w.f2 = 2.0; w.f3 = 3.0; w.f4 = w.f0 * 4.0;
+                Pair[2] pairs;
+                pairs[0] = q;
+                pairs[1] = p;
+                resources.output[idx] = p.b + q.a + o.inner.b + w.f4 + pairs[idx & 1u].a;
+            ''')
+            # No struct variable is declared, only the array of pairs.
+            self.assertNotRegex(body, r"(Pair|Outer|Wide) _\d+(;| =)")
+            self.assertRegex(body, r"Pair _\d+\[2\];")
+            self.assertIn("= Pair(", body)
+            self.assertNotIn(".inner", body)
+
+        def test_structs_kept_in_memory(self):
+            # A pointer to the struct, or an array field, keeps the struct.
+            body = self.split_main('''
+                Pair s;
+                s.a = 5.0;
+                s.b = x;
+                Pair^ ptr = ^s;
+                ptr^.a = ptr^.a + 1.0;
+                Holder h;
+                h.values[0] = x;
+                h.values[1] = 1.0;
+                h.extra = 3.0;
+                h.values[idx & 1u] += h.extra;
+                resources.output[idx] = s.a + s.b + h.values[0] + h.values[1];
+            ''')
+            self.assertRegex(body, r"_\d+\.a \* |_\d+\.a \+ ")
+            self.assertRegex(body, r"_\d+\.values\[")
 
         def mod_fold_glsl(self, body, declarations=""):
             target = self.compile(shader(body, declarations), "-glsl")
