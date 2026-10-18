@@ -598,7 +598,8 @@ void GLESBuilder::PrepareArrayRegisters() {
     // whole-array assignment about twice as slowly as an initialized
     // declaration (a 72-entry hue table: 0.98 vs 0.50 ms at 4K). Reads can
     // stay where they are: the values never change after the fill. Any other
-    // write to the array's storage, or a pointer to it, keeps the plain fill.
+    // write to the array's storage, or a pointer to it or to one of its
+    // elements, keeps the plain fill.
     for (u32 a = 0; a < ir->localArrayCount; ++a) {
         u16 reg = ir->localArrayRegisters[a];
         if (reg >= regCount) continue;
@@ -625,7 +626,11 @@ void GLESBuilder::PrepareArrayRegisters() {
         bool onlyFilledOnce = true;
         for (u32 i = 0; i < ir->instructionCount && onlyFilledOnce; ++i) {
             u16 op = ir->opcodes[i];
-            if ((op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_FIELD_PTR) && Op(i, 0) == reg) {
+            // `^array[i]` is an OP_STORAGE_INDEX of the array. Programs with
+            // such a pointer take the SPIR-V path today (see
+            // SupportsLocalPointers), but the check shouldn't depend on it.
+            if ((op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_STORAGE_INDEX) &&
+                Op(i, 0) == reg) {
                 onlyFilledOnce = false;
             } else if (writesArray(i)) {
                 u32 count = (fill || Dest(i) != reg) ? 0 : GetArrayFillLength(i, ir->instructionCount);
