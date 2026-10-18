@@ -116,10 +116,10 @@ static bool IsWholeRead(u16 op, u32 slot) {
     }
 }
 
-static bool IsCandidate(const SplitData* data, u16 reg) {
+static bool IsCandidate(const SplitData* data, u16 reg, bool variable = true) {
     const IRProgram* ir = data->ir;
     if (static_cast<CoreType>(ir->registerTypes[reg]) != CoreType::CUSTOM) return false;
-    if (!ir->registerNameHashes || ir->registerNameHashes[reg] == 0) return false;  // Only variables
+    if (variable && (!ir->registerNameHashes || ir->registerNameHashes[reg] == 0)) return false;
     u32 storage = ir->registerStorageInfo ? ir->registerStorageInfo[reg] : 0;
     if ((storage & ~IRProgram::STORAGE_IS_ADDRESS_TAKEN) != 0) return false;
     const IRProgram::StructTypeInfo* layout = FindStructType(ir, ir->registerStructTypes[reg]);
@@ -193,6 +193,28 @@ static bool ChooseStructs(SplitData* data) {
         any |= data->state[reg] == SPLIT;
     }
     if (!any) return false;
+    // A struct defined once by a copy of a split one is split too: a
+    // function's return value and the caller's variable it initializes.
+    // Its copy then copies fields, where it would rebuild the struct and
+    // read every field back, which keeps fields nothing reads alive. The
+    // checks below see its uses like any other candidate's.
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (u32 reg = 0; reg < data->regCount; reg++) {
+            if (data->state[reg] == SPLIT || data->definitionCounts[reg] != 1) continue;
+            u32 definition = data->definedBy[reg];
+            u16 op = ir->opcodes[definition];
+            u16 source = ir->GetOperand(definition, 0);
+            if ((op != IR::OP_STORE_REG && op != IR::OP_LOAD_REG) || !IsRegister(data, source) ||
+                data->state[source] != SPLIT ||
+                ir->registerStructTypes[reg] != ir->registerStructTypes[source] ||
+                !IsCandidate(data, static_cast<u16>(reg), false))
+                continue;
+            data->state[reg] = SPLIT;
+            data->layouts[reg] = data->layouts[source];
+            changed = true;
+        }
+    }
     auto reject = [&](u16 reg) {
         if (IsRegister(data, reg)) data->state[reg] = NOT_SPLIT;
     };
@@ -274,7 +296,7 @@ static void AddUndefRegister(SplitData* data, u16 reg, CoreType type) {
 }
 
 // Registers for the fields of every struct split this round, named
-// `<variable>_<field>`.
+// `<variable>_<field>` (unnamed for a struct without a name).
 static bool AllocateFields(SplitData* data) {
     IRProgram* ir = data->ir;
     u32 total = 0;
@@ -287,7 +309,8 @@ static bool AllocateFields(SplitData* data) {
         if (data->state[reg] != SPLIT) continue;
         const IRProgram::StructTypeInfo* layout = data->layouts[reg];
         data->fieldOffsets[reg] = data->fieldCount;
-        std::string variable = ReverseLookup::GetString(ir->registerNameHashes[reg]);
+        u32 variableHash = ir->registerNameHashes ? ir->registerNameHashes[reg] : 0;
+        std::string variable = variableHash ? ReverseLookup::GetString(variableHash) : "";
         for (u32 f = 0; f < layout->fieldCount; f++) {
             u32 field = layout->fieldOffset + f;
             CoreType type = FieldType(ir, layout, f);
@@ -296,8 +319,10 @@ static bool AllocateFields(SplitData* data) {
             if (type == CoreType::CUSTOM || type == CoreType::ENUM) {
                 ir->registerStructTypes[fieldReg] = ir->structFieldTypeHashes ? ir->structFieldTypeHashes[field] : 0;
             }
-            std::string name = variable + "_" + ReverseLookup::GetString(ir->structFieldNameHashes[field]);
-            ir->registerNameHashes[fieldReg] = ReverseLookup::Intern(name);
+            if (variableHash) {
+                std::string name = variable + "_" + ReverseLookup::GetString(ir->structFieldNameHashes[field]);
+                ir->registerNameHashes[fieldReg] = ReverseLookup::Intern(name);
+            }
             data->fields[data->fieldCount++] = fieldReg;
         }
     }
