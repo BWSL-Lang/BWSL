@@ -1,0 +1,181 @@
+// Struct data that is constant in practice: a material system's inputs come
+// from defaultMaterial(), and only the base color, roughness and metallic are
+// overridden. Shading four lights branches on the feature fields (unlit,
+// anisotropy, lighting model, sheen, clearcoat), which keep their defaults,
+// so a compiler that tracks struct fields can drop those branches.
+pipeline StructFoldingBench {
+    attributes {
+        position: float2
+    }
+
+    struct Scene {
+        // xyz position, w unused
+        float4[4] lightPositions;
+        // rgb color, w intensity
+        float4[4] lightColors;
+        // xyz camera position, w pattern scale
+        float4 camera;
+    };
+
+    struct MaterialInputs {
+        float3 baseColor;
+        float metallic;
+        float roughness;
+        float3 emissive;
+        float clearcoat;
+        float clearcoatRoughness;
+        float sheen;
+        float3 sheenColor;
+        float anisotropy;
+        float3 anisotropyDirection;
+        int lightingModel;
+        bool unlit;
+    };
+
+    struct Surface {
+        float3 position;
+        float3 normal;
+        float3 tangent;
+        float3 view;
+    };
+
+    resources {
+        scene: Scene
+    }
+
+    const int LIGHTS = 4;
+    const float PI = 3.14159265;
+
+    defaultMaterial :: () -> MaterialInputs {
+        MaterialInputs m;
+        m.baseColor = float3(1.0);
+        m.metallic = 0.0;
+        m.roughness = 0.5;
+        m.emissive = float3(0.0);
+        m.clearcoat = 0.0;
+        m.clearcoatRoughness = 0.1;
+        m.sheen = 0.0;
+        m.sheenColor = float3(0.0);
+        m.anisotropy = 0.0;
+        m.anisotropyDirection = float3(1.0, 0.0, 0.0);
+        m.lightingModel = 0;
+        m.unlit = false;
+        return m;
+    }
+
+    distributionGgx :: (float ndh, float alpha) -> float {
+        float a2 = alpha * alpha;
+        float d = ndh * ndh * (a2 - 1.0) + 1.0;
+        return a2 / (PI * d * d);
+    }
+
+    visibilitySmith :: (float ndl, float ndv, float alpha) -> float {
+        float k = alpha * 0.5;
+        float gl = ndl / (ndl * (1.0 - k) + k);
+        float gv = ndv / (ndv * (1.0 - k) + k);
+        return gl * gv;
+    }
+
+    shadeLight :: (MaterialInputs m, Surface s, float3 L, float3 radiance) -> float3 {
+        if (m.unlit) {
+            return float3(0.0);
+        }
+        float3 H = normalize(L + s.view);
+        float ndl = max(dot(s.normal, L), 0.0);
+        float ndv = max(dot(s.normal, s.view), 0.0001);
+        float ndh = max(dot(s.normal, H), 0.0);
+        float vdh = max(dot(s.view, H), 0.0);
+        float alpha = m.roughness * m.roughness;
+
+        float D = 0.0;
+        if (m.anisotropy != 0.0) {
+            float3 t = normalize(s.tangent + m.anisotropyDirection * 0.1);
+            float3 b = cross(s.normal, t);
+            float at = max(alpha * (1.0 + m.anisotropy), 0.001);
+            float ab = max(alpha * (1.0 - m.anisotropy), 0.001);
+            float tdh = dot(t, H) / at;
+            float bdh = dot(b, H) / ab;
+            float d = tdh * tdh + bdh * bdh + ndh * ndh;
+            D = 1.0 / (PI * at * ab * d * d);
+        } else {
+            D = distributionGgx(ndh, alpha);
+        }
+
+        float3 F0 = lerp(float3(0.04), m.baseColor, m.metallic);
+        float3 F = F0 + (1.0 - F0) * pow(1.0 - vdh, 5.0);
+        float3 specular = D * visibilitySmith(ndl, ndv, alpha) * F / max(4.0 * ndl * ndv, 0.0001);
+
+        float3 diffuse = float3(0.0);
+        switch (m.lightingModel) {
+            case 1: {
+                float wrap = max((dot(s.normal, L) + 0.5) / 1.5, 0.0);
+                diffuse = m.baseColor * wrap / (PI * max(ndl, 0.0001));
+            }
+            case 2: {
+                diffuse = m.baseColor * smoothstep(0.45, 0.55, ndl) / (PI * max(ndl, 0.0001));
+            }
+            default: {
+                diffuse = m.baseColor / PI;
+            }
+        }
+
+        float3 color = (diffuse * (1.0 - F) * (1.0 - m.metallic) + specular) * radiance * ndl;
+
+        if (m.sheen > 0.0) {
+            float sheenAlpha = max(m.roughness, 0.07);
+            float sinH = sqrt(max(1.0 - ndh * ndh, 0.0));
+            float sheenD = (2.0 + 1.0 / sheenAlpha) * pow(sinH, 1.0 / sheenAlpha) / (2.0 * PI);
+            float sheenV = 1.0 / (4.0 * (ndl + ndv - ndl * ndv));
+            color += m.sheenColor * m.sheen * sheenD * sheenV * radiance * ndl;
+        }
+
+        if (m.clearcoat > 0.0) {
+            float coatAlpha = m.clearcoatRoughness * m.clearcoatRoughness;
+            float coatD = distributionGgx(ndh, coatAlpha);
+            float coatV = 0.25 / max(vdh * vdh, 0.0001);
+            float coatF = 0.04 + 0.96 * pow(1.0 - vdh, 5.0);
+            color = color * (1.0 - coatF * m.clearcoat) + coatD * coatV * coatF * m.clearcoat * radiance * ndl;
+        }
+        return color;
+    }
+
+    pass "Main" {
+        use attributes { position }
+        use resources { scene }
+
+        vertex {
+            output.position = float4(attributes.position, 0.0, 1.0);
+            output.uv = attributes.position * 0.5 + 0.5;
+        }
+
+        fragment {
+            // A bumpy sheet facing the camera.
+            float2 p = input.uv * 2.0 - 1.0;
+            float scale = resources.scene.camera.w;
+            float2 wave = float2(sin(p.x * scale), cos(p.y * scale * 1.3));
+            Surface s;
+            s.position = float3(p, 0.2 * wave.x * wave.y);
+            s.normal = normalize(float3(-0.2 * scale * cos(p.x * scale) * wave.y,
+                                        0.26 * scale * wave.x * sin(p.y * scale * 1.3), 1.0));
+            s.tangent = normalize(cross(float3(0.0, 1.0, 0.0), s.normal));
+            s.view = normalize(resources.scene.camera.xyz - s.position);
+
+            MaterialInputs m = defaultMaterial();
+            float pattern = 0.5 + 0.5 * sin(p.x * 9.0) * sin(p.y * 7.0);
+            m.baseColor = lerp(float3(0.8, 0.3, 0.2), float3(0.2, 0.5, 0.8), pattern);
+            m.roughness = 0.2 + 0.6 * pattern;
+            m.metallic = step(0.7, pattern);
+
+            float3 color = m.emissive;
+            for (int l = 0; l < LIGHTS; l++) {
+                float3 toLight = resources.scene.lightPositions[l].xyz - s.position;
+                float distance = length(toLight);
+                float4 light = resources.scene.lightColors[l];
+                float3 radiance = light.rgb * light.w / (distance * distance);
+                color += shadeLight(m, s, toLight / distance, radiance);
+            }
+            color = color / (color + 1.0);
+            output.color = float4(pow(color, float3(1.0 / 2.2)), 1.0);
+        }
+    }
+}

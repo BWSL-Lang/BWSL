@@ -1,0 +1,25 @@
+{
+  "description": "Material struct filled in place, 3 fields from runtime values; feature branches on constant fields, 4 lights",
+  "format": "rgba8",
+  "mesh": {"type": "fullscreen"},
+  "attributes": [
+    {"name": "position", "type": "float2"}
+  ],
+  "uniforms": [
+    {
+      "name": "scene",
+      "values": [
+        -1.5, 1.2, 1.5, 0,
+        1.6, 1.0, 1.2, 0,
+        0.0, -1.4, 1.0, 0,
+        0.3, 0.2, 2.5, 0,
+        1.0, 0.9, 0.8, 3.0,
+        0.4, 0.6, 1.0, 2.0,
+        1.0, 0.5, 0.3, 1.5,
+        0.8, 0.8, 0.8, 2.5,
+        0.0, 0.0, 3.0, 6.0
+      ]
+    }
+  ],
+  "tolerance": 0.0079
+}
