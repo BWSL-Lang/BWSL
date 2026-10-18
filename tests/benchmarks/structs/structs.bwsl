@@ -1,0 +1,173 @@
+// A small ray tracer whose state lives in local structs: a Hit updated in a
+// loop over the spheres, a Material built per hit, a Surface nesting both,
+// a Lighting struct accumulated over the lights (with a shadow ray each),
+// and a Ray carried through the bounces. Material.emission is written but
+// never read.
+pipeline StructsBench {
+    attributes {
+        position: float2
+    }
+
+    struct Scene {
+        // xyz, w unused
+        float4 cameraPosition;
+        float4 cameraForward;
+        float4 cameraRight;
+        float4 cameraUp;
+        // xyz center, w radius
+        float4[12] spheres;
+        // rgb albedo, w roughness
+        float4[12] materials;
+        float4[3] lightPositions;
+        // rgb color, w intensity
+        float4[3] lightColors;
+        // rgb horizon, w aspect
+        float4 sky;
+    };
+
+    struct Ray {
+        float3 origin;
+        float3 direction;
+    };
+
+    struct Hit {
+        float t;
+        float3 position;
+        float3 normal;
+        int material;
+        bool found;
+    };
+
+    struct Material {
+        float3 albedo;
+        float roughness;
+        float metallic;
+        float3 emission;
+    };
+
+    struct Surface {
+        Hit hit;
+        Material material;
+        float3 view;
+    };
+
+    struct Lighting {
+        float3 diffuse;
+        float3 specular;
+        float3 ambient;
+    };
+
+    resources {
+        scene: Scene
+    }
+
+    const int SPHERES = 12;
+    const int LIGHTS = 3;
+    const int BOUNCES = 3;
+
+    pass "Main" {
+        use attributes { position }
+        use resources { scene }
+
+        intersectScene :: (Ray ray) -> Hit {
+            Hit hit;
+            hit.t = 1.0e9;
+            hit.position = float3(0.0);
+            hit.normal = float3(0.0);
+            hit.material = 0;
+            hit.found = false;
+            for (int i = 0; i < SPHERES; i++) {
+                float4 sphere = resources.scene.spheres[i];
+                float3 oc = ray.origin - sphere.xyz;
+                float b = dot(oc, ray.direction);
+                float c = dot(oc, oc) - sphere.w * sphere.w;
+                float h = b * b - c;
+                if (h > 0.0) {
+                    float t = -b - sqrt(h);
+                    if (t > 0.001 && t < hit.t) {
+                        hit.t = t;
+                        hit.material = i;
+                        hit.found = true;
+                    }
+                }
+            }
+            if (hit.found) {
+                hit.position = ray.origin + ray.direction * hit.t;
+                hit.normal = normalize(hit.position - resources.scene.spheres[hit.material].xyz);
+            }
+            return hit;
+        }
+
+        materialOf :: (int index) -> Material {
+            float4 data = resources.scene.materials[index];
+            Material m;
+            m.albedo = data.rgb;
+            m.roughness = data.w;
+            m.metallic = fract(float(index) * 0.37);
+            m.emission = data.rgb * 0.1;
+            return m;
+        }
+
+        shade :: (Surface surface) -> Lighting {
+            Lighting lighting;
+            lighting.diffuse = float3(0.0);
+            lighting.specular = float3(0.0);
+            lighting.ambient = surface.material.albedo * 0.03;
+            float shininess = 2.0 / max(surface.material.roughness * surface.material.roughness, 0.002);
+            for (int l = 0; l < LIGHTS; l++) {
+                float3 toLight = resources.scene.lightPositions[l].xyz - surface.hit.position;
+                float distance = length(toLight);
+                float3 L = toLight / distance;
+                Ray shadow;
+                shadow.origin = surface.hit.position + surface.hit.normal * 0.002;
+                shadow.direction = L;
+                Hit blocker = intersectScene(shadow);
+                float visible = (blocker.found && blocker.t < distance) ? 0.0 : 1.0;
+                float4 light = resources.scene.lightColors[l];
+                float3 radiance = light.rgb * light.w * visible / (1.0 + distance * distance * 0.1);
+                float ndl = max(dot(surface.hit.normal, L), 0.0);
+                float3 H = normalize(L + surface.view);
+                float ndh = max(dot(surface.hit.normal, H), 0.0);
+                lighting.diffuse += surface.material.albedo * radiance * ndl * (1.0 - surface.material.metallic);
+                lighting.specular += radiance * pow(ndh, shininess) * ndl;
+            }
+            return lighting;
+        }
+
+        vertex {
+            output.position = float4(attributes.position, 0.0, 1.0);
+            output.uv = attributes.position * 0.5 + 0.5;
+        }
+
+        fragment {
+            float2 p = input.uv * 2.0 - 1.0;
+            Ray ray;
+            ray.origin = resources.scene.cameraPosition.xyz;
+            ray.direction = normalize(resources.scene.cameraForward.xyz * 1.6
+                                      + resources.scene.cameraRight.xyz * (p.x * resources.scene.sky.w)
+                                      + resources.scene.cameraUp.xyz * p.y);
+            float3 color = float3(0.0);
+            float3 throughput = float3(1.0);
+            for (int bounce = 0; bounce < BOUNCES; bounce++) {
+                Hit hit = intersectScene(ray);
+                if (!hit.found) {
+                    float horizon = clamp(ray.direction.y * 0.5 + 0.5, 0.0, 1.0);
+                    color += throughput * lerp(resources.scene.sky.rgb, float3(0.15, 0.25, 0.5), horizon);
+                    break;
+                }
+                Surface surface;
+                surface.hit = hit;
+                surface.material = materialOf(hit.material);
+                surface.view = -ray.direction;
+                Lighting lighting = shade(surface);
+                color += throughput * (lighting.diffuse + lighting.specular + lighting.ambient);
+                throughput *= lerp(float3(0.04), surface.material.albedo, surface.material.metallic)
+                              * (1.0 - surface.material.roughness * 0.5);
+                ray.origin = hit.position + hit.normal * 0.002;
+                ray.direction = reflect(ray.direction, hit.normal);
+            }
+            color = color / (color + 1.0);
+            output.color = float4(pow(color, float3(1.0 / 2.2)), 1.0);
+        }
+    }
+}
