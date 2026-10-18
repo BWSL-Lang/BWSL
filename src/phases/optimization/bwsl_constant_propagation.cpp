@@ -3083,7 +3083,8 @@ static bool IsRemovableDefinition(const ConstantPropagationData* data, u16 reg) 
     u16 op = data->ir->opcodes[definition];
     return GetFoldArity(op) != 0 || IsPureValueOp(op) || op == IR::OP_MAT_DET ||
            op == IR::OP_MAT_INVERSE || (op >= IR::OP_LENGTH && op <= IR::OP_FACEFORWARD) ||
-           op == IR::OP_ANY || op == IR::OP_ALL;
+           op == IR::OP_ANY || op == IR::OP_ALL || op == IR::OP_STRUCT_INSERT || op == IR::OP_STRUCT_CONSTRUCT ||
+           op == IR::OP_STRUCT_EXTRACT;
 }
 
 // Removes the value instructions and phis that nothing reads any more,
