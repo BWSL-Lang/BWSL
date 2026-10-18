@@ -61,7 +61,9 @@ by default), its larger resolutions are skipped.
 
 The GL and Vulkan device and driver are printed with the table. On laptops
 with two GPUs the runner asks for the discrete one on both APIs; check the
-header if the numbers look odd.
+header if the numbers look odd. `--vk-device N` runs Vulkan on another GPU
+(the index from `vulkaninfo --summary`), e.g. an integrated one with
+`--backends vk-hand,vk-bwsl`.
 
 ## Verification
 
