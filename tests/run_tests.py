@@ -266,6 +266,7 @@ ERROR_CASE_TESTS = {
     "select_condition_not_bool.bwsl": "'select' condition (argument 3) is float, but must be bool",
     "select_value_types_differ.bwsl": "'select' arguments 1 and 2 must have the same type, but they are float and uint",
     "select_condition_width_mismatch.bwsl": "'select' condition is bool3, but the values are float2",
+    "select_struct_types_differ.bwsl": "'select' arguments 1 and 2 must have the same type, but they are Light and Fog",
     "gl_name_sampler_vs_texture.bwsl": "GL name 't_atlas' of sampler 't_atlas' collides with texture 'atlas'",
     "gl_name_struct_vs_attribute.bwsl": "GL name 'a_position' of struct 'a_position' collides with attribute 'position'",
     "gl_name_varying_vs_struct.bwsl": "GL name 'v_uv' of varying 'uv' collides with struct 'v_uv'",

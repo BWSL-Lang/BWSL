@@ -1023,6 +1023,13 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
             for (char& c : name) c = static_cast<char>(tolower(c));
             return name;
         };
+        // A value's type as the source names it: a struct by its name.
+        auto valueTypeName = [&](u16 reg, CoreType type) {
+            u32 hash = type == CoreType::CUSTOM ? program.registerStructTypes[reg] : 0;
+            if (hash == 0) return typeName(type);
+            std::string name = ReverseLookup::GetString(hash);
+            return name.rfind("<hash:", 0) == 0 ? std::string("a struct") : name;
+        };
         char msg[256];
         if (condWidth == 0) {
             snprintf(msg, sizeof(msg),
@@ -1035,10 +1042,20 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         if (falseType != trueType ||
             (falseType == CoreType::CUSTOM &&
              program.registerStructTypes[args[0]] != program.registerStructTypes[args[1]])) {
-            snprintf(msg, sizeof(msg),
-                     "Error: 'select' arguments 1 and 2 must have the same type, "
-                     "but they are %s and %s\n",
-                     typeName(falseType).c_str(), typeName(trueType).c_str());
+            std::string falseName = valueTypeName(args[0], falseType);
+            std::string trueName = valueTypeName(args[1], trueType);
+            if (falseName == trueName) {
+                // Two structs that print alike, such as same-named structs
+                // of different modules.
+                snprintf(msg, sizeof(msg),
+                         "Error: 'select' arguments 1 and 2 must have the same type, "
+                         "but they are two different struct types\n");
+            } else {
+                snprintf(msg, sizeof(msg),
+                         "Error: 'select' arguments 1 and 2 must have the same type, "
+                         "but they are %s and %s\n",
+                         falseName.c_str(), trueName.c_str());
+            }
             ReportErrorAt(call.arguments[1], msg);
             return 0;
         }
