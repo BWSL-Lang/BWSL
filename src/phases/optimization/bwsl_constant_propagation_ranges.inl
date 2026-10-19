@@ -9,7 +9,8 @@
 // A value whose range is one number is a constant, which propagation then
 // folds (with a CFG, as a pin, and propagation runs again). A min, max,
 // clamp, saturate or abs whose operand ranges decide it becomes a copy or a
-// cheaper operation.
+// cheaper operation, and so does a signed remainder or division whose
+// operands aren't negative.
 //
 // Float ends follow the GPU's rounding: an operation's end is the float
 // the GPU would round the exact result to, moved outward only when the
@@ -1012,7 +1013,8 @@ static bool RewriteAsOperand(ConstantPropagationData* data, u32 inst, u16 operan
     return RewriteAs(data, inst, IR::OP_LOAD_REG, operand);
 }
 
-// min, max, clamp, saturate and abs that their operands' ranges decide.
+// min, max, clamp, saturate and abs that their operands' ranges decide,
+// and signed remainders and divisions of a dividend that isn't negative.
 static void RewriteWithRanges(ConstantPropagationData* data, u32 inst, u32 block) {
     IRProgram* ir = data->ir;
     u16 op = ir->opcodes[inst];
@@ -1074,6 +1076,27 @@ static void RewriteWithRanges(ConstantPropagationData* data, u32 inst, u32 block
             }
             if (nonNegative) RewriteAs(data, inst, IR::OP_LOAD_REG, a);
             else if (nonPositive) RewriteAs(data, inst, op == IR::OP_FABS ? IR::OP_FNEG : IR::OP_INEG, a);
+            return;
+        }
+        case IR::OP_IMOD: case IR::OP_IDIV: {
+            // Signed remainder and division truncate toward zero, which
+            // GLSL's `%` doesn't promise for negative operands, so the
+            // backends expand a remainder into a division. Neither matters
+            // when the operands aren't negative.
+            if (GetScalarType(type) != CoreType::INT) return;
+            u16 zero = InternConstant(data->builder, CoreType::INT, 0);
+            if (zero == 0xFFFF || !AllAtMost(data, zero, a, count, block)) return;
+            // A power-of-two divisor leaves the low bits, or shifts them out.
+            ConstantValue divisor = GetKnownValue(data, b);
+            bool known = count == 1 && divisor.state == ValueState::CONSTANT && divisor.type == CoreType::INT;
+            s32 d = known ? static_cast<s32>(divisor.bits[0]) : 0;
+            if (d > 1 && (d & (d - 1)) == 0) {
+                u32 shift = 0;
+                while ((1 << shift) != d) shift++;
+                u16 operand = InternConstant(data->builder, CoreType::INT, op == IR::OP_IMOD ? static_cast<u32>(d - 1) : shift);
+                if (operand != 0xFFFF && RewriteAs(data, inst, op == IR::OP_IMOD ? IR::OP_AND : IR::OP_ASR, a, operand)) return;
+            }
+            if (op == IR::OP_IMOD && AllAtMost(data, zero, b, count, block)) ir->flags[inst] |= IR::FLAG_NON_NEGATIVE_OPERANDS;
             return;
         }
         default:

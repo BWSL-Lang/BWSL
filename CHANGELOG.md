@@ -110,6 +110,12 @@
   Ranges carry through vector conversions such as `int2(q)`, and a struct
   field read back after a store, as in `i.color = c; ... i.color.z`, is the
   value stored, so its constant and range carry too.
+  A signed `%` or `/` whose operands the ranges show aren't negative no
+  longer pays for truncating negative values: `x % 8` becomes `x & 7`,
+  `x / 8` becomes `x >> 3`, and other remainders, such as
+  `int(input.position.x) % spacing`, become an unsigned `%` instead of
+  `x - spacing * (x / spacing)`. GLSL, HLSL and MSL get
+  `int(uint(x) % uint(spacing))`, and direct GLSL ES and WGSL a plain `%`.
   Folding skips results that can differ between GPUs:
   NaN, infinities, denormals, `-0.0`, integer division of negative values,
   conversions that are out of range or inexact, and math functions outside
