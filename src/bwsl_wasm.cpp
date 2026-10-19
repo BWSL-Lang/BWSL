@@ -252,6 +252,7 @@ static std::string EmitDirectGLES(IRProgram& program,
         program.structTypeCount + 128);
     std::vector<char> glesMem(glesScratchBytes);
     glesArena.Initialize(glesMem.data(), glesMem.size());
+    glesArena.EnableGrowth(glesScratchBytes);
 
     GLES::GLESBuilder glesBuilder;
     glesBuilder.Initialize(&glesArena, sourceBase, &program, cfgPtr, stage,
@@ -582,6 +583,7 @@ static ShaderOutput CompileShaderStage(
         static_cast<size_t>(lowering.program.instructionCount) * 512);
     std::vector<char> cfgMem(stageScratchBytes);
     cfgArena.Initialize(cfgMem.data(), cfgMem.size());
+    cfgArena.EnableGrowth(stageScratchBytes);
 
     CFGBuilder cfgBuilder;
     CFG* cfgPtr = nullptr;
@@ -617,6 +619,7 @@ static ShaderOutput CompileShaderStage(
     Memory::BWEMemoryArena spirvArena;
     std::vector<char> spirvMem(stageScratchBytes);
     spirvArena.Initialize(spirvMem.data(), spirvMem.size());
+    spirvArena.EnableGrowth(stageScratchBytes);
 
     SPIRVBuilder builder;
     builder.Initialize(&spirvArena, &lowering.program, stage,

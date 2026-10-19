@@ -3841,6 +3841,11 @@ def main() -> int:
     passed += register_passed
     failed += register_failed
 
+    from arena_growth_tests import run_arena_growth_tests
+    arena_passed, arena_failed = run_arena_growth_tests(bwslc, output_dir / "arena_growth")
+    passed += arena_passed
+    failed += arena_failed
+
     if metal_validation:
         from resource_p1_tests import run_resource_p1_suite
         resource_passed, resource_failed = run_resource_p1_suite(bwslc, output_dir, verbose)

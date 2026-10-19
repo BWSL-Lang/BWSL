@@ -306,6 +306,9 @@ void PrintUsage(const char* programName) {
     printf("                 drive hot reload from the compiler's stdout.\n");
     printf("  -watch-interval <ms>\n");
     printf("                 File polling interval for -watch (default: 250)\n");
+    printf("  -arena-limit <MiB>\n");
+    printf("                 Most memory each compilation arena may grow to before the\n");
+    printf("                 unit fails with an error (default: 1024)\n");
     printf("\n");
     printf("Output artifact flags (WGSL-only compilation bypasses SPIR-V):\n");
     printf("  -spv           Write generated SPIR-V files alongside requested artifacts\n");
@@ -2422,6 +2425,7 @@ CompileResult CompileShaderStage(
         // arena, or allocate one for targets which do not need control flow.
         cfgMemory.reset(new u8[stageScratchBytes]);
         cfgArena.Initialize(cfgMemory.get(), stageScratchBytes);
+        cfgArena.EnableGrowth(stageScratchBytes);
         if (verbose) {
             printf("    Building CFG and converting to SSA...\n");
         }
@@ -2553,6 +2557,7 @@ CompileResult CompileShaderStage(
             lowering.program.structTypeCount + 128);
         std::vector<char> glesMem(glesScratchBytes);
         glesArena.Initialize(glesMem.data(), glesMem.size());
+        glesArena.EnableGrowth(glesScratchBytes);
 
         // Initialize and emit GLES
         GLES::GLESBuilder glesBuilder;
@@ -2585,6 +2590,7 @@ CompileResult CompileShaderStage(
     Memory::BWEMemoryArena spirvArena;
     std::vector<char> spirvMem(stageScratchBytes);
     spirvArena.Initialize(spirvMem.data(), spirvMem.size());
+    spirvArena.EnableGrowth(stageScratchBytes);
 
     SPIRVBuilder builder;
     builder.Initialize(&spirvArena, &lowering.program, stage,
@@ -3407,6 +3413,23 @@ int main(int argc, char* argv[]) {
                                "",
                                DiagnosticMessageId::Raw);
             return emitFailure(nullptr, nullptr, true);
+        } else if (arg == "-arena-limit" || arg == "--arena-limit") {
+            char* end = nullptr;
+            const char* text = i + 1 < argc ? argv[i + 1] : "";
+            unsigned long long mib = std::strtoull(text, &end, 10);
+            if (end == text || *end != '\0' || mib == 0 || mib > (1ull << 20)) {
+                diagnostics.AddRaw(DiagnosticSeverity::Error,
+                                   DiagnosticPhase::CLI,
+                                   "Expected a size in MiB (1 or more) after " + arg,
+                                   DiagnosticSpan{},
+                                   config.inputFile,
+                                   "",
+                                   "",
+                                   DiagnosticMessageId::Raw);
+                return emitFailure(nullptr, nullptr, true);
+            }
+            ++i;
+            Memory::g_arenaGrowthLimit = static_cast<size_t>(mib) * 1024 * 1024;
         } else if (arg == "-ast-json" || arg == "--ast-json") {
             config.astJson = true;
         } else if ((arg == "-validation" || arg == "--validation") && i + 1 < argc) {
@@ -4313,6 +4336,18 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
     outcome.exitCode = errorCount > 0 ? 1 : 0;
     outcome.success = errorCount == 0;
     return outcome;
+    } catch (const Memory::ArenaExhausted& e) {
+        std::string message = e.what();
+        if (!e.systemOutOfMemory) {
+            message += "; raise it with -arena-limit <MiB> if the shader needs more";
+        }
+        diagnostics.AddMessage(DiagnosticSeverity::Error,
+                               DiagnosticPhase::Compile,
+                               DiagnosticMessageId::CompilerMemoryExhausted,
+                               {DiagnosticArg::String(message)},
+                               DiagnosticSpan{},
+                               config.inputFile);
+        return fail();
     } catch (const std::exception& e) {
         diagnostics.AddMessage(DiagnosticSeverity::Error,
                                DiagnosticPhase::Internal,
