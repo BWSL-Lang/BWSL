@@ -1,0 +1,40 @@
+// A signed remainder or division whose operands the ranges show aren't
+// negative is emitted as `&`, `>>` or an unsigned `%`; one that may see a
+// negative operand keeps truncating toward zero.
+pipeline EquivNonNegativeRemainder {
+
+    struct Sample {
+        @bounds(>=0, <1000) int value;
+        int signed_value;
+        @bounds(>0, <10) int divisor;
+        int pad;
+    }
+
+    resources {
+        inbuf: buffer<Sample>
+        output: buffer<int>
+    }
+
+    pass "Compute" {
+        use resources { inbuf, output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int v = resources.inbuf[idx].value;
+            int s = resources.inbuf[idx].signed_value;
+            int d = resources.inbuf[idx].divisor;
+            int2 q = int2(v, v + 1) % int2(d, 4);
+            uint base = idx * 10u;
+
+            resources.output[base + 0u] = v % 8;     // v & 7
+            resources.output[base + 1u] = v / 8;     // v >> 3
+            resources.output[base + 2u] = v % 3;     // unsigned %
+            resources.output[base + 3u] = v % d;     // unsigned %
+            resources.output[base + 4u] = s % 8;     // may be negative
+            resources.output[base + 5u] = s / 8;
+            resources.output[base + 6u] = s % d;
+            resources.output[base + 7u] = v % -4;    // negative divisor
+            resources.output[base + 8u] = q.x;
+            resources.output[base + 9u] = q.y;
+        }
+    }
+}

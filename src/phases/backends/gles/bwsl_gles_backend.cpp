@@ -1156,7 +1156,8 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             EmitBinaryAssign(instIdx, dest, "/");
             return;
         case IR::OP_IMOD:
-            if (mask(static_cast<CoreType>(Type(instIdx))) & TypeMasks::UINT_TYPES) {
+            if ((mask(static_cast<CoreType>(Type(instIdx))) & TypeMasks::UINT_TYPES) ||
+                (ir->flags[instIdx] & IR::FLAG_NON_NEGATIVE_OPERANDS)) {
                 EmitBinaryAssign(instIdx, dest, "%");
             } else {
                 // GLSL `%` does not preserve OpSRem for negative operands
@@ -2419,7 +2420,8 @@ bool GLESBuilder::EmitConstantExpr(u16 reg, u32 depth) {
         EmitType(Type(definition)); out.Chr('(');
         ok = EmitConstantExpr(Op(definition, 0), depth + 1);
         out.Chr(')');
-    } else if (op == IR::OP_IMOD && (mask(static_cast<CoreType>(Type(definition))) & TypeMasks::INT_TYPES)) {
+    } else if (op == IR::OP_IMOD && (mask(static_cast<CoreType>(Type(definition))) & TypeMasks::INT_TYPES) &&
+               !(ir->flags[definition] & IR::FLAG_NON_NEGATIVE_OPERANDS)) {
         out.Chr('(');
         ok = EmitConstantExpr(Op(definition, 0), depth + 1);
         out.Lit(" - ");

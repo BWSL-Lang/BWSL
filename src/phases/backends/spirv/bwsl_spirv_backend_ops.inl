@@ -533,6 +533,28 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         if ((mask(regType) & TypeMasks::UINT_TYPES) != 0) {
           if (op == IR::OP_IDIV) spv_op = spv::OpUDiv;
           if (op == IR::OP_IMOD) spv_op = spv::OpUMod;
+        } else if (op == IR::OP_IMOD && (mask(regType) & TypeMasks::INT_TYPES) != 0 &&
+                   (ir->flags[ir_idx] & IR::FLAG_NON_NEGATIVE_OPERANDS)) {
+          // Neither operand is negative, so the unsigned remainder is the
+          // same. SPIRV-Cross expands OpSRem into a division for GLSL, HLSL
+          // and MSL, but emits OpUMod as their native `%`.
+          CoreType unsignedType = regType == CoreType::INT2   ? CoreType::UINT2
+                                  : regType == CoreType::INT3 ? CoreType::UINT3
+                                  : regType == CoreType::INT4 ? CoreType::UINT4
+                                                              : CoreType::UINT;
+          u32 unsigned_type = GetTypeId(unsignedType);
+          auto toUnsigned = [&](u16 operand, u32 id) {
+            if (IR::IsIntConstant(operand)) return GetSpirvIdForBitwise(operand, true);
+            u32 converted = AllocateId();
+            Emit(spv::OpBitcast, unsigned_type, converted, id);
+            return converted;
+          };
+          u32 a = toUnsigned(ir->GetOperand(ir_idx, 0), op1);
+          u32 b = toUnsigned(ir->GetOperand(ir_idx, 1), op2);
+          u32 remainder = AllocateId();
+          Emit(spv::OpUMod, unsigned_type, remainder, a, b);
+          Emit(spv::OpBitcast, result_type, dest, remainder);
+          break;
         }
       }
     }

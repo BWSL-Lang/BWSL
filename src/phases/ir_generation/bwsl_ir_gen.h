@@ -28,6 +28,12 @@ constexpr bool IsUintConstant(u16 value) { return (value & 0xE000) == 0x6000; }
 constexpr bool IsFloatConstant(u16 value) { return (value & 0xC000) == 0x8000; }
 constexpr bool IsBoolConstant(u16 value) { return value != 0xFFFF && (value & 0xC000) == 0xC000; }
 
+// Instruction flags (IRProgram::flags).
+// On a signed OP_IMOD: neither operand is negative, so the remainder is
+// what an unsigned one, or a target's native `%`, gives. Set by constant
+// propagation from value ranges; meaningless on any other opcode.
+constexpr u16 FLAG_NON_NEGATIVE_OPERANDS = 0x1;
+
 
 struct IRProgram {
     // Hot instruction data - separate arrays for better cache usage

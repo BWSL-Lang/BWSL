@@ -2053,6 +2053,7 @@ static bool RewriteAs(ConstantPropagationData* data, u32 inst, u16 op, u16 a, u1
     if (op == IR::OP_LOAD_REG && (IsMemoryBacked(ir, dest) || IsMemoryBacked(ir, a))) return false;
     ir->opcodes[inst] = op;
     ir->metadata[inst] = 0;
+    ir->flags[inst] = 0;
     ir->SetOperand(inst, 0, a);
     ir->SetOperand(inst, 1, b);
     for (u32 slot = 2; slot < 4; slot++) ir->SetOperand(inst, slot, 0xFFFF);
