@@ -452,6 +452,10 @@ ERROR_CASE_EXPECTED_ERROR_COUNTS = {
     # A dynamic texture array call expands to one call per element; the stage
     # error must be reported once, not once per element.
     "sample_texture_array_in_helper_called_from_compute.bwsl": 1,
+    # The rejected call's result keeps its normal type, so returning it from
+    # the helper doesn't add an implicit-conversion error.
+    "sample_in_helper_called_from_compute.bwsl": 1,
+    "derivative_in_helper_called_from_vertex.bwsl": 1,
 }
 
 def diagnostic_output_contains(output: str, expected: str) -> bool:
