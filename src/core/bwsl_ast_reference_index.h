@@ -1580,7 +1580,8 @@ private:
                 Error(ref, "Unknown function '" + name + "'", name);
             }
             AddReference(NodeId(ref), type.id, "construct");
-            return {name, type.id};
+            // Builtin structs are typed by their id, like declared structs.
+            return {type.id.empty() ? name : type.type, type.id};
         }
         const std::string builtinId = "builtin:function:" + name;
         AddSymbol({builtinId, "intrinsic", name, builtinId, "builtin", {}, {}});

@@ -51,6 +51,7 @@ pipeline BuiltinResultTypes {
             arr[1] = frexp(input.uv.y);
             late = arr[1];
             float value = made.fraction + made.whole + ldexp(arr[0].mantissa, late.exponent);
+            value += rebuild(late, BwslModfResult(0.5, input.uv.x));
             output.color = float4(value, frexp(input.uv.y * 3.0).mantissa, 0.0, 1.0);
         }
     }

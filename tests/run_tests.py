@@ -582,6 +582,26 @@ AST_JSON_REFERENCE_TESTS = {
             {"to": "builtin:type:float2", "role": "type", "from_prefix": "VARIABLE_DECL:"},
         ],
     },
+    "builtin_result_types": {
+        "symbols": [
+            {
+                "match": {"kind": "struct", "name": "BwslModfResult"},
+                "expect": {"id": "builtin:type:BwslModfResult", "owner": "builtin"},
+            },
+            {
+                "match": {"kind": "struct-field", "name": "mantissa"},
+                "expect": {"id": "builtin:type:BwslFrexpResult/field:mantissa",
+                           "owner": "builtin:type:BwslFrexpResult", "type": "float"},
+            },
+        ],
+        "references": [
+            {"to": "FUNCTION:0", "role": "call", "from_prefix": "FUNCTION_CALL:"},
+            {"to": "builtin:type:BwslModfResult", "role": "construct", "from_prefix": "FUNCTION_CALL:"},
+            {"to": "builtin:type:BwslModfResult", "role": "type", "from_prefix": "FUNCTION:0/parameter:"},
+            {"to": "builtin:type:BwslModfResult/field:whole", "role": "member", "from_prefix": "MEMBER_ACCESS:"},
+            {"to": "builtin:type:BwslFrexpResult/field:mantissa", "role": "member", "from_prefix": "MEMBER_ACCESS:"},
+        ],
+    },
 }
 
 FORBIDDEN_SOURCE_ALIAS_NAMES = (
