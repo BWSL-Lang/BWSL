@@ -455,9 +455,37 @@ struct IRLowering {
   // Keyed by register: the `^` result and pointer variables and parameters
   // copied from it.
   std::unordered_map<u16, PointerProblem> pointerProblems;
+  // Conditional regions (branch arms, switch cases, loop bodies) around the
+  // code being lowered, and the depth each variable was declared at. A store
+  // to a pointer variable replaces what is known about its target only when
+  // it runs whenever the declaration does; otherwise the old target stays
+  // possible, and so does its problem.
+  u32 controlDepth = 0;
+  std::unordered_map<u16, u32> variableDepth;
+  // A pointer argument inside a loop is checked again when the loop ends,
+  // since a store later in the body reaches it through the back edge. Copies
+  // are kept to carry such a problem to the pointers copied from it.
+  struct PendingPointerArgument {
+    u16 source;
+    NodeRef argument;
+    u32 functionNameHash;
+    u32 index;
+  };
+  struct PointerLoopFrame {
+    std::vector<std::pair<u16, u16>> copies;  // (destination, source)
+    std::vector<PendingPointerArgument> arguments;
+  };
+  std::vector<PointerLoopFrame> pointerLoops;
+  std::unordered_set<u32> reportedPointerArguments;  // Packed NodeRefs
+  void BeginPointerLoop();
+  void EndPointerLoop();
   bool IsFunctionLocalPlace(NodeRef expr);
   bool IsPointerValue(u16 reg) const;
-  void CopyPointerProvenance(u16 dest, u16 source);
+  // `Type^ p = q` and pointer parameter copies, and `p = q`.
+  void DeclarePointerVariable(u16 reg, u16 source);
+  void AssignPointerVariable(u16 reg, u16 source);
+  void ReportPointerArgumentProblem(NodeRef argument, u32 functionNameHash,
+                                    u32 index, PointerProblem problem);
   // An argument's overload mask; a pointer argument describes its pointee
   // and carries OVERLOAD_POINTER_MASK.
   OverloadTypeMask ArgumentOverloadMask(u16 reg);

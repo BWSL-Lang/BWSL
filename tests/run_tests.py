@@ -344,6 +344,8 @@ ERROR_CASE_TESTS = {
     "pointer_param_builtin_argument.bwsl": "argument 1 of 'abs' is a pointer, but 'abs' takes values",
     "pointer_param_eval_function.bwsl": "Compile-time (eval) functions cannot take pointer parameters",
     "pointer_return_type.bwsl": "Functions cannot return pointers",
+    "pointer_param_rebound_in_branch.bwsl": "pointer argument 1 of 'bump' points to a temporary copy",
+    "pointer_param_loop_carried.bwsl": "pointer argument 1 of 'bump' points to a temporary copy",
     "swizzle_too_long.bwsl": "invalid swizzle - swizzles use 1-4 components",
     "swizzle_mixed_sets.bwsl": "invalid swizzle - swizzles use 1-4 components",
     "swizzle_duplicate_write.bwsl": "swizzle assignment target has duplicate components",

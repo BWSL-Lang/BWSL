@@ -57,6 +57,17 @@ pipeline EquivPointerParams {
         v^ = v^ + v^;
     }
 
+    // Value and pointer generics with one name specialize separately, in
+    // either order.
+    tag :: (Num v) -> int {
+        return 1;
+    }
+
+    tag :: (Num^ v) -> int {
+        v^ = v^ + v^;
+        return 2;
+    }
+
     pass "Compute" {
         use resources { output }
 
@@ -115,11 +126,17 @@ pipeline EquivPointerParams {
             int ti = n;
             twice(^ti);
 
+            int tv = n;
+            int tags = tag(tv) * 10 + tag(^tv);
+            float tf = float(n) + 0.5;
+            int tagsFloat = tag(^tf) * 10 + tag(tf);
+
             resources.output[idx] = x + y * 3 + z * 5 + same * 7 + pair.a * 11 +
                 pair.b * 13 + arr[0] * 17 + arr[1] * 19 + arr[2] * 23 + arr[3] * 29 +
                 h.inner.a * 31 + h.values[0] * 37 + h.values[1] * 41 +
                 h.values[2] * 43 + h.values[3] * 47 + total * 53 + y2 * 59 +
-                c.total * 61 + ti * 67;
+                c.total * 61 + ti * 67 + tags * 71 + tv * 73 + tagsFloat * 79 +
+                int(tf) * 83;
         }
     }
 }

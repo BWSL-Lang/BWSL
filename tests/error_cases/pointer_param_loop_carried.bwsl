@@ -1,0 +1,26 @@
+// Error case: a pointer rebound to a copy later in a loop body reaches the
+// call on the next iteration.
+pipeline PointerParamLoopCarried {
+    attributes {
+        position: float3
+    }
+
+    bump :: (float^ target) -> void {
+        target^ = target^ + 1.0;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float4 v = float4(attributes.position, 1.0);
+            float w = 1.0;
+            float^ p = ^w;
+            for (int i = 0; i < 3; i++) {
+                bump(p);
+                p = ^v.y;
+            }
+            output.position = float4(v.xyz, w);
+        }
+    }
+}

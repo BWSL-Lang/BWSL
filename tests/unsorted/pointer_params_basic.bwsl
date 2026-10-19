@@ -66,6 +66,13 @@ pipeline PointerParamsBasic {
             accumulate(px, 1);         // x = 106
             accumulate(^px^, 1);       // `^px^` is px: x = 107
 
+            // Rebinding a pointer that pointed at a copy makes it valid to
+            // pass again.
+            int4 v = int4(n);
+            int^ retargeted = ^v.x;
+            retargeted = ^y;
+            accumulate(retargeted, 1); // y = n + 7
+
             int d = 4;
             int r = doubleInPlace(^d); // d = 8, r = 9
 
@@ -74,7 +81,7 @@ pipeline PointerParamsBasic {
             int rb = 0;
             int rl = rebind(^rb);      // rb = 3, rl = 42
 
-            resources.output[idx] = x + y + same + d + r + kinds + rb + rl;
+            resources.output[idx] = x + y + same + d + r + kinds + rb + rl + v.x;
         }
     }
 }

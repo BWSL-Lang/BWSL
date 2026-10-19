@@ -310,11 +310,19 @@ struct SpecializationRegistry {
 
     // Hash concrete type arguments for a specialization
     // Each constrained parameter contributes its concrete type to the hash
-    static inline u64 HashSpecialization(const CoreType* types, const bool* isConstrained, u32 paramCount) {
+    // isPointer marks `Type^` parameters. Value and pointer templates can
+    // share a name (`f(Num)` and `f(Num^)`), so the pointer shape is part of
+    // the key or one would reuse the other's specialization.
+    static inline u64 HashSpecialization(const CoreType* types, const bool* isConstrained,
+                                         u32 paramCount, const bool* isPointer = nullptr) {
         u64 hash = 0xcbf29ce484222325ULL;  // FNV offset basis
         for (u32 i = 0; i < paramCount; i++) {
             if (isConstrained[i]) {
                 hash ^= static_cast<u64>(types[i]);
+                hash *= 0x100000001b3ULL;
+            }
+            if (isPointer && isPointer[i]) {
+                hash ^= 0x100ULL + i;  // Above every CoreType value
                 hash *= 0x100000001b3ULL;
             }
         }
@@ -1631,7 +1639,8 @@ namespace SymbolTable {
         const ArenaString& baseName,
         const CoreType* types,
         const bool* isConstrained,
-        u32 paramCount
+        u32 paramCount,
+        const bool* isPointer = nullptr
     ) {
         std::string result;
         result.reserve(64);
@@ -1643,6 +1652,9 @@ namespace SymbolTable {
             if (isConstrained[i]) {
                 result.append("$");
                 result.append(std::to_string(static_cast<u32>(types[i])));
+            }
+            if (isPointer && isPointer[i]) {
+                result.append("^").append(std::to_string(i));
             }
         }
 

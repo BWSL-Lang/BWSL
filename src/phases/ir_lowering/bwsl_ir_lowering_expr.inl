@@ -328,9 +328,65 @@ inline bool IRLowering::IsPointerValue(u16 reg) const {
          ((storage >> 8) & 0xFF) != 0;
 }
 
-inline void IRLowering::CopyPointerProvenance(u16 dest, u16 source) {
+inline void IRLowering::DeclarePointerVariable(u16 reg, u16 source) {
+  variableDepth[reg] = controlDepth;
+  if (!pointerLoops.empty()) pointerLoops.back().copies.push_back({reg, source});
   auto problem = pointerProblems.find(source);
-  if (problem != pointerProblems.end()) pointerProblems[dest] = problem->second;
+  if (problem != pointerProblems.end()) {
+    pointerProblems[reg] = problem->second;
+  } else {
+    pointerProblems.erase(reg);
+  }
+}
+
+inline void IRLowering::AssignPointerVariable(u16 reg, u16 source) {
+  if (!pointerLoops.empty()) pointerLoops.back().copies.push_back({reg, source});
+  auto problem = pointerProblems.find(source);
+  if (problem != pointerProblems.end()) {
+    pointerProblems[reg] = problem->second;
+    return;
+  }
+  auto depth = variableDepth.find(reg);
+  if (depth != variableDepth.end() && depth->second == controlDepth) {
+    pointerProblems.erase(reg);
+  }
+}
+
+inline void IRLowering::BeginPointerLoop() {
+  controlDepth++;
+  pointerLoops.emplace_back();
+}
+
+inline void IRLowering::EndPointerLoop() {
+  PointerLoopFrame frame = std::move(pointerLoops.back());
+  pointerLoops.pop_back();
+  controlDepth--;
+  // Problems stored anywhere in the body reach every copy made from them on
+  // a later iteration. Kills aren't modeled, so this over-approximates.
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (const auto &[dest, source] : frame.copies) {
+      auto problem = pointerProblems.find(source);
+      if (problem != pointerProblems.end() && !pointerProblems.count(dest)) {
+        pointerProblems[dest] = problem->second;
+        changed = true;
+      }
+    }
+  }
+  for (const PendingPointerArgument &pending : frame.arguments) {
+    auto problem = pointerProblems.find(pending.source);
+    if (problem != pointerProblems.end()) {
+      ReportPointerArgumentProblem(pending.argument, pending.functionNameHash,
+                                   pending.index, problem->second);
+    }
+  }
+  // An enclosing loop's back edge can carry a problem into this one too.
+  if (!pointerLoops.empty()) {
+    PointerLoopFrame &outer = pointerLoops.back();
+    outer.copies.insert(outer.copies.end(), frame.copies.begin(), frame.copies.end());
+    outer.arguments.insert(outer.arguments.end(), frame.arguments.begin(),
+                           frame.arguments.end());
+  }
 }
 
 inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {

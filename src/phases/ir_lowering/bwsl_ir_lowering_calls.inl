@@ -90,7 +90,7 @@ inline u16 IRLowering::CopyArgumentValue(u16 source) {
     // values do not inherit the caller's address-taken or storage metadata.
     if (storage & IRProgram::STORAGE_IS_PTR) {
       program.registerStorageInfo[copy] = storage;
-      CopyPointerProvenance(copy, source);
+      DeclarePointerVariable(copy, source);
     }
     builder.EmitInstruction(OP_STORE_REG, copy, source);
   }
@@ -119,30 +119,13 @@ inline void IRLowering::BindPointerParameter(const FunctionCallData &call,
                                              u32 index, u16 arg) {
   auto problem = pointerProblems.find(arg);
   if (problem != pointerProblems.end()) {
-    const char *reason = "";
-    switch (problem->second) {
-    case PointerProblem::NON_LOCAL:
-      reason = "points to a resource, stage input or output, or shared "
-               "memory; copy the value into a local variable, pass `^local` "
-               "and store the result back";
-      break;
-    case PointerProblem::TEMPORARY:
-      reason = "points to a temporary copy; pass the address of a local "
-               "variable, one of its struct fields or an array element, not "
-               "a vector component, matrix column or computed value";
-      break;
-    case PointerProblem::WHOLE_ARRAY:
-      reason = "points to a whole array; pass a pointer to one element "
-               "(`^values[i]`) or wrap the array in a struct";
-      break;
-    }
-    char msg[384];
-    snprintf(msg, sizeof(msg), "Error: pointer argument %u of '%s' %s\n",
-             index + 1, ReverseLookup::GetString(function.name.nameHash).c_str(),
-             reason);
-    ReportErrorAt(index < call.arguments.count ? call.arguments[index]
-                                               : NodeRef::Null(),
-                  msg);
+    ReportPointerArgumentProblem(
+        index < call.arguments.count ? call.arguments[index] : NodeRef::Null(),
+        function.name.nameHash, index, problem->second);
+  } else if (!pointerLoops.empty()) {
+    pointerLoops.back().arguments.push_back(
+        {arg, index < call.arguments.count ? call.arguments[index] : NodeRef::Null(),
+         function.name.nameHash, index});
   }
   // The copy keeps the pointer's target, so writes through it reach the
   // caller's variable, and two parameters given the same address alias.
@@ -153,6 +136,35 @@ inline void IRLowering::BindPointerParameter(const FunctionCallData &call,
   constVariables.erase(nameHash);
   initializedVariables.insert(nameHash);
   program.registerNameHashes[reg] = nameHash;
+}
+
+inline void IRLowering::ReportPointerArgumentProblem(NodeRef argument,
+                                                     u32 functionNameHash,
+                                                     u32 index,
+                                                     PointerProblem problem) {
+  if (argument.IsValid() && !reportedPointerArguments.insert(argument.packed).second)
+    return;
+  const char *reason = "";
+  switch (problem) {
+  case PointerProblem::NON_LOCAL:
+    reason = "points to a resource, stage input or output, or shared "
+             "memory; copy the value into a local variable, pass `^local` "
+             "and store the result back";
+    break;
+  case PointerProblem::TEMPORARY:
+    reason = "points to a temporary copy; pass the address of a local "
+             "variable, one of its struct fields or an array element, not "
+             "a vector component, matrix column or computed value";
+    break;
+  case PointerProblem::WHOLE_ARRAY:
+    reason = "points to a whole array; pass a pointer to one element "
+             "(`^values[i]`) or wrap the array in a struct";
+    break;
+  }
+  char msg[384];
+  snprintf(msg, sizeof(msg), "Error: pointer argument %u of '%s' %s\n",
+           index + 1, ReverseLookup::GetString(functionNameHash).c_str(), reason);
+  ReportErrorAt(argument, msg);
 }
 
 inline bool IRLowering::ReportPointerArgumentMismatch(
@@ -336,6 +348,7 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
         payloadIndex += width;
       }
     }
+    controlDepth++;
     if (arm.body.Type() == ASTNodeType::BLOCK) {
       LowerBlock(arm.body);
     } else {
@@ -346,6 +359,7 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
       if (value < MAX_REGISTERS) program.registerStructTypes[inlineReturnReg] = program.registerStructTypes[value];
       builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg, builder.EmitConstantBool(true));
     }
+    controlDepth--;
     u32 merge = builder.currentInstruction;
     builder.EmitInstruction(OP_NOP, 0, 0);
     program.SetBranchTargets(branch, bodyStart, merge);
@@ -2462,8 +2476,7 @@ inline NodeRef IRLowering::TryResolveGenericFunction(const FunctionCallData &cal
 
   for (u32 i = 0; i < argCount; i++) {
     // A pointer argument specializes a `Constraint^` parameter by its
-    // pointee. The template fixes which parameters are pointers, so the
-    // specialization key needs no pointer bits.
+    // pointee.
     argIsPointer[i] = IsPointerValue(args[i]);
     argTypes[i] = argIsPointer[i]
         ? static_cast<CoreType>((program.registerStorageInfo[args[i]] >> 8) & 0xFF)
@@ -2486,9 +2499,10 @@ inline NodeRef IRLowering::TryResolveGenericFunction(const FunctionCallData &cal
     isConstrained[i] = gfn->parameters[i].isConstrained;
   }
 
-  // Compute specialization hash
+  // Compute specialization hash. The matched template has the arguments'
+  // pointer shape, which tells it apart from a same-named value template.
   u64 specHash = SpecializationRegistry::HashSpecialization(
-      argTypes, isConstrained, argCount);
+      argTypes, isConstrained, argCount, argIsPointer);
 
   // Check if specialization already exists
   u32 existingFunc =
@@ -2539,7 +2553,7 @@ inline NodeRef IRLowering::TryResolveGenericFunction(const FunctionCallData &cal
 
   // Build mangled name
   std::string mangledName = SymbolTable::MangleSpecializationName(
-      gfn->name, argTypes, isConstrained, argCount);
+      gfn->name, argTypes, isConstrained, argCount, argIsPointer);
 
   // Clone the generic function with type substitutions
   NodeRef srcFuncRef(ASTNodeType::FUNCTION, 0);

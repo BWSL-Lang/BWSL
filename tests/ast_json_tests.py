@@ -129,6 +129,26 @@ class AstJsonTests(unittest.TestCase):
         self.assert_edge(data, pointer['parameters'][0]['id'],
                          self.nodes(data, 'STRUCT_DECL', 'Pair')[0]['id'], 'type')
 
+    def test_pointer_overload_calls_resolve(self):
+        data = self.parse('''pipeline P {
+            kind :: (int v) -> int { return 1; }
+            kind :: (int^ v) -> int { return 2; }
+            forward :: (int^ v) -> int { return kind(v) + kind(v^); }
+            pass "Main" {
+                vertex {
+                    int x = 1;
+                    int^ p = ^x;
+                    int k = kind(x) + kind(^x) + kind(p) + forward(^x);
+                    output.position = float4(float(k));
+                }
+            }
+        }''')
+        value, pointer, forward = self.nodes(data, 'FUNCTION')[:3]
+        calls = [edge['to'] for edge in self.edges(data, 'call')]
+        # forward: kind(v), kind(v^); vertex: kind(x), kind(^x), kind(p), forward(^x)
+        self.assertEqual(sorted(calls), sorted([pointer['id'], value['id'], value['id'],
+                                                pointer['id'], pointer['id'], forward['id']]))
+
     def test_multidimensional_array_shapes_and_parameter_syntaxes(self):
         data = self.parse('''module Arrays {
             const int ROWS = 2;

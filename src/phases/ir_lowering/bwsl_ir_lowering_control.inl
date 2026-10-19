@@ -89,7 +89,9 @@ inline void IRLowering::LowerStatementsWithReturnGuard(const BlockData &block,
   inlineReturnFlagReads++;
 
   u32 falseTarget = builder.currentInstruction;
+  controlDepth++;
   LowerStatements(block, first, true);
+  controlDepth--;
 
   u32 mergePoint = builder.currentInstruction;
   builder.EmitInstruction(OP_NOP, 0, 0);
@@ -180,6 +182,8 @@ inline void IRLowering::LowerForCStyle(NodeRef ref) {
     LowerStatement(forLoop.init);
   }
 
+  // The condition and increment run on every iteration, like the body.
+  BeginPointerLoop();
   u32 loopHeader = builder.currentInstruction;
   builder.EmitInstruction(OP_JUMP, 0, 0);
   program.metadata[loopHeader] = builder.currentInstruction;
@@ -236,6 +240,7 @@ inline void IRLowering::LowerForCStyle(NodeRef ref) {
 
   // Patch break/skip jumps
   PopLoopContext(continueTarget, loopEnd);
+  EndPointerLoop();
 
   // Patch branch: true = continue into body, false = exit loop
   if (hasBranch) {
@@ -367,6 +372,7 @@ inline void IRLowering::LowerForRange(NodeRef ref) {
     builder.EmitInstruction(OP_BRANCH, 0, condReg);
     u32 bodyStart = builder.currentInstruction;
     loopDepth++;
+    BeginPointerLoop();
     PushLoopContext();
     if (!forLoop.body.IsNull()) LowerStatement(forLoop.body);
     loopDepth--;
@@ -425,6 +431,7 @@ inline void IRLowering::LowerForRange(NodeRef ref) {
     u32 loopEnd = builder.currentInstruction;
     builder.EmitInstruction(OP_NOP, 0, 0);
     PopLoopContext(continueTarget, loopEnd);
+    EndPointerLoop();
     program.SetBranchTargets(branchIdx, bodyStart, loopEnd);
     program.structureInfo[branchIdx] = IRProgram::PackStructure(IRProgram::STRUCT_LOOP_HEADER, loopEnd);
     program.continueInfo[branchIdx] = continueTarget;
@@ -477,6 +484,7 @@ inline void IRLowering::LowerForCollection(NodeRef ref) {
 
   // Body - track loop depth for nested if-statement merge handling
   loopDepth++;
+  BeginPointerLoop();
   PushLoopContext();
   if (!forLoop.body.IsNull()) {
     LowerStatement(forLoop.body);
@@ -502,6 +510,7 @@ inline void IRLowering::LowerForCollection(NodeRef ref) {
 
   // Patch break/skip jumps
   PopLoopContext(continueTarget, loopEnd);
+  EndPointerLoop();
 
   // Patch branch: true = continue into body, false = exit loop
   program.SetBranchTargets(branchIdx, bodyStart, loopEnd);
@@ -541,6 +550,7 @@ inline void IRLowering::LowerLoop(NodeRef ref) {
 
     // Body - track loop depth for nested if-statement merge handling
     loopDepth++;
+    BeginPointerLoop();
     PushLoopContext();
     if (!loop.body.IsNull()) {
       LowerStatement(loop.body);
@@ -574,6 +584,7 @@ inline void IRLowering::LowerLoop(NodeRef ref) {
 
     // Patch break/skip jumps
     PopLoopContext(continueTarget, loopEnd);
+    EndPointerLoop();
 
     // Patch main loop branch: true = continue into body, false = exit loop
     program.SetBranchTargets(branchIdx, bodyStart, loopEnd);
@@ -604,6 +615,7 @@ inline void IRLowering::LowerLoop(NodeRef ref) {
 
     // Body - track loop depth for nested if-statement merge handling
     loopDepth++;
+    BeginPointerLoop();
     PushLoopContext();
     if (!loop.body.IsNull()) {
       LowerStatement(loop.body);
@@ -634,6 +646,7 @@ inline void IRLowering::LowerLoop(NodeRef ref) {
 
     // Patch break/skip jumps
     PopLoopContext(continueTarget, loopEnd);
+    EndPointerLoop();
 
     // Patch header branch: always enters body (true=body, false=exit for
     // structure)
@@ -875,6 +888,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
   u32 *caseJumps = (u32 *)alloca(caseArmCount * sizeof(u32));
 
   switchDepth++;
+  controlDepth++;
   for (u32 i = 0; i < caseArmCount; i++) {
     NodeRef caseRef = sw.cases[i];
     const SwitchCaseData &caseData = ast->GetSwitchCase(caseRef);
@@ -903,6 +917,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
     defaultJumpIdx = builder.currentInstruction;
     builder.EmitInstruction(OP_JUMP, 0, 0);
   }
+  controlDepth--;
   switchDepth--;
 
   u32 mergePoint = builder.currentInstruction;
@@ -1033,11 +1048,13 @@ inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
   u32 trueTarget = builder.currentInstruction;
 
   // Lower true branch
+  controlDepth++;
   if (rest && restInThen) {
     lowerBranchAndRest(block.statements[1]);
   } else {
     LowerStatement(block.statements[1]);
   }
+  controlDepth--;
 
   bool restInElse = rest && !restInThen;
   u32 jumpOverElseIdx = 0;
@@ -1050,6 +1067,7 @@ inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
   u32 falseTarget = builder.currentInstruction;
 
   bool needMergePad = true;
+  controlDepth++;
   if (restInElse) {
     lowerBranchAndRest(block.statements.count > 2 ? block.statements[2]
                                                   : NodeRef::Null());
@@ -1073,6 +1091,7 @@ inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
     // distinct merge block that will then branch to the continue target.
     needMergePad = true;
   }
+  controlDepth--;
 
   // Set merge point to current instruction (NOP location if we emit one)
   u32 mergePoint = builder.currentInstruction;
