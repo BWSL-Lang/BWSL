@@ -195,6 +195,8 @@ ERROR_CASE_TESTS = {
     "intrinsic_module_function_name.bwsl": "reserved for a built-in intrinsic",
     "intrinsic_struct_method_name.bwsl": "reserved for a built-in intrinsic",
     "intrinsic_enum_method_name.bwsl": "reserved for a built-in intrinsic",
+    "builtin_result_struct_redeclared.bwsl": "Struct name 'BwslFrexpResult' is reserved for a built-in type",
+    "builtin_result_unknown_field.bwsl": "Unknown field 'fraction' on type 'BwslFrexpResult'",
     "attribute_capacity.bwsl": "supported limit of 16 attributes",
     "array_negative_remainder_index.bwsl": "out of bounds",
     'function_void_return_value.bwsl': 'Void function cannot return a value',

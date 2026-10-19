@@ -273,6 +273,7 @@ struct Parser {
         activeVariantBindings.clear();
         allowBareVariantLookup = false;
         SymbolTable::Init(&symbolTable, arena);
+        RegisterBuiltinStructTypes();
         currentShaderStage = ShaderStage::Fragment;
         inShaderStage = false;
         currentPass = NodeRef::Null();
@@ -450,6 +451,7 @@ private:
     NodeRef ParseMemberAccess(NodeRef object);
     NodeRef ParseFunction();
     NodeRef ParseStruct();
+    void RegisterBuiltinStructTypes();
     NodeRef ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime);
     NodeRef ResolveEnumMethod(const ArenaString& enumName, const ArenaString& methodName);
     NodeRef ParseModule();

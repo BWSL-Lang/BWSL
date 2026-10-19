@@ -240,6 +240,10 @@ inline u32 IRLowering::LookupOrRegisterStructType(u32 typeNameHash) {
     if (structData) {
       return RegisterStructTypeFromData(typeNameHash, structData);
     }
+    if (const StdLib::BuiltinStructType *builtin =
+            StdLib::FindBuiltinStructType(typeNameHash)) {
+      return RegisterBuiltinStructType(*builtin);
+    }
     return 0;
   }
   // Get the struct data - use its name hash as canonical (unqualified name
@@ -444,16 +448,14 @@ inline u32 IRLowering::RegisterStructTypeFromData(u32 typeNameHash, StructData *
   return typeNameHash;
 }
 
-inline u32 IRLowering::RegisterBuiltinStructType(const char *typeName,
-                              const char *const *fieldNames,
-                              const CoreType *fieldTypes,
-                              u32 fieldCount) {
-  if (!typeName || !fieldNames || !fieldTypes || fieldCount == 0 ||
-      program.structTypeCount >= program.structTypeCapacity) {
+inline u32
+IRLowering::RegisterBuiltinStructType(const StdLib::BuiltinStructType &builtin) {
+  if (program.structTypeCount >= program.structTypeCapacity) {
     return 0;
   }
 
-  u32 typeNameHash = Utils::HashStr(typeName);
+  const u32 fieldCount = builtin.fieldCount;
+  u32 typeNameHash = builtin.nameHash;
   auto existing = structTypeMap.find(typeNameHash);
   if (existing != structTypeMap.end()) {
     return typeNameHash;
@@ -461,7 +463,7 @@ inline u32 IRLowering::RegisterBuiltinStructType(const char *typeName,
 
   u32 structIdx = program.structTypeCount++;
   structTypeMap[typeNameHash] = structIdx;
-  ReverseLookup::Register(typeNameHash, typeName);
+  ReverseLookup::Register(typeNameHash, builtin.name);
 
   IRProgram::StructTypeInfo &info = program.structTypes[structIdx];
   info.nameHash = typeNameHash;
@@ -481,19 +483,20 @@ inline u32 IRLowering::RegisterBuiltinStructType(const char *typeName,
 
   u32 currentOffset = 0;
   for (u32 i = 0; i < fieldCount; i++) {
-    u32 fieldNameHash = Utils::HashStr(fieldNames[i]);
-    ReverseLookup::Register(fieldNameHash, fieldNames[i]);
+    const CoreType fieldType = builtin.fields[i].type;
+    u32 fieldNameHash = Utils::HashStr(builtin.fields[i].name);
+    ReverseLookup::Register(fieldNameHash, builtin.fields[i].name);
 
     program.structFieldTypes[fieldOffset + i] =
-        static_cast<u16>(fieldTypes[i]);
+        static_cast<u16>(fieldType);
     program.structFieldNameHashes[fieldOffset + i] = fieldNameHash;
     program.structFieldTypeHashes[fieldOffset + i] = 0;
     program.structFieldArraySizes[fieldOffset + i] = 0;
 
-    u32 alignment = GetTypeAlignment(fieldTypes[i]);
+    u32 alignment = GetTypeAlignment(fieldType);
     currentOffset = (currentOffset + alignment - 1) & ~(alignment - 1);
     program.structFieldByteOffsets[fieldOffset + i] = currentOffset;
-    currentOffset += GetTypeSize(fieldTypes[i]);
+    currentOffset += GetTypeSize(fieldType);
   }
 
   info.totalSize = currentOffset;

@@ -150,7 +150,10 @@ Stage-interface symbols take their `type` from the first value assigned to
 them. Intrinsic calls are typed from the standard-library table: a fixed
 result type (`dot` gives `float`), otherwise the widest argument the intrinsic
 returns (`normalize(float2)` gives `float2`, `smoothstep(0.0, 1.0, float3)`
-gives `float3`).
+gives `float3`). `frexp` and `modf` return the built-in structs
+`BwslFrexpResult` and `BwslModfResult`, which appear as `struct` symbols with
+ids `builtin:type:BwslFrexpResult` and `builtin:type:BwslModfResult`; their
+fields (`.../field:mantissa`) get `member` edges like declared fields.
 
 The index is built from the parsed AST, before shader lowering. Missing or
 ambiguous targets can have no reference edge; consumers must not treat the
