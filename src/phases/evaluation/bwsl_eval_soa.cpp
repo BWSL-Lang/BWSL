@@ -526,6 +526,16 @@ bool CompileTimeEvaluatorSoA::EvaluateBinaryOp(EvalStateSoA* state, NodeRef node
     }
     if (!EvaluateNode(state, binOp.right, &rightVal)) return false;
 
+    // A uint scalar beside a float scalar promotes to float, like an int does
+    // below, and takes the scalar float path (comparisons and % included).
+    if (leftVal.type == LiteralValue::UINT && rightVal.type == LiteralValue::FLOAT) {
+        leftVal.floatValue = static_cast<float>(leftVal.uintValue);
+        leftVal.type = LiteralValue::FLOAT;
+    } else if (leftVal.type == LiteralValue::FLOAT && rightVal.type == LiteralValue::UINT) {
+        rightVal.floatValue = static_cast<float>(rightVal.uintValue);
+        rightVal.type = LiteralValue::FLOAT;
+    }
+
     if (leftVal.IsVector() || rightVal.IsVector() ||
         leftVal.type == LiteralValue::UINT || rightVal.type == LiteralValue::UINT) {
         return EvaluateLaneBinaryOp(state, binOp.op, leftVal, rightVal, outValue);

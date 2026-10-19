@@ -30,6 +30,11 @@ pipeline EvalVectorArithmetic {
                 resources.data[1] = c;
                 resources.data[2] = float4(scaled(float3(1.0, 2.0, 3.0), 2.0), 0.0);
 
+                // uint scalars beside floats promote to float.
+                eval float m = 5.0 % 2u;
+                eval bool lt = 1u < 2.0;
+                eval if (lt) { resources.data[3] = float4(m, 3u * 0.5, 0.0, 1.0); }
+
                 eval int3 v = int3(-7, 7, -8);
                 resources.idata[0] = int4(v / 2, -v.x);
                 resources.idata[1] = int4(v % 3, (v * int3(1, 2, 3)).z);
