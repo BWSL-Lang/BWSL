@@ -120,6 +120,12 @@ The current parser accepts:
 - `case` labels with one or more comma-separated values
 - `default`
 
+The selector must be an `int`, `uint` or enum value, and case labels must be
+integer, enum or bool constants. A selector that is a compile-time constant,
+such as a `bool` variant, keeps only the matching arm and may be a `bool`.
+A runtime `bool` or `float` selector, or a `float` case label, is a source
+error.
+
 ## Discard
 
 `discard;` is accepted as a statement form. It is intended for fragment-stage

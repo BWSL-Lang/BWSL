@@ -133,6 +133,11 @@
   first, and a condition of the wrong width previously failed SPIR-V
   validation; a numeric condition with matching values compiled as
   `condition != 0` (see Breaking changes).
+- A `switch` on a `float` or runtime `bool` selector, or with a `float` case
+  label, is a source error at the selector or label. The selector previously
+  failed SPIR-V validation, and a `float` label was reported without a
+  location. A `bool` variant selector still works, because the switch is
+  reduced to one arm at compile time.
 
 ### AST JSON
 - `frexp` and `modf` calls and variables of their result types are typed as
