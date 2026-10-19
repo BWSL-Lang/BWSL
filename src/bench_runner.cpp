@@ -15,7 +15,7 @@
 //                [--tex FILE W H FORMAT FILTER WRAP GLNAME SET BINDING]...
 //                [--frames N] [--min-frames N] [--warmup N]
 //                [--warmup-seconds S] [--budget S]
-//                [--readback FILE] [--vk-device INDEX]
+//                [--readback FILE] [--vk-device INDEX] [--pipeline-stats FILE]
 //
 // GL takes GLSL ES source text for --vert/--frag and resolves resources by
 // name (attributes with glGetAttribLocation, uniform blocks with
@@ -41,6 +41,11 @@
 // least --min-frames are timed. --readback writes every target of the last
 // frame as RGBA float32, targets concatenated, rows in GL order (row 0 is NDC
 // y = -1 on both APIs).
+//
+// --pipeline-stats (Vulkan) writes what the driver reports about the compiled
+// shaders through VK_KHR_pipeline_executable_properties: statistics such as
+// register and instruction counts, and the text representations it offers
+// (AMD's include the disassembly).
 //
 // Prints one JSON object to stdout:
 //   {"api": ..., "device": ..., "driver": ..., "warmup_frames": N,
@@ -210,6 +215,7 @@ struct Args {
     double budget_seconds = 2.0;
     std::string readback_path;
     int vk_device = -1;
+    std::string pipeline_stats_path;
 };
 
 uint32_t parse_u32(const char* s) {
@@ -343,6 +349,8 @@ Args parse_args(int argc, char** argv) {
             a.readback_path = next();
         } else if (f == "--vk-device") {
             a.vk_device = parse_int(next());
+        } else if (f == "--pipeline-stats") {
+            a.pipeline_stats_path = next();
         } else {
             die("unknown argument " + f);
         }
@@ -1042,6 +1050,7 @@ struct VkCtx {
     uint32_t queue_family = UINT32_MAX;
     uint32_t timestamp_bits = 0;
     float timestamp_period = 1.0f;
+    bool executable_info = false;  // VK_KHR_pipeline_executable_properties enabled
 };
 
 uint32_t find_mem_type(const VkCtx& c, uint32_t type_bits, VkMemoryPropertyFlags flags) {
@@ -1218,7 +1227,23 @@ VkCtx make_vk_context(const Args& a, Result& r) {
 #ifdef __APPLE__
     dev_exts.push_back("VK_KHR_portability_subset");
 #endif
+    VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR executable_features{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR};
+    if (!a.pipeline_stats_path.empty()) {
+        uint32_t extensionCount = 0;
+        vkEnumerateDeviceExtensionProperties(c.phys, nullptr, &extensionCount, nullptr);
+        std::vector<VkExtensionProperties> extensions(extensionCount);
+        vkEnumerateDeviceExtensionProperties(c.phys, nullptr, &extensionCount, extensions.data());
+        for (const VkExtensionProperties& e : extensions) {
+            c.executable_info |=
+                std::strcmp(e.extensionName, VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME) == 0;
+        }
+        if (!c.executable_info) die("the device doesn't support VK_KHR_pipeline_executable_properties");
+        dev_exts.push_back(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+        executable_features.pipelineExecutableInfo = VK_TRUE;
+    }
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+    if (c.executable_info) dci.pNext = &executable_features;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
     dci.enabledExtensionCount = (uint32_t)dev_exts.size();
@@ -1226,6 +1251,75 @@ VkCtx make_vk_context(const Args& a, Result& r) {
     VK_CHECK(vkCreateDevice(c.phys, &dci, nullptr, &c.dev));
     vkGetDeviceQueue(c.dev, c.queue_family, 0, &c.queue);
     return c;
+}
+
+// What the driver reports about each compiled stage of `pipeline`.
+void write_pipeline_stats(const VkCtx& c, VkPipeline pipeline, const std::string& path) {
+    auto getProperties = (PFN_vkGetPipelineExecutablePropertiesKHR)vkGetDeviceProcAddr(
+        c.dev, "vkGetPipelineExecutablePropertiesKHR");
+    auto getStatistics = (PFN_vkGetPipelineExecutableStatisticsKHR)vkGetDeviceProcAddr(
+        c.dev, "vkGetPipelineExecutableStatisticsKHR");
+    auto getRepresentations = (PFN_vkGetPipelineExecutableInternalRepresentationsKHR)
+        vkGetDeviceProcAddr(c.dev, "vkGetPipelineExecutableInternalRepresentationsKHR");
+    if (!getProperties || !getStatistics || !getRepresentations)
+        die("VK_KHR_pipeline_executable_properties functions are missing");
+
+    VkPipelineInfoKHR info{VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR};
+    info.pipeline = pipeline;
+    uint32_t count = 0;
+    VK_CHECK(getProperties(c.dev, &info, &count, nullptr));
+    std::vector<VkPipelineExecutablePropertiesKHR> executables(
+        count, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_PROPERTIES_KHR});
+    VK_CHECK(getProperties(c.dev, &info, &count, executables.data()));
+
+    std::string out;
+    for (uint32_t e = 0; e < count; e++) {
+        out += "== " + std::string(executables[e].name) + ": " + executables[e].description +
+               " (subgroup size " + std::to_string(executables[e].subgroupSize) + ")\n";
+        VkPipelineExecutableInfoKHR executable{VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR};
+        executable.pipeline = pipeline;
+        executable.executableIndex = e;
+        uint32_t statCount = 0;
+        VK_CHECK(getStatistics(c.dev, &executable, &statCount, nullptr));
+        std::vector<VkPipelineExecutableStatisticKHR> stats(
+            statCount, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR});
+        VK_CHECK(getStatistics(c.dev, &executable, &statCount, stats.data()));
+        for (const VkPipelineExecutableStatisticKHR& stat : stats) {
+            std::string value;
+            switch (stat.format) {
+                case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR:
+                    value = stat.value.b32 ? "true" : "false";
+                    break;
+                case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR:
+                    value = std::to_string(stat.value.i64);
+                    break;
+                case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR:
+                    value = std::to_string(stat.value.u64);
+                    break;
+                default:
+                    value = std::to_string(stat.value.f64);
+                    break;
+            }
+            out += "  " + std::string(stat.name) + " = " + value + "\n";
+        }
+        uint32_t reprCount = 0;
+        VK_CHECK(getRepresentations(c.dev, &executable, &reprCount, nullptr));
+        std::vector<VkPipelineExecutableInternalRepresentationKHR> reprs(
+            reprCount, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INTERNAL_REPRESENTATION_KHR});
+        VK_CHECK(getRepresentations(c.dev, &executable, &reprCount, reprs.data()));
+        std::vector<std::vector<char>> data(reprCount);
+        for (uint32_t r = 0; r < reprCount; r++) {
+            data[r].resize(reprs[r].dataSize);
+            reprs[r].pData = data[r].data();
+        }
+        VK_CHECK(getRepresentations(c.dev, &executable, &reprCount, reprs.data()));
+        for (uint32_t r = 0; r < reprCount; r++) {
+            if (!reprs[r].isText) continue;
+            out += "-- " + std::string(reprs[r].name) + ": " + reprs[r].description + "\n";
+            out += std::string(data[r].data(), strnlen(data[r].data(), data[r].size())) + "\n";
+        }
+    }
+    write_file(path, out.data(), out.size());
 }
 
 VkShaderModule make_shader(const VkCtx& c, const std::string& path) {
@@ -1599,8 +1693,13 @@ int run_vulkan(const Args& a) {
     gpci.pDepthStencilState = &ds;
     gpci.layout = pipe_layout;
     gpci.renderPass = render_pass;
+    if (c.executable_info) {
+        gpci.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR |
+                      VK_PIPELINE_CREATE_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR;
+    }
     VkPipeline pipeline;
     VK_CHECK(vkCreateGraphicsPipelines(c.dev, VK_NULL_HANDLE, 1, &gpci, nullptr, &pipeline));
+    if (c.executable_info) write_pipeline_stats(c, pipeline, a.pipeline_stats_path);
 
     // ===== Per-frame command buffers =====
     // Two slots in flight, each with its own pair of timestamp queries. A full

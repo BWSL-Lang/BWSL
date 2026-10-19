@@ -65,6 +65,11 @@ header if the numbers look odd. `--vk-device N` runs Vulkan on another GPU
 (the index from `vulkaninfo --summary`), e.g. an integrated one with
 `--backends vk-hand,vk-bwsl`.
 
+To see what a Vulkan driver made of a shader, run `bench_runner` directly
+with `--pipeline-stats FILE`: it writes the driver's statistics (registers,
+instruction counts) and, where the driver exposes them, its internal
+representations such as AMD's ISA, through `VK_KHR_pipeline_executable_properties`.
+
 ## Verification
 
 The first resolution also reads back every target of every backend and
