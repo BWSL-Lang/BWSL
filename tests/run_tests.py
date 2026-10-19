@@ -808,6 +808,14 @@ TRANSLATION_EXPECTATION_TESTS = {
             "glsl_not_contains": ["6000", "24000", "< 6;"],
         },
     },
+    # Shapes are scoped: once the inner `float[4][5] g` ends, `g[1][2]` uses
+    # the outer stride 3, not 5.
+    "arrays_multidim_shadowing": {
+        "comp": {
+            "glsl_contains": ["(1 * int(3u)) + 2", "(3 * int(5u)) + 4"],
+            "glsl_not_contains": ["(1 * int(5u)) + 2"],
+        },
+    },
     "modules_pbr_lighting": {
         "frag": {
             "ir_contains": ["NORMALIZE", "LERP", "POW"],

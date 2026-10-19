@@ -1,0 +1,48 @@
+// Regression (#208 review): multi-dimensional array shapes were tracked by
+// name and never restored when a scope ended, so after an inner
+// `float[4][5] g` shadowed a `float[2][3] g` parameter or local, a later
+// `g[1][2]` was flattened with stride 5 and read the wrong element.
+pipeline EquivMultidimArrayShadowing {
+
+    pickShadowed :: (float[2][3] g) -> float {
+        if (g[0][0] > -1.0) {
+            float[4][5] g;
+            g[3][4] = 100.0;
+            g[1][2] = 200.0;
+        }
+        return g[1][2] + float(g[0].length);
+    }
+
+    resources {
+        output: buffer<float>
+    }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [4, 1, 1] {
+            uint idx = input.global_id.x;
+
+            float[2][3] grid;
+            for (i in 0..grid.length) {
+                for (j in 0..grid[i].length) {
+                    grid[i][j] = float(i * 10 + j);
+                }
+            }
+
+            float inner = 0.0;
+            {
+                float[4][5] grid;
+                grid[1][2] = 300.0;
+                inner = grid[1][2] + float(grid[0].length);
+            }
+
+            // grid[1][2] is 12; with stride 5 it read grid[7], past the end.
+            float[4] results = {
+                pickShadowed(grid),
+                grid[1][2],
+                float(grid[1].length),
+                inner
+            };
+            resources.output[idx] = results[idx];
+        }
+    }
+}

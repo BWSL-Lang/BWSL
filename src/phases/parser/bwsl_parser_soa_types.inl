@@ -207,9 +207,7 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
         varData.constDecl = varDecl;
     }
 
-    if (arrayDims.size() > 1) {
-        multiDimArrayDims[ArenaString::MakeHashOnly(varName).nameHash] = arrayDims;
-    }
+    BindArrayShape(ArenaString::MakeHashOnly(varName).nameHash, arrayDims);
 
     return varDecl;
 }
