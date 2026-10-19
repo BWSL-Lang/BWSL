@@ -1,0 +1,52 @@
+// Vector eval locals in compile-time arithmetic, swizzles and constructors
+// (#209): component-wise + - * / % with vectors and scalar broadcast,
+// unary minus, swizzle reads and writes.
+pipeline EvalVectorArithmetic {
+    resources {
+        data: buffer<float4>
+        idata: buffer<int4>
+        udata: buffer<uint4>
+    }
+
+    eval scaled :: (float3 v, float k) -> float3 {
+        return v * k + 0.5;
+    }
+
+    pass "Main" {
+        use resources { data, idata, udata }
+        compute "Main" [1, 1, 1] {
+            eval {
+                eval float3 tint = float3(0.25, 0.5, 0.75);
+                tint = tint * 2.0;
+                tint = tint + tint;
+                tint = 1 - tint / float3(2.0, 4.0, 8.0);
+                eval float g = tint.y;
+                resources.data[0] = float4(tint, g);
+
+                eval float4 c = float4(tint.zyx, -tint.x);
+                c.w = 8.0;
+                c.xy = float2(1.5, 2.5);
+                c.z += 0.125;
+                resources.data[1] = c;
+                resources.data[2] = float4(scaled(float3(1.0, 2.0, 3.0), 2.0), 0.0);
+
+                // uint scalars beside floats promote to float.
+                eval float m = 5.0 % 2u;
+                eval bool lt = 1u < 2.0;
+                eval if (lt) { resources.data[3] = float4(m, 3u * 0.5, 0.0, 1.0); }
+
+                // Float % is floored, like mod(): the result has the divisor's sign.
+                eval float3 w = float3(-7.5, 7.5, -7.5);
+                resources.data[4] = float4(w % float3(2.0, -2.0, -2.0), (w % 2.0).x);
+
+                eval int3 v = int3(-7, 7, -8);
+                resources.idata[0] = int4(v / 2, -v.x);
+                resources.idata[1] = int4(v % 3, (v * int3(1, 2, 3)).z);
+
+                eval uint2 u = uint2(3u, 5u);
+                u = u * 2 + uint2(1u);
+                resources.udata[0] = uint4(u, u.y / 4u, u.x % 4u);
+            }
+        }
+    }
+}

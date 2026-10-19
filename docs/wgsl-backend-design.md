@@ -312,7 +312,9 @@ a sizing pass followed by one exact arena allocation.
 Vertex attributes retain their declared locations. Varying location is the
 logical varying slot minus `VARYING0`, so an unused varying cannot shift another
 stage's locations. Float varyings default to perspective interpolation;
-`@noperspective` maps to WGSL `linear, center`. Integer varyings become `flat` on
+`@noperspective` maps to WGSL `linear, center`. `@centroid` maps to
+`perspective, centroid`, or `linear, centroid` with `@noperspective`, and
+reflection reports it as `"sampling": "centroid"`. Integer varyings become `flat` on
 both sides, as required by [WGSL](https://www.w3.org/TR/WGSL/#interpolation).
 Integer linear interpolation is diagnosed. Vertex/instance indices and fragment
 coordinates use their WGSL builtins. Vertex position must be `float4` and written.
@@ -554,9 +556,14 @@ records total byte size and member offsets, array strides and nested type IDs.
 Independent GPU readbacks cover scalar arrays, nested structs, mat2/mat3 columns,
 and the graphics material's mat4 plus vec3/scalar packing.
 
-Sampled textures support f32 2D, 3D, cube and 2D-array resources; ordinary,
-explicit-LOD, bias, gradient and comparison sampling; gather; texel fetch; size
-and level queries. Explicit and implicit samplers have distinct binding ranges;
+Sampled textures support f32 2D, 3D, cube and 2D-array resources, and fixed
+arrays of them: element i of an array at slot b is the separate texture
+b + i (WGSL has no texture arrays outside `binding_array`), and the IR's
+branch per element for a dynamic index is ordinary structured control flow.
+Reflection lists each element with `arrayLength` and `arrayIndex`; a
+comparison on any element makes every element a depth texture. Textures
+support ordinary, explicit-LOD, bias, gradient and comparison sampling;
+gather; texel fetch; size and level queries. Explicit and implicit samplers have distinct binding ranges;
 ordinary/comparison conflicts are diagnosed. Gather components must be literal
 integers in 0–3. Local arrays, general aggregate values, storage textures,
 multisampled/integer texture types, texture offset overloads, general matrix

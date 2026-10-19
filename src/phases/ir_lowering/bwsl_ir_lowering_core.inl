@@ -115,6 +115,8 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   memset(program.metadata, 0, initialSize * sizeof(u32));
   memset(program.outputInterpolations, 0, sizeof(program.outputInterpolations));
   memset(program.inputInterpolations, 0, sizeof(program.inputInterpolations));
+  memset(program.outputSamplings, 0, sizeof(program.outputSamplings));
+  memset(program.inputSamplings, 0, sizeof(program.inputSamplings));
   program.branchTrueTargets =
       (u32 *)pool->Allocate(initialSize * sizeof(u32), 64);
   program.branchFalseTargets =
@@ -271,6 +273,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   constVariables.clear();
   constantVectors.clear();
   arrayBaseRegisters.clear();
+  localArrayDimensions.clear();
   structTypeMap.clear();
   variableStructTypes.clear();
   pointerProblems.clear();

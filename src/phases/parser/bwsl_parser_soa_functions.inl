@@ -965,6 +965,16 @@ NodeRef Parser::ParseFunction(bool isEval) {
 
     SymbolTable::EnterScope(&symbolTable);
 
+    // The body indexes a multi-dimensional parameter like a local array.
+    {
+        const FunctionDeclData& fn = ast->GetFunction(function);
+        for (u32 i = 0; i < fn.parameters.count && i < fn.parameterArraySizes.count; i++) {
+            const ArenaArray<u32>& sizes = fn.parameterArraySizes[i];
+            BindArrayShape(fn.parameters[i].first.nameHash,
+                           std::vector<u32>(sizes.data, sizes.data + sizes.count));
+        }
+    }
+
     // Parse function body
     Consume(TokenType::LEFT_BRACE, "Expected '{' before function body");
 

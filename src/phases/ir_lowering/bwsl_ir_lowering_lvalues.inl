@@ -6,45 +6,7 @@ namespace BWSL::IR {
 
 namespace {
 
-inline bool DecodeSwizzleByHash(u32 nameHash, u16 lengthHint, u8 outIndices[4],
-                                u32 *outLength) {
-  const char xyzw[] = {'x', 'y', 'z', 'w'};
-  const char rgba[] = {'r', 'g', 'b', 'a'};
-  const char *sets[] = {xyzw, rgba};
-
-  u32 minLen = 1;
-  u32 maxLen = 4;
-  if (lengthHint >= 1 && lengthHint <= 4) {
-    minLen = lengthHint;
-    maxLen = lengthHint;
-  }
-
-  for (u32 setIdx = 0; setIdx < 2; setIdx++) {
-    const char *chars = sets[setIdx];
-    for (u32 len = minLen; len <= maxLen; len++) {
-      u32 combinations = 1u << (len * 2); // 4^len
-      for (u32 n = 0; n < combinations; n++) {
-        char candidate[4] = {};
-        u8 indices[4] = {};
-        for (u32 i = 0; i < len; i++) {
-          u32 shift = (len - 1 - i) * 2;
-          u8 idx = static_cast<u8>((n >> shift) & 0x3);
-          candidate[i] = chars[idx];
-          indices[i] = idx;
-        }
-        if (Utils::HashStr(candidate, static_cast<u16>(len)) == nameHash) {
-          for (u32 i = 0; i < len; i++) {
-            outIndices[i] = indices[i];
-          }
-          *outLength = len;
-          return true;
-        }
-      }
-    }
-  }
-
-  return false;
-}
+using Utils::DecodeSwizzleByHash;
 
 // Reports an error and returns false if a swizzle on a vector of
 // `vectorType` uses a component past its end, e.g. .z or .xyzw on a float2.
@@ -167,8 +129,38 @@ inline u32 ResolveStructHashForStaticAccess(IRLowering *lowering, NodeRef expr) 
   }
 }
 
+// Length of dimension `depth` (0 = outermost) of an array whose declared
+// dimensions are `dims`; a one-dimensional array has no `dims` and is
+// `flatLength` long. Multi-dimensional arrays are flattened, so their
+// flattened length is never the answer.
+inline u32 ArrayDimensionLength(const ArenaArray<u32> *dims, u32 flatLength,
+                                u32 depth) {
+  if (dims && dims->count > 1) return depth < dims->count ? (*dims)[depth] : 0;
+  return depth == 0 ? flatLength : 0;
+}
+
+inline u32 VariableArrayDimensionLength(IRLowering *lowering,
+                                        const VariableData &data, u32 depth) {
+  const ArenaArray<u32> *dims = nullptr;
+  if (data.constDecl.IsValid() &&
+      data.constDecl.Type() == ASTNodeType::VARIABLE_DECL) {
+    dims = &lowering->ast->GetVariableDecl(data.constDecl).arraySizes;
+  }
+  return ArrayDimensionLength(dims, data.typeInfo.arrayLength, depth);
+}
+
+// Static `.length` of `expr`. `grid[i]` on a `T[2][3] grid` is the inner
+// `T[3]`, so each declared dimension subscripted selects the next one; the
+// index values themselves do not matter.
 inline u32 ResolveStaticArrayLength(IRLowering *lowering, NodeRef expr) {
   if (!lowering || expr.IsNull()) return 0;
+
+  u32 depth = 0;
+  while (expr.Type() == ASTNodeType::ARRAY_ACCESS) {
+    const ArrayAccessData &access = lowering->ast->GetArrayAccess(expr);
+    depth += access.indexedDimensions;
+    expr = access.array;
+  }
 
   if (expr.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &ident = lowering->ast->GetIdentifier(expr);
@@ -184,7 +176,11 @@ inline u32 ResolveStaticArrayLength(IRLowering *lowering, NodeRef expr) {
       u32 arrayIdx = info >> IRProgram::STORAGE_BINDING_SHIFT;
       if ((info & IRProgram::STORAGE_IS_LOCAL_ARRAY) &&
           arrayIdx < lowering->program.localArrayCount) {
-        return lowering->program.localArraySizes[arrayIdx];
+        auto dims = lowering->localArrayDimensions.find(arrayIdx);
+        return ArrayDimensionLength(
+            dims != lowering->localArrayDimensions.end() ? &dims->second
+                                                         : nullptr,
+            lowering->program.localArraySizes[arrayIdx], depth);
       }
     }
     Symbol *sym = bindingHash
@@ -194,7 +190,8 @@ inline u32 ResolveStaticArrayLength(IRLowering *lowering, NodeRef expr) {
               const_cast<SymbolTableData *>(lowering->symbols), ident.name);
     if (sym && sym->kind == SymbolKind::VARIABLE &&
         sym->index < lowering->symbols->variables.count) {
-      return lowering->symbols->variables[sym->index].typeInfo.arrayLength;
+      return VariableArrayDimensionLength(
+          lowering, lowering->symbols->variables[sym->index], depth);
     }
     return 0;
   }
@@ -214,8 +211,11 @@ inline u32 ResolveStaticArrayLength(IRLowering *lowering, NodeRef expr) {
     Symbol *sym = SymbolTable::LookupByHash(
         const_cast<SymbolTableData *>(lowering->symbols), access.qualifiedNameHash);
     if (sym && sym->kind == SymbolKind::VARIABLE)
-      return lowering->symbols->variables[sym->index].typeInfo.arrayLength;
+      return VariableArrayDimensionLength(
+          lowering, lowering->symbols->variables[sym->index], depth);
   }
+  // Struct array fields are one-dimensional.
+  if (depth > 0) return 0;
   u32 objectStructHash =
       ResolveStructHashForStaticAccess(lowering, access.object);
   u32 structIdx = FindStructTypeIndex(lowering, objectStructHash);
@@ -712,6 +712,9 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref, u32 bindingNameHash,
 
     RegisterLocalArray(varReg, arrayElementType, arrayElementStructHash,
                        arrayLength, nameHash);
+    if (varDecl.arraySizes.count > 1) {
+      localArrayDimensions[program.localArrayCount - 1] = varDecl.arraySizes;
+    }
   }
 
   // If there's an initializer, evaluate it
@@ -865,11 +868,12 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
     nodeRegisters[ast->GetBinaryOp(assign.value).left.packed] = oldValue;
   }
   u16 valueReg = LowerExpression(assign.value);
-  StoreLValue(assign.target, valueReg, assign.interpolation);
+  StoreLValue(assign.target, valueReg, assign.interpolation, assign.sampling);
 }
 
 inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
-                                  InterpolationMode interpolation) {
+                                  InterpolationMode interpolation,
+                                  InterpolationSampling sampling) {
   // Array element and nested field writes must honor the root declaration's
   // const flag. The direct identifier path below only covers whole values.
   NodeRef root = target;
@@ -1011,7 +1015,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
         builder.EmitInstruction(OP_STRUCT_INSERT, updated, objectReg,
                                 static_cast<u16>(fieldIndex), valueReg);
         program.metadata[builder.currentInstruction - 1] = structHash;
-        StoreLValue(access.object, updated, interpolation);
+        StoreLValue(access.object, updated, interpolation, sampling);
         return;
       }
       if ((mask(objectType) & (TypeMasks::FLOAT_VECTORS |
@@ -1051,7 +1055,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
             builder.EmitInstruction(OP_VEC_INSERT, next, updated, indices[j], component);
             updated = next;
           }
-          StoreLValue(access.object, updated, interpolation);
+          StoreLValue(access.object, updated, interpolation, sampling);
           return;
         }
       }
@@ -1084,7 +1088,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
             nameStr = nameBuf;
           }
           u16 slot = (u16)ResolveOutputSlotForStore(outputNameHash, outputType,
-                                               nameStr, interpolation);
+                                               nameStr, interpolation, sampling);
 
           u16 outputReg = AllocateRegister();
           SetRegisterType(outputReg, outputType);
@@ -1209,7 +1213,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           nameStr = nameBuf;
         }
         u16 slot = (u16)ResolveOutputSlotForStore(nameHash, valueType, nameStr,
-                                             interpolation, target);
+                                             interpolation, sampling, target);
         CoreType declaredOutputType = GetFragmentOutputType(nameHash);
         if (currentStage == ShaderStage::Fragment &&
             declaredOutputType != CoreType::INVALID &&
@@ -1591,7 +1595,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
             program.registerStructTypes[updated] = structHash;
             builder.EmitInstruction(OP_STRUCT_ARRAY_INSERT, updated, objectReg, field, indexReg, valueReg);
             program.metadata[builder.currentInstruction - 1] = structHash;
-            StoreLValue(fieldAccess.object, updated, interpolation);
+            StoreLValue(fieldAccess.object, updated, interpolation, sampling);
             return;
           }
         }
@@ -1631,7 +1635,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
         SetRegisterType(newVecReg, baseType);
         builder.EmitInstruction(OP_VEC_INSERT_DYNAMIC, newVecReg, baseReg,
                                 valueReg, indexReg);
-        StoreLValue(arrAccess.array, newVecReg, interpolation);
+        StoreLValue(arrAccess.array, newVecReg, interpolation, sampling);
         return;
       }
 
@@ -1661,7 +1665,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
         SetRegisterType(updated, baseType);
         builder.EmitInstruction(OP_MAT_CONSTRUCT, updated, columns[0], columns[1], columns[2], columns[3]);
         program.metadata[builder.currentInstruction - 1] = count;
-        StoreLValue(arrAccess.array, updated, interpolation);
+        StoreLValue(arrAccess.array, updated, interpolation, sampling);
         return;
       }
     }
@@ -2682,6 +2686,8 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       u32 varyingIndex = inputSlot - OutputSlot::VARYING0;
       program.inputInterpolations[inputSlot] =
           static_cast<u8>(currentPassVaryings->GetInterpolation(varyingIndex));
+      program.inputSamplings[inputSlot] =
+          static_cast<u8>(currentPassVaryings->GetSampling(varyingIndex));
       // A flat varying (integers always are) is one vertex's value, so it
       // keeps the range the vertex stage gave it.
       if (varyingIndex < currentPassVaryings->count &&
@@ -2944,7 +2950,10 @@ static inline bool IsPerspectiveInterpolationType(CoreType type) {
 
 inline u32 IRLowering::ResolveOutputSlotForStore(
     u32 nameHash, CoreType valueType, const char *nameStr,
-    InterpolationMode interpolation, NodeRef diagnosticNode) {
+    InterpolationMode interpolation, InterpolationSampling sampling,
+    NodeRef diagnosticNode) {
+  const bool decorated = interpolation != InterpolationMode::Default ||
+                         sampling != InterpolationSampling::Center;
   if (currentStage == ShaderStage::Fragment && !IsBuiltinOutput(nameHash)) {
     char msg[256];
     if (nameStr && nameStr[0] != '\0') {
@@ -2959,7 +2968,7 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
     return OutputSlot::COLOR;
   }
   if (IsBuiltinOutput(nameHash)) {
-    if (interpolation != InterpolationMode::Default) {
+    if (decorated) {
       ReportError("Error: interpolation decorators can only be used on vertex-to-fragment varyings\n");
     }
     return GetBuiltinOutputSlot(nameHash);
@@ -2968,7 +2977,12 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
       !IsPerspectiveInterpolationType(valueType)) {
     ReportError("Error: @noperspective can only be used on floating-point varyings\n");
   }
-  if (interpolation != InterpolationMode::Default &&
+  // Integer varyings are always flat, so centroid sampling has nothing to move.
+  if (sampling == InterpolationSampling::Centroid &&
+      !IsPerspectiveInterpolationType(valueType)) {
+    ReportError("Error: @centroid can only be used on floating-point varyings\n");
+  }
+  if (decorated &&
       (currentStage != ShaderStage::Vertex || !currentPassVaryings)) {
     ReportError("Error: interpolation decorators can only be used on vertex-to-fragment varyings\n");
   }
@@ -2978,7 +2992,7 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
     CoreType existingType = CoreType::INVALID;
     u32 varyingCount = currentPassVaryings->count;
     u32 varyingIndex = currentPassVaryings->AddOrGetSlot(
-        nameHash, valueType, nameStr, interpolation, &conflict, &typeConflict,
+        nameHash, valueType, nameStr, interpolation, sampling, &conflict, &typeConflict,
         &existingType);
     if (currentPassVaryings->count > varyingCount) {
       CheckVaryingGLName(varyingIndex, diagnosticNode);
@@ -3003,6 +3017,8 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
     if (slot < 32) {
       program.outputInterpolations[slot] = static_cast<u8>(
           currentPassVaryings->GetInterpolation(varyingIndex));
+      program.outputSamplings[slot] = static_cast<u8>(
+          currentPassVaryings->GetSampling(varyingIndex));
     }
     if (currentStage == ShaderStage::Vertex) program.varyingBoundsOut = currentPassVaryings->bounds;
     return slot;

@@ -450,6 +450,7 @@
 
 <interpolation-decorator> ::= '@' 'flat'
                             | '@' 'noperspective'
+                            | '@' 'centroid'
 
 <block-stmt> ::= '{' <statement-list> '}'
 

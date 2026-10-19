@@ -28,6 +28,12 @@ constexpr bool IsUintConstant(u16 value) { return (value & 0xE000) == 0x6000; }
 constexpr bool IsFloatConstant(u16 value) { return (value & 0xC000) == 0x8000; }
 constexpr bool IsBoolConstant(u16 value) { return value != 0xFFFF && (value & 0xC000) == 0xC000; }
 
+// Instruction flags (IRProgram::flags).
+// On a signed OP_IMOD: neither operand is negative, so the remainder is
+// what an unsigned one, or a target's native `%`, gives. Set by constant
+// propagation from value ranges; meaningless on any other opcode.
+constexpr u16 FLAG_NON_NEGATIVE_OPERANDS = 0x1;
+
 
 struct IRProgram {
     // Hot instruction data - separate arrays for better cache usage
@@ -91,9 +97,11 @@ struct IRProgram {
     alignas(64) u8* resourceStageFlags;   // Which stages need this
     u32 resourceCount;
 
-    // Interpolation mode per vertex output / fragment input slot.
+    // Interpolation mode and sampling per vertex output / fragment input slot.
     u8 outputInterpolations[32];
     u8 inputInterpolations[32];
+    u8 outputSamplings[32];       // InterpolationSampling
+    u8 inputSamplings[32];
 
     // @bounds(...) of the values loads read, for the optimizer; null where a
     // declaration has none. A load of an uncompressed attribute, of a scalar

@@ -1,0 +1,17 @@
+// Error case: implicit-LOD sample_offset() in a compute stage (use
+// sample_lod_offset).
+pipeline SampleOffsetImplicitLodCompute {
+    resources {
+        tex: texture2D
+        data: buffer<float4>
+    }
+
+    pass "Main" {
+        use resources { tex, data }
+
+        compute "Main" [8, 8, 1] {
+            uint id = input.global_id.x;
+            resources.data[id] = sample_offset(resources.tex, float2(0.5, 0.5), int2(1, 1));
+        }
+    }
+}

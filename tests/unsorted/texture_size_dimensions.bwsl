@@ -1,0 +1,50 @@
+// Test: texture_size returns one component per native dimension (#204)
+// Tests: int2 for texture2D and textureCube; int3 (w, h, depth) for texture3D
+//        and int3 (w, h, layers) for texture2DArray, including a depth array
+//        and a texture passed to a function. Texture arrays are covered by
+//        texture_size_texture_array.bwsl.
+
+pipeline TextureSizeDimensions {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    resources {
+        colorTex: texture2D
+        envMap: textureCube
+        volume: texture3D
+        layers: texture2DArray
+        shadowLayers: texture2DArray
+    }
+
+    volumeTexels :: (texture3D tex, int lod) -> int {
+        int3 size = texture_size(tex, lod);
+        return size.x * size.y * size.z;
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+        use resources { colorTex, envMap, volume, layers, shadowLayers }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+        }
+
+        fragment {
+            int2 colorSize = texture_size(resources.colorTex);
+            int2 cubeSize = texture_size(resources.envMap, 1);
+            int3 volumeSize = texture_size(resources.volume);
+            int3 layerSize = texture_size(resources.layers, 1);
+            int3 shadowSize = texture_size(resources.shadowLayers);
+            int texels = volumeTexels(resources.volume, 1);
+
+            float shadow = sample_cmp(resources.shadowLayers, float3(input.uv, float(shadowSize.z - 1)), 0.5).x;
+            float depth = float(volumeSize.z + texels);
+            float layerCount = float(layerSize.z + shadowSize.z);
+            float2 extent = float2(colorSize + cubeSize + layerSize.xy);
+            output.color = float4(extent, depth, layerCount) * shadow;
+        }
+    }
+}

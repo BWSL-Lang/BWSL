@@ -667,7 +667,13 @@ inline void IRLowering::LowerLoop(NodeRef ref) {
 inline void IRLowering::LowerSwitch(NodeRef ref) {
   const SwitchData &sw = ast->GetSwitch(ref);
 
-  auto GetCaseLiteralValue = [&](NodeRef valueRef, s32 *outVal) -> bool {
+  // Returns false for a label that isn't an integer, bool or enum constant;
+  // `outIsFloat` (if given) is then set when the label is a float constant.
+  auto GetCaseLiteralValue = [&](NodeRef valueRef, s32 *outVal,
+                                 bool *outIsFloat = nullptr) -> bool {
+    auto noteFloat = [&](LiteralValue::Type type) {
+      if (outIsFloat && type == LiteralValue::FLOAT) *outIsFloat = true;
+    };
     // Negative case labels arrive as unary negation over a literal.
     if (valueRef.Type() == ASTNodeType::UNARY_OP) {
       const UnaryOpData &unary = ast->GetUnaryOp(valueRef);
@@ -682,6 +688,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
           *outVal = -static_cast<s32>(lit.value.uintValue);
           return true;
         }
+        noteFloat(lit.value.type);
       }
       return false;
     }
@@ -699,6 +706,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
         *outVal = lit.value.boolValue ? 1 : 0;
         return true;
       default:
+        noteFloat(lit.value.type);
         return false;
       }
     }
@@ -722,6 +730,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
             *outVal = val.boolValue ? 1 : 0;
             return true;
           }
+          noteFloat(val.type);
         } else if (sym->kind == SymbolKind::VARIABLE) {
           const VariableData &varData = symbols->variables[sym->index];
           if (varData.isConst) {
@@ -738,6 +747,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
               *outVal = val.boolValue ? 1 : 0;
               return true;
             }
+            noteFloat(val.type);
           }
         }
       }
@@ -791,9 +801,14 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
       for (u32 v = 0; v < caseData.values.count; v++) {
         NodeRef valueRef = caseData.values[v];
         s32 caseVal = 0;
-        if (!GetCaseLiteralValue(valueRef, &caseVal)) {
-          ReportError(
-              "Error: switch case values must be compile-time literals\n");
+        bool isFloat = false;
+        if (!GetCaseLiteralValue(valueRef, &caseVal, &isFloat)) {
+          ReportErrorAt(valueRef,
+                        isFloat
+                            ? "Error: switch case values must be int, uint or "
+                              "enum constants, got float\n"
+                            : "Error: switch case values must be "
+                              "compile-time literals\n");
           return;
         }
         minCase = (caseVal < minCase) ? caseVal : minCase;
@@ -863,8 +878,25 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
                       (static_cast<u32>(range) <= totalCaseValues * 2);
   (void)useJumpTable; // For future optimization - currently always use linear
 
-  // Lower switch expression
+  // Lower switch expression. OpSwitch takes a scalar integer selector; a
+  // compile-time bool (e.g. a bool variant) was already pruned above, so any
+  // other type would only fail SPIR-V validation.
+  size_t diagnosticsBefore = diagnostics.size();
   u16 exprReg = LowerExpression(sw.expression);
+  CoreType selectorType = GetRegisterType(exprReg);
+  if (diagnostics.size() == diagnosticsBefore &&
+      selectorType != CoreType::INT && selectorType != CoreType::UINT &&
+      selectorType != CoreType::ENUM) {
+    // Scalar and vector CoreType names are the source spelling in upper case.
+    std::string typeName = CoreTypeToString(selectorType);
+    for (char &c : typeName) c = static_cast<char>(tolower(c));
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+             "Error: switch selector must be an int, uint or enum value, got %s\n",
+             typeName.c_str());
+    ReportErrorAt(sw.expression, msg);
+    return;
+  }
 
   // Emit the switch instruction
   u32 switchIdx = builder.currentInstruction;

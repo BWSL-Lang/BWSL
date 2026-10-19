@@ -11,6 +11,13 @@
   compiled on SPIR-V-based targets but broke `-gles-direct` and `-wgsl`,
   widening silently repeated components (`.xyx`) or read out of bounds, and
   the other cases failed SPIR-V validation.
+- `texture_size` returns `int3` for a `texture3D` (width, height, depth) and
+  a `texture2DArray` (width, height, layers), as GLSL `textureSize`, HLSL
+  `GetDimensions` and Metal do. It was `int2` for every texture, dropping the
+  depth and the layer count. `texture2D` and `textureCube` still return
+  `int2`. `int2 s = texture_size(volume);` is now a source error; write
+  `texture_size(volume).xy`. Overloads on the result pick their `int3`
+  version.
 
 ### Language
 - `@bounds(...)` promises the range of an attribute, a scalar or vector
@@ -33,6 +40,32 @@
 - A pointer to an element of a struct's array field (`^s.values[i]`) or to
   a `self` field named without `self.` now points at the element. It
   previously pointed at a copy, so writes through it were lost.
+- `@centroid` on a vertex output assignment evaluates the varying inside the
+  primitive under MSAA, so edge pixels don't extrapolate it past its vertex
+  values: `@centroid output.atlasUV = uv;`. It combines with
+  `@noperspective` but not `@flat`, and is emitted for SPIR-V, GLSL, GLSL ES,
+  HLSL, Metal and WGSL.
+- Vector `eval` values work in compile-time arithmetic: `+ - * /` and `%`
+  between vectors of the same width or with a scalar on either side, bit
+  operations on `int` and `uint` vectors, unary minus, swizzle reads such as
+  `tint.y` or `tint.zyx`, and swizzle stores such as `tint.xy = ...`.
+  Constructors built from these, like `float3(tint.x, 1.0, tint.z)`, fold
+  too. `uint` scalar arithmetic in eval code now works as well.
+- Module constant initializers can use vector arithmetic and swizzles, as in
+  `const float2 SOUTH = NORTH * -1.0;`.
+- A pipeline-scope `const` can call a pipeline `eval` function, as in
+  `const float AREA = circleArea(2.0);`. The call is evaluated once and
+  every pass sees the folded value. An eval call whose arguments aren't
+  compile-time values is reported at the declaration.
+- Float `%` with a negative operand now gives the same result at compile
+  time as at runtime. `eval` code and `const` initializers truncated, so
+  `-7.5 % 2.0` was `-1.5` there but `0.5` in runtime code; both now give
+  `0.5`, the sign of the divisor, like `mod()`. `fmod()` still truncates.
+- `BwslFrexpResult` and `BwslModfResult`, the structs `frexp` and `modf`
+  return, can be named as types again: locals, arrays, parameters, return
+  types, struct fields and constructors. Since v0.10 they were rejected with
+  "Unknown type". A user struct can't take either name, and reading a field
+  they don't have is a source error.
 
 ### Backends
 - Experimental native WGSL output is available with `-wgsl` for compute,
@@ -40,6 +73,9 @@
   uniforms and sampled textures. `-bindings` emits WebGPU binding metadata.
   WGSL-only compilation bypasses SPIR-V; request `-spv` or another target
   alongside `-wgsl` to generate both. `-all` keeps its existing targets.
+  Texture arrays (`texture2D[N]` and the other sampled kinds) bind each
+  element as its own WGSL texture, reported per element in the bindings
+  metadata with `arrayLength` and `arrayIndex`.
 - Constant values are propagated through the whole shader, including across
   branches, loops and inlined functions. Arithmetic, comparisons and
   conversions on constants are folded, `x && true`, `x || false` and their
@@ -89,6 +125,12 @@
   Ranges carry through vector conversions such as `int2(q)`, and a struct
   field read back after a store, as in `i.color = c; ... i.color.z`, is the
   value stored, so its constant and range carry too.
+  A signed `%` or `/` whose operands the ranges show aren't negative no
+  longer pays for truncating negative values: `x % 8` becomes `x & 7`,
+  `x / 8` becomes `x >> 3`, and other remainders, such as
+  `int(input.position.x) % spacing`, become an unsigned `%` instead of
+  `x - spacing * (x / spacing)`. GLSL, HLSL and MSL get
+  `int(uint(x) % uint(spacing))`, and direct GLSL ES and WGSL a plain `%`.
   Folding skips results that can differ between GPUs:
   NaN, infinities, denormals, `-0.0`, integer division of negative values,
   conversions that are out of range or inexact, and math functions outside
@@ -130,6 +172,15 @@
 - Passing a value where a pointer parameter is expected, a pointer where a
   value is expected (including to an intrinsic or constructor), or a pointer
   to a different type reports the argument and how to fix it.
+- `sample`, `sample_offset` and `sample_cmp` in a compute stage are a source
+  error that recommends `sample_lod` or `sample_lod_offset`; they previously
+  failed SPIR-V validation. `sample_offset` in a vertex stage is reported the
+  same way. `sample_bias` and the derivative intrinsics (`ddx`, `ddy`,
+  `fwidth` and their fine and coarse forms) outside fragment stages get a
+  specific message instead of "Intrinsic not available in this shader stage".
+  Helper functions are now checked against the stage that calls them, so a
+  helper using `sample()` or `ddx()` called from a vertex or compute stage is
+  a source error rather than a SPIR-V validation failure.
 - Ternary arms of different types, such as `c ? float3(1.0) : float2(1.0)`,
   are a source error. They previously failed SPIR-V validation.
 - `select(false_value, true_value, condition)` reports a source error when
@@ -139,11 +190,19 @@
   first, and a condition of the wrong width previously failed SPIR-V
   validation; a numeric condition with matching values compiled as
   `condition != 0` (see Breaking changes).
+- A `switch` on a `float` or runtime `bool` selector, or with a `float` case
+  label, is a source error at the selector or label. The selector previously
+  failed SPIR-V validation, and a `float` label was reported without a
+  location. A `bool` variant selector still works, because the switch is
+  reduced to one arm at compile time.
 
 ### AST JSON
 - A pointer parameter has `isPointer: true` and a `dataType` spelled as
   written, such as `int^`; its `typeInfo` describes the pointee. Function
   stable IDs mark pointer parameters with `^`, as in `swap(int^,int^)`.
+- `frexp` and `modf` calls and variables of their result types are typed as
+  `builtin:type:BwslFrexpResult` / `builtin:type:BwslModfResult`, and their
+  field reads have `member` edges.
 - A call that passes a struct resource or an enum variant directly, such as
   `read(resources.data)` or `weight(variants.quality)`, now has its `call`
   edge in `referenceIndex.references`.
@@ -195,6 +254,13 @@
 - Vertex attributes beyond the supported 16 slots produce a source error.
 - `.length` works on local arrays and array function parameters. It was
   previously rejected as an invalid swizzle.
+- `.length` on a multi-dimensional array is the outer dimension, and on a
+  partly indexed one the next dimension: for `float[2][3] grid`,
+  `grid.length` is 2 and `grid[i].length` is 3. Previously `grid.length` was
+  the flattened element count, 6, and `grid[i].length` was rejected as an
+  invalid swizzle. Multi-dimensional function parameters, e.g.
+  `(float[2][3] g)`, can also be indexed as `g[i][j]`; previously such reads
+  were undefined.
 - `min` and `max` with more than two arguments reduce over all of them, up
   to 16. Previously only the first two were used and the rest were
   silently dropped. More than 16 arguments is a source error.

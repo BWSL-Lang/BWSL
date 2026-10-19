@@ -18,6 +18,11 @@ static const char* InterpolationQualifier(InterpolationMode interpolation) {
     }
 }
 
+// GLSL ES 3.00 orders the interpolation qualifier before `centroid in`/`out`.
+static const char* SamplingQualifier(InterpolationSampling sampling) {
+    return sampling == InterpolationSampling::Centroid ? "centroid " : "";
+}
+
 static bool UsesNoPerspectiveInterpolation(const IR::PassVaryingContext* varyings) {
     if (!varyings) {
         return false;
@@ -424,6 +429,7 @@ void GLESBuilder::EmitInputs() {
         if (varyings) {
             for (u32 i = 0; i < varyings->count; i++) {
                 out.Str(InterpolationQualifier(varyings->varyings[i].interpolation));
+                out.Str(SamplingQualifier(varyings->varyings[i].sampling));
                 out.Lit("in ");
                 EmitType(static_cast<u16>(varyings->varyings[i].type));
                 out.Chr(' ');
@@ -480,6 +486,7 @@ void GLESBuilder::EmitOutputs() {
         if (varyings) {
             for (u32 i = 0; i < varyings->count; i++) {
                 out.Str(InterpolationQualifier(varyings->varyings[i].interpolation));
+                out.Str(SamplingQualifier(varyings->varyings[i].sampling));
                 out.Lit("out ");
                 EmitType(static_cast<u16>(varyings->varyings[i].type));
                 out.Chr(' ');
@@ -1291,7 +1298,8 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             EmitBinaryAssign(instIdx, dest, "/");
             return;
         case IR::OP_IMOD:
-            if (mask(static_cast<CoreType>(Type(instIdx))) & TypeMasks::UINT_TYPES) {
+            if ((mask(static_cast<CoreType>(Type(instIdx))) & TypeMasks::UINT_TYPES) ||
+                (ir->flags[instIdx] & IR::FLAG_NON_NEGATIVE_OPERANDS)) {
                 EmitBinaryAssign(instIdx, dest, "%");
             } else {
                 // GLSL `%` does not preserve OpSRem for negative operands
@@ -1867,17 +1875,13 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         case IR::OP_TEX_SIZE:
+            // textureSize is ivec3 for 3D and array samplers, as the IR types it.
             EmitRegWithDecl(dest);
             out.Lit(" = textureSize(");
             EmitTexture(Op(instIdx, 0), ir->metadata[instIdx]);  // sampler
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));  // lod
-            out.Chr(')');
-            if (Type(instIdx) == static_cast<u16>(CoreType::INT2)) {
-                const TextureBinding* texture = FindTextureBinding(Op(instIdx, 0) & 0x0FFF);
-                if (texture && (texture->isVolume || texture->isArray)) out.Lit(".xy");
-            }
-            out.Chr(';');
+            out.Lit(");");
             return;
 
         case IR::OP_TEX_LEVELS:
@@ -2539,7 +2543,8 @@ bool GLESBuilder::EmitConstantExpr(u16 reg, u32 depth) {
         EmitType(Type(definition)); out.Chr('(');
         ok = EmitConstantExpr(Op(definition, 0), depth + 1);
         out.Chr(')');
-    } else if (op == IR::OP_IMOD && (mask(static_cast<CoreType>(Type(definition))) & TypeMasks::INT_TYPES)) {
+    } else if (op == IR::OP_IMOD && (mask(static_cast<CoreType>(Type(definition))) & TypeMasks::INT_TYPES) &&
+               !(ir->flags[definition] & IR::FLAG_NON_NEGATIVE_OPERANDS)) {
         out.Chr('(');
         ok = EmitConstantExpr(Op(definition, 0), depth + 1);
         out.Lit(" - ");

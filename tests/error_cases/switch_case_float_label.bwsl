@@ -1,0 +1,20 @@
+// Error case: a float case label on an int selector.
+pipeline SwitchCaseFloatLabel {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            int x = int(attributes.position.x);
+            float r = 0.0;
+            switch (x) {
+                case 1.5: r = 1.0;
+                default: r = 2.0;
+            }
+            output.position = float4(attributes.position, r);
+        }
+    }
+}

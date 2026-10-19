@@ -65,12 +65,15 @@ NodeRef Parser::ParseStatement() {
         u32 decoHash = Utils::HashStr(stream->GetValue(previous).data(),
                                       static_cast<u16>(stream->GetLength(previous)));
         InterpolationMode interpolation = InterpolationMode::Default;
+        InterpolationSampling sampling = InterpolationSampling::Center;
         if (decoHash == Utils::HashStr("flat")) {
             interpolation = InterpolationMode::Flat;
         } else if (decoHash == Utils::HashStr("noperspective")) {
             interpolation = InterpolationMode::NoPerspective;
+        } else if (decoHash == Utils::HashStr("centroid")) {
+            sampling = InterpolationSampling::Centroid;
         } else {
-            Error("Expected @flat or @noperspective before output assignment");
+            Error("Expected @flat, @noperspective or @centroid before output assignment");
             return NodeRef::Null();
         }
 
@@ -80,17 +83,29 @@ NodeRef Parser::ParseStatement() {
         }
         if (stmt.Type() != ASTNodeType::ASSIGNMENT ||
             !IsOutputAssignmentTarget(ast, ast->GetAssignment(stmt).target)) {
-            Error("@flat and @noperspective can only decorate output assignments");
+            Error("@flat, @noperspective and @centroid can only decorate output assignments");
             return stmt;
         }
 
         AssignmentData& assign = ast->GetAssignment(stmt);
-        if (assign.interpolation != InterpolationMode::Default &&
-            assign.interpolation != interpolation) {
-            Error("Conflicting interpolation decorators on output assignment");
+        if (interpolation != InterpolationMode::Default) {
+            if (assign.interpolation != InterpolationMode::Default &&
+                assign.interpolation != interpolation) {
+                Error("Conflicting interpolation decorators on output assignment");
+                return stmt;
+            }
+            assign.interpolation = interpolation;
+        }
+        if (sampling != InterpolationSampling::Center) {
+            assign.sampling = sampling;
+        }
+        // A flat varying takes one vertex's value, so there is no
+        // interpolation for centroid sampling to move.
+        if (assign.interpolation == InterpolationMode::Flat &&
+            assign.sampling == InterpolationSampling::Centroid) {
+            Error("@centroid cannot be combined with @flat");
             return stmt;
         }
-        assign.interpolation = interpolation;
         return stmt;
     }
 
@@ -775,9 +790,7 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
         }
     }
 
-    if (arrayDims.size() > 1) {
-        multiDimArrayDims[ArenaString::MakeHashOnly(varName).nameHash] = arrayDims;
-    }
+    BindArrayShape(ArenaString::MakeHashOnly(varName).nameHash, arrayDims);
 
     return varDecl;
 }

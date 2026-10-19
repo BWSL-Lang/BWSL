@@ -1,0 +1,28 @@
+// Test: multi-dimensional array shapes follow scopes (#208 review)
+// Tests: after an inner `float[4][5] g` shadows a `float[2][3] g` local or
+//        parameter, `g[1][2]` flattens with the outer stride again
+
+pipeline ArraysMultidimShadowing {
+    pick :: (float[2][3] g) -> float {
+        if (g[0][0] > -1.0) {
+            float[4][5] g;
+            g[3][4] = 9.0;
+        }
+        return g[1][2];
+    }
+
+    resources { data: buffer<float> }
+    pass "Main" {
+        use resources { data }
+        compute "Main" [1, 1, 1] {
+            float[2][3] g;
+            g[1][2] = resources.data[3];
+            if (resources.data[1] > 0.0) {
+                float[4][5] g;
+                g[3][4] = resources.data[4];
+                resources.data[2] = g[3][4];
+            }
+            resources.data[0] = g[1][2] + pick(g);
+        }
+    }
+}

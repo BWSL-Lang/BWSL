@@ -1,0 +1,38 @@
+// Test: @centroid varyings, alone and combined with @noperspective, keep the
+// Centroid decoration through lowering and every backend
+
+pipeline InterpolationCentroid {
+    attributes {
+        position: float3
+        texcoord: float2
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord }
+
+        vertex {
+            float3 pos = attributes.position;
+            float2 uv = attributes.texcoord;
+
+            output.position = float4(pos, 1.0);
+            @centroid output.atlasUV = uv * 0.5 + float2(0.25);
+            @centroid @noperspective output.screenUV = uv;
+            @noperspective @centroid output.shade = pos.z;
+            output.plainUV = uv;
+
+            // A later store may omit the qualifier; the varying stays centroid.
+            if (pos.x > 0.5) {
+                output.atlasUV = uv;
+            }
+        }
+
+        fragment {
+            float2 atlasUV = input.atlasUV;
+            float2 screenUV = input.screenUV;
+            float shade = input.shade;
+            float2 plainUV = input.plainUV;
+
+            output.color = float4(atlasUV + screenUV + plainUV, shade, 1.0);
+        }
+    }
+}

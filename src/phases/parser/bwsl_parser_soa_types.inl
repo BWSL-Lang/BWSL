@@ -207,9 +207,7 @@ NodeRef Parser::ParseArrayDeclaration(CoreType elementType, StorageClass storage
         varData.constDecl = varDecl;
     }
 
-    if (arrayDims.size() > 1) {
-        multiDimArrayDims[ArenaString::MakeHashOnly(varName).nameHash] = arrayDims;
-    }
+    BindArrayShape(ArenaString::MakeHashOnly(varName).nameHash, arrayDims);
 
     return varDecl;
 }
@@ -376,18 +374,12 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
             }
             TypeInfo objType = GetExpressionType(memberData.object);
             if (objType.coreType == CoreType::CUSTOM) {
-                u32 memberHash = memberData.member.nameHash;
-                if (objType.customTypeHash == Utils::HashStr("BwslModfResult")) {
-                    if (memberHash == Utils::HashStr("fraction") ||
-                        memberHash == Utils::HashStr("whole")) {
-                        return TypeInfo{CoreType::FLOAT, 1, 0, 0, 0, 0, 0};
-                    }
-                } else if (objType.customTypeHash == Utils::HashStr("BwslFrexpResult")) {
-                    if (memberHash == Utils::HashStr("mantissa")) {
-                        return TypeInfo{CoreType::FLOAT, 1, 0, 0, 0, 0, 0};
-                    }
-                    if (memberHash == Utils::HashStr("exponent")) {
-                        return TypeInfo{CoreType::INT, 1, 0, 0, 0, 0, 0};
+                // Fields read straight off a call, e.g. frexp(x).mantissa.
+                const StdLib::BuiltinStructType* builtin =
+                    StdLib::FindBuiltinStructType(objType.customTypeHash);
+                for (u32 i = 0; builtin && i < builtin->fieldCount; i++) {
+                    if (memberData.member.nameHash == Utils::HashStr(builtin->fields[i].name)) {
+                        return TypeInfo{builtin->fields[i].type, 1, 0, 0, 0, 0, 0};
                     }
                 }
             }
@@ -588,9 +580,9 @@ TypeInfo Parser::GetExpressionType(NodeRef expr) {
                     static_cast<StdLib::Intrinsic>(StdLib::INTRINSICS[funcCall.intrinsicIndex].enumIndex);
                 switch (intrinsic) {
                     case StdLib::Intrinsic::FREXP:
-                        return TypeInfo{CoreType::CUSTOM, 1, 0, 0, Utils::HashStr("BwslFrexpResult"), 0, 0};
                     case StdLib::Intrinsic::MODF_SPLIT:
-                        return TypeInfo{CoreType::CUSTOM, 1, 0, 0, Utils::HashStr("BwslModfResult"), 0, 0};
+                        return TypeInfo{CoreType::CUSTOM, 1, 0, 0,
+                                        StdLib::FindBuiltinStructResult(intrinsic)->nameHash, 0, 0};
                     case StdLib::Intrinsic::F32TOF16:
                         return TypeInfo{CoreType::UINT, 1, 0, 0, 0, 0, 0};
                     case StdLib::Intrinsic::F16TOF32:
@@ -1226,6 +1218,34 @@ NodeRef Parser::ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime) {
     return method;
 }
 
+// Declares the intrinsic result structs (BwslFrexpResult, BwslModfResult) as
+// global struct types, so source can name them anywhere a type is accepted.
+void Parser::RegisterBuiltinStructTypes() {
+    for (const StdLib::BuiltinStructType& builtin : StdLib::BUILTIN_STRUCT_TYPES) {
+        StructData structData;
+        structData.name = ArenaString::MakeHashOnly(builtin.name);
+        structData.fields.Init(arena, builtin.fieldCount);
+        structData.methodIndices.Init(arena, 1);
+        structData.isIndexable = false;
+        ReverseLookup::Register(structData.name.nameHash, builtin.name);
+        for (u32 i = 0; i < builtin.fieldCount; i++) {
+            StructData::Field field;
+            field.name = ArenaString::MakeHashOnly(builtin.fields[i].name);
+            ReverseLookup::Register(field.name.nameHash, builtin.fields[i].name);
+            field.type = TYPE_INFO(builtin.fields[i].type, 1, false);
+            field.arraySize = 0;
+            structData.fields.Push(arena, field);
+        }
+
+        Symbol* sym = SymbolTable::AddSymbol(&symbolTable, structData.name,
+                                             SymbolKind::CUSTOM_TYPE);
+        if (sym) {
+            symbolTable.structs[sym->index] = structData;
+            g_customTypes.RegisterType(structData.name, &symbolTable.structs[sym->index]);
+        }
+    }
+}
+
 NodeRef Parser::ParseStruct() {
     // Note: STRUCT token already consumed by caller
     TokenRef declToken = previous;  // The STRUCT keyword; a doc block precedes it
@@ -1235,6 +1255,14 @@ NodeRef Parser::ParseStruct() {
 
     Consume(TokenType::IDENTIFIER, "Expected struct name");
     std::string structName(stream->GetValue(previous));
+    // Lowering resolves struct types by their unqualified name, so even a
+    // module struct with a built-in's name would take over its layout.
+    const bool reservedName =
+        StdLib::FindBuiltinStructType(Utils::HashStr(structName.c_str())) != nullptr;
+    if (reservedName) {
+        ErrorAtPrevious("Struct name '" + structName +
+                        "' is reserved for a built-in type; rename the struct");
+    }
     SourceLocation nameLoc = getLocation(stream->GetOffset(previous));
 
     NodeRef structNode = ASTFactory::MakeStructDecl(ast, structName, line, col);
@@ -1425,6 +1453,8 @@ NodeRef Parser::ParseStruct() {
     // NOTE: Do NOT register with g_customTypes here - we need to use the pointer
     // to the stored copy in symbolTable.structs, not a local variable pointer.
     // Registration happens below after storing in symbol table.
+
+    if (reservedName) return structNode;
 
     // Register in symbol table
     if (symbolTable.inModuleScope &&

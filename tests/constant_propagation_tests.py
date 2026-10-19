@@ -677,6 +677,53 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             self.assertIn("clamp(gl_FragCoord.z, 0.0, 1.0)", body)
             self.assertIn("max(gl_FragCoord.w, 0.0)", body)
 
+        def test_remainders_of_values_that_arent_negative_use_native_operators(self):
+            # GLSL's `%` isn't defined for negative operands, so a signed
+            # remainder is expanded into a division unless the ranges show
+            # neither operand is negative: x is a fragment coordinate, the
+            # spacing 3 or 4 and n anything.
+            target = self.compile('''pipeline NonNegMod {
+                attributes { position: float2 }
+                struct Params { float tall; int n; }
+                resources { params: Params }
+                pass "Main" {
+                    use attributes { position }
+                    use resources { params }
+                    vertex { output.position = float4(attributes.position, 0.0, 1.0); }
+                    fragment {
+                        int x = int(input.position.x);
+                        int n = resources.params.n;
+                        int spacing = resources.params.tall > 0.0 ? 4 : 3;
+                        int a = x % spacing + x % 8 + x / 8;
+                        int b = (x - 100) % 8 + n % spacing + x % -4;
+                        output.color = float4(float(a), float(b), float((x - 100) / 8), 1.0);
+                    }
+                }
+            }''', "-glsl", "-gles-direct", "-metal", "-hlsl", "-wgsl")
+            def body(name):
+                text = (target / name).read_text(encoding="utf-8")
+                return text[text.index("main"):]
+            glsl, gles = body("constprop.glsl.frag"), body("constprop.gles.frag")
+            metal, hlsl = body("constprop.frag.metal"), body("constprop.frag.hlsl")
+            wgsl = body("constprop.frag.wgsl")
+            # SPIRV-Cross emits OpUMod as a native `%`, OpSRem as a division.
+            for text in (glsl, metal, hlsl):
+                self.assertRegex(text, r"int\(uint\(_\d+\) % uint\(")
+                self.assertRegex(text, r"\(_\d+ & 7\)")
+                self.assertRegex(text, r"\(_\d+ >> 3\)")
+                # Those that may see a negative operand keep the division.
+                self.assertRegex(text, r"_\d+ - 8 \* \(_\d+ / 8\)")
+                self.assertRegex(text, r"float\(_\d+ / 8\)")
+                self.assertIn(" - (-4) * (", text)
+                self.assertRegex(text, r"\.n - _\d+ \* \(")
+            self.assertRegex(gles, r"= \(r\d+ % r\d+\);")
+            self.assertRegex(gles, r"= \(r\d+ & 7\);")
+            self.assertRegex(gles, r"= \(r\d+ >> 3\);")
+            self.assertRegex(gles, r"= \(r\d+ - 8 \* \(r\d+ / 8\)\);")
+            self.assertRegex(gles, r"= \(r\d+ - r\d+ \* \(r\d+ / r\d+\)\);")
+            self.assertRegex(gles, r"= \(r\d+ - -4 \* \(r\d+ / -4\)\);")
+            self.assertRegex(wgsl, r"& \(7i\)")
+
         def test_flat_varyings_keep_their_ranges(self):
             # A flat or integer varying is one vertex's value; an interpolated
             # one can leave its vertices' range under MSAA. Division isn't

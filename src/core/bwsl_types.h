@@ -83,6 +83,14 @@ enum class InterpolationMode : u8 {
     NoPerspective,
 };
 
+// Where in the pixel an interpolated varying is evaluated. Separate from
+// InterpolationMode because centroid applies to both perspective and
+// no-perspective interpolation.
+enum class InterpolationSampling : u8 {
+    Center = 0,
+    Centroid,
+};
+
 enum class CoreType : u8 {
     
     // Invalid/Not a type

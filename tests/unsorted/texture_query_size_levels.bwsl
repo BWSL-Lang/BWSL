@@ -30,9 +30,9 @@ pipeline TextureQuerySizeLevels {
             int2 mipSize = texture_size(resources.colorTex, 2);
             int levels = texture_levels(resources.colorTex);
 
-            // Queries on cube and 3D textures (current result type is int2)
+            // Queries on cube and 3D textures; a volume also reports its depth
             int2 cubeSize = texture_size(resources.envMap);
-            int2 volumeSize = texture_size(resources.volume);
+            int3 volumeSize = texture_size(resources.volume);
             int cubeLevels = texture_levels(resources.envMap);
 
             // Normalize a pixel coordinate by the queried size
@@ -42,7 +42,7 @@ pipeline TextureQuerySizeLevels {
             float4 c = sample(resources.colorTex, resources.colorSampler, uv);
             float lodInfo = float(levels + cubeLevels)
                 + float(mipSize.x + mipSize.y)
-                + float(cubeSize.x + volumeSize.y);
+                + float(cubeSize.x + volumeSize.y + volumeSize.z);
             output.color = c + float4(0.0, 0.0, 0.0, lodInfo * 0.0001);
         }
     }

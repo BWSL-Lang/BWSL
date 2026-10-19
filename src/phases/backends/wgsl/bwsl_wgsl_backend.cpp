@@ -627,6 +627,7 @@ bool WGSLBuilder::AllocateInterface(InterfaceTable& table, InterfaceOrigins& ori
     table.locations = static_cast<u32*>(Allocate(capacity, sizeof(u32)));
     table.builtins = static_cast<u8*>(Allocate(capacity, sizeof(u8)));
     table.interpolations = static_cast<u8*>(Allocate(capacity, sizeof(u8)));
+    table.samplings = static_cast<u8*>(Allocate(capacity, sizeof(u8)));
     origins.slots = static_cast<u16*>(Allocate(capacity, sizeof(u16)));
     origins.instructions = static_cast<u32*>(Allocate(capacity, sizeof(u32)));
     return errorMessage[0] == '\0';
@@ -635,11 +636,13 @@ bool WGSLBuilder::AllocateInterface(InterfaceTable& table, InterfaceOrigins& ori
 bool WGSLBuilder::AddInterface(InterfaceTable& table, InterfaceOrigins& origins,
                                u32* slotMap, u32 instruction, u16 slot,
                                CoreType type, u32 location, InterfaceBuiltin builtin,
-                               InterpolationMode interpolation) {
+                               InterpolationMode interpolation,
+                               InterpolationSampling sampling) {
     const u32 existing = slotMap[slot];
     if (existing != InvalidId) {
         if (table.types[existing] != static_cast<u16>(type) ||
-            table.interpolations[existing] != static_cast<u8>(interpolation)) {
+            table.interpolations[existing] != static_cast<u8>(interpolation) ||
+            table.samplings[existing] != static_cast<u8>(sampling)) {
             return Fail("WGSL stage interface slot has conflicting types or interpolation");
         }
         return true;
@@ -650,16 +653,21 @@ bool WGSLBuilder::AddInterface(InterfaceTable& table, InterfaceOrigins& origins,
     table.locations[id] = location;
     table.builtins[id] = static_cast<u8>(builtin);
     table.interpolations[id] = static_cast<u8>(interpolation);
+    table.samplings[id] = static_cast<u8>(sampling);
     origins.slots[id] = slot;
     origins.instructions[id] = instruction;
     return true;
 }
 
-static bool InterfaceInterpolation(CoreType type, u8 mode, InterpolationMode& result) {
-    if (mode > static_cast<u8>(InterpolationMode::NoPerspective)) {
+static bool InterfaceInterpolation(CoreType type, u8 mode, u8 sampling,
+                                   InterpolationMode& result,
+                                   InterpolationSampling& resultSampling) {
+    if (mode > static_cast<u8>(InterpolationMode::NoPerspective) ||
+        sampling > static_cast<u8>(InterpolationSampling::Centroid)) {
         return false;
     }
     result = static_cast<InterpolationMode>(mode);
+    resultSampling = static_cast<InterpolationSampling>(sampling);
     const CoreType scalar = Scalar(type);
     if (scalar == CoreType::BOOL || Width(type) == 0) {
         return false;
@@ -670,7 +678,9 @@ static bool InterfaceInterpolation(CoreType type, u8 mode, InterpolationMode& re
         }
         result = InterpolationMode::Flat;
     }
-    return true;
+    // A flat varying is not interpolated, so it has no sampling to choose.
+    return result != InterpolationMode::Flat ||
+           resultSampling == InterpolationSampling::Center;
 }
 
 bool WGSLBuilder::PrepareInput(u32 instruction, u16 slot, CoreType type, bool attribute) {
@@ -681,6 +691,7 @@ bool WGSLBuilder::PrepareInput(u32 instruction, u16 slot, CoreType type, bool at
     CoreType expected = type;
     u32 location = InvalidId;
     InterpolationMode interpolation = InterpolationMode::Default;
+    InterpolationSampling sampling = InterpolationSampling::Center;
     if (attribute) {
         if (stage != ShaderStage::Vertex || slot >= 16) {
             return Fail("WGSL attributes require vertex stage locations 0 through 15");
@@ -703,7 +714,8 @@ bool WGSLBuilder::PrepareInput(u32 instruction, u16 slot, CoreType type, bool at
     } else if (stage == ShaderStage::Fragment && slot >= OutputSlot::VARYING0 &&
                slot < OutputSlot::VARYING0 + 16) {
         location = slot - OutputSlot::VARYING0;
-        if (!InterfaceInterpolation(type, ir->inputInterpolations[slot], interpolation)) {
+        if (!InterfaceInterpolation(type, ir->inputInterpolations[slot], ir->inputSamplings[slot],
+                                    interpolation, sampling)) {
             return Fail("WGSL fragment varying has an invalid type or interpolation");
         }
     } else {
@@ -713,7 +725,7 @@ bool WGSLBuilder::PrepareInput(u32 instruction, u16 slot, CoreType type, bool at
         return Fail("WGSL builtin input has an incompatible type");
     }
     return AddInterface(inputs, inputOrigins, inputForSlot, instruction, slot, type,
-                        location, builtin, interpolation);
+                        location, builtin, interpolation, sampling);
 }
 
 bool WGSLBuilder::PrepareOutput(u32 instruction, u16 slot, CoreType type) {
@@ -723,6 +735,7 @@ bool WGSLBuilder::PrepareOutput(u32 instruction, u16 slot, CoreType type) {
     InterfaceBuiltin builtin = InterfaceBuiltin::None;
     u32 location = InvalidId;
     InterpolationMode interpolation = InterpolationMode::Default;
+    InterpolationSampling sampling = InterpolationSampling::Center;
     if (stage == ShaderStage::Vertex && slot == OutputSlot::POSITION) {
         if (type != CoreType::FLOAT4) {
             return Fail("WGSL vertex position must be float4");
@@ -731,7 +744,8 @@ bool WGSLBuilder::PrepareOutput(u32 instruction, u16 slot, CoreType type) {
     } else if (stage == ShaderStage::Vertex && slot >= OutputSlot::VARYING0 &&
                slot < OutputSlot::VARYING0 + 16) {
         location = slot - OutputSlot::VARYING0;
-        if (!InterfaceInterpolation(type, ir->outputInterpolations[slot], interpolation)) {
+        if (!InterfaceInterpolation(type, ir->outputInterpolations[slot], ir->outputSamplings[slot],
+                                    interpolation, sampling)) {
             return Fail("WGSL vertex varying has an invalid type or interpolation");
         }
     } else if (stage == ShaderStage::Fragment && slot == OutputSlot::DEPTH) {
@@ -746,7 +760,7 @@ bool WGSLBuilder::PrepareOutput(u32 instruction, u16 slot, CoreType type) {
         return Fail("WGSL output is not available in this shader stage");
     }
     return AddInterface(outputs, outputOrigins, outputForSlot, instruction, slot, type,
-                        location, builtin, interpolation);
+                        location, builtin, interpolation, sampling);
 }
 
 bool WGSLBuilder::Prepare() {
@@ -1981,10 +1995,14 @@ void WGSLBuilder::WriteInterfaceAttribute(TextWriter& writer, const InterfaceTab
     writer.Text(") ");
     if (varying) {
         const InterpolationMode mode = static_cast<InterpolationMode>(table.interpolations[id]);
+        const bool centroid =
+            static_cast<InterpolationSampling>(table.samplings[id]) == InterpolationSampling::Centroid;
         if (mode == InterpolationMode::Flat) {
             writer.Text("@interpolate(flat) ");
         } else if (mode == InterpolationMode::NoPerspective) {
-            writer.Text("@interpolate(linear, center) ");
+            writer.Text(centroid ? "@interpolate(linear, centroid) " : "@interpolate(linear, center) ");
+        } else if (centroid) {
+            writer.Text("@interpolate(perspective, centroid) ");
         }
     }
 }

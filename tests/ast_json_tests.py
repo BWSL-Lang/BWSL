@@ -486,6 +486,29 @@ class AstJsonTests(unittest.TestCase):
         self.assertEqual(self.edges(data, 'call'),
                          [{'from': 'FUNCTION_CALL:0', 'to': 'FUNCTION:2', 'role': 'call'}])
 
+    def test_texture_size_result_follows_texture_dimensions(self):
+        # Issue #204: volumes and 2D arrays report int3, so overloads on the
+        # size pick the int3 function for them and int2 for texture2D.
+        data = self.parse('''
+            pipeline P {
+                resources { vol: texture3D layers: texture2DArray flat: texture2D }
+                extent :: (int3 size) -> int { return size.z; }
+                extent :: (int2 size) -> int { return 1; }
+                pass "Main" {
+                    use resources { vol, layers, flat }
+                    fragment {
+                        int e = extent(texture_size(resources.vol)) +
+                                extent(texture_size(resources.layers)) +
+                                extent(texture_size(resources.flat));
+                        output.color = float4(float(e));
+                    }
+                }
+            }
+        ''')
+        calls = [edge['to'] for edge in self.edges(data, 'call')
+                 if edge['to'] != 'builtin:function:texture_size']
+        self.assertEqual(calls, ['FUNCTION:0', 'FUNCTION:0', 'FUNCTION:1'])
+
     def test_same_name_structs_preserve_identity_through_calls(self):
         data = self.parse('''
             module ModA {

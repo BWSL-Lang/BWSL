@@ -205,7 +205,17 @@ struct Parser {
     NodeRef currentPass;
     NodeRef currentPipeline;
     std::unordered_map<std::string, u16> variableRegisters;
-    std::unordered_map<u32, std::vector<u32>> multiDimArrayDims;
+    // Declared shape of each array variable or parameter, innermost last and
+    // tied to the scope it was declared in. Multi-dimensional accesses are
+    // flattened with the innermost binding of their base name; a binding
+    // with fewer than two dimensions shadows outer multi-dimensional ones.
+    struct ArrayShapeBinding {
+        u32 nameHash;
+        u32 scopeLevel;
+        u32 scopeSerial;
+        std::vector<u32> dims;
+    };
+    std::vector<ArrayShapeBinding> arrayShapeBindings;
     struct ResourceTypeSite {
         TokenRef token;
         u32 qualifierIndex;
@@ -265,7 +275,7 @@ struct Parser {
         errors.Init(arena, 16);
         hasLookahead = false;
         has3TokenLookahead = false;
-        multiDimArrayDims.clear();
+        arrayShapeBindings.clear();
         resourceTypeSites.clear();
         recoveredKeywordNames.clear();
         evalBindings.clear();
@@ -273,6 +283,7 @@ struct Parser {
         activeVariantBindings.clear();
         allowBareVariantLookup = false;
         SymbolTable::Init(&symbolTable, arena);
+        RegisterBuiltinStructTypes();
         currentShaderStage = ShaderStage::Fragment;
         inShaderStage = false;
         currentPass = NodeRef::Null();
@@ -453,6 +464,7 @@ private:
     NodeRef ParseMemberAccess(NodeRef object);
     NodeRef ParseFunction(bool isEval = false);
     NodeRef ParseStruct();
+    void RegisterBuiltinStructTypes();
     NodeRef ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime);
     NodeRef ResolveEnumMethod(const ArenaString& enumName, const ArenaString& methodName);
     NodeRef ParseModule();
@@ -491,6 +503,8 @@ private:
     // failure. Does not consume the surrounding brackets.
     bool ParseArraySizeValue(u32* outSize);
     NodeRef FlattenMultiDimArrayAccess(NodeRef access);
+    void BindArrayShape(u32 nameHash, const std::vector<u32>& dims);
+    const std::vector<u32>* FindMultiDimArrayDims(u32 nameHash) const;
     TypeInfo ResolveType(const std::string& typeName);
     TypeInfo GetTypeInfoFromSymbol(Symbol* sym);
     TypeInfo ParseArrayType();

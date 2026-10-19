@@ -195,6 +195,8 @@ ERROR_CASE_TESTS = {
     "intrinsic_module_function_name.bwsl": "reserved for a built-in intrinsic",
     "intrinsic_struct_method_name.bwsl": "reserved for a built-in intrinsic",
     "intrinsic_enum_method_name.bwsl": "reserved for a built-in intrinsic",
+    "builtin_result_struct_redeclared.bwsl": "Struct name 'BwslFrexpResult' is reserved for a built-in type",
+    "builtin_result_unknown_field.bwsl": "Unknown field 'fraction' on type 'BwslFrexpResult'",
     "attribute_capacity.bwsl": "supported limit of 16 attributes",
     "array_negative_remainder_index.bwsl": "out of bounds",
     'function_void_return_value.bwsl': 'Void function cannot return a value',
@@ -237,9 +239,14 @@ ERROR_CASE_TESTS = {
     "eval_while_runtime_data.bwsl": "Eval while condition must be a compile-time value",
     "interpolation_decorator_builtin_output.bwsl": "interpolation decorators can only be used on vertex-to-fragment varyings",
     "interpolation_decorator_conflict.bwsl": "conflicting interpolation decorators for varying",
-    "interpolation_decorator_non_output.bwsl": "@flat and @noperspective can only decorate output assignments",
+    "interpolation_decorator_non_output.bwsl": "@flat, @noperspective and @centroid can only decorate output assignments",
     "interpolation_decorator_noperspective_int.bwsl": "@noperspective can only be used on floating-point varyings",
     "interpolation_decorator_stack_conflict.bwsl": "Conflicting interpolation decorators on output assignment",
+    "interpolation_decorator_centroid_flat.bwsl": "@centroid cannot be combined with @flat",
+    "interpolation_decorator_centroid_builtin_output.bwsl": "interpolation decorators can only be used on vertex-to-fragment varyings",
+    "interpolation_decorator_centroid_conflict.bwsl": "conflicting interpolation decorators for varying",
+    "interpolation_decorator_centroid_flat_conflict.bwsl": "conflicting interpolation decorators for varying",
+    "interpolation_decorator_centroid_int.bwsl": "@centroid can only be used on floating-point varyings",
     "undeclared_fragment_output.bwsl": "fragment output 'bloom' is not declared",
     "attributes_used_as_value.bwsl": "'attributes' cannot be used as a value",
     "missing_variable.bwsl": "Unknown identifier 'i_position'",
@@ -282,7 +289,7 @@ ERROR_CASE_TESTS = {
     "shared_array_initializer.bwsl": "Shared arrays cannot have initializers",
     "shared_non_array.bwsl": "shared variables must be declared as arrays",
     "barrier_in_fragment.bwsl": "barrier intrinsics are only available in compute shaders",
-    "module_const_not_constant.bwsl": "vector arithmetic and swizzles are not supported here",
+    "module_const_not_constant.bwsl": "Module constant initializers must be built from literals and other constants",
     "module_const_type_mismatch.bwsl": "Module constant 'TINT' is declared float3 but its initializer is float2",
     "eval_for_step_zero.bwsl": "Eval for step must not be zero",
     "eval_infinite_loop.bwsl": "Infinite eval loops require an until condition",
@@ -298,7 +305,9 @@ ERROR_CASE_TESTS = {
     "use_before_declaration.bwsl": "Unknown identifier 'lateVar'",
     "unknown_function_call.bwsl": "Unknown function 'notAFunction'",
     "mutual_recursion.bwsl": "recursion is not supported",
-    "derivative_in_vertex_stage.bwsl": "Intrinsic not available in this shader stage",
+    "derivative_in_vertex_stage.bwsl": "ddx() computes screen-space derivatives, which are only available in fragment shaders, not vertex shaders",
+    "derivative_in_compute_stage.bwsl": "fwidth() computes screen-space derivatives, which are only available in fragment shaders, not compute shaders",
+    "derivative_in_helper_called_from_vertex.bwsl": "ddy() computes screen-space derivatives, which are only available in fragment shaders, not vertex shaders",
     "pipeline_scope_mutable_var.bwsl": "Expected 'import', 'using', 'attributes', 'resources'",
     "keyword_as_variable_name.bwsl": "'pass' is a keyword and cannot be used as a variable name",
     "overload_no_viable_match.bwsl": "Function not found: pickone",
@@ -313,12 +322,16 @@ ERROR_CASE_TESTS = {
     "unknown_enum_variant.bwsl": "Unknown enum variant 'Missing'",
     "array_size_negative.bwsl": "Expected array size",
     "discard_in_vertex.bwsl": "SPIR-V validation failed",
-    "switch_on_float.bwsl": "SPIR-V validation failed",
+    "switch_on_float.bwsl": "switch selector must be an int, uint or enum value, got float",
+    "switch_on_runtime_bool.bwsl": "switch selector must be an int, uint or enum value, got bool",
+    "switch_case_float_label.bwsl": "switch case values must be int, uint or enum constants, got float",
+    "switch_case_negative_float_label.bwsl": "switch case values must be int, uint or enum constants, got float",
     "variant_switch_duplicate_match.bwsl": "Duplicate switch case value",
     "user_function_wrong_arg_count.bwsl": "SPIR-V validation failed",
     "struct_as_varying.bwsl": "SPIR-V validation failed",
     "assign_to_input.bwsl": "cannot assign to input.* - stage inputs are read-only",
     "vector_narrow_assign.bwsl": "cannot implicitly convert int3 to int2; vector widths must match, use a swizzle such as .xy to narrow",
+    "texture_size_volume_into_int2.bwsl": "cannot implicitly convert int3 to int2; vector widths must match, use a swizzle such as .xy to narrow",
     "vector_narrow_reassign.bwsl": "cannot implicitly convert int3 to int2; vector widths must match, use a swizzle such as .xy to narrow",
     "vector_widen_assign.bwsl": "cannot implicitly convert int2 to int3; vector widths must match, use a constructor such as int3(value, ...) to widen",
     "vector_component_type_assign.bwsl": "cannot implicitly convert int3 to float3; vector component types must match, convert with float3(...)",
@@ -334,6 +347,10 @@ ERROR_CASE_TESTS = {
     "fragment_reads_attribute.bwsl": "Vertex attributes cannot be read in a fragment stage",
     "varying_type_conflict.bwsl": "conflicting types for stage output 'uv': first assigned as float2, now assigned float3",
     "sample_implicit_lod_vertex.bwsl": "sample() uses implicit derivatives and is not available in vertex shaders",
+    "sample_implicit_lod_compute.bwsl": "sample() uses implicit derivatives and is not available in compute shaders; use sample_lod() with an explicit LOD",
+    "sample_offset_implicit_lod_compute.bwsl": "sample_offset() uses implicit derivatives and is not available in compute shaders; use sample_lod_offset() with an explicit LOD",
+    "sample_in_helper_called_from_compute.bwsl": "sample() uses implicit derivatives and is not available in compute shaders",
+    "sample_texture_array_in_helper_called_from_compute.bwsl": "sample() uses implicit derivatives and is not available in compute shaders",
     "vec_compare_to_scalar_bool.bwsl": "cannot assign a vector comparison result to a scalar bool",
     "pointer_param_buffer_argument.bwsl": "pointer argument 1 of 'accumulate' points to a resource, stage input or output, or shared memory",
     "pointer_param_forwarded_output.bwsl": "pointer argument 1 of 'brighten' points to a resource, stage input or output, or shared memory",
@@ -377,6 +394,9 @@ ERROR_CASE_TESTS = {
     "eval_function_recursion.bwsl": "Eval function call depth exceeded",
     "eval_function_missing_return.bwsl": "Non-void function must return a value on every reachable path",
     "eval_function_return_type.bwsl": "Type mismatch in eval function return",
+    "eval_vector_swizzle_store_duplicate.bwsl": "Invalid compile-time swizzle assignment",
+    "eval_vector_width_mismatch.bwsl": "Compile-time assignment value is not a compile-time value",
+    "pipeline_const_eval_call_runtime_arg.bwsl": "Pipeline constant 'AREA' calls eval function 'circleArea' with arguments that are not compile-time values",
     "eval_vector_constructor_empty.bwsl": "Compile-time declaration initializer is not a compile-time value",
     "eval_vector_constructor_few.bwsl": "Compile-time declaration initializer is not a compile-time value",
     "eval_vector_constructor_many.bwsl": "Compile-time declaration initializer is not a compile-time value",
@@ -448,6 +468,18 @@ ERROR_CASE_FORBIDDEN_OUTPUT = {
     # An unresolved call has no type; the enclosing float4(...) must not also
     # report a component-count error for it.
     "texture_param_type_mismatch.bwsl": ["vector constructor expects"],
+}
+
+# Exact error counts, for cases where a single source mistake must not be
+# reported more than once.
+ERROR_CASE_EXPECTED_ERROR_COUNTS = {
+    # A dynamic texture array call expands to one call per element; the stage
+    # error must be reported once, not once per element.
+    "sample_texture_array_in_helper_called_from_compute.bwsl": 1,
+    # The rejected call's result keeps its normal type, so returning it from
+    # the helper doesn't add an implicit-conversion error.
+    "sample_in_helper_called_from_compute.bwsl": 1,
+    "derivative_in_helper_called_from_vertex.bwsl": 1,
 }
 
 def diagnostic_output_contains(output: str, expected: str) -> bool:
@@ -602,6 +634,26 @@ AST_JSON_REFERENCE_TESTS = {
             {"to": "builtin:type:float2", "role": "type", "from_prefix": "VARIABLE_DECL:"},
         ],
     },
+    "builtin_result_types": {
+        "symbols": [
+            {
+                "match": {"kind": "struct", "name": "BwslModfResult"},
+                "expect": {"id": "builtin:type:BwslModfResult", "owner": "builtin"},
+            },
+            {
+                "match": {"kind": "struct-field", "name": "mantissa"},
+                "expect": {"id": "builtin:type:BwslFrexpResult/field:mantissa",
+                           "owner": "builtin:type:BwslFrexpResult", "type": "float"},
+            },
+        ],
+        "references": [
+            {"to": "FUNCTION:0", "role": "call", "from_prefix": "FUNCTION_CALL:"},
+            {"to": "builtin:type:BwslModfResult", "role": "construct", "from_prefix": "FUNCTION_CALL:"},
+            {"to": "builtin:type:BwslModfResult", "role": "type", "from_prefix": "FUNCTION:0/parameter:"},
+            {"to": "builtin:type:BwslModfResult/field:whole", "role": "member", "from_prefix": "MEMBER_ACCESS:"},
+            {"to": "builtin:type:BwslFrexpResult/field:mantissa", "role": "member", "from_prefix": "MEMBER_ACCESS:"},
+        ],
+    },
 }
 
 FORBIDDEN_SOURCE_ALIAS_NAMES = (
@@ -627,6 +679,12 @@ TEXT_GOLDEN_SUFFIXES = {".metal", ".hlsl", ".glsl", ".gles", ".vert", ".frag", "
 EQUIV_BACKENDS = ("spirv", "hlsl", "glsl")
 STAGE_SUFFIXES = ("vert", "frag", "comp")
 KNOWN_TEST_STEMS: set[str] = set()
+
+# Extra backends for translation expectations: "gles_*" keys then check the
+# direct GLES backend, and "wgsl_*" keys the native WGSL backend.
+TRANSLATION_EXTRA_ARGS = {
+    "interpolation_centroid": ("-gles-direct", "-wgsl"),
+}
 
 TRANSLATION_EXPECTATION_TESTS = {
     "struct_in_place_mutation": {
@@ -686,6 +744,116 @@ TRANSLATION_EXPECTATION_TESTS = {
                 "noperspective in vec2 v_screenUV",
             ],
             "gles_not_contains": ["mediump"],
+        },
+    },
+    "interpolation_centroid": {
+        "vert": {
+            "spirv_contains": [
+                "OpDecorate %v_atlasUV Centroid",
+                "OpDecorate %v_screenUV Centroid",
+                "OpDecorate %v_screenUV NoPerspective",
+            ],
+            "spirv_not_contains": ["OpDecorate %v_plainUV Centroid"],
+            "hlsl_contains": [
+                "centroid float2 v_atlasUV : TEXCOORD0",
+                "noperspective centroid float2 v_screenUV : TEXCOORD1",
+                "noperspective centroid float v_shade : TEXCOORD2",
+            ],
+            "glsl_contains": [
+                "layout(location = 0) centroid out vec2 v_atlasUV",
+                "layout(location = 1) noperspective centroid out vec2 v_screenUV",
+                "layout(location = 3) out vec2 v_plainUV",
+            ],
+            "gles_contains": [
+                "#extension GL_NV_shader_noperspective_interpolation : require",
+                "\ncentroid out vec2 v_atlasUV;",
+                "noperspective centroid out vec2 v_screenUV;",
+                "noperspective centroid out float v_shade;",
+                "\nout vec2 v_plainUV;",
+            ],
+            "wgsl_contains": [
+                "@location(0) @interpolate(perspective, centroid)",
+                "@location(1) @interpolate(linear, centroid)",
+                "@location(2) @interpolate(linear, centroid)",
+            ],
+            "wgsl_not_contains": ["@location(3) @interpolate"],
+        },
+        "frag": {
+            "spirv_contains": [
+                "OpDecorate %v_atlasUV Centroid",
+                "OpDecorate %v_screenUV Centroid",
+                "OpDecorate %v_screenUV NoPerspective",
+            ],
+            "spirv_not_contains": ["OpDecorate %v_plainUV Centroid"],
+            "metal_contains": [
+                "float2 v_atlasUV [[user(locn0), centroid_perspective]]",
+                "float2 v_screenUV [[user(locn1), centroid_no_perspective]]",
+                "float v_shade [[user(locn2), centroid_no_perspective]]",
+                "float2 v_plainUV [[user(locn3)]]",
+            ],
+            "hlsl_contains": [
+                "centroid float2 v_atlasUV : TEXCOORD0",
+                "noperspective centroid float2 v_screenUV : TEXCOORD1",
+            ],
+            "glsl_contains": [
+                "layout(location = 0) centroid in vec2 v_atlasUV",
+                "layout(location = 1) noperspective centroid in vec2 v_screenUV",
+            ],
+            "gles_contains": [
+                "#extension GL_NV_shader_noperspective_interpolation : require",
+                "\ncentroid in vec2 v_atlasUV;",
+                "noperspective centroid in vec2 v_screenUV;",
+                "noperspective centroid in float v_shade;",
+                "\nin vec2 v_plainUV;",
+            ],
+            "wgsl_contains": [
+                "@location(0) @interpolate(perspective, centroid)",
+                "@location(1) @interpolate(linear, centroid)",
+                "@location(2) @interpolate(linear, centroid)",
+            ],
+            "wgsl_not_contains": ["@location(3) @interpolate"],
+        },
+    },
+    # Issue #204: texture_size has one component per native dimension.
+    "texture_size_dimensions": {
+        "frag": {
+            "spirv_count_exactly": {"OpImageQuerySizeLod %v2int": 2, "OpImageQuerySizeLod %v3int": 4},
+            "metal_contains": ["get_depth(1)", "t_layers.get_array_size()", "t_shadowLayers.get_array_size()"],
+            "hlsl_contains": ["GetDimensions(Level, ret.x, ret.y, ret.z, Param)"],
+            "glsl_contains": ["textureSize(t_volume, 0).z"],
+        },
+    },
+    "texture_size_texture_array": {
+        "frag": {
+            "spirv_count_exactly": {"OpImageQuerySizeLod %v3int": 6},
+            "spirv_not_contains": ["OpImageQuerySizeLod %v2int"],
+        },
+    },
+    "eval_vector_arithmetic": {
+        "comp": {
+            "glsl_contains": [
+                "_m0[0] = vec4(0.5, 0.5, 0.625, 0.5);",
+                "_m0[1] = vec4(1.5, 2.5, 0.625, 8.0);",
+                "_m0[2] = vec4(2.5, 4.5, 6.5, 0.0);",
+                "_m0[3] = vec4(1.0, 1.5, 0.0, 1.0);",
+                "_m0[4] = vec4(0.5, -0.5, -1.5, 0.5);",
+                "_m0[0] = ivec4(-3, 3, -4, 7);",
+                "_m0[1] = ivec4(-1, 1, -2, -24);",
+                "_m0[0] = uvec4(7u, 11u, 2u, 3u);",
+            ],
+        },
+    },
+    "pipeline_const_eval_call": {
+        "comp": {
+            "glsl_contains": [
+                "_m0[0] = 4.5;",
+                "_m0[1] = 9.0;",
+                "7.5 + ",
+                "_m0[5] = 18.0;",
+                "_m0[6] = 9.25;",
+                "_m0[7] = 40.5;",
+                "_m0[8] = 30.0;",
+            ],
         },
     },
     "output_depth_builtin": {
@@ -826,6 +994,32 @@ TRANSLATION_EXPECTATION_TESTS = {
         "frag": {
             "ir_contains": ["XOR", "SHR", "IMUL", "NORMALIZE", "SIN", "COS"],
             "hlsl_contains": ["normalize("],
+        },
+    },
+    # #208: `.length` on a multi-dimensional array is the outer dimension and
+    # on a partly indexed one the next dimension, not the flattened count.
+    "arrays_multidim_length": {
+        "comp": {
+            "glsl_contains": [
+                "_m0[0] = 2000;",
+                "_m0[1] = 3000;",
+                "_m0[2] = 3000;",
+                "_m0[3] = 2000;",
+                "_m0[4] = 3000;",
+                "_m0[5] = 4000;",
+                "_m0[6] = 3000 + ",
+                "< 2;",
+                "< 3;",
+            ],
+            "glsl_not_contains": ["6000", "24000", "< 6;"],
+        },
+    },
+    # Shapes are scoped: once the inner `float[4][5] g` ends, `g[1][2]` uses
+    # the outer stride 3, not 5.
+    "arrays_multidim_shadowing": {
+        "comp": {
+            "glsl_contains": ["(1 * int(3u)) + 2", "(3 * int(5u)) + 4"],
+            "glsl_not_contains": ["(1 * int(5u)) + 2"],
         },
     },
     "modules_pbr_lighting": {
@@ -1467,7 +1661,7 @@ def check_translation_expectations(output_dir: Path, test_name: str,
     for stage, expectations in stage_expectations.items():
         texts: dict[str, str] = {}
 
-        for key in ("metal", "hlsl", "glsl", "gles"):
+        for key in ("metal", "hlsl", "glsl", "gles", "wgsl"):
             if any(name.startswith(f"{key}_") for name in expectations):
                 path, message = find_stage_file(output_dir, test_name, stage, key)
                 if path is None:
@@ -1491,6 +1685,7 @@ def check_translation_expectations(output_dir: Path, test_name: str,
             ("hlsl", "HLSL"),
             ("glsl", "GLSL"),
             ("gles", "GLES"),
+            ("wgsl", "WGSL"),
         ):
             if key not in texts:
                 continue
@@ -2952,6 +3147,7 @@ def main() -> int:
 
         if needs_internals:
             compile_args.append("-internals")
+        compile_args.extend(TRANSLATION_EXTRA_ARGS.get(test_name, ()))
 
         unsorted_tests.append({
             "file": test_file,
@@ -3425,6 +3621,14 @@ def main() -> int:
             if forbidden_output:
                 print(f"[{RED}FAIL{NC}] error_cases/{test_file.stem}")
                 print(f"       Error: expected diagnostic output not to include {forbidden_output}, got: {result.stdout.strip()}")
+                failed += 1
+                continue
+
+            expected_count = ERROR_CASE_EXPECTED_ERROR_COUNTS.get(test_file.name)
+            actual_count = result.doc.get("errorCount") if result.doc else None
+            if expected_count is not None and actual_count != expected_count:
+                print(f"[{RED}FAIL{NC}] error_cases/{test_file.stem}")
+                print(f"       Error: expected {expected_count} error(s), got {actual_count}: {result.stdout.strip()}")
                 failed += 1
                 continue
 

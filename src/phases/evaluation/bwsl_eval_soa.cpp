@@ -33,6 +33,80 @@ static bool EvalScalarCondition(const LiteralValue& value, bool* result) {
     }
 }
 
+// Component ("lane") kinds of numeric scalars and vectors. Vector arithmetic
+// runs lane by lane; a scalar is a single lane.
+enum class LaneKind : u8 { NONE, FLOAT, INT, UINT };
+
+static LaneKind GetLaneKind(LiteralValue::Type type) {
+    switch (type) {
+        case LiteralValue::FLOAT: case LiteralValue::FLOAT2:
+        case LiteralValue::FLOAT3: case LiteralValue::FLOAT4:
+            return LaneKind::FLOAT;
+        case LiteralValue::INT: case LiteralValue::INT2:
+        case LiteralValue::INT3: case LiteralValue::INT4:
+            return LaneKind::INT;
+        case LiteralValue::UINT: case LiteralValue::UINT2:
+        case LiteralValue::UINT3: case LiteralValue::UINT4:
+            return LaneKind::UINT;
+        default:
+            return LaneKind::NONE;
+    }
+}
+
+// The scalar (count 1) or vector type with count lanes of kind.
+static LiteralValue::Type MakeLaneType(LaneKind kind, u32 count) {
+    LiteralValue::Type scalar = kind == LaneKind::FLOAT ? LiteralValue::FLOAT
+                              : kind == LaneKind::INT ? LiteralValue::INT : LiteralValue::UINT;
+    LiteralValue::Type vec2 = kind == LaneKind::FLOAT ? LiteralValue::FLOAT2
+                            : kind == LaneKind::INT ? LiteralValue::INT2 : LiteralValue::UINT2;
+    return count <= 1 ? scalar : static_cast<LiteralValue::Type>(vec2 + count - 2);
+}
+
+// Converts a scalar to lane kind with the eval assignment rules: int and uint
+// promote to float, uint converts to int within the signed range, and a
+// nonnegative int converts to uint.
+static bool ConvertScalarLane(LiteralValue* value, LaneKind kind) {
+    if (value->IsVector()) return false;
+    switch (kind) {
+        case LaneKind::FLOAT:
+            if (value->type == LiteralValue::INT) value->floatValue = static_cast<float>(value->intValue);
+            else if (value->type == LiteralValue::UINT) value->floatValue = static_cast<float>(value->uintValue);
+            else return value->type == LiteralValue::FLOAT;
+            value->type = LiteralValue::FLOAT;
+            return true;
+        case LaneKind::INT:
+            if (value->type == LiteralValue::UINT && value->uintValue <= static_cast<u32>(INT_MAX)) {
+                value->intValue = static_cast<int>(value->uintValue);
+                value->type = LiteralValue::INT;
+            }
+            return value->type == LiteralValue::INT;
+        case LaneKind::UINT:
+            if (value->type == LiteralValue::INT && value->intValue >= 0) {
+                value->uintValue = static_cast<u32>(value->intValue);
+                value->type = LiteralValue::UINT;
+            }
+            return value->type == LiteralValue::UINT;
+        default:
+            return false;
+    }
+}
+
+static void CopyLane(LaneKind kind, const LiteralValue& from, u32 fromLane,
+                     LiteralValue* to, u32 toLane) {
+    switch (kind) {
+        case LaneKind::FLOAT: to->floatVec[toLane] = from.floatVec[fromLane]; break;
+        case LaneKind::INT: to->intVec[toLane] = from.intVec[fromLane]; break;
+        case LaneKind::UINT: to->uintVec[toLane] = from.uintVec[fromLane]; break;
+        default: break;
+    }
+}
+
+static bool IsComparisonOp(BinaryOpType op) {
+    return op == BinaryOpType::EQUALS || op == BinaryOpType::NOT_EQUALS ||
+           op == BinaryOpType::LESS || op == BinaryOpType::GREATER ||
+           op == BinaryOpType::LESS_EQUAL || op == BinaryOpType::GREATER_EQUAL;
+}
+
 // Pre-computed hashes for vector constructor names
 static const u32 kFloat2Hash = Utils::HashStr("float2");
 static const u32 kFloat3Hash = Utils::HashStr("float3");
@@ -224,6 +298,42 @@ bool CompileTimeEvaluatorSoA::PerformIntOp(BinaryOpType op, int left, int right,
     }
 }
 
+bool CompileTimeEvaluatorSoA::PerformUintOp(BinaryOpType op, u32 left, u32 right, u32* result) {
+    // Unsigned arithmetic wraps, as it does at run time.
+    switch (op) {
+        case BinaryOpType::ADD: *result = left + right; return true;
+        case BinaryOpType::SUBTRACT: *result = left - right; return true;
+        case BinaryOpType::MULTIPLY: *result = left * right; return true;
+        case BinaryOpType::DIVIDE:
+            if (right == 0) return false;
+            *result = left / right;
+            return true;
+        case BinaryOpType::MODULO:
+            if (right == 0) return false;
+            *result = left % right;
+            return true;
+        case BinaryOpType::EQUALS: *result = (left == right) ? 1 : 0; return true;
+        case BinaryOpType::NOT_EQUALS: *result = (left != right) ? 1 : 0; return true;
+        case BinaryOpType::LESS: *result = (left < right) ? 1 : 0; return true;
+        case BinaryOpType::GREATER: *result = (left > right) ? 1 : 0; return true;
+        case BinaryOpType::LESS_EQUAL: *result = (left <= right) ? 1 : 0; return true;
+        case BinaryOpType::GREATER_EQUAL: *result = (left >= right) ? 1 : 0; return true;
+        case BinaryOpType::BITWISE_AND: *result = left & right; return true;
+        case BinaryOpType::BITWISE_OR: *result = left | right; return true;
+        case BinaryOpType::BITWISE_XOR: *result = left ^ right; return true;
+        case BinaryOpType::LEFT_SHIFT:
+            if (right >= 32) return false;
+            *result = left << right;
+            return true;
+        case BinaryOpType::RIGHT_SHIFT:
+            // Logical shift, like OpShiftRightLogical on unsigned operands.
+            if (right >= 32) return false;
+            *result = left >> right;
+            return true;
+        default: return false;
+    }
+}
+
 bool CompileTimeEvaluatorSoA::PerformFloatOp(BinaryOpType op, float left, float right, float* result) {
     switch (op) {
         case BinaryOpType::ADD: *result = left + right; return true;
@@ -356,6 +466,14 @@ bool CompileTimeEvaluatorSoA::CanEvaluateNode(EvalStateSoA* state, NodeRef node)
                     return true;
                 }
             }
+            if (!access.isModuleQualified) {
+                // A swizzle of a compile-time scalar or vector.
+                u8 indices[4] = {};
+                u32 length = 0;
+                return CanEvaluateNode(state, access.object) &&
+                       Utils::DecodeSwizzleByHash(access.member.nameHash, access.member.nameLength,
+                                                  indices, &length);
+            }
             if (access.isModuleQualified) {
                 // Get the module name from the object (should be an identifier)
                 if (access.object.Type() != ASTNodeType::IDENTIFIER) return false;
@@ -410,6 +528,21 @@ bool CompileTimeEvaluatorSoA::EvaluateBinaryOp(EvalStateSoA* state, NodeRef node
         return true;
     }
     if (!EvaluateNode(state, binOp.right, &rightVal)) return false;
+
+    // A uint scalar beside a float scalar promotes to float, like an int does
+    // below, and takes the scalar float path (comparisons and % included).
+    if (leftVal.type == LiteralValue::UINT && rightVal.type == LiteralValue::FLOAT) {
+        leftVal.floatValue = static_cast<float>(leftVal.uintValue);
+        leftVal.type = LiteralValue::FLOAT;
+    } else if (leftVal.type == LiteralValue::FLOAT && rightVal.type == LiteralValue::UINT) {
+        rightVal.floatValue = static_cast<float>(rightVal.uintValue);
+        rightVal.type = LiteralValue::FLOAT;
+    }
+
+    if (leftVal.IsVector() || rightVal.IsVector() ||
+        leftVal.type == LiteralValue::UINT || rightVal.type == LiteralValue::UINT) {
+        return EvaluateLaneBinaryOp(state, binOp.op, leftVal, rightVal, outValue);
+    }
 
     // Type coercion: promote int to float if needed
     if (leftVal.type == LiteralValue::INT && rightVal.type == LiteralValue::FLOAT) {
@@ -506,6 +639,10 @@ bool CompileTimeEvaluatorSoA::EvaluateUnaryOp(EvalStateSoA* state, NodeRef node,
         return true;
     }
 
+    if (operandVal.IsVector() || operandVal.type == LiteralValue::UINT) {
+        return EvaluateLaneUnaryOp(state, unaryOp.op, operandVal, outValue);
+    }
+
     switch (unaryOp.op) {
         case UnaryOpType::NEGATE:
             if (operandVal.type == LiteralValue::INT) {
@@ -554,6 +691,147 @@ bool CompileTimeEvaluatorSoA::EvaluateUnaryOp(EvalStateSoA* state, NodeRef node,
 
     SetError(state, "Invalid unary operation");
     return false;
+}
+
+bool CompileTimeEvaluatorSoA::EvaluateLaneBinaryOp(EvalStateSoA* state, BinaryOpType op,
+                                                   LiteralValue left, LiteralValue right,
+                                                   LiteralValue* outValue) {
+    // Only a scalar operand converts, to the other operand's component type:
+    // int and uint promote to float and a nonnegative int converts to uint,
+    // so float3 * 2 and uint3 * 2 work. Nothing converts to int.
+    LaneKind leftKind = GetLaneKind(left.type);
+    LaneKind rightKind = GetLaneKind(right.type);
+    auto canConvertTo = [](LaneKind kind) {
+        return kind == LaneKind::FLOAT || kind == LaneKind::UINT;
+    };
+    if (leftKind != rightKind && canConvertTo(rightKind) && ConvertScalarLane(&left, rightKind)) {
+        leftKind = rightKind;
+    } else if (leftKind != rightKind && canConvertTo(leftKind) && ConvertScalarLane(&right, leftKind)) {
+        rightKind = leftKind;
+    }
+    const u32 leftCount = left.VectorSize();
+    const u32 rightCount = right.VectorSize();
+    if (leftKind == LaneKind::NONE || leftKind != rightKind ||
+        (left.IsVector() && right.IsVector() && leftCount != rightCount)) {
+        SetError(state, "Type mismatch in binary operation");
+        return false;
+    }
+
+    const bool isVector = left.IsVector() || right.IsVector();
+    if (isVector && IsComparisonOp(op)) {
+        SetError(state, "Vector comparisons cannot be evaluated at compile time");
+        return false;
+    }
+
+    const u32 count = leftCount > rightCount ? leftCount : rightCount;
+    LiteralValue result{};
+    result.type = MakeLaneType(leftKind, count);
+    for (u32 i = 0; i < count; i++) {
+        const u32 l = left.IsVector() ? i : 0;
+        const u32 r = right.IsVector() ? i : 0;
+        bool ok = false;
+        switch (leftKind) {
+            case LaneKind::FLOAT:
+                ok = PerformFloatOp(op, left.floatVec[l], right.floatVec[r], &result.floatVec[i]);
+                break;
+            case LaneKind::INT:
+                ok = PerformIntOp(op, left.intVec[l], right.intVec[r], &result.intVec[i]);
+                break;
+            default:
+                ok = PerformUintOp(op, left.uintVec[l], right.uintVec[r], &result.uintVec[i]);
+                break;
+        }
+        if (!ok) {
+            SetError(state, "Compile-time operation failed (division by zero?)");
+            return false;
+        }
+    }
+
+    if (IsComparisonOp(op)) {
+        outValue->type = LiteralValue::BOOL;
+        outValue->boolValue = result.uintVec[0] != 0;
+        return true;
+    }
+    *outValue = result;
+    return true;
+}
+
+bool CompileTimeEvaluatorSoA::EvaluateLaneUnaryOp(EvalStateSoA* state, UnaryOpType op,
+                                                  const LiteralValue& operand, LiteralValue* outValue) {
+    const LaneKind kind = GetLaneKind(operand.type);
+    const bool negate = op == UnaryOpType::NEGATE;
+    if (kind == LaneKind::NONE || (!negate && op != UnaryOpType::BITWISE_NOT) ||
+        (!negate && kind == LaneKind::FLOAT)) {
+        SetError(state, "Invalid unary operation");
+        return false;
+    }
+    LiteralValue result = operand;
+    for (u32 i = 0; i < operand.VectorSize(); i++) {
+        switch (kind) {
+            case LaneKind::FLOAT:
+                result.floatVec[i] = -operand.floatVec[i];
+                break;
+            case LaneKind::INT:
+                result.intVec[i] = negate ? (int)(0u - (u32)operand.intVec[i]) : ~operand.intVec[i];
+                break;
+            default:
+                result.uintVec[i] = negate ? 0u - operand.uintVec[i] : ~operand.uintVec[i];
+                break;
+        }
+    }
+    *outValue = result;
+    return true;
+}
+
+bool CompileTimeEvaluatorSoA::EvaluateSwizzle(EvalStateSoA* state, NodeRef node, LiteralValue* outValue) {
+    const MemberAccessData& access = state->ast->GetMemberAccess(node);
+    LiteralValue object;
+    if (!EvaluateNode(state, access.object, &object)) return false;
+
+    const LaneKind kind = GetLaneKind(object.type);
+    u8 indices[4] = {};
+    u32 length = 0;
+    if (kind == LaneKind::NONE ||
+        !Utils::DecodeSwizzleByHash(access.member.nameHash, access.member.nameLength, indices, &length)) {
+        SetError(state, "Non-module member access cannot be evaluated at compile time");
+        return false;
+    }
+    LiteralValue result{};
+    result.type = MakeLaneType(kind, length);
+    for (u32 i = 0; i < length; i++) {
+        if (indices[i] >= object.VectorSize()) {
+            SetError(state, "Swizzle component is out of range");
+            return false;
+        }
+        CopyLane(kind, object, indices[i], &result, i);
+    }
+    *outValue = result;
+    return true;
+}
+
+bool CompileTimeEvaluatorSoA::StoreSwizzle(LiteralValue* vector, ArenaString member, LiteralValue value) {
+    const LaneKind kind = GetLaneKind(vector->type);
+    u8 indices[4] = {};
+    u32 length = 0;
+    if (!vector->IsVector() ||
+        !Utils::DecodeSwizzleByHash(member.nameHash, member.nameLength, indices, &length)) {
+        return false;
+    }
+    for (u32 i = 0; i < length; i++) {
+        if (indices[i] >= vector->VectorSize()) return false;
+        for (u32 j = 0; j < i; j++) {
+            if (indices[i] == indices[j]) return false;
+        }
+    }
+    if (length == 1) {
+        if (!ConvertScalarLane(&value, kind)) return false;
+    } else if (value.type != MakeLaneType(kind, length)) {
+        return false;
+    }
+    for (u32 i = 0; i < length; i++) {
+        CopyLane(kind, value, i, vector, indices[i]);
+    }
+    return true;
 }
 
 bool CompileTimeEvaluatorSoA::EvaluateFunctionCall(EvalStateSoA* state, NodeRef node, LiteralValue* outValue) {
@@ -985,8 +1263,7 @@ bool CompileTimeEvaluatorSoA::EvaluateNode(EvalStateSoA* state, NodeRef node, Li
                 SetError(state, "Module member is not a compile-time constant");
                 return false;
             }
-            SetError(state, "Non-module member access cannot be evaluated at compile time");
-            return false;
+            return EvaluateSwizzle(state, node, outValue);
         }
 
         default:

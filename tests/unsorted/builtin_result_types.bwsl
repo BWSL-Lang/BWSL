@@ -1,0 +1,58 @@
+// Regression (#212): the frexp/modf result structs BwslFrexpResult and
+// BwslModfResult can be named wherever a type is accepted: locals, function
+// parameters and return types, struct fields, arrays and constructors.
+pipeline BuiltinResultTypes {
+    attributes { position: float3 uv: float2 }
+
+    struct SplitPair {
+        BwslFrexpResult parts
+        BwslModfResult split
+        float scale
+    }
+
+    splitValue :: (float x) -> BwslModfResult {
+        return modf(x);
+    }
+
+    decompose :: (float x) -> BwslFrexpResult {
+        BwslFrexpResult r = frexp(x);
+        return r;
+    }
+
+    rebuild :: (BwslFrexpResult p, BwslModfResult m) -> float {
+        return ldexp(p.mantissa, p.exponent) + m.fraction + m.whole;
+    }
+
+    pass "Main" {
+        use attributes { position, uv }
+        vertex { output.position = float4(attributes.position, 1.0); output.uv = attributes.uv; }
+        fragment {
+            BwslFrexpResult parts = frexp(input.uv.x * 8.0);
+            BwslModfResult m = modf(input.uv.y * 4.0);
+            SplitPair pair;
+            pair.parts = decompose(input.uv.x);
+            pair.split = splitValue(input.uv.y);
+            pair.scale = 2.0;
+            float total = rebuild(pair.parts, pair.split) * pair.scale;
+            output.color = float4(parts.mantissa, float(parts.exponent), m.fraction + total, m.whole);
+        }
+    }
+
+    pass "Ordered" {
+        use attributes { position, uv }
+        vertex { output.position = float4(attributes.position, 1.0); output.uv = attributes.uv; }
+        fragment {
+            // Declared before any frexp/modf call, so the struct types are
+            // created from the declarations rather than from the calls.
+            BwslModfResult made = BwslModfResult(0.25, 3.0);
+            BwslFrexpResult[2] arr;
+            BwslFrexpResult late;
+            arr[0] = frexp(input.uv.x);
+            arr[1] = frexp(input.uv.y);
+            late = arr[1];
+            float value = made.fraction + made.whole + ldexp(arr[0].mantissa, late.exponent);
+            value += rebuild(late, BwslModfResult(0.5, input.uv.x));
+            output.color = float4(value, frexp(input.uv.y * 3.0).mantissa, 0.0, 1.0);
+        }
+    }
+}
