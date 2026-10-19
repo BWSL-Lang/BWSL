@@ -851,6 +851,27 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
                     self.assertNotIn("min(1.0", body)
                     self.assertRegex(body, r"min\(_\d+\.best, ")
 
+        def mod_fold_glsl(self, body, declarations=""):
+            target = self.compile(shader(body, declarations), "-glsl")
+            glsl = (target / "constprop.frag").read_text(encoding="utf-8")
+            return glsl[glsl.index("void main"):]
+
+        def test_float_remainder_folds_like_runtime_mod(self):
+            # Float `%` is OpFMod at runtime: x - y * floor(x / y). Parse-time
+            # consts, eval code and constant propagation must all agree.
+            body = self.mod_fold_glsl('''
+                eval float a = 7.5 % -2.0;
+                eval float b = -1.25;
+                eval { b %= 1.0; }
+                float c = -5.0 % 4.0;
+                output.color = float4(K, a, b, c);
+            ''', "const float K = -7.5 % 2.0;")
+            self.assertIn("vec4(0.5, -0.5, 0.75, 3.0)", body)
+
+        def test_fmod_intrinsic_still_truncates(self):
+            body = self.mod_fold_glsl("output.color = float4(fmod(-7.25, 2.0));")
+            self.assertIn("vec4(-1.25)", body)
+
     result = unittest.TextTestRunner(verbosity=1).run(
         unittest.defaultTestLoader.loadTestsFromTestCase(ConstantPropagationTests))
     failures = len(result.failures) + len(result.errors)
