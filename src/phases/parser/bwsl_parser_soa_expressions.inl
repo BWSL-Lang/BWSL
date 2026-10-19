@@ -839,6 +839,28 @@ NodeRef Parser::ParseArrayAccess(NodeRef array) {
     return FlattenMultiDimArrayAccess(access);
 }
 
+void Parser::BindArrayShape(u32 nameHash, const std::vector<u32>& dims) {
+    while (!arrayShapeBindings.empty() &&
+           !SymbolTable::IsScopeOpen(&symbolTable, arrayShapeBindings.back().scopeLevel,
+                                     arrayShapeBindings.back().scopeSerial)) {
+        arrayShapeBindings.pop_back();
+    }
+    arrayShapeBindings.push_back({nameHash, symbolTable.currentScope,
+                                  symbolTable.scopeSerials[symbolTable.currentScope], dims});
+}
+
+const std::vector<u32>* Parser::FindMultiDimArrayDims(u32 nameHash) const {
+    for (size_t i = arrayShapeBindings.size(); i > 0; --i) {
+        const ArrayShapeBinding& binding = arrayShapeBindings[i - 1];
+        if (binding.nameHash != nameHash ||
+            !SymbolTable::IsScopeOpen(&symbolTable, binding.scopeLevel, binding.scopeSerial)) {
+            continue;
+        }
+        return binding.dims.size() > 1 ? &binding.dims : nullptr;
+    }
+    return nullptr;
+}
+
 NodeRef Parser::FlattenMultiDimArrayAccess(NodeRef access) {
     if (access.Type() != ASTNodeType::ARRAY_ACCESS) {
         return access;
@@ -857,14 +879,13 @@ NodeRef Parser::FlattenMultiDimArrayAccess(NodeRef access) {
         return access;
     }
 
-    u32 baseHash = ast->GetIdentifier(base).name.nameHash;
-    auto it = multiDimArrayDims.find(baseHash);
-    if (it == multiDimArrayDims.end()) {
+    const std::vector<u32>* found = FindMultiDimArrayDims(ast->GetIdentifier(base).name.nameHash);
+    if (!found) {
         return access;
     }
 
-    const std::vector<u32>& dims = it->second;
-    if (dims.size() <= 1 || indices.size() != dims.size()) {
+    const std::vector<u32>& dims = *found;
+    if (indices.size() != dims.size()) {
         return access;
     }
 
@@ -877,7 +898,7 @@ NodeRef Parser::FlattenMultiDimArrayAccess(NodeRef access) {
         flatIndex = ASTFactory::MakeBinaryOp(ast, BinaryOpType::ADD, mul, indices[i], 0, 0);
     }
 
-    return ASTFactory::MakeArrayAccess(ast, base, flatIndex, 0, 0);
+    return ASTFactory::MakeArrayAccess(ast, base, flatIndex, 0, 0, static_cast<u8>(dims.size()));
 }
 
 } // namespace BWSL

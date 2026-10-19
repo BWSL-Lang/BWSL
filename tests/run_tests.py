@@ -195,6 +195,8 @@ ERROR_CASE_TESTS = {
     "intrinsic_module_function_name.bwsl": "reserved for a built-in intrinsic",
     "intrinsic_struct_method_name.bwsl": "reserved for a built-in intrinsic",
     "intrinsic_enum_method_name.bwsl": "reserved for a built-in intrinsic",
+    "builtin_result_struct_redeclared.bwsl": "Struct name 'BwslFrexpResult' is reserved for a built-in type",
+    "builtin_result_unknown_field.bwsl": "Unknown field 'fraction' on type 'BwslFrexpResult'",
     "attribute_capacity.bwsl": "supported limit of 16 attributes",
     "array_negative_remainder_index.bwsl": "out of bounds",
     'function_void_return_value.bwsl': 'Void function cannot return a value',
@@ -315,7 +317,10 @@ ERROR_CASE_TESTS = {
     "unknown_enum_variant.bwsl": "Unknown enum variant 'Missing'",
     "array_size_negative.bwsl": "Expected array size",
     "discard_in_vertex.bwsl": "SPIR-V validation failed",
-    "switch_on_float.bwsl": "SPIR-V validation failed",
+    "switch_on_float.bwsl": "switch selector must be an int, uint or enum value, got float",
+    "switch_on_runtime_bool.bwsl": "switch selector must be an int, uint or enum value, got bool",
+    "switch_case_float_label.bwsl": "switch case values must be int, uint or enum constants, got float",
+    "switch_case_negative_float_label.bwsl": "switch case values must be int, uint or enum constants, got float",
     "variant_switch_duplicate_match.bwsl": "Duplicate switch case value",
     "user_function_wrong_arg_count.bwsl": "SPIR-V validation failed",
     "struct_as_varying.bwsl": "SPIR-V validation failed",
@@ -373,6 +378,7 @@ ERROR_CASE_TESTS = {
     "eval_function_recursion.bwsl": "Eval function call depth exceeded",
     "eval_function_missing_return.bwsl": "Non-void function must return a value on every reachable path",
     "eval_function_return_type.bwsl": "Type mismatch in eval function return",
+    "pipeline_const_eval_call_runtime_arg.bwsl": "Pipeline constant 'AREA' calls eval function 'circleArea' with arguments that are not compile-time values",
     "eval_vector_constructor_empty.bwsl": "Compile-time declaration initializer is not a compile-time value",
     "eval_vector_constructor_few.bwsl": "Compile-time declaration initializer is not a compile-time value",
     "eval_vector_constructor_many.bwsl": "Compile-time declaration initializer is not a compile-time value",
@@ -610,6 +616,26 @@ AST_JSON_REFERENCE_TESTS = {
             {"to": "builtin:type:float2", "role": "type", "from_prefix": "VARIABLE_DECL:"},
         ],
     },
+    "builtin_result_types": {
+        "symbols": [
+            {
+                "match": {"kind": "struct", "name": "BwslModfResult"},
+                "expect": {"id": "builtin:type:BwslModfResult", "owner": "builtin"},
+            },
+            {
+                "match": {"kind": "struct-field", "name": "mantissa"},
+                "expect": {"id": "builtin:type:BwslFrexpResult/field:mantissa",
+                           "owner": "builtin:type:BwslFrexpResult", "type": "float"},
+            },
+        ],
+        "references": [
+            {"to": "FUNCTION:0", "role": "call", "from_prefix": "FUNCTION_CALL:"},
+            {"to": "builtin:type:BwslModfResult", "role": "construct", "from_prefix": "FUNCTION_CALL:"},
+            {"to": "builtin:type:BwslModfResult", "role": "type", "from_prefix": "FUNCTION:0/parameter:"},
+            {"to": "builtin:type:BwslModfResult/field:whole", "role": "member", "from_prefix": "MEMBER_ACCESS:"},
+            {"to": "builtin:type:BwslFrexpResult/field:mantissa", "role": "member", "from_prefix": "MEMBER_ACCESS:"},
+        ],
+    },
 }
 
 FORBIDDEN_SOURCE_ALIAS_NAMES = (
@@ -694,6 +720,19 @@ TRANSLATION_EXPECTATION_TESTS = {
                 "noperspective in vec2 v_screenUV",
             ],
             "gles_not_contains": ["mediump"],
+        },
+    },
+    "pipeline_const_eval_call": {
+        "comp": {
+            "glsl_contains": [
+                "_m0[0] = 4.5;",
+                "_m0[1] = 9.0;",
+                "7.5 + ",
+                "_m0[5] = 18.0;",
+                "_m0[6] = 9.25;",
+                "_m0[7] = 40.5;",
+                "_m0[8] = 30.0;",
+            ],
         },
     },
     "output_depth_builtin": {
@@ -834,6 +873,32 @@ TRANSLATION_EXPECTATION_TESTS = {
         "frag": {
             "ir_contains": ["XOR", "SHR", "IMUL", "NORMALIZE", "SIN", "COS"],
             "hlsl_contains": ["normalize("],
+        },
+    },
+    # #208: `.length` on a multi-dimensional array is the outer dimension and
+    # on a partly indexed one the next dimension, not the flattened count.
+    "arrays_multidim_length": {
+        "comp": {
+            "glsl_contains": [
+                "_m0[0] = 2000;",
+                "_m0[1] = 3000;",
+                "_m0[2] = 3000;",
+                "_m0[3] = 2000;",
+                "_m0[4] = 3000;",
+                "_m0[5] = 4000;",
+                "_m0[6] = 3000 + ",
+                "< 2;",
+                "< 3;",
+            ],
+            "glsl_not_contains": ["6000", "24000", "< 6;"],
+        },
+    },
+    # Shapes are scoped: once the inner `float[4][5] g` ends, `g[1][2]` uses
+    # the outer stride 3, not 5.
+    "arrays_multidim_shadowing": {
+        "comp": {
+            "glsl_contains": ["(1 * int(3u)) + 2", "(3 * int(5u)) + 4"],
+            "glsl_not_contains": ["(1 * int(5u)) + 2"],
         },
     },
     "modules_pbr_lighting": {

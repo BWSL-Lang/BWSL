@@ -62,6 +62,8 @@ Current `const` rules include:
 - `const` declarations require an initializer
 - top-level and pass-level `const` values are parsed and may be compile-time
   evaluated when possible
+- a pipeline-level `const` initializer may call pipeline `eval` functions
+  with compile-time arguments; each call is folded at the declaration
 - module-level `const` declarations are folded at compile time. Their type
   must be a scalar or a `float`, `int` or `uint` vector. The initializer may
   use literals, other constants, scalar arithmetic, and scalar or vector

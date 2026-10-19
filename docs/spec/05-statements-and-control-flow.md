@@ -120,6 +120,12 @@ The current parser accepts:
 - `case` labels with one or more comma-separated values
 - `default`
 
+The selector must be an `int`, `uint` or enum value, and case labels must be
+integer, enum or bool constants. A selector that is a compile-time constant,
+such as a `bool` variant, keeps only the matching arm and may be a `bool`.
+A runtime `bool` or `float` selector, or a `float` case label, is a source
+error.
+
 ## Discard
 
 `discard;` is accepted as a statement form. It is intended for fragment-stage
@@ -193,12 +199,16 @@ but not currently part of the language.
 ### Eval Functions
 
 Pipeline-scope eval functions can be called with compile-time arguments from eval
-initializers or runtime expressions. Their result is substituted into emitted code.
+initializers, pipeline-, pass- and local-scope `const` initializers, or runtime
+expressions. Their result is substituted into emitted code. A pipeline constant
+whose eval call has runtime arguments is rejected at its declaration.
 
 ```bwsl
 eval taps :: (int quality) -> int {
     return quality * 2 + 1;
 }
+
+const int TAPS = taps(2);
 ```
 
 Function execution supports typed local declarations, assignments, scalar

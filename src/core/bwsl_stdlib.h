@@ -705,6 +705,53 @@ inline bool FormatDerivativeStageError(Intrinsic id, ShaderStage stage,
     return true;
 }
 
+// Structs returned by intrinsics that produce two values. The parser declares
+// them as global struct types so source can name them, and lowering lays them
+// out from the same fields, so a declared variable and the call result agree.
+struct BuiltinStructField {
+    const char* name;
+    CoreType type;
+};
+
+struct BuiltinStructType {
+    const char* name;
+    u32 nameHash;
+    Intrinsic intrinsic;  // The call that returns this struct
+    const BuiltinStructField* fields;
+    u32 fieldCount;
+};
+
+constexpr BuiltinStructField MODF_RESULT_FIELDS[] = {
+    {"fraction", CoreType::FLOAT},
+    {"whole", CoreType::FLOAT},
+};
+
+constexpr BuiltinStructField FREXP_RESULT_FIELDS[] = {
+    {"mantissa", CoreType::FLOAT},
+    {"exponent", CoreType::INT},
+};
+
+constexpr BuiltinStructType BUILTIN_STRUCT_TYPES[] = {
+    {"BwslModfResult", Utils::HashStr("BwslModfResult"), Intrinsic::MODF_SPLIT,
+     MODF_RESULT_FIELDS, 2},
+    {"BwslFrexpResult", Utils::HashStr("BwslFrexpResult"), Intrinsic::FREXP,
+     FREXP_RESULT_FIELDS, 2},
+};
+
+inline const BuiltinStructType* FindBuiltinStructType(u32 nameHash) {
+    for (const auto& type : BUILTIN_STRUCT_TYPES) {
+        if (type.nameHash == nameHash) return &type;
+    }
+    return nullptr;
+}
+
+inline const BuiltinStructType* FindBuiltinStructResult(Intrinsic intrinsic) {
+    for (const auto& type : BUILTIN_STRUCT_TYPES) {
+        if (type.intrinsic == intrinsic) return &type;
+    }
+    return nullptr;
+}
+
 // Pre-computed hashes for hot paths
 namespace PrecomputedHashes {
     constexpr u32 LERP = Utils::HashStr("lerp");

@@ -61,7 +61,8 @@ def main():
             resources { tex: texture2D result: buffer<float4> }
             pass "Main" { use resources { tex, result }
         ''' + body + "}}"
-    for name in ("uniform_struct_dynamic_index", "texture_resources_cube_3d_array", "texture_sample_grad_cmp_gather", "texture_query_size_levels"):
+    for name in ("uniform_struct_dynamic_index", "texture_resources_cube_3d_array", "texture_sample_grad_cmp_gather",
+                 "texture_query_size_levels", "texture_array_kinds"):
         sources[name] = (ROOT / "tests/unsorted" / f"{name}.bwsl").read_text()
     records = []
     for name, source in sources.items():
@@ -109,6 +110,21 @@ def main():
                                                (2 * [1, 0.5, 0.25][index % 3] - 2, [1, 0.5, 0.25][index % 3] + 6)])}]
             else:
                 buffers = None
+            if name == "texture_array_kinds":
+                # Each texture array element is its own WGSL binding at the
+                # array's slot plus its index (#211).
+                reflection = json.loads((directory / "source.frag.wgsl.bindings.json").read_text())
+                textures = {item["binding"]: item for item in reflection["resources"] if item["type"] == "texture"}
+                expected = {1: ("flat2d", 3, 0, "2d"), 2: ("flat2d", 3, 1, "2d"), 3: ("flat2d", 3, 2, "2d"),
+                            4: ("cubes", 2, 0, "cube"), 5: ("cubes", 2, 1, "cube"), 7: ("volumes", 2, 1, "3d"),
+                            8: ("layered", 2, 0, "2d-array"), 9: ("layered", 2, 1, "2d-array"),
+                            10: ("pairs", 2, 0, "2d"), 11: ("pairs", 2, 1, "2d"),
+                            12: ("shadows", 2, 0, "2d"), 13: ("shadows", 2, 1, "2d")}
+                checks["texture_array_elements"] = textures.keys() == expected.keys() and all(
+                    (textures[binding]["name"], textures[binding]["arrayLength"], textures[binding]["arrayIndex"],
+                     textures[binding]["viewDimension"]) == value for binding, value in expected.items())
+                checks["texture_array_depth"] = all(
+                    (textures[binding]["sampleType"] == "depth") == (binding >= 12) for binding in textures)
             if buffers and not args.skip_gpu and all(checks.values()):
                 case = directory / "case.json"
                 case.write_text(json.dumps({"workgroups": [1, 1, 1], "buffers": buffers}))
