@@ -1594,6 +1594,15 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         glsl_op = GLSLstd450SSign;
       }
     }
+    // first_bit_high on a signed int finds the highest bit that differs
+    // from the sign bit (FindSMsb), so first_bit_high(-1) is -1.
+    if (op == IR::OP_CLZ) {
+      CoreType t = GetOperandType(operand_reg);
+      if (t == CoreType::INT || t == CoreType::INT2 ||
+          t == CoreType::INT3 || t == CoreType::INT4) {
+        glsl_op = GLSLstd450FindSMsb;
+      }
+    }
 
     // OpExtInst: result_type, result_id, set_id, instruction, operands...
     if (currentFunctionSize + 6 > currentFunctionCapacity) {
@@ -1618,9 +1627,10 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u32 offset_id = GetSpirvId(offset_reg);
     u32 count_id = GetSpirvId(count_reg);
     CoreType base_type = GetOperandType(base_reg);
+    // Zero-extend uint fields, including each component of a uint vector.
     spv::Op extract_op =
-        (base_type == CoreType::UINT) ? spv::OpBitFieldUExtract
-                                      : spv::OpBitFieldSExtract;
+        (CoreTypeScalarType(base_type) == CoreType::UINT) ? spv::OpBitFieldUExtract
+                                                          : spv::OpBitFieldSExtract;
     Emit(extract_op, result_type, dest, base_id, offset_id, count_id);
     break;
   }

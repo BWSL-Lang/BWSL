@@ -318,6 +318,19 @@ ERROR_CASE_TESTS = {
     "user_function_wrong_arg_count.bwsl": "SPIR-V validation failed",
     "struct_as_varying.bwsl": "SPIR-V validation failed",
     "assign_to_input.bwsl": "cannot assign to input.* - stage inputs are read-only",
+    "vector_narrow_assign.bwsl": "cannot implicitly convert int3 to int2; vector widths must match, use a swizzle such as .xy to narrow",
+    "texture_size_volume_into_int2.bwsl": "cannot implicitly convert int3 to int2; vector widths must match, use a swizzle such as .xy to narrow",
+    "vector_narrow_reassign.bwsl": "cannot implicitly convert int3 to int2; vector widths must match, use a swizzle such as .xy to narrow",
+    "vector_widen_assign.bwsl": "cannot implicitly convert int2 to int3; vector widths must match, use a constructor such as int3(value, ...) to widen",
+    "vector_component_type_assign.bwsl": "cannot implicitly convert int3 to float3; vector component types must match, convert with float3(...)",
+    "vector_to_scalar_assign.bwsl": "cannot implicitly convert int3 to int; select a component such as .x",
+    "vector_scalar_splat_assign.bwsl": "cannot implicitly convert float to float2; use float2(value) to splat a scalar",
+    "vector_swizzle_store_width.bwsl": "cannot implicitly convert int3 to int2; vector widths must match, use a swizzle such as .xy to narrow",
+    "vector_struct_field_width.bwsl": "cannot implicitly convert int3 to int2; vector widths must match, use a swizzle such as .xy to narrow",
+    "vector_array_element_width.bwsl": "cannot implicitly convert int3 to int2; vector widths must match, use a swizzle such as .xy to narrow",
+    "vector_array_initializer_width.bwsl": "cannot implicitly convert int3 to int2; vector widths must match, use a swizzle such as .xy to narrow",
+    "vector_return_width.bwsl": "cannot implicitly convert int3 to int2; vector widths must match, use a swizzle such as .xy to narrow",
+    "vector_binary_width.bwsl": "vector operands have different widths (int2 and int3); use a swizzle or constructor to match them",
     "assign_to_attribute.bwsl": "cannot assign to attributes.* - vertex attributes are read-only",
     "fragment_reads_attribute.bwsl": "Vertex attributes cannot be read in a fragment stage",
     "varying_type_conflict.bwsl": "conflicting types for stage output 'uv': first assigned as float2, now assigned float3",
@@ -707,6 +720,22 @@ TRANSLATION_EXPECTATION_TESTS = {
         "frag": {
             "ir_count_exactly": {"  PHI r": 6},
             "spirv_count_exactly": {"OpPhi": 6},
+        },
+    },
+    # Issue #189: first_bit_high is FindSMsb on int and FindUMsb on uint.
+    "intrinsics_bit_indices": {
+        "frag": {
+            "spirv_contains": ["OpBitCount", "FindSMsb", "FindUMsb", "FindILsb"],
+            "glsl_contains": ["bitCount(", "findMSB(", "findLSB("],
+            "hlsl_contains": ["countbits(", "firstbithigh(", "firstbitlow("],
+            "metal_contains": ["popcount(", "spvFindSMSB(", "spvFindUMSB(", "spvFindLSB("],
+        },
+    },
+    # Unsigned fields, including uint vector components, zero-extend.
+    "intrinsics_bitfield": {
+        "frag": {
+            "spirv_contains": ["OpBitReverse", "OpBitFieldSExtract", "OpBitFieldUExtract", "OpBitFieldInsert"],
+            "spirv_count_exactly": {"OpBitFieldUExtract": 2, "OpBitFieldSExtract": 2},
         },
     },
     "types_matrices": {

@@ -359,7 +359,8 @@ static u32 GetFoldArity(u16 op) {
         case IR::OP_ROUND: case IR::OP_FRACT: case IR::OP_SIGN: case IR::OP_SATURATE:
         case IR::OP_DEGREES: case IR::OP_RADIANS:
         case IR::OP_ISNAN: case IR::OP_ISINF: case IR::OP_ISFINITE: case IR::OP_ISNORMAL:
-        case IR::OP_POPCNT: case IR::OP_CTZ: case IR::OP_REVERSE_BITS: case IR::OP_BITCAST:
+        case IR::OP_POPCNT: case IR::OP_CLZ: case IR::OP_CTZ: case IR::OP_REVERSE_BITS:
+        case IR::OP_BITCAST:
             return 1;
         case IR::OP_FADD: case IR::OP_FSUB: case IR::OP_FMUL: case IR::OP_FDIV:
         case IR::OP_FMIN: case IR::OP_FMAX:
@@ -504,16 +505,22 @@ static bool FoldOperation(u16 op, const ConstantValue* in, CoreType resultType, 
             return true;
         }
 
-        // Bit operations. firstbithigh (OP_CLZ) isn't folded: the backends
-        // disagree on what it returns.
+        // Bit operations. first_bit_high/low return the bit's index, or -1
+        // (all ones) when there's none: FindUMsb, FindSMsb and FindILsb.
         case IR::OP_POPCNT:
             if (!IsIntegerType(type) || !IsIntegerType(resultType)) return false;
             *out = MakeConstant(resultType, static_cast<u32>(std::popcount(ua)));
             return true;
+        case IR::OP_CLZ: {
+            if (!IsIntegerType(type) || !IsIntegerType(resultType)) return false;
+            // A signed value's highest bit that differs from its sign bit.
+            u32 bits = type == CoreType::INT && sa < 0 ? ~ua : ua;
+            *out = MakeConstant(resultType, bits == 0 ? 0xFFFFFFFFu : static_cast<u32>(31 - std::countl_zero(bits)));
+            return true;
+        }
         case IR::OP_CTZ:
-            // Zero has no lowest set bit; the backends return -1 or 32.
-            if (!IsIntegerType(type) || !IsIntegerType(resultType) || ua == 0) return false;
-            *out = MakeConstant(resultType, static_cast<u32>(std::countr_zero(ua)));
+            if (!IsIntegerType(type) || !IsIntegerType(resultType)) return false;
+            *out = MakeConstant(resultType, ua == 0 ? 0xFFFFFFFFu : static_cast<u32>(std::countr_zero(ua)));
             return true;
         case IR::OP_REVERSE_BITS: {
             if (!IsIntegerType(type)) return false;
@@ -1878,7 +1885,8 @@ static bool KeepsRegisterOperands(u16 op) {
     switch (op) {
         case IR::OP_SHL: case IR::OP_SHR: case IR::OP_ASR:
         case IR::OP_ISNAN: case IR::OP_ISINF: case IR::OP_ISFINITE: case IR::OP_ISNORMAL:
-        case IR::OP_POPCNT: case IR::OP_CTZ: case IR::OP_REVERSE_BITS: case IR::OP_BITCAST:
+        case IR::OP_POPCNT: case IR::OP_CLZ: case IR::OP_CTZ: case IR::OP_REVERSE_BITS:
+        case IR::OP_BITCAST:
         case IR::OP_LDEXP: case IR::OP_BITFIELD_EXTRACT: case IR::OP_BITFIELD_INSERT:
             return true;
         default:
