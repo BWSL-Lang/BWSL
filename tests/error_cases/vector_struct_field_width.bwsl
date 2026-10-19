@@ -1,0 +1,28 @@
+// Error case: a struct field store keeps the field's declared width.
+pipeline VectorWidth {
+    attributes {
+        position: float3
+    }
+
+    struct Holder {
+        int2 size;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.position.xy;
+        }
+
+        fragment {
+            int2 small = int2(int(input.uv.x), int(input.uv.y));
+            int3 large = int3(small, int(input.uv.x * 3.0));
+            Holder holder;
+            holder.size = large;
+            int2 value = holder.size;
+            output.color = float4(float(value.x), float(value.y), 0.0, 1.0);
+        }
+    }
+}

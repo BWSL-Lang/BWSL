@@ -53,7 +53,11 @@ Current intrinsic names include, among others:
   `pack_unorm2x16`, `unpack_unorm2x16`, `pack_unorm4x8`,
   `unpack_unorm4x8`, `pack_snorm2x16`, `unpack_snorm2x16`,
   `pack_snorm4x8`, `unpack_snorm4x8`, `pack_half2x16`,
-  `unpack_half2x16`
+  `unpack_half2x16`. `count_bits`, `first_bit_low` and `first_bit_high`
+  return their argument's type. `first_bit_low` and `first_bit_high` give
+  the index of the lowest or highest set bit, or -1 when there is none; on
+  an `int`, `first_bit_high` gives the highest bit that differs from the
+  sign bit, so `first_bit_high(-1)` is -1.
 - control/select: `select`
 - reductions and classification: `any`, `all`, `isnan`, `isinf`, `isfinite`,
   `isnormal`
