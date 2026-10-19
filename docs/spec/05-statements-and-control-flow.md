@@ -196,6 +196,26 @@ The current comptime value domain is limited to scalar and numeric vector litera
 existing enum, module, and variant constants. Richer comptime data is planned
 but not currently part of the language.
 
+Vector values are evaluated component-wise, with the same results as at run
+time. `+`, `-`, `*`, `/` and `%` take two vectors of the same component type and
+width, or a vector and a scalar in either order; the scalar is applied to every
+component. An `int` or `uint` scalar promotes to match a `float` vector, and a
+nonnegative `int` scalar converts to match a `uint` vector; other component
+types must match. The bit operators apply to `int` and `uint` vectors.
+Integer division truncates toward zero and integer division by zero is
+rejected; float `%` is floored, as described in Expressions. Unary `-` negates each component. Swizzle reads (`tint.y`,
+`tint.zyx`) produce a scalar or vector, and swizzle stores to an eval binding
+(`tint.xy = float2(1.0, 0.5);`) take a scalar for one component or a vector of
+the same type for several, with distinct components. Vector comparisons are
+not evaluated at compile time.
+
+```bwsl
+eval float3 tint = float3(0.2, 0.4, 0.6);
+tint = tint * 2.0;
+eval float g = tint.y;
+tint = float3(tint.x, 1.0, tint.z);
+```
+
 ### Eval Functions
 
 Pipeline-scope eval functions can be called with compile-time arguments from eval

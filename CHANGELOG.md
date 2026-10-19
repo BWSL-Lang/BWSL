@@ -18,6 +18,14 @@
   `@bounds(>=0, <=1) float4 tint;`, or per component, as in
   `@bounds(>0, -10<y<0) float4 offsets;`. A bounded component is never
   NaN. See "Value Bounds" in the language reference.
+- Vector `eval` values work in compile-time arithmetic: `+ - * /` and `%`
+  between vectors of the same width or with a scalar on either side, bit
+  operations on `int` and `uint` vectors, unary minus, swizzle reads such as
+  `tint.y` or `tint.zyx`, and swizzle stores such as `tint.xy = ...`.
+  Constructors built from these, like `float3(tint.x, 1.0, tint.z)`, fold
+  too. `uint` scalar arithmetic in eval code now works as well.
+- Module constant initializers can use vector arithmetic and swizzles, as in
+  `const float2 SOUTH = NORTH * -1.0;`.
 - A pipeline-scope `const` can call a pipeline `eval` function, as in
   `const float AREA = circleArea(2.0);`. The call is evaluated once and
   every pass sees the folded value. An eval call whose arguments aren't

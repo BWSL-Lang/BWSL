@@ -656,8 +656,34 @@ static bool BindCompileTimeDecl(ComptimeState* state, NodeRef stmt, bool require
     return true;
 }
 
+// Executes a swizzle store into an eval vector binding, e.g. `tint.y = 1.0;`.
+static bool ExecuteSwizzleAssignmentIfComptime(ComptimeState* state, NodeRef stmt) {
+    const AssignmentData& assign = state->ast->GetAssignment(stmt);
+    const MemberAccessData& access = state->ast->GetMemberAccess(assign.target);
+    if (access.isModuleQualified || access.object.Type() != ASTNodeType::IDENTIFIER) return false;
+    const u32 nameHash = state->ast->GetIdentifier(access.object).name.nameHash;
+    LiteralValue vector;
+    if (!LookupBindingValue(state, nameHash, &vector)) return false;
+
+    LiteralValue value;
+    if (!EvalExpression(state, assign.value, &value)) {
+        Report(state, assign.value, "Compile-time assignment value is not a compile-time value");
+        return true;
+    }
+    if (!CompileTimeEvaluatorSoA::StoreSwizzle(&vector, access.member, value)) {
+        Report(state, stmt, "Invalid compile-time swizzle assignment: the binding must be a vector, "
+                            "the components distinct and in range, and the value match them");
+        return true;
+    }
+    UpdateBinding(state, nameHash, vector);
+    return true;
+}
+
 static bool ExecuteAssignmentIfComptime(ComptimeState* state, NodeRef stmt) {
     const AssignmentData& assign = state->ast->GetAssignment(stmt);
+    if (assign.target.Type() == ASTNodeType::MEMBER_ACCESS) {
+        return ExecuteSwizzleAssignmentIfComptime(state, stmt);
+    }
     if (assign.target.Type() != ASTNodeType::IDENTIFIER) return false;
     const IdentifierData& ident = state->ast->GetIdentifier(assign.target);
     u32 index = INVALID_U32;

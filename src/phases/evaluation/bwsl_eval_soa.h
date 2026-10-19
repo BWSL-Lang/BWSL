@@ -98,6 +98,13 @@ public:
     static bool EvaluateBinaryOp(EvalStateSoA* state, NodeRef node, LiteralValue* outValue);
     static bool EvaluateUnaryOp(EvalStateSoA* state, NodeRef node, LiteralValue* outValue);
     static bool EvaluateFunctionCall(EvalStateSoA* state, NodeRef node, LiteralValue* outValue);
+    static bool EvaluateSwizzle(EvalStateSoA* state, NodeRef node, LiteralValue* outValue);
+
+    // Writes value into the components of vector named by a swizzle member
+    // (e.g. .xz). One component takes a scalar, converted like an eval
+    // assignment; several take a vector of the same component type and width.
+    // Returns false if the swizzle or value doesn't fit.
+    static bool StoreSwizzle(LiteralValue* vector, ArenaString member, LiteralValue value);
 
 private:
     // Stack manipulation
@@ -109,7 +116,15 @@ private:
     // Arithmetic operations
     static bool PerformIntOp(BinaryOpType op, int left, int right, int* result);
     static bool PerformFloatOp(BinaryOpType op, float left, float right, float* result);
+    static bool PerformUintOp(BinaryOpType op, u32 left, u32 right, u32* result);
     static bool PerformBoolOp(BinaryOpType op, bool left, bool right, bool* result);
+
+    // Component-wise arithmetic on numeric vectors and uint scalars. A scalar
+    // operand is broadcast to every component.
+    static bool EvaluateLaneBinaryOp(EvalStateSoA* state, BinaryOpType op, LiteralValue left,
+                                     LiteralValue right, LiteralValue* outValue);
+    static bool EvaluateLaneUnaryOp(EvalStateSoA* state, UnaryOpType op,
+                                    const LiteralValue& operand, LiteralValue* outValue);
 
     // Error helpers
     static void SetError(EvalStateSoA* state, const char* msg);

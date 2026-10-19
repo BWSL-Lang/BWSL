@@ -284,7 +284,7 @@ ERROR_CASE_TESTS = {
     "shared_array_initializer.bwsl": "Shared arrays cannot have initializers",
     "shared_non_array.bwsl": "shared variables must be declared as arrays",
     "barrier_in_fragment.bwsl": "barrier intrinsics are only available in compute shaders",
-    "module_const_not_constant.bwsl": "vector arithmetic and swizzles are not supported here",
+    "module_const_not_constant.bwsl": "Module constant initializers must be built from literals and other constants",
     "module_const_type_mismatch.bwsl": "Module constant 'TINT' is declared float3 but its initializer is float2",
     "eval_for_step_zero.bwsl": "Eval for step must not be zero",
     "eval_infinite_loop.bwsl": "Infinite eval loops require an until condition",
@@ -378,6 +378,8 @@ ERROR_CASE_TESTS = {
     "eval_function_recursion.bwsl": "Eval function call depth exceeded",
     "eval_function_missing_return.bwsl": "Non-void function must return a value on every reachable path",
     "eval_function_return_type.bwsl": "Type mismatch in eval function return",
+    "eval_vector_swizzle_store_duplicate.bwsl": "Invalid compile-time swizzle assignment",
+    "eval_vector_width_mismatch.bwsl": "Compile-time assignment value is not a compile-time value",
     "pipeline_const_eval_call_runtime_arg.bwsl": "Pipeline constant 'AREA' calls eval function 'circleArea' with arguments that are not compile-time values",
     "eval_vector_constructor_empty.bwsl": "Compile-time declaration initializer is not a compile-time value",
     "eval_vector_constructor_few.bwsl": "Compile-time declaration initializer is not a compile-time value",
@@ -720,6 +722,20 @@ TRANSLATION_EXPECTATION_TESTS = {
                 "noperspective in vec2 v_screenUV",
             ],
             "gles_not_contains": ["mediump"],
+        },
+    },
+    "eval_vector_arithmetic": {
+        "comp": {
+            "glsl_contains": [
+                "_m0[0] = vec4(0.5, 0.5, 0.625, 0.5);",
+                "_m0[1] = vec4(1.5, 2.5, 0.625, 8.0);",
+                "_m0[2] = vec4(2.5, 4.5, 6.5, 0.0);",
+                "_m0[3] = vec4(1.0, 1.5, 0.0, 1.0);",
+                "_m0[4] = vec4(0.5, -0.5, -1.5, 0.5);",
+                "_m0[0] = ivec4(-3, 3, -4, 7);",
+                "_m0[1] = ivec4(-1, 1, -2, -24);",
+                "_m0[0] = uvec4(7u, 11u, 2u, 3u);",
+            ],
         },
     },
     "pipeline_const_eval_call": {

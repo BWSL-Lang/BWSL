@@ -66,8 +66,8 @@ Current `const` rules include:
   with compile-time arguments; each call is folded at the declaration
 - module-level `const` declarations are folded at compile time. Their type
   must be a scalar or a `float`, `int` or `uint` vector. The initializer may
-  use literals, other constants, scalar arithmetic, and scalar or vector
-  constructors; vector arithmetic, swizzles and matrices are not supported yet
+  use literals, other constants, arithmetic, swizzles, and scalar or vector
+  constructors; matrices are not supported yet
 - assignments, increments and stores through members or swizzles cannot modify
   a const value; taking a mutable address of a const value is also rejected
 - a const pointer cannot be rebound, but its mutable pointee can be written

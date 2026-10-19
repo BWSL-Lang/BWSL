@@ -1,7 +1,8 @@
 // Test: module constants with vector constructor initializers (#139)
 // Tests: qualified and unqualified uses, swizzles on a folded constant,
 //        constructor arguments built from other constants and scalar
-//        arithmetic, int-to-float promotion, int vectors, const from const
+//        arithmetic, int-to-float promotion, int vectors, const from const,
+//        vector arithmetic and swizzles in initializers (#209)
 
 module Dirs {
     const float2 NORTH = float2(0.0, -1.0);
@@ -11,6 +12,9 @@ module Dirs {
     const float3 TINT = float3(HALF, 0.25, 1);
     const int2 STEP = int2(1, 2);
     const uint4 MASK = uint4(1u, 2u, 4u, 8u);
+    const float2 SOUTH = NORTH * -1.0;
+    const float SOUTH_Y = SOUTH.y + TINT.z;
+    const int2 HALF_STEP = int2(7, -7) / STEP.y;
 
     flip :: (float2 v) -> float2 { return v * NORTH.y; }
 }
@@ -28,6 +32,7 @@ pipeline ModuleConstVectors {
         vertex {
             float2 p = attributes.position + Dirs::NORTH + Dirs::flip(Dirs::UP);
             p += float2(Dirs::STEP) * Dirs::HALF_PI;
+            p += Dirs::SOUTH * Dirs::SOUTH_Y + float2(Dirs::HALF_STEP);
             output.position = float4(p, float(Dirs::MASK.w), 1.0);
         }
 
