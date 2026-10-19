@@ -12,6 +12,9 @@ pipeline SSAComplex {
         vertex {
             // A runtime value, so constant propagation keeps every diamond.
             float cond = attributes.position.x;
+            // Zero, but not a constant (x * 0.0 isn't 0.0 for infinities), so
+            // the loops that start from it aren't evaluated at compile time.
+            int first = int(attributes.position.y * 0.0);
 
             // Diamond CFG pattern with modifications
             float diamond = 0.0;
@@ -43,7 +46,7 @@ pipeline SSAComplex {
 
             // Loop containing if
             float loop_if = 0.0;
-            for (int i = 0; i < 5; i++) {
+            for (int i = first; i < 5; i++) {
                 if (i % 2 == 0) {
                     loop_if = loop_if + 1.0;
                 } else {
@@ -55,7 +58,7 @@ pipeline SSAComplex {
             // If containing loop
             float if_loop = 0.0;
             if (cond > 0.3) {
-                for (int i = 0; i < 3; i++) {
+                for (int i = first; i < 3; i++) {
                     if_loop = if_loop + 1.0;
                 }
             } else {
@@ -65,9 +68,9 @@ pipeline SSAComplex {
 
             // Nested loops with shared variable
             float nested = 0.0;
-            for (int i = 0; i < 2; i++) {
+            for (int i = first; i < 2; i++) {
                 nested = nested + 1.0;  // +1 per outer iteration
-                for (int j = 0; j < 3; j++) {
+                for (int j = first; j < 3; j++) {
                     nested = nested + 0.1;  // +0.3 per outer iteration
                 }
             }
@@ -75,7 +78,7 @@ pipeline SSAComplex {
 
             // Complex: loop with break inside if
             float complex1 = 0.0;
-            for (int i = 0; i < 10; i++) {
+            for (int i = first; i < 10; i++) {
                 complex1 = complex1 + 1.0;
                 if (complex1 > 5.0) {
                     break;
@@ -87,7 +90,7 @@ pipeline SSAComplex {
             float a = 1.0;
             float b = 2.0;
             float c = 3.0;
-            for (int i = 0; i < 3; i++) {
+            for (int i = first; i < 3; i++) {
                 if (i == 0) {
                     a = a + 10.0;
                 } else if (i == 1) {
@@ -100,7 +103,7 @@ pipeline SSAComplex {
 
             // Early exit pattern
             float early = 0.0;
-            for (int i = 0; i < 10; i++) {
+            for (int i = first; i < 10; i++) {
                 if (i == 3) {
                     early = 100.0;
                     break;

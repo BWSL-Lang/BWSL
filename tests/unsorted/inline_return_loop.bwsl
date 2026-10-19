@@ -17,7 +17,8 @@ pipeline InlineReturnLoop {
         use attributes { position }
 
         vertex {
-            int v = chooseLoop(4);
+            // The limit isn't a constant, so the loop isn't evaluated at compile time.
+            int v = chooseLoop(int(attributes.position.y) + 4);
             output.position = float4(attributes.position, 1.0);
             output.position.x = float(v);
         }

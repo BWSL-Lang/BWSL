@@ -1,0 +1,40 @@
+// pow with a small integer exponent becomes multiplications, inserted in
+// front of the pow: inside a loop body, in the arms of nested ifs and in a
+// switch case, so loop, branch and switch targets after them must still
+// land where they did.
+pipeline EquivPowChains {
+
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            float x = float(idx) * 0.25 + 0.5;                       // 0.5 .. 2.25
+
+            float sum = 0.0;
+            for (int i = 0; i < int(idx % 3u) + 1; i++) {
+                sum += pow(x, 3.0);                                  // x^3 per pass
+            }
+
+            float arm = 0.0;
+            if (x > 1.0) {
+                if (x > 2.0) { arm = pow(x, 5.0); } else { arm = pow(x, -2.0); }
+            } else {
+                arm = pow(1.0 - x, 4.0);
+            }
+
+            float picked = 0.0;
+            switch (int(idx) & 3) {
+                case 0: picked = pow(x, 16.0); break;
+                case 1: picked = pow(x, -3.0); break;
+                default: picked = pow(x, 7.0); break;
+            }
+
+            float3 v = pow(float3(x, 1.0, 2.0), float3(6.0));        // (x^6, 1, 64)
+            resources.output[idx] = sum + arm + picked + v.x + v.y + v.z;
+        }
+    }
+}

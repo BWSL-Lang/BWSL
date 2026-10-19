@@ -19,7 +19,8 @@ pipeline InlineReturnNestedLoops {
         use attributes { position }
 
         vertex {
-            int v = chooseNested(2);
+            // The limit isn't a constant, so the loop isn't evaluated at compile time.
+            int v = chooseNested(int(attributes.position.y) + 2);
             output.position = float4(attributes.position, 1.0);
             output.position.x = float(v);
         }

@@ -2,10 +2,12 @@
 
 ## unreleased
 
-### Breaking changes
-- `select` requires a `bool` (or `bool` vector) condition. A numeric
-  condition used to compile as `condition != 0` and is now an error; write
-  `select(a, b, flag != 0)` instead.
+### Language
+- `@bounds(...)` promises the range of an attribute, a scalar or vector
+  resource, or a struct field: `@bounds(>0, <10) int count;`,
+  `@bounds(>=0, <=1) float4 tint;`, or per component, as in
+  `@bounds(>0, -10<y<0) float4 offsets;`. A bounded component is never
+  NaN. See "Value Bounds" in the language reference.
 
 ### Backends
 - Experimental native WGSL output is available with `-wgsl` for compute,
@@ -21,10 +23,51 @@
   Vectors and matrices fold too: construction, swizzles, `dot`, `cross`,
   `transpose` and matrix products. For example, `gain` set to `2.0` on both
   sides of an `if` becomes the constant `2.0`, and `float3(2.0) * m[0]` with
-  a constant `m` becomes a constant vector. Folding skips results that can
-  differ between GPUs:
-  NaN, infinities, denormals, `-0.0`, integer division of negative values
-  and conversions that are out of range or inexact.
+  a constant `m` becomes a constant vector.
+  Intrinsics with constant arguments fold as well, from `clamp` and `max` to
+  `pow`, `sin`, `smoothstep`, `normalize`, `reflect`, `determinant` and the
+  bit operations. Math functions are computed in double precision and
+  rounded once, so they're at least as accurate as the GPU's.
+  A loop whose inputs are all constants and that has no side effects runs
+  at compile time, so a function like `poly(2.0)` that loops over its
+  argument becomes a constant. A loop that runs at most once is no longer
+  emitted as a loop: one whose condition is false on entry disappears, and
+  one whose body always breaks becomes the code of its single pass.
+  A vector or matrix with some constant components keeps them: reading one,
+  through a swizzle, component access, `select` or componentwise
+  arithmetic, gives the constant. `Color::hsluvToRgb(float3(180.0, x,
+  50.0))` keeps only the arithmetic on `x`, and its SPIR-V shrinks from
+  4440 to 1920 bytes.
+  Operations that a constant or a repeated operand decides simplify too:
+  `x * 1.0`, `x + 0.0` and `x / 1.0` become `x`, `0.0 - x` and
+  `x * -1.0` become `-x`, `x / 4.0` becomes `x * 0.25`, and
+  `pow(x, 0.5)` becomes `sqrt(x)`, along with the integer identities,
+  `x ^ x`, `min(x, x)` and double negation. `pow` with an integer exponent
+  up to 16, such as Schlick's `pow(1.0 - VdotH, 5.0)`, becomes
+  multiplications, which are faster and more accurate than the GPU's
+  `pow`. `x * 0.0` and `x - x` stay, since they aren't 0 for an infinite
+  or NaN `x`.
+  A calculation repeated where an earlier one with the same operands is
+  available, such as `sin(x * 2.0)` twice, or `x * 3.0` before a branch
+  and again in its arms, is computed once.
+  Every value's range is tracked, from `@bounds`, constants, operations and
+  the branches it's in, and it removes what can't change the value:
+  `clamp`, `min`, `max`, `saturate`, `step` and `abs` of values already in
+  range, and branches the range decides. With `@bounds(>0, <10) int n`,
+  `clamp(n, 1, 9)` becomes `n` and `if (n >= 10)` disappears, and in
+  `for (int i = 0; i < n; i++)`, `saturate(float(i) / 16.0)` becomes
+  `float(i) * 0.0625`. Calls on a value that may be NaN stay.
+  Built-in inputs count too: in a `[8, 1, 1]` compute stage,
+  `input.local_id.y` is 0 and `min(input.local_id.x, 7u)` is
+  `input.local_id.x`, and a fragment shader's `input.position.xy` is never
+  NaN. A `@flat` or integer varying keeps its range in the fragment stage.
+  Ranges carry through vector conversions such as `int2(q)`, and a struct
+  field read back after a store, as in `i.color = c; ... i.color.z`, is the
+  value stored, so its constant and range carry too.
+  Folding skips results that can differ between GPUs:
+  NaN, infinities, denormals, `-0.0`, integer division of negative values,
+  conversions that are out of range or inexact, and math functions outside
+  their domain, such as `sqrt(-1.0)` or `pow(-2.0, 0.5)`.
 - Range loops with a constant step test only the direction they go, and
   drop the wraparound test when their bounds rule it out, unless the body
   assigns the iterator. `for (x in -1..=1)` now comes out as
@@ -209,6 +252,11 @@
   [0, 100] instead of special-casing the ends, so near black and white they
   return the lightness as given with a tiny chroma rather than exactly 0;
   the RGB result is unchanged.
+- `Math::fast_atan2(y, x)` (with `float2`/`float3`/`float4` overloads) is a
+  branch-free `atan2` within 1.2e-5 rad. GPUs have no `atan` instruction, so
+  the exact version is a software routine with branches for IEEE edge
+  cases. `fast_atan2(0, 0)` is 0; infinities and the sign of zero aren't
+  handled.
 
 ### Tooling
 - `make wasm` and `make wasm-debug` link with `em++`, so they build with

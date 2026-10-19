@@ -24,8 +24,6 @@ on:
       - 'build.bat'
       - 'make.bat'
       - '.github/workflows/ci.yml'
-  pull_request_review:
-    types: [submitted]
   workflow_dispatch:
 
 concurrency:

@@ -180,6 +180,10 @@ VARIANT_ERROR_TESTS = {
 }
 
 ERROR_CASE_TESTS = {
+    "bounds_empty.bwsl": "@bounds leave no value possible",
+    "bounds_missing_component.bwsl": "The type has no component z",
+    "bounds_on_bool.bwsl": "@bounds applies to float, int and uint scalars and vectors",
+    "bounds_on_struct_resource.bwsl": "put them on the fields of a struct or buffer element instead",
     "texture_array_unindexed.bwsl": "texture array 'resources.textures' must be indexed",
     "texture_param_type_mismatch.bwsl": "Function not found: sampleClamped",
     "texture_array_index_out_of_bounds.bwsl": "index 4 is out of bounds for texture array",

@@ -1,0 +1,37 @@
+// Math::fast_atan2 (scalar and vector overloads) against atan2, within the
+// documented 1.2e-5 rad, in every quadrant, on the axes, at (0, 0) and from
+// tiny to huge magnitudes. Inputs come from a buffer so drivers can't fold
+// the result at compile time.
+pipeline EquivMathFastAtan2 {
+    import Math
+
+    resources {
+        inbuf: buffer<float4>
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { inbuf, output }
+
+        compute "Main" [22, 1, 1] {
+            uint i = input.global_id.x;
+            float y = resources.inbuf[i].x;
+            float x = resources.inbuf[i].y;
+            float s = Math::fast_atan2(y, x);
+            float2 v2 = Math::fast_atan2(float2(y, -y), float2(x, x));
+            float3 v3 = Math::fast_atan2(float3(y, y, -y), float3(x, -x, -x));
+            float4 v4 = Math::fast_atan2(float4(x, y, -x, -y), float4(y, x, y, x));
+            uint o = i * 10u;
+            resources.output[o] = s;
+            resources.output[o + 1u] = v2.x;
+            resources.output[o + 2u] = v2.y;
+            resources.output[o + 3u] = v3.x;
+            resources.output[o + 4u] = v3.y;
+            resources.output[o + 5u] = v3.z;
+            resources.output[o + 6u] = v4.x;
+            resources.output[o + 7u] = v4.y;
+            resources.output[o + 8u] = v4.z;
+            resources.output[o + 9u] = v4.w;
+        }
+    }
+}

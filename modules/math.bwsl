@@ -336,6 +336,42 @@ module Math {
     }
 
     // ============================================
+    // Trigonometry
+    // ============================================
+
+    /// Fast atan2(y, x): the angle of (x, y) in radians, in [-pi, pi], within
+    /// 1.2e-5 rad of atan2. GPUs have no atan instruction, and the exact
+    /// version branches on IEEE edge cases; this one has no branches.
+    /// fast_atan2(0, 0) is 0. Infinities and the sign of zero aren't handled
+    /// (fast_atan2(-0.0, -1.0) is pi), and neither are vectors shorter than
+    /// 1e-30.
+    /// Reference: Abramowitz & Stegun, Handbook of Mathematical Functions, 4.4.49
+    fast_atan2 :: (float y, float x) -> float {
+        float ax = abs(x);
+        float ay = abs(y);
+        // atan of the ratio in [0, 1], then mirrored into the right octant.
+        float t = min(ax, ay) / max(max(ax, ay), 1e-30);
+        float t2 = t * t;
+        float r = t * (0.9998660 + t2 * (-0.3302995 + t2 * (0.1801410 + t2 * (-0.0851330 + t2 * 0.0208351))));
+        r = select(r, 0.5 * PI - r, ay > ax);
+        r = select(r, PI - r, x < 0.0);
+        return select(r, -r, y < 0.0);
+    }
+
+    fast_atan2 :: (float2 y, float2 x) -> float2 {
+        return float2(fast_atan2(y.x, x.x), fast_atan2(y.y, x.y));
+    }
+
+    fast_atan2 :: (float3 y, float3 x) -> float3 {
+        return float3(fast_atan2(y.x, x.x), fast_atan2(y.y, x.y), fast_atan2(y.z, x.z));
+    }
+
+    fast_atan2 :: (float4 y, float4 x) -> float4 {
+        return float4(fast_atan2(y.x, x.x), fast_atan2(y.y, x.y),
+                      fast_atan2(y.z, x.z), fast_atan2(y.w, x.w));
+    }
+
+    // ============================================
     // Transformations
     // ============================================
 

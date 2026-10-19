@@ -566,6 +566,8 @@ inline u16 IRLowering::LowerIdentifier(NodeRef ref) {
       CoreType attrType = compression == CompressionFormat::NONE
                               ? GetInputTypeFromAttribute(ident.name.nameHash)
                               : GetRawTypeForCompression(compression);
+      if (compression == CompressionFormat::NONE)
+        program.attributeBounds[attrIndex] = GetAttributeBounds(ident.name.nameHash);
       SetRegisterType(reg, attrType);
       variableRegisters[ident.name.nameHash] = reg;
       return reg;
