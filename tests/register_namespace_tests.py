@@ -84,14 +84,38 @@ def gather_shader() -> str:
 
 def sampler_handle_shader(pointers: int = 6500) -> str:
     # Every `^x` and pointer local fills a register, so register 0x3000 is a
-    # pointer when `sample` runs. The sampler handle 0x3000 | slot shares that
-    # number and must not be read as a pointer argument.
+    # pointer when `sample` runs. The sampler handle used to be 0x3000 | slot,
+    # that number, and must not be read as a pointer argument.
     return (
         "pipeline SamplerHandle { resources { tex: texture2D smp: sampler }\n"
         'pass "Main" { use resources {tex, smp} vertex {output.position=float4(1.0);}\n'
         "fragment {float x=input.position.x;\n" +
         "".join(f"float^ p{i}=^x;\n" for i in range(pointers)) +
         "output.color=sample(resources.tex,resources.smp,float2(x)); }}}\n")
+
+
+def sampler_register_shader(before: int, after: int, offsets: bool = True) -> str:
+    # Each call lowers to about 69 registers, so after 180 calls the
+    # coordinates sit in 0x3000-0x3FFF, the numbers sampler handles used to
+    # share (0x3000 | slot). Texture calls without a sampler must not take a
+    # coordinate there for one, and naming resources.smp once register
+    # 0x3000 + slot exists must not retype that register. WGSL has no
+    # gather_offset or load_offset, the other calls that could mistake one.
+    return (
+        "pipeline SamplerRegisters { resources { tex: texture2D smp: sampler }\n"
+        "burst :: (float x, float delta) -> float {\n" + "x=x+delta;\n" * 64 + "return x;}\n"
+        'pass "Main" { use resources {tex, smp} vertex {output.position=float4(1.0);}\n'
+        "fragment {float delta=input.position.x; float acc=delta;\n" +
+        "acc=burst(acc,delta);\n" * before +
+        "float2 uv=float2(acc); int2 texel=int2(uv);\n" +
+        "acc=burst(acc,delta);\n" * after +
+        "float4 color=sample_lod(resources.tex,uv,0.0);\n" +
+        ("color=color+gather_offset(resources.tex,uv,1,int2(1,0));\n"
+         "color=color+load_offset(resources.tex,texel,0,int2(1,0));\n" if offsets else "") +
+        "color=color+sample(resources.tex,resources.smp,uv+float2(acc));\n"
+        "color=color+sample_lod(resources.tex,resources.smp,uv,1.0);\n"
+        "color=color+gather(resources.tex,resources.smp,uv,2);\n"
+        "output.color=color; }}}\n")
 
 
 def run_register_namespace_tests(compiler: Path, output: Path,
@@ -102,7 +126,7 @@ def run_register_namespace_tests(compiler: Path, output: Path,
     additions = 9000
 
     def compile_shader(name: str, code: str, internals: bool = False, json_errors: bool = False,
-                       direct_gles: bool = False):
+                       direct_gles: bool = False, wgsl: bool = False, all_targets: bool = False):
         source = output / f"{name}.bwsl"
         source.write_text(code, encoding="utf-8")
         target = output / name
@@ -111,6 +135,8 @@ def run_register_namespace_tests(compiler: Path, output: Path,
             [str(compiler), str(source), "-o", str(target), "-spv", "-validation", "strict",
              *(["-internals"] if internals else []),
              *(["-gles-direct"] if direct_gles else []),
+             *(["-wgsl"] if wgsl else []),
+             *(["-all"] if all_targets else []),
              *(["-errors-json"] if json_errors else [])],
             capture_output=True, text=True, timeout=60)
         return result, target
@@ -186,6 +212,47 @@ def run_register_namespace_tests(compiler: Path, output: Path,
         def test_sampler_handle_is_not_a_pointer_argument(self):
             result, _ = compile_shader("sampler_handle", sampler_handle_shader())
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        def assert_sampler_registers(self, after: int, registers: int):
+            # The samplers each WGSL texture call names, in order.
+            def wgsl_samplers(target: Path, stem: str) -> list[str]:
+                wgsl = (target / f"{stem}.frag.wgsl").read_text()
+                return re.findall(r"texture\w+\([^;]*?\b(bwsl_sampler_\d+)", wgsl)
+
+            control, control_target = compile_shader(
+                "sampler_registers_control", sampler_register_shader(2, 1, offsets=False), wgsl=True)
+            self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
+            expected = wgsl_samplers(control_target, "sampler_registers_control")
+            self.assertEqual(len(expected), 4, expected)
+            for name, offsets, flags in (("wgsl", False, {"wgsl": True}),
+                                         ("direct", True, {"direct_gles": True, "internals": True}),
+                                         ("all", True, {"all_targets": True})):
+                stem = f"sampler_registers_{after}_{name}"
+                result, target = compile_shader(stem, sampler_register_shader(180, after, offsets),
+                                                **flags)
+                diagnostics = result.stdout + result.stderr
+                if "register limit exceeded (16383 registers)" in diagnostics:
+                    self.skipTest(f"{registers} registers in a stage need the higher limit "
+                                  "of BWSL-Lang/BWSL#236")
+                with self.subTest(targets=name):
+                    self.assertEqual(result.returncode, 0, diagnostics)
+                    if name == "wgsl":
+                        self.assertEqual(wgsl_samplers(target, stem), expected)
+                    if name == "direct":
+                        ir = json.loads((target / f"{stem}.frag.internals.json").read_text())["ir"]
+                        self.assertGreater(int(re.search(r"Registers: (\d+)", ir)[1]), registers)
+                        # Three calls without a sampler and one with.
+                        coordinates = [int(register) for register in re.findall(
+                            r"TEX_(?:SAMPLE_LOD|GATHER_OFFSET|FETCH_OFFSET)\s+r\d+\s+<- [^,]+, r(\d+)", ir)]
+                        self.assertEqual(len(coordinates), 4, coordinates)
+                        self.assertTrue(all(0x3000 <= register < 0x4000 for register in coordinates),
+                                        coordinates)
+
+        def test_sampler_handles_are_not_registers(self):
+            self.assert_sampler_registers(after=10, registers=13000)
+
+        def test_sampler_handles_past_old_register_limit(self):
+            self.assert_sampler_registers(after=200, registers=26000)
 
         def test_gather_invalid_marker_with_large_ssa_capacity(self):
             result, target = compile_shader("gather_marker", gather_shader(), internals=True,

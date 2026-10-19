@@ -142,6 +142,14 @@
 - A shader with more than 256 distinct float constants no longer corrupts
   its integer constants (`+ 7` could become `+ 1132478464`). More than
   16384 distinct float constants is a source error.
+- A stage with more than 12288 registers handles separate samplers
+  correctly. A `sampler` resource shared its internal number with a
+  register, so `sample(tex, smp, uv)` could change that register's type
+  (WGSL failed with "SSA copy changes type without an explicit
+  conversion"), and `sample_lod(tex, uv, lod)`, `gather_offset` or
+  `load_offset` without a sampler could take a coordinate computed late in
+  the stage for one, failing validation or sampling with the wrong
+  operands.
 - `first_bit_high` and `first_bit_low` return the same value on every
   backend: the index of the highest or lowest set bit, or -1 when the value
   is 0. WGSL and direct GLES returned leading and trailing zero counts, so
