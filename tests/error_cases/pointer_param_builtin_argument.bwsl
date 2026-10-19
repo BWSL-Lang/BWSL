@@ -1,0 +1,16 @@
+// Error case: intrinsics and constructors take values, not pointers.
+pipeline PointerParamBuiltinArgument {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float acc = -1.0;
+            float a = abs(^acc);
+            output.position = float4(attributes.position, a);
+        }
+    }
+}

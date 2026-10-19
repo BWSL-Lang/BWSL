@@ -557,6 +557,7 @@ private:
         for (u32 i = 0; i < function.parameters.count; i++) {
             if (i > 0) result += ",";
             result += ResolveName(function.parameters[i].second);
+            if (IsPointerParameter(function, i)) result += "^";
             if (i < function.parameterArraySizes.count) {
                 const auto& sizes = function.parameterArraySizes[i];
                 for (u32 j = 0; j < sizes.count; j++) result += "[" + std::to_string(sizes[j]) + "]";

@@ -88,11 +88,167 @@ inline u16 IRLowering::CopyArgumentValue(u16 source) {
   } else {
     // Pointer parameters copy the pointer value, preserving its pointee. Plain
     // values do not inherit the caller's address-taken or storage metadata.
-    if (storage & IRProgram::STORAGE_IS_PTR)
+    if (storage & IRProgram::STORAGE_IS_PTR) {
       program.registerStorageInfo[copy] = storage;
+      CopyPointerProvenance(copy, source);
+    }
     builder.EmitInstruction(OP_STORE_REG, copy, source);
   }
   return copy;
+}
+
+// ============= Pointer arguments =============
+
+inline OverloadTypeMask IRLowering::ArgumentOverloadMask(u16 reg) {
+  bool isRegister = (reg & 0xC000) == 0 && reg < MAX_REGISTERS;
+  if (IsPointerValue(reg)) {
+    CoreType pointee =
+        static_cast<CoreType>((program.registerStorageInfo[reg] >> 8) & 0xFF);
+    u32 customHash =
+        pointee == CoreType::CUSTOM ? program.registerStructTypes[reg] : 0;
+    return MakeOverloadMask(pointee, customHash) | OVERLOAD_POINTER_MASK;
+  }
+  CoreType type = GetRegisterType(reg);
+  u32 customHash = type == CoreType::CUSTOM && isRegister
+                       ? program.registerStructTypes[reg] : 0;
+  return MakeOverloadMask(type, customHash);
+}
+
+inline void IRLowering::BindPointerParameter(const FunctionCallData &call,
+                                             const FunctionDeclData &function,
+                                             u32 index, u16 arg) {
+  auto problem = pointerProblems.find(arg);
+  if (problem != pointerProblems.end()) {
+    const char *reason = "";
+    switch (problem->second) {
+    case PointerProblem::NON_LOCAL:
+      reason = "points to a resource, stage input or output, or shared "
+               "memory; copy the value into a local variable, pass `^local` "
+               "and store the result back";
+      break;
+    case PointerProblem::TEMPORARY:
+      reason = "points to a temporary copy; pass the address of a local "
+               "variable, one of its struct fields or an array element, not "
+               "a vector component, matrix column or computed value";
+      break;
+    case PointerProblem::WHOLE_ARRAY:
+      reason = "points to a whole array; pass a pointer to one element "
+               "(`^values[i]`) or wrap the array in a struct";
+      break;
+    }
+    char msg[384];
+    snprintf(msg, sizeof(msg), "Error: pointer argument %u of '%s' %s\n",
+             index + 1, ReverseLookup::GetString(function.name.nameHash).c_str(),
+             reason);
+    ReportErrorAt(index < call.arguments.count ? call.arguments[index]
+                                               : NodeRef::Null(),
+                  msg);
+  }
+  // The copy keeps the pointer's target, so writes through it reach the
+  // caller's variable, and two parameters given the same address alias.
+  u32 nameHash = function.parameters[index].first.nameHash;
+  u16 reg = CopyArgumentValue(arg);
+  variableRegisters[nameHash] = reg;
+  resourceHandleVariables.erase(nameHash);
+  constVariables.erase(nameHash);
+  initializedVariables.insert(nameHash);
+  program.registerNameHashes[reg] = nameHash;
+}
+
+inline bool IRLowering::ReportPointerArgumentMismatch(
+    const FunctionCallData &call, const FunctionDeclData &function,
+    const OverloadTypeMask *argMasks, u32 argCount) {
+  if (function.parameters.count != argCount) return false;
+  u32 mismatch = argCount;
+  for (u32 i = 0; i < argCount; i++) {
+    OverloadTypeMask paramMask = MakeOverloadMaskFromResolvedTypeHash(
+        function.parameters[i].second.nameHash);
+    if (IsPointerParameter(function, i)) paramMask |= OVERLOAD_POINTER_MASK;
+    if (OverloadMaskMatches(paramMask, argMasks[i])) continue;
+    bool pointerInvolved =
+        ((paramMask | argMasks[i]) & OVERLOAD_POINTER_MASK) != 0;
+    // Another argument has a plain value-type mismatch, which the general
+    // "Function not found" diagnostic covers.
+    if (!pointerInvolved) return false;
+    if (mismatch == argCount) mismatch = i;
+  }
+  if (mismatch == argCount) return false;
+
+  std::string name = ReverseLookup::GetString(function.name.nameHash);
+  std::string type =
+      ReverseLookup::GetString(function.parameters[mismatch].second.nameHash);
+  bool wantsPointer = IsPointerParameter(function, mismatch);
+  bool hasPointer = (argMasks[mismatch] & OVERLOAD_POINTER_MASK) != 0;
+  char msg[384];
+  if (wantsPointer && !hasPointer) {
+    snprintf(msg, sizeof(msg),
+             "Error: argument %u of '%s' must be a pointer (%s^); pass the "
+             "address of a local variable, as in `^value`\n",
+             mismatch + 1, name.c_str(), type.c_str());
+  } else if (!wantsPointer) {
+    snprintf(msg, sizeof(msg),
+             "Error: argument %u of '%s' takes a value of type %s, not a "
+             "pointer; dereference it (`ptr^`)\n",
+             mismatch + 1, name.c_str(), type.c_str());
+  } else {
+    // An argument mask names one pointee: a struct hash or a single core
+    // type bit.
+    OverloadTypeMask pointee = argMasks[mismatch] & ~OVERLOAD_POINTER_MASK;
+    std::string passed = "another type";
+    if (pointee & OVERLOAD_CUSTOM_MASK) {
+      passed = ReverseLookup::GetString(static_cast<u32>(pointee));
+    } else if (pointee != 0) {
+      passed = ReverseLookup::GetString(GetCoreTypeNameHash(
+          static_cast<CoreType>(std::countr_zero(pointee))));
+    }
+    snprintf(msg, sizeof(msg),
+             "Error: argument %u of '%s' must point to %s, but the pointer "
+             "passed points to %s\n",
+             mismatch + 1, name.c_str(), type.c_str(), passed.c_str());
+  }
+  ReportErrorAt(mismatch < call.arguments.count ? call.arguments[mismatch]
+                                                : NodeRef::Null(),
+                msg);
+  return true;
+}
+
+inline bool IRLowering::ReportPointerArgumentToBuiltin(
+    const FunctionCallData &call, const u16 *args, u32 argCount) {
+  for (u32 i = 0; i < argCount; i++) {
+    if (!IsPointerValue(args[i])) continue;
+    std::string name = call.name.isHashOnly()
+                           ? ReverseLookup::GetString(call.name.nameHash)
+                           : call.name.ToString(sourceBase);
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+             "Error: argument %u of '%s' is a pointer, but '%s' takes "
+             "values; dereference it (`ptr^`)\n",
+             i + 1, name.c_str(), name.c_str());
+    ReportErrorAt(i < call.arguments.count ? call.arguments[i] : NodeRef::Null(),
+                  msg);
+    return true;
+  }
+  return false;
+}
+
+inline bool IRLowering::ReportStructMethodPointerMismatch(
+    const StructData *structData, const FunctionCallData &call,
+    const OverloadTypeMask *argMasks, u32 argCount) {
+  for (u32 i = 0; i < structData->methodIndices.count; i++) {
+    u32 index = structData->methodIndices[i];
+    if (index >= symbols->functions.count) continue;
+    const FunctionData &method = symbols->functions[index];
+    if (method.name.nameHash != call.name.nameHash ||
+        method.paramTypeMasks.count != argCount) {
+      continue;
+    }
+    NodeRef methodRef;
+    methodRef.packed = method.astNodeIndex;
+    if (methodRef.Type() != ASTNodeType::FUNCTION) continue;
+    return ReportPointerArgumentMismatch(call, ast->GetFunction(methodRef),
+                                         argMasks, argCount);
+  }
+  return false;
 }
 
 inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
@@ -707,6 +863,10 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
   }
 
   if (call.flags & FunctionCallFlags::IS_INTRINSIC) {
+    if (ReportPointerArgumentToBuiltin(call, args, argCount)) {
+      SetRegisterType(dest, CoreType::INVALID);
+      return dest;
+    }
     using Intrinsic = StdLib::Intrinsic;
     Intrinsic intrinsic =
         static_cast<Intrinsic>(StdLib::INTRINSICS[call.intrinsicIndex].enumIndex);
@@ -1190,6 +1350,11 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         return dest;
       }
 
+      if (ReportPointerArgumentToBuiltin(call, args, argCount)) {
+        SetRegisterType(dest, CoreType::INVALID);
+        return dest;
+      }
+
       // Check if this is a scalar type conversion (float(x), int(x), uint(x))
       bool isScalarConversion = (constructedType == CoreType::FLOAT ||
                                  constructedType == CoreType::INT ||
@@ -1549,6 +1714,11 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
             ResolveCoreTypeFromHash(call.name.nameHash, &customHash);
         if (resolved == CoreType::CUSTOM && customHash != 0) {
           u32 structTypeHash = LookupOrRegisterStructType(customHash);
+          if (structTypeHash != 0 &&
+              ReportPointerArgumentToBuiltin(call, args, argCount)) {
+            SetRegisterType(dest, CoreType::INVALID);
+            return dest;
+          }
           if (structTypeHash != 0) {
             auto it = structTypeMap.find(structTypeHash);
             u32 fieldCount = 0;
@@ -1648,13 +1818,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   std::vector<OverloadTypeMask> argMasks;
   argMasks.reserve(argCount);
   for (u32 i = 0; i < argCount; i++) {
-    CoreType argType = GetRegisterType(args[i]);
-    u32 customHash = 0;
-    if ((argType == CoreType::CUSTOM || argType == CoreType::ENUM) &&
-        args[i] < MAX_REGISTERS) {
-      customHash = program.registerStructTypes[args[i]];
-    }
-    argMasks.push_back(MakeOverloadMask(argType, customHash));
+    argMasks.push_back(ArgumentOverloadMask(args[i]));
   }
 
   bool foundName = false;
@@ -1667,6 +1831,9 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
     if (foundNonConstOnly && receiverIsConst) {
       ReportError(
           "Error: cannot call non-const struct method on const receiver\n");
+    } else if (foundName && ReportStructMethodPointerMismatch(
+                   structData, call, argMasks.data(), argCount)) {
+      // Reported at the offending argument.
     } else if (foundName) {
       std::string methodName = call.name.isHashOnly()
                                    ? ReverseLookup::GetString(call.name.nameHash)
@@ -1773,6 +1940,10 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   u32 paramCount =
       method.parameters.count < argCount ? method.parameters.count : argCount;
   for (u32 i = 0; i < paramCount; i++) {
+    if (IsPointerParameter(method, i)) {
+      BindPointerParameter(call, method, i, args[i]);
+      continue;
+    }
     const auto &param = method.parameters[i];
     u32 paramNameHash = param.first.nameHash;
     u16 paramReg = CopyArgumentValue(args[i]);
@@ -1905,24 +2076,24 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
       argMasks.push_back(MakeOverloadMask(argHandleTypes[i]));
       continue;
     }
-    CoreType argType = GetRegisterType(args[i]);
-    u32 customHash = 0;
-    if (argType == CoreType::CUSTOM) {
-      customHash = program.registerStructTypes[args[i]];
-    }
-    argMasks.push_back(MakeOverloadMask(argType, customHash));
+    argMasks.push_back(ArgumentOverloadMask(args[i]));
   }
 
-  auto matchesSignature = [&](const FunctionDeclData &fn) -> bool {
+  // The first same-named candidate with the right arity that was rejected,
+  // for a pointer-specific diagnostic when nothing matches.
+  NodeRef rejectedCandidate = NodeRef::Null();
+  auto matchesSignature = [&](const FunctionDeclData &fn, NodeRef fnRef) -> bool {
     if (fn.parameters.count != argCount)
       return false;
     for (u32 i = 0; i < argCount; i++) {
       OverloadTypeMask paramMask = MakeOverloadMaskFromResolvedTypeHash(
           fn.parameters[i].second.nameHash);
+      if (IsPointerParameter(fn, i)) paramMask |= OVERLOAD_POINTER_MASK;
       if (!OverloadMaskMatches(paramMask, argMasks[i])) {
         // Overload rejection is normal during resolution — caller
         // tries multiple candidates. Downstream "Function not found"
         // error covers the truly-unresolvable case.
+        if (rejectedCandidate.IsNull()) rejectedCandidate = fnRef;
         return false;
       }
     }
@@ -1949,7 +2120,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
       NodeRef fnRef = module.functions[i];
       if (fnRef.Type() == ASTNodeType::FUNCTION) {
         const FunctionDeclData &fn = ast->GetFunction(fnRef);
-        if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn)) {
+        if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn, fnRef)) {
           funcRef = fnRef;
           foundModuleIndex = targetModuleIndex;
           break;
@@ -1968,7 +2139,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
         if (fnRef.Type() == ASTNodeType::FUNCTION) {
           const FunctionDeclData &fn = ast->GetFunction(fnRef);
           if (fn.name.nameHash == call.moduleQualifiedHash) {
-            if (!matchesSignature(fn)) {
+            if (!matchesSignature(fn, fnRef)) {
               continue;
             }
             funcRef = fnRef;
@@ -1991,7 +2162,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
       NodeRef fnRef = module.functions[i];
       if (fnRef.Type() == ASTNodeType::FUNCTION) {
         const FunctionDeclData &fn = ast->GetFunction(fnRef);
-        if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn)) {
+        if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn, fnRef)) {
           funcRef = fnRef;
           foundModuleIndex = inlineModuleIndex;
           break;
@@ -2009,7 +2180,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
       NodeRef fnRef = module.functions[i];
       if (fnRef.Type() == ASTNodeType::FUNCTION) {
         const FunctionDeclData &fn = ast->GetFunction(fnRef);
-        if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn)) {
+        if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn, fnRef)) {
           funcRef = fnRef;
           foundModuleIndex = moduleIndex;
           break;
@@ -2043,7 +2214,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
       NodeRef fnRef = pass.functions[i];
       if (fnRef.Type() == ASTNodeType::FUNCTION) {
         const FunctionDeclData &fn = ast->GetFunction(fnRef);
-        if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn)) {
+        if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn, fnRef)) {
           funcRef = fnRef;
           break;
         }
@@ -2058,7 +2229,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
       NodeRef fnRef = pipeline.functions[i];
       if (fnRef.Type() == ASTNodeType::FUNCTION) {
         const FunctionDeclData &fn = ast->GetFunction(fnRef);
-        if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn)) {
+        if (fn.name.nameHash == call.name.nameHash && matchesSignature(fn, fnRef)) {
           funcRef = fnRef;
           break;
         }
@@ -2069,6 +2240,16 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   // If regular function not found, try generic function resolution
   if (funcRef.IsNull()) {
     funcRef = TryResolveGenericFunction(call, args, argCount);
+  }
+
+  if (funcRef.IsNull() && !rejectedCandidate.IsNull() &&
+      ReportPointerArgumentMismatch(call, ast->GetFunction(rejectedCandidate),
+                                    argMasks.data(), argCount)) {
+    // Reported at the argument; an untyped result keeps the caller from
+    // adding "Function not found" or follow-on type errors.
+    u16 placeholder = AllocateRegister();
+    SetRegisterType(placeholder, CoreType::INVALID);
+    return placeholder;
   }
 
   if (funcRef.IsNull()) {
@@ -2142,6 +2323,10 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
       resourceHandleVariables[paramNameHash] = {args[i], argHandleTypes[i]};
       constVariables.erase(paramNameHash);
       initializedVariables.insert(paramNameHash);
+      continue;
+    }
+    if (IsPointerParameter(func, i)) {
+      BindPointerParameter(call, func, i, args[i]);
       continue;
     }
     resourceHandleVariables.erase(paramNameHash);
@@ -2261,11 +2446,18 @@ inline NodeRef IRLowering::TryResolveGenericFunction(const FunctionCallData &cal
   // Get argument types for constraint checking
   CoreType argTypes[16];
   bool isConstrained[16];
+  bool argIsPointer[16];
   if (argCount > 16)
     return NodeRef::Null();
 
   for (u32 i = 0; i < argCount; i++) {
-    argTypes[i] = GetRegisterType(args[i]);
+    // A pointer argument specializes a `Constraint^` parameter by its
+    // pointee. The template fixes which parameters are pointers, so the
+    // specialization key needs no pointer bits.
+    argIsPointer[i] = IsPointerValue(args[i]);
+    argTypes[i] = argIsPointer[i]
+        ? static_cast<CoreType>((program.registerStorageInfo[args[i]] >> 8) & 0xFF)
+        : GetRegisterType(args[i]);
     isConstrained[i] = false; // Will be set based on generic function
   }
 
@@ -2273,7 +2465,7 @@ inline NodeRef IRLowering::TryResolveGenericFunction(const FunctionCallData &cal
   // lookup)
   SymbolTableData *mutableSymbols = const_cast<SymbolTableData *>(symbols);
   GenericFunctionData *gfn = SymbolTable::FindMatchingGenericFunction(
-      mutableSymbols, call.name.nameHash, argTypes, argCount);
+      mutableSymbols, call.name.nameHash, argTypes, argCount, argIsPointer);
 
   if (!gfn) {
     return NodeRef::Null(); // No matching generic function

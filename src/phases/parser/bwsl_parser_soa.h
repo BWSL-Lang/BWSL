@@ -395,7 +395,10 @@ private:
     void ParseUseAttributes(NodeRef pass);
     void ParseUseResources(NodeRef pass);
     void ParseFunctionsBlockBody(NodeRef block);
-    void ParseFunctionParameters(NodeRef function);
+    // pointerError, when set, rejects `Type^` parameters with that message.
+    void ParseFunctionParameters(NodeRef function, const char* pointerError = nullptr);
+    void RejectPointerReturnType();
+    void ReportRecoveredError(TokenRef token, const char* message);
     NodeRef ParseComputeStage();
     NodeRef ParseComputeGraph();
     ComputeGraphNode ParseComputeGraphNode();
@@ -448,7 +451,7 @@ private:
     NodeRef ParsePrimary();
     NodeRef ParseFunctionCall(NodeRef function);
     NodeRef ParseMemberAccess(NodeRef object);
-    NodeRef ParseFunction();
+    NodeRef ParseFunction(bool isEval = false);
     NodeRef ParseStruct();
     NodeRef ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime);
     NodeRef ResolveEnumMethod(const ArenaString& enumName, const ArenaString& methodName);

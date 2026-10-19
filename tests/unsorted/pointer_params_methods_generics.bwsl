@@ -1,0 +1,64 @@
+// Test: pointer parameters on struct methods, generic functions and module
+//       functions
+// Tests: const and mutating methods writing through a pointer parameter, a
+//        constrained `Num^` parameter specialized by its pointee, and a
+//        module-qualified call to a void helper used as a statement
+
+module PointerParamHelpers {
+    clampUnit :: (float^ v) -> void {
+        v^ = clamp(v^, 0.0, 1.0);
+    }
+}
+
+pipeline PointerParamsMethodsGenerics {
+    import PointerParamHelpers
+
+    resources {
+        output: buffer<float>
+    }
+
+    struct Counter {
+        int total;
+
+        addInto :: (int^ dst) const -> void {
+            dst^ = dst^ + self.total;
+        }
+
+        bump :: (int^ dst, int k) -> void {
+            self.total = self.total + k;
+            dst^ = self.total;
+        }
+    }
+
+    constraint Num = int | float;
+
+    twice :: (Num^ v) -> void {
+        v^ = v^ + v^;
+    }
+
+    pass "Compute" {
+        use resources { output }
+
+        compute "Main" [64, 1, 1] {
+            uint idx = input.global_id.x;
+            int n = int(idx);
+
+            Counter c;
+            c.total = 5;
+            int x = n;
+            c.addInto(^x);        // x = n + 5
+            int y = 0;
+            c.bump(^y, 2);        // c.total = 7, y = 7
+
+            int ti = 3;
+            twice(^ti);           // 6
+            float tf = 1.5;
+            twice(^tf);           // 3.0
+
+            float unit = float(n) * 0.1;
+            PointerParamHelpers::clampUnit(^unit);
+
+            resources.output[idx] = float(x + y + ti + c.total) + tf + unit;
+        }
+    }
+}

@@ -256,36 +256,105 @@ inline u16 IRLowering::LowerExpression(NodeRef ref) {
   return result;
 }
 
+// Whether `^expr` points into this invocation's function-local memory: a
+// local variable, a parameter copy or `self`, or a field or element of one,
+// possibly reached through a pointer that is itself local. Resources, stage
+// inputs and outputs, shared memory and pipeline-scope values are not.
+inline bool IRLowering::IsFunctionLocalPlace(NodeRef expr) {
+  while (true) {
+    switch (expr.Type()) {
+    case ASTNodeType::MEMBER_ACCESS: {
+      const MemberAccessData &access = ast->GetMemberAccess(expr);
+      if (access.isModuleQualified) return false;
+      expr = access.object;
+      continue;
+    }
+    case ASTNodeType::ARRAY_ACCESS:
+      expr = ast->GetArrayAccess(expr).array;
+      continue;
+    case ASTNodeType::UNARY_OP: {
+      const UnaryOpData &unop = ast->GetUnaryOp(expr);
+      if (unop.op != UnaryOpType::DEREFERENCE ||
+          unop.operand.Type() != ASTNodeType::IDENTIFIER) {
+        return false;
+      }
+      auto pointer = variableRegisters.find(
+          ast->GetIdentifier(unop.operand).name.nameHash);
+      return pointer != variableRegisters.end() &&
+             IsPointerValue(pointer->second) &&
+             pointerProblems.count(pointer->second) == 0;
+    }
+    case ASTNodeType::IDENTIFIER: {
+      const IdentifierData &ident = ast->GetIdentifier(expr);
+      if (ident.identifierKind == SpecialIdentifier::SELF) return true;
+      if (ident.identifierKind != SpecialIdentifier::NONE) return false;
+      auto var = variableRegisters.find(ident.name.nameHash);
+      if (var == variableRegisters.end()) {
+        // A receiver field named without `self.` inside a struct method.
+        u32 fieldIndex = 0, fieldTypeHash = 0;
+        CoreType fieldType = CoreType::INVALID;
+        return currentStructMethodTypeHash != 0 &&
+               FindStructField(currentStructMethodTypeHash, ident.name.nameHash,
+                               &fieldIndex, &fieldType, &fieldTypeHash);
+      }
+      u16 reg = var->second;
+      if ((reg & 0xC000) != 0 || reg >= MAX_REGISTERS) return false;
+      u32 storage = program.registerStorageInfo[reg];
+      if (storage & (IRProgram::STORAGE_IS_SHARED |
+                     IRProgram::STORAGE_IS_UNIFORM_ARRAY)) {
+        return false;
+      }
+      // Declarations and parameter copies are named after their variable;
+      // attribute loads and pipeline-scope values are not.
+      return (storage & IRProgram::STORAGE_IS_LOCAL_ARRAY) ||
+             program.registerNameHashes[reg] != 0;
+    }
+    default:
+      return false;
+    }
+  }
+}
+
+// A pointer value made by `^`, as opposed to a storage buffer, shared or
+// local array register that also carries STORAGE_IS_PTR. Only `^` records a
+// pointee type in bits 8-15.
+inline bool IRLowering::IsPointerValue(u16 reg) const {
+  if ((reg & 0xC000) != 0 || reg >= MAX_REGISTERS) return false;
+  u32 storage = program.registerStorageInfo[reg];
+  constexpr u32 notPointer = IRProgram::STORAGE_IS_SHARED |
+                             IRProgram::STORAGE_IS_LOCAL_ARRAY |
+                             IRProgram::STORAGE_IS_UNIFORM_ARRAY;
+  return (storage & IRProgram::STORAGE_IS_PTR) && !(storage & notPointer) &&
+         ((storage >> 8) & 0xFF) != 0;
+}
+
+inline void IRLowering::CopyPointerProvenance(u16 dest, u16 source) {
+  auto problem = pointerProblems.find(source);
+  if (problem != pointerProblems.end()) pointerProblems[dest] = problem->second;
+}
+
 inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
   const UnaryOpData &unop = ast->GetUnaryOp(ref);
-
-  // Special case: address-of a struct-field member access (`^v.pos`).
-  // Must fire before the generic LowerExpression path; otherwise
-  // LowerMemberAccess emits OP_STRUCT_EXTRACT and we'd be pointing at a
-  // by-value copy instead of the field's memory slot.
-  if (unop.op == UnaryOpType::ADDRESS_OF &&
-      unop.operand.Type() == ASTNodeType::MEMBER_ACCESS) {
-    u16 fieldPtr = TryLowerLocalFieldAddressOf(unop.operand);
-    if (fieldPtr != 0) return fieldPtr;
-  }
-
-  if (unop.op == UnaryOpType::ADDRESS_OF &&
-      unop.operand.Type() == ASTNodeType::ARRAY_ACCESS) {
-    const ArrayAccessData &access = ast->GetArrayAccess(unop.operand);
-    u16 array = LowerExpression(access.array);
-    if (array < MAX_REGISTERS &&
-        (program.registerStorageInfo[array] & IRProgram::STORAGE_IS_LOCAL_ARRAY)) {
-      u16 index = LowerExpression(access.index);
-      if (!CheckConstArrayIndexBounds(array, index, access.index)) return 0xFFFF;
-      u16 pointer = AllocateRegister();
-      CoreType elementType = GetRegisterType(array);
-      SetRegisterType(pointer, elementType);
-      program.registerStructTypes[pointer] = program.registerStructTypes[array];
-      program.registerStorageInfo[pointer] = IRProgram::STORAGE_IS_PTR |
-          IRProgram::STORAGE_IS_FIELD_PTR | (static_cast<u32>(elementType) << 8);
-      builder.EmitInstruction(OP_STORAGE_INDEX, pointer, array, index);
-      return pointer;
+  if (unop.op == UnaryOpType::ADDRESS_OF) {
+    // `^p^` is `p` itself, along with what is known about its target.
+    if (unop.operand.Type() == ASTNodeType::UNARY_OP &&
+        ast->GetUnaryOp(unop.operand).op == UnaryOpType::DEREFERENCE) {
+      u16 pointer = LowerExpression(ast->GetUnaryOp(unop.operand).operand);
+      if (IsPointerValue(pointer)) return pointer;
     }
+    bool isLocal = IsFunctionLocalPlace(unop.operand);
+    bool pointsAtCopy = false, pointsAtArray = false;
+    u16 pointer = LowerAddressOf(unop, &pointsAtCopy, &pointsAtArray);
+    if ((pointer & 0xC000) == 0 && pointer < MAX_REGISTERS) {
+      if (!isLocal) {
+        pointerProblems[pointer] = PointerProblem::NON_LOCAL;
+      } else if (pointsAtArray) {
+        pointerProblems[pointer] = PointerProblem::WHOLE_ARRAY;
+      } else if (pointsAtCopy) {
+        pointerProblems[pointer] = PointerProblem::TEMPORARY;
+      }
+    }
+    return pointer;
   }
 
   u16 operand = LowerExpression(unop.operand);
@@ -398,38 +467,8 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
     StoreLValue(unop.operand, newVal);
     return dest; // Return old value
   }
-  case UnaryOpType::ADDRESS_OF: {
-    // ^x: Get pointer to variable. Rejects constants (bits 0x4000/0x8000),
-    // out-of-range register indices, and registers past MAX_REGISTERS —
-    // registerStorageInfo has only MAX_REGISTERS entries, and indexing with
-    // a constant-encoded operand (>= 0x4000) reads/writes far OOB.
-    if ((operand & 0xC000) != 0 || operand >= MAX_REGISTERS ||
-        dest >= MAX_REGISTERS) {
-      builder.EmitInstruction(OP_LOCAL_VAR_PTR, dest, operand);
-      SetRegisterType(dest, CoreType::CUSTOM);
-      return dest;
-    }
-    builder.EmitInstruction(OP_LOCAL_VAR_PTR, dest, operand);
-    // Mark as pointer type - store pointee type and source register in
-    // storage info Format: bits 0-7: flags, bits 8-15: pointee type, bits
-    // 16-31: source register
-    CoreType pointeeType = GetRegisterType(operand);
-    SetRegisterType(dest, CoreType::CUSTOM); // Use CUSTOM to indicate pointer
-    u32 storageVal = (static_cast<u32>(operand) << 16) |
-                     (static_cast<u32>(pointeeType) << 8) |
-                     IR::IRProgram::STORAGE_IS_PTR;
-    builder.program->registerStorageInfo[dest] = storageVal;
-    // Propagate the struct type hash so p^.field lowering can find the
-    // struct layout. Without this, dereference falls back to vec-extract.
-    if (program.registerStructTypes[operand] != 0) {
-      program.registerStructTypes[dest] = program.registerStructTypes[operand];
-    }
-    // Mark the source register as address-taken so SSA doesn't create phi
-    // nodes for it
-    builder.program->registerStorageInfo[operand] |=
-        IR::IRProgram::STORAGE_IS_ADDRESS_TAKEN;
-    return dest;
-  }
+  case UnaryOpType::ADDRESS_OF:
+    break; // Lowered by LowerAddressOf.
   case UnaryOpType::DEREFERENCE: {
     // x^: Dereference pointer.
     if ((operand & 0xC000) != 0 || operand >= MAX_REGISTERS) {
@@ -465,6 +504,88 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
 
   // Fallthrough for unhandled cases (shouldn't happen)
   builder.EmitInstruction(op, dest, operand);
+  return dest;
+}
+
+inline u16 IRLowering::LowerAddressOf(const UnaryOpData &unop,
+                                      bool *pointsAtCopy,
+                                      bool *pointsAtArray) {
+  // Special case: address-of a struct-field member access (`^v.pos`).
+  // Must fire before the generic LowerExpression path; otherwise
+  // LowerMemberAccess emits OP_STRUCT_EXTRACT and we'd be pointing at a
+  // by-value copy instead of the field's memory slot.
+  if (unop.operand.Type() == ASTNodeType::MEMBER_ACCESS) {
+    u16 fieldPtr = TryLowerLocalFieldAddressOf(unop.operand);
+    if (fieldPtr != 0) return fieldPtr;
+  }
+
+  if (unop.operand.Type() == ASTNodeType::ARRAY_ACCESS) {
+    const ArrayAccessData &access = ast->GetArrayAccess(unop.operand);
+    u16 array = LowerExpression(access.array);
+    if (array < MAX_REGISTERS &&
+        (program.registerStorageInfo[array] & IRProgram::STORAGE_IS_LOCAL_ARRAY)) {
+      u16 index = LowerExpression(access.index);
+      if (!CheckConstArrayIndexBounds(array, index, access.index)) return 0xFFFF;
+      u16 pointer = AllocateRegister();
+      CoreType elementType = GetRegisterType(array);
+      SetRegisterType(pointer, elementType);
+      program.registerStructTypes[pointer] = program.registerStructTypes[array];
+      program.registerStorageInfo[pointer] = IRProgram::STORAGE_IS_PTR |
+          IRProgram::STORAGE_IS_FIELD_PTR | (static_cast<u32>(elementType) << 8);
+      builder.EmitInstruction(OP_STORAGE_INDEX, pointer, array, index);
+      return pointer;
+    }
+  }
+
+  // A field or element reached through an in-place struct variable,
+  // including `self` fields and elements of array fields (`^s.values[i]`).
+  if (unop.operand.Type() == ASTNodeType::MEMBER_ACCESS ||
+      unop.operand.Type() == ASTNodeType::ARRAY_ACCESS ||
+      unop.operand.Type() == ASTNodeType::IDENTIFIER) {
+    LocalPlace place;
+    if (ResolveLocalPlace(unop.operand, false, &place) && place.isPointer &&
+        place.arrayLength == 0 && ResolveLocalPlace(unop.operand, true, &place)) {
+      return place.reg;
+    }
+  }
+
+  // ^x: Get pointer to variable. Rejects constants (bits 0x4000/0x8000),
+  // out-of-range register indices, and registers past MAX_REGISTERS —
+  // registerStorageInfo has only MAX_REGISTERS entries, and indexing with
+  // a constant-encoded operand (>= 0x4000) reads/writes far OOB.
+  u16 operand = LowerExpression(unop.operand);
+  u16 dest = AllocateRegister();
+  if ((operand & 0xC000) != 0 || operand >= MAX_REGISTERS ||
+      dest >= MAX_REGISTERS) {
+    builder.EmitInstruction(OP_LOCAL_VAR_PTR, dest, operand);
+    SetRegisterType(dest, CoreType::CUSTOM);
+    *pointsAtCopy = true;
+    return dest;
+  }
+  // Only a variable's own register is named after it; anything else is a
+  // value computed from the operand, and the pointer would target that copy.
+  u32 operandStorage = program.registerStorageInfo[operand];
+  *pointsAtArray = (operandStorage & IRProgram::STORAGE_IS_LOCAL_ARRAY) != 0;
+  *pointsAtCopy = !*pointsAtArray && program.registerNameHashes[operand] == 0;
+  builder.EmitInstruction(OP_LOCAL_VAR_PTR, dest, operand);
+  // Mark as pointer type - store pointee type and source register in
+  // storage info Format: bits 0-7: flags, bits 8-15: pointee type, bits
+  // 16-31: source register
+  CoreType pointeeType = GetRegisterType(operand);
+  SetRegisterType(dest, CoreType::CUSTOM); // Use CUSTOM to indicate pointer
+  u32 storageVal = (static_cast<u32>(operand) << 16) |
+                   (static_cast<u32>(pointeeType) << 8) |
+                   IR::IRProgram::STORAGE_IS_PTR;
+  builder.program->registerStorageInfo[dest] = storageVal;
+  // Propagate the struct type hash so p^.field lowering can find the
+  // struct layout. Without this, dereference falls back to vec-extract.
+  if (program.registerStructTypes[operand] != 0) {
+    program.registerStructTypes[dest] = program.registerStructTypes[operand];
+  }
+  // Mark the source register as address-taken so SSA doesn't create phi
+  // nodes for it
+  builder.program->registerStorageInfo[operand] |=
+      IR::IRProgram::STORAGE_IS_ADDRESS_TAKEN;
   return dest;
 }
 

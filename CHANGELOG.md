@@ -8,6 +8,21 @@
   `@bounds(>=0, <=1) float4 tint;`, or per component, as in
   `@bounds(>0, -10<y<0) float4 offsets;`. A bounded component is never
   NaN. See "Value Bounds" in the language reference.
+- Functions and struct methods can take pointer parameters, `Type^ name`,
+  to update the caller's variables: `swap :: (int^ a, int^ b)` called as
+  `swap(^x, ^y)`. Writes through the parameter reach the caller, and two
+  parameters given the same address alias. The argument must point to a
+  local variable, a field of one or an array element; pointers to
+  resources, stage inputs and outputs or shared memory are rejected. `T^`
+  and `T` overload separately, and a constrained `Number^` parameter is
+  specialized by its pointee. Functions can't return pointers. See
+  "Pointer parameters" in the language reference.
+- `Module::helper(...);` is accepted as a statement. It previously failed to
+  parse ("Expected variable name"), so a void module function couldn't be
+  called.
+- A pointer to an element of a struct's array field (`^s.values[i]`) or to
+  a `self` field named without `self.` now points at the element. It
+  previously pointed at a copy, so writes through it were lost.
 
 ### Backends
 - Experimental native WGSL output is available with `-wgsl` for compute,
@@ -77,6 +92,9 @@
   16384 distinct float constants is a source error.
 
 ### Diagnostics
+- Passing a value where a pointer parameter is expected, a pointer where a
+  value is expected (including to an intrinsic or constructor), or a pointer
+  to a different type reports the argument and how to fix it.
 - Ternary arms of different types, such as `c ? float3(1.0) : float2(1.0)`,
   are a source error. They previously failed SPIR-V validation.
 - `select(false_value, true_value, condition)` reports a source error when
@@ -88,6 +106,9 @@
   `condition != 0` (see Breaking changes).
 
 ### AST JSON
+- A pointer parameter has `isPointer: true` and a `dataType` spelled as
+  written, such as `int^`; its `typeInfo` describes the pointee. Function
+  stable IDs mark pointer parameters with `^`, as in `swap(int^,int^)`.
 - A call that passes a struct resource or an enum variant directly, such as
   `read(resources.data)` or `weight(variants.quality)`, now has its `call`
   edge in `referenceIndex.references`.

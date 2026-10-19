@@ -1,0 +1,55 @@
+// Test: pointer parameters in vertex and fragment stages
+// Tests: a module struct pointee updated through a module function, a vector
+//        pointee, and swapping two locals
+
+module PointerParamAccum {
+    struct Accum {
+        float3 sum;
+        float weight;
+    }
+
+    addSample :: (Accum^ acc, float3 value, float w) -> void {
+        acc^.sum = acc^.sum + value * w;
+        acc^.weight = acc^.weight + w;
+    }
+}
+
+pipeline PointerParamsGraphics {
+    import PointerParamAccum
+
+    attributes {
+        position: float3
+    }
+
+    swapf :: (float^ a, float^ b) -> void {
+        float t = a^;
+        a^ = b^;
+        b^ = t;
+    }
+
+    scaleXY :: (float4^ v, float s) -> void {
+        v^ = float4(v^.xy * s, v^.zw);
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float4 p = float4(attributes.position, 1.0);
+            scaleXY(^p, 0.5);
+            output.position = p;
+        }
+
+        fragment {
+            PointerParamAccum::Accum acc;
+            acc.sum = float3(0.0);
+            acc.weight = 0.0;
+            PointerParamAccum::addSample(^acc, float3(1.0, 0.5, 0.25), 2.0);
+            PointerParamAccum::addSample(^acc, float3(0.0, 0.5, 1.0), 1.0);
+            float r = acc.sum.x / acc.weight;
+            float g = acc.sum.y;
+            swapf(^r, ^g);
+            output.color = float4(r, g, acc.sum.z, 1.0);
+        }
+    }
+}

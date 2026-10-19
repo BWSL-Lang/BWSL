@@ -273,6 +273,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   arrayBaseRegisters.clear();
   structTypeMap.clear();
   variableStructTypes.clear();
+  pointerProblems.clear();
 }
 
 inline IRProgram *IRLowering::LowerPipeline(NodeRef pipelineRef) {

@@ -797,6 +797,7 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref, u32 bindingNameHash,
                                       IR::IRProgram::STORAGE_IS_PTR)) {
         program.registerStorageInfo[varReg] =
             program.registerStorageInfo[initReg];
+        CopyPointerProvenance(varReg, initReg);
         // Also propagate the struct type hash for `TypeName^ p = ^s;` so
         // `p^.field` later resolves the struct layout.
         if (program.registerStructTypes[initReg] != 0 &&
@@ -959,6 +960,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
                                      IR::IRProgram::STORAGE_IS_PTR)) {
       program.registerStorageInfo[varReg] =
           program.registerStorageInfo[valueReg];
+      CopyPointerProvenance(varReg, valueReg);
     }
     initializedVariables.insert(ident.name.nameHash);
   } else if (target.Type() == ASTNodeType::MEMBER_ACCESS) {

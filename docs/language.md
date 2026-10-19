@@ -806,6 +806,50 @@ Current test coverage includes:
 - pointer use in arithmetic and control flow
 - disambiguation between dereference and bitwise XOR
 
+### Pointer parameters
+
+Parameters are passed by value, so a helper that updates the caller's
+variable takes a pointer parameter, `Type^ name`. The caller passes an
+address with `^`:
+
+```bwsl
+swap :: (int^ a, int^ b) -> void {
+    int t = a^;
+    a^ = b^;
+    b^ = t;
+}
+
+accumulate :: (int^ sum, int value) -> void {
+    sum^ = sum^ + value;
+}
+
+int x = 1;
+int y = 2;
+swap(^x, ^y);        // x == 2, y == 1
+accumulate(^x, 5);   // x == 7
+```
+
+A write through the parameter changes the caller's variable right away, and
+two parameters given the same address alias each other. Struct pointees use
+`p^.field`. A pointer parameter can be passed on to another function as is
+(`accumulate(sum, value)`).
+
+The argument must point to memory local to the calling function:
+
+- a local variable or parameter: `^x`
+- a field of a local struct, nested or not: `^light.color`, `^s.inner.a`
+- an element of a local array, with a constant or dynamic index: `^values[i]`,
+  `^s.values[i]`
+- a pointer variable or pointer parameter holding one of these
+
+Pointers to resources, stage inputs and outputs, shared memory, vector
+components or matrix columns can't be passed; copy the value into a local,
+pass `^local` and store the result back. `Type^` and `Type` are different
+parameter types: passing a value where a pointer is expected, a pointer where
+a value is expected, or a pointer to another type is an error. Functions can't
+return pointers, and pointer-to-pointer, array-of-pointer and whole-array
+pointer parameters aren't supported.
+
 ## Compute Features
 
 Compute shaders support:

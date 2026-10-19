@@ -1,0 +1,18 @@
+// Error case: compile-time (eval) functions can't take pointer parameters.
+pipeline PointerParamEvalFunction {
+    attributes {
+        position: float3
+    }
+
+    eval twice :: (int^ v) -> int {
+        return v^ * 2;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+    }
+}

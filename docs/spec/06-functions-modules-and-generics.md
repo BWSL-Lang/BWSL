@@ -35,16 +35,66 @@ argument. Struct copies include nested fields and fixed arrays. Fixed-array
 parameters receive independent array storage, including when the same array
 is passed to two parameters or a function is called repeatedly.
 
-Pointer-typed function parameters remain unsupported by the current parser.
 Local pointers retain their reference behavior: writing through an alias
 changes its pointee. Passing an ordinary value that also has a local pointer
 alias still gives the callee an independent value copy. A mutable method's
 `self` receiver retains its existing receiver-mutation behavior; its other
 ordinary parameters follow the value-copy rule.
 
+## Pointer Parameters
+
+A parameter declared `Type^ name` (or `name: Type^`) is a pointer parameter.
+Functions, pass functions, module functions, struct methods and constrained
+generic functions may declare them:
+
+```bwsl
+swap :: (int^ a, int^ b) -> void {
+    int t = a^;
+    a^ = b^;
+    b^ = t;
+}
+```
+
+The parameter is a local pointer initialized from the argument. Reads use
+`p^`, writes use `p^ = value`, and struct pointees use `p^.field`, exactly as
+for a local `Type^`. A write through the parameter changes the pointee
+immediately, so the caller observes it after the call and parameters given
+the same address alias: `swap(^x, ^x)` leaves `x` unchanged. Assigning the
+parameter itself (`p = ^local`) rebinds only the callee's pointer.
+
+The argument must be a pointer to memory local to the calling invocation:
+
+- `^v`, where `v` is a local variable or a parameter of the calling function
+- `^v.field`, including nested fields and `self` fields in a method
+- `^a[i]`, an element of a local array or of a local struct's array field,
+  with a constant or dynamic index
+- a pointer local or pointer parameter holding such an address
+
+An argument that points to a resource, a stage input or output, shared
+memory or a pipeline-scope value is an error, as is one that points to a
+temporary: a vector component (`^v.x`), a matrix column (`^m[1]`) or a value
+read through another pointer. A pointer to a whole array is an error.
+
+`Type^` and `Type` are distinct parameter types for overloading. A pointer
+argument matches only a pointer parameter with the same pointee type; no
+conversion applies through a pointer. Passing a value to a pointer parameter,
+a pointer to a value parameter, an intrinsic or a constructor, or a pointer to
+a different pointee type is an error. A constrained parameter such as
+`Number^ v` is specialized by the pointee type of its argument.
+
+Pointer parameters are not supported in compile-time (`eval`) functions or
+enum methods. Pointer-to-pointer parameters (`Type^^`), arrays of pointers
+(`Type^[N]`), pointers to whole arrays (`Type[N]^`) and pointers to textures
+or samplers are rejected. Function return types cannot be pointers.
+
+Implementation note: every call to a user function is inlined during IR
+lowering, so a pointer parameter becomes a local pointer to the caller's
+variable and no backend emits a pointer-typed function signature.
+
 ## Return Types
 
-Function return types currently include:
+Function return types currently include the following; pointer types are not
+return types:
 
 - built-in source types
 - custom and module-qualified types

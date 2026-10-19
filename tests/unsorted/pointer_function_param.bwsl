@@ -1,4 +1,6 @@
-// Error case: pointer-typed function parameters are not supported.
+// Test: a pointer parameter writes through to the caller's local.
+// (Previously rejected as "Pointer-typed function parameters are not
+// supported", issue #205.)
 pipeline PointerFunctionParam {
     attributes {
         position: float3

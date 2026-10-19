@@ -11,6 +11,7 @@
 #include "core/bwsl_resource_reflection.h"
 #include "core/bwsl_symbol_table.h"
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -436,6 +437,47 @@ struct IRLowering {
   bool TryStoreLocalPlace(NodeRef target, u16 valueReg);
 
   u16 LowerUnaryOp(NodeRef ref);
+  u16 LowerAddressOf(const UnaryOpData &unop, bool *pointsAtCopy,
+                     bool *pointsAtArray);
+
+  // ============= Pointer arguments =============
+  // Why a pointer can't be passed to a `Type^` parameter. Each of these
+  // pointers targets a loaded or computed copy rather than the place that
+  // was written, so the callee's writes would never reach it.
+  enum class PointerProblem : u8 {
+    NON_LOCAL,    // `^` of a resource, stage input or output, shared memory
+                  // or a pipeline-scope value
+    TEMPORARY,    // `^` of a vector component, matrix column, a value read
+                  // through a pointer or another computed value
+    WHOLE_ARRAY,  // `^` of a whole array, which `Type^` can't describe
+  };
+  // Keyed by register: the `^` result and pointer variables and parameters
+  // copied from it.
+  std::unordered_map<u16, PointerProblem> pointerProblems;
+  bool IsFunctionLocalPlace(NodeRef expr);
+  bool IsPointerValue(u16 reg) const;
+  void CopyPointerProvenance(u16 dest, u16 source);
+  // An argument's overload mask; a pointer argument describes its pointee
+  // and carries OVERLOAD_POINTER_MASK.
+  OverloadTypeMask ArgumentOverloadMask(u16 reg);
+  // Binds a `Type^` parameter of an inlined call to the caller's pointer.
+  void BindPointerParameter(const FunctionCallData &call,
+                            const FunctionDeclData &function, u32 index,
+                            u16 arg);
+  // When no overload of `call` matched only because an argument is or isn't
+  // a pointer (or points at the wrong type), reports that argument and
+  // returns true.
+  bool ReportPointerArgumentMismatch(const FunctionCallData &call,
+                                     const FunctionDeclData &function,
+                                     const OverloadTypeMask *argMasks,
+                                     u32 argCount);
+  // Intrinsics and constructors take values only.
+  bool ReportPointerArgumentToBuiltin(const FunctionCallData &call,
+                                      const u16 *args, u32 argCount);
+  bool ReportStructMethodPointerMismatch(const StructData *structData,
+                                         const FunctionCallData &call,
+                                         const OverloadTypeMask *argMasks,
+                                         u32 argCount);
 
   u16 LowerIdentifier(NodeRef ref);
 

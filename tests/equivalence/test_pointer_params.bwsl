@@ -1,0 +1,125 @@
+// Pointer parameters (`Type^ name`) write through to the caller's locals.
+// Independent CPU expectations are recorded in the adjacent JSON specification.
+pipeline EquivPointerParams {
+    resources {
+        output: buffer<int>
+    }
+
+    struct Pair {
+        int a;
+        int b;
+    }
+
+    struct Holder {
+        Pair inner;
+        int[4] values;
+    }
+
+    struct Counter {
+        int total;
+
+        bump :: (int^ dst, int k) -> void {
+            self.total = self.total + k;
+            dst^ = self.total;
+        }
+    }
+
+    constraint Num = int | float;
+
+    swap :: (int^ a, int^ b) -> void {
+        int t = a^;
+        a^ = b^;
+        b^ = t;
+    }
+
+    accumulate :: (int^ sum, int value) -> void {
+        sum^ = sum^ + value;
+    }
+
+    accumulateTwice :: (int^ sum, int value) -> void {
+        accumulate(sum, value);
+        accumulate(sum, value);
+    }
+
+    // With both parameters pointing at one variable, the second write sees
+    // the first: z becomes (z + 1) * 2.
+    incrementThenDouble :: (int^ a, int^ b) -> void {
+        a^ = a^ + 1;
+        b^ = b^ * 2;
+    }
+
+    bumpPair :: (Pair^ p, int amount) -> void {
+        p^.a = p^.a + amount;
+        p^.b = p^.b * 2;
+    }
+
+    twice :: (Num^ v) -> void {
+        v^ = v^ + v^;
+    }
+
+    pass "Compute" {
+        use resources { output }
+
+        compute "Main" [64, 1, 1] {
+            uint idx = input.global_id.x;
+            int n = int(idx);
+
+            int x = n;
+            int y = 100;
+            swap(^x, ^y);
+            accumulate(^x, 5);
+            accumulateTwice(^y, 3);
+
+            int z = n;
+            incrementThenDouble(^z, ^z);
+
+            int same = n + 7;
+            swap(^same, ^same);
+
+            Pair pair;
+            pair.a = 1;
+            pair.b = 2;
+            bumpPair(^pair, n);
+            accumulate(^pair.b, 10);
+
+            int[4] arr;
+            arr[0] = 1;
+            arr[1] = 2;
+            arr[2] = 3;
+            arr[3] = 4;
+            accumulate(^arr[n % 4], 50);
+
+            Holder h;
+            h.inner = pair;
+            h.values[0] = 0;
+            h.values[1] = 0;
+            h.values[2] = 0;
+            h.values[3] = 0;
+            accumulate(^h.values[(n + 1) % 4], 7);
+            accumulate(^h.inner.a, n);
+
+            int total = 0;
+            for (int i = 0; i < 4; i++) {
+                if (i % 2 == n % 2) {
+                    accumulate(^total, arr[i]);
+                } else {
+                    accumulate(^h.values[i], 1);
+                }
+            }
+
+            Counter c;
+            c.total = 5;
+            int y2 = 0;
+            c.bump(^y2, n);
+
+            int ti = n;
+            twice(^ti);
+
+            resources.output[idx] = x + y * 3 + z * 5 + same * 7 + pair.a * 11 +
+                pair.b * 13 + arr[0] * 17 + arr[1] * 19 + arr[2] * 23 + arr[3] * 29 +
+                h.inner.a * 31 + h.values[0] * 37 + h.values[1] * 41 +
+                h.values[2] * 43 + h.values[3] * 47 + total * 53 + y2 * 59 +
+                c.total * 61 + ti * 67;
+        }
+    }
+}

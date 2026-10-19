@@ -64,6 +64,11 @@ struct VariableData {
 };
 using OverloadTypeMask = u64;
 static constexpr OverloadTypeMask OVERLOAD_CUSTOM_MASK = (1ULL << 63);
+// Set on a `Type^` parameter or a pointer argument; the rest of the mask
+// describes the pointee. Core type bits stop below 62 and custom hashes are
+// 32-bit, so the bit never collides with a type.
+static constexpr OverloadTypeMask OVERLOAD_POINTER_MASK = (1ULL << 62);
+static_assert(static_cast<u32>(CoreType::COUNT) < 62, "core type bits overlap OVERLOAD_POINTER_MASK");
 
 inline OverloadTypeMask MakeOverloadMask(CoreType type, u32 customHash = 0) {
     if (type == CoreType::CUSTOM) {
@@ -89,10 +94,12 @@ inline OverloadTypeMask MakeOverloadMaskFromTypeHash(u32 typeHash) {
 }
 
 inline bool OverloadMaskMatches(OverloadTypeMask paramMask, OverloadTypeMask argMask) {
+    // A pointer only matches a pointer parameter, and a value only a value one.
+    if ((paramMask ^ argMask) & OVERLOAD_POINTER_MASK) return false;
     if ((paramMask & OVERLOAD_CUSTOM_MASK) || (argMask & OVERLOAD_CUSTOM_MASK)) {
         return paramMask == argMask;
     }
-    return (paramMask & argMask) != 0;
+    return (paramMask & argMask & ~OVERLOAD_POINTER_MASK) != 0;
 }
 
 inline u64 HashOverloadSignature(const OverloadTypeMask* masks, u32 count) {
@@ -264,6 +271,7 @@ struct GenericParamInfo {
     ArenaString typeName;       // Type name as written (e.g., "FloatVectors", "float", "T")
     TypeMask constraintMask;    // 0 if concrete type, non-zero if constraint
     bool isConstrained;         // true = uses constraint, false = concrete type
+    bool isPointer = false;     // `Type^`: the argument is a pointer to Type
 };
 
 // Generic function template - specializations become normal FunctionData
@@ -1586,7 +1594,8 @@ namespace SymbolTable {
         SymbolTableData* table,
         u32 nameHash,
         const CoreType* argTypes,
-        u32 argCount
+        u32 argCount,
+        const bool* argIsPointer = nullptr  // argTypes then name the pointees
     ) {
         for (u32 i = 0; i < table->genericFunctions.count; i++) {
             GenericFunctionData& gfn = table->genericFunctions[i];
@@ -1596,6 +1605,11 @@ namespace SymbolTable {
             // Check if all constrained parameters are satisfied
             bool allSatisfied = true;
             for (u32 j = 0; j < argCount; j++) {
+                bool isPointer = argIsPointer && argIsPointer[j];
+                if (gfn.parameters[j].isPointer != isPointer) {
+                    allSatisfied = false;
+                    break;
+                }
                 if (gfn.parameters[j].isConstrained) {
                     if (!GenericFunctionData::TypeSatisfiesConstraint(
                             argTypes[j], gfn.parameters[j].constraintMask)) {
