@@ -8,6 +8,7 @@
 #include "core/bwsl_variant_system.h"
 #include "core/bwsl_custom_type_registry.h"
 #include "core/bwsl_diagnostics.h"
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <unordered_map>
@@ -96,7 +97,9 @@ struct ParseError {
 };
 
 struct CompilationContext {
-    static constexpr size_t DEFAULT_ARENA_SIZE = 16 * 1024 * 1024; // 16MB for complex module hierarchies
+    // First block of the arena, and the size of each block it grows by.
+    // Large material shaders with several modules outgrow one block.
+    static constexpr size_t DEFAULT_ARENA_SIZE = 16 * 1024 * 1024;
 
     void* memory;
     BWSL_Arena arena;
@@ -106,10 +109,16 @@ struct CompilationContext {
     DiagnosticStream diagnostics;
     DiagnosticStream* diagnosticSink;
 
-    explicit CompilationContext(u32 estimatedNodes = 2048)
+    explicit CompilationContext(u32 estimatedNodes = 2048,
+                                size_t arenaLimit = Memory::g_arenaGrowthLimit)
         : root(NodeRef::Null()), diagnosticSink(&diagnostics) {
-        memory = malloc(DEFAULT_ARENA_SIZE);
-        arena.Initialize(memory, DEFAULT_ARENA_SIZE);
+        const size_t firstBlock = std::min(DEFAULT_ARENA_SIZE, arenaLimit);
+        memory = malloc(firstBlock);
+        if (memory == nullptr) {
+            throw Memory::ArenaExhausted(arenaLimit, firstBlock, true);
+        }
+        arena.Initialize(memory, firstBlock);
+        arena.EnableGrowth(DEFAULT_ARENA_SIZE, arenaLimit);
         ast.Init(&arena, estimatedNodes);
         evalCache.Init();
         diagnostics.Init(&arena);

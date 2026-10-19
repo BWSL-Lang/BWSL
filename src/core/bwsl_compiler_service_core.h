@@ -701,6 +701,7 @@ private:
             static_cast<size_t>(lowering.program.instructionCount) * 512);
         std::vector<char> cfgMem(stageScratchBytes);
         cfgArena.Initialize(cfgMem.data(), cfgMem.size());
+        cfgArena.EnableGrowth(stageScratchBytes);
         
         CFGBuilder cfgBuilder;
         cfgBuilder.Init(&lowering.program, &cfgArena);
@@ -729,6 +730,7 @@ private:
         Memory::BWEMemoryArena spirvArena;
         std::vector<char> spirvMem(stageScratchBytes);
         spirvArena.Initialize(spirvMem.data(), spirvMem.size());
+        spirvArena.EnableGrowth(stageScratchBytes);
         
         SPIRVBuilder builder;
         builder.Initialize(&spirvArena, &lowering.program, stage,

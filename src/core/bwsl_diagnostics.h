@@ -66,6 +66,7 @@ enum class DiagnosticMessageId : u16 {
     CrossCompileFailed,
     MaxUserVaryingsExceeded,
     ComputeGraphValidationFailed,
+    CompilerMemoryExhausted,
 };
 
 enum class DiagnosticArgKind : u8 {
@@ -337,6 +338,7 @@ public:
             case DiagnosticMessageId::CrossCompileFailed: return "CrossCompileFailed";
             case DiagnosticMessageId::MaxUserVaryingsExceeded: return "MaxUserVaryingsExceeded";
             case DiagnosticMessageId::ComputeGraphValidationFailed: return "ComputeGraphValidationFailed";
+            case DiagnosticMessageId::CompilerMemoryExhausted: return "CompilerMemoryExhausted";
             default: return "Raw";
         }
     }
@@ -551,6 +553,8 @@ private:
                 return "Maximum 16 user varyings exceeded";
             case DiagnosticMessageId::ComputeGraphValidationFailed:
                 return "Compute graph validation failed: {0}";
+            case DiagnosticMessageId::CompilerMemoryExhausted:
+                return "Compilation stopped: {0}";
             default:
                 return "";
         }
@@ -576,6 +580,7 @@ private:
             case DiagnosticMessageId::MaxUserVaryingsExceeded: return "BWSL1301";
             case DiagnosticMessageId::ShaderStageCompileFailed: return "BWSL1400";
             case DiagnosticMessageId::CrossCompileFailed: return "BWSL1401";
+            case DiagnosticMessageId::CompilerMemoryExhausted: return "BWSL1402";
             case DiagnosticMessageId::ValidationStrictToolMissing: return "BWSL1500";
             case DiagnosticMessageId::ValidationAutoToolMissing: return "BWSL1501";
             case DiagnosticMessageId::ValidationFailed: return "BWSL1502";

@@ -196,6 +196,18 @@
   location. A `bool` variant selector still works, because the switch is
   reduced to one arm at compile time.
 
+### Tooling
+- Large shaders no longer crash the compiler. The compilation arena was a
+  fixed 16 MiB block, and a 3000-line material shader importing two modules
+  needs about 23 MiB; every variant of it crashed with a segmentation fault.
+  The arena now grows in 16 MiB blocks without moving earlier allocations,
+  up to 1 GiB per compilation by default. `-arena-limit <MiB>` changes the
+  limit. Reaching it is error BWSL1402 for that unit, and the other units of
+  a batch still compile. The CFG/SSA, SPIR-V and direct GLSL ES scratch
+  arenas grow the same way.
+- The comptime pass may clone up to 1,000,000 AST nodes, up from 100,000.
+  The same shader clones about 94,000.
+
 ### AST JSON
 - A pointer parameter has `isPointer: true` and a `dataType` spelled as
   written, such as `int^`; its `typeInfo` describes the pointee. Function

@@ -45,7 +45,8 @@ static void InitBudget(ComptimeBudget* budget) {
     budget->maxExecutedStatements = 100000;
     budget->maxEmittedStatements = 100000;
     budget->maxLoopIterations = 10000;
-    budget->maxCloneNodes = 100000;
+    // A 3000-line material shader with two modules clones ~94k nodes.
+    budget->maxCloneNodes = 1000000;
     budget->maxCloneDepth = 2048;
 }
 

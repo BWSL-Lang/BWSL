@@ -166,7 +166,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
     std::string source(reinterpret_cast<const char*>(data), size);
 
-    CompilationContext context;
+    // A 32 KiB input never needs more than the first arena block; capping the
+    // arena there keeps runaway allocation loops failing fast.
+    CompilationContext context(2048, CompilationContext::DEFAULT_ARENA_SIZE);
     TokenStream stream;
     stream.Init(&context.arena, source.c_str(), source.length());
 
