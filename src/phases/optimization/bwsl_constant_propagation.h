@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/bwsl_optimizations.h"
 #include "phases/control_flow/bwsl_cfg.h"
 #include "phases/ir_generation/bwsl_ir_gen.h"
 
@@ -24,7 +25,11 @@ namespace Optimization {
 // `cfg` is null for straight-line stages, which skip CFG and SSA. Those,
 // and single-block stages, get one forward walk instead, since a register
 // there can be assigned more than once.
-void PropagateConstants(IR::IRBuilder* builder, CFG* cfg);
+//
+// `optimizations` turns parts off (see core/bwsl_optimizations.h). Without
+// CONSTANT_PROPAGATION only COMMON_SUBEXPRESSIONS can still run.
+void PropagateConstants(IR::IRBuilder* builder, CFG* cfg,
+                        OptimizationSet optimizations = Optimizations::Default());
 
 }  // namespace Optimization
 }  // namespace BWSL

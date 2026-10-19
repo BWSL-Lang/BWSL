@@ -96,6 +96,9 @@ using namespace BWSL;
 using namespace BWSL::IR;
 using namespace BWSL::ToolCommon;
 
+// --optimizations of the compile() call in progress.
+static OptimizationSet g_optimizations = Optimizations::Default();
+
 // ============= Helper Functions =============
 
 static const char* PixelFormatToString(PixelFormat format) {
@@ -257,6 +260,7 @@ static std::string EmitDirectGLES(IRProgram& program,
     GLES::GLESBuilder glesBuilder;
     glesBuilder.Initialize(&glesArena, sourceBase, &program, cfgPtr, stage,
                            &pass, &renderConfig, &analysis, varyingContext);
+    glesBuilder.optimizations = g_optimizations;
     if (!pipelineRef.IsNull()) {
         const PipelineData& pipeline = ast.GetPipeline(pipelineRef);
         for (u32 i = 0; i < pipeline.attributes.count; i++) {
@@ -546,6 +550,7 @@ static ShaderOutput CompileShaderStage(
     lowering.Initialize(&irPool, const_cast<SymbolTableData*>(&parser.symbolTable),
                         const_cast<AST*>(&context.ast), sourceBase);
     lowering.currentStage = stage;
+    lowering.optimizations = g_optimizations;
     lowering.currentPipeline = pipelineRef;
     lowering.currentPassData = &pass;
     lowering.currentPassVaryings = varyingContext;
@@ -613,7 +618,7 @@ static ShaderOutput CompileShaderStage(
         }
     }
 
-    Optimization::PropagateConstants(&lowering.builder, cfgPtr);
+    Optimization::PropagateConstants(&lowering.builder, cfgPtr, g_optimizations);
 
     // Generate SPIR-V
     Memory::BWEMemoryArena spirvArena;
@@ -637,6 +642,7 @@ static ShaderOutput CompileShaderStage(
     vpConfig.descriptorSet = 0;
     builder.SetVertexPullingConfig(vpConfig);
     builder.SetUseStd430Padding(true);  // For GLSL ES compatibility
+    builder.SetOptimizations(g_optimizations);
     if (varyingContext) {
         for (u32 i = 0; i < varyingContext->count; i++) {
             builder.SetVaryingName(varyingContext->varyings[i].slot,
@@ -1205,6 +1211,7 @@ extern "C" {
 //        "-modules <path>" to add module search path (can be used multiple times)
 //        "-variant name=value" to specialize one named variant (can be used multiple times)
 //        "-dump-variant-space" to return variant reflection JSON without shader output
+//        "--optimizations <list>" to choose optimizations, as bwslc does
 // Returns JSON string with compiled shaders and metadata
 const char* compile(const char* bwslSource, const char* rcfgSource, const char* flags) {
     bool emitInternals = flags && strstr(flags, "-internals") != nullptr;
@@ -1214,7 +1221,24 @@ const char* compile(const char* bwslSource, const char* rcfgSource, const char* 
     std::string sourceFileName;
     std::vector<std::string> modulePaths;
     std::vector<VariantOverride> variantOverrides;
+    g_optimizations = Optimizations::Default();
     if (flags) {
+        // "--optimizations <list>", "-optimizations <list>" or "--optimizations=<list>"
+        const char* option = strstr(flags, "-optimizations");
+        if (option) {
+            const char* p = option + strlen("-optimizations");
+            if (*p == '=' || *p == ' ') p++;
+            while (*p == ' ') p++;
+            const char* end = p;
+            while (*end && *end != ' ') end++;
+            std::string error = "expects a group or optimization names";
+            if (end == p || !Optimizations::Parse(std::string_view(p, end - p), &g_optimizations, &error)) {
+                g_resultBuffer = "{\"success\":false,\"errors\":[\"--optimizations: " +
+                                 EscapeJsonString(error) + "\"]}";
+                return g_resultBuffer.c_str();
+            }
+        }
+
         const char* p = flags;
         while ((p = strstr(p, "-modules ")) != nullptr) {
             p += 9;  // Skip "-modules "

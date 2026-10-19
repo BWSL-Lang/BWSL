@@ -12,6 +12,7 @@
 #include <vector>
 #include <stdexcept>
 
+#include "core/bwsl_optimizations.h"
 #include "core/bwsl_defs.h"
 #include "core/bwsl_arena.h"
 #include "phases/ir_generation/bwsl_ir_gen.h"
@@ -372,6 +373,7 @@ struct GLESBuilder {
     u32 workgroupSizeX;
     u32 workgroupSizeY;
     u32 workgroupSizeZ;
+    OptimizationSet optimizations = Optimizations::Default();  // GLES_CONST_TABLES
 
 
     void DebugDumpRegisterInfo();

@@ -1,4 +1,5 @@
 #pragma once
+#include "core/bwsl_optimizations.h"
 #include "phases/ir_generation/bwsl_ir_gen.h"
 #include "phases/ir_generation/bwsl_ir_analysis.h"
 #include "phases/control_flow/bwsl_cfg.h"
@@ -236,6 +237,7 @@ struct SPIRVBuilder {
     // SPIRV-Cross does not rename OpNames on plain result IDs, so these would
     // reach GLSL/ESSL output verbatim and fail to compile.
     bool avoidGlslReservedNames = false;
+    OptimizationSet optimizations = Optimizations::Default();  // ARRAY_FILL_STORES
 
     // ============= Interface Names =============
     // Source names of vertex->fragment varyings, indexed by 0-based varying
@@ -412,6 +414,7 @@ struct SPIRVBuilder {
     // Debug options
     void SetEmitDebugNames(bool emit) { emitDebugNames = emit; }
     void SetAvoidGlslReservedNames(bool avoid) { avoidGlslReservedNames = avoid; }
+    void SetOptimizations(OptimizationSet set) { optimizations = set; }
 
     // Interface names. These are emitted regardless of emitDebugNames:
     // GL hosts without layout(binding) look blocks and samplers up by name,

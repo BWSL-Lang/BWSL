@@ -220,6 +220,18 @@
 - The comptime pass may clone up to 1,000,000 AST nodes, up from 100,000.
   The same shader clones about 94,000.
 
+### Tooling
+- `--optimizations <list>` chooses which optimizations run, in bwslc and in
+  the WASM module's flags. The list holds at most one group (`off`,
+  `default`, `amd`, `nvidia`, `intel`) and optimization names, each enabled
+  as written or disabled with a leading `-`:
+  `--optimizations off,common-subexpressions` runs only common
+  subexpression elimination, `--optimizations amd,-dead-values` runs the
+  AMD set but keeps unread values. Names win over the group. Without the option, or
+  with no group in the list, `default` applies: every optimization not
+  known to slow down any vendor's GPU. The vendor groups start out equal to
+  `default`. `bwslc -h` lists the names.
+
 ### AST JSON
 - A pointer parameter has `isPointer: true` and a `dataType` spelled as
   written, such as `int^`; its `typeInfo` describes the pointee. Function

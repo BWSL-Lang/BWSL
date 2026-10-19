@@ -81,6 +81,9 @@ struct CompilationConfig {
 
     // Validation options
     bool validateSpirv = true;     // Run spirv-val on generated SPIR-V
+
+    // Which optimizations run (see bwsl_optimizations.h)
+    OptimizationSet optimizations = Optimizations::Default();
 };
 
 // ============================================================================
@@ -649,6 +652,7 @@ private:
         lowering.Initialize(&irPool, &shaderSet.cachedParser->symbolTable, &ast,
                             shaderSet.cachedSource.data());
         lowering.currentStage = stage;
+        lowering.optimizations = config.optimizations;
         lowering.currentPassVaryings = passVaryings;
 
         const PassData* owningPass = nullptr;
@@ -717,7 +721,7 @@ private:
             lowering.ReportErrorAt(node, "SSA register limit exceeded (32764 registers). Split or simplify the shader.\n");
             return false;
         }
-        Optimization::PropagateConstants(&lowering.builder, &cfgBuilder.cfg);
+        Optimization::PropagateConstants(&lowering.builder, &cfgBuilder.cfg, config.optimizations);
 
         if (outExplicitSamplerUses) {
             std::vector<ExplicitSamplerUse> stageUses =
@@ -735,6 +739,7 @@ private:
         SPIRVBuilder builder;
         builder.Initialize(&spirvArena, &lowering.program, stage,
                           &shaderSet.cachedParser->symbolTable, &cfgBuilder.cfg);
+        builder.SetOptimizations(config.optimizations);
         if (passVaryings) {
             for (u32 i = 0; i < passVaryings->count; i++) {
                 builder.SetVaryingName(passVaryings->varyings[i].slot,
