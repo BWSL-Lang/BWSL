@@ -1,0 +1,49 @@
+// Test: reverse_bits, bitfield_extract and bitfield_insert on run-time int and
+// uint scalars and vectors. GLSL ES 3.00 (WebGL2) has no bitfieldReverse,
+// bitfieldExtract or bitfieldInsert, so direct GLES emits helper functions;
+// extracting from a uint, or a uint vector, zero-extends the field
+// (OpBitFieldUExtract), from an int sign-extends it (OpBitFieldSExtract).
+
+pipeline IntrinsicsBitfield {
+    attributes {
+        position: float3
+        uv: float2
+    }
+
+    pass "Main" {
+        use attributes { position, uv }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.uv;
+        }
+
+        fragment {
+            int n = int(input.uv.x * 4.0);
+            int x = (n - 2) * 4660 + n;
+            uint u = uint(x + 20000);
+            int3 i3 = int3(x, -x, x << 20);
+            uint2 u2 = uint2(u, u * 3u);
+
+            int ri = reverse_bits(x);
+            uint ru = reverse_bits(u);
+            int3 ri3 = reverse_bits(i3);
+            uint2 ru2 = reverse_bits(u2);
+
+            int ei = bitfield_extract(x, 4, 8);
+            uint eu = bitfield_extract(u, n * 3, 7);
+            int3 ei3 = bitfield_extract(i3, n, 5);
+            uint2 eu2 = bitfield_extract(u2, n + 2, 9);
+
+            int ii = bitfield_insert(x, -3, n * 2, 6);
+            uint iu = bitfield_insert(u, uint(n) + 5u, 8, n + 1);
+            int3 ii3 = bitfield_insert(i3, int3(n, -1, 7), n + 1, 4);
+            uint2 iu2 = bitfield_insert(u2, uint2(7u, uint(n)), n * 4, 3);
+
+            float a = float(ri) + float(ru) + float(ri3.y) + float(ru2.x);
+            float b = float(ei) + float(eu) + float(ei3.z) + float(eu2.y);
+            float c = float(ii) + float(iu) + float(ii3.x) + float(iu2.y);
+            output.color = float4(a, b, c, 1.0);
+        }
+    }
+}

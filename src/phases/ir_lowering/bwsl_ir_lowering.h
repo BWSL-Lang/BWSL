@@ -254,6 +254,7 @@ struct IRLowering {
   u16 inlineReturnReg =
       0xFFFF; // Register to store return value during inlining
   u16 inlineReturnFlagReg = 0xFFFF; // Bool register for early-return tracking
+  CoreType inlineReturnType = CoreType::INVALID; // Declared return type
   u32 inlineReturnCounter = 0;    // Counts returns seen during current inlining
   u32 inlineReturnFlagReads = 0;  // Counts reads of inlineReturnFlagReg
   u32 inlineReturnGuardDepth = 0; // Suppress nested return guards
@@ -578,6 +579,8 @@ struct IRLowering {
   u16 EmitConstantUint(u32 value);
 
   u16 ConvertRegisterToType(u16 reg, CoreType targetType);
+  bool CheckStoreShape(NodeRef node, u16 valueReg, CoreType targetType);
+  static std::string SourceTypeName(CoreType type);
   u16 TryConvertScalarConstant(u16 reg, CoreType targetType);
   u16 TryFoldScalarArithmetic(OpCode op, u16 left, u16 right);
   void RecordConstantVector(u16 reg);
