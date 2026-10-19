@@ -1,0 +1,63 @@
+// Texture arrays of every sampled kind (#211). WGSL has no arrays of
+// texture bindings outside binding_array, so `-wgsl` binds element i of an
+// array at slot b as texture b + i; a dynamic index branches to one
+// constant-index call per element, as on GLSL ES 3.00.
+//
+// WGSL only allows implicit-LOD sampling (sample, sample_cmp) in uniform
+// control flow, so those calls take a uniform index; per-fragment indices
+// use explicit-LOD sampling, gather, load and size queries.
+pipeline TextureArrayKinds {
+    attributes {
+        position: float3
+        uv: float2
+        unit: uint
+    }
+    resources {
+        pick: int
+        flat2d: texture2D[3]
+        cubes: textureCube[2]
+        volumes: texture3D[2]
+        layered: texture2DArray[2]
+        pairs: texture2D[2]
+        shadows: texture2D[2]
+        linearSampler: sampler
+    }
+
+    pass "Main" {
+        use attributes { position, uv, unit }
+        use resources { pick, flat2d, cubes, volumes, layered, pairs, shadows, linearSampler }
+
+        shade :: (t: texture2D, uv: float2) -> float4 {
+            return sample(t, uv) * 0.5;
+        }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.uv;
+            @flat output.unit = attributes.unit;
+        }
+
+        fragment {
+            float2 uv = input.uv;
+            float3 dir = normalize(float3(uv * 2.0 - 1.0, 1.0));
+            // Constant indices, directly and through a helper function
+            float4 fixed = sample(resources.flat2d[0], uv);
+            float4 helper = shade(resources.flat2d[2], uv);
+            float4 volume = sample(resources.volumes[1], float3(uv, 0.5));
+            // Uniform dynamic indices
+            float4 picked = sample(resources.flat2d[resources.pick], uv);
+            float4 layer = sample(resources.layered[resources.pick], float3(uv, 1.0));
+            float4 paired = sample(resources.pairs[resources.pick], resources.linearSampler, uv);
+            float4 shadow = sample_cmp(resources.shadows[resources.pick], uv, 0.5);
+            // Per-fragment dynamic indices
+            float4 varying = sample_lod(resources.flat2d[input.unit], uv, 0.0);
+            float4 env = sample_lod(resources.cubes[input.unit], dir, 2.0);
+            float4 reds = gather(resources.flat2d[input.unit], uv, 0);
+            float4 texel = load(resources.layered[input.unit], int3(1, 2, 0), 0);
+            int2 size = texture_size(resources.flat2d[input.unit]);
+            float count = float(resources.flat2d.length + size.x);
+            float4 sum = fixed + helper + volume + picked + layer + paired + shadow;
+            output.color = (sum + varying + env + reds + texel) * count;
+        }
+    }
+}
