@@ -311,7 +311,7 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
             const ArrayAccessData& src = ast->GetArrayAccess(node);
             NodeRef array = CloneNodeWithParams(src.array, subs, subCount);
             NodeRef index = CloneNodeWithParams(src.index, subs, subCount);
-            return ASTFactory::MakeArrayAccess(ast, array, index, line, col);
+            return ASTFactory::MakeArrayAccess(ast, array, index, line, col, src.indexedDimensions);
         }
 
         case ASTNodeType::ASSIGNMENT: {

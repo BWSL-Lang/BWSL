@@ -167,8 +167,38 @@ inline u32 ResolveStructHashForStaticAccess(IRLowering *lowering, NodeRef expr) 
   }
 }
 
+// Length of dimension `depth` (0 = outermost) of an array whose declared
+// dimensions are `dims`; a one-dimensional array has no `dims` and is
+// `flatLength` long. Multi-dimensional arrays are flattened, so their
+// flattened length is never the answer.
+inline u32 ArrayDimensionLength(const ArenaArray<u32> *dims, u32 flatLength,
+                                u32 depth) {
+  if (dims && dims->count > 1) return depth < dims->count ? (*dims)[depth] : 0;
+  return depth == 0 ? flatLength : 0;
+}
+
+inline u32 VariableArrayDimensionLength(IRLowering *lowering,
+                                        const VariableData &data, u32 depth) {
+  const ArenaArray<u32> *dims = nullptr;
+  if (data.constDecl.IsValid() &&
+      data.constDecl.Type() == ASTNodeType::VARIABLE_DECL) {
+    dims = &lowering->ast->GetVariableDecl(data.constDecl).arraySizes;
+  }
+  return ArrayDimensionLength(dims, data.typeInfo.arrayLength, depth);
+}
+
+// Static `.length` of `expr`. `grid[i]` on a `T[2][3] grid` is the inner
+// `T[3]`, so each declared dimension subscripted selects the next one; the
+// index values themselves do not matter.
 inline u32 ResolveStaticArrayLength(IRLowering *lowering, NodeRef expr) {
   if (!lowering || expr.IsNull()) return 0;
+
+  u32 depth = 0;
+  while (expr.Type() == ASTNodeType::ARRAY_ACCESS) {
+    const ArrayAccessData &access = lowering->ast->GetArrayAccess(expr);
+    depth += access.indexedDimensions;
+    expr = access.array;
+  }
 
   if (expr.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &ident = lowering->ast->GetIdentifier(expr);
@@ -184,7 +214,11 @@ inline u32 ResolveStaticArrayLength(IRLowering *lowering, NodeRef expr) {
       u32 arrayIdx = info >> IRProgram::STORAGE_BINDING_SHIFT;
       if ((info & IRProgram::STORAGE_IS_LOCAL_ARRAY) &&
           arrayIdx < lowering->program.localArrayCount) {
-        return lowering->program.localArraySizes[arrayIdx];
+        auto dims = lowering->localArrayDimensions.find(arrayIdx);
+        return ArrayDimensionLength(
+            dims != lowering->localArrayDimensions.end() ? &dims->second
+                                                         : nullptr,
+            lowering->program.localArraySizes[arrayIdx], depth);
       }
     }
     Symbol *sym = bindingHash
@@ -194,7 +228,8 @@ inline u32 ResolveStaticArrayLength(IRLowering *lowering, NodeRef expr) {
               const_cast<SymbolTableData *>(lowering->symbols), ident.name);
     if (sym && sym->kind == SymbolKind::VARIABLE &&
         sym->index < lowering->symbols->variables.count) {
-      return lowering->symbols->variables[sym->index].typeInfo.arrayLength;
+      return VariableArrayDimensionLength(
+          lowering, lowering->symbols->variables[sym->index], depth);
     }
     return 0;
   }
@@ -214,8 +249,11 @@ inline u32 ResolveStaticArrayLength(IRLowering *lowering, NodeRef expr) {
     Symbol *sym = SymbolTable::LookupByHash(
         const_cast<SymbolTableData *>(lowering->symbols), access.qualifiedNameHash);
     if (sym && sym->kind == SymbolKind::VARIABLE)
-      return lowering->symbols->variables[sym->index].typeInfo.arrayLength;
+      return VariableArrayDimensionLength(
+          lowering, lowering->symbols->variables[sym->index], depth);
   }
+  // Struct array fields are one-dimensional.
+  if (depth > 0) return 0;
   u32 objectStructHash =
       ResolveStructHashForStaticAccess(lowering, access.object);
   u32 structIdx = FindStructTypeIndex(lowering, objectStructHash);
@@ -710,6 +748,9 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref, u32 bindingNameHash,
 
     RegisterLocalArray(varReg, arrayElementType, arrayElementStructHash,
                        arrayLength, nameHash);
+    if (varDecl.arraySizes.count > 1) {
+      localArrayDimensions[program.localArrayCount - 1] = varDecl.arraySizes;
+    }
   }
 
   // If there's an initializer, evaluate it

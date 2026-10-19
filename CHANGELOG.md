@@ -139,6 +139,13 @@
 - Vertex attributes beyond the supported 16 slots produce a source error.
 - `.length` works on local arrays and array function parameters. It was
   previously rejected as an invalid swizzle.
+- `.length` on a multi-dimensional array is the outer dimension, and on a
+  partly indexed one the next dimension: for `float[2][3] grid`,
+  `grid.length` is 2 and `grid[i].length` is 3. Previously `grid.length` was
+  the flattened element count, 6, and `grid[i].length` was rejected as an
+  invalid swizzle. Multi-dimensional function parameters, e.g.
+  `(float[2][3] g)`, can also be indexed as `g[i][j]`; previously such reads
+  were undefined.
 - `min` and `max` with more than two arguments reduce over all of them, up
   to 16. Previously only the first two were used and the rest were
   silently dropped. More than 16 arguments is a source error.

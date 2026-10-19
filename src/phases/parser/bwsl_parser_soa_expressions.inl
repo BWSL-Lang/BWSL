@@ -876,7 +876,7 @@ NodeRef Parser::FlattenMultiDimArrayAccess(NodeRef access) {
         flatIndex = ASTFactory::MakeBinaryOp(ast, BinaryOpType::ADD, mul, indices[i], 0, 0);
     }
 
-    return ASTFactory::MakeArrayAccess(ast, base, flatIndex, 0, 0);
+    return ASTFactory::MakeArrayAccess(ast, base, flatIndex, 0, 0, static_cast<u8>(dims.size()));
 }
 
 } // namespace BWSL

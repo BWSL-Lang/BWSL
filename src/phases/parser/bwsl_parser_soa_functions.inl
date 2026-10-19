@@ -1216,6 +1216,11 @@ void Parser::ParseFunctionParameters(NodeRef function) {
             std::make_pair(ArenaString::MakeHashOnly(paramName), ArenaString::MakeHashOnly(paramType)));
         declaration.parameterPositions.Push(arena, positions);
         declaration.parameterArraySizes.Push(arena, arraySizes);
+        // The body indexes a multi-dimensional parameter like a local array.
+        if (arraySizes.count > 1 && !paramName.empty()) {
+            multiDimArrayDims[ArenaString::MakeHashOnly(paramName).nameHash] =
+                std::vector<u32>(arraySizes.data, arraySizes.data + arraySizes.count);
+        }
     } while (Match(TokenType::COMMA) && !Check(TokenType::RIGHT_PAREN));
 }
 
