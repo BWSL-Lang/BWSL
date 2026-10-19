@@ -674,8 +674,10 @@ TRANSLATION_EXPECTATION_TESTS = {
                 "_m0[1] = 9.0;",
                 "7.5 + ",
                 "_m0[5] = 18.0;",
+                "_m0[6] = 9.25;",
+                "_m0[7] = 40.5;",
+                "_m0[8] = 30.0;",
             ],
-            "glsl_not_contains": ["halfSquare"],
         },
     },
     "output_depth_builtin": {

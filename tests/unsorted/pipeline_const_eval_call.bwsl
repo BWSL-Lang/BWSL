@@ -1,6 +1,13 @@
 // Pipeline-scope constants may call pipeline eval functions; the call is
-// folded once at the declaration and every use sees the value.
+// folded once at the declaration and every use sees the value. Constants
+// derived from folded ones are compile-time too, and a module-qualified call
+// that shares the eval function's name stays a call to the module function.
+module Shapes {
+    halfSquare :: (float r) -> float { return r * 10.0; }
+}
+
 pipeline PipelineConstEvalCall {
+    import Shapes
     resources { data: buffer<float> }
 
     eval halfSquare :: (float r) -> float {
@@ -11,6 +18,8 @@ pipeline PipelineConstEvalCall {
     const float DOUBLE_AREA = AREA * 2.0;
     const float2 PAIR = float2(halfSquare(2.0), 0.25);
     const float OFFSET_AREA = halfSquare(1.0) + 7.0;
+    const float CHAINED = halfSquare(DOUBLE_AREA);
+    const float MODULE_CALL = Shapes::halfSquare(3.0);
 
     pass "Main" {
         use resources { data }
@@ -19,9 +28,13 @@ pipeline PipelineConstEvalCall {
             resources.data[1] = DOUBLE_AREA;
             resources.data[2] = PAIR.x + PAIR.y;
             resources.data[3] = OFFSET_AREA + resources.data[4];
+            resources.data[7] = CHAINED;
+            resources.data[8] = MODULE_CALL;
             eval {
                 eval float scaled = AREA * 4.0;
                 resources.data[5] = scaled;
+                eval float doubled = DOUBLE_AREA + 0.25;
+                resources.data[6] = doubled;
             }
         }
     }

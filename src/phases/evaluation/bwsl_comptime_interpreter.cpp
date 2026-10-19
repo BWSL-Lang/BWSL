@@ -981,6 +981,12 @@ static bool EvalFunctionHook(void* user, NodeRef call, const LiteralValue* args,
     auto* state = static_cast<ComptimeState*>(user);
     if (state->currentPipeline.IsNull()) return false;
     const FunctionCallData& callData = state->ast->GetFunctionCall(call);
+    // Module-qualified calls and method calls resolve elsewhere, even when
+    // their name matches a pipeline eval function.
+    if ((callData.flags & (FunctionCallFlags::IS_MODULE_FUNCTION | FunctionCallFlags::IS_METHOD_CALL)) ||
+        callData.moduleQualifiedHash != 0 || callData.moduleObject.IsValid()) {
+        return false;
+    }
     const PipelineData& pipeline = state->ast->GetPipeline(state->currentPipeline);
     NodeRef selected = NodeRef::Null();
     LiteralValue selectedArgs[16]{};
@@ -1185,11 +1191,25 @@ static const char* CopyMessage(ComptimeState* state, const std::string& message)
 static bool FoldPipelineConst(ComptimeState* state, NodeRef declRef) {
     if (declRef.Type() != ASTNodeType::VARIABLE_DECL) return true;
     const VariableDeclData& decl = state->ast->GetVariableDecl(declRef);
-    if (decl.arrayDimensions > 0 || FindEvalCall(state, decl.initializer).IsNull()) return true;
+    if (decl.arrayDimensions > 0) return true;
     Symbol* sym = SymbolTable::LookupByHash(state->symbols, decl.name.nameHash);
     if (!sym || sym->kind != SymbolKind::VARIABLE) return true;
     VariableData& var = state->symbols->variables[sym->index];
-    if (var.constExpr != decl.initializer) return true;
+    if (var.hasEvalValue || var.constExpr != decl.initializer) return true;
+
+    if (FindEvalCall(state, decl.initializer).IsNull()) {
+        // No eval call, but the initializer may read a constant folded above
+        // (const float B = A * 2.0;). Record its value so later constants and
+        // eval code can read it; uses still lower the initializer.
+        LiteralValue value;
+        if (EvalExpression(state, decl.initializer, &value) &&
+            CoerceLiteralToType(var.typeInfo, &value)) {
+            var.isEval = true;
+            var.hasEvalValue = true;
+            var.evalValue = value;
+        }
+        return !state->hadError;
+    }
 
     // Cloning substitutes each eval call whose arguments are compile-time.
     NodeRef folded = CloneNode(state, decl.initializer);
