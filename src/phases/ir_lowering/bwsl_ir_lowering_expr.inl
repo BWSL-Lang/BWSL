@@ -298,7 +298,7 @@ inline bool IRLowering::IsFunctionLocalPlace(NodeRef expr) {
                                &fieldIndex, &fieldType, &fieldTypeHash);
       }
       u16 reg = var->second;
-      if ((reg & 0xC000) != 0 || reg >= program.registerCount ||
+      if (!IR::IsRegister(reg) || reg >= program.registerCount ||
           GetResourceHandleType(expr, reg) != CoreType::INVALID) {
         return false;
       }
@@ -323,7 +323,7 @@ inline bool IRLowering::IsFunctionLocalPlace(NodeRef expr) {
 // pointee type in bits 8-15. Storage info past the allocated registers is
 // uninitialized, and sampler handles (0x3000 | slot) fall in that range.
 inline bool IRLowering::IsPointerValue(u16 reg) const {
-  if ((reg & 0xC000) != 0 || reg >= program.registerCount) return false;
+  if (!IR::IsRegister(reg) || reg >= program.registerCount) return false;
   u32 storage = program.registerStorageInfo[reg];
   constexpr u32 notPointer = IRProgram::STORAGE_IS_SHARED |
                              IRProgram::STORAGE_IS_LOCAL_ARRAY |
@@ -410,7 +410,7 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
     bool isLocal = IsFunctionLocalPlace(unop.operand);
     bool pointsAtCopy = false, pointsAtArray = false;
     u16 pointer = LowerAddressOf(unop, &pointsAtCopy, &pointsAtArray);
-    if ((pointer & 0xC000) == 0 && pointer < MAX_REGISTERS) {
+    if (IR::IsRegister(pointer)) {
       if (!isLocal) {
         pointerProblems[pointer] = PointerProblem::NON_LOCAL;
       } else if (pointsAtArray) {
@@ -431,11 +431,11 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
     CoreType type = GetRegisterType(operand);
     if (operand != 0xFFFF && IR::IsConstant(operand)) {
       if (type == CoreType::FLOAT)
-        return builder.EmitConstant(-program.floatConstants[operand & 0x7FFF]);
+        return builder.EmitConstant(-program.floatConstants[IR::FloatConstantIndex(operand)]);
       if (type == CoreType::UINT)
-        return EmitConstantUint(0u - program.uintConstants[operand & 0x1FFF]);
+        return EmitConstantUint(0u - program.uintConstants[IR::UintConstantIndex(operand)]);
       if (type == CoreType::INT) {
-        s64 value = static_cast<s32>(program.intConstants[operand & 0x1FFF]);
+        s64 value = static_cast<s32>(program.intConstants[IR::IntConstantIndex(operand)]);
         if (value != INT32_MIN) return EmitConstantInt(static_cast<u32>(-value));
       }
     }
@@ -536,7 +536,7 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
     break; // Lowered by LowerAddressOf.
   case UnaryOpType::DEREFERENCE: {
     // x^: Dereference pointer.
-    if ((operand & 0xC000) != 0 || operand >= MAX_REGISTERS) {
+    if (!IR::IsRegister(operand)) {
       builder.EmitInstruction(OP_LOCAL_LOAD, dest, operand);
       return dest;
     }
@@ -614,14 +614,12 @@ inline u16 IRLowering::LowerAddressOf(const UnaryOpData &unop,
     }
   }
 
-  // ^x: Get pointer to variable. Rejects constants (bits 0x4000/0x8000),
-  // out-of-range register indices, and registers past MAX_REGISTERS —
-  // registerStorageInfo has only MAX_REGISTERS entries, and indexing with
-  // a constant-encoded operand (>= 0x4000) reads/writes far OOB.
+  // ^x: Get pointer to variable. Rejects constants and anything else that
+  // isn't a register: registerStorageInfo has only MAX_REGISTERS entries,
+  // and indexing with a constant-encoded operand reads/writes far OOB.
   u16 operand = LowerExpression(unop.operand);
   u16 dest = AllocateRegister();
-  if ((operand & 0xC000) != 0 || operand >= MAX_REGISTERS ||
-      dest >= MAX_REGISTERS) {
+  if (!IR::IsRegister(operand) || !IR::IsRegister(dest)) {
     builder.EmitInstruction(OP_LOCAL_VAR_PTR, dest, operand);
     SetRegisterType(dest, CoreType::CUSTOM);
     *pointsAtCopy = true;

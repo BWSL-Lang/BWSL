@@ -341,8 +341,8 @@ void GLESBuilder::EmitAttributeName(u32 attributeIndex) {
 
 void GLESBuilder::EmitTextureLevelsUniformName(u16 texReg) {
     out.Lit("bwsl_texture_levels_");
-    if ((texReg & 0xF000) == 0x6000) {
-        out.Uint(texReg & 0x0FFF);
+    if (IR::IsResourceHandle(texReg)) {
+        out.Uint(IR::ResourceHandleSlot(texReg));
     } else {
         out.Lit("dynamic");
     }
@@ -570,8 +570,8 @@ void GLESBuilder::EmitUniforms() {
     for (u32 i = 0; i < ir->instructionCount; i++) {
         if (!IR::IsTextureOp(static_cast<IR::OpCode>(ir->opcodes[i]))) continue;
         u16 texReg = ir->GetOperand(i, 0);
-        if ((texReg & 0xF000) != 0x6000) continue;
-        u16 texSlot = texReg & 0x0FFF;
+        if (!IR::IsResourceHandle(texReg)) continue;
+        u16 texSlot = IR::ResourceHandleSlot(texReg);
         if (texSlot < 32) {
             usedTextures[texSlot] = true;
             if (ir->opcodes[i] == IR::OP_TEX_SAMPLE_CMP) shadowTextures[texSlot] = true;
@@ -649,7 +649,7 @@ void GLESBuilder::EmitUniforms() {
                     EmitGLName(GLNameKind::COMBINED_TEXTURE, tex.name.c_str());
                     out.Chr('['); out.Uint(tex.arraySize); out.Chr(']');
                 } else {
-                    EmitTexture(static_cast<u16>(0x6000 | texSlot), metadata);
+                    EmitTexture(IR::MakeResourceHandle(texSlot), metadata);
                 }
                 out.Lit(";\n");
             };
@@ -659,7 +659,7 @@ void GLESBuilder::EmitUniforms() {
                 std::vector<u16> emittedPairs;
                 for (u32 i = 0; i < ir->instructionCount; ++i) {
                     if (!IR::IsTextureOp(static_cast<IR::OpCode>(ir->opcodes[i])) ||
-                        (Op(i, 0) & 0x0FFF) != texSlot) continue;
+                        IR::ResourceHandleSlot(Op(i, 0)) != texSlot) continue;
                     u32 metadata = ir->metadata[i];
                     u16 sampler = TextureOpHasExplicitSampler(metadata)
                         ? GetTextureOpExplicitSamplerBinding(metadata) : 0xFFFFu;
@@ -671,7 +671,7 @@ void GLESBuilder::EmitUniforms() {
             for (u32 slot = texSlot; slot < texSlot + slotCount && slot < 32; ++slot) {
                 if (usedTextureLevels[slot]) {
                     out.Lit("uniform int ");
-                    EmitTextureLevelsUniformName(static_cast<u16>(0x6000 | slot));
+                    EmitTextureLevelsUniformName(IR::MakeResourceHandle(slot));
                     out.Lit(";\n");
                 }
                 emittedTextures[slot] = true;
@@ -701,7 +701,7 @@ void GLESBuilder::EmitUniforms() {
         out.Lit(";\n");
         if (usedTextureLevels[i]) {
             out.Lit("uniform int ");
-            EmitTextureLevelsUniformName(static_cast<u16>(0x6000 | i));
+            EmitTextureLevelsUniformName(IR::MakeResourceHandle(i));
             out.Lit(";\n");
         }
         emittedFallbackTexture = true;
@@ -802,7 +802,7 @@ u32 GLESBuilder::GetArrayFillLength(u32 first, u32 end) {
         u32 inst = first + i;
         if (ir->opcodes[inst] != IR::OP_ARRAY_STORE || Dest(inst) != base) return 0;
         u16 index = Op(inst, 0);
-        if (!IR::IsUintConstant(index) || ir->uintConstants[index & 0x1FFF] != i ||
+        if (!IR::IsUintConstant(index) || ir->uintConstants[IR::UintConstantIndex(index)] != i ||
             !IsValidOperand(Op(inst, 1))) return 0;
     }
     return count;
@@ -1137,7 +1137,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             // (This is a simplification - proper phi elimination would add
             // copies at predecessor block ends)
             u16 firstVal = Op(instIdx, 0);
-            if (firstVal != 0x3FFF) {
+            if (firstVal != IR::InvalidOperand) {
                 EmitRegWithDecl(dest);
                 out.Lit(" = ");
                 EmitExpr(firstVal);
@@ -2046,7 +2046,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             bool first = true;
             for (u32 i = 0; i < 4; i++) {
                 u16 valueReg = Op(instIdx, i);
-                if (valueReg == 0xFFFF || valueReg == 0x3FFF) continue;
+                if (valueReg == 0xFFFF || valueReg == IR::InvalidOperand) continue;
                 if (!first) out.Lit(", ");
                 EmitExpr(valueReg);
                 first = false;
@@ -2195,7 +2195,7 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             out.Lit("[](");
             for (u32 i = 0; i < 4; i++) {
                 u16 op = Op(instIdx, i);
-                if (op == 0x3FFF) break;  // Invalid marker
+                if (op == IR::InvalidOperand) break;
                 if (i > 0) out.Lit(", ");
                 EmitExpr(op);
             }
@@ -2331,32 +2331,33 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
 // ============================================================================
 
 void GLESBuilder::EmitExpr(u16 reg) {
-    // Bool must precede float; uint and texture handles share an encoding,
-    // so texture instructions explicitly call EmitTexture instead.
-    if ((reg & 0xC000) == 0xC000) {
-        u16 idx = reg & 0x3FFF;
+    // Uint constants and texture handles share an encoding, so texture
+    // instructions explicitly call EmitTexture instead. The unused marker
+    // prints as false.
+    if (IR::IsBoolConstant(reg) || reg == IR::UnusedOperand) {
+        u32 idx = IR::BoolConstantIndex(reg);
         out.Str(idx < ir->boolCount && ir->boolConstants[idx] ? "true" : "false");
         return;
     }
-    if (reg & 0x8000) {
-        u16 idx = reg & 0x7FFF;
+    if (IR::IsFloatConstant(reg)) {
+        u32 idx = IR::FloatConstantIndex(reg);
         out.Flt(idx < ir->floatCount ? ir->floatConstants[idx] : 0.0f);
         return;
     }
     if (IR::IsIntConstant(reg)) {
-        u16 idx = reg & 0x3FFF;
+        u32 idx = IR::IntConstantIndex(reg);
         out.Int(idx < ir->intCount ? static_cast<s32>(ir->intConstants[idx]) : 0);
         return;
     }
     if (IR::IsUintConstant(reg)) {
-        u16 idx = reg & 0x1FFF;
+        u32 idx = IR::UintConstantIndex(reg);
         out.Uint(idx < ir->uintCount ? ir->uintConstants[idx] : 0u);
         out.Chr('u');
         return;
     }
 
     // Invalid register marker
-    if (reg == 0x3FFF) {
+    if (reg == IR::InvalidOperand) {
         out.Lit("0.0 /* invalid */");  // Emit placeholder instead of nothing
         return;
     }
@@ -2507,8 +2508,8 @@ void GLESBuilder::EmitFuncCall(u32 instIdx, const char* func, u32 arity) {
 }
 
 bool GLESBuilder::EmitConstantExpr(u16 reg, u32 depth) {
-    if (depth > 32 || reg == 0x3FFF) return false;
-    if (reg >= 0x4000) { EmitExpr(reg); return true; }
+    if (depth > 32 || reg == IR::InvalidOperand) return false;
+    if (IR::IsConstant(reg)) { EmitExpr(reg); return true; }
     u32 definition = NO_BLOCK;
     for (u32 i = 0; i < ir->instructionCount; ++i) {
         u16 op = ir->opcodes[i];
@@ -2532,7 +2533,7 @@ bool GLESBuilder::EmitConstantExpr(u16 reg, u32 depth) {
         u32 consumed = 0;
         for (u32 i = 0; i < 4 && consumed < components; ++i) {
             u16 value = Op(definition, i);
-            if (value == 0x3FFF) continue;
+            if (value == IR::InvalidOperand) continue;
             if (!first) out.Lit(", ");
             first = false;
             if (!EmitConstantExpr(value, depth + 1)) { ok = false; break; }
@@ -2603,7 +2604,7 @@ const TextureBinding* GLESBuilder::FindTextureBinding(u16 slot) const {
 }
 
 void GLESBuilder::EmitTexture(u16 reg, u32 metadata) {
-    u16 slot = reg & 0x0FFF;
+    u16 slot = IR::ResourceHandleSlot(reg);
     if (renderConfig) {
         if (const TextureBinding* texture = FindTextureBinding(slot); texture && texture->arraySize > 0) {
             // Element indices are constants, as GLSL ES 3.00 requires.
@@ -2672,12 +2673,13 @@ void GLESBuilder::EmitSwizzle(u32 instIdx) {
 
 // Helper to check if an operand is a valid value reference
 bool GLESBuilder::IsValidOperand(u16 op) const {
-    if (op == 0x3FFF) return false;  // Explicit invalid marker
+    if (op == IR::InvalidOperand) return false;  // Explicit invalid marker
 
-    if ((op & 0xC000) == 0xC000) return (op & 0x3FFF) < ir->boolCount;
-    if (op & 0x8000) return (op & 0x7FFF) < ir->floatCount;
-    if (IR::IsIntConstant(op)) return (op & 0x3FFF) < ir->intCount;
-    if (IR::IsUintConstant(op)) return (op & 0x1FFF) < ir->uintCount;
+    if (op == IR::UnusedOperand) return false;
+    if (IR::IsBoolConstant(op)) return IR::BoolConstantIndex(op) < ir->boolCount;
+    if (IR::IsFloatConstant(op)) return IR::FloatConstantIndex(op) < ir->floatCount;
+    if (IR::IsIntConstant(op)) return IR::IntConstantIndex(op) < ir->intCount;
+    if (IR::IsUintConstant(op)) return IR::UintConstantIndex(op) < ir->uintCount;
 
     // Register reference - always valid (r0 is valid!)
     return true;
@@ -2729,7 +2731,7 @@ void GLESBuilder::EmitVecConstruct(u32 instIdx) {
         bool isInt = false;
         bool isUint = false;
 
-        // Check if first operand is an int constant (0x4000 prefix)
+        // Check if first operand is an int constant
         if (IR::IsIntConstant(firstOp)) {
             isInt = true;
         }
@@ -2890,7 +2892,7 @@ void GLESBuilder::DebugDumpRegisterInfo() {
             continue;
         }
         u16 dest = ir->destinations[i];
-        if ((dest & 0xC000) == 0 && dest < ir->registerCount) {
+        if (IR::IsRegister(dest) && dest < ir->registerCount) {
             definedByInst[dest] = true;
         }
     }
@@ -2919,7 +2921,7 @@ void GLESBuilder::DebugDumpRegisterInfo() {
     for (u32 i = 0; i < ir->instructionCount; i++) {
         for (u32 j = 0; j < 4; j++) {
             u16 opReg = ir->GetOperand(i, j);
-            if ((opReg & 0xC000) == 0 && opReg < ir->registerCount) {
+            if (IR::IsRegister(opReg) && opReg < ir->registerCount) {
                 if (!definedByInst[opReg]) {
                     fprintf(stderr, "  Inst[%u] operand[%u] uses r%u - NOT DEFINED\n", 
                             i, j, opReg);
@@ -2934,7 +2936,7 @@ void GLESBuilder::DebugDumpRegisterInfo() {
             u32 opCount = ir->GetPhiOperandCount(i);
             for (u32 j = 0; j < opCount; j++) {
                 u16 val = ir->GetPhiOperandValue(i, j);
-                if ((val & 0xC000) == 0 && val < ir->registerCount) {
+                if (IR::IsRegister(val) && val < ir->registerCount) {
                     if (!definedByInst[val]) {
                         fprintf(stderr, "  PHI[%u] operand[%u] uses r%u - NOT DEFINED\n",
                                 i, j, val);

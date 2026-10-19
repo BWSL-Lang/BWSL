@@ -176,7 +176,7 @@ void SSAConstructor::IdentifyVariables() {
             }
             u16 operand = ir->GetOperand(i, opIdx);
             if (operand == 0 || operand == 0xFFFF) continue;
-            if (operand & 0xC000) continue;  // Skip constants (0x8000=float, 0x4000=int, 0x6000=uint)
+            if (IR::IsConstant(operand)) continue;
             if (operand >= ir->registerCount) continue;
 
             // Check if this use is in a block different from ALL definition blocks
@@ -674,7 +674,7 @@ void SSAConstructor::Rename() {
                 // unreachable.
                 if (op == IR::OP_BRANCH || op == IR::OP_SWITCH) {
                     u16 condReg = ir->GetOperand(i, 0);
-                    if (condReg != 0xFFFF && (condReg & 0xC000) == 0) {
+                    if (IR::IsRegister(condReg)) {
                         u16 undefReg =
                             (op == IR::OP_BRANCH)
                                 ? getUnreachableUndef(
@@ -699,6 +699,7 @@ void SSAConstructor::Rename() {
     // A more complete implementation would remap all registers
     registerLimitExceeded = state.registerLimitExceeded;
     ir->ssaFailureSourceNode = state.failureSourceNode;
+    ir->ssaRegisterEnd = state.nextNewReg;
 }
 
 void SSAConstructor::RenameBlock(u32 block, RenameState& state,
@@ -770,7 +771,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
         // We need to rename the destination to the current version of the variable
         if (op == IR::OP_STORE_OUTPUT) {
             u16 destReg = ir->destinations[i];
-            if ((destReg & 0xC000) == 0 && destReg < ir->registerCount) {
+            if (IR::IsRegister(destReg) && destReg < ir->registerCount) {
                 u16 varIdx = GetVariable(destReg);
                 if (varIdx != 0xFFFF) {
                     u16 currentReg = state.GetCurrentRegister(varIdx);
@@ -852,8 +853,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                 // Skip unused operand slots (0xFFFF sentinel)
                 if (opReg == 0xFFFF) continue;
                 // Skip constants and invalid registers
-                if (opReg & 0xC000) continue;  // Skip constants
-                if (opReg >= ir->registerCount) continue;
+                if (!IR::IsRegister(opReg) || opReg >= ir->registerCount) continue;
 
                 // Check if this operand is a tracked variable
                 u16 varIdx = GetVariable(opReg);
@@ -874,14 +874,14 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
         // For definitions: allocate a new SSA register and update the instruction
         u16 dest = ir->destinations[i];
         // Skip constant references, but allow register 0
-        if ((dest & 0xC000) == 0 && dest < ir->registerCount) {
+        if (IR::IsRegister(dest) && dest < ir->registerCount) {
             u16 varIdx = GetVariable(dest);
 
             // Special case: STORE_REG where dest is NOT a tracked variable
             // We still need to rename the source operand if it's a variable
             if (varIdx == 0xFFFF && op == IR::OP_STORE_REG) {
                 u16 srcReg = ir->GetOperand(i, 0);
-                if ((srcReg & 0xC000) == 0 && srcReg < ir->registerCount) {
+                if (IR::IsRegister(srcReg) && srcReg < ir->registerCount) {
                     u16 srcVarIdx = GetVariable(srcReg);
                     if (srcVarIdx != 0xFFFF) {
                         u16 currentSrc = state.GetCurrentRegister(srcVarIdx);
@@ -902,7 +902,7 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
                 u16 srcReg = ir->GetOperand(i, 0);
                 
                 // Check if source is a constant reference
-                bool srcIsConstant = (srcReg & 0xC000) != 0;
+                bool srcIsConstant = IR::IsConstant(srcReg);
                 // An address-taken source lives in memory and can change after
                 // this copy, so it can't stand in for the copied value (in a
                 // phi or a later read). Snapshot it like a constant.
@@ -1079,10 +1079,10 @@ void SSAConstructor::EliminateDeadPhis() {
     for (u32 i = 0; i < ir->instructionCount; i++) {
         if (ir->opcodes[i] == IR::OP_NOP) continue;
         u16 dest = ir->destinations[i];
-        if ((dest & 0xC000) == 0 && dest < regCount) regUsed[dest] = true;
+        if (IR::IsRegister(dest) && dest < regCount) regUsed[dest] = true;
         for (u32 opIdx = 0; opIdx < 4; opIdx++) {
             u16 opReg = ir->GetOperand(i, opIdx);
-            if (opReg == 0xFFFF || (opReg & 0xC000) != 0 || opReg >= regCount) continue;
+            if (!IR::IsRegister(opReg) || opReg >= regCount) continue;
             regUsed[opReg] = true;
         }
     }

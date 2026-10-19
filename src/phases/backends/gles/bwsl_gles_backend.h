@@ -265,12 +265,11 @@ struct RegInfo {
 // (`^var`) or a pointer that is copied (assigned, passed, merged in a phi)
 // needs the SPIR-V path, which tracks its target at run time.
 inline bool SupportsLocalPointers(const IR::IRProgram& program) {
-    // Operands carry tag bits for constants and markers, and registerCount
-    // can exceed the register range, so decode an operand before using it
-    // as a register index.
+    // Operands also encode constants and markers, and registerCount can
+    // exceed the register range, so decode an operand before using it as a
+    // register index.
     auto isRegister = [&](u16 reg) {
-        return !IR::IsConstant(reg) && reg < IR::RegisterLimit &&
-               reg < program.registerCount;
+        return IR::IsRegister(reg) && reg < program.registerCount;
     };
     auto isAccessPointer = [&](u16 reg) {
         if (!isRegister(reg)) return false;

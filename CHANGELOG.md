@@ -167,6 +167,10 @@
   like any other shader using these features, it now fails `-gles` and
   `-gles-direct` with the feature GLSL ES 3.00 lacks, and `-all` omits the
   GLSL ES target with a warning.
+- A shader stage can use 32764 registers, up from 16383, so larger shaders
+  compile instead of failing with "Shader register limit exceeded" or "SSA
+  register limit exceeded". Output for shaders that compiled before is
+  unchanged.
 
 ### Diagnostics
 - Passing a value where a pointer parameter is expected, a pointer where a

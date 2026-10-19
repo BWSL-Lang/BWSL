@@ -177,6 +177,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   // AllocateRegister initializes each live slot, including placeholders whose
   // final type is patched later. Unused register capacity need not be touched.
   program.registerCount = 0;
+  program.ssaRegisterEnd = 0;
   program.registerNameHashes =
       (u32 *)pool->Allocate(MAX_REGISTERS * sizeof(u32), 64);
   memset(program.registerNameHashes, 0, MAX_REGISTERS * sizeof(u32));

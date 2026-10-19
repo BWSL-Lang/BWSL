@@ -403,7 +403,7 @@ inline u16 IRLowering::TryLowerLocalFieldAddressOf(NodeRef memberRef) {
 // register (registerNameHashes marks it), so writing it in place can't affect
 // another value. Pointers, arrays and shared or uniform storage don't qualify.
 inline bool IRLowering::IsInPlaceStructVariable(u16 reg) const {
-  if ((reg & 0xC000) != 0 || reg >= MAX_REGISTERS) return false;
+  if (!IR::IsRegister(reg)) return false;
   if (program.registerNameHashes[reg] == 0) return false;
   if (static_cast<CoreType>(program.registerTypes[reg]) != CoreType::CUSTOM)
     return false;
@@ -2000,8 +2000,9 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
               variant.associatedTypes.count == 0) {
             u16 dest = AllocateRegister();
             u32 enumStructHash = LookupOrRegisterStructType(qualifierHash);
-            builder.EmitInstruction(OP_ENUM_CONSTRUCT, dest, 0x3FFF,
-                                    0x3FFF, 0x3FFF, 0x3FFF);
+            builder.EmitInstruction(OP_ENUM_CONSTRUCT, dest, IR::InvalidOperand,
+                                    IR::InvalidOperand, IR::InvalidOperand,
+                                    IR::InvalidOperand);
             program.metadata[builder.currentInstruction - 1] =
                 (v << 16) | (0u << 8) | (qualifierHash & 0xFF);
             SetRegisterType(dest, CoreType::CUSTOM);
@@ -2508,16 +2509,16 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
           return 0;
         }
         // Traditional bound texture - encode slot in register
-        dest = 0x6000 | (u16)resData.bindingIndex;
+        dest = IR::MakeResourceHandle(resData.bindingIndex);
         break;
 
     case ResourceBinding::StorageImage:
         // Storage image (read/write texture) - encode slot same as texture
-        dest = 0x6000 | (u16)resData.bindingIndex;
+        dest = IR::MakeResourceHandle(resData.bindingIndex);
         break;
 
     case ResourceBinding::Sampler:
-      dest = 0x3000 | (u16)resData.bindingIndex;
+      dest = IR::MakeSamplerHandle(resData.bindingIndex);
       break;
 
     default:
