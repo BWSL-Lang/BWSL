@@ -695,7 +695,9 @@ private:
             lowering.program.opcodes[lowering.program.instructionCount - 1] != IR::OP_RET) {
             lowering.builder.EmitInstruction(IR::OP_RET, 0, 0);
         }
-        Optimization::SplitLocalStructs(&lowering.builder);
+        if (Optimizations::IsEnabled(config.optimizations, OptimizationId::SPLIT_STRUCTS)) {
+            Optimization::SplitLocalStructs(&lowering.builder);
+        }
         
         // Specialize for this variant's attribute mask
         IR::OptimizationPass optimizer;

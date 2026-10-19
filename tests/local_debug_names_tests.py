@@ -289,8 +289,7 @@ def run_local_debug_names_tests(compiler: Path) -> tuple[int, int]:
                 if (fragIn.coord.x > 10.0) { discard; }
                 output.color = float4(fragIn.coord, 1.0, 1.0);
             """, declarations="struct FragmentData { float2 coord; }")
-            # The struct is split into its fields, named after the variable.
-            self.assert_names(ops, ["fragIn_coord"])
+            self.assert_names(ops, ["fragIn"])
 
         def test_local_live_across_inlined_discard(self):
             _, ops = self.compile("""

@@ -857,10 +857,7 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             body = glsl[glsl.index("void main"):]
             self.assertNotIn("min(", body)
             self.assertNotIn(", 0.0, 2.0)", body)
-            # The structs are split: i.other and k.other are variables the
-            # branch and the loop assign.
-            self.assertNotIn(".other", body)
-            self.assertRegex(body, r"vec4\(_\d+, _\d+ \+ _\d+, _\d+, _\d+\)")
+            self.assertRegex(body, r"_\d+\.other, _\d+\.other\)")
 
         def test_struct_fields_survive_writes_to_other_structs(self):
             # Separate structs are separate memory: initializing s and
@@ -899,8 +896,7 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
                     glsl = (target / "constprop.frag").read_text(encoding="utf-8")
                     body = glsl[glsl.index("void main"):]
                     self.assertNotIn("min(1.0", body)
-                    self.assertNotIn(".best", body)
-                    self.assertRegex(body, r"min\(_\d+, float\(")
+                    self.assertRegex(body, r"min\(_\d+\.best, ")
 
         def split_main(self, body):
             target = self.compile('''pipeline Split {
@@ -917,7 +913,7 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
                         ''' + body + '''
                     }
                 }
-            }''', "-glsl")
+            }''', "-glsl", "--optimizations", "split-structs")
             glsl = (target / "constprop.comp").read_text(encoding="utf-8")
             return glsl[glsl.index("void main"):]
 

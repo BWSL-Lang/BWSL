@@ -1,4 +1,5 @@
 {
+    "bwslc_args": ["--optimizations", "split-structs"],
     "groups": [
         1,
         1,

@@ -2397,7 +2397,9 @@ CompileResult CompileShaderStage(
         lowering.program.opcodes[lowering.program.instructionCount - 1] != OP_RET) {
         lowering.builder.EmitInstruction(OP_RET, 0, 0);
     }
-    Optimization::SplitLocalStructs(&lowering.builder);
+    if (Optimizations::IsEnabled(optimizations, OptimizationId::SPLIT_STRUCTS)) {
+        Optimization::SplitLocalStructs(&lowering.builder);
+    }
 
     auto irEnd = Clock::now();
     result.timing.irLoweringMs = std::chrono::duration<double, std::milli>(irEnd - irStart).count();

@@ -110,6 +110,7 @@ static void CompileOneStage(CompilationContext& context, Parser& parser,
     for (u32 i = 0; i < block.statements.count; i++) {
         lowering.LowerStatement(block.statements[i]);
     }
+    // Off by default (split-structs), but fuzzed all the same.
     Optimization::SplitLocalStructs(&lowering.builder);
 
     // CFG + SSA (only if control flow is present — matches bwslc's behavior).

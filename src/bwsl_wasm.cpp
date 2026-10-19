@@ -581,7 +581,9 @@ static ShaderOutput CompileShaderStage(
         lowering.program.opcodes[lowering.program.instructionCount - 1] != OP_RET) {
         lowering.builder.EmitInstruction(OP_RET, 0, 0);
     }
-    Optimization::SplitLocalStructs(&lowering.builder);
+    if (Optimizations::IsEnabled(g_optimizations, OptimizationId::SPLIT_STRUCTS)) {
+        Optimization::SplitLocalStructs(&lowering.builder);
+    }
 
     // CFG/SSA for control flow
     Memory::BWEMemoryArena cfgArena;
