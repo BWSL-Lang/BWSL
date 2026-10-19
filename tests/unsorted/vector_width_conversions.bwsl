@@ -1,0 +1,42 @@
+// Test: explicit vector width and component-type conversions
+// Tests: narrowing with a swizzle, widening with a constructor, converting
+// component types with a constructor, swizzle stores of matching width,
+// scalar splats, and returns that match the declared width. Implicit width
+// changes are errors (see tests/error_cases/vector_*.bwsl).
+
+pipeline VectorWidthConversions {
+    attributes {
+        position: float3
+    }
+
+    footprint :: (int3 volume) -> int2 {
+        return volume.xy;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.position.xy;
+        }
+
+        fragment {
+            int3 volume = int3(int(input.uv.x * 8.0), int(input.uv.y * 8.0), 4);
+            int2 size = volume.xy;
+            int2 flat = footprint(volume);
+            int3 padded = int3(size, 1);
+            int4 wide = int4(padded, 0);
+            wide.xyz = padded.zyx;
+            wide.w = size.y;
+
+            uint3 cells = uint3(volume);
+
+            float3 scale = float3(padded);
+            float2 half = float2(0.5);
+            scale.xy = scale.xy * half;
+            output.color = float4(scale, float(wide.w + flat.x) +
+                                         float(cells.z));
+        }
+    }
+}
