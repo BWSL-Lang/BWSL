@@ -1,0 +1,19 @@
+// Error case: a helper function that uses a derivative intrinsic is reported
+// when a vertex stage calls it.
+pipeline DerivativeInHelperCalledFromVertex {
+    attributes {
+        position: float3
+    }
+
+    slope :: (float v) -> float {
+        return ddy(v);
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, slope(attributes.position.x));
+        }
+    }
+}

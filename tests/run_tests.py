@@ -300,7 +300,9 @@ ERROR_CASE_TESTS = {
     "use_before_declaration.bwsl": "Unknown identifier 'lateVar'",
     "unknown_function_call.bwsl": "Unknown function 'notAFunction'",
     "mutual_recursion.bwsl": "recursion is not supported",
-    "derivative_in_vertex_stage.bwsl": "Intrinsic not available in this shader stage",
+    "derivative_in_vertex_stage.bwsl": "ddx() computes screen-space derivatives, which are only available in fragment shaders, not vertex shaders",
+    "derivative_in_compute_stage.bwsl": "fwidth() computes screen-space derivatives, which are only available in fragment shaders, not compute shaders",
+    "derivative_in_helper_called_from_vertex.bwsl": "ddy() computes screen-space derivatives, which are only available in fragment shaders, not vertex shaders",
     "pipeline_scope_mutable_var.bwsl": "Expected 'import', 'using', 'attributes', 'resources'",
     "keyword_as_variable_name.bwsl": "'pass' is a keyword and cannot be used as a variable name",
     "overload_no_viable_match.bwsl": "Function not found: pickone",
@@ -339,6 +341,10 @@ ERROR_CASE_TESTS = {
     "fragment_reads_attribute.bwsl": "Vertex attributes cannot be read in a fragment stage",
     "varying_type_conflict.bwsl": "conflicting types for stage output 'uv': first assigned as float2, now assigned float3",
     "sample_implicit_lod_vertex.bwsl": "sample() uses implicit derivatives and is not available in vertex shaders",
+    "sample_implicit_lod_compute.bwsl": "sample() uses implicit derivatives and is not available in compute shaders; use sample_lod() with an explicit LOD",
+    "sample_offset_implicit_lod_compute.bwsl": "sample_offset() uses implicit derivatives and is not available in compute shaders; use sample_lod_offset() with an explicit LOD",
+    "sample_in_helper_called_from_compute.bwsl": "sample() uses implicit derivatives and is not available in compute shaders",
+    "sample_texture_array_in_helper_called_from_compute.bwsl": "sample() uses implicit derivatives and is not available in compute shaders",
     "vec_compare_to_scalar_bool.bwsl": "cannot assign a vector comparison result to a scalar bool",
     "pointer_function_param.bwsl": "Pointer-typed function parameters are not supported",
     "swizzle_too_long.bwsl": "invalid swizzle - swizzles use 1-4 components",
@@ -444,6 +450,18 @@ ERROR_CASE_FORBIDDEN_OUTPUT = {
     # An unresolved call has no type; the enclosing float4(...) must not also
     # report a component-count error for it.
     "texture_param_type_mismatch.bwsl": ["vector constructor expects"],
+}
+
+# Exact error counts, for cases where a single source mistake must not be
+# reported more than once.
+ERROR_CASE_EXPECTED_ERROR_COUNTS = {
+    # A dynamic texture array call expands to one call per element; the stage
+    # error must be reported once, not once per element.
+    "sample_texture_array_in_helper_called_from_compute.bwsl": 1,
+    # The rejected call's result keeps its normal type, so returning it from
+    # the helper doesn't add an implicit-conversion error.
+    "sample_in_helper_called_from_compute.bwsl": 1,
+    "derivative_in_helper_called_from_vertex.bwsl": 1,
 }
 
 def diagnostic_output_contains(output: str, expected: str) -> bool:
@@ -3480,6 +3498,14 @@ def main() -> int:
             if forbidden_output:
                 print(f"[{RED}FAIL{NC}] error_cases/{test_file.stem}")
                 print(f"       Error: expected diagnostic output not to include {forbidden_output}, got: {result.stdout.strip()}")
+                failed += 1
+                continue
+
+            expected_count = ERROR_CASE_EXPECTED_ERROR_COUNTS.get(test_file.name)
+            actual_count = result.doc.get("errorCount") if result.doc else None
+            if expected_count is not None and actual_count != expected_count:
+                print(f"[{RED}FAIL{NC}] error_cases/{test_file.stem}")
+                print(f"       Error: expected {expected_count} error(s), got {actual_count}: {result.stdout.strip()}")
                 failed += 1
                 continue
 

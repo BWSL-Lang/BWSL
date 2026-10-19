@@ -218,6 +218,31 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
 
 inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
   const FunctionCallData &call = ast->GetFunctionCall(ref);
+  // Implicit-LOD sampling and derivatives need fragment quads. The parser
+  // checks stage bodies; this also covers helper functions, whose stage is
+  // only known once a stage calls them. Check before a dynamic texture array
+  // call expands into one call per element, so it's reported once.
+  if (call.flags & FunctionCallFlags::IS_INTRINSIC) {
+    const StdLib::IntrinsicData &data = StdLib::INTRINSICS[call.intrinsicIndex];
+    char stageMsg[256];
+    if (StdLib::FormatDerivativeStageError(
+            static_cast<StdLib::Intrinsic>(data.enumIndex), currentStage,
+            stageMsg, sizeof(stageMsg))) {
+      std::string error = std::string("Error: ") + stageMsg + "\n";
+      ReportErrorAt(ref, error.c_str());
+      // Give the result the call's normal type (float4 for a sample, the
+      // argument's type for a derivative) so storing or returning it doesn't
+      // add a conversion error on top of this one.
+      u16 dest = AllocateRegister();
+      TypeMask returnTypes = data.returnTypes;
+      if (std::has_single_bit(returnTypes)) {
+        SetRegisterType(dest, static_cast<CoreType>(std::countr_zero(returnTypes)));
+      } else if (call.arguments.count > 0) {
+        SetRegisterType(dest, GetRegisterType(LowerExpression(call.arguments[0])));
+      }
+      return dest;
+    }
+  }
   u16 textureArrayResult;
   if (TryLowerDynamicTextureArrayCall(ref, &textureArrayResult))
     return textureArrayResult;

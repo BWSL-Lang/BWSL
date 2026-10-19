@@ -691,24 +691,25 @@ NodeRef Parser::ParseFunctionCall(NodeRef function) {
 
         const auto& intrinsicData = StdLib::INTRINSICS[ast->GetFunctionCall(call).intrinsicIndex];
 
+        // Implicit-LOD sampling and derivatives need fragment quads. Outside
+        // a stage body the stage isn't known yet; lowering checks helper
+        // functions against the stage that calls them.
+        {
+            char msg[256];
+            if (inShaderStage &&
+                StdLib::FormatDerivativeStageError(
+                    static_cast<StdLib::Intrinsic>(intrinsicData.enumIndex),
+                    currentShaderStage, msg, sizeof(msg))) {
+                ErrorAtPrevious(msg);
+                Consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
+                return call;
+            }
+        }
+
         if (!StdLib::IsValidForStage(&intrinsicData, currentShaderStage)) {
             ErrorAtPrevious("Intrinsic not available in this shader stage");
             Consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
             return call;
-        }
-
-        // Implicit-LOD sampling needs derivatives, which vertex stages don't
-        // have; SPIR-V restricts OpImageSampleImplicitLod accordingly.
-        {
-            StdLib::Intrinsic intrinsicId =
-                static_cast<StdLib::Intrinsic>(intrinsicData.enumIndex);
-            if (currentShaderStage == ShaderStage::Vertex &&
-                (intrinsicId == StdLib::Intrinsic::SAMPLE ||
-                 intrinsicId == StdLib::Intrinsic::SAMPLE_CMP)) {
-                ErrorAtPrevious("sample() uses implicit derivatives and is not available in vertex shaders; use sample_lod() with an explicit LOD");
-                Consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
-                return call;
-            }
         }
 
         // Validate argument count
