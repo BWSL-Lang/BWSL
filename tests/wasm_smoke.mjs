@@ -162,9 +162,8 @@ const computeLimits = (helper, body) => `pipeline RegisterLimits {
     resources.output[idx]=acc;
   }}
 }`;
-const lowerLimit = computeLimits(
-  `burst :: (float x, float delta) -> float { ${'x=x+delta;\n'.repeat(64)} return x; }`,
-  'acc=burst(acc,delta);\n'.repeat(260));
+const burst = `burst :: (float x, float delta) -> float { ${'x=x+delta;\n'.repeat(64)} return x; }`;
+const lowerLimit = computeLimits(burst, 'acc=burst(acc,delta);\n'.repeat(520));
 const variables = Array.from({length: 32}, (_, i) => `v${i}`);
 const ssaLimit = computeLimits(`burst :: (float delta, bool flip) -> float {
   ${variables.map(v => `float ${v}=delta;`).join('\n')}
@@ -172,10 +171,10 @@ const ssaLimit = computeLimits(`burst :: (float delta, bool flip) -> float {
     ${variables.map((v, i) => `${v}=${variables[(i+1)%32]};`).join('\n')}
   }else{${variables.map(v => `${v}=delta;`).join('\n')}}}
   return ${variables.join('+')};
-}`, 'bool flip=(idx&1u)==0u;\n' + 'acc=burst(acc,flip);\n'.repeat(120));
+}`, 'bool flip=(idx&1u)==0u;\n' + 'acc=burst(acc,flip);\n'.repeat(200));
 for (const [name, source, diagnostic] of [
-  ['lowering register limit', lowerLimit, 'Shader register limit exceeded'],
-  ['SSA register limit', ssaLimit, 'SSA register limit exceeded'],
+  ['lowering register limit', lowerLimit, 'Shader register limit exceeded (32764 registers)'],
+  ['SSA register limit', ssaLimit, 'SSA register limit exceeded (32764 registers)'],
 ]) {
   const result = JSON.parse(compile(source, '', '-spv'));
   assert.equal(result.success, false, name);
@@ -184,6 +183,10 @@ for (const [name, source, diagnostic] of [
   assert.match(errors, /line [1-9]\d*:[1-9]\d*:/);
   console.log(`${name} located diagnostic: PASS`);
 }
+// About 26000 registers, past the 16383 the limit was before.
+const highRegisters = JSON.parse(compile(computeLimits(burst, 'acc=burst(acc,delta);\n'.repeat(380)), '', '-spv'));
+assert.equal(highRegisters.success, true, JSON.stringify(highRegisters.errors));
+console.log('registers past the old limit: PASS');
 for (const unsigned of [false, true]) {
   const kind = unsigned ? 'uint' : 'int';
   for (const count of [600, 8193]) {

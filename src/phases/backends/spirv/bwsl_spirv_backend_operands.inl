@@ -39,7 +39,7 @@ u32 SPIRVBuilder::GetResultType(u16 dest_reg, u16 op1_reg) {
   }
 
     // Fallback: use first operand's type
-    if (op1_reg & 0x8000) {
+    if (IR::IsFloatOrBoolConstant(op1_reg)) {
         // Float constant
         return GetTypeId(CoreType::FLOAT);
     } else if (IR::IsIntConstant(op1_reg)) {
@@ -71,9 +71,9 @@ u32 SPIRVBuilder::GetResultType(u16 dest_reg, u16 op1_reg) {
 }
 
 CoreType SPIRVBuilder::GetOperandType(u16 reg) {
-    if ((reg & 0xC000) == 0xC000)
+    if (IR::IsBoolConstant(reg) || reg == IR::UnusedOperand)
         return CoreType::BOOL; // Bool constant
-    if (reg & 0x8000)
+    if (IR::IsFloatConstant(reg))
         return CoreType::FLOAT; // Float constant
     if (IR::IsIntConstant(reg))
         return CoreType::INT; // Int constant
@@ -84,6 +84,21 @@ CoreType SPIRVBuilder::GetOperandType(u16 reg) {
     return static_cast<CoreType>(ir->registerTypes[reg]);
   }
   return CoreType::FLOAT;
+}
+
+// XOR and the shifts have always read registerTypes at the first operand's
+// low 14 bits. For a constant that is the register numbered like its pool
+// index (plus 0x2000 for uint ones), so a constant first operand takes some
+// register's signedness. Reading the same register keeps their output.
+CoreType SPIRVBuilder::GetBitwiseLegacyType(u16 reg) {
+  u32 slot = 0x3FFF;  // The invalid and unused markers
+  if (IR::IsRegister(reg)) slot = reg;
+  else if (IR::IsIntConstant(reg)) slot = IR::IntConstantIndex(reg);
+  else if (IR::IsUintConstant(reg)) slot = 0x2000 | IR::UintConstantIndex(reg);
+  else if (IR::IsFloatConstant(reg)) slot = IR::FloatConstantIndex(reg);
+  else if (IR::IsBoolConstant(reg)) slot = IR::BoolConstantIndex(reg);
+  if (!ir->registerTypes || slot >= ir->registerCount) return CoreType::VOID;
+  return static_cast<CoreType>(ir->registerTypes[slot]);
 }
 
 CoreType GetScalarComponentType(CoreType vecType) {

@@ -2436,7 +2436,7 @@ CompileResult CompileShaderStage(
             if (!ssa.ConvertToSSA()) {
                 NodeRef node;
                 node.packed = lowering.program.ssaFailureSourceNode;
-                lowering.ReportErrorAt(node, "SSA register limit exceeded (16383 registers). Split or simplify the shader.\n");
+                lowering.ReportErrorAt(node, "SSA register limit exceeded (32764 registers). Split or simplify the shader.\n");
                 result.error = lowering.diagnostics.back();
                 result.diagnosticsAlreadyReported = diagnosticStream != nullptr;
                 return result;

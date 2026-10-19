@@ -28,7 +28,7 @@ struct InstructionInsertions {
     u32 registerEnd;
 };
 
-// A new register of `type`, or 0xFFFF past IR::RegisterLimit. Registers are
+// A new register of `type`, or 0xFFFF past the register limit. Registers are
 // added in batches, like SSA's: the program's registerCount includes spare
 // ones of type VOID. Like SSA, it grows the metadata the backends read
 // (types, struct types, storage info, names), not registerLifetimes or

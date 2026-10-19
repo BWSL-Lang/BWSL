@@ -22,7 +22,7 @@ u32 SPIRVBuilder::TranslateArrayStoreSequence(u32 first, u32 end) {
     u32 inst = first + i;
     if (ir->opcodes[inst] != IR::OP_ARRAY_STORE || ir->destinations[inst] != base) return 0;
     u16 index = ir->GetOperand(inst, 0);
-    if (!IR::IsUintConstant(index) || ir->uintConstants[index & 0x1FFF] != i) return 0;
+    if (!IR::IsUintConstant(index) || ir->uintConstants[IR::UintConstantIndex(index)] != i) return 0;
     u16 value = ir->GetOperand(inst, 1);
     if (value == 0xFFFF) return 0;
     constant &= IR::IsConstant(value) ||
@@ -242,11 +242,11 @@ void SPIRVBuilder::EmitBranch(u32 ir_idx) {
         // Pre-convert condition to bool if needed (before merge instruction)
         u16 cond_reg = ir->GetOperand(ir_idx, 0);
         CoreType condType = CoreType::BOOL;
-        if (cond_reg & 0xC000) {
+        if (IR::IsConstant(cond_reg)) {
             // Constant-encoded condition
-            if ((cond_reg & 0xC000) == 0xC000) {
+            if (IR::IsBoolConstant(cond_reg) || cond_reg == IR::UnusedOperand) {
                 condType = CoreType::BOOL;
-            } else if (cond_reg & 0x8000) {
+            } else if (IR::IsFloatConstant(cond_reg)) {
                 condType = CoreType::FLOAT;
             } else if (IR::IsIntConstant(cond_reg)) {
                 condType = CoreType::INT;
@@ -719,8 +719,8 @@ void SPIRVBuilder::EmitFunctionBody() {
             for (u32 op = 0; op < operandCount; op++) {
                 u16 valueReg = ir->GetPhiOperandValue(phi_idx, op);
                 // Skip constants (they have special encoding and are handled
-                // differently) 0x8000=float, 0x4000=int, 0x6000=uint, 0xC000=bool
-                if (valueReg & 0xC000)
+                // differently)
+                if (IR::IsConstant(valueReg))
                     continue;
                 // Pre-allocate an ID for this register if it doesn't have one
                 // Use GetSpirvId which handles undef registers properly

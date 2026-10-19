@@ -473,7 +473,7 @@ bool WGSLBuilder::ValueId(u16 reg, u32& valueId) {
 }
 
 bool WGSLBuilder::OperandType(u16 operand, CoreType& type) {
-    if (operand == 0xFFFF || operand == IR::RegisterLimit) {
+    if (operand == 0xFFFF || operand == IR::InvalidOperand) {
         return Fail("WGSL instruction contains an invalid or missing operand");
     }
     if (!IR::IsConstant(operand)) {
@@ -487,14 +487,14 @@ bool WGSLBuilder::OperandType(u16 operand, CoreType& type) {
         type = static_cast<CoreType>(values.types[id]);
         return true;
     }
-    if ((operand & 0xC000) == 0xC000) {
-        u32 index = operand & 0x3FFF;
+    if (IR::IsBoolConstant(operand)) {
+        u32 index = IR::BoolConstantIndex(operand);
         if (ir->boolConstants == nullptr || index >= ir->boolCount) {
             return Fail("WGSL boolean constant index is out of bounds");
         }
         type = CoreType::BOOL;
-    } else if ((operand & 0x8000) != 0) {
-        u32 index = operand & 0x3FFF;
+    } else if (IR::IsFloatConstant(operand)) {
+        u32 index = IR::FloatConstantIndex(operand);
         if (ir->floatConstants == nullptr || index >= ir->floatCount) {
             return Fail("WGSL floating-point constant index is out of bounds");
         }
@@ -503,13 +503,13 @@ bool WGSLBuilder::OperandType(u16 operand, CoreType& type) {
         }
         type = CoreType::FLOAT;
     } else if (IR::IsUintConstant(operand)) {
-        u32 index = operand & 0x1FFF;
+        u32 index = IR::UintConstantIndex(operand);
         if (ir->uintConstants == nullptr || index >= ir->uintCount) {
             return Fail("WGSL unsigned constant index is out of bounds");
         }
         type = CoreType::UINT;
     } else {
-        u32 index = operand & 0x1FFF;
+        u32 index = IR::IntConstantIndex(operand);
         if (ir->intConstants == nullptr || index >= ir->intCount) {
             return Fail("WGSL signed constant index is out of bounds");
         }
@@ -837,7 +837,7 @@ bool WGSLBuilder::Prepare() {
         return false;
     }
     // SSA keeps spare allocation capacity in registerCount. The operand
-    // encoding still limits addressable registers, so map only that domain;
+    // encoding limits addressable registers, so map only that domain;
     // DefineValue and ValueId validate every actual register independently.
     const u32 registerMapCount = ir->registerCount < IR::RegisterLimit
         ? ir->registerCount : IR::RegisterLimit;
@@ -1511,11 +1511,11 @@ bool WGSLBuilder::WriteOperand(TextWriter& writer, u16 operand) {
         }
     }
     if (type == CoreType::BOOL) {
-        writer.Text(ir->boolConstants[operand & 0x3FFF] != 0 ? "true" : "false");
+        writer.Text(ir->boolConstants[IR::ConstantIndex(operand)] != 0 ? "true" : "false");
     } else if (type == CoreType::FLOAT) {
         // Exact hexadecimal f32 literals avoid locale-sensitive formatting
         // and the newer deployment target required by floating to_chars.
-        float value = ir->floatConstants[operand & 0x3FFF];
+        float value = ir->floatConstants[IR::ConstantIndex(operand)];
         u32 bits = 0;
         std::memcpy(&bits, &value, sizeof(bits));
         u32 exponentBits = (bits >> 23) & 0xFF;
@@ -1550,10 +1550,10 @@ bool WGSLBuilder::WriteOperand(TextWriter& writer, u16 operand) {
         writer.Number(static_cast<u32>(exponent < 0 ? -exponent : exponent));
         writer.Text("f)");
     } else if (type == CoreType::UINT) {
-        writer.Number(ir->uintConstants[operand & 0x1FFF]);
+        writer.Number(ir->uintConstants[IR::ConstantIndex(operand)]);
         writer.Text("u");
     } else {
-        u32 bits = ir->intConstants[operand & 0x1FFF];
+        u32 bits = ir->intConstants[IR::ConstantIndex(operand)];
         s32 value = 0;
         std::memcpy(&value, &bits, sizeof(value));
         if (value == std::numeric_limits<s32>::min()) {

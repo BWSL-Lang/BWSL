@@ -74,7 +74,7 @@ bool VerifySSA(const IR::IRProgram* ir) {
             u16 dest = ir->destinations[i];
 
             // Ignore constants and invalid registers
-            if ((dest & 0xC000) == 0 && dest < ir->registerCount) {
+            if (IR::IsRegister(dest) && dest < ir->registerCount) {
                 if (defCount[dest] > 0) {
                     fprintf(stderr, "[SSA Error] Register R%u defined at Inst %u (Op 0x%X), but already defined at ", dest, i, op);
                     if (firstDefInst[dest] == -2) fprintf(stderr, "UNDEF\n");
@@ -111,7 +111,7 @@ bool VerifySSA(const IR::IRProgram* ir) {
             u16 reg = ir->GetOperand(i, opIdx);
 
             // Check if it's a valid register reference
-            if ((reg & 0xC000) == 0 && reg != 0xFFFF && reg != 0 && reg < ir->registerCount) {
+            if (IR::IsRegister(reg) && reg != 0 && reg < ir->registerCount) {
                 if (defCount[reg] == 0) {
                     fprintf(stderr, "[SSA Error] Inst %u (Op 0x%X) uses R%u which is never defined.\n", i, opCode, reg);
                     isValid = false;
@@ -126,7 +126,7 @@ bool VerifySSA(const IR::IRProgram* ir) {
         for (u32 j = 0; j < count; j++) {
             u16 reg = ir->GetPhiOperandValue(i, j);
 
-            if ((reg & 0xC000) == 0 && reg != 0xFFFF && reg != 0 && reg < ir->registerCount) {
+            if (IR::IsRegister(reg) && reg != 0 && reg < ir->registerCount) {
                 if (defCount[reg] == 0) {
                     fprintf(stderr, "[SSA Error] PHI %u operand %u uses R%u which is never defined.\n", i, j, reg);
                     isValid = false;

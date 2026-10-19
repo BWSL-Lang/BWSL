@@ -817,7 +817,7 @@ inline u16 IRLowering::AllocateRegister() {
     if (builder.nextRegister >= MAX_REGISTERS) {
         NodeRef node;
         node.packed = builder.currentSourceNode;
-        if (!hadError) ReportErrorAt(node, "Shader register limit exceeded (16383 registers). Split or simplify the shader.\n");
+        if (!hadError) ReportErrorAt(node, "Shader register limit exceeded (32764 registers). Split or simplify the shader.\n");
         return 0;
     }
     u16 reg = builder.nextRegister++;
@@ -836,7 +836,7 @@ inline u16 IRLowering::EmitConstantInt(u32 value) {
     NodeRef node;
     node.packed = builder.currentSourceNode;
     if (!hadError) ReportErrorAt(node, "Signed integer constant limit exceeded (8192 values). Split or simplify the shader.\n");
-    return 0x4000;
+    return IR::MakeIntConstant(0);
 }
 
 // Fold only pure integer ASTs. In particular, do not infer constants from a
@@ -954,13 +954,13 @@ inline bool IRLowering::CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
 inline bool IRLowering::TryGetConstIndex(u16 indexReg, NodeRef indexExpr,
                                          s64* value) {
     if (IR::IsIntConstant(indexReg)) {
-        u16 slot = indexReg & 0x3FFF;
+        u32 slot = IR::IntConstantIndex(indexReg);
         if (slot >= program.intCount) return false;
         *value = static_cast<s32>(program.intConstants[slot]);
         return true;
     }
     if (IR::IsUintConstant(indexReg)) {
-        u16 slot = indexReg & 0x1FFF;
+        u32 slot = IR::UintConstantIndex(indexReg);
         if (slot >= program.uintCount) return false;
         *value = program.uintConstants[slot];
         return true;
@@ -996,7 +996,7 @@ inline u16 IRLowering::EmitConstantUint(u32 value) {
     NodeRef node;
     node.packed = builder.currentSourceNode;
     if (!hadError) ReportErrorAt(node, "Unsigned integer constant limit exceeded (8192 values). Split or simplify the shader.\n");
-    return 0x6000;
+    return IR::MakeUintConstant(0);
 }
 
 inline u16 IRLowering::TryConvertScalarConstant(u16 reg, CoreType targetType) {
@@ -1004,10 +1004,10 @@ inline u16 IRLowering::TryConvertScalarConstant(u16 reg, CoreType targetType) {
   CoreType sourceType = GetRegisterType(reg);
   if (sourceType == targetType) return reg;
   double value;
-  if (sourceType == CoreType::FLOAT) value = program.floatConstants[reg & 0x7FFF];
-  else if (sourceType == CoreType::INT) value = static_cast<s32>(program.intConstants[reg & 0x1FFF]);
-  else if (sourceType == CoreType::UINT) value = program.uintConstants[reg & 0x1FFF];
-  else if (sourceType == CoreType::BOOL) value = program.boolConstants[reg & 0x3FFF];
+  if (sourceType == CoreType::FLOAT) value = program.floatConstants[IR::FloatConstantIndex(reg)];
+  else if (sourceType == CoreType::INT) value = static_cast<s32>(program.intConstants[IR::IntConstantIndex(reg)]);
+  else if (sourceType == CoreType::UINT) value = program.uintConstants[IR::UintConstantIndex(reg)];
+  else if (sourceType == CoreType::BOOL) value = program.boolConstants[IR::BoolConstantIndex(reg)];
   else return 0xFFFF;
   if (targetType == CoreType::FLOAT) return builder.EmitConstant(static_cast<float>(value));
   if (targetType != CoreType::INT && targetType != CoreType::UINT) return 0xFFFF;
@@ -1031,7 +1031,8 @@ inline u16 IRLowering::TryFoldScalarArithmetic(OpCode op, u16 left, u16 right) {
       !IR::IsConstant(right) || GetRegisterType(left) != GetRegisterType(right)) return 0xFFFF;
   CoreType type = GetRegisterType(left);
   if (type == CoreType::FLOAT) {
-    float a = program.floatConstants[left & 0x7FFF], b = program.floatConstants[right & 0x7FFF];
+    float a = program.floatConstants[IR::FloatConstantIndex(left)];
+    float b = program.floatConstants[IR::FloatConstantIndex(right)];
     float result;
     switch (op) {
     case OP_FADD: result = a + b; break;
@@ -1044,7 +1045,8 @@ inline u16 IRLowering::TryFoldScalarArithmetic(OpCode op, u16 left, u16 right) {
     return builder.EmitConstant(result);
   }
   if (type == CoreType::UINT) {
-    u32 a = program.uintConstants[left & 0x1FFF], b = program.uintConstants[right & 0x1FFF];
+    u32 a = program.uintConstants[IR::UintConstantIndex(left)];
+    u32 b = program.uintConstants[IR::UintConstantIndex(right)];
     u32 result;
     switch (op) {
     case OP_IADD: result = a + b; break;
@@ -1057,8 +1059,8 @@ inline u16 IRLowering::TryFoldScalarArithmetic(OpCode op, u16 left, u16 right) {
     return EmitConstantUint(result);
   }
   if (type == CoreType::INT) {
-    s64 a = static_cast<s32>(program.intConstants[left & 0x1FFF]);
-    s64 b = static_cast<s32>(program.intConstants[right & 0x1FFF]);
+    s64 a = static_cast<s32>(program.intConstants[IR::IntConstantIndex(left)]);
+    s64 b = static_cast<s32>(program.intConstants[IR::IntConstantIndex(right)]);
     s64 result;
     switch (op) {
     case OP_IADD: result = a + b; break;
@@ -1234,16 +1236,16 @@ inline u16 IRLowering::GetOrAllocateVariable(u32 nameHash) {
 }
 
 inline CoreType IRLowering::GetRegisterType(u16 reg) {
-    // Constants have type encoded in high bits
-    // Check order matters: bool (0xC000) must be checked before float (0x8000)
-    if ((reg & 0xC000) == 0xC000)
-        return CoreType::BOOL; // Bool constant (0xC000 prefix)
-    if (reg & 0x8000)
-        return CoreType::FLOAT; // Float constant (0x8000 prefix)
+    // A constant's operand code says its type. The unused marker 0xFFFF
+    // reads as bool, as it always has.
+    if (IR::IsBoolConstant(reg) || reg == IR::UnusedOperand)
+        return CoreType::BOOL;
+    if (IR::IsFloatConstant(reg))
+        return CoreType::FLOAT;
     if (IR::IsIntConstant(reg))
-        return CoreType::INT; // Int constant (0x4000 prefix)
+        return CoreType::INT;
     if (IR::IsUintConstant(reg))
-        return CoreType::UINT; // Uint constant (0x6000 prefix)
+        return CoreType::UINT;
 
     if (reg < program.registerCount) {
         return static_cast<CoreType>(program.registerTypes[reg]);

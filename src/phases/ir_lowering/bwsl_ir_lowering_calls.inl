@@ -115,7 +115,7 @@ inline u16 IRLowering::CopyArgumentValue(u16 source) {
 // ============= Pointer arguments =============
 
 inline OverloadTypeMask IRLowering::ArgumentOverloadMask(NodeRef argument, u16 reg) {
-  bool isRegister = (reg & 0xC000) == 0 && reg < MAX_REGISTERS;
+  bool isRegister = IR::IsRegister(reg);
   if (IsPointerArgument(argument, reg)) {
     CoreType pointee =
         static_cast<CoreType>((program.registerStorageInfo[reg] >> 8) & 0xFF);
@@ -537,7 +537,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
   if (call.flags & FunctionCallFlags::IS_METHOD_CALL) {
     if (!call.moduleObject.IsNull()) {
       u16 receiverReg = LowerExpression(call.moduleObject);
-      if ((receiverReg & 0xC000) != 0 || receiverReg >= MAX_REGISTERS) {
+      if (!IR::IsRegister(receiverReg)) {
         return 0;
       }
 
@@ -573,10 +573,10 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
     // Get the receiver object
     if (!call.moduleObject.IsNull()) {
       u16 receiverReg = LowerExpression(call.moduleObject);
-      // registerStructTypes has MAX_REGISTERS entries. Constant-encoded
-      // registers (bits 0x4000 / 0x8000) and any reg past MAX_REGISTERS
-      // can't have a valid struct-type hash; skip method dispatch.
-      if ((receiverReg & 0xC000) != 0 || receiverReg >= MAX_REGISTERS) {
+      // registerStructTypes has MAX_REGISTERS entries. Constants and the
+      // invalid marker can't have a valid struct-type hash; skip method
+      // dispatch.
+      if (!IR::IsRegister(receiverReg)) {
         return 0;
       }
       u32 receiverStructHash = program.registerStructTypes[receiverReg];
@@ -1054,9 +1054,9 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
     case Intrinsic::SAMPLE_LOD_OFFSET:
     case Intrinsic::SAMPLE_BIAS_OFFSET: {
       OpCode texOp = IntrinsicToOpcode(intrinsic);
-      u16 texReg = args[0]; // Texture with 0x6000 marker
+      u16 texReg = args[0]; // A resource handle
       const bool hasExplicitSampler =
-          argCount >= 3 && (args[1] & 0xF000) == 0x3000;
+          argCount >= 3 && IR::IsSamplerHandle(args[1]);
       u16 coordReg = hasExplicitSampler ? args[2] : args[1];
 
       switch (intrinsic) {
@@ -1095,7 +1095,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       if (hasExplicitSampler) {
         BWSL::SetTextureOpExplicitSamplerMetadata(program,
                                                   builder.currentInstruction - 1,
-                                                  static_cast<u16>(args[1] & 0x0FFFu));
+                                                  static_cast<u16>(IR::SamplerHandleSlot(args[1])));
       }
 
       // Texture samples always return float4
@@ -1105,12 +1105,12 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
     case Intrinsic::GATHER:
     case Intrinsic::GATHER_OFFSET: {
       OpCode texOp = IntrinsicToOpcode(intrinsic);
-      u16 texReg = args[0]; // Texture with 0x6000 marker
+      u16 texReg = args[0]; // A resource handle
       const bool hasExplicitSampler =
-          argCount >= 4 && (args[1] & 0xF000) == 0x3000;
+          argCount >= 4 && IR::IsSamplerHandle(args[1]);
       u16 coordReg = hasExplicitSampler ? args[2] : args[1];
       u16 componentReg = hasExplicitSampler ? args[3] : args[2];
-      u16 offsetReg = 0x3FFF;
+      u16 offsetReg = IR::InvalidOperand;
       if (intrinsic == Intrinsic::GATHER_OFFSET) {
         offsetReg = hasExplicitSampler ? args[4] : args[3];
       }
@@ -1119,7 +1119,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       if (hasExplicitSampler) {
         BWSL::SetTextureOpExplicitSamplerMetadata(program,
                                                   builder.currentInstruction - 1,
-                                                  static_cast<u16>(args[1] & 0x0FFFu));
+                                                  static_cast<u16>(IR::SamplerHandleSlot(args[1])));
       }
 
       SetRegisterType(dest, CoreType::FLOAT4);
@@ -1130,17 +1130,17 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       OpCode texOp = IntrinsicToOpcode(intrinsic);
       u16 texReg = args[0];
       const bool hasExplicitSampler =
-          argCount >= 4 && (args[1] & 0xF000) == 0x3000;
+          argCount >= 4 && IR::IsSamplerHandle(args[1]);
       u16 coordReg = hasExplicitSampler ? args[2] : args[1];
       u16 lodReg = hasExplicitSampler ? args[3] : args[2];
       u16 offsetReg = (intrinsic == Intrinsic::LOAD_OFFSET)
                           ? (hasExplicitSampler ? args[4] : args[3])
-                          : 0x3FFF;
+                          : IR::InvalidOperand;
       builder.EmitInstruction(texOp, dest, texReg, coordReg, lodReg, offsetReg);
       if (hasExplicitSampler) {
         BWSL::SetTextureOpExplicitSamplerMetadata(program,
                                                   builder.currentInstruction - 1,
-                                                  static_cast<u16>(args[1] & 0x0FFFu));
+                                                  static_cast<u16>(IR::SamplerHandleSlot(args[1])));
       }
       SetRegisterType(dest, CoreType::FLOAT4);
       return dest;
@@ -1849,7 +1849,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
                                                 u16 receiverReg, u16 *args,
                                                 u32 argCount, u16 dest,
                                                 bool receiverIsConst) {
-  if ((receiverReg & 0xC000) != 0 || receiverReg >= MAX_REGISTERS) {
+  if (!IR::IsRegister(receiverReg)) {
     return 0xFFFF;
   }
 
@@ -2647,9 +2647,9 @@ inline u16 IRLowering::LowerTextureSample(NodeRef ref) {
     u16 coordReg = LowerExpression(call.arguments[1]);
     u16 dest = AllocateRegister();
 
-    // IR format: s0 = texture (with 0x6000 marker for slot), s1 = coordinate
+    // IR format: s0 = texture (a resource handle for the slot), s1 = coordinate
     if (IR::IsUintConstant(texReg)) {
-        // texReg already has 0x6000 marker, pass it directly
+        // texReg is already a resource handle, pass it directly
         builder.EmitInstruction(OP_TEX_SAMPLE, dest, texReg, coordReg);
     } else {
         // Bindless - texReg is a register containing texture handle
@@ -2734,7 +2734,7 @@ inline u16 IRLowering::LowerTextureArrayElement(NodeRef ref) {
                         name + "' of length " + std::to_string(textures->arraySize) + "\n").c_str());
     return 0;
   }
-  u16 texture = 0x6000 | static_cast<u16>(textures->bindingIndex + index);
+  u16 texture = IR::MakeResourceHandle(static_cast<u32>(textures->bindingIndex + index));
   SetRegisterType(texture, static_cast<CoreType>(textures->coreType));
   return texture;
 }
@@ -2775,7 +2775,7 @@ inline bool IRLowering::TryLowerDynamicTextureArrayCall(NodeRef ref, u16 *result
   u16 selected = AllocateRegister();
   auto lowerElement = [&](u32 elementIndex) {
     nodeRegisters = dominatingNodes;
-    nodeRegisters[element.packed] = 0x6000 | static_cast<u16>(textures->bindingIndex + elementIndex);
+    nodeRegisters[element.packed] = IR::MakeResourceHandle(textures->bindingIndex + elementIndex);
     u16 value = LowerFunctionCall(ref);
     SetRegisterType(selected, GetRegisterType(value));
     builder.EmitInstruction(OP_STORE_REG, selected, value);
