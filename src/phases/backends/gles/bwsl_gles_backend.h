@@ -129,9 +129,9 @@ static constexpr OpInfo BIT_OPS[] = {
     {"<<", 2, 0},         // OP_SHL
     {">>", 2, 0},         // OP_SHR
     {">>", 2, 0},         // OP_ASR (same syntax, signed context)
-    {"bitCount", 1, 1},   // OP_POPCNT
-    {nullptr, 1, 1},      // OP_CLZ (no direct GLSL)
-    {nullptr, 1, 1},      // OP_CTZ (no direct GLSL)
+    {"bwsl_count_bits", 1, 1},     // OP_POPCNT (helper function)
+    {"bwsl_first_bit_high", 1, 1}, // OP_CLZ (helper function)
+    {"bwsl_first_bit_low", 1, 1},  // OP_CTZ (helper function)
     {"bitfieldReverse", 1, 1}, // OP_REVERSE_BITS
 };
 
@@ -422,6 +422,8 @@ private:
 
     // ===== Emission =====
     void EmitHeader();
+    void EmitBitHelpers();
+    u16 BitOperandType(u32 instIdx) const;
     void EmitInputs();
     void EmitOutputs();
     void EmitUniforms();

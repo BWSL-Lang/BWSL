@@ -48,6 +48,31 @@ CASES = {
                          [v for _ in range(4) for pixel in ([-2,-2,2,2],[-2,-2,2,2],[1,1,-1,-1],[1,1,-1,-1]) for v in pixel]),
     "vector_remainder": ("int a=(int((input.uv.x+1.0)*2.0)-2)*3+1;int4 r=int4(a,a,-a,-a)%int4(3,-3,3,-3);output.color=float4(r);",
                          [v for _ in range(4) for pixel in ([-2,-2,2,2],[-2,-2,2,2],[1,1,-1,-1],[1,1,-1,-1]) for v in pixel]),
+    # count_bits, first_bit_high and first_bit_low (#189, #213): ES 3.00 has
+    # no bitCount/findMSB/findLSB, and every backend returns the bit index,
+    # -1 for no bit, and the signed form for int.
+    "bit_intrinsics_uint": ("int n=int((input.uv.x+1.0)*2.0);uint u=uint(n)*6u;"
+                            "output.color=float4(float(count_bits(u)),float(int(first_bit_high(u))),"
+                            "float(int(first_bit_low(u))),float(count_bits(~u)));",
+                            [v for _ in range(4) for pixel in ([0,-1,-1,32],[2,2,1,30],[2,3,2,30],[2,4,1,30])
+                             for v in pixel]),
+    "bit_count_int4": ("int n=int((input.uv.x+1.0)*2.0);int4 v=int4(n-2,n*5,-(n+1),n<<30);"
+                       "output.color=float4(count_bits(v));",
+                       [v for _ in range(4) for pixel in ([31,0,32,0],[32,2,31,1],[0,2,31,1],[1,4,30,2])
+                        for v in pixel]),
+    "first_bit_high_int4": ("int n=int((input.uv.x+1.0)*2.0);int4 v=int4(n-2,n*5,-(n+1),n<<30);"
+                            "output.color=float4(first_bit_high(v));",
+                            [v for _ in range(4) for pixel in ([0,-1,-1,-1],[-1,2,0,30],[-1,3,1,30],[0,3,1,29])
+                             for v in pixel]),
+    "first_bit_low_uint4": ("int n=int((input.uv.x+1.0)*2.0);uint4 w=uint4(int4(n-2,n*5,-(n+1),n<<30));"
+                            "output.color=float4(int4(first_bit_low(w)));",
+                            [v for _ in range(4) for pixel in ([1,-1,0,-1],[0,0,1,30],[-1,1,0,31],[0,0,2,30])
+                             for v in pixel]),
+    "bit_index_mixed": ("int n=int((input.uv.x+1.0)*2.0);int4 v=int4(n-2,n*5,-(n+1),n<<30);"
+                        "int4 h=int4(first_bit_high(uint4(v)));int4 l=first_bit_low(v);"
+                        "output.color=float4(float(h.x),float(h.w),float(l.x),float(l.w));",
+                        [v for _ in range(4) for pixel in ([31,-1,1,-1],[31,30,0,30],[-1,31,-1,31],[0,31,0,30])
+                         for v in pixel]),
     "matrix_store": ("mat2 m=mat2(1.0);m[1][0]=7.0;mat2 t=transpose(m);output.color=float4(t[0][0],t[0][1],t[1][0],t[1][1]);", [1,7,0,1]),
     "classification_select": ("float4 v=float4(0.0,1.0,-1.0,2.0);bool4 f=isfinite(v);bool4 n=isnormal(v);output.color=float4(all(f)?1.0:0.0,all(n)?1.0:0.0,any(n)?1.0:0.0,isnan(1.0)?1.0:0.0);", [1,0,1,0]),
     "fma": ("float4 r=fma(float4(2.0),float4(3.0),float4(4.0));output.color=r;", [10]*4),

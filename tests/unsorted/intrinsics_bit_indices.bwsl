@@ -1,0 +1,53 @@
+// Test: count_bits, first_bit_high and first_bit_low on run-time int and
+// uint scalars and vectors (#189, #213). first_bit_high/low return the bit's
+// index, or -1 for no bit; on an int, first_bit_high finds the highest bit
+// that differs from the sign bit (FindSMsb), on a uint the highest set bit
+// (FindUMsb).
+
+pipeline IntrinsicsBitIndices {
+    attributes {
+        position: float3
+        uv: float2
+    }
+
+    pass "Main" {
+        use attributes { position, uv }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.uv;
+        }
+
+        fragment {
+            int n = int(input.uv.x * 4.0);
+            uint u = uint(n) * 6u;
+            int s = n - 2;
+            int2 i2 = int2(s, -s);
+            int3 i3 = int3(s, n, -n);
+            int4 i4 = int4(s, n * 5, -(n + 1), n << 30);
+            uint2 u2 = uint2(u, u + 1u);
+            uint3 u3 = uint3(i3);
+            uint4 u4 = uint4(i4);
+
+            uint cu = count_bits(u);
+            int cs = count_bits(s);
+            int4 c4 = count_bits(i4);
+            uint2 cu2 = count_bits(u2);
+
+            uint hu = first_bit_high(u);
+            int hs = first_bit_high(s);
+            int2 h2 = first_bit_high(i2);
+            uint3 hu3 = first_bit_high(u3);
+
+            int lu = int(first_bit_low(u));
+            int ls = first_bit_low(s);
+            int3 l3 = first_bit_low(i3);
+            uint4 lu4 = first_bit_low(u4);
+
+            float a = float(cu) + float(cs) + float(c4.x + c4.w) + float(cu2.y);
+            float b = float(int(hu)) + float(hs) + float(h2.y) + float(int(hu3.z));
+            float c = float(lu) + float(ls) + float(l3.z) + float(int(lu4.w));
+            output.color = float4(a, b, c, 1.0);
+        }
+    }
+}

@@ -1594,6 +1594,15 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         glsl_op = GLSLstd450SSign;
       }
     }
+    // first_bit_high on a signed int finds the highest bit that differs
+    // from the sign bit (FindSMsb), so first_bit_high(-1) is -1.
+    if (op == IR::OP_CLZ) {
+      CoreType t = GetOperandType(operand_reg);
+      if (t == CoreType::INT || t == CoreType::INT2 ||
+          t == CoreType::INT3 || t == CoreType::INT4) {
+        glsl_op = GLSLstd450FindSMsb;
+      }
+    }
 
     // OpExtInst: result_type, result_id, set_id, instruction, operands...
     if (currentFunctionSize + 6 > currentFunctionCapacity) {

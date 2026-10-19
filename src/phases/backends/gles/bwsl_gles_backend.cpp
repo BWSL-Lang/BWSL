@@ -78,6 +78,8 @@ void GLESBuilder::EmitHeader() {
         }
     }
 
+    EmitBitHelpers();
+
     bool needsFrexp = false;
     bool needsGatherPolyfill = false;
     for (u32 i = 0; i < ir->instructionCount; i++) {
@@ -117,6 +119,92 @@ void GLESBuilder::EmitHeader() {
         out.Lit("    return bwsl_texture_gather_offset(tex, uv, component, ivec2(0));\n");
         out.Lit("}\n\n");
     }
+}
+
+static u32 GLESComponentCount(u16 type) {
+    switch (static_cast<CoreType>(type)) {
+        case CoreType::BOOL2: case CoreType::INT2: case CoreType::UINT2: case CoreType::FLOAT2: return 2;
+        case CoreType::BOOL3: case CoreType::INT3: case CoreType::UINT3: case CoreType::FLOAT3: return 3;
+        case CoreType::BOOL4: case CoreType::INT4: case CoreType::UINT4: case CoreType::FLOAT4: return 4;
+        default: return 1;
+    }
+}
+
+// count_bits, first_bit_high and first_bit_low. GLSL ES 3.00 (WebGL2) has no
+// bitCount, findMSB or findLSB, and their ES 3.10 forms return int even for
+// uint. The helpers return their operand's type and match SPIR-V's
+// OpBitCount, FindUMsb/FindSMsb and FindILsb: a bit index, or -1 (all ones)
+// when no bit qualifies.
+static const char* BitHelperName(u16 opcode) {
+    switch (opcode) {
+        case IR::OP_POPCNT: return "bwsl_count_bits";
+        case IR::OP_CLZ: return "bwsl_first_bit_high";
+        case IR::OP_CTZ: return "bwsl_first_bit_low";
+        default: return nullptr;
+    }
+}
+
+u16 GLESBuilder::BitOperandType(u32 instIdx) const {
+    u16 operand = Op(instIdx, 0);
+    if (IR::IsIntConstant(operand)) return static_cast<u16>(CoreType::INT);
+    if (IR::IsUintConstant(operand)) return static_cast<u16>(CoreType::UINT);
+    if (operand < regCount && ir->registerTypes && ir->registerTypes[operand] != 0) {
+        return ir->registerTypes[operand];
+    }
+    return Type(instIdx);
+}
+
+void GLESBuilder::EmitBitHelpers() {
+    // Operand types each helper is called with, as CoreType bits.
+    u32 used[3] = {};
+    static constexpr u16 OPS[3] = {IR::OP_POPCNT, IR::OP_CLZ, IR::OP_CTZ};
+    for (u32 i = 0; i < ir->instructionCount; ++i) {
+        for (u32 h = 0; h < 3; ++h) {
+            if (ir->opcodes[i] != OPS[h]) continue;
+            u16 type = BitOperandType(i);
+            if (type < 32) used[h] |= 1u << type;
+        }
+    }
+    if (!(used[0] | used[1] | used[2])) return;
+
+    // The uint forms do the work; count_bits underlies the other two.
+    out.Lit("uint bwsl_count_bits(uint x) { x -= (x >> 1u) & 0x55555555u; "
+            "x = (x & 0x33333333u) + ((x >> 2u) & 0x33333333u); "
+            "return (((x + (x >> 4u)) & 0x0F0F0F0Fu) * 0x01010101u) >> 24u; }\n");
+    if (used[1]) {
+        out.Lit("uint bwsl_first_bit_high(uint x) { x |= x >> 1u; x |= x >> 2u; x |= x >> 4u; "
+                "x |= x >> 8u; x |= x >> 16u; return bwsl_count_bits(x) - 1u; }\n");
+    }
+    if (used[2]) {
+        out.Lit("uint bwsl_first_bit_low(uint x) { return x == 0u ? 0xFFFFFFFFu : bwsl_count_bits(~x & (x - 1u)); }\n");
+    }
+    constexpr u32 SIGNED = (1u << static_cast<u32>(CoreType::INT)) | (1u << static_cast<u32>(CoreType::INT2)) |
+                           (1u << static_cast<u32>(CoreType::INT3)) | (1u << static_cast<u32>(CoreType::INT4));
+    static constexpr CoreType VECTORS[] = {CoreType::INT2, CoreType::INT3, CoreType::INT4,
+                                           CoreType::UINT2, CoreType::UINT3, CoreType::UINT4};
+    for (u32 h = 0; h < 3; ++h) {
+        if (!used[h]) continue;
+        const char* name = BitHelperName(OPS[h]);
+        if (used[h] & SIGNED) {
+            out.Lit("int "); out.Str(name); out.Lit("(int x) { return int("); out.Str(name);
+            // A negative value's highest bit is the highest one that differs
+            // from its sign bit.
+            out.Str(h == 1 ? "(uint(x < 0 ? ~x : x))); }\n" : "(uint(x))); }\n");
+        }
+        for (CoreType vector : VECTORS) {
+            if (!(used[h] & (1u << static_cast<u32>(vector)))) continue;
+            u32 n = GLESComponentCount(static_cast<u16>(vector));
+            EmitType(static_cast<u16>(vector)); out.Chr(' '); out.Str(name); out.Chr('(');
+            EmitType(static_cast<u16>(vector)); out.Lit(" x) { return ");
+            EmitType(static_cast<u16>(vector)); out.Chr('(');
+            for (u32 c = 0; c < n; ++c) {
+                if (c) out.Lit(", ");
+                out.Str(name); out.Lit("(x."); out.Chr(Str::SWIZZLE[c]); out.Chr(')');
+            }
+            out.Lit("); }\n");
+        }
+    }
+    out.NL(0);
 }
 
 static bool GLESIsValidIdent(const std::string& s) {
@@ -1408,28 +1496,17 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
         case IR::OP_SHR: case IR::OP_ASR:
             EmitBinaryAssign(instIdx, dest, ">>");
             return;
-        case IR::OP_POPCNT:
-            // GLSL ES 300 has bitCount
-            EmitFuncAssign(instIdx, dest, "bitCount", 1);
-            return;
-        case IR::OP_CLZ: {
-            // GLSL ES 300: use findMSB and compute 31 - findMSB(x)
+        case IR::OP_POPCNT: case IR::OP_CLZ: case IR::OP_CTZ: {
+            // The helper returns its operand's type; convert when the
+            // destination's differs.
+            u16 type = Type(instIdx);
+            bool convert = BitOperandType(instIdx) != type;
             EmitRegWithDecl(dest);
-            out.Lit(" = (");
-            EmitExpr(Op(instIdx, 0));
-            out.Lit(" == 0) ? 32 : (31 - findMSB(");
-            EmitExpr(Op(instIdx, 0));
-            out.Lit("));");
-            return;
-        }
-        case IR::OP_CTZ: {
-            // GLSL ES 300: use findLSB
-            EmitRegWithDecl(dest);
-            out.Lit(" = (");
-            EmitExpr(Op(instIdx, 0));
-            out.Lit(" == 0) ? 32 : findLSB(");
-            EmitExpr(Op(instIdx, 0));
-            out.Lit(");");
+            out.Lit(" = ");
+            if (convert) { EmitType(type); out.Chr('('); }
+            EmitFuncCall(instIdx, BitHelperName(opcode), 1);
+            if (convert) out.Chr(')');
+            out.Chr(';');
             return;
         }
         case IR::OP_REVERSE_BITS:
@@ -2371,15 +2448,6 @@ void GLESBuilder::EmitFuncCall(u32 instIdx, const char* func, u32 arity) {
         EmitExpr(Op(instIdx, i));
     }
     out.Chr(')');
-}
-
-static u32 GLESComponentCount(u16 type) {
-    switch (static_cast<CoreType>(type)) {
-        case CoreType::BOOL2: case CoreType::INT2: case CoreType::UINT2: case CoreType::FLOAT2: return 2;
-        case CoreType::BOOL3: case CoreType::INT3: case CoreType::UINT3: case CoreType::FLOAT3: return 3;
-        case CoreType::BOOL4: case CoreType::INT4: case CoreType::UINT4: case CoreType::FLOAT4: return 4;
-        default: return 1;
-    }
 }
 
 bool GLESBuilder::EmitConstantExpr(u16 reg, u32 depth) {
