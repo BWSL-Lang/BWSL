@@ -202,6 +202,21 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
 
 inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
   const FunctionCallData &call = ast->GetFunctionCall(ref);
+  // Implicit-LOD sampling and derivatives need fragment quads. The parser
+  // checks stage bodies; this also covers helper functions, whose stage is
+  // only known once a stage calls them. Check before a dynamic texture array
+  // call expands into one call per element, so it's reported once.
+  if (call.flags & FunctionCallFlags::IS_INTRINSIC) {
+    char stageMsg[256];
+    if (StdLib::FormatDerivativeStageError(
+            static_cast<StdLib::Intrinsic>(
+                StdLib::INTRINSICS[call.intrinsicIndex].enumIndex),
+            currentStage, stageMsg, sizeof(stageMsg))) {
+      std::string error = std::string("Error: ") + stageMsg + "\n";
+      ReportErrorAt(ref, error.c_str());
+      return 0;
+    }
+  }
   u16 textureArrayResult;
   if (TryLowerDynamicTextureArrayCall(ref, &textureArrayResult))
     return textureArrayResult;
@@ -710,16 +725,6 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
     using Intrinsic = StdLib::Intrinsic;
     Intrinsic intrinsic =
         static_cast<Intrinsic>(StdLib::INTRINSICS[call.intrinsicIndex].enumIndex);
-
-    // The parser checks stage bodies; this also covers helper functions,
-    // whose stage is only known once a stage calls them.
-    char stageMsg[256];
-    if (StdLib::FormatDerivativeStageError(intrinsic, currentStage, stageMsg,
-                                           sizeof(stageMsg))) {
-      std::string error = std::string("Error: ") + stageMsg + "\n";
-      ReportErrorAt(ref, error.c_str());
-      return 0;
-    }
 
     OpCode op = OP_NOP;
 

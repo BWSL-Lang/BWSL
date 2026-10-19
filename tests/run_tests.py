@@ -327,6 +327,7 @@ ERROR_CASE_TESTS = {
     "sample_implicit_lod_compute.bwsl": "sample() uses implicit derivatives and is not available in compute shaders; use sample_lod() with an explicit LOD",
     "sample_offset_implicit_lod_compute.bwsl": "sample_offset() uses implicit derivatives and is not available in compute shaders; use sample_lod_offset() with an explicit LOD",
     "sample_in_helper_called_from_compute.bwsl": "sample() uses implicit derivatives and is not available in compute shaders",
+    "sample_texture_array_in_helper_called_from_compute.bwsl": "sample() uses implicit derivatives and is not available in compute shaders",
     "vec_compare_to_scalar_bool.bwsl": "cannot assign a vector comparison result to a scalar bool",
     "pointer_function_param.bwsl": "Pointer-typed function parameters are not supported",
     "swizzle_too_long.bwsl": "invalid swizzle - swizzles use 1-4 components",
@@ -431,6 +432,14 @@ ERROR_CASE_FORBIDDEN_OUTPUT = {
     # An unresolved call has no type; the enclosing float4(...) must not also
     # report a component-count error for it.
     "texture_param_type_mismatch.bwsl": ["vector constructor expects"],
+}
+
+# Exact error counts, for cases where a single source mistake must not be
+# reported more than once.
+ERROR_CASE_EXPECTED_ERROR_COUNTS = {
+    # A dynamic texture array call expands to one call per element; the stage
+    # error must be reported once, not once per element.
+    "sample_texture_array_in_helper_called_from_compute.bwsl": 1,
 }
 
 def diagnostic_output_contains(output: str, expected: str) -> bool:
@@ -3392,6 +3401,14 @@ def main() -> int:
             if forbidden_output:
                 print(f"[{RED}FAIL{NC}] error_cases/{test_file.stem}")
                 print(f"       Error: expected diagnostic output not to include {forbidden_output}, got: {result.stdout.strip()}")
+                failed += 1
+                continue
+
+            expected_count = ERROR_CASE_EXPECTED_ERROR_COUNTS.get(test_file.name)
+            actual_count = result.doc.get("errorCount") if result.doc else None
+            if expected_count is not None and actual_count != expected_count:
+                print(f"[{RED}FAIL{NC}] error_cases/{test_file.stem}")
+                print(f"       Error: expected {expected_count} error(s), got {actual_count}: {result.stdout.strip()}")
                 failed += 1
                 continue
 
