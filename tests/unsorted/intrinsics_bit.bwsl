@@ -18,13 +18,13 @@ pipeline IntrinsicsBit {
             int bits_15 = count_bits(15);         // 4 (0b1111)
             int bits_255 = count_bits(255);       // 8
 
-            // first_bit_high - find highest set bit (from MSB)
-            int high_1 = first_bit_high(1);       // 31 (or 0 depending on impl)
-            int high_2 = first_bit_high(2);       // 30
-            int high_8 = first_bit_high(8);       // 28
-            int high_128 = first_bit_high(128);   // 24
+            // first_bit_high - index of the highest set bit, -1 for 0
+            int high_1 = first_bit_high(1);       // 0
+            int high_2 = first_bit_high(2);       // 1
+            int high_8 = first_bit_high(8);       // 3
+            int high_128 = first_bit_high(128);   // 7
 
-            // first_bit_low - find lowest set bit (from LSB)
+            // first_bit_low - index of the lowest set bit, -1 for 0
             int low_1 = first_bit_low(1);         // 0
             int low_2 = first_bit_low(2);         // 1
             int low_4 = first_bit_low(4);         // 2
@@ -43,9 +43,9 @@ pipeline IntrinsicsBit {
             int count = count_bits(mask);
             bool hasBits = count > 0;
 
-            // Vector bit operations (if supported)
+            // Vector bit operations
             int2 iv2 = int2(3, 7);
-            // int2 bits_v2 = count_bits(iv2);  // If vector overload exists
+            int2 bits_v2 = count_bits(iv2);
 
             output.position = float4(attributes.position, 1.0);
         }

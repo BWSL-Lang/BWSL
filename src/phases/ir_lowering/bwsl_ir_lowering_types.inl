@@ -1162,6 +1162,67 @@ inline u16 IRLowering::ConvertRegisterToType(u16 reg, CoreType targetType) {
   return converted;
 }
 
+// Type name as written in source, for diagnostics.
+inline std::string IRLowering::SourceTypeName(CoreType type) {
+  std::string name = CoreTypeToString(type);
+  for (char &c : name) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  return name;
+}
+
+// A store converts between scalar kinds (ConvertRegisterToType) but never
+// changes a vector's width or component type, splats a scalar or collapses a
+// vector: each takes an explicit swizzle or constructor. Reports the mismatch
+// at `node` and returns false; matrices and aggregates are checked elsewhere.
+inline bool IRLowering::CheckStoreShape(NodeRef node, u16 valueReg,
+                                        CoreType targetType) {
+  CoreType sourceType = GetRegisterType(valueReg);
+  if (sourceType == targetType) return true;
+  constexpr TypeMask vectors = TypeMasks::VECTOR_TYPES | TypeMasks::BOOL_VECTORS;
+  constexpr TypeMask values = vectors | TypeMasks::SCALAR_TYPES;
+  bool sourceVector = (mask(sourceType) & vectors) != 0;
+  bool targetVector = (mask(targetType) & vectors) != 0;
+  if (!(mask(sourceType) & values) || !(mask(targetType) & values) ||
+      (!sourceVector && !targetVector)) {
+    return true;
+  }
+  std::string source = SourceTypeName(sourceType);
+  std::string target = SourceTypeName(targetType);
+  u32 sourceWidth = GetVectorDimension(sourceType);
+  u32 targetWidth = GetVectorDimension(targetType);
+  char msg[256];
+  if (!targetVector) {
+    snprintf(msg, sizeof(msg),
+             "Error: cannot implicitly convert %s to %s; select a component "
+             "such as .x\n",
+             source.c_str(), target.c_str());
+  } else if (!sourceVector) {
+    snprintf(msg, sizeof(msg),
+             "Error: cannot implicitly convert %s to %s; use %s(value) to "
+             "splat a scalar\n",
+             source.c_str(), target.c_str(), target.c_str());
+  } else if (sourceWidth > targetWidth) {
+    snprintf(msg, sizeof(msg),
+             "Error: cannot implicitly convert %s to %s; vector widths must "
+             "match, use a swizzle such as .%.*s to narrow\n",
+             source.c_str(), target.c_str(), static_cast<int>(targetWidth),
+             "xyzw");
+  } else if (sourceWidth < targetWidth) {
+    snprintf(msg, sizeof(msg),
+             "Error: cannot implicitly convert %s to %s; vector widths must "
+             "match, use a constructor such as %s(value, ...) to widen\n",
+             source.c_str(), target.c_str(), target.c_str());
+  } else {
+    snprintf(msg, sizeof(msg),
+             "Error: cannot implicitly convert %s to %s; vector component "
+             "types must match, convert with %s(...)\n",
+             source.c_str(), target.c_str(), target.c_str());
+  }
+  ReportErrorAt(node, msg);
+  return false;
+}
+
 inline u16 IRLowering::GetOrAllocateVariable(u32 nameHash) {
   auto it = variableRegisters.find(nameHash);
   if (it != variableRegisters.end()) {
