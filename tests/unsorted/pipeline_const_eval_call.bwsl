@@ -1,0 +1,28 @@
+// Pipeline-scope constants may call pipeline eval functions; the call is
+// folded once at the declaration and every use sees the value.
+pipeline PipelineConstEvalCall {
+    resources { data: buffer<float> }
+
+    eval halfSquare :: (float r) -> float {
+        return r * r * 0.5;
+    }
+
+    const float AREA = halfSquare(3.0);
+    const float DOUBLE_AREA = AREA * 2.0;
+    const float2 PAIR = float2(halfSquare(2.0), 0.25);
+    const float OFFSET_AREA = halfSquare(1.0) + 7.0;
+
+    pass "Main" {
+        use resources { data }
+        compute "Main" [1, 1, 1] {
+            resources.data[0] = AREA;
+            resources.data[1] = DOUBLE_AREA;
+            resources.data[2] = PAIR.x + PAIR.y;
+            resources.data[3] = OFFSET_AREA + resources.data[4];
+            eval {
+                eval float scaled = AREA * 4.0;
+                resources.data[5] = scaled;
+            }
+        }
+    }
+}

@@ -193,12 +193,16 @@ but not currently part of the language.
 ### Eval Functions
 
 Pipeline-scope eval functions can be called with compile-time arguments from eval
-initializers or runtime expressions. Their result is substituted into emitted code.
+initializers, pipeline-, pass- and local-scope `const` initializers, or runtime
+expressions. Their result is substituted into emitted code. A pipeline constant
+whose eval call has runtime arguments is rejected at its declaration.
 
 ```bwsl
 eval taps :: (int quality) -> int {
     return quality * 2 + 1;
 }
+
+const int TAPS = taps(2);
 ```
 
 Function execution supports typed local declarations, assignments, scalar

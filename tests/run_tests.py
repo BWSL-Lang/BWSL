@@ -355,6 +355,7 @@ ERROR_CASE_TESTS = {
     "eval_function_recursion.bwsl": "Eval function call depth exceeded",
     "eval_function_missing_return.bwsl": "Non-void function must return a value on every reachable path",
     "eval_function_return_type.bwsl": "Type mismatch in eval function return",
+    "pipeline_const_eval_call_runtime_arg.bwsl": "Pipeline constant 'AREA' calls eval function 'circleArea' with arguments that are not compile-time values",
     "eval_vector_constructor_empty.bwsl": "Compile-time declaration initializer is not a compile-time value",
     "eval_vector_constructor_few.bwsl": "Compile-time declaration initializer is not a compile-time value",
     "eval_vector_constructor_many.bwsl": "Compile-time declaration initializer is not a compile-time value",
@@ -664,6 +665,17 @@ TRANSLATION_EXPECTATION_TESTS = {
                 "noperspective in vec2 v_screenUV",
             ],
             "gles_not_contains": ["mediump"],
+        },
+    },
+    "pipeline_const_eval_call": {
+        "comp": {
+            "glsl_contains": [
+                "_m0[0] = 4.5;",
+                "_m0[1] = 9.0;",
+                "7.5 + ",
+                "_m0[5] = 18.0;",
+            ],
+            "glsl_not_contains": ["halfSquare"],
         },
     },
     "output_depth_builtin": {
