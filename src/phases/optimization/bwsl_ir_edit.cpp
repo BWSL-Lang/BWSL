@@ -99,7 +99,7 @@ void ApplyInsertions(IR::IRBuilder* builder, CFG* cfg, InstructionInsertions* in
         if (ir->branchFalseTargets) ir->branchFalseTargets[to] = target(falseTarget);
         if (structure != 0) {
             u32 merge = target(structure & IRProgram::STRUCT_TARGET_MASK);
-            structure = (structure & IRProgram::STRUCT_TYPE_MASK) | (merge & IRProgram::STRUCT_TARGET_MASK);
+            structure = (structure & ~IRProgram::STRUCT_TARGET_MASK) | (merge & IRProgram::STRUCT_TARGET_MASK);
         }
         ir->structureInfo[to] = structure;
         ir->continueInfo[to] = target(continuation);

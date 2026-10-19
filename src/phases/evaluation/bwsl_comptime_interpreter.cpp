@@ -532,6 +532,7 @@ static NodeRef CloneNodeImpl(ComptimeState* state, NodeRef node) {
             NodeRef cloned = node.Type() == ASTNodeType::EVAL_IF
                 ? ASTFactory::MakeEvalIfStatement(state->ast, line, col)
                 : ASTFactory::MakeIfStatement(state->ast, line, col);
+            state->ast->SetSelectionHint(cloned, state->ast->GetSelectionHint(node));
             for (NodeRef stmt : statements) {
                 NodeRef child = CloneNode(state, stmt);
                 if (child.IsValid()) {

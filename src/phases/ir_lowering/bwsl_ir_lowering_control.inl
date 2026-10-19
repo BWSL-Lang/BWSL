@@ -1054,21 +1054,39 @@ inline void IRLowering::LowerIfStatement(NodeRef ref) {
 
 inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
                                         u32 restFirst, bool restInThen) {
+  const BlockData &block = ast->GetBlock(ref);
+  if (block.statements.count < 2)
+    return;
+
+    // @branch asks for a real branch that a wave skips when no lane takes it.
+    // AMD's compiler turns an if into selects whenever everything inside can
+    // be evaluated unconditionally, and DontFlatten alone doesn't stop it (a
+    // ray tracer's sphere tests: 6.8 vs 5.4 ms). A read inside a branch, and
+    // a value stored to memory on one side only, can't be: so && and || in
+    // the condition and body branch on every operand, and the SPIR-V backend
+    // keeps the values merged here in memory (see PlanPhiVariables). Both
+    // only with ENFORCE_BRANCH_HINTS; the hint itself is always emitted.
+    SelectionHint hint = ast->GetSelectionHint(ref);
+    bool outerShortCircuitAll = shortCircuitAll;
+    if (hint == SelectionHint::Branch &&
+        Optimizations::IsEnabled(optimizations, OptimizationId::ENFORCE_BRANCH_HINTS)) {
+        shortCircuitAll = true;
+    }
+
   // The rest runs after its branch; guard it if that branch may have
-  // returned (e.g. from inside a loop).
+  // returned (e.g. from inside a loop). It isn't part of this if's body.
   auto lowerBranchAndRest = [&](NodeRef branch) {
       u32 returnCountBefore = inlineReturnCounter;
       if (!branch.IsNull()) LowerStatement(branch);
+      bool bodyShortCircuitAll = shortCircuitAll;
+      shortCircuitAll = outerShortCircuitAll;
       if (inlineReturnCounter != returnCountBefore) {
           LowerStatementsWithReturnGuard(*rest, restFirst);
       } else {
           LowerStatements(*rest, restFirst, true);
       }
+      shortCircuitAll = bodyShortCircuitAll;
   };
-
-  const BlockData &block = ast->GetBlock(ref);
-  if (block.statements.count < 2)
-    return;
 
   u16 condReg = LowerExpression(block.statements[0]);
 
@@ -1137,6 +1155,12 @@ inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
   // ANNOTATE: This branch instruction is an if-header, merge at mergePoint
   program.structureInfo[branchIdx] =
       IRProgram::PackStructure(IRProgram::STRUCT_IF_HEADER, mergePoint);
+    if (hint == SelectionHint::Branch) {
+        program.structureInfo[branchIdx] |= IRProgram::STRUCT_HINT_BRANCH;
+    } else if (hint == SelectionHint::Flatten) {
+        program.structureInfo[branchIdx] |= IRProgram::STRUCT_HINT_FLATTEN;
+    }
+    shortCircuitAll = outerShortCircuitAll;
 
   // Patch jump over else to go to merge point
   if (jumpOverElseIdx != 0) {

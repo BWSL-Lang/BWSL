@@ -157,6 +157,14 @@ applies to floating-point varyings.
 `@flat`, `@noperspective` and `@centroid` apply only to user varyings, not
 built-ins such as `output.position`, `output.color`, or `output.depth`.
 
+## Branch Hints
+
+`@branch if (...)` asks for a real branch that a wave skips when none of its
+lanes take it; `@flatten if (...)` asks for both sides to be evaluated. They
+never change results. See
+[Statements and Control Flow](spec/05-statements-and-control-flow.md#if-statements)
+for what `@branch` does to the output.
+
 ## Resources
 
 Pipeline shader resources are declared in a `resources` block:

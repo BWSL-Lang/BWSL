@@ -446,6 +446,7 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
             NodeRef newIf = node.Type() == ASTNodeType::EVAL_IF
                 ? ASTFactory::MakeEvalIfStatement(ast, line, col)
                 : ASTFactory::MakeIfStatement(ast, line, col);
+            ast->SetSelectionHint(newIf, ast->GetSelectionHint(node));
             ast->GetBlock(newIf).statements.Push(arena, condition);
             for (u32 i = 1; i < statements.size(); i++) {
                 NodeRef cloned = CloneNodeWithParams(statements[i], subs, subCount);

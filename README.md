@@ -328,6 +328,7 @@ what is known to help or hurt on that vendor; today they equal `default`.
 | `speculate-logical-ops` | A cheap, side-effect-free right operand of `&&`/`\|\|` is evaluated without a branch |
 | `array-fill-stores` | SPIR-V: an array filled element by element, in order, is stored at once |
 | `gles-const-tables` | `-gles-direct`: an array filled once with constants gets them in its declaration |
+| `enforce-branch-hints` | `@branch if`: `&&`/`\|\|` inside branch on every operand, and values merged after it stay in memory, so drivers that ignore the branch hint (AMD's) keep the branch |
 | `phi-variables` | SPIRV-Cross targets (Metal, HLSL, GLSL, GLSL ES): a variable carried through loops and branches stays one variable instead of a copy per edge. In no group yet |
 
 Turning optimizations off never changes results. With `constant-propagation`

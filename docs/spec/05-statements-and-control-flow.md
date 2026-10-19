@@ -45,6 +45,31 @@ The parser supports:
 - single-statement bodies without braces
 - chained `else if`
 
+`@branch` or `@flatten` before `if` says how the branch should be compiled:
+
+```bwsl
+@branch if (h > 0.0) {
+    float t = -b - sqrt(h);
+    if (t > 0.001 && t < best) { best = t; }
+}
+```
+
+- `@branch` keeps a real branch, so a wave whose lanes all skip the body
+  skips its work. The selection is marked `DontFlatten` (`[branch]` in HLSL,
+  `[[dont_flatten]]` in GLSL where `GL_EXT_control_flow_attributes` exists).
+  Because some drivers ignore that, AMD's among them, the
+  `enforce-branch-hints` optimization (on by default; see `--optimizations`)
+  also makes `&&` and `||` in the condition and body branch on every
+  operand, and keeps values assigned in the body and read after it in
+  one-element local arrays, stored only where they change: a compiler can't
+  evaluate those unconditionally.
+- `@flatten` marks the selection `Flatten` (`[flatten]` in HLSL).
+
+Both are hints and never change results. GLSL ES, Metal and WGSL output has no
+equivalent; there `@branch` keeps only the code shape. Whether `@branch` helps
+depends on the GPU and the data: a ray tracer's sphere tests ran 20% faster
+with it on an AMD iGPU, and within 2% either way on an NVIDIA RTX 4060 Ti.
+
 ## Return Variants
 
 The current syntax surface includes:

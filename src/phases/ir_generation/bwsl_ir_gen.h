@@ -293,7 +293,11 @@ struct IRProgram {
     STRUCT_IF_HEADER     = 1 << 28,  // OpSelectionMerge needed
     STRUCT_LOOP_HEADER   = 2 << 28,  // OpLoopMerge needed
     STRUCT_SWITCH_HEADER = 3 << 28,
-    STRUCT_TYPE_MASK     = 0xF0000000,
+    STRUCT_TYPE_MASK     = 0x30000000,
+    // An if header written with @branch / @flatten (SelectionHint).
+    STRUCT_HINT_BRANCH   = 1u << 30,
+    STRUCT_HINT_FLATTEN  = 1u << 31,
+    STRUCT_HINT_MASK     = 0xC0000000,
     STRUCT_TARGET_MASK   = 0x0FFFFFFF,
     };
 
@@ -1151,12 +1155,12 @@ void EliminateDeadCode(IRProgram* prog) {
             if (prog->structureInfo) {
                 u32 info = prog->structureInfo[i];
                 if (info != 0) {
-                    u32 type = info & IRProgram::STRUCT_TYPE_MASK;
+                    u32 kindAndHint = info & ~IRProgram::STRUCT_TARGET_MASK;
                     u32 mergeInst = info & IRProgram::STRUCT_TARGET_MASK;
                     if (mergeInst < oldCount) {
                         u32 newMerge = indexRemap[mergeInst];
                         if (newMerge == 0xFFFFFFFF) newMerge = writeIdx + 1;
-                        info = type | (newMerge & IRProgram::STRUCT_TARGET_MASK);
+                        info = kindAndHint | (newMerge & IRProgram::STRUCT_TARGET_MASK);
                     }
                 }
                 prog->structureInfo[writeIdx] = info;
@@ -1447,12 +1451,12 @@ void EliminateDeadCode(IRProgram* prog) {
                 if (prog->structureInfo) {
                     u32 info = prog->structureInfo[i];
                     if (info != 0) {
-                        u32 type = info & IRProgram::STRUCT_TYPE_MASK;
+                        u32 kindAndHint = info & ~IRProgram::STRUCT_TARGET_MASK;
                         u32 mergeInst = info & IRProgram::STRUCT_TARGET_MASK;
                         if (mergeInst < oldCount) {
                             u32 newMerge = indexRemap[mergeInst];
                             if (newMerge == 0xFFFFFFFF) newMerge = writeIdx + 1;
-                            info = type | (newMerge & IRProgram::STRUCT_TARGET_MASK);
+                            info = kindAndHint | (newMerge & IRProgram::STRUCT_TARGET_MASK);
                         }
                     }
                     prog->structureInfo[writeIdx] = info;

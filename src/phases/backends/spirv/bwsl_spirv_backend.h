@@ -231,8 +231,8 @@ struct SPIRVBuilder {
     u32* backEdgeTargets = nullptr;  // [blockCount] header block of a BACK_EDGE block
     bool* edgeEmitted = nullptr;
 
-    // Phi webs kept in Function variables for SPIRV-Cross (see
-    // PlanPhiVariables), in arena arrays. Empty unless usePhiVariables is set.
+    // Phi webs kept in Function variables for SPIRV-Cross, and webs merged
+    // at an @branch if (see PlanPhiVariables), in arena arrays.
     bool usePhiVariables = false;
     struct PhiVariable {
         u32 variableId;
@@ -241,6 +241,7 @@ struct SPIRVBuilder {
     struct PhiEdgeStore {
         u32 variableId;
         u16 value;
+        u32 elementPointerTypeId;  // 0: the variable is the value itself
     };
     u32* phiVariableIds = nullptr;       // [phiVariableIdCount] variable, 0: OpPhi
     u32 phiVariableIdCount = 0;
@@ -256,6 +257,9 @@ struct SPIRVBuilder {
     // used); 0 otherwise.
     u32* phiLoadVariables = nullptr;
     u32* phiLoadTypeIds = nullptr;
+    // [phiLoadCount] the pointer type of the variable's one element when it
+    // is a one-element array (an @branch merge), 0 to load the variable.
+    u32* phiLoadElementPointerTypeIds = nullptr;
     u32 phiLoadCount = 0;
 
     // ============= Debug Options =============
@@ -556,8 +560,15 @@ inline u32 SPIRVBuilder::GetSpirvId(u16 ir_register, bool readValue) {
     if (readValue && ir_register < phiLoadCount && phiLoadVariables[ir_register] != 0) {
         // A phi kept in a variable (see PlanPhiVariables) is read where it's
         // used, as glslang does, so SPIRV-Cross keeps loops in `for` form.
+        u32 pointer = phiLoadVariables[ir_register];
+        if (phiLoadElementPointerTypeIds[ir_register] != 0) {
+            u32 element = AllocateId();
+            Emit(spv::OpAccessChain, phiLoadElementPointerTypeIds[ir_register], element, pointer,
+                 GetIntConstantId(0));
+            pointer = element;
+        }
         u32 loaded = AllocateId();
-        Emit(spv::OpLoad, phiLoadTypeIds[ir_register], loaded, phiLoadVariables[ir_register]);
+        Emit(spv::OpLoad, phiLoadTypeIds[ir_register], loaded, pointer);
         return loaded;
     }
 

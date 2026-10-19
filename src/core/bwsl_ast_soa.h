@@ -116,6 +116,14 @@ struct BlockData {
     ArenaArray<NodeRef> statements;
 };
 
+// How an if statement asks to be compiled: `@branch` keeps a real branch,
+// `@flatten` evaluates both sides. None leaves it to the driver.
+enum class SelectionHint : u32 {
+    None = 0,
+    Branch = 1,
+    Flatten = 2,
+};
+
 // ArenaArray for NodeRef children
 struct NodeRefArray {
     ArenaArray<NodeRef> refs;
@@ -638,6 +646,10 @@ struct AST {
     ArenaArray<const char*> sourceFiles;
     NodeU32Map declarationSources;
 
+    // @branch / @flatten written on an if statement, keyed by the
+    // IF_STATEMENT node (a SelectionHint).
+    NodeU32Map selectionHints;
+
     // Named constant uses folded into LITERAL nodes by the parser.
     ArenaArray<FoldedConstantData> foldedConstants;
 
@@ -714,6 +726,7 @@ struct AST {
         sourceFiles.Init(arena, 4);
         typeAliases.Init(arena, 4);
         declarationSources.Init(arena, 64);
+        selectionHints.Init(arena, 16);
         foldedConstants.Init(arena, 8);
         typeQualifiers.Init(arena, 8);
     }
@@ -890,6 +903,16 @@ struct AST {
         if (ref.IsNull()) return nullptr;
         u32 entry = declarationSources.Find(ref.packed);
         return (entry == 0 || entry > sourceFiles.count) ? nullptr : sourceFiles[entry - 1];
+    }
+
+    void SetSelectionHint(NodeRef ref, SelectionHint hint) {
+        if (ref.IsNull() || hint == SelectionHint::None) return;
+        selectionHints.Set(arena, ref.packed, static_cast<u32>(hint));
+    }
+
+    SelectionHint GetSelectionHint(NodeRef ref) const {
+        return ref.IsNull() ? SelectionHint::None
+                            : static_cast<SelectionHint>(selectionHints.Find(ref.packed));
     }
 
     //==========================================================================
@@ -2234,6 +2257,7 @@ namespace ASTClone {
         }
 
         NodeRef newIf = ASTFactory::MakeIfStatement(ctx.ast, line, col);
+        ctx.ast->SetSelectionHint(newIf, ctx.ast->GetSelectionHint(ifRef));
 
         // Clone all statements (condition, then branch, optional else branch)
         for (NodeRef stmt : statements) {

@@ -20,6 +20,11 @@
   version.
 
 ### Language
+- `@branch if (...)` asks for a real branch, which a wave skips when none of
+  its lanes take it, and `@flatten if (...)` for both sides evaluated. They
+  set the SPIR-V selection control (`[branch]`/`[flatten]` in HLSL). For
+  drivers that ignore the hint, AMD's among them, `enforce-branch-hints`
+  also shapes the code so the branch stays.
 - `@bounds(...)` promises the range of an attribute, a scalar or vector
   resource, or a struct field: `@bounds(>0, <10) int count;`,
   `@bounds(>=0, <=1) float4 tint;`, or per component, as in

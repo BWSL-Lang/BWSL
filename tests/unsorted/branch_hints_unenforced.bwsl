@@ -1,0 +1,28 @@
+// branch_hints under --optimizations no-enforce-branch-hints, so
+// @branch only marks the selection DontFlatten.
+pipeline BranchHintsUnenforced {
+    pass "Main" {
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+        }
+        fragment {
+            float best = 1.0e9;
+            bool found = false;
+            for (int i = 0; i < 8; i++) {
+                float h = input.position.x - float(i);
+                @branch if (h > 0.0) {
+                    float t = sqrt(h);
+                    if (t > 0.001 && t < best) {
+                        best = t;
+                        found = true;
+                    }
+                }
+            }
+            float shade = 0.0;
+            @flatten if (input.position.y > 0.5) {
+                shade = 1.0;
+            }
+            output.color = float4(best, found ? 1.0 : 0.0, shade, 1.0);
+        }
+    }
+}

@@ -28,6 +28,7 @@ enum class OptimizationId : u8 {
     ARRAY_FILL_STORES,      // SPIR-V: an array filled element by element in order is one store
     GLES_CONST_TABLES,      // direct GLSL ES: a constant array gets its values where declared
     PHI_VARIABLES,          // SPIRV-Cross output: a variable carried through phis stays one variable
+    ENFORCE_BRANCH_HINTS,   // @branch keeps its branch on drivers that ignore DontFlatten (AMD)
     COUNT,
 };
 
@@ -57,6 +58,7 @@ inline constexpr OptimizationInfo OPTIMIZATIONS[] = {
     {OptimizationId::ARRAY_FILL_STORES, "array-fill-stores"},
     {OptimizationId::GLES_CONST_TABLES, "gles-const-tables"},
     {OptimizationId::PHI_VARIABLES, "phi-variables"},
+    {OptimizationId::ENFORCE_BRANCH_HINTS, "enforce-branch-hints"},
 };
 static_assert(sizeof(OPTIMIZATIONS) / sizeof(OPTIMIZATIONS[0]) == size_t(OptimizationId::COUNT),
               "every optimization needs a name");
@@ -79,6 +81,8 @@ struct GroupInfo {
 
 // PHI_VARIABLES is in no group: on its own it was 5% slower on NVIDIA's GL
 // compiler, and faster only with the struct split. Turn it on by name.
+// ENFORCE_BRANCH_HINTS is for AMD's compiler, which flattens an @branch if
+// anyway. It made NVIDIA's Vulkan output slightly faster too.
 inline constexpr u64 DEFAULT_SET = ALL & ~Bit(OptimizationId::PHI_VARIABLES);
 
 inline constexpr GroupInfo GROUPS[] = {

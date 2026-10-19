@@ -64,6 +64,19 @@ NodeRef Parser::ParseStatement() {
     if (Match(TokenType::AT)) {
         u32 decoHash = Utils::HashStr(stream->GetValue(previous).data(),
                                       static_cast<u16>(stream->GetLength(previous)));
+        if (decoHash == Utils::HashStr("branch") || decoHash == Utils::HashStr("flatten")) {
+            SelectionHint hint = decoHash == Utils::HashStr("branch") ? SelectionHint::Branch
+                                                                      : SelectionHint::Flatten;
+            if (!Check(TokenType::IF)) {
+                Error("@branch and @flatten can only decorate if statements");
+                return NodeRef::Null();
+            }
+            NodeRef stmt = ParseStatement();
+            if (stmt.IsValid() && stmt.Type() == ASTNodeType::IF_STATEMENT) {
+                ast->SetSelectionHint(stmt, hint);
+            }
+            return stmt;
+        }
         InterpolationMode interpolation = InterpolationMode::Default;
         InterpolationSampling sampling = InterpolationSampling::Center;
         if (decoHash == Utils::HashStr("flat")) {
@@ -73,7 +86,7 @@ NodeRef Parser::ParseStatement() {
         } else if (decoHash == Utils::HashStr("centroid")) {
             sampling = InterpolationSampling::Centroid;
         } else {
-            Error("Expected @flat, @noperspective or @centroid before output assignment");
+            Error("Expected @flat, @noperspective or @centroid before an output assignment, or @branch or @flatten before an if statement");
             return NodeRef::Null();
         }
 
