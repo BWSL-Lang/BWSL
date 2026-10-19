@@ -224,13 +224,34 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
                 float a = sqrt(-1.0) + log(0.0) + pow(-2.0, 0.5) + asin(2.0);
                 float b = smoothstep(1.0, 0.0, 0.5);
                 float3 n = normalize(float3(0.0));
-                uint high = first_bit_high(8u);
-                output.color = float4(a, b, float(high), 1.0) + float4(n, input.uv.x);
+                output.color = float4(a, b, 0.0, 1.0) + float4(n, input.uv.x);
             '''), "-glsl")
             glsl = (target / "constprop.frag").read_text(encoding="utf-8")
             body = glsl[glsl.index("void main"):]
-            for call in ("sqrt(", "log(", "pow(", "asin(", "smoothstep(", "normalize(", "findMSB("):
+            for call in ("sqrt(", "log(", "pow(", "asin(", "smoothstep(", "normalize("):
                 self.assertIn(call, body)
+
+        def test_bit_indices_fold(self):
+            # first_bit_high/low give the bit's index or -1 when there's none;
+            # for a negative int, the highest bit that differs from the sign (#189).
+            target = self.compile(shader('''
+                int h = int(first_bit_high(8u));     // 3
+                int hz = int(first_bit_high(0u));    // -1
+                int hs = first_bit_high(-8);         // 2
+                int hm = first_bit_high(-1);         // -1
+                int l = int(first_bit_low(12u));     // 2
+                int lz = first_bit_low(0);           // -1
+                int3 hv = first_bit_high(int3(-8, 0, 1024));
+                output.color = float4(float(h * 1000 + hs * 100 + l), float(hz + hm + lz),
+                                      float(hv.x + hv.y + hv.z), input.uv.x);
+            '''), "-glsl", "-wgsl", "-gles", "-gles-direct")
+            for name, folded in (("constprop.glsl.frag", "vec4(3202.0, -3.0, 11.0, v_uv.x)"),
+                                 ("constprop.gles.frag", "vec4(3202.0, -3.0, 11.0, "),
+                                 ("constprop.frag.wgsl", "vec4<f32>((3202.0f), (-3.0f), (11.0f), ")):
+                text = (target / name).read_text(encoding="utf-8")
+                self.assertIn(folded, text)
+                for call in ("findMSB(", "findLSB(", "bwsl_first_bit", "firstLeadingBit(", "firstTrailingBit("):
+                    self.assertNotIn(call, text)
 
         def test_loops_with_constant_inputs_fold(self):
             # A user function's loop, nested loops, and a loop whose bound is

@@ -84,6 +84,16 @@ def run_resource_remaining_suite(compiler: Path, output_dir: Path, verbose=False
     combined = run("all-gles-capability-exclusion", compute, ["-all"], artifact="*.metal")
     if "target omitted by -all" not in combined.get("output", ""):
         combined["errors"].append("-all omitted an unavailable target without explaining it")
+    # ldexp/modf route GLSL ES to the direct emitter, which must report the
+    # storage buffer instead of emitting a shader without its buffer accesses.
+    fallback = ROOT / "tests/unsorted/compute_ldexp_modf_storage.bwsl"
+    for flag in ("-gles", "-gles-direct"):
+        run("explicit" + flag + "-ldexp-modf-storage", fallback, [flag], "does not support storage buffers")
+    combined = run("all-gles-ldexp-modf-storage-exclusion", fallback, ["-all"], artifact="*.metal")
+    if "target omitted by -all: error: GLSL ES 300 does not support storage buffers" not in combined.get("output", ""):
+        combined["errors"].append("-all did not omit GLSL ES for the storage buffer")
+    if list((output / "all-gles-ldexp-modf-storage-exclusion").glob("*.gles.*")):
+        combined["errors"].append("-all wrote a GLSL ES shader for a storage-buffer program")
     wave = ROOT / "tests/equivalence/test_wave_ops.bwsl"
     run("explicit-glsl-subgroup-unavailable", wave, ["-glsl"], "only supported in Vulkan semantics")
     run("all-glsl-subgroup-exclusion", wave, ["-all"], artifact="*.hlsl")

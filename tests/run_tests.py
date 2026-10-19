@@ -706,6 +706,22 @@ TRANSLATION_EXPECTATION_TESTS = {
             "spirv_count_exactly": {"OpPhi": 6},
         },
     },
+    # Issue #189: first_bit_high is FindSMsb on int and FindUMsb on uint.
+    "intrinsics_bit_indices": {
+        "frag": {
+            "spirv_contains": ["OpBitCount", "FindSMsb", "FindUMsb", "FindILsb"],
+            "glsl_contains": ["bitCount(", "findMSB(", "findLSB("],
+            "hlsl_contains": ["countbits(", "firstbithigh(", "firstbitlow("],
+            "metal_contains": ["popcount(", "spvFindSMSB(", "spvFindUMSB(", "spvFindLSB("],
+        },
+    },
+    # Unsigned fields, including uint vector components, zero-extend.
+    "intrinsics_bitfield": {
+        "frag": {
+            "spirv_contains": ["OpBitReverse", "OpBitFieldSExtract", "OpBitFieldUExtract", "OpBitFieldInsert"],
+            "spirv_count_exactly": {"OpBitFieldUExtract": 2, "OpBitFieldSExtract": 2},
+        },
+    },
     "types_matrices": {
         "vert": {
             "ir_contains": ["MAT_CONSTRUCT", "COS", "SIN"],
