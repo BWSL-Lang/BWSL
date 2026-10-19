@@ -654,7 +654,13 @@ inline void IRLowering::LowerLoop(NodeRef ref) {
 inline void IRLowering::LowerSwitch(NodeRef ref) {
   const SwitchData &sw = ast->GetSwitch(ref);
 
-  auto GetCaseLiteralValue = [&](NodeRef valueRef, s32 *outVal) -> bool {
+  // Returns false for a label that isn't an integer, bool or enum constant;
+  // `outIsFloat` (if given) is then set when the label is a float constant.
+  auto GetCaseLiteralValue = [&](NodeRef valueRef, s32 *outVal,
+                                 bool *outIsFloat = nullptr) -> bool {
+    auto noteFloat = [&](LiteralValue::Type type) {
+      if (outIsFloat && type == LiteralValue::FLOAT) *outIsFloat = true;
+    };
     // Negative case labels arrive as unary negation over a literal.
     if (valueRef.Type() == ASTNodeType::UNARY_OP) {
       const UnaryOpData &unary = ast->GetUnaryOp(valueRef);
@@ -669,6 +675,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
           *outVal = -static_cast<s32>(lit.value.uintValue);
           return true;
         }
+        noteFloat(lit.value.type);
       }
       return false;
     }
@@ -686,6 +693,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
         *outVal = lit.value.boolValue ? 1 : 0;
         return true;
       default:
+        noteFloat(lit.value.type);
         return false;
       }
     }
@@ -709,6 +717,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
             *outVal = val.boolValue ? 1 : 0;
             return true;
           }
+          noteFloat(val.type);
         } else if (sym->kind == SymbolKind::VARIABLE) {
           const VariableData &varData = symbols->variables[sym->index];
           if (varData.isConst) {
@@ -725,6 +734,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
               *outVal = val.boolValue ? 1 : 0;
               return true;
             }
+            noteFloat(val.type);
           }
         }
       }
@@ -778,12 +788,10 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
       for (u32 v = 0; v < caseData.values.count; v++) {
         NodeRef valueRef = caseData.values[v];
         s32 caseVal = 0;
-        if (!GetCaseLiteralValue(valueRef, &caseVal)) {
-          bool isFloatLiteral =
-              valueRef.Type() == ASTNodeType::LITERAL &&
-              ast->GetLiteral(valueRef).value.type == LiteralValue::FLOAT;
+        bool isFloat = false;
+        if (!GetCaseLiteralValue(valueRef, &caseVal, &isFloat)) {
           ReportErrorAt(valueRef,
-                        isFloatLiteral
+                        isFloat
                             ? "Error: switch case values must be int, uint or "
                               "enum constants, got float\n"
                             : "Error: switch case values must be "

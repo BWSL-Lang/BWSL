@@ -316,6 +316,7 @@ ERROR_CASE_TESTS = {
     "switch_on_float.bwsl": "switch selector must be an int, uint or enum value, got float",
     "switch_on_runtime_bool.bwsl": "switch selector must be an int, uint or enum value, got bool",
     "switch_case_float_label.bwsl": "switch case values must be int, uint or enum constants, got float",
+    "switch_case_negative_float_label.bwsl": "switch case values must be int, uint or enum constants, got float",
     "variant_switch_duplicate_match.bwsl": "Duplicate switch case value",
     "user_function_wrong_arg_count.bwsl": "SPIR-V validation failed",
     "struct_as_varying.bwsl": "SPIR-V validation failed",
