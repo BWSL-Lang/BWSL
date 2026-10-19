@@ -93,7 +93,8 @@ struct AssignmentData {
     NodeRef value;
     InterpolationMode interpolation;
     bool isCompound;
-    u8 _pad[2];
+    InterpolationSampling sampling;
+    u8 _pad[1];
 };
 
 // Shader stage data
@@ -1293,14 +1294,16 @@ namespace ASTFactory {
 
     inline NodeRef MakeAssignment(AST* ast, NodeRef target, NodeRef value, u32 line = 0, u32 col = 0,
                                   InterpolationMode interpolation = InterpolationMode::Default,
-                                  bool isCompound = false) {
+                                  bool isCompound = false,
+                                  InterpolationSampling sampling = InterpolationSampling::Center) {
         u32 index = ast->assignments.count;
         AssignmentData data;
         data.target = target;
         data.value = value;
         data.interpolation = interpolation;
         data.isCompound = isCompound;
-        data._pad[0] = data._pad[1] = 0;
+        data.sampling = sampling;
+        data._pad[0] = 0;
         ast->assignments.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {
@@ -1323,7 +1326,8 @@ namespace ASTFactory {
         data.value = value;
         data.interpolation = InterpolationMode::Default;
         data.isCompound = false;
-        data._pad[0] = data._pad[1] = 0;
+        data.sampling = InterpolationSampling::Center;
+        data._pad[0] = 0;
         ast->assignments.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {
@@ -2195,7 +2199,8 @@ namespace ASTClone {
         NodeRef target = CloneNode(ctx, src.target);
         NodeRef value = CloneNode(ctx, src.value);
 
-        return ASTFactory::MakeAssignment(ctx.ast, target, value, line, col, src.interpolation, src.isCompound);
+        return ASTFactory::MakeAssignment(ctx.ast, target, value, line, col, src.interpolation, src.isCompound,
+                                          src.sampling);
     }
 
     // Clone a return statement (returns reuse AssignmentData with null target)

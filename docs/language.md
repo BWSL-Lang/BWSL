@@ -140,11 +140,22 @@ interpolation:
 vertex {
     @flat output.materialIndex = meta.materialIndex;
     @noperspective output.screenUV = uv;
+    @centroid output.atlasUV = tileOrigin + uv * tileSize;
+    @centroid @noperspective output.edgeUV = uv;
 }
 ```
 
-`@flat` and `@noperspective` apply only to user varyings, not built-ins such as
-`output.position`, `output.color`, or `output.depth`.
+`@centroid` matters only under MSAA. By default a varying is evaluated at the
+pixel center, even when the primitive covers only some of the pixel's samples
+and the center lies outside it; the value is then extrapolated past the vertex
+values. A `@centroid` varying is evaluated at a point the primitive covers, so
+atlas UVs stay inside their tile. Derivatives of a centroid varying, and the
+texture LOD computed from them, can be less accurate along triangle edges.
+`@centroid` combines with `@noperspective`, but not with `@flat`, and only
+applies to floating-point varyings.
+
+`@flat`, `@noperspective` and `@centroid` apply only to user varyings, not
+built-ins such as `output.position`, `output.color`, or `output.depth`.
 
 ## Resources
 

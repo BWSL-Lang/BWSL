@@ -2105,6 +2105,16 @@ static std::string BuildWGSLBindingsJson(const WGSL::WGSLBuilder& builder,
             } else {
                 json << "null";
             }
+            json << ", \"sampling\": ";
+            if (varying && builtin == WGSL::InterfaceBuiltin::None &&
+                static_cast<InterpolationMode>(table.interpolations[id]) != InterpolationMode::Flat) {
+                json << (static_cast<InterpolationSampling>(table.samplings[id]) ==
+                                 InterpolationSampling::Centroid
+                             ? "\"centroid\""
+                             : "\"center\"");
+            } else {
+                json << "null";
+            }
             json << "}";
         }
         json << "\n  ]";

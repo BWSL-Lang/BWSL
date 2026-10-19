@@ -211,6 +211,7 @@ namespace BWSL{
         {Utils::HashStr("cameraPosition"), "cameraPosition"},
         {Utils::HashStr("cbuffer"), "cbuffer"},
         {Utils::HashStr("ceil"), "ceil"},
+        {Utils::HashStr("centroid"), "centroid"},
         {Utils::HashStr("clamp"), "clamp"},
         {Utils::HashStr("color"), "color"},
         {Utils::HashStr("compressed"), "compressed"},

@@ -18,6 +18,11 @@ static const char* InterpolationQualifier(InterpolationMode interpolation) {
     }
 }
 
+// GLSL ES 3.00 orders the interpolation qualifier before `centroid in`/`out`.
+static const char* SamplingQualifier(InterpolationSampling sampling) {
+    return sampling == InterpolationSampling::Centroid ? "centroid " : "";
+}
+
 static bool UsesNoPerspectiveInterpolation(const IR::PassVaryingContext* varyings) {
     if (!varyings) {
         return false;
@@ -424,6 +429,7 @@ void GLESBuilder::EmitInputs() {
         if (varyings) {
             for (u32 i = 0; i < varyings->count; i++) {
                 out.Str(InterpolationQualifier(varyings->varyings[i].interpolation));
+                out.Str(SamplingQualifier(varyings->varyings[i].sampling));
                 out.Lit("in ");
                 EmitType(static_cast<u16>(varyings->varyings[i].type));
                 out.Chr(' ');
@@ -480,6 +486,7 @@ void GLESBuilder::EmitOutputs() {
         if (varyings) {
             for (u32 i = 0; i < varyings->count; i++) {
                 out.Str(InterpolationQualifier(varyings->varyings[i].interpolation));
+                out.Str(SamplingQualifier(varyings->varyings[i].sampling));
                 out.Lit("out ");
                 EmitType(static_cast<u16>(varyings->varyings[i].type));
                 out.Chr(' ');

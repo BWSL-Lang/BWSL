@@ -312,7 +312,9 @@ a sizing pass followed by one exact arena allocation.
 Vertex attributes retain their declared locations. Varying location is the
 logical varying slot minus `VARYING0`, so an unused varying cannot shift another
 stage's locations. Float varyings default to perspective interpolation;
-`@noperspective` maps to WGSL `linear, center`. Integer varyings become `flat` on
+`@noperspective` maps to WGSL `linear, center`. `@centroid` maps to
+`perspective, centroid`, or `linear, centroid` with `@noperspective`, and
+reflection reports it as `"sampling": "centroid"`. Integer varyings become `flat` on
 both sides, as required by [WGSL](https://www.w3.org/TR/WGSL/#interpolation).
 Integer linear interpolation is diagnosed. Vertex/instance indices and fragment
 coordinates use their WGSL builtins. Vertex position must be `float4` and written.

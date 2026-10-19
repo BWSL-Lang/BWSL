@@ -233,6 +233,7 @@ static void TestGraphicsInterfaces() {
     assert(fragment.builder.Initialize(&fragment.arena, &fragment.ir, nullptr, nullptr, ShaderStage::Fragment));
     fragment.Add(IR::OP_LOAD_INPUT, 0, CoreType::FLOAT2, 5);
     fragment.ir.inputInterpolations[5] = static_cast<u8>(InterpolationMode::NoPerspective);
+    fragment.ir.inputSamplings[5] = static_cast<u8>(InterpolationSampling::Centroid);
     fragment.Add(IR::OP_LOAD_INPUT, 1, CoreType::UINT, 3);
     fragment.Add(IR::OP_LOAD_INPUT, 2, CoreType::FLOAT4, BuiltinInputSlot::FRAG_COORD);
     fragment.Add(IR::OP_STORE_OUTPUT, 2, CoreType::VOID, OutputSlot::COLOR);
@@ -244,6 +245,7 @@ static void TestGraphicsInterfaces() {
     assert(fragment.builder.Emit());
     assert(fragment.builder.inputs.locations[0] == 3);
     assert(fragment.builder.inputs.interpolations[1] == static_cast<u8>(InterpolationMode::Flat));
+    assert(fragment.builder.Source().find("@interpolate(linear, centroid)") != std::string_view::npos);
     assert(fragment.builder.Source().find("let v3 = bwsl_output.f0;") != std::string_view::npos);
     assert(fragment.builder.Source().find("dpdx(") != std::string_view::npos);
 }
@@ -311,6 +313,13 @@ static void TestInvalidGraphicsInterfaces() {
     integerLinear.Add(IR::OP_LOAD_INPUT, 0, CoreType::UINT, 2);
     integerLinear.ir.inputInterpolations[2] = static_cast<u8>(InterpolationMode::NoPerspective);
     assert(!integerLinear.builder.Emit());
+
+    WGSLFixture integerCentroid;
+    assert(integerCentroid.builder.Initialize(&integerCentroid.arena, &integerCentroid.ir,
+                                             nullptr, nullptr, ShaderStage::Fragment));
+    integerCentroid.Add(IR::OP_LOAD_INPUT, 0, CoreType::UINT, 2);
+    integerCentroid.ir.inputSamplings[2] = static_cast<u8>(InterpolationSampling::Centroid);
+    assert(!integerCentroid.builder.Emit());
 
     WGSLFixture derivativeCompute;
     derivativeCompute.Add(IR::OP_LOAD_INPUT, 0, CoreType::UINT3, BuiltinInputSlot::GLOBAL_INVOCATION_ID);

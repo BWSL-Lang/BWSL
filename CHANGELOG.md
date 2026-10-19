@@ -25,6 +25,11 @@
   `@bounds(>=0, <=1) float4 tint;`, or per component, as in
   `@bounds(>0, -10<y<0) float4 offsets;`. A bounded component is never
   NaN. See "Value Bounds" in the language reference.
+- `@centroid` on a vertex output assignment evaluates the varying inside the
+  primitive under MSAA, so edge pixels don't extrapolate it past its vertex
+  values: `@centroid output.atlasUV = uv;`. It combines with
+  `@noperspective` but not `@flat`, and is emitted for SPIR-V, GLSL, GLSL ES,
+  HLSL, Metal and WGSL.
 - Vector `eval` values work in compile-time arithmetic: `+ - * /` and `%`
   between vectors of the same width or with a scalar on either side, bit
   operations on `int` and `uint` vectors, unary minus, swizzle reads such as

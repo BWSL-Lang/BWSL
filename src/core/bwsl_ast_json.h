@@ -161,6 +161,14 @@ inline const char* InterpolationModeToString(InterpolationMode mode) {
     }
 }
 
+inline const char* InterpolationSamplingToString(InterpolationSampling sampling) {
+    switch (sampling) {
+        case InterpolationSampling::Center: return "CENTER";
+        case InterpolationSampling::Centroid: return "CENTROID";
+        default: return "UNKNOWN";
+    }
+}
+
 inline const char* SpecialIdentifierToString(SpecialIdentifier kind) {
     switch (kind) {
         case SpecialIdentifier::NONE: return "NONE";
@@ -969,6 +977,8 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             AppendNodeField(json, first, "value", ast, node.value, depth);
             AppendStringField(json, first, "interpolation",
                               InterpolationModeToString(node.interpolation));
+            AppendStringField(json, first, "sampling",
+                              InterpolationSamplingToString(node.sampling));
             break;
         }
         case ASTNodeType::RETURN: {

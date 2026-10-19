@@ -239,9 +239,14 @@ ERROR_CASE_TESTS = {
     "eval_while_runtime_data.bwsl": "Eval while condition must be a compile-time value",
     "interpolation_decorator_builtin_output.bwsl": "interpolation decorators can only be used on vertex-to-fragment varyings",
     "interpolation_decorator_conflict.bwsl": "conflicting interpolation decorators for varying",
-    "interpolation_decorator_non_output.bwsl": "@flat and @noperspective can only decorate output assignments",
+    "interpolation_decorator_non_output.bwsl": "@flat, @noperspective and @centroid can only decorate output assignments",
     "interpolation_decorator_noperspective_int.bwsl": "@noperspective can only be used on floating-point varyings",
     "interpolation_decorator_stack_conflict.bwsl": "Conflicting interpolation decorators on output assignment",
+    "interpolation_decorator_centroid_flat.bwsl": "@centroid cannot be combined with @flat",
+    "interpolation_decorator_centroid_builtin_output.bwsl": "interpolation decorators can only be used on vertex-to-fragment varyings",
+    "interpolation_decorator_centroid_conflict.bwsl": "conflicting interpolation decorators for varying",
+    "interpolation_decorator_centroid_flat_conflict.bwsl": "conflicting interpolation decorators for varying",
+    "interpolation_decorator_centroid_int.bwsl": "@centroid can only be used on floating-point varyings",
     "undeclared_fragment_output.bwsl": "fragment output 'bloom' is not declared",
     "attributes_used_as_value.bwsl": "'attributes' cannot be used as a value",
     "missing_variable.bwsl": "Unknown identifier 'i_position'",
@@ -665,6 +670,12 @@ EQUIV_BACKENDS = ("spirv", "hlsl", "glsl")
 STAGE_SUFFIXES = ("vert", "frag", "comp")
 KNOWN_TEST_STEMS: set[str] = set()
 
+# Extra backends for translation expectations: "gles_*" keys then check the
+# direct GLES backend, and "wgsl_*" keys the native WGSL backend.
+TRANSLATION_EXTRA_ARGS = {
+    "interpolation_centroid": ("-gles-direct", "-wgsl"),
+}
+
 TRANSLATION_EXPECTATION_TESTS = {
     "struct_in_place_mutation": {
         "frag": {
@@ -723,6 +734,74 @@ TRANSLATION_EXPECTATION_TESTS = {
                 "noperspective in vec2 v_screenUV",
             ],
             "gles_not_contains": ["mediump"],
+        },
+    },
+    "interpolation_centroid": {
+        "vert": {
+            "spirv_contains": [
+                "OpDecorate %v_atlasUV Centroid",
+                "OpDecorate %v_screenUV Centroid",
+                "OpDecorate %v_screenUV NoPerspective",
+            ],
+            "spirv_not_contains": ["OpDecorate %v_plainUV Centroid"],
+            "hlsl_contains": [
+                "centroid float2 v_atlasUV : TEXCOORD0",
+                "noperspective centroid float2 v_screenUV : TEXCOORD1",
+                "noperspective centroid float v_shade : TEXCOORD2",
+            ],
+            "glsl_contains": [
+                "layout(location = 0) centroid out vec2 v_atlasUV",
+                "layout(location = 1) noperspective centroid out vec2 v_screenUV",
+                "layout(location = 3) out vec2 v_plainUV",
+            ],
+            "gles_contains": [
+                "#extension GL_NV_shader_noperspective_interpolation : require",
+                "\ncentroid out vec2 v_atlasUV;",
+                "noperspective centroid out vec2 v_screenUV;",
+                "noperspective centroid out float v_shade;",
+                "\nout vec2 v_plainUV;",
+            ],
+            "wgsl_contains": [
+                "@location(0) @interpolate(perspective, centroid)",
+                "@location(1) @interpolate(linear, centroid)",
+                "@location(2) @interpolate(linear, centroid)",
+            ],
+            "wgsl_not_contains": ["@location(3) @interpolate"],
+        },
+        "frag": {
+            "spirv_contains": [
+                "OpDecorate %v_atlasUV Centroid",
+                "OpDecorate %v_screenUV Centroid",
+                "OpDecorate %v_screenUV NoPerspective",
+            ],
+            "spirv_not_contains": ["OpDecorate %v_plainUV Centroid"],
+            "metal_contains": [
+                "float2 v_atlasUV [[user(locn0), centroid_perspective]]",
+                "float2 v_screenUV [[user(locn1), centroid_no_perspective]]",
+                "float v_shade [[user(locn2), centroid_no_perspective]]",
+                "float2 v_plainUV [[user(locn3)]]",
+            ],
+            "hlsl_contains": [
+                "centroid float2 v_atlasUV : TEXCOORD0",
+                "noperspective centroid float2 v_screenUV : TEXCOORD1",
+            ],
+            "glsl_contains": [
+                "layout(location = 0) centroid in vec2 v_atlasUV",
+                "layout(location = 1) noperspective centroid in vec2 v_screenUV",
+            ],
+            "gles_contains": [
+                "#extension GL_NV_shader_noperspective_interpolation : require",
+                "\ncentroid in vec2 v_atlasUV;",
+                "noperspective centroid in vec2 v_screenUV;",
+                "noperspective centroid in float v_shade;",
+                "\nin vec2 v_plainUV;",
+            ],
+            "wgsl_contains": [
+                "@location(0) @interpolate(perspective, centroid)",
+                "@location(1) @interpolate(linear, centroid)",
+                "@location(2) @interpolate(linear, centroid)",
+            ],
+            "wgsl_not_contains": ["@location(3) @interpolate"],
         },
     },
     # Issue #204: texture_size has one component per native dimension.
@@ -1572,7 +1651,7 @@ def check_translation_expectations(output_dir: Path, test_name: str,
     for stage, expectations in stage_expectations.items():
         texts: dict[str, str] = {}
 
-        for key in ("metal", "hlsl", "glsl", "gles"):
+        for key in ("metal", "hlsl", "glsl", "gles", "wgsl"):
             if any(name.startswith(f"{key}_") for name in expectations):
                 path, message = find_stage_file(output_dir, test_name, stage, key)
                 if path is None:
@@ -1596,6 +1675,7 @@ def check_translation_expectations(output_dir: Path, test_name: str,
             ("hlsl", "HLSL"),
             ("glsl", "GLSL"),
             ("gles", "GLES"),
+            ("wgsl", "WGSL"),
         ):
             if key not in texts:
                 continue
@@ -3057,6 +3137,7 @@ def main() -> int:
 
         if needs_internals:
             compile_args.append("-internals")
+        compile_args.extend(TRANSLATION_EXTRA_ARGS.get(test_name, ()))
 
         unsorted_tests.append({
             "file": test_file,

@@ -318,7 +318,8 @@ NodeRef Parser::CloneNodeWithParams(NodeRef node, const ParamSubstitution* subs,
             const AssignmentData& src = ast->GetAssignment(node);
             NodeRef target = CloneNodeWithParams(src.target, subs, subCount);
             NodeRef value = CloneNodeWithParams(src.value, subs, subCount);
-            return ASTFactory::MakeAssignment(ast, target, value, line, col, src.interpolation, src.isCompound);
+            return ASTFactory::MakeAssignment(ast, target, value, line, col, src.interpolation, src.isCompound,
+                                              src.sampling);
         }
 
         case ASTNodeType::BLOCK:

@@ -296,17 +296,31 @@ Vertex-stage varying writes may be decorated with interpolation qualifiers:
 vertex {
     @flat output.materialIndex = meta.materialIndex;
     @noperspective output.screenUV = uv;
+    @centroid output.atlasUV = atlasUV;
+    @centroid @noperspective output.edgeUV = uv;
 }
 ```
 
+`@flat` and `@noperspective` select the interpolation mode. `@centroid` selects
+where an interpolated varying is evaluated under multisampling: at a point
+inside both the pixel and the primitive instead of the pixel center.
+
 Current rules:
 
-- `@flat` and `@noperspective` may only decorate `output.*` assignments.
+- `@flat`, `@noperspective` and `@centroid` may only decorate `output.*`
+  assignments.
 - The decorated output must be a vertex-to-fragment varying, not a built-in
   output such as `output.position`.
-- Later writes to the same varying may omit the qualifier, but may not specify a
-  conflicting qualifier.
-- `@noperspective` is only valid for floating-point scalar/vector varyings.
+- Later writes to the same varying may omit the qualifiers, but a write that
+  specifies qualifiers must specify the same set as earlier decorated writes.
+- `@noperspective` and `@centroid` are only valid for floating-point
+  scalar/vector varyings.
+- `@centroid` may be combined with `@noperspective`, but not with `@flat`.
+
+| Qualifiers | SPIR-V | GLSL / GLSL ES | HLSL | Metal | WGSL |
+| --- | --- | --- | --- | --- | --- |
+| `@centroid` | `Centroid` | `centroid` | `centroid` | `centroid_perspective` | `@interpolate(perspective, centroid)` |
+| `@centroid @noperspective` | `Centroid`, `NoPerspective` | `noperspective centroid` | `noperspective centroid` | `centroid_no_perspective` | `@interpolate(linear, centroid)` |
 
 ## Resources
 
