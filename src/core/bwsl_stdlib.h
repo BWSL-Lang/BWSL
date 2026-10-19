@@ -5,6 +5,7 @@
 #include "bwsl_types.h"
 #include "bwsl_utils.h"
 #include <array>
+#include <cstdio>
 #include "SPIRV-Headers/include/spirv/1.2/GLSL.std.450.h"
 // Include the unified definitions and opcode result metadata together. The
 // unity build reaches this header before the SPIR-V backend.
@@ -651,6 +652,53 @@ inline bool IsValidForStage(const IntrinsicData* data, ShaderStage stage) {
     }
     if (data->flags & IntrinsicFlags::VERTEX_ONLY) {
         return stage == ShaderStage::Vertex;
+    }
+    return true;
+}
+
+// Implicit-LOD sampling and screen-space derivatives are computed across the
+// fragment stage's pixel quads. Vertex and compute stages have none, and
+// SPIR-V only allows these instructions in fragment entry points. Writes the
+// diagnostic for calling `id` in `stage` to `buffer` and returns true, or
+// returns false when the intrinsic is available in that stage.
+inline bool FormatDerivativeStageError(Intrinsic id, ShaderStage stage,
+                                       char* buffer, size_t size) {
+    if (stage == ShaderStage::Fragment) return false;
+    const char* name = nullptr;
+    const char* explicitLod = nullptr; // Replacement taking an explicit LOD.
+    bool isDerivative = false;
+    switch (id) {
+    case Intrinsic::SAMPLE:             name = "sample"; explicitLod = "sample_lod"; break;
+    case Intrinsic::SAMPLE_BIAS:        name = "sample_bias"; explicitLod = "sample_lod"; break;
+    case Intrinsic::SAMPLE_OFFSET:      name = "sample_offset"; explicitLod = "sample_lod_offset"; break;
+    case Intrinsic::SAMPLE_BIAS_OFFSET: name = "sample_bias_offset"; explicitLod = "sample_lod_offset"; break;
+    case Intrinsic::SAMPLE_CMP:         name = "sample_cmp"; break;
+    case Intrinsic::DDX:                name = "ddx"; isDerivative = true; break;
+    case Intrinsic::DDY:                name = "ddy"; isDerivative = true; break;
+    case Intrinsic::DDX_FINE:           name = "ddx_fine"; isDerivative = true; break;
+    case Intrinsic::DDY_FINE:           name = "ddy_fine"; isDerivative = true; break;
+    case Intrinsic::DDX_COARSE:         name = "ddx_coarse"; isDerivative = true; break;
+    case Intrinsic::DDY_COARSE:         name = "ddy_coarse"; isDerivative = true; break;
+    case Intrinsic::FWIDTH:             name = "fwidth"; isDerivative = true; break;
+    case Intrinsic::FWIDTH_FINE:        name = "fwidth_fine"; isDerivative = true; break;
+    case Intrinsic::FWIDTH_COARSE:      name = "fwidth_coarse"; isDerivative = true; break;
+    default: return false;
+    }
+    const char* stageName = stage == ShaderStage::Vertex ? "vertex" : "compute";
+    if (isDerivative) {
+        snprintf(buffer, size,
+                 "%s() computes screen-space derivatives, which are only "
+                 "available in fragment shaders, not %s shaders",
+                 name, stageName);
+    } else if (explicitLod) {
+        snprintf(buffer, size,
+                 "%s() uses implicit derivatives and is not available in %s "
+                 "shaders; use %s() with an explicit LOD",
+                 name, stageName, explicitLod);
+    } else {
+        snprintf(buffer, size,
+                 "%s() uses implicit derivatives and is not available in %s shaders",
+                 name, stageName);
     }
     return true;
 }

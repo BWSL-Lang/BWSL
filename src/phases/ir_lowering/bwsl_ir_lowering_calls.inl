@@ -711,6 +711,16 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
     Intrinsic intrinsic =
         static_cast<Intrinsic>(StdLib::INTRINSICS[call.intrinsicIndex].enumIndex);
 
+    // The parser checks stage bodies; this also covers helper functions,
+    // whose stage is only known once a stage calls them.
+    char stageMsg[256];
+    if (StdLib::FormatDerivativeStageError(intrinsic, currentStage, stageMsg,
+                                           sizeof(stageMsg))) {
+      std::string error = std::string("Error: ") + stageMsg + "\n";
+      ReportErrorAt(ref, error.c_str());
+      return 0;
+    }
+
     OpCode op = OP_NOP;
 
     switch (intrinsic) {

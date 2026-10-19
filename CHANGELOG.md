@@ -77,6 +77,15 @@
   16384 distinct float constants is a source error.
 
 ### Diagnostics
+- `sample`, `sample_offset` and `sample_cmp` in a compute stage are a source
+  error that recommends `sample_lod` or `sample_lod_offset`; they previously
+  failed SPIR-V validation. `sample_offset` in a vertex stage is reported the
+  same way. `sample_bias` and the derivative intrinsics (`ddx`, `ddy`,
+  `fwidth` and their fine and coarse forms) outside fragment stages get a
+  specific message instead of "Intrinsic not available in this shader stage".
+  Helper functions are now checked against the stage that calls them, so a
+  helper using `sample()` or `ddx()` called from a vertex or compute stage is
+  a source error rather than a SPIR-V validation failure.
 - Ternary arms of different types, such as `c ? float3(1.0) : float2(1.0)`,
   are a source error. They previously failed SPIR-V validation.
 - `select(false_value, true_value, condition)` reports a source error when
