@@ -691,24 +691,25 @@ NodeRef Parser::ParseFunctionCall(NodeRef function) {
 
         const auto& intrinsicData = StdLib::INTRINSICS[ast->GetFunctionCall(call).intrinsicIndex];
 
+        // Implicit-LOD sampling and derivatives need fragment quads. Outside
+        // a stage body the stage isn't known yet; lowering checks helper
+        // functions against the stage that calls them.
+        {
+            char msg[256];
+            if (inShaderStage &&
+                StdLib::FormatDerivativeStageError(
+                    static_cast<StdLib::Intrinsic>(intrinsicData.enumIndex),
+                    currentShaderStage, msg, sizeof(msg))) {
+                ErrorAtPrevious(msg);
+                Consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
+                return call;
+            }
+        }
+
         if (!StdLib::IsValidForStage(&intrinsicData, currentShaderStage)) {
             ErrorAtPrevious("Intrinsic not available in this shader stage");
             Consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
             return call;
-        }
-
-        // Implicit-LOD sampling needs derivatives, which vertex stages don't
-        // have; SPIR-V restricts OpImageSampleImplicitLod accordingly.
-        {
-            StdLib::Intrinsic intrinsicId =
-                static_cast<StdLib::Intrinsic>(intrinsicData.enumIndex);
-            if (currentShaderStage == ShaderStage::Vertex &&
-                (intrinsicId == StdLib::Intrinsic::SAMPLE ||
-                 intrinsicId == StdLib::Intrinsic::SAMPLE_CMP)) {
-                ErrorAtPrevious("sample() uses implicit derivatives and is not available in vertex shaders; use sample_lod() with an explicit LOD");
-                Consume(TokenType::RIGHT_PAREN, "Expected ')' after arguments");
-                return call;
-            }
         }
 
         // Validate argument count
@@ -838,6 +839,28 @@ NodeRef Parser::ParseArrayAccess(NodeRef array) {
     return FlattenMultiDimArrayAccess(access);
 }
 
+void Parser::BindArrayShape(u32 nameHash, const std::vector<u32>& dims) {
+    while (!arrayShapeBindings.empty() &&
+           !SymbolTable::IsScopeOpen(&symbolTable, arrayShapeBindings.back().scopeLevel,
+                                     arrayShapeBindings.back().scopeSerial)) {
+        arrayShapeBindings.pop_back();
+    }
+    arrayShapeBindings.push_back({nameHash, symbolTable.currentScope,
+                                  symbolTable.scopeSerials[symbolTable.currentScope], dims});
+}
+
+const std::vector<u32>* Parser::FindMultiDimArrayDims(u32 nameHash) const {
+    for (size_t i = arrayShapeBindings.size(); i > 0; --i) {
+        const ArrayShapeBinding& binding = arrayShapeBindings[i - 1];
+        if (binding.nameHash != nameHash ||
+            !SymbolTable::IsScopeOpen(&symbolTable, binding.scopeLevel, binding.scopeSerial)) {
+            continue;
+        }
+        return binding.dims.size() > 1 ? &binding.dims : nullptr;
+    }
+    return nullptr;
+}
+
 NodeRef Parser::FlattenMultiDimArrayAccess(NodeRef access) {
     if (access.Type() != ASTNodeType::ARRAY_ACCESS) {
         return access;
@@ -856,14 +879,13 @@ NodeRef Parser::FlattenMultiDimArrayAccess(NodeRef access) {
         return access;
     }
 
-    u32 baseHash = ast->GetIdentifier(base).name.nameHash;
-    auto it = multiDimArrayDims.find(baseHash);
-    if (it == multiDimArrayDims.end()) {
+    const std::vector<u32>* found = FindMultiDimArrayDims(ast->GetIdentifier(base).name.nameHash);
+    if (!found) {
         return access;
     }
 
-    const std::vector<u32>& dims = it->second;
-    if (dims.size() <= 1 || indices.size() != dims.size()) {
+    const std::vector<u32>& dims = *found;
+    if (indices.size() != dims.size()) {
         return access;
     }
 
@@ -876,7 +898,7 @@ NodeRef Parser::FlattenMultiDimArrayAccess(NodeRef access) {
         flatIndex = ASTFactory::MakeBinaryOp(ast, BinaryOpType::ADD, mul, indices[i], 0, 0);
     }
 
-    return ASTFactory::MakeArrayAccess(ast, base, flatIndex, 0, 0);
+    return ASTFactory::MakeArrayAccess(ast, base, flatIndex, 0, 0, static_cast<u8>(dims.size()));
 }
 
 } // namespace BWSL

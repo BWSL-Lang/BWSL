@@ -1,0 +1,7 @@
+// Error case (#212): BwslFrexpResult is the built-in result type of frexp, so a
+// user struct can't take its name (lowering resolves structs by name, and the
+// call would pick up the user's layout).
+pipeline BuiltinResultRedeclared {
+    struct BwslFrexpResult { float mantissa; int exponent; }
+    pass "Compute" { compute "Main" [1, 1, 1] { float x = frexp(2.0).mantissa; } }
+}

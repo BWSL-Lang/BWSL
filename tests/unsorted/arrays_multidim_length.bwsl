@@ -1,0 +1,49 @@
+// Test: `.length` on multi-dimensional arrays (#208)
+// Tests: the outer dimension for the array itself, the next dimension for a
+//        partly indexed array (constant or dynamic index), 3-D arrays, a
+//        struct field named `length` on a fully indexed array of structs,
+//        and a multi-dimensional function parameter
+
+pipeline ArraysMultidimLength {
+    struct Item {
+        int length;
+    }
+
+    sumGrid :: (float[2][3] g) -> float {
+        float s = 0.0;
+        for (i in 0..g.length) {
+            for (j in 0..g[i].length) {
+                s += g[i][j];
+            }
+        }
+        return s;
+    }
+
+    resources { data: buffer<int> }
+    pass "Main" {
+        use resources { data }
+        compute "Main" [1, 1, 1] {
+            int k = resources.data[8];
+
+            float[2][3] grid;
+            for (i in 0..grid.length) {
+                for (j in 0..grid[i].length) {
+                    grid[i][j] = float(i * 10 + j);
+                }
+            }
+
+            int[2][3][4] cube;
+            Item[2][3] items;
+            items[1][k].length = 7;
+
+            resources.data[0] = grid.length * 1000;
+            resources.data[1] = grid[0].length * 1000;
+            resources.data[2] = grid[k].length * 1000;
+            resources.data[3] = cube.length * 1000;
+            resources.data[4] = cube[1].length * 1000;
+            resources.data[5] = cube[k][1].length * 1000;
+            resources.data[6] = items[k].length * 1000 + items[1][k].length;
+            resources.data[7] = int(sumGrid(grid));
+        }
+    }
+}

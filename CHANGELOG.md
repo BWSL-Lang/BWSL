@@ -26,10 +26,19 @@
   too. `uint` scalar arithmetic in eval code now works as well.
 - Module constant initializers can use vector arithmetic and swizzles, as in
   `const float2 SOUTH = NORTH * -1.0;`.
+- A pipeline-scope `const` can call a pipeline `eval` function, as in
+  `const float AREA = circleArea(2.0);`. The call is evaluated once and
+  every pass sees the folded value. An eval call whose arguments aren't
+  compile-time values is reported at the declaration.
 - Float `%` with a negative operand now gives the same result at compile
   time as at runtime. `eval` code and `const` initializers truncated, so
   `-7.5 % 2.0` was `-1.5` there but `0.5` in runtime code; both now give
   `0.5`, the sign of the divisor, like `mod()`. `fmod()` still truncates.
+- `BwslFrexpResult` and `BwslModfResult`, the structs `frexp` and `modf`
+  return, can be named as types again: locals, arrays, parameters, return
+  types, struct fields and constructors. Since v0.10 they were rejected with
+  "Unknown type". A user struct can't take either name, and reading a field
+  they don't have is a source error.
 
 ### Backends
 - Experimental native WGSL output is available with `-wgsl` for compute,
@@ -37,6 +46,9 @@
   uniforms and sampled textures. `-bindings` emits WebGPU binding metadata.
   WGSL-only compilation bypasses SPIR-V; request `-spv` or another target
   alongside `-wgsl` to generate both. `-all` keeps its existing targets.
+  Texture arrays (`texture2D[N]` and the other sampled kinds) bind each
+  element as its own WGSL texture, reported per element in the bindings
+  metadata with `arrayLength` and `arrayIndex`.
 - Constant values are propagated through the whole shader, including across
   branches, loops and inlined functions. Arithmetic, comparisons and
   conversions on constants are folded, `x && true`, `x || false` and their
@@ -124,6 +136,15 @@
   GLSL ES target with a warning.
 
 ### Diagnostics
+- `sample`, `sample_offset` and `sample_cmp` in a compute stage are a source
+  error that recommends `sample_lod` or `sample_lod_offset`; they previously
+  failed SPIR-V validation. `sample_offset` in a vertex stage is reported the
+  same way. `sample_bias` and the derivative intrinsics (`ddx`, `ddy`,
+  `fwidth` and their fine and coarse forms) outside fragment stages get a
+  specific message instead of "Intrinsic not available in this shader stage".
+  Helper functions are now checked against the stage that calls them, so a
+  helper using `sample()` or `ddx()` called from a vertex or compute stage is
+  a source error rather than a SPIR-V validation failure.
 - Ternary arms of different types, such as `c ? float3(1.0) : float2(1.0)`,
   are a source error. They previously failed SPIR-V validation.
 - `select(false_value, true_value, condition)` reports a source error when
@@ -133,8 +154,16 @@
   first, and a condition of the wrong width previously failed SPIR-V
   validation; a numeric condition with matching values compiled as
   `condition != 0` (see Breaking changes).
+- A `switch` on a `float` or runtime `bool` selector, or with a `float` case
+  label, is a source error at the selector or label. The selector previously
+  failed SPIR-V validation, and a `float` label was reported without a
+  location. A `bool` variant selector still works, because the switch is
+  reduced to one arm at compile time.
 
 ### AST JSON
+- `frexp` and `modf` calls and variables of their result types are typed as
+  `builtin:type:BwslFrexpResult` / `builtin:type:BwslModfResult`, and their
+  field reads have `member` edges.
 - A call that passes a struct resource or an enum variant directly, such as
   `read(resources.data)` or `weight(variants.quality)`, now has its `call`
   edge in `referenceIndex.references`.
@@ -186,6 +215,13 @@
 - Vertex attributes beyond the supported 16 slots produce a source error.
 - `.length` works on local arrays and array function parameters. It was
   previously rejected as an invalid swizzle.
+- `.length` on a multi-dimensional array is the outer dimension, and on a
+  partly indexed one the next dimension: for `float[2][3] grid`,
+  `grid.length` is 2 and `grid[i].length` is 3. Previously `grid.length` was
+  the flattened element count, 6, and `grid[i].length` was rejected as an
+  invalid swizzle. Multi-dimensional function parameters, e.g.
+  `(float[2][3] g)`, can also be indexed as `g[i][j]`; previously such reads
+  were undefined.
 - `min` and `max` with more than two arguments reduce over all of them, up
   to 16. Previously only the first two were used and the rest were
   silently dropped. More than 16 arguments is a source error.

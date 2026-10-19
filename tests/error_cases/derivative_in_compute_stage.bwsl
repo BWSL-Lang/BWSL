@@ -1,0 +1,15 @@
+// Error case: screen-space derivative intrinsics are fragment-only.
+pipeline DerivativeInComputeStage {
+    resources {
+        data: buffer<float>
+    }
+
+    pass "Main" {
+        use resources { data }
+
+        compute "Main" [64, 1, 1] {
+            uint id = input.global_id.x;
+            resources.data[id] = fwidth(resources.data[id]);
+        }
+    }
+}

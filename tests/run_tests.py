@@ -195,6 +195,8 @@ ERROR_CASE_TESTS = {
     "intrinsic_module_function_name.bwsl": "reserved for a built-in intrinsic",
     "intrinsic_struct_method_name.bwsl": "reserved for a built-in intrinsic",
     "intrinsic_enum_method_name.bwsl": "reserved for a built-in intrinsic",
+    "builtin_result_struct_redeclared.bwsl": "Struct name 'BwslFrexpResult' is reserved for a built-in type",
+    "builtin_result_unknown_field.bwsl": "Unknown field 'fraction' on type 'BwslFrexpResult'",
     "attribute_capacity.bwsl": "supported limit of 16 attributes",
     "array_negative_remainder_index.bwsl": "out of bounds",
     'function_void_return_value.bwsl': 'Void function cannot return a value',
@@ -298,7 +300,9 @@ ERROR_CASE_TESTS = {
     "use_before_declaration.bwsl": "Unknown identifier 'lateVar'",
     "unknown_function_call.bwsl": "Unknown function 'notAFunction'",
     "mutual_recursion.bwsl": "recursion is not supported",
-    "derivative_in_vertex_stage.bwsl": "Intrinsic not available in this shader stage",
+    "derivative_in_vertex_stage.bwsl": "ddx() computes screen-space derivatives, which are only available in fragment shaders, not vertex shaders",
+    "derivative_in_compute_stage.bwsl": "fwidth() computes screen-space derivatives, which are only available in fragment shaders, not compute shaders",
+    "derivative_in_helper_called_from_vertex.bwsl": "ddy() computes screen-space derivatives, which are only available in fragment shaders, not vertex shaders",
     "pipeline_scope_mutable_var.bwsl": "Expected 'import', 'using', 'attributes', 'resources'",
     "keyword_as_variable_name.bwsl": "'pass' is a keyword and cannot be used as a variable name",
     "overload_no_viable_match.bwsl": "Function not found: pickone",
@@ -313,7 +317,10 @@ ERROR_CASE_TESTS = {
     "unknown_enum_variant.bwsl": "Unknown enum variant 'Missing'",
     "array_size_negative.bwsl": "Expected array size",
     "discard_in_vertex.bwsl": "SPIR-V validation failed",
-    "switch_on_float.bwsl": "SPIR-V validation failed",
+    "switch_on_float.bwsl": "switch selector must be an int, uint or enum value, got float",
+    "switch_on_runtime_bool.bwsl": "switch selector must be an int, uint or enum value, got bool",
+    "switch_case_float_label.bwsl": "switch case values must be int, uint or enum constants, got float",
+    "switch_case_negative_float_label.bwsl": "switch case values must be int, uint or enum constants, got float",
     "variant_switch_duplicate_match.bwsl": "Duplicate switch case value",
     "user_function_wrong_arg_count.bwsl": "SPIR-V validation failed",
     "struct_as_varying.bwsl": "SPIR-V validation failed",
@@ -334,6 +341,10 @@ ERROR_CASE_TESTS = {
     "fragment_reads_attribute.bwsl": "Vertex attributes cannot be read in a fragment stage",
     "varying_type_conflict.bwsl": "conflicting types for stage output 'uv': first assigned as float2, now assigned float3",
     "sample_implicit_lod_vertex.bwsl": "sample() uses implicit derivatives and is not available in vertex shaders",
+    "sample_implicit_lod_compute.bwsl": "sample() uses implicit derivatives and is not available in compute shaders; use sample_lod() with an explicit LOD",
+    "sample_offset_implicit_lod_compute.bwsl": "sample_offset() uses implicit derivatives and is not available in compute shaders; use sample_lod_offset() with an explicit LOD",
+    "sample_in_helper_called_from_compute.bwsl": "sample() uses implicit derivatives and is not available in compute shaders",
+    "sample_texture_array_in_helper_called_from_compute.bwsl": "sample() uses implicit derivatives and is not available in compute shaders",
     "vec_compare_to_scalar_bool.bwsl": "cannot assign a vector comparison result to a scalar bool",
     "pointer_function_param.bwsl": "Pointer-typed function parameters are not supported",
     "swizzle_too_long.bwsl": "invalid swizzle - swizzles use 1-4 components",
@@ -369,6 +380,7 @@ ERROR_CASE_TESTS = {
     "eval_function_return_type.bwsl": "Type mismatch in eval function return",
     "eval_vector_swizzle_store_duplicate.bwsl": "Invalid compile-time swizzle assignment",
     "eval_vector_width_mismatch.bwsl": "Compile-time assignment value is not a compile-time value",
+    "pipeline_const_eval_call_runtime_arg.bwsl": "Pipeline constant 'AREA' calls eval function 'circleArea' with arguments that are not compile-time values",
     "eval_vector_constructor_empty.bwsl": "Compile-time declaration initializer is not a compile-time value",
     "eval_vector_constructor_few.bwsl": "Compile-time declaration initializer is not a compile-time value",
     "eval_vector_constructor_many.bwsl": "Compile-time declaration initializer is not a compile-time value",
@@ -440,6 +452,18 @@ ERROR_CASE_FORBIDDEN_OUTPUT = {
     # An unresolved call has no type; the enclosing float4(...) must not also
     # report a component-count error for it.
     "texture_param_type_mismatch.bwsl": ["vector constructor expects"],
+}
+
+# Exact error counts, for cases where a single source mistake must not be
+# reported more than once.
+ERROR_CASE_EXPECTED_ERROR_COUNTS = {
+    # A dynamic texture array call expands to one call per element; the stage
+    # error must be reported once, not once per element.
+    "sample_texture_array_in_helper_called_from_compute.bwsl": 1,
+    # The rejected call's result keeps its normal type, so returning it from
+    # the helper doesn't add an implicit-conversion error.
+    "sample_in_helper_called_from_compute.bwsl": 1,
+    "derivative_in_helper_called_from_vertex.bwsl": 1,
 }
 
 def diagnostic_output_contains(output: str, expected: str) -> bool:
@@ -594,6 +618,26 @@ AST_JSON_REFERENCE_TESTS = {
             {"to": "builtin:type:float2", "role": "type", "from_prefix": "VARIABLE_DECL:"},
         ],
     },
+    "builtin_result_types": {
+        "symbols": [
+            {
+                "match": {"kind": "struct", "name": "BwslModfResult"},
+                "expect": {"id": "builtin:type:BwslModfResult", "owner": "builtin"},
+            },
+            {
+                "match": {"kind": "struct-field", "name": "mantissa"},
+                "expect": {"id": "builtin:type:BwslFrexpResult/field:mantissa",
+                           "owner": "builtin:type:BwslFrexpResult", "type": "float"},
+            },
+        ],
+        "references": [
+            {"to": "FUNCTION:0", "role": "call", "from_prefix": "FUNCTION_CALL:"},
+            {"to": "builtin:type:BwslModfResult", "role": "construct", "from_prefix": "FUNCTION_CALL:"},
+            {"to": "builtin:type:BwslModfResult", "role": "type", "from_prefix": "FUNCTION:0/parameter:"},
+            {"to": "builtin:type:BwslModfResult/field:whole", "role": "member", "from_prefix": "MEMBER_ACCESS:"},
+            {"to": "builtin:type:BwslFrexpResult/field:mantissa", "role": "member", "from_prefix": "MEMBER_ACCESS:"},
+        ],
+    },
 }
 
 FORBIDDEN_SOURCE_ALIAS_NAMES = (
@@ -691,6 +735,19 @@ TRANSLATION_EXPECTATION_TESTS = {
                 "_m0[0] = ivec4(-3, 3, -4, 7);",
                 "_m0[1] = ivec4(-1, 1, -2, -24);",
                 "_m0[0] = uvec4(7u, 11u, 2u, 3u);",
+            ],
+        },
+    },
+    "pipeline_const_eval_call": {
+        "comp": {
+            "glsl_contains": [
+                "_m0[0] = 4.5;",
+                "_m0[1] = 9.0;",
+                "7.5 + ",
+                "_m0[5] = 18.0;",
+                "_m0[6] = 9.25;",
+                "_m0[7] = 40.5;",
+                "_m0[8] = 30.0;",
             ],
         },
     },
@@ -832,6 +889,32 @@ TRANSLATION_EXPECTATION_TESTS = {
         "frag": {
             "ir_contains": ["XOR", "SHR", "IMUL", "NORMALIZE", "SIN", "COS"],
             "hlsl_contains": ["normalize("],
+        },
+    },
+    # #208: `.length` on a multi-dimensional array is the outer dimension and
+    # on a partly indexed one the next dimension, not the flattened count.
+    "arrays_multidim_length": {
+        "comp": {
+            "glsl_contains": [
+                "_m0[0] = 2000;",
+                "_m0[1] = 3000;",
+                "_m0[2] = 3000;",
+                "_m0[3] = 2000;",
+                "_m0[4] = 3000;",
+                "_m0[5] = 4000;",
+                "_m0[6] = 3000 + ",
+                "< 2;",
+                "< 3;",
+            ],
+            "glsl_not_contains": ["6000", "24000", "< 6;"],
+        },
+    },
+    # Shapes are scoped: once the inner `float[4][5] g` ends, `g[1][2]` uses
+    # the outer stride 3, not 5.
+    "arrays_multidim_shadowing": {
+        "comp": {
+            "glsl_contains": ["(1 * int(3u)) + 2", "(3 * int(5u)) + 4"],
+            "glsl_not_contains": ["(1 * int(5u)) + 2"],
         },
     },
     "modules_pbr_lighting": {
@@ -3431,6 +3514,14 @@ def main() -> int:
             if forbidden_output:
                 print(f"[{RED}FAIL{NC}] error_cases/{test_file.stem}")
                 print(f"       Error: expected diagnostic output not to include {forbidden_output}, got: {result.stdout.strip()}")
+                failed += 1
+                continue
+
+            expected_count = ERROR_CASE_EXPECTED_ERROR_COUNTS.get(test_file.name)
+            actual_count = result.doc.get("errorCount") if result.doc else None
+            if expected_count is not None and actual_count != expected_count:
+                print(f"[{RED}FAIL{NC}] error_cases/{test_file.stem}")
+                print(f"       Error: expected {expected_count} error(s), got {actual_count}: {result.stdout.strip()}")
                 failed += 1
                 continue
 

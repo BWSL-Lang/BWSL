@@ -148,7 +148,9 @@ bool WGSLBuilder::PrepareAdditionalResources() {
         if (symbols != nullptr) {
             for (u32 index = 0; index < symbols->resources.count; ++index) {
                 const ResourceData& declaration = symbols->resources[index];
-                if (declaration.bindingIndex != slot) {
+                // Texture array element i occupies slot bindingIndex + i.
+                if (slot < declaration.bindingIndex ||
+                    slot - declaration.bindingIndex >= GetResourceSlotCount(declaration)) {
                     continue;
                 }
                 if (declaration.type == ResourceBinding::UniformBuffer) {
@@ -185,13 +187,20 @@ bool WGSLBuilder::PrepareAdditionalResources() {
                 type != CoreType::TEXTURECUBE && type != CoreType::TEXTURE2DARRAY) {
                 return Fail("WGSL supports sampled 2D, 3D, cube and 2D-array textures");
             }
-            if ((depthMask & (1u << slot)) && type == CoreType::TEXTURE3D) {
+            // Texture array elements are separate WGSL bindings, but one
+            // BWSL resource: a comparison on any element makes all of them
+            // depth textures, as the other backends' shared array type does.
+            const u32 first = texture->bindingIndex;
+            const u32 count = GetResourceSlotCount(*texture);
+            const u32 elements = count >= 32 ? ~0u : ((1u << count) - 1) << first;
+            const bool depth = (depthMask & elements) != 0;
+            if (depth && type == CoreType::TEXTURE3D) {
                 return Fail("WGSL has no 3D depth texture type");
             }
             textureForSlot[slot] = textureId;
             textures.types[textureId] = static_cast<u16>(type);
             textures.slots[textureId] = slot;
-            textures.depth[textureId] = (depthMask >> slot) & 1;
+            textures.depth[textureId] = depth;
             ++textureId;
         }
     }
