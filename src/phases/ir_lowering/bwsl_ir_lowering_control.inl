@@ -779,8 +779,15 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
         NodeRef valueRef = caseData.values[v];
         s32 caseVal = 0;
         if (!GetCaseLiteralValue(valueRef, &caseVal)) {
-          ReportError(
-              "Error: switch case values must be compile-time literals\n");
+          bool isFloatLiteral =
+              valueRef.Type() == ASTNodeType::LITERAL &&
+              ast->GetLiteral(valueRef).value.type == LiteralValue::FLOAT;
+          ReportErrorAt(valueRef,
+                        isFloatLiteral
+                            ? "Error: switch case values must be int, uint or "
+                              "enum constants, got float\n"
+                            : "Error: switch case values must be "
+                              "compile-time literals\n");
           return;
         }
         minCase = (caseVal < minCase) ? caseVal : minCase;
@@ -850,8 +857,25 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
                       (static_cast<u32>(range) <= totalCaseValues * 2);
   (void)useJumpTable; // For future optimization - currently always use linear
 
-  // Lower switch expression
+  // Lower switch expression. OpSwitch takes a scalar integer selector; a
+  // compile-time bool (e.g. a bool variant) was already pruned above, so any
+  // other type would only fail SPIR-V validation.
+  size_t diagnosticsBefore = diagnostics.size();
   u16 exprReg = LowerExpression(sw.expression);
+  CoreType selectorType = GetRegisterType(exprReg);
+  if (diagnostics.size() == diagnosticsBefore &&
+      selectorType != CoreType::INT && selectorType != CoreType::UINT &&
+      selectorType != CoreType::ENUM) {
+    // Scalar and vector CoreType names are the source spelling in upper case.
+    std::string typeName = CoreTypeToString(selectorType);
+    for (char &c : typeName) c = static_cast<char>(tolower(c));
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+             "Error: switch selector must be an int, uint or enum value, got %s\n",
+             typeName.c_str());
+    ReportErrorAt(sw.expression, msg);
+    return;
+  }
 
   // Emit the switch instruction
   u32 switchIdx = builder.currentInstruction;

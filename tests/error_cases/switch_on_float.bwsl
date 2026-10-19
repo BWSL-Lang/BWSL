@@ -1,6 +1,5 @@
-// Error case: switching on a float selector. Currently rejected only when
-// the emitted SPIR-V fails validation (OpSwitch requires an integer
-// selector); a front-end diagnostic would be better.
+// Error case: switching on a float selector. OpSwitch requires an integer
+// selector, so lowering reports it at the selector.
 pipeline SwitchOnFloat {
     attributes {
         position: float3
