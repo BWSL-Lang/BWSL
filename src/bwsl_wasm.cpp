@@ -606,7 +606,7 @@ static ShaderOutput CompileShaderStage(
             if (!SSA::ConvertToSSA(&lowering.program, &cfgBuilder.cfg, &cfgBuilder, &cfgArena)) {
                 NodeRef node;
                 node.packed = lowering.program.ssaFailureSourceNode;
-                lowering.ReportErrorAt(node, "SSA register limit exceeded (16383 registers). Split or simplify the shader.\n");
+                lowering.ReportErrorAt(node, "SSA register limit exceeded (32764 registers). Split or simplify the shader.\n");
                 output.error = lowering.diagnostics.back();
                 return output;
             }

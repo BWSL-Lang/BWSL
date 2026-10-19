@@ -201,8 +201,8 @@ struct IRLowering {
   std::unordered_set<u32> constVariables;
 
   // Texture and sampler parameters of an inlined function, keyed by name
-  // hash. They bind to the caller's resource handle (0x6000 | slot for
-  // textures and samplers alike) rather than a copy. That encoding is shared
+  // hash. They bind to the caller's resource handle (IR::MakeResourceHandle
+  // for textures and samplers alike) rather than a copy. That encoding is shared
   // with uint constants, so the register alone can't say it holds a texture
   // or a sampler; this records the handle and its type for overload
   // resolution and texture calls in nested calls.

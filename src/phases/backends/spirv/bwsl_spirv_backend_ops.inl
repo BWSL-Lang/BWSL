@@ -177,8 +177,8 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u32 src_id = GetSpirvId(src_reg);
     u16 dest_reg = ir->destinations[ir_idx];
 
-    // Check if source is a constant (float 0x8000, int 0x4000, bool 0xC000)
-    bool srcIsConstant = (src_reg & 0xC000) != 0;
+    // Check if source is a constant
+    bool srcIsConstant = IR::IsConstant(src_reg);
     bool needsPreallocDef =
         (dest_reg < idCapacity && hasPreAllocatedId[dest_reg]);
 
@@ -205,9 +205,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 }
                 // Infer type from constant encoding if register type not set
                 if (destType == CoreType::VOID || destType == CoreType::INVALID) {
-                    if ((src_reg & 0xC000) == 0xC000) {
+                    if (IR::IsBoolConstant(src_reg) || src_reg == IR::UnusedOperand) {
                         destType = CoreType::BOOL;
-                    } else if (src_reg & 0x8000) {
+                    } else if (IR::IsFloatConstant(src_reg)) {
                         destType = CoreType::FLOAT;
                     } else if (IR::IsUintConstant(src_reg)) {
                         destType = CoreType::UINT;
@@ -377,10 +377,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u32 op2 = GetSpirvId(op2_reg);
 
         // Check for scalar-vector mixing which requires splatting
-        // Constants (0x8000=float, 0x4000=int, 0x6000=uint, 0xC000=bool) are
-        // scalars
-        bool op1_is_scalar = (op1_reg & 0xC000) != 0;
-        bool op2_is_scalar = (op2_reg & 0xC000) != 0;
+        // Constants are scalars
+        bool op1_is_scalar = IR::IsConstant(op1_reg);
+        bool op2_is_scalar = IR::IsConstant(op2_reg);
 
     CoreType destType = CoreType::FLOAT;
     if (ir->registerTypes && dest_reg < ir->registerCount) {
@@ -483,10 +482,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u32 result_type = GetResultType(dest_reg, op1_reg);
 
         // Check for vector-scalar multiplication
-        // Constants (0x8000=float, 0x4000=int, 0x6000=uint, 0xC000=bool) are always
-        // scalars
-        bool op1_is_scalar = (op1_reg & 0xC000) != 0;
-        bool op2_is_scalar = (op2_reg & 0xC000) != 0;
+        // Constants are always scalars
+        bool op1_is_scalar = IR::IsConstant(op1_reg);
+        bool op2_is_scalar = IR::IsConstant(op2_reg);
 
     // Check register types independently for each non-constant operand
     if (ir->registerTypes) {
@@ -604,8 +602,8 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
         // Get input vector type - check both constant flags and register types
         CoreType vecType = CoreType::FLOAT4; // Default assumption
-        if (!(op2_reg & 0xC000)) {
-            // Not a constant (0x8000=float, 0x4000=int, 0x6000=uint), check register
+        if (!IR::IsConstant(op2_reg)) {
+            // Not a constant, check register
             // type
             if (ir->registerTypes && op2_reg < ir->registerCount) {
                 CoreType regType = static_cast<CoreType>(ir->registerTypes[op2_reg]);
@@ -802,8 +800,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u16 op1_reg = ir->GetOperand(ir_idx, 0);
     u16 op2_reg = ir->GetOperand(ir_idx, 1);
     u32 result_type = GetResultType(dest_reg, op1_reg);
-    CoreType op1_type =
-        static_cast<CoreType>(ir->registerTypes[op1_reg & 0x3FFF]);
+    CoreType op1_type = GetBitwiseLegacyType(op1_reg);
     bool useUint = (op1_type == CoreType::UINT);
     u32 op1 = GetSpirvIdForBitwise(op1_reg, useUint);
     u32 op2 = GetSpirvIdForBitwise(op2_reg, useUint);
@@ -969,8 +966,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u16 base_reg = ir->GetOperand(ir_idx, 0);
     u16 shift_reg = ir->GetOperand(ir_idx, 1);
     u32 result_type = GetResultType(dest_reg, base_reg);
-    CoreType base_type =
-        static_cast<CoreType>(ir->registerTypes[base_reg & 0x3FFF]);
+    CoreType base_type = GetBitwiseLegacyType(base_reg);
     bool useUint = (base_type == CoreType::UINT);
     u32 base = GetSpirvIdForBitwise(base_reg, useUint);
     u32 shift = GetSpirvIdForBitwise(shift_reg, useUint);
@@ -984,8 +980,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u16 base_reg = ir->GetOperand(ir_idx, 0);
     u16 shift_reg = ir->GetOperand(ir_idx, 1);
     u32 result_type = GetResultType(dest_reg, base_reg);
-    CoreType base_type =
-        static_cast<CoreType>(ir->registerTypes[base_reg & 0x3FFF]);
+    CoreType base_type = GetBitwiseLegacyType(base_reg);
     bool useUint = (base_type == CoreType::UINT);
     u32 base = GetSpirvIdForBitwise(base_reg, useUint);
     u32 shift = GetSpirvIdForBitwise(shift_reg, useUint);
@@ -1036,10 +1031,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u32 op2 = GetSpirvId(op2_reg);
 
         // Determine operand types to check for vector comparison
-        // Constants (0x8000=float, 0x4000=int, 0x6000=uint, 0xC000=bool) are
-        // scalars
-        bool op1_is_scalar = (op1_reg & 0xC000) != 0;
-        bool op2_is_scalar = (op2_reg & 0xC000) != 0;
+        // Constants are scalars
+        bool op1_is_scalar = IR::IsConstant(op1_reg);
+        bool op2_is_scalar = IR::IsConstant(op2_reg);
         CoreType op1_type = CoreType::FLOAT;
         CoreType op2_type = CoreType::FLOAT;
 
@@ -1166,17 +1160,17 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
         // Detect operand type (scalar vs vector, for sizing the bvec result).
         CoreType op1_type = CoreType::INT;
-        if (ir->registerTypes && (op1_reg & 0xC000) == 0 &&
+        if (ir->registerTypes && !IR::IsConstant(op1_reg) &&
                 op1_reg < ir->registerCount) {
             op1_type = static_cast<CoreType>(ir->registerTypes[op1_reg]);
-        } else if ((op1_reg & 0xC000) == 0xC000) {
+        } else if (IR::IsBoolConstant(op1_reg) || op1_reg == IR::UnusedOperand) {
             op1_type = CoreType::BOOL;
         }
         CoreType op2_type = CoreType::INT;
-        if (ir->registerTypes && (op2_reg & 0xC000) == 0 &&
+        if (ir->registerTypes && !IR::IsConstant(op2_reg) &&
                 op2_reg < ir->registerCount) {
             op2_type = static_cast<CoreType>(ir->registerTypes[op2_reg]);
-        } else if ((op2_reg & 0xC000) == 0xC000) {
+        } else if (IR::IsBoolConstant(op2_reg) || op2_reg == IR::UnusedOperand) {
             op2_type = CoreType::BOOL;
         }
 
@@ -1261,12 +1255,12 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         // matching size. Without this the result type fell back to bool
         // scalar and SPIR-V rejected the emit.
         CoreType op1_type = CoreType::UINT;
-        if (ir->registerTypes && (op1_reg & 0xC000) == 0 &&
+        if (ir->registerTypes && !IR::IsConstant(op1_reg) &&
                 op1_reg < ir->registerCount) {
             op1_type = static_cast<CoreType>(ir->registerTypes[op1_reg]);
         }
         CoreType op2_type = CoreType::UINT;
-        if (ir->registerTypes && (op2_reg & 0xC000) == 0 &&
+        if (ir->registerTypes && !IR::IsConstant(op2_reg) &&
                 op2_reg < ir->registerCount) {
             op2_type = static_cast<CoreType>(ir->registerTypes[op2_reg]);
         }
@@ -1329,9 +1323,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         CoreType valType = CoreType::FLOAT;
         if (ir->registerTypes && true_val_reg < ir->registerCount) {
             valType = static_cast<CoreType>(ir->registerTypes[true_val_reg]);
-        } else if ((true_val_reg & 0xC000) == 0xC000) {
-            valType = CoreType::BOOL; // Bool constant (0xC000 prefix)
-        } else if (true_val_reg & 0x8000) {
+        } else if (IR::IsBoolConstant(true_val_reg) || true_val_reg == IR::UnusedOperand) {
+            valType = CoreType::BOOL; // Bool constant
+        } else if (IR::IsFloatConstant(true_val_reg)) {
             valType = CoreType::FLOAT; // Float constant
         } else if (IR::IsIntConstant(true_val_reg)) {
             valType = CoreType::INT; // Int constant
@@ -1790,10 +1784,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
         // For GLSL.std.450 functions like Pow, both operands must match result type
         // Handle scalar-vector mismatches by splatting scalar to vector
-        // Constants (0x8000=float, 0x4000=int, 0x6000=uint, 0xC000=bool) are
-        // scalars
-        bool op1_is_scalar = (op1_reg & 0xC000) != 0;
-        bool op2_is_scalar = (op2_reg & 0xC000) != 0;
+        // Constants are scalars
+        bool op1_is_scalar = IR::IsConstant(op1_reg);
+        bool op2_is_scalar = IR::IsConstant(op2_reg);
         CoreType op1_type = CoreType::FLOAT;
         CoreType op2_type = CoreType::FLOAT;
 
@@ -1917,9 +1910,8 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
         // Check if op3 (interpolant) is scalar while result is vector
         // SPIR-V FMix requires all operands to match result type
-        // Constants (0x8000=float, 0x4000=int, 0x6000=uint, 0xC000=bool) are
-        // scalars
-        bool op3_is_scalar = (op3_reg & 0xC000) != 0;
+        // Constants are scalars
+        bool op3_is_scalar = IR::IsConstant(op3_reg);
         CoreType op1_type = CoreType::FLOAT;
         CoreType op3_type = CoreType::FLOAT;
 
@@ -2001,9 +1993,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
         // For GLSL.std.450 ops (except Refract), operands must match result type.
         // Splat scalar operands to vector when needed.
-        bool op1_is_scalar = (op1_reg & 0xC000) != 0;
-        bool op2_is_scalar = (op2_reg & 0xC000) != 0;
-        bool op3_is_scalar = (op3_reg & 0xC000) != 0;
+        bool op1_is_scalar = IR::IsConstant(op1_reg);
+        bool op2_is_scalar = IR::IsConstant(op2_reg);
+        bool op3_is_scalar = IR::IsConstant(op3_reg);
         CoreType op1_type = CoreType::FLOAT;
         CoreType op2_type = CoreType::FLOAT;
         CoreType op3_type = CoreType::FLOAT;
@@ -2631,9 +2623,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
                 // Check the type of this operand
                 CoreType opType = CoreType::FLOAT;
-                if ((op_reg & 0xC000) == 0xC000) {
+                if (IR::IsBoolConstant(op_reg)) {
                     opType = CoreType::BOOL;
-                } else if (op_reg & 0x8000) {
+                } else if (IR::IsFloatConstant(op_reg)) {
                     opType = CoreType::FLOAT;
                 } else if (IR::IsIntConstant(op_reg)) {
                     opType = CoreType::INT;
@@ -3299,7 +3291,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
         bool isConstIndex = IR::IsIntConstant(index_reg);
         if (isConstIndex) {
-            u32 slot = index_reg & 0x3FFF;
+            u32 slot = IR::IntConstantIndex(index_reg);
             u32 index_val = ir->intConstants[slot];
             if (isInsert) {
                 Emit(spv::OpCompositeInsert, struct_type_id, dest, value_id,
@@ -3455,7 +3447,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     // struct fields when the destination field type is CUSTOM.
     for (u32 i = 0; i < 4 && constituentCount < totalFieldCount; i++) {
       u16 op_reg = ir->GetOperand(ir_idx, i);
-      if (op_reg != 0x3FFF && op_reg != 0xFFFF) {
+      if (op_reg != IR::InvalidOperand && op_reg != 0xFFFF) {
         // Check if this operand is a vector type that needs decomposition
         CoreType opType = CoreType::FLOAT;
         if (ir->registerTypes && op_reg < ir->registerCount) {
@@ -3648,7 +3640,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
         u32 field_idx = 0;
         if (IR::IsIntConstant(field_idx_reg)) {
             // Int constant
-            u32 idx = field_idx_reg & 0x3FFF;
+            u32 idx = IR::IntConstantIndex(field_idx_reg);
             field_idx = ir->intConstants[idx];
         }
 
@@ -3848,7 +3840,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                     // array values from non-fused shapes.)
                     bool isConstIndex = IR::IsIntConstant(index_reg);
                     if (isConstIndex) {
-                        u32 idx = index_reg & 0x3FFF;
+                        u32 idx = IR::IntConstantIndex(index_reg);
                         u32 index_val = ir->intConstants[idx];
                         // OpCompositeExtract for constant index
                         if (currentFunctionSize + 5 > currentFunctionCapacity) {
@@ -3883,7 +3875,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 // Check if index is a constant
                 bool isConstIndex = IR::IsIntConstant(index_reg);
                 if (isConstIndex) {
-                    u32 idx = index_reg & 0x3FFF;
+                    u32 idx = IR::IntConstantIndex(index_reg);
                     u32 index_val = ir->intConstants[idx];
                     // OpCompositeExtract for constant index
                     if (currentFunctionSize + 5 > currentFunctionCapacity) {
@@ -3945,7 +3937,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
                 // Vector element extraction
                 bool isConstIndex = IR::IsIntConstant(index_reg);
                 if (isConstIndex) {
-                    u32 idx = index_reg & 0x3FFF;
+                    u32 idx = IR::IntConstantIndex(index_reg);
                     u32 index_val = ir->intConstants[idx];
                     // OpCompositeExtract for constant index
                     if (currentFunctionSize + 5 > currentFunctionCapacity) {
@@ -3993,9 +3985,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             // Local array with Function storage class
             CoreType elemType = CoreType::FLOAT;
             // First check if value_reg is a constant - infer type from encoding
-            if ((value_reg & 0xC000) == 0xC000) {
+            if (IR::IsBoolConstant(value_reg) || value_reg == IR::UnusedOperand) {
                 elemType = CoreType::BOOL;
-            } else if (value_reg & 0x8000) {
+            } else if (IR::IsFloatConstant(value_reg)) {
                 elemType = CoreType::FLOAT;
             } else if (IR::IsIntConstant(value_reg)) {
                 elemType = CoreType::INT;
@@ -4050,9 +4042,9 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
             CoreType elemType = CoreType::FLOAT;
             // First check if value_reg is a constant - infer type from encoding
-            if ((value_reg & 0xC000) == 0xC000) {
+            if (IR::IsBoolConstant(value_reg) || value_reg == IR::UnusedOperand) {
                 elemType = CoreType::BOOL;
-            } else if (value_reg & 0x8000) {
+            } else if (IR::IsFloatConstant(value_reg)) {
                 elemType = CoreType::FLOAT;
             } else if (IR::IsIntConstant(value_reg)) {
                 elemType = CoreType::INT;
@@ -4564,11 +4556,11 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             // SPIR-V requires boolean condition for OpBranchConditional
             // If condition is not bool, convert it to bool via != 0 comparison
             CoreType condType = CoreType::BOOL;
-            if (cond_reg & 0xC000) {
+            if (IR::IsConstant(cond_reg)) {
                 // Constant-encoded condition
-                if ((cond_reg & 0xC000) == 0xC000) {
+                if (IR::IsBoolConstant(cond_reg) || cond_reg == IR::UnusedOperand) {
                     condType = CoreType::BOOL;
-                } else if (cond_reg & 0x8000) {
+                } else if (IR::IsFloatConstant(cond_reg)) {
                     condType = CoreType::FLOAT;
                 } else if (IR::IsIntConstant(cond_reg)) {
                     condType = CoreType::INT;
@@ -4915,15 +4907,15 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     }
 
         auto get_uint_constant_lane_id = [&](u16 lane_reg) -> u32 {
-            if ((lane_reg & 0xC000) == 0xC000) {
-                u32 idx = lane_reg & 0x3FFF;
+            if (IR::IsBoolConstant(lane_reg) || lane_reg == IR::UnusedOperand) {
+                u32 idx = IR::BoolConstantIndex(lane_reg);
                 if (idx >= ir->boolCount) {
                     return 0;
                 }
                 return GetIntConstantId(ir->boolConstants[idx] != 0 ? 1u : 0u, true);
             }
             if (IR::IsIntConstant(lane_reg)) {
-                u32 idx = lane_reg & 0x3FFF;
+                u32 idx = IR::IntConstantIndex(lane_reg);
                 if (idx >= ir->intCount) {
                     return 0;
                 }
@@ -4932,7 +4924,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
             if (IR::IsUintConstant(lane_reg)) {
                 return GetSpirvId(lane_reg);
             }
-            if (lane_reg & 0x8000) {
+            if (IR::IsFloatConstant(lane_reg)) {
                 return 0;
             }
 
@@ -5112,7 +5104,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     case IR::OP_TEX_SAMPLE_LOD_OFFSET:
     case IR::OP_TEX_SAMPLE_BIAS_OFFSET: {
         // Texture sampling: dest = sample(texture, coord)
-        // IR format: s0 = texture (with 0x6000 marker), s1 = coord
+        // IR format: s0 = texture (a resource handle), s1 = coord
         // The resources are declared as combined image samplers
         // (OpTypeSampledImage)
         u16 tex_reg = ir->GetOperand(ir_idx, 0);
@@ -5297,7 +5289,7 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u16 lod_reg = ir->GetOperand(ir_idx, 1);
     // OpImageQuerySizeLod returns one component per native dimension: int3
     // for volumes and 2D arrays. Lowering types the result the same way.
-    u16 slot = tex_reg & 0x0FFF;
+    u16 slot = IR::ResourceHandleSlot(tex_reg);
     CoreType size_type = slot < 32 && (textureIsVolume[slot] || textureIsArray[slot])
                              ? CoreType::INT3 : CoreType::INT2;
     SampledTextureLoad texture{};
@@ -5325,13 +5317,13 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
 
     case IR::OP_IMG_STORE: {
         // Image store: store(image, coord, value)
-        // IR format: s0 = image (with 0x6000 marker), s1 = coord (int2), s2 = value
+        // IR format: s0 = image (a resource handle), s1 = coord (int2), s2 = value
         // (float4) OpImageWrite has no result - it's a void operation
         u16 img_reg = ir->GetOperand(ir_idx, 0);
         u16 coord_reg = ir->GetOperand(ir_idx, 1);
         u16 value_reg = ir->GetOperand(ir_idx, 2);
 
-        u16 img_slot = img_reg & 0x0FFF; // Extract binding from 0x6000 | binding
+        u16 img_slot = IR::ResourceHandleSlot(img_reg);
 
     // Get the storage image variable ID from the dedicated storage image array
     u32 img_var_id = storageImageIds[img_slot];

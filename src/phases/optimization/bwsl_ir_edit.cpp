@@ -21,11 +21,20 @@ static T* GrowArray(IRMemoryPool* pool, T* values, u32 count, u32 capacity) {
     return grown;
 }
 
+// New registers are numbered after registerCount, past SSA's spare capacity,
+// so for a large shader they reached the old 14-bit limit long before its
+// registers did, and the rewrites asking for them were skipped. A shader whose
+// registers fit below that limit keeps it, so its output doesn't change.
+static u32 RegisterCeiling(const IRProgram* ir) {
+    u32 used = ir->ssaRegisterEnd != 0 ? ir->ssaRegisterEnd : ir->registerCount;
+    return used <= IR::LegacyRegisterLimit ? IR::LegacyRegisterLimit : IR::RegisterLimit;
+}
+
 u16 AllocateRegister(IR::IRBuilder* builder, InstructionInsertions* insertions, CoreType type) {
     IRProgram* ir = builder->program;
     if (insertions->nextRegister == insertions->registerEnd) {
         u32 count = ir->registerCount;
-        u32 capacity = std::min<u32>(count + REGISTER_BATCH, IR::RegisterLimit);
+        u32 capacity = std::min<u32>(count + REGISTER_BATCH, RegisterCeiling(ir));
         if (capacity <= count) return 0xFFFF;
         ir->registerTypes = GrowArray(builder->pool, ir->registerTypes, count, capacity);
         ir->registerStructTypes = GrowArray(builder->pool, ir->registerStructTypes, count, capacity);

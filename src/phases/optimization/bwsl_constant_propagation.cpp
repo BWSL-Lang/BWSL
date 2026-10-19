@@ -297,20 +297,20 @@ static float RoundHalfEven(float value) {
 
 static ConstantValue DecodeConstant(const IRProgram* ir, u16 operand) {
     if (IR::IsBoolConstant(operand)) {
-        u32 index = operand & 0x3FFF;
+        u32 index = IR::BoolConstantIndex(operand);
         if (index < ir->boolCount) {
             return MakeConstant(CoreType::BOOL, ir->boolConstants[index] ? 1 : 0);
         }
     } else if (IR::IsFloatConstant(operand)) {
-        u32 index = operand & 0x3FFF;
+        u32 index = IR::FloatConstantIndex(operand);
         if (index < ir->floatCount && IsFoldableFloat(ir->floatConstants[index])) {
             return MakeConstant(CoreType::FLOAT, FloatToBits(ir->floatConstants[index]));
         }
     } else if (IR::IsIntConstant(operand)) {
-        u32 index = operand & 0x1FFF;
+        u32 index = IR::IntConstantIndex(operand);
         if (index < ir->intCount) return MakeConstant(CoreType::INT, ir->intConstants[index]);
     } else if (IR::IsUintConstant(operand)) {
-        u32 index = operand & 0x1FFF;
+        u32 index = IR::UintConstantIndex(operand);
         if (index < ir->uintCount) return MakeConstant(CoreType::UINT, ir->uintConstants[index]);
     }
     return OVERDEFINED_VALUE;

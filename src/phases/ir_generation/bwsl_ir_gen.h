@@ -14,19 +14,84 @@ constexpr u32 NO_BLOCK = 0xFFFFFFFF;
 
 namespace IR {
 
-// Internal 16-bit operand layout. Keep the legacy 0x3fff invalid marker and
-// 0xffff unused-operand sentinel outside the register range. Uint constants and
-// texture handles previously used 0x2000, which aliased live SSA registers once
-// a shader exceeded 8192 registers. The external instruction widths do not change.
-constexpr u32 RegisterLimit = 0x3FFF;
+// Internal 16-bit operand layout, from low to high:
+//   [0, RegisterLimit)             registers
+//   InvalidOperand                 invalid marker (== RegisterLimit)
+//   IntConstantBase + index        int constants, index < IntegerConstantLimit
+//   UintConstantBase + index       uint constants; texture and storage image
+//                                  handles are uint codes (MakeResourceHandle)
+//   FloatConstantBase + index      float constants, index < FloatConstantLimit
+//   BoolConstantBase + index       bool constants (false and true)
+//   UnusedOperand (0xFFFF)         unused operand slot
+// The constant pools sit directly below UnusedOperand, in the order and sizes
+// they had when the top bits tagged them, and registers get every code below
+// them. So anything above InvalidOperand is a constant, and while
+// registerCount <= RegisterLimit (before SSA reserves capacity),
+// `operand < registerCount` alone still rules out constants and the marker.
+// Decode operands only through these helpers; the bases aren't aligned to
+// a bit mask. The external instruction widths do not change.
+constexpr u32 UnusedOperand = 0xFFFF;
 constexpr u32 IntegerConstantLimit = 0x2000;
-// Float constants are 0x8000 | index; index 0x4000 and up would read as bool.
 constexpr u32 FloatConstantLimit = 0x4000;
-constexpr bool IsConstant(u16 value) { return (value & 0xC000) != 0; }
-constexpr bool IsIntConstant(u16 value) { return (value & 0xE000) == 0x4000; }
-constexpr bool IsUintConstant(u16 value) { return (value & 0xE000) == 0x6000; }
-constexpr bool IsFloatConstant(u16 value) { return (value & 0xC000) == 0x8000; }
-constexpr bool IsBoolConstant(u16 value) { return value != 0xFFFF && (value & 0xC000) == 0xC000; }
+// EmitConstantBool keeps one entry per value.
+constexpr u32 BoolConstantLimit = 2;
+constexpr u32 BoolConstantBase = UnusedOperand - BoolConstantLimit;
+constexpr u32 FloatConstantBase = BoolConstantBase - FloatConstantLimit;
+constexpr u32 UintConstantBase = FloatConstantBase - IntegerConstantLimit;
+constexpr u32 IntConstantBase = UintConstantBase - IntegerConstantLimit;
+constexpr u32 InvalidOperand = IntConstantBase - 1;
+constexpr u32 RegisterLimit = InvalidOperand;
+// The register limit diagnostics quote this number.
+static_assert(RegisterLimit == 32764, "update the register limit diagnostics");
+// The register limit when the top two bits tagged constants. Shaders whose
+// registers fit below it still get it where a pass used to stop there, so
+// their output stays the same (see Optimization::AllocateRegister).
+constexpr u32 LegacyRegisterLimit = 0x3FFF;
+
+constexpr bool IsRegister(u16 value) { return value < RegisterLimit; }
+// True for UnusedOperand too, as when constants were tagged by their top bits.
+constexpr bool IsConstant(u16 value) { return value > InvalidOperand; }
+constexpr bool IsIntConstant(u16 value) { return value >= IntConstantBase && value < UintConstantBase; }
+constexpr bool IsUintConstant(u16 value) { return value >= UintConstantBase && value < FloatConstantBase; }
+constexpr bool IsFloatConstant(u16 value) { return value >= FloatConstantBase && value < BoolConstantBase; }
+constexpr bool IsBoolConstant(u16 value) { return value >= BoolConstantBase && value < UnusedOperand; }
+constexpr bool IsIntegerConstant(u16 value) { return IsIntConstant(value) || IsUintConstant(value); }
+// Float or bool constants, or UnusedOperand: what the 0x8000 tag bit covered.
+// For callers that test for floats before ruling out bools.
+constexpr bool IsFloatOrBoolConstant(u16 value) { return value >= FloatConstantBase; }
+
+// Pool index of a constant of that kind. Callers check the kind first.
+constexpr u32 IntConstantIndex(u16 value) { return value - IntConstantBase; }
+constexpr u32 UintConstantIndex(u16 value) { return value - UintConstantBase; }
+constexpr u32 FloatConstantIndex(u16 value) { return value - FloatConstantBase; }
+constexpr u32 BoolConstantIndex(u16 value) { return value - BoolConstantBase; }
+// Index into intConstants or uintConstants, whichever holds it.
+constexpr u32 IntegerConstantIndex(u16 value) {
+    return IsUintConstant(value) ? UintConstantIndex(value) : IntConstantIndex(value);
+}
+// Index into the pool of whichever kind of constant this is.
+constexpr u32 ConstantIndex(u16 value) {
+    return IsBoolConstant(value) ? BoolConstantIndex(value)
+         : IsFloatConstant(value) ? FloatConstantIndex(value)
+         : IntegerConstantIndex(value);
+}
+constexpr u16 MakeIntConstant(u32 index) { return static_cast<u16>(IntConstantBase + index); }
+constexpr u16 MakeUintConstant(u32 index) { return static_cast<u16>(UintConstantBase + index); }
+constexpr u16 MakeFloatConstant(u32 index) { return static_cast<u16>(FloatConstantBase + index); }
+constexpr u16 MakeBoolConstant(u32 index) { return static_cast<u16>(BoolConstantBase + index); }
+
+// Texture, storage image and sampler operands name their binding slot as a
+// uint code; the expression's type says which kind it is.
+constexpr u32 ResourceHandleLimit = 0x1000;
+constexpr u16 MakeResourceHandle(u32 slot) { return MakeUintConstant(slot); }
+constexpr bool IsResourceHandle(u16 value) {
+    return IsUintConstant(value) && UintConstantIndex(value) < ResourceHandleLimit;
+}
+// The slot of a handle. Any other operand gives some number below
+// ResourceHandleLimit, as it always did: a register its low 12 bits.
+constexpr u32 ResourceHandleSlot(u16 value) {
+    return (IsUintConstant(value) ? UintConstantIndex(value) : value) & (ResourceHandleLimit - 1);
+}
 
 // Instruction flags (IRProgram::flags).
 // On a signed OP_IMOD: neither operand is negative, so the remainder is
@@ -59,6 +124,9 @@ struct IRProgram {
     alignas(64) u32* registerLifetimes;    // Packed first:16|last:16 instruction
     alignas(64) u32* registerSpillSlots;   // 0xFFFFFFFF if not spilled
     u32 registerCount;
+    // One past the highest register SSA numbered. registerCount also counts
+    // its spare capacity. Zero when SSA didn't rename anything.
+    u32 ssaRegisterEnd = 0;
     
     // Constant pools
     alignas(64) float* floatConstants;
@@ -649,13 +717,13 @@ inline bool HasSideEffects(OpCode op) {
 inline bool TryGetConstantCondition(const IRProgram* prog, u16 operand, bool* value) {
     if (operand == 0xFFFF || !IsConstant(operand)) return false;
     if (IsBoolConstant(operand)) {
-        u32 index = operand & 0x3FFF;
+        u32 index = BoolConstantIndex(operand);
         if (index >= prog->boolCount) return false;
         *value = prog->boolConstants[index] != 0;
         return true;
     }
     if (IsFloatConstant(operand)) {
-        u32 index = operand & 0x3FFF;
+        u32 index = FloatConstantIndex(operand);
         if (index >= prog->floatCount || prog->floatConstants[index] != prog->floatConstants[index]) {
             return false;
         }
@@ -663,7 +731,7 @@ inline bool TryGetConstantCondition(const IRProgram* prog, u16 operand, bool* va
         return true;
     }
     bool isUnsigned = IsUintConstant(operand);
-    u32 index = operand & 0x1FFF;
+    u32 index = IntegerConstantIndex(operand);
     if (index >= (isUnsigned ? prog->uintCount : prog->intCount)) return false;
     *value = (isUnsigned ? prog->uintConstants : prog->intConstants)[index] != 0;
     return true;
@@ -671,9 +739,9 @@ inline bool TryGetConstantCondition(const IRProgram* prog, u16 operand, bool* va
 
 // Reads an int or uint tagged constant as its 32 bits.
 inline bool TryGetConstantInteger(const IRProgram* prog, u16 operand, u32* bits) {
-    if (operand == 0xFFFF || !(IsIntConstant(operand) || IsUintConstant(operand))) return false;
+    if (!IsIntegerConstant(operand)) return false;
     bool isUnsigned = IsUintConstant(operand);
-    u32 index = operand & 0x1FFF;
+    u32 index = IntegerConstantIndex(operand);
     if (index >= (isUnsigned ? prog->uintCount : prog->intCount)) return false;
     *bits = (isUnsigned ? prog->uintConstants : prog->intConstants)[index];
     return true;
@@ -802,13 +870,13 @@ struct IRBuilder {
         for (u16 i = 0; i < program->floatCount; i++) {
             if (floatConstantHashes[i] == hash &&
                 program->floatConstants[i] == value) {
-                return 0x8000 | i;  // High bit indicates constant
+                return MakeFloatConstant(i);
             }
         }
 
         if (program->floatCount >= FloatConstantLimit) {
             floatConstantLimitExceeded = true;
-            return 0x8000;
+            return MakeFloatConstant(0);
         }
         // The pools start at 256 entries. Growing them keeps a shader with
         // more distinct floats from writing over the int constants.
@@ -825,16 +893,16 @@ struct IRBuilder {
         u32 slot = program->floatCount++;
         program->floatConstants[slot] = value;
         floatConstantHashes[slot] = hash;
-        return 0x8000 | (u16)slot;
+        return MakeFloatConstant(slot);
     }
 
     // Returns 0xFFFF when the pool is full (IntegerConstantLimit values).
     u16 EmitConstantInteger(u32 value, bool isUnsigned) {
         u32* values = isUnsigned ? program->uintConstants : program->intConstants;
         u32 count = isUnsigned ? program->uintCount : program->intCount;
-        u16 tag = isUnsigned ? 0x6000 : 0x4000;
+        auto make = isUnsigned ? MakeUintConstant : MakeIntConstant;
         for (u32 i = 0; i < count; i++) {
-            if (values[i] == value) return tag | (u16)i;
+            if (values[i] == value) return make(i);
         }
         if (count >= IntegerConstantLimit) return 0xFFFF;
         u32& capacity = isUnsigned ? program->uintCapacity : program->intCapacity;
@@ -845,7 +913,7 @@ struct IRBuilder {
         }
         values[count] = value;
         (isUnsigned ? program->uintCount : program->intCount) = count + 1;
-        return tag | (u16)count;
+        return make(count);
     }
 
     u16 EmitConstantBool(bool value) {
@@ -853,14 +921,14 @@ struct IRBuilder {
         u8 boolVal = value ? 1 : 0;
         for (u16 i = 0; i < program->boolCount; i++) {
             if (program->boolConstants[i] == boolVal) {
-                return 0xC000 | i;  // 0xC000 prefix for bool constants
+                return MakeBoolConstant(i);
             }
         }
 
-        // Add new constant
+        // Add new constant. There are two values, so at most BoolConstantLimit.
         u32 slot = program->boolCount++;
         program->boolConstants[slot] = boolVal;
-        return 0xC000 | (u16)slot;
+        return MakeBoolConstant(slot);
     }
 
     void GrowInstructionArrays() {
@@ -967,7 +1035,7 @@ void EliminateDeadCode(IRProgram* prog) {
             for (u32 j = 0; j < count; j++) {
                 u16 op = prog->GetPhiOperandValue(i, j);
                 // If operand is a register (not a constant)
-                if ((op & 0xC000) == 0 && op < prog->registerCount) {
+                if (IsRegister(op) && op < prog->registerCount) {
                     u32 producer = registerWriters[op];
                     // Mark the instruction that produced this operand as used
                     if (producer != 0xFFFFFFFF && !used[producer]) {
@@ -986,7 +1054,7 @@ void EliminateDeadCode(IRProgram* prog) {
         // Add operand producers to queue (check all 4 operands)
         for (u32 j = 0; j < 4; j++) {
             u16 op = prog->GetOperand(idx, j);
-            if ((op & 0xC000) == 0 && op < prog->registerCount) {
+            if (IsRegister(op) && op < prog->registerCount) {
                 u32 producer = registerWriters[op];
                 if (producer != 0xFFFFFFFF && !used[producer]) {
                     used[producer] = true;
@@ -1021,7 +1089,7 @@ void EliminateDeadCode(IRProgram* prog) {
         u32 idx = workQueue[queueHead++];
         for (u32 j = 0; j < 4; j++) {
             u16 op = prog->GetOperand(idx, j);
-            if ((op & 0xC000) == 0 && op < prog->registerCount) {
+            if (IsRegister(op) && op < prog->registerCount) {
                 u32 producer = registerWriters[op];
                 if (producer != 0xFFFFFFFF && !used[producer]) {
                     used[producer] = true;
@@ -1202,7 +1270,7 @@ void EliminateDeadCode(IRProgram* prog) {
                 for (u32 j = 0; j < 3; j++) {
                     u16 op = prog->GetOperand(i, j);
                     // Only check register references (not constants or special values)
-                    if ((op & 0x8000) == 0 && (op & 0x4000) == 0 && op < prog->registerCount) {
+                    if (IsRegister(op) && op < prog->registerCount) {
                         if (poisonedRegisters[op]) {
                             anyPoisoned = true;
                             break;
@@ -1256,7 +1324,7 @@ void EliminateDeadCode(IRProgram* prog) {
                     u16 value = prog->GetPhiOperandValue(phiIdx, j);
                     
                     // Check if this operand is a poisoned register
-                    if ((value & 0xC000) == 0 && value < prog->registerCount && poisonedRegisters[value]) {
+                    if (IsRegister(value) && value < prog->registerCount && poisonedRegisters[value]) {
                         hasPoison = true;
                     } else {
                         // Track first non-poisoned value for replacement
@@ -1270,7 +1338,7 @@ void EliminateDeadCode(IRProgram* prog) {
                 if (hasPoison && nonPoisonedValue != 0xFFFF) {
                     for (u32 j = 0; j < operandCount; j++) {
                         u16 value = prog->GetPhiOperandValue(phiIdx, j);
-                        if ((value & 0xC000) == 0 && value < prog->registerCount && poisonedRegisters[value]) {
+                        if (IsRegister(value) && value < prog->registerCount && poisonedRegisters[value]) {
                             prog->SetPhiOperandValue(phiIdx, j, nonPoisonedValue);
                             if (debug) printf("        [PHI %u] Replaced poisoned R%u with R%u\n", 
                                             phiIdx, value, nonPoisonedValue);
@@ -1285,7 +1353,7 @@ void EliminateDeadCode(IRProgram* prog) {
             if (prog->opcodes[i] == OP_BRANCH) {
                 // Conditional branch - operand 0 is condition
                 u16 cond = prog->GetOperand(i, 0);
-                if ((cond & 0x8000) == 0 && cond < prog->registerCount) {
+                if (IsRegister(cond) && cond < prog->registerCount) {
                     if (poisonedRegisters[cond]) {
                         // The branch condition depends on unavailable attribute
                         // Convert to unconditional jump to the false branch
@@ -1430,7 +1498,7 @@ void EliminateDeadCode(IRProgram* prog) {
             // Check operands
             for (u32 j = 0; j < 3; j++) {
                 u16 op = prog->GetOperand(i, j);
-                if ((op & 0x8000) == 0 && op < prog->registerCount) {
+                if (IsRegister(op) && op < prog->registerCount) {
                     u32 lifetime = prog->registerLifetimes[op];
                     u16 firstUse = lifetime >> 16;
                     u16 lastUse = lifetime & 0xFFFF;

@@ -80,8 +80,8 @@ bool WGSLBuilder::PrepareAdditionalResources() {
         if (!IsSampledTextureOpcode(opcode)) {
             continue;
         }
-        const u32 slot = operand & 0x1FFFu;
-        if ((operand & 0xE000u) != 0x6000u || slot >= 32) {
+        const u32 slot = IR::UintConstantIndex(operand);
+        if (!IR::IsUintConstant(operand) || slot >= 32) {
             return Fail("WGSL textures require a declared static texture slot");
         }
         textureMask |= 1u << slot;
@@ -384,7 +384,7 @@ bool WGSLBuilder::WriteUniformLoad(TextWriter& writer, u32 value) {
 
 bool WGSLBuilder::PrepareTextureInstruction(u32 instruction) {
     const u16 opcode = ir->opcodes[instruction];
-    const u32 texture = textureForSlot[ir->GetOperand(instruction, 0) & 0x1FFFu];
+    const u32 texture = textureForSlot[IR::UintConstantIndex(ir->GetOperand(instruction, 0))];
     const CoreType textureType = static_cast<CoreType>(textures.types[texture]);
     const u16 destination = ir->destinations[instruction];
     const CoreType type = static_cast<CoreType>(ir->registerTypes[destination]);
@@ -431,7 +431,7 @@ bool WGSLBuilder::PrepareTextureInstruction(u32 instruction) {
             !(IR::IsIntConstant(component) || IR::IsUintConstant(component))) {
             return Fail("WGSL textureGather component must be a literal integer");
         }
-        const u32 index = component & 0x1FFFu;
+        const u32 index = IR::IntegerConstantIndex(component);
         const u32 value = componentType == CoreType::INT ? ir->intConstants[index] : ir->uintConstants[index];
         if (value > 3) {
             return Fail("WGSL textureGather component must be in the range 0 through 3");
@@ -455,7 +455,7 @@ bool WGSLBuilder::PrepareTextureInstruction(u32 instruction) {
 
 bool WGSLBuilder::WriteTextureExpression(TextWriter& writer, u32 instruction) {
     const u16 opcode = ir->opcodes[instruction];
-    const u32 texture = textureForSlot[ir->GetOperand(instruction, 0) & 0x1FFFu];
+    const u32 texture = textureForSlot[IR::UintConstantIndex(ir->GetOperand(instruction, 0))];
     const CoreType textureType = static_cast<CoreType>(textures.types[texture]);
     const bool array = textureType == CoreType::TEXTURE2DARRAY;
     const bool depth = textures.depth[texture] != 0;

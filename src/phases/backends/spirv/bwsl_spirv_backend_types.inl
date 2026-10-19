@@ -424,7 +424,7 @@ bool SPIRVBuilder::LoadSampledTexture(u16 texReg, CoreType missingResultType,
                                       u32 dest, bool needImage,
                                       SampledTextureLoad* outLoad, u32 metadata) {
   SampledTextureLoad load{};
-  load.slot = texReg & 0x0FFF;
+  load.slot = IR::ResourceHandleSlot(texReg);
   load.variableId = load.slot < 32 ? textureIds[load.slot] : 0;
 
   if (load.variableId == 0) {

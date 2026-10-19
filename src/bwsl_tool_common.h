@@ -243,13 +243,13 @@ inline const char* OpCodeToString(IR::OpCode op) {
 }
 
 inline std::string FormatOperand(const IR::IRProgram& prog, u16 op, bool allowZeroReg = true) {
-    if (op == 0xFFFF || op == 0x3FFF) return "_";
-    if ((op & 0xC000) == 0xC000) {
-        u16 idx = op & 0x3FFF;
+    if (op == 0xFFFF || op == IR::InvalidOperand) return "_";
+    if (IR::IsBoolConstant(op)) {
+        u32 idx = IR::BoolConstantIndex(op);
         return idx < prog.boolCount ? (prog.boolConstants[idx] ? "true" : "false") : "b?";
     }
-    if (op & 0x8000) {
-        u16 idx = op & 0x7FFF;
+    if (IR::IsFloatConstant(op)) {
+        u32 idx = IR::FloatConstantIndex(op);
         if (idx < prog.floatCount) {
             char buf[32];
             snprintf(buf, sizeof(buf), "%.4g", prog.floatConstants[idx]);
@@ -258,7 +258,7 @@ inline std::string FormatOperand(const IR::IRProgram& prog, u16 op, bool allowZe
         return "f?";
     }
     if (IR::IsIntConstant(op)) {
-        u16 idx = op & 0x3FFF;
+        u32 idx = IR::IntConstantIndex(op);
         if (idx < prog.intCount) {
             char buf[32];
             snprintf(buf, sizeof(buf), "%d", static_cast<int>(prog.intConstants[idx]));
@@ -267,7 +267,7 @@ inline std::string FormatOperand(const IR::IRProgram& prog, u16 op, bool allowZe
         return "i?";
     }
     if (IR::IsUintConstant(op)) {
-        u16 idx = op & 0x1FFF;
+        u32 idx = IR::UintConstantIndex(op);
         if (idx >= prog.uintCount) return "u?";
         char buf[32];
         snprintf(buf, sizeof(buf), "%uu", prog.uintConstants[idx]);
@@ -316,10 +316,13 @@ inline std::string DumpIRToString(const IR::IRProgram& prog) {
         out += buf;
 
         if (dest != 0 || op == IR::OP_STORE_REG || op == IR::OP_STORE_OUTPUT) {
+            // Some opcodes hold a constant or resource handle in this slot.
+            std::string destText = IR::IsRegister(dest) ? "r" + std::to_string(dest)
+                                                        : FormatOperand(prog, dest);
             if (type != CoreType::INVALID) {
-                snprintf(buf, sizeof(buf), " r%-3u:%-7s <-", dest, CoreTypeToString(type));
+                snprintf(buf, sizeof(buf), " %-4s:%-7s <-", destText.c_str(), CoreTypeToString(type));
             } else {
-                snprintf(buf, sizeof(buf), " r%-3u         <-", dest);
+                snprintf(buf, sizeof(buf), " %-4s         <-", destText.c_str());
             }
             out += buf;
         } else {

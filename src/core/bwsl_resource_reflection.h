@@ -385,11 +385,11 @@ inline std::vector<ExplicitSamplerUse> CollectExplicitSamplerUses(const IR::IRPr
                 const u32 metadata = ir.metadata[i];
 
                 const u16 texReg = ir.GetOperand(i, 0);
-                if ((texReg & 0xF000) != 0x6000) {
+                if (!IR::IsResourceHandle(texReg)) {
                     break;
                 }
 
-                appendUse(static_cast<u16>(texReg & 0x0FFFu),
+                appendUse(static_cast<u16>(IR::ResourceHandleSlot(texReg)),
                           TextureOpHasExplicitSampler(metadata)
                               ? GetTextureOpExplicitSamplerBinding(metadata) : 0xFFFFu);
                 break;
