@@ -205,6 +205,8 @@
   limit. Reaching it is error BWSL1402 for that unit, and the other units of
   a batch still compile. The CFG/SSA, SPIR-V and direct GLSL ES scratch
   arenas grow the same way.
+- The comptime pass may clone up to 1,000,000 AST nodes, up from 100,000.
+  The same shader clones about 94,000.
 
 ### AST JSON
 - A pointer parameter has `isPointer: true` and a `dataType` spelled as

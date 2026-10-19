@@ -16,6 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 # The compilation arena used to be a fixed 16 MiB block. Sources that need
 # more crashed the compiler; this many module helpers need about 25 MiB.
 LARGE_MODULE_HELPERS = 4000
+# Each pipeline helper clones ~50 AST nodes during comptime; 2500 of them
+# exceed the old 100k clone budget.
+CLONE_HEAVY_HELPERS = 2500
 
 
 def helper(name: str, index: int) -> str:
@@ -48,6 +51,15 @@ def large_module_sources(count: int) -> tuple[str, str]:
                 compute_body([f"ArenaStressLib::helper{i}" for i in range(0, count, step)]) +
                 "}\n")
     return module, pipeline
+
+
+def clone_heavy_source(count: int) -> str:
+    step = max(1, count // 32)
+    return ("pipeline CloneHeavy {\n"
+            "    resources { inbuf: buffer<float> output: buffer<float> }\n" +
+            "".join(helper("helper", i) for i in range(count)) +
+            compute_body([f"helper{i}" for i in range(0, count, step)]) +
+            "}\n")
 
 
 SMALL_SOURCE = """pipeline SmallUnit {
@@ -131,6 +143,14 @@ def run_arena_growth_tests(compiler: Path, output: Path) -> tuple[int, int]:
                     result, _ = compile_units("bad_limit", [small], "-arena-limit", *value)
                     self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                     self.assertIn("Expected a size in MiB", result.stdout + result.stderr)
+
+        def test_clone_heavy_pipeline_fits_comptime_budget(self):
+            source = output / "clone_heavy.bwsl"
+            source.write_text(clone_heavy_source(CLONE_HEAVY_HELPERS), encoding="utf-8")
+            result, target = compile_units("clone_heavy", [source])
+            self.assertEqual(result.returncode, 0, (result.stdout + result.stderr)[-2000:])
+            self.assertNotIn("clone node budget", result.stdout + result.stderr)
+            self.assertTrue((target / "clone_heavy.comp.spv").is_file())
 
         @unittest.skipUnless(shutil.which(shlex.split(os.environ.get("CXX", "clang++"))[0]),
                              "the arena unit test needs a C++ compiler")
