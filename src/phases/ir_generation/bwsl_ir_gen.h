@@ -364,8 +364,8 @@ enum OpCode : u16 {
     OP_SHR           = 0x45,  // Logical shift right
     OP_ASR           = 0x46,  // Arithmetic shift right
     OP_POPCNT        = 0x47,
-    OP_CLZ           = 0x48,  // Count leading zeros
-    OP_CTZ           = 0x49,  // Count trailing zeros
+    OP_CLZ           = 0x48,  // first_bit_high: index of the highest set bit (sign-aware for int), -1 if none
+    OP_CTZ           = 0x49,  // first_bit_low: index of the lowest set bit, -1 if none
     OP_REVERSE_BITS  = 0x4A,
     OP_BITFIELD_EXTRACT = 0x4B,
     OP_BITFIELD_INSERT  = 0x4C,

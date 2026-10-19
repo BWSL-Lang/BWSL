@@ -861,10 +861,13 @@ static std::string SelectGLESSource(const CrossCompileResult& crossResult,
         return directGlesSource;
     }
 
+    // When the direct emitter declines the program, its error names the
+    // capability the target lacks, which the fallback hint doesn't.
     if (IsFailedCrossCompileSource(crossResult.glslEs) &&
         IsKnownGLESFallbackError(crossResult.glslEs) &&
         !directGlesSource.empty() &&
-        directGlesSource.find("error") == std::string::npos) {
+        (directGlesSource.rfind("error:", 0) == 0 ||
+         directGlesSource.find("error") == std::string::npos)) {
         if (selectedMs) *selectedMs = directGlesMs;
         return directGlesSource;
     }
@@ -2507,8 +2510,14 @@ CompileResult CompileShaderStage(
     const bool emitDirectGles = !hasUnsupportedPointers &&
         (useDirectGles || (allowDirectGlesFallback && ProgramNeedsDirectGLESFallback(lowering.program)));
 
-    // Direct GLES output (bypasses SPIRV-Cross)
-    if (emitDirectGles) {
+    // Direct GLES output (bypasses SPIRV-Cross). Programs that use features
+    // the target lacks get the capability error instead of output with those
+    // operations missing.
+    const char* directGlesUnsupported =
+        emitDirectGles ? GLES::UnsupportedFeatureError(lowering.program) : nullptr;
+    if (directGlesUnsupported) {
+        result.directGlesSource = directGlesUnsupported;
+    } else if (emitDirectGles) {
         auto glesStart = Clock::now();
 
         // Run IR analysis (needed for attribute/output types)
@@ -2534,8 +2543,7 @@ CompileResult CompileShaderStage(
                                                 shaderStageData->workgroupSizeY,
                                                 shaderStageData->workgroupSizeZ);
         }
-        std::string_view glesOutput = glesBuilder.Emit();
-        result.directGlesSource = std::string(glesOutput);
+        result.directGlesSource = std::string(glesBuilder.Emit());
 
         auto glesEnd = Clock::now();
         result.timing.glslEsCrossMs = std::chrono::duration<double, std::milli>(glesEnd - glesStart).count();
@@ -2627,12 +2635,12 @@ static bool IsCrossCompileError(const std::string& source) {
 }
 
 static bool IsDocumentedTargetCapabilityExclusion(const std::string& source) {
+    // Builtins, storage buffers and images, compute shaders, shared memory
+    // and atomics, from SPIRV-Cross or the direct GLES emitter.
     return source.find("This subgroup operation is only supported in Vulkan semantics") != std::string::npos ||
-           (source.find("GLSL ES 300 does not support builtin '") != std::string::npos &&
-            source.find("requires ES 310+") != std::string::npos) ||
-           source.find("does not support storage buffers (requires ES 310+)") != std::string::npos ||
-           source.find("does not support storage images (requires ES 310+)") != std::string::npos ||
-           source.find("does not support compute shaders (requires ES 310+)") != std::string::npos;
+           source.find("GLSL ES does not support subgroup operations") != std::string::npos ||
+           (source.find("GLSL ES 300 does not support ") != std::string::npos &&
+            source.find("(requires ES 310+)") != std::string::npos);
 }
 
 static bool WriteCrossCompileOutput(bool enabled,

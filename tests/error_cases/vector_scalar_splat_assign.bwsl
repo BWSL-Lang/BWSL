@@ -1,0 +1,22 @@
+// Error case: a scalar does not implicitly splat into a vector; use float2(x).
+pipeline VectorWidth {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.position.xy;
+        }
+
+        fragment {
+            int2 small = int2(int(input.uv.x), int(input.uv.y));
+            int3 large = int3(small, int(input.uv.x * 3.0));
+            float2 value = input.uv.x;
+            output.color = float4(value.x, value.y, 0.0, 1.0);
+        }
+    }
+}

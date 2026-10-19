@@ -62,7 +62,29 @@ def runtime_cases() -> dict[str, dict]:
         + 8 * int(all(value > 1 for value in vector))
         for vector in reduction_vectors
     ]
+    # Bit indices are -1 when no bit qualifies; a negative int's highest bit
+    # is the highest one that differs from its sign bit.
+    bit_values = [0, 1, -1, -2, 8, -8, 6, 12, 0x40000000, -0x80000000, 0x7FFFFFFF, -0x40000000,
+                  0x12345678, -0x12345678, 255, -256]
+    unsigned_bits = [(bit_values[index % 16] + (index // 16) * (index % 3)) & 0xFFFFFFFF for index in range(64)]
+    bit_values = [bits - (bits >> 31 << 32) for bits in unsigned_bits]
+    # Naga 27's Metal lowering of firstLeadingBit(0xFFFFFFFFu) returns -1, so
+    # the unsigned form reads the value with bit 0 cleared.
+    bit_expected = [result for value, bits in zip(bit_values, unsigned_bits)
+                    for result in (bin(bits).count("1"),
+                                   (~value if value < 0 else value).bit_length() - 1,
+                                   (bits & -bits).bit_length() - 1,
+                                   (bits & ~1).bit_length() - 1,
+                                   (bits & -bits).bit_length() - 1)]
     return {
+        "bit_intrinsics": {
+            "workgroups": [1, 1, 1],
+            "buffers": [
+                {"binding": 0, "data": unsigned_bits, "expected": unsigned_bits},
+                {"binding": 1, "data": [0] * 320,
+                 "expected": [value & 0xFFFFFFFF for value in bit_expected]},
+            ],
+        },
         "scalar_reassignment": {
             "workgroups": [2, 1, 1],
             "buffers": [

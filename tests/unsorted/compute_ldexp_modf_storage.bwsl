@@ -1,0 +1,21 @@
+// Test: ldexp and modf in a compute stage that uses a storage buffer. GLSL ES
+// 3.00 has neither storage buffers nor compute, so -all omits the GLSL ES
+// target with a warning. ldexp and modf send GLSL ES to the direct emitter,
+// which must report the missing storage buffers rather than emit the shader
+// without its buffer reads and writes.
+
+pipeline ComputeLdexpModfStorage {
+    resources {
+        results: buffer<float>
+    }
+
+    pass "Main" {
+        use resources { results }
+
+        compute "Main" [1, 1, 1] {
+            float x = resources.results[0];
+            resources.results[1] = modf(x).fraction + modf(x).whole;
+            resources.results[2] = ldexp(resources.results[0], 2);
+        }
+    }
+}

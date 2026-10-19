@@ -565,6 +565,7 @@ inline bool IRLowering::TryStoreLocalPlace(NodeRef target, u16 valueReg) {
                             EmitZeroStruct(program.registerStructTypes[place.rootReg]));
     initializedVariables.insert(place.rootNameHash);
   }
+  if (!CheckStoreShape(target, valueReg, place.type)) return true;
   ResolveLocalPlace(target, true, &place);
   if (place.type != CoreType::CUSTOM && place.type != CoreType::ENUM)
     valueReg = ConvertRegisterToType(valueReg, place.type);
@@ -724,6 +725,10 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref, u32 bindingNameHash,
       std::vector<u16> elementRegs(elementCount);
       for (u32 i = 0; i < elementCount; i++) {
         u16 elementReg = LowerExpression(initBlock.statements[i]);
+        if (!CheckStoreShape(initBlock.statements[i], elementReg,
+                             arrayElementType)) {
+          return;
+        }
         elementRegs[i] = ConvertRegisterToType(elementReg, arrayElementType);
       }
       for (u32 i = 0; i < elementCount; i++) {
@@ -790,6 +795,7 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref, u32 bindingNameHash,
         }
       }
 
+      if (!isArray && !CheckStoreShape(ref, initReg, coreType)) return;
       u16 storedInitReg = ConvertRegisterToType(initReg, coreType);
       builder.EmitInstruction(OP_STORE_REG, varReg, storedInitReg);
       // Propagate pointer storage info if the init expression is a pointer
@@ -916,6 +922,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           ReportError("Error: cannot assign to receiver field inside const method\n");
           return;
         }
+        if (!CheckStoreShape(target, valueReg, fieldType)) return;
         valueReg = ConvertRegisterToType(valueReg, fieldType);
         u16 newStructReg = AllocateRegister();
         SetRegisterType(newStructReg, CoreType::CUSTOM);
@@ -952,7 +959,11 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
       return;
     }
 
+    bool declared = variableRegisters.find(ident.name.nameHash) !=
+                    variableRegisters.end();
     u16 varReg = GetOrAllocateVariable(ident.name.nameHash);
+    if (declared && !CheckStoreShape(target, valueReg, GetRegisterType(varReg)))
+      return;
     valueReg = ConvertRegisterToType(valueReg, GetRegisterType(varReg));
     builder.EmitInstruction(OP_STORE_REG, varReg, valueReg);
     // Propagate pointer storage info if the value is a pointer
@@ -993,6 +1004,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
         u16 updated = AllocateRegister();
         SetRegisterType(updated, objectType);
         program.registerStructTypes[updated] = structHash;
+        if (!CheckStoreShape(target, valueReg, fieldType)) return;
         valueReg = ConvertRegisterToType(valueReg, fieldType);
         builder.EmitInstruction(OP_STRUCT_INSERT, updated, objectReg,
                                 static_cast<u16>(fieldIndex), valueReg);
@@ -1010,6 +1022,9 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
                                 indices, &length)) {
           if (!CheckSwizzleInRange(this, target, objectType, indices, length))
               return;
+          CoreType component = GetScalarComponentType(objectType);
+          if (!CheckStoreShape(target, valueReg, GetVectorType(component, length)))
+            return;
           for (u32 j = 0; j < length; ++j) {
             for (u32 k = 0; k < j; ++k) {
               if (indices[j] == indices[k]) {
@@ -1093,6 +1108,9 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
             u8 index = static_cast<u8>(componentIndex);
             if (!CheckSwizzleInRange(this, target, outputType, &index, 1))
                 return;
+            CoreType component = GetScalarComponentType(outputType);
+            if (!CheckStoreShape(target, valueReg, component)) return;
+            valueReg = ConvertRegisterToType(valueReg, component);
             u32 numComponents = GetVectorDimension(outputType);
             if (numComponents < 2) {
               builder.EmitInstruction(OP_STORE_OUTPUT, valueReg, slot);
@@ -1116,6 +1134,10 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
                                   swizzleIndices, &swizzleLen)) {
             if (!CheckSwizzleInRange(this, target, outputType, swizzleIndices, swizzleLen))
                 return;
+            CoreType component = GetScalarComponentType(outputType);
+            if (!CheckStoreShape(target, valueReg,
+                                 GetVectorType(component, swizzleLen)))
+              return;
             // A repeated component in a swizzle store would silently drop
             // one of the writes.
             for (u32 i = 0; i < swizzleLen; i++) {
@@ -1170,6 +1192,9 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
       if (obj.identifierKind == SpecialIdentifier::OUTPUT) {
         u32 nameHash = access.member.nameHash;
         CoreType valueType = GetRegisterType(valueReg);
+        if (IsBuiltinOutput(nameHash) &&
+            !CheckStoreShape(target, valueReg, GetBuiltinOutputType(nameHash)))
+          return;
 
         // Extract name string for GLES output
         const char *nameStr = nullptr;
@@ -1245,6 +1270,11 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           }
 
           if (fieldIndex != 0xFFFF) {
+            CoreType fieldType = static_cast<CoreType>(
+                program.structFieldTypes[program.structTypes[structIt->second]
+                                             .fieldOffset + fieldIndex]);
+            if (!CheckStoreShape(target, valueReg, fieldType)) return;
+            valueReg = ConvertRegisterToType(valueReg, fieldType);
             // Emit struct insert: dest = struct with field=value
             // We modify the struct in place by creating a new struct value
             u16 newStructReg = AllocateRegister();
@@ -1288,6 +1318,9 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           u8 index = static_cast<u8>(componentIndex);
           if (!CheckSwizzleInRange(this, target, varType, &index, 1))
               return;
+          CoreType component = GetScalarComponentType(varType);
+          if (!CheckStoreShape(target, valueReg, component)) return;
+          valueReg = ConvertRegisterToType(valueReg, component);
 
           // Create a new vector with the component inserted
           u16 newVecReg = AllocateRegister();
@@ -1328,6 +1361,10 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
             CoreType varType = GetRegisterType(objReg);
             if (!CheckSwizzleInRange(this, target, varType, targetIdx, swizzleLen))
                 return;
+            CoreType component = GetScalarComponentType(varType);
+            if (!CheckStoreShape(target, valueReg,
+                                 GetVectorType(component, swizzleLen)))
+              return;
             u32 numComponents = GetVectorDimension(varType);
             if (numComponents < 2) {
               builder.EmitInstruction(OP_STORE_REG, objReg, valueReg);
@@ -1407,6 +1444,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
 
             CoreType memberType =
                 static_cast<CoreType>(program.structFieldTypes[memberOffset]);
+            if (!CheckStoreShape(target, valueReg, memberType)) return;
             valueReg = ConvertRegisterToType(valueReg, memberType);
 
             u16 indexReg = LowerExpression(arrAccess.index);
@@ -1624,6 +1662,17 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
         StoreLValue(arrAccess.array, updated, interpolation, sampling);
         return;
       }
+    }
+    if (baseReg < MAX_REGISTERS &&
+        (program.registerStorageInfo[baseReg] &
+         IR::IRProgram::STORAGE_IS_LOCAL_ARRAY)) {
+      u32 arrayIndex = program.registerStorageInfo[baseReg] >>
+                       IR::IRProgram::STORAGE_BINDING_SHIFT;
+      CoreType elementType =
+          arrayIndex < program.localArrayCount
+              ? static_cast<CoreType>(program.localArrayTypes[arrayIndex])
+              : CoreType::INVALID;
+      if (!CheckStoreShape(target, valueReg, elementType)) return;
     }
     if (baseReg < MAX_REGISTERS) {
       CoreType baseType =
@@ -2949,19 +2998,13 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
     if (typeConflict) {
       // The varying's type is inferred from its first assignment; a later
       // store of another type would only fail in SPIR-V validation.
-      auto typeName = [](CoreType type) {
-        std::string name = CoreTypeToString(type);
-        for (char &c : name) {
-          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        }
-        return name;
-      };
       char msg[256];
       snprintf(msg, sizeof(msg),
                "Error: conflicting types for stage output '%s': first assigned "
                "as %s, now assigned %s\n",
                (nameStr && nameStr[0] != '\0') ? nameStr : "<unnamed>",
-               typeName(existingType).c_str(), typeName(valueType).c_str());
+               SourceTypeName(existingType).c_str(),
+               SourceTypeName(valueType).c_str());
       ReportErrorAt(diagnosticNode, msg);
     }
     u32 slot = OutputSlot::VARYING0 + varyingIndex;
