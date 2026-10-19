@@ -1,0 +1,15 @@
+// Error case: @bounds on a bool.
+pipeline WrongBounds {
+    struct Params {
+        @bounds(>0) bool enabled;
+    }
+
+    resources {
+        params: Params
+    }
+
+    pass "Main" {
+        use resources { params }
+        compute "Main" [1, 1, 1] { }
+    }
+}

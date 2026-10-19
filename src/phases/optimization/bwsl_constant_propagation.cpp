@@ -40,6 +40,30 @@ struct ConstantValue {
 constexpr ConstantValue UNDEFINED_VALUE = {ValueState::UNDEFINED, CoreType::INVALID, 0, {}, 0};
 constexpr ConstantValue OVERDEFINED_VALUE = {ValueState::OVERDEFINED, CoreType::INVALID, 0, {}, 0};
 
+// A component's possible values (see bwsl_constant_propagation_ranges.inl):
+// from low to high, each end reached unless it's exclusive, and NaN or not.
+// Integers keep whole, reached ends. Without KNOWN, nothing has reached it yet.
+struct ValueRange {
+    f64 low;
+    f64 high;
+    u8 flags;
+
+    static constexpr u8 KNOWN = 1;
+    static constexpr u8 LOW_EXCLUSIVE = 2;   // value > low rather than >= low
+    static constexpr u8 HIGH_EXCLUSIVE = 4;  // value < high rather than <= high
+    static constexpr u8 MAY_BE_NAN = 8;
+};
+
+// `reg op other` holds (or, with !holds, fails) in a block and the blocks
+// it dominates, linked to the dominator's constraints through parent.
+struct RangeConstraint {
+    u16 reg;
+    u16 op;
+    u16 other;
+    bool holds;
+    u32 parent;
+};
+
 // Marks a definitions[] or use-list entry that names a phi, not an instruction.
 constexpr u32 PHI_REFERENCE = 0x80000000;
 constexpr u32 NO_DEFINITION = 0xFFFFFFFF;
@@ -92,6 +116,20 @@ struct ConstantPropagationData {
     // Instructions rewrites add, applied once the pass is done with
     // instruction indices.
     InstructionInsertions insertions;
+
+    // Value ranges.
+    ValueRange* ranges;         // [bitOffsets[regCount]]
+    u8* rangeChanges;           // [regCount] times a range grew, for widening
+    u32* blockConstraints;      // [blockCount] the block's last constraint, NO_DEFINITION for none
+    RangeConstraint* constraints;
+    u32 constraintCount;
+    u32 constraintCapacity;
+    bool rangesReady;           // ranges hold a settled result (or, straight-line, the walk's)
+    mutable bool sawUnknownRange;  // An evaluation read a range not known yet
+    // What the stage stores to each varying, by varying index: the hull of
+    // its stores' ranges, for ir->varyingBoundsOut.
+    ValueRange varyingRanges[16 * 4];
+    u8 varyingCounts[16];       // Components stored, 0 for a varying not stored
 };
 
 static ConstantValue MakeConstant(CoreType type, u32 bits) {
@@ -1448,6 +1486,14 @@ static void VisitInstruction(ConstantPropagationData* data, u32 inst) {
     }
     u16 dest = ir->destinations[inst];
     if (dest < data->regCount && data->tracked[dest] && data->definitions[dest] == inst) {
+        if (data->pinned[dest]) {
+            // A value its range fixes (see PinPointRanges).
+            ConstantValue value = {ValueState::CONSTANT, GetRegisterType(ir, dest),
+                                   static_cast<u8>(data->bitOffsets[dest + 1] - data->bitOffsets[dest]), {}, 0};
+            memcpy(value.bits, data->pinnedBits + data->bitOffsets[dest], value.count * sizeof(u32));
+            UpdateRegister(data, dest, value);
+            return;
+        }
         UpdateRegister(data, dest, EvaluateInstruction(data, inst));
     }
 }
@@ -1490,6 +1536,8 @@ static void Propagate(ConstantPropagationData* data) {
 // ============= Loops =============
 
 static u16 InternConstant(IR::IRBuilder* builder, CoreType type, u32 bits);
+static void ComputeRanges(ConstantPropagationData* data);
+static bool PinPointRanges(ConstantPropagationData* data);
 
 // Instructions a loop evaluated at compile time may hold, beside control
 // flow: values without side effects.
@@ -1767,8 +1815,10 @@ static void PropagateWithLoops(ConstantPropagationData* data) {
     const CFG* cfg = data->cfg;
     Propagate(data);
     if (!cfg->dominatorsComputed) return;
-    while (true) {
-        bool anyFolded = false;
+    for (u32 round = 0; round < 16; round++) {
+        // Values their ranges fix fold like constants.
+        ComputeRanges(data);
+        bool anyFolded = PinPointRanges(data);
         for (u32 block = 0; block < cfg->blockCount; block++) {
             if (!data->blockExecutable[block] || data->loopFolded[block] || !HasBackEdge(cfg, block)) continue;
             if (FoldLoop(data, block)) {
@@ -1776,10 +1826,12 @@ static void PropagateWithLoops(ConstantPropagationData* data) {
                 anyFolded = true;
             }
         }
-        if (!anyFolded) return;
+        if (!anyFolded) break;
         ResetPropagation(data);
         Propagate(data);
     }
+    // Ranges for the rewrites, from the final propagation.
+    ComputeRanges(data);
 }
 
 // ============= Rewriting =============
@@ -2005,6 +2057,269 @@ static bool RewriteAs(ConstantPropagationData* data, u32 inst, u16 op, u16 a, u1
     ir->SetOperand(inst, 1, b);
     for (u32 slot = 2; slot < 4; slot++) ir->SetOperand(inst, slot, 0xFFFF);
     return true;
+}
+
+// ============= Local stores =============
+
+// Stored fields store forwarding tracks at a time.
+constexpr u32 LOCAL_STORES_TRACKED = 32;
+
+// A field of a local struct, as a field pointer names it: the register its
+// chain starts from (the struct, or a pointer to one) and the field indices.
+struct LocalAddress {
+    u16 root;
+    u8 depth;
+    u8 fields[4];
+};
+
+static bool SameAddress(const LocalAddress& a, const LocalAddress& b) {
+    return a.root == b.root && a.depth == b.depth && memcmp(a.fields, b.fields, a.depth) == 0;
+}
+
+// Two addresses of one root that can't overlap: their paths part.
+static bool Disjoint(const LocalAddress& a, const LocalAddress& b) {
+    if (a.root != b.root) return false;
+    for (u32 d = 0; d < a.depth && d < b.depth; d++) {
+        if (a.fields[d] != b.fields[d]) return true;
+    }
+    return false;
+}
+
+// Instructions that don't write local memory.
+static bool KeepsLocalMemory(u16 op) {
+    return op == IR::OP_NOP || op == IR::OP_LOAD_REG || op == IR::OP_STORE_REG || op == IR::OP_LOCAL_LOAD ||
+           op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_INDEX_PTR ||
+           op == IR::OP_LOAD_UNIFORM || op == IR::OP_STRUCT_EXTRACT || op == IR::OP_STRUCT_INSERT ||
+           HasSlotOperands(op) || IsLoopValueOp(op) || IsPureValueOp(op) ||
+           IR::IsTerminator(static_cast<IR::OpCode>(op));
+}
+
+// A load of a struct field that a store before it on every path wrote
+// becomes a copy of the value stored, so constants and ranges carry
+// through the field. Each block starts with what all its predecessors
+// stored. Blocks are walked in reverse postorder until that settles,
+// starting from the assumption that a block not walked yet keeps
+// everything, so a loop that doesn't write a field keeps it; loads are
+// rewritten in one walk after that.
+//
+// A store through a pointer that isn't a field pointer chain forgets every
+// stored value, as does anything else that may write local memory; a store
+// to a field forgets what overlaps it: its own root's fields along the same
+// path, and, since a pointer may point to any struct, every field when one
+// of the two roots is a pointer. Two structs are separate memory. A chain's
+// root is a struct, or a pointer assigned once. Reassigning a value or a
+// root forgets what depends on it, and reassigning a struct a pointer
+// takes the address of forgets the fields of pointer roots too.
+static void ForwardLocalStores(ConstantPropagationData* data, BWSL_Arena* arena) {
+    IRProgram* ir = data->ir;
+    const CFG* cfg = data->cfg;
+    u32 regCount = data->regCount;
+    u32 blocks = data->straightLine ? 1 : cfg->blockCount;
+    constexpr u32 MAX_STORED = LOCAL_STORES_TRACKED;
+    struct Stored { LocalAddress address; u16 value; };
+    bool* addressed = (bool*)AllocateZeroed(arena, regCount * sizeof(bool));
+    bool* pointerLike = (bool*)AllocateZeroed(arena, regCount * sizeof(bool));
+    u8* definitionCounts = (u8*)AllocateZeroed(arena, regCount);
+    u32* definedBy = (u32*)AllocateZeroed(arena, regCount * sizeof(u32));
+    u8* resolved = (u8*)AllocateZeroed(arena, regCount);  // 0 not yet, 1 an address, 2 none
+    LocalAddress* addresses = (LocalAddress*)AllocateZeroed(arena, regCount * sizeof(LocalAddress));
+    Stored* outs = (Stored*)AllocateZeroed(arena, size_t(blocks) * MAX_STORED * sizeof(Stored));
+    u8* outCounts = (u8*)AllocateZeroed(arena, blocks);  // ALL_STORED: not walked yet, keeps everything
+    constexpr u8 ALL_STORED = 0xFF;
+    if (!addressed || !pointerLike || !definitionCounts || !definedBy || !resolved || !addresses || !outs ||
+        !outCounts) {
+        return;
+    }
+    memset(outCounts, ALL_STORED, blocks);
+    auto isPointerOp = [](u16 op) {
+        return op == IR::OP_LOCAL_VAR_PTR || op == IR::OP_LOCAL_FIELD_PTR || op == IR::OP_LOCAL_INDEX_PTR;
+    };
+    auto defines = [&](u32 i) {
+        u16 op = ir->opcodes[i];
+        return op != IR::OP_NOP && !IsUseInDestination(op) && !IR::IsTerminator(static_cast<IR::OpCode>(op)) &&
+               IsRegisterOperand(data, ir->destinations[i]);
+    };
+    for (u32 i = 0; i < ir->instructionCount; i++) {
+        u16 op = ir->opcodes[i];
+        u16 base = ir->GetOperand(i, 0);
+        if (isPointerOp(op) && IsRegisterOperand(data, base)) addressed[base] = true;
+        if (!defines(i)) continue;
+        u16 dest = ir->destinations[i];
+        if (definitionCounts[dest] < 255) definitionCounts[dest]++;
+        definedBy[dest] = i;
+        if (isPointerOp(op)) pointerLike[dest] = true;
+    }
+    for (u32 phi = 0; phi < ir->phiCount; phi++) {
+        u16 result = ir->phiResultRegs[phi];
+        if (IsRegisterOperand(data, result) && definitionCounts[result] < 255) definitionCounts[result] += 2;
+    }
+    // Copies, selects and phis of pointers are pointers too.
+    for (bool changed = true; changed;) {
+        changed = false;
+        auto mark = [&](u16 reg, u16 source) {
+            if (IsRegisterOperand(data, reg) && IsRegisterOperand(data, source) && pointerLike[source] && !pointerLike[reg]) {
+                pointerLike[reg] = changed = true;
+            }
+        };
+        for (u32 i = 0; i < ir->instructionCount; i++) {
+            u16 op = ir->opcodes[i];
+            if (!defines(i)) continue;
+            if (op == IR::OP_LOAD_REG || op == IR::OP_STORE_REG) mark(ir->destinations[i], ir->GetOperand(i, 0));
+            if (op == IR::OP_SELECT) {
+                mark(ir->destinations[i], ir->GetOperand(i, 1));
+                mark(ir->destinations[i], ir->GetOperand(i, 2));
+            }
+        }
+        for (u32 phi = 0; phi < ir->phiCount; phi++) {
+            for (u32 j = 0; j < ir->GetPhiOperandCount(phi); j++) mark(ir->phiResultRegs[phi], ir->GetPhiOperandValue(phi, j));
+        }
+    }
+    // The address a field pointer register holds: one assigned once, by a
+    // field pointer of a struct or of a pointer assigned once.
+    auto resolve = [&](auto&& self, u16 reg, u32 depth) -> const LocalAddress* {
+        if (!IsRegisterOperand(data, reg) || depth > 4) return nullptr;
+        if (resolved[reg] == 0) {
+            resolved[reg] = 2;
+            u32 i = definedBy[reg];
+            if (definitionCounts[reg] == 1 && ir->opcodes[i] == IR::OP_LOCAL_FIELD_PTR) {
+                u16 base = ir->GetOperand(i, 0);
+                u16 field = ir->GetOperand(i, 1);
+                LocalAddress address = {};
+                if (const LocalAddress* parent = self(self, base, depth + 1)) {
+                    address = *parent;
+                } else if (IsRegisterOperand(data, base) && (!pointerLike[base] || definitionCounts[base] == 1)) {
+                    address.root = base;
+                } else {
+                    return nullptr;
+                }
+                if (address.depth < 4 && field < 256) {
+                    address.fields[address.depth++] = static_cast<u8>(field);
+                    addresses[reg] = address;
+                    resolved[reg] = 1;
+                }
+            }
+        }
+        return resolved[reg] == 1 ? &addresses[reg] : nullptr;
+    };
+
+    // One walk over the blocks; returns whether a block's result changed.
+    auto walk = [&](bool rewrite) {
+        bool changed = false;
+        Stored stored[MAX_STORED];
+        for (u32 k = blocks; k-- > 0;) {
+            u32 block = data->straightLine ? 0 : cfg->postorder[k];
+            if (block >= blocks) continue;
+            // What every predecessor walked stored. One not walked yet keeps
+            // everything; if none is walked, the block isn't reached and
+            // starts with nothing.
+            u32 storedCount = 0;
+            bool first = true;
+            if (!data->straightLine && block != cfg->entryBlock) {
+                for (u32 e = cfg->predecessorOffsets[block]; e < cfg->predecessorOffsets[block + 1]; e++) {
+                    u32 predecessor = cfg->predecessorData[e];
+                    if (predecessor >= blocks || outCounts[predecessor] == ALL_STORED) continue;
+                    const Stored* other = outs + size_t(predecessor) * MAX_STORED;
+                    if (first) {
+                        storedCount = outCounts[predecessor];
+                        memcpy(stored, other, storedCount * sizeof(Stored));
+                        first = false;
+                        continue;
+                    }
+                    u32 kept = 0;
+                    for (u32 s = 0; s < storedCount; s++) {
+                        bool found = false;
+                        for (u32 t = 0; t < outCounts[predecessor] && !found; t++) {
+                            found = other[t].value == stored[s].value && SameAddress(other[t].address, stored[s].address);
+                        }
+                        if (found) stored[kept++] = stored[s];
+                    }
+                    storedCount = kept;
+                }
+            }
+            u32 firstInst = data->straightLine ? 0 : cfg->firstInst[block];
+            u32 lastInst = data->straightLine ? ir->instructionCount - 1 : cfg->lastInst[block];
+            for (u32 i = firstInst; i <= lastInst && i < ir->instructionCount; i++) {
+                u16 op = ir->opcodes[i];
+                u16 dest = ir->destinations[i];
+                if (op == IR::OP_LOCAL_LOAD && rewrite) {
+                    const LocalAddress* address = resolve(resolve, ir->GetOperand(i, 0), 0);
+                    for (u32 s = 0; address && s < storedCount; s++) {
+                        if (!SameAddress(stored[s].address, *address)) continue;
+                        u16 value = stored[s].value;
+                        if (IR::IsConstant(value)) {
+                            CoreType type = GetRegisterType(ir, dest);
+                            if (GetComponentCount(type) == 1 && DecodeConstant(ir, value).type == type &&
+                                !IsMemoryBacked(ir, dest)) {
+                                MakeConstantCopy(data, i, value);
+                            }
+                        } else {
+                            RewriteAs(data, i, IR::OP_LOAD_REG, value);
+                        }
+                        op = ir->opcodes[i];
+                        break;
+                    }
+                }
+                if (op == IR::OP_LOCAL_STORE) {
+                    const LocalAddress* address = resolve(resolve, ir->GetOperand(i, 0), 0);
+                    u16 value = ir->GetOperand(i, 1);
+                    if (!address) {
+                        storedCount = 0;
+                    } else {
+                        LocalAddress target = *address;
+                        u32 kept = 0;
+                        for (u32 s = 0; s < storedCount; s++) {
+                            u16 root = stored[s].address.root;
+                            bool separate = root != target.root && !pointerLike[root] && !pointerLike[target.root];
+                            if (separate || Disjoint(stored[s].address, target)) stored[kept++] = stored[s];
+                        }
+                        storedCount = kept;
+                        bool forwardable = IR::IsConstant(value) ||
+                                           (IsRegisterOperand(data, value) && !addressed[value] && !pointerLike[value] &&
+                                            !IsMemoryBacked(ir, value) &&
+                                            (data->straightLine || definitionCounts[value] == 1));
+                        if (forwardable) {
+                            // When full, the oldest value goes: a later
+                            // load more likely reads a recent store.
+                            if (storedCount == MAX_STORED) {
+                                memmove(stored, stored + 1, (MAX_STORED - 1) * sizeof(Stored));
+                                storedCount--;
+                            }
+                            stored[storedCount++] = {target, value};
+                        }
+                    }
+                } else if (!KeepsLocalMemory(op)) {
+                    storedCount = 0;
+                }
+                if (defines(i)) {
+                    // A struct a pointer can reach changed: so may what the
+                    // fields of pointer roots hold.
+                    u32 kept = 0;
+                    for (u32 s = 0; s < storedCount; s++) {
+                        u16 root = stored[s].address.root;
+                        bool keep = stored[s].value != dest && root != dest && !(addressed[dest] && pointerLike[root]);
+                        if (keep) stored[kept++] = stored[s];
+                    }
+                    storedCount = kept;
+                }
+            }
+            Stored* out = outs + size_t(block) * MAX_STORED;
+            bool same = outCounts[block] == storedCount;
+            for (u32 s = 0; s < storedCount && same; s++) {
+                same = out[s].value == stored[s].value && SameAddress(out[s].address, stored[s].address);
+            }
+            if (!same) {
+                changed = true;
+                outCounts[block] = static_cast<u8>(storedCount);
+                memcpy(out, stored, storedCount * sizeof(Stored));
+            }
+        }
+        return changed;
+    };
+    // Each walk can only drop entries, so it settles; a stage that hasn't
+    // after many walks is left alone.
+    bool settled = false;
+    for (u32 pass = 0; pass < 64 && !settled; pass++) settled = !walk(false);
+    if (settled) walk(true);
 }
 
 // A scalar result that doesn't depend on the operands' values.
@@ -2331,6 +2646,8 @@ static void RewriteAlgebraicIdentity(ConstantPropagationData* data, u32 inst) {
     }
 }
 
+#include "bwsl_constant_propagation_ranges.inl"
+
 static void RewriteConstants(ConstantPropagationData* data) {
     IRProgram* ir = data->ir;
     for (u32 i = 0; i < ir->instructionCount; i++) {
@@ -2339,6 +2656,9 @@ static void RewriteConstants(ConstantPropagationData* data) {
         if (!IsRegisterOperand(data, dest) || data->states[dest] != ValueState::CONSTANT) {
             RewriteBitwiseIdentity(data, i);
             RewriteAlgebraicIdentity(data, i);
+            if (data->rangesReady && data->blockExecutable[data->cfg->instToBlock[i]]) {
+                RewriteWithRanges(data, i, data->cfg->instToBlock[i]);
+            }
         }
     }
 
@@ -2544,6 +2864,29 @@ static void RemoveDeadLoops(ConstantPropagationData* data, BWSL_Arena* arena) {
         }
         anyRemoved = true;
     }
+
+    // A selection whose branch or switch is constant becomes a jump to the
+    // arm it takes, so every backend sees just that arm (WGSL writes out
+    // both otherwise, and the phis no longer have the other's edge). Loop
+    // exits and `until` conditions keep their branch: WGSL's continuing
+    // block needs it.
+    for (u32 b = 0; b < cfg->blockCount; b++) {
+        u32 last = cfg->lastInst[b];
+        u32 kind = ir->structureInfo[last] & IR::IRProgram::STRUCT_TYPE_MASK;
+        if (kind != IR::IRProgram::STRUCT_IF_HEADER && kind != IR::IRProgram::STRUCT_SWITCH_HEADER) continue;
+        u32 target;
+        if (!IR::TryGetConstantTarget(ir, last, &target) || target >= ir->instructionCount) continue;
+        ir->opcodes[last] = IR::OP_JUMP;
+        ir->metadata[last] = target;
+        for (u32 slot = 0; slot < 4; slot++) ir->SetOperand(last, slot, 0);
+        ir->ClearBranchTargets(last);
+        ir->structureInfo[last] = 0;
+        ir->continueInfo[last] = 0xFFFFFFFF;
+        cfg->successorCount[b] = 1;
+        cfg->successors[b * 2] = cfg->instToBlock[target];
+        cfg->successors[b * 2 + 1] = NO_BLOCK;
+        anyRemoved = true;
+    }
     if (!anyRemoved) return;
 
     // Predecessors from the new successors, in place: there are fewer.
@@ -2685,6 +3028,8 @@ static void PropagateStraightLine(ConstantPropagationData* data) {
         RewriteOperands(data, i);
         RewriteBitwiseIdentity(data, i);
         RewriteAlgebraicIdentity(data, i);
+        RecordVaryingRange(data, i, 0);
+        RewriteWithRanges(data, i, 0);
         u16 dest = ir->destinations[i];
         if (IsRegisterOperand(data, dest) && !IsUseInDestination(op) && op != IR::OP_JUMP &&
             op != IR::OP_BRANCH && op != IR::OP_SWITCH && op != IR::OP_RET) {
@@ -2701,6 +3046,29 @@ static void PropagateStraightLine(ConstantPropagationData* data) {
         // A vector with some known components keeps them too.
         bool isPartial = value.state == ValueState::OVERDEFINED && value.known != 0 && fits;
         SetRegisterValue(data, dest, isConstant || isPartial ? value : OVERDEFINED_VALUE);
+        // The walk's range for the register from here on; one that's a
+        // single number is a constant. Float zeros aren't: they could be -0.0.
+        if (HasRange(data, dest)) {
+            u32 offset = data->bitOffsets[dest];
+            u32 count = data->bitOffsets[dest + 1] - offset;
+            CoreType scalar = GetScalarType(type);
+            ConstantValue fixed = {ValueState::CONSTANT, type, static_cast<u8>(count), {}, 0};
+            bool point = !isConstant && count == GetComponentCount(type);
+            for (u32 c = 0; c < count; c++) {
+                ValueRange range = isConstant ? PointRange(scalar, value.bits[c]) : EvaluateComponentRange(data, i, c, 0);
+                data->ranges[offset + c] = range;
+                point = point && IsPoint(range) && !(IsFloatScalar(scalar) && range.low == 0.0);
+                if (point) {
+                    fixed.bits[c] = IsFloatScalar(scalar) ? FloatToBits(static_cast<float>(range.low))
+                                  : scalar == CoreType::INT ? static_cast<u32>(static_cast<s32>(range.low))
+                                                            : static_cast<u32>(range.low);
+                }
+            }
+            if (point) {
+                SetRegisterValue(data, dest, fixed);
+                isConstant = true;
+            }
+        }
         if (isConstant) MaterializeConstant(data, i, dest);
     }
 }
@@ -3005,7 +3373,15 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
                    size_t(bitCount) * sizeof(u32) * 2 + size_t(ir->phiCount) * sizeof(u16) +
                    size_t(blockCount) * (sizeof(bool) * 2 + sizeof(u32)) +
                    // Dead loops: path, next, onPath, predecessor counts.
-                   size_t(blockCount) * (sizeof(u32) * 3 + sizeof(bool)) + sizeof(u32) + 52 * 64;
+                   size_t(blockCount) * (sizeof(u32) * 3 + sizeof(bool)) + sizeof(u32) +
+                   // Store forwarding: per register flags, counts, definitions and
+                   // addresses; per block what it stored.
+                   size_t(regCount) * (sizeof(bool) * 2 + 2 + sizeof(u32) + sizeof(LocalAddress)) +
+                   size_t(std::max<u32>(blockCount, 1)) * (LOCAL_STORES_TRACKED * (sizeof(LocalAddress) + sizeof(u16) + 2) + 2) + 9 * 64 +
+                   // Ranges: ranges, rangeChanges; blockConstraints, constraints.
+                   size_t(bitCount) * sizeof(ValueRange) + size_t(regCount) +
+                   size_t(blockCount) * sizeof(u32) + size_t(blockCount * 8 + 16) * sizeof(RangeConstraint) +
+                   56 * 64;
     std::vector<char> memory(bytes);
     BWSL_Arena arena;
     arena.Initialize(memory.data(), memory.size());
@@ -3028,6 +3404,12 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
     data.regWork = (u32*)AllocateZeroed(&arena, (bitCount + regCount * 2) * sizeof(u32));
     data.known = (u16*)AllocateZeroed(&arena, regCount * sizeof(u16));
     data.savedKnown = (u16*)AllocateZeroed(&arena, regCount * sizeof(u16));
+    data.ranges = (ValueRange*)AllocateZeroed(&arena, bitCount * sizeof(ValueRange));
+    data.rangeChanges = (u8*)AllocateZeroed(&arena, regCount);
+    data.blockConstraints = (u32*)AllocateZeroed(&arena, blockCount * sizeof(u32));
+    data.constraintCapacity = blockCount * 8 + 16;
+    data.constraints = (RangeConstraint*)AllocateZeroed(&arena, data.constraintCapacity * sizeof(RangeConstraint));
+    data.rangesReady = straightLine;
     data.blockExecutable = (bool*)AllocateZeroed(&arena, blockCount * sizeof(bool));
     data.edgeExecutable = (bool*)AllocateZeroed(&arena, edgeCount * sizeof(bool));
     data.blockPhiOffsets = (u32*)AllocateZeroed(&arena, (blockCount + 1) * sizeof(u32));
@@ -3048,7 +3430,8 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
         !data.blockExecutable || !data.edgeExecutable || !data.blockPhiOffsets ||
         !data.blockPhis || !data.phiRemoved || !data.blockWork || !data.pinned || !data.pinnedBits ||
         !data.pinnedPhiOperand || !data.readAnywhere || !data.loopFolded || !data.inLoop ||
-        !data.blockStack || !data.savedStates || !data.savedBits || !data.known || !data.savedKnown) {
+        !data.blockStack || !data.savedStates || !data.savedBits || !data.known || !data.savedKnown ||
+        !data.ranges || !data.rangeChanges || !data.blockConstraints || !data.constraints) {
         return;
     }
     memset(data.definitions, 0xFF, regCount * sizeof(u32));
@@ -3058,6 +3441,7 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
         data.bitOffsets[reg + 1] = data.bitOffsets[reg] + count;
     }
 
+    ForwardLocalStores(&data, &arena);
     FindDefinitions(&data, straightLine);
     if (straightLine) {
         PropagateStraightLine(&data);
@@ -3066,11 +3450,13 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
         FindReads(&data);
         GroupPhisByBlock(&data);
         PropagateWithLoops(&data);
+        RecordVaryingRanges(&data);
         RewriteConstants(&data);
         DropFoldedBranchEdges(&data, &arena);
         RemoveDeadLoops(&data, &arena);
         CollapseSingleValuePhis(&data, &arena);
     }
+    ExportVaryingRanges(&data);
     RemoveDeadValues(&data, &arena);
     if (straightLine) RemoveUnreadAssignments(&data, &arena);
     ApplyInsertions(builder, cfg, &data.insertions);

@@ -1,0 +1,15 @@
+// Error case: @bounds on a struct resource; they belong on its fields.
+pipeline WrongBounds {
+    struct Params {
+        float level;
+    }
+
+    resources {
+        @bounds(>0) params: Params
+    }
+
+    pass "Main" {
+        use resources { params }
+        compute "Main" [1, 1, 1] { }
+    }
+}

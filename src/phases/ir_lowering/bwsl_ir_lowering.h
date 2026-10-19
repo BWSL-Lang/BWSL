@@ -48,6 +48,9 @@ struct VaryingInfo {
 struct PassVaryingContext {
   VaryingInfo varyings[16]; // Max 16 user varyings
   u32 count = 0;
+  // What each varying holds, as the vertex stage's optimizer found it
+  // (count 0 for nothing known), for the fragment stage's.
+  DeclaredBounds bounds[16] = {};
   DiagnosticStream *diagnosticStream = nullptr;
   std::string diagnosticPassName;
   const char *diagnosticStageName = "vertex";
@@ -333,6 +336,7 @@ struct IRLowering {
   void LowerPass(NodeRef passRef);
 
   void LowerShaderStage(NodeRef stageRef);
+  void RecordWorkgroupSize();
 
   void LowerBlock(NodeRef blockRef);
 
@@ -611,6 +615,7 @@ struct IRLowering {
   CoreType ResolveOutputTypeForLoad(u32 nameHash);
 
   u32 GetAttributeIndex(u32 nameHash);
+  const DeclaredBounds *GetAttributeBounds(u32 nameHash);
 
   u32 GetInputSlotIndex(u32 nameHash);
 
