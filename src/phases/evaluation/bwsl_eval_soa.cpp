@@ -234,8 +234,11 @@ bool CompileTimeEvaluatorSoA::PerformFloatOp(BinaryOpType op, float left, float 
             *result = left / right;
             return true;
         case BinaryOpType::MODULO:
+            // Float `%` lowers to OP_FMOD (OpFMod), which floors:
+            // x - y * floor(x / y). Fold it the same way constant
+            // propagation does so folding never changes the result.
             if (right == 0.0f) return false;
-            *result = std::fmod(left, right);
+            *result = left - right * std::floor(left / right);
             return true;
         default: return false;
     }

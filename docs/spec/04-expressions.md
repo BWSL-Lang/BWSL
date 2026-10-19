@@ -77,8 +77,11 @@ as the corresponding explicit cast.
 Signed integer `/` truncates toward zero, and `%` returns the corresponding
 remainder: `a - b * (a / b)`. A nonzero remainder has the sign of the dividend,
 so `-4 % 3` is `-1` and `4 % -3` is `1`. This also applies component-wise to
-integer vectors and during compile-time evaluation. Floating-point `mod()`
-keeps its floor-based modulo behavior.
+integer vectors and during compile-time evaluation. Floating-point `%` is
+floor-based like `mod()`: `a - b * floor(a / b)`, so a nonzero result has the
+sign of the divisor and `-7.5 % 2.0` is `0.5`, in runtime code and during
+compile-time evaluation. `fmod()` truncates instead and has the sign of the
+dividend.
 
 Scalar `&&` and `||` evaluate the left operand first and short-circuit:
 `&&` evaluates its right operand only when the left is true, and `||` only

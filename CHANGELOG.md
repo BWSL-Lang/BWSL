@@ -8,6 +8,10 @@
   `@bounds(>=0, <=1) float4 tint;`, or per component, as in
   `@bounds(>0, -10<y<0) float4 offsets;`. A bounded component is never
   NaN. See "Value Bounds" in the language reference.
+- Float `%` with a negative operand now gives the same result at compile
+  time as at runtime. `eval` code and `const` initializers truncated, so
+  `-7.5 % 2.0` was `-1.5` there but `0.5` in runtime code; both now give
+  `0.5`, the sign of the divisor, like `mod()`. `fmod()` still truncates.
 
 ### Backends
 - Experimental native WGSL output is available with `-wgsl` for compute,
