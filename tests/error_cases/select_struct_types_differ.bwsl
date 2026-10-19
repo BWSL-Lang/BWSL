@@ -1,0 +1,18 @@
+// select's two values must be the same struct type; the error names both
+// structs rather than calling them both "custom".
+pipeline SelectStructTypesDiffer {
+    struct Light { float intensity; };
+    struct Fog { float intensity; };
+
+    pass "Main" {
+        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+        fragment {
+            Light light;
+            light.intensity = 1.0;
+            Fog fog;
+            fog.intensity = 0.5;
+            Light picked = select(light, fog, input.position.x > 0.5);
+            output.color = float4(picked.intensity);
+        }
+    }
+}

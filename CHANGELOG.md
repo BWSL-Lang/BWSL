@@ -79,6 +79,13 @@
 ### Diagnostics
 - Ternary arms of different types, such as `c ? float3(1.0) : float2(1.0)`,
   are a source error. They previously failed SPIR-V validation.
+- `select(false_value, true_value, condition)` reports a source error when
+  the condition isn't a `bool` (for example when it's passed first), when the
+  two values differ in type, or when a `bool` vector condition is narrower or
+  wider than the values. Values that differ, as with the condition passed
+  first, and a condition of the wrong width previously failed SPIR-V
+  validation; a numeric condition with matching values compiled as
+  `condition != 0` (see Breaking changes).
 
 ### AST JSON
 - A call that passes a struct resource or an enum variant directly, such as

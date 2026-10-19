@@ -1,0 +1,10 @@
+// A bool vector condition must be as wide as select's values.
+pipeline SelectConditionWidthMismatch {
+    pass "Main" {
+        vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+        fragment {
+            float2 v = select(float2(0.0), float2(1.0), input.position.xyz > float3(0.5));
+            output.color = float4(v, 0.0, 1.0);
+        }
+    }
+}
