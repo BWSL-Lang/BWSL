@@ -982,6 +982,12 @@ static bool EvalFunctionHook(void* user, NodeRef call, const LiteralValue* args,
     auto* state = static_cast<ComptimeState*>(user);
     if (state->currentPipeline.IsNull()) return false;
     const FunctionCallData& callData = state->ast->GetFunctionCall(call);
+    // Module-qualified calls and method calls resolve elsewhere, even when
+    // their name matches a pipeline eval function.
+    if ((callData.flags & (FunctionCallFlags::IS_MODULE_FUNCTION | FunctionCallFlags::IS_METHOD_CALL)) ||
+        callData.moduleQualifiedHash != 0 || callData.moduleObject.IsValid()) {
+        return false;
+    }
     const PipelineData& pipeline = state->ast->GetPipeline(state->currentPipeline);
     NodeRef selected = NodeRef::Null();
     LiteralValue selectedArgs[16]{};
@@ -1135,9 +1141,112 @@ static bool ProcessStruct(ComptimeState* state, NodeRef structRef) {
     return true;
 }
 
+// Returns the first call to a pipeline eval function inside expr, or null.
+static NodeRef FindEvalCall(ComptimeState* state, NodeRef expr) {
+    if (expr.IsNull()) return NodeRef::Null();
+    switch (expr.Type()) {
+        case ASTNodeType::FUNCTION_CALL: {
+            const FunctionCallData& call = state->ast->GetFunctionCall(expr);
+            if (EvalFunctionHook(state, expr, nullptr, call.arguments.count, nullptr)) return expr;
+            for (u32 i = 0; i < call.arguments.count; i++) {
+                NodeRef found = FindEvalCall(state, call.arguments[i]);
+                if (found.IsValid()) return found;
+            }
+            return NodeRef::Null();
+        }
+        case ASTNodeType::BINARY_OP: {
+            const BinaryOpData& op = state->ast->GetBinaryOp(expr);
+            NodeRef found = FindEvalCall(state, op.left);
+            return found.IsValid() ? found : FindEvalCall(state, op.right);
+        }
+        case ASTNodeType::UNARY_OP:
+            return FindEvalCall(state, state->ast->GetUnaryOp(expr).operand);
+        case ASTNodeType::TERNARY_EXPRESSION: {
+            const TernaryExprData& ternary = state->ast->GetTernaryExpression(expr);
+            NodeRef found = FindEvalCall(state, ternary.condition);
+            if (found.IsNull()) found = FindEvalCall(state, ternary.trueExpr);
+            return found.IsValid() ? found : FindEvalCall(state, ternary.falseExpr);
+        }
+        case ASTNodeType::MEMBER_ACCESS:
+            return FindEvalCall(state, state->ast->GetMemberAccess(expr).object);
+        case ASTNodeType::ARRAY_ACCESS: {
+            const ArrayAccessData& access = state->ast->GetArrayAccess(expr);
+            NodeRef found = FindEvalCall(state, access.array);
+            return found.IsValid() ? found : FindEvalCall(state, access.index);
+        }
+        default:
+            return NodeRef::Null();
+    }
+}
+
+static const char* CopyMessage(ComptimeState* state, const std::string& message) {
+    char* copy = static_cast<char*>(state->arena->Allocate(message.size() + 1, 1));
+    memcpy(copy, message.c_str(), message.size() + 1);
+    return copy;
+}
+
+// The parser folds pipeline constants while parsing, before eval functions
+// can run. A constant whose initializer calls one is folded here instead, the
+// way a stage-local const is; otherwise each use would lower a call to a
+// function with no runtime body.
+static bool FoldPipelineConst(ComptimeState* state, NodeRef declRef) {
+    if (declRef.Type() != ASTNodeType::VARIABLE_DECL) return true;
+    const VariableDeclData& decl = state->ast->GetVariableDecl(declRef);
+    if (decl.arrayDimensions > 0) return true;
+    Symbol* sym = SymbolTable::LookupByHash(state->symbols, decl.name.nameHash);
+    if (!sym || sym->kind != SymbolKind::VARIABLE) return true;
+    VariableData& var = state->symbols->variables[sym->index];
+    if (var.hasEvalValue || var.constExpr != decl.initializer) return true;
+
+    if (FindEvalCall(state, decl.initializer).IsNull()) {
+        // No eval call, but the initializer may read a constant folded above
+        // (const float B = A * 2.0;). Record its value so later constants and
+        // eval code can read it; uses still lower the initializer.
+        LiteralValue value;
+        if (EvalExpression(state, decl.initializer, &value) &&
+            CoerceLiteralToType(var.typeInfo, &value)) {
+            var.isEval = true;
+            var.hasEvalValue = true;
+            var.evalValue = value;
+        }
+        return !state->hadError;
+    }
+
+    // Cloning substitutes each eval call whose arguments are compile-time.
+    NodeRef folded = CloneNode(state, decl.initializer);
+    if (state->hadError) return false;
+    NodeRef evalCall = FindEvalCall(state, folded);
+    if (evalCall.IsValid()) {
+        Report(state, declRef, CopyMessage(state,
+            "Pipeline constant '" + decl.name.ToString(state->sourceBase) +
+            "' calls eval function '" +
+            state->ast->GetFunctionCall(evalCall).name.ToString(state->sourceBase) +
+            "' with arguments that are not compile-time values"));
+        return false;
+    }
+
+    LiteralValue value;
+    if (EvalExpression(state, folded, &value) && CoerceLiteralToType(var.typeInfo, &value)) {
+        NodeRef literal = MakeLiteralNode(state->ast, value, state->ast->GetLine(folded),
+                                          state->ast->GetColumn(folded));
+        if (literal.IsValid()) {
+            folded = literal;
+            var.isEval = true;
+            var.hasEvalValue = true;
+            var.evalValue = value;
+        }
+    }
+    state->ast->GetVariableDecl(declRef).initializer = folded;
+    var.constExpr = folded;
+    return true;
+}
+
 static bool ProcessPipeline(ComptimeState* state, NodeRef pipelineRef) {
     state->currentPipeline = pipelineRef;
     PipelineData& pipeline = state->ast->GetPipeline(pipelineRef);
+    for (u32 i = 0; i < pipeline.consts.count; i++) {
+        if (!FoldPipelineConst(state, pipeline.consts[i])) return false;
+    }
     for (u32 i = 0; i < pipeline.functions.count; i++) {
         if (!ProcessFunction(state, pipeline.functions[i])) return false;
     }

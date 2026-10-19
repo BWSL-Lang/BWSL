@@ -18,6 +18,10 @@
   `@bounds(>=0, <=1) float4 tint;`, or per component, as in
   `@bounds(>0, -10<y<0) float4 offsets;`. A bounded component is never
   NaN. See "Value Bounds" in the language reference.
+- A pipeline-scope `const` can call a pipeline `eval` function, as in
+  `const float AREA = circleArea(2.0);`. The call is evaluated once and
+  every pass sees the folded value. An eval call whose arguments aren't
+  compile-time values is reported at the declaration.
 - Float `%` with a negative operand now gives the same result at compile
   time as at runtime. `eval` code and `const` initializers truncated, so
   `-7.5 % 2.0` was `-1.5` there but `0.5` in runtime code; both now give
