@@ -148,7 +148,7 @@ void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
                 } else {
                     // Regular function
                     std::vector<OverloadTypeMask> paramMasks;
-                    BuildParamMasks(decl.parameters, paramMasks);
+                    BuildParamMasks(decl, paramMasks);
                     u64 signatureKey = HashOverloadSignature(paramMasks.data(),
                         static_cast<u32>(paramMasks.size()));
 

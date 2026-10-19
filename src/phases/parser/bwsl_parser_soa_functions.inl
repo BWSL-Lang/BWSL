@@ -11,6 +11,11 @@
 
 namespace BWSL {
 
+// Compile-time functions run in the compiler, where no variable has an
+// address to point at.
+static constexpr const char* EVAL_POINTER_PARAMETER_ERROR =
+    "Compile-time (eval) functions cannot take pointer parameters";
+
 bool Parser::ValidateAttributeInUse(const ArenaString& attrName) {
     if (!currentPass.IsValid()) return false;
 
@@ -814,7 +819,7 @@ u32 AnalyzeFunctionExits(const AST* ast, NodeRef node, u32 loopDepth = 0) {
 }
 } // namespace
 
-NodeRef Parser::ParseFunction() {
+NodeRef Parser::ParseFunction(bool isEval) {
     TokenRef declToken = current;  // Function name token; a doc block precedes it
 
     // Get function name
@@ -841,7 +846,7 @@ NodeRef Parser::ParseFunction() {
 
     // Parse parameters
     Consume(TokenType::LEFT_PAREN, "Expected '(' after '::'");
-    ParseFunctionParameters(function);
+    ParseFunctionParameters(function, isEval ? EVAL_POINTER_PARAMETER_ERROR : nullptr);
     Consume(TokenType::RIGHT_PAREN, "Expected ')' after parameters");
 
     // Parse return type
@@ -902,6 +907,7 @@ NodeRef Parser::ParseFunction() {
         Error("Expected valid return type after '->'");
         return NodeRef::Null();
     }
+    RejectPointerReturnType();
 
     const FunctionDeclData& decl = ast->GetFunction(function);
 
@@ -936,7 +942,7 @@ NodeRef Parser::ParseFunction() {
     } else {
         // Regular function - add to symbol table as before
         std::vector<OverloadTypeMask> paramMasks;
-        BuildParamMasks(decl.parameters, paramMasks);
+        BuildParamMasks(decl, paramMasks);
         u64 signatureKey = HashOverloadSignature(paramMasks.data(), static_cast<u32>(paramMasks.size()));
 
         // Only add unqualified function symbol when NOT in module scope
@@ -1152,7 +1158,24 @@ NodeRef Parser::ParseFunction() {
     return function;
 }
 
-void Parser::ParseFunctionParameters(NodeRef function) {
+// A returned pointer could only point at the callee's own locals, which end
+// with the call.
+void Parser::RejectPointerReturnType() {
+    if (!Check(TokenType::BITWISE_XOR)) return;
+    ReportRecoveredError(current, "Functions cannot return pointers; take a pointer "
+                                  "parameter (`Type^ out`) and write the result through it");
+    while (Match(TokenType::BITWISE_XOR)) {}
+}
+
+// Reports an unsupported but well-formed declaration without entering panic
+// mode, so parsing continues and later declarations can still report errors.
+void Parser::ReportRecoveredError(TokenRef token, const char* message) {
+    const bool wasInPanicMode = panicMode;
+    ErrorAt(token, message);
+    panicMode = wasInPanicMode;
+}
+
+void Parser::ParseFunctionParameters(NodeRef function, const char* pointerError) {
     if (Check(TokenType::RIGHT_PAREN)) return;
     do {
         std::string paramName;
@@ -1171,10 +1194,14 @@ void Parser::ParseFunctionParameters(NodeRef function) {
             typeLoc = getLocation(stream->GetOffset(current));
         }
         positions.typePosition = AST::PackPosition(typeLoc.line, typeLoc.column);
-        if (MatchMask(TokenMasks::CORE_TYPES) || Match(TokenType::TEXTURE2D) ||
-            Match(TokenType::TEXTURE3D) || Match(TokenType::TEXTURECUBE) ||
-            Match(TokenType::TEXTURE2DARRAY) || Match(TokenType::SAMPLER)) {
+        bool isHandleType = false;
+        if (MatchMask(TokenMasks::CORE_TYPES)) {
             paramType = std::string(stream->GetValue(previous));
+        } else if (Match(TokenType::TEXTURE2D) || Match(TokenType::TEXTURE3D) ||
+                   Match(TokenType::TEXTURECUBE) || Match(TokenType::TEXTURE2DARRAY) ||
+                   Match(TokenType::SAMPLER)) {
+            paramType = std::string(stream->GetValue(previous));
+            isHandleType = true;
         } else if (Match(TokenType::IDENTIFIER)) {
             paramType = std::string(stream->GetValue(previous));
             if (Match(TokenType::DOUBLE_COLON)) {
@@ -1187,10 +1214,21 @@ void Parser::ParseFunctionParameters(NodeRef function) {
             Error("Expected parameter type");
             return;
         }
-        // Pointer parameters have no supported overload representation.
+        // `Type^ name` passes a pointer to the caller's variable. Only
+        // single-level pointers to non-handle values are allowed, matching
+        // what a local `Type^` can point at.
+        bool isPointer = false;
         if (Match(TokenType::BITWISE_XOR)) {
-            Error("Pointer-typed function parameters are not supported");
-            return;
+            isPointer = true;
+            if (pointerError) {
+                ReportRecoveredError(previous, pointerError);
+            } else if (isHandleType) {
+                ReportRecoveredError(previous, "Pointer parameters cannot point to textures "
+                                               "or samplers; pass the handle by value");
+            } else if (Check(TokenType::BITWISE_XOR)) {
+                ReportRecoveredError(current, "Pointer-to-pointer parameters are not supported");
+            }
+            while (Match(TokenType::BITWISE_XOR)) {}
         }
         u32 totalSize = 1;
         while (Match(TokenType::LEFT_BRACKET)) {
@@ -1203,6 +1241,15 @@ void Parser::ParseFunctionParameters(NodeRef function) {
             }
             totalSize *= size;
             arraySizes.Push(arena, size);
+        }
+        if (isPointer && arraySizes.count > 0) {
+            ReportRecoveredError(previous, "Arrays of pointers are not supported as parameters");
+        }
+        if (arraySizes.count > 0 && Check(TokenType::BITWISE_XOR)) {
+            ReportRecoveredError(current, "Pointers to whole arrays are not supported; pass a "
+                                          "pointer to an element (`^values[i]`) or wrap the "
+                                          "array in a struct");
+            while (Match(TokenType::BITWISE_XOR)) {}
         }
         if (paramName.empty() &&
             (Check(TokenType::IDENTIFIER) || IsKeywordNameToken(CurrentTokenType()))) {
@@ -1226,6 +1273,7 @@ void Parser::ParseFunctionParameters(NodeRef function) {
             std::make_pair(ArenaString::MakeHashOnly(paramName), ArenaString::MakeHashOnly(paramType)));
         declaration.parameterPositions.Push(arena, positions);
         declaration.parameterArraySizes.Push(arena, arraySizes);
+        declaration.parameterIsPointer.Push(arena, isPointer);
     } while (Match(TokenType::COMMA) && !Check(TokenType::RIGHT_PAREN));
 }
 

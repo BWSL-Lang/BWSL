@@ -1,0 +1,25 @@
+// Error case: a pointer local that points at a stage output can't be passed
+// on to a pointer parameter either.
+pipeline PointerParamForwardedOutput {
+    attributes {
+        position: float3
+    }
+
+    brighten :: (float4^ color) -> void {
+        color^ = color^ * 2.0;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            output.color = float4(0.25);
+            float4^ target = ^output.color;
+            brighten(target);
+        }
+    }
+}

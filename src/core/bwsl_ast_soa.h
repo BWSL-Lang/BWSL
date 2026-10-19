@@ -234,6 +234,9 @@ struct FunctionDeclData {
     ArenaArray<std::pair<ArenaString, ArenaString>> parameters;
     ArenaArray<ParameterSourcePositions> parameterPositions;
     ArenaArray<ArenaArray<u32>> parameterArraySizes;
+    // True for a `Type^` parameter; the parameter's type string names the
+    // pointee. Synthesized functions may leave this shorter than parameters.
+    ArenaArray<bool> parameterIsPointer;
     CoreType returnType;
     u32 returnTypeHash;
     u32 returnTypeNameHash = 0; // Written custom type/alias before resolution
@@ -244,6 +247,10 @@ struct FunctionDeclData {
     bool isStructMethod;
     bool isConstMethod;
 };
+
+inline bool IsPointerParameter(const FunctionDeclData& function, u32 index) {
+    return index < function.parameterIsPointer.count && function.parameterIsPointer[index];
+}
 
 // Struct field with optional array size
 struct StructFieldData {
@@ -1668,6 +1675,7 @@ namespace ASTFactory {
         data.parameters.Init(ast->arena, 4);
         data.parameterPositions.Init(ast->arena, 0);
         data.parameterArraySizes.Init(ast->arena, 0);
+        data.parameterIsPointer.Init(ast->arena, 0);
         data.body = NodeRef::Null();
         data.isEval = false;
         data.isStructMethod = false;
@@ -2433,6 +2441,7 @@ namespace ASTClone {
         dst.isEval = src.isEval;
         dst.parameterPositions = src.parameterPositions;
         dst.parameterArraySizes = src.parameterArraySizes;
+        dst.parameterIsPointer = src.parameterIsPointer;
         dst.returnTypePosition = src.returnTypePosition;
 
         // Clone parameters with type substitution

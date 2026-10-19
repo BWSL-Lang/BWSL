@@ -104,6 +104,51 @@ class AstJsonTests(unittest.TestCase):
         self.assert_type_shape(function['returnTypeInfo'], 'float', [])
         self.assertIn('sum(float[3],Light[2],float)', symbols[function['id']]['stableId'])
 
+    def test_pointer_parameters_and_stable_ids(self):
+        data = self.parse('''module Pointers {
+            struct Pair { int a; int b; }
+            bump :: (Pair^ pair, amount: int^, int step) -> void {
+                pair^.a = pair^.a + step;
+                amount^ = amount^ + 1;
+            }
+            bump :: (Pair pair, int amount, int step) -> void {}
+        }''')
+        overloads = self.nodes(data, 'FUNCTION', 'bump')
+        pointer, value = overloads[0], overloads[1]
+        symbols = {symbol['id']: symbol for symbol in data['referenceIndex']['symbols']}
+        expected = [('Pair^', 'Pair', True), ('int^', 'int', True), ('int', 'int', False)]
+        for parameter, (data_type, pointee, is_pointer) in zip(pointer['parameters'], expected):
+            with self.subTest(name=parameter['name']):
+                self.assertEqual(parameter['dataType'], data_type)
+                self.assertEqual(parameter.get('isPointer', False), is_pointer)
+                self.assert_type_shape(parameter['typeInfo'], pointee, [])
+                self.assertEqual(symbols[parameter['id']]['type'], pointee)
+        self.assertNotIn('isPointer', value['parameters'][0])
+        self.assertIn('bump(Pair^,int^,int)', symbols[pointer['id']]['stableId'])
+        self.assertIn('bump(Pair,int,int)', symbols[value['id']]['stableId'])
+        self.assert_edge(data, pointer['parameters'][0]['id'],
+                         self.nodes(data, 'STRUCT_DECL', 'Pair')[0]['id'], 'type')
+
+    def test_pointer_overload_calls_resolve(self):
+        data = self.parse('''pipeline P {
+            kind :: (int v) -> int { return 1; }
+            kind :: (int^ v) -> int { return 2; }
+            forward :: (int^ v) -> int { return kind(v) + kind(v^); }
+            pass "Main" {
+                vertex {
+                    int x = 1;
+                    int^ p = ^x;
+                    int k = kind(x) + kind(^x) + kind(p) + forward(^x);
+                    output.position = float4(float(k));
+                }
+            }
+        }''')
+        value, pointer, forward = self.nodes(data, 'FUNCTION')[:3]
+        calls = [edge['to'] for edge in self.edges(data, 'call')]
+        # forward: kind(v), kind(v^); vertex: kind(x), kind(^x), kind(p), forward(^x)
+        self.assertEqual(sorted(calls), sorted([pointer['id'], value['id'], value['id'],
+                                                pointer['id'], pointer['id'], forward['id']]))
+
     def test_multidimensional_array_shapes_and_parameter_syntaxes(self):
         data = self.parse('''module Arrays {
             const int ROWS = 2;

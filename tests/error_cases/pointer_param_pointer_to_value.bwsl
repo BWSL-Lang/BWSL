@@ -1,0 +1,20 @@
+// Error case: a value parameter can't take a pointer; it must be dereferenced.
+pipeline PointerParamPointerToValue {
+    attributes {
+        position: float3
+    }
+
+    half :: (float v) -> float {
+        return v * 0.5;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            float acc = 1.0;
+            float h = half(^acc);
+            output.position = float4(attributes.position, h);
+        }
+    }
+}

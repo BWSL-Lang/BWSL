@@ -1,0 +1,21 @@
+// Error case: a pointer argument must point to a function-local variable. A
+// pointer to a storage buffer element would target a loaded copy, so the
+// callee's write would never reach the buffer.
+pipeline PointerParamBufferArgument {
+    resources {
+        output: buffer<int>
+    }
+
+    accumulate :: (int^ sum, int value) -> void {
+        sum^ = sum^ + value;
+    }
+
+    pass "Compute" {
+        use resources { output }
+
+        compute "Main" [64, 1, 1] {
+            uint idx = input.global_id.x;
+            accumulate(^resources.output[idx], 1);
+        }
+    }
+}

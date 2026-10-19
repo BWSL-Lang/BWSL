@@ -1,0 +1,19 @@
+// Error case: functions can't return pointers; a returned pointer could only
+// point at the callee's own locals.
+pipeline PointerReturnType {
+    attributes {
+        position: float3
+    }
+
+    pick :: (float^ a) -> float^ {
+        return a;
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+    }
+}

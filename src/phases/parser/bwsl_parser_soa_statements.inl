@@ -437,6 +437,15 @@ NodeRef Parser::ParseStatement() {
                 return ParseCustomTypeVarDecl();
             }
         } else if (stream->GetType(next) == TokenType::DOUBLE_COLON) {
+            // `Module::function(...);` is a call statement, the way a void
+            // helper (for example one writing through a pointer) is called.
+            if (next + 2 < stream->Count() &&
+                stream->GetType(next + 1) == TokenType::IDENTIFIER &&
+                stream->GetType(next + 2) == TokenType::LEFT_PAREN) {
+                NodeRef call = ParseExpression();
+                if (call.IsValid()) Consume(TokenType::SEMICOLON, "Expected ';' after function call");
+                return call;
+            }
             // Could be module-qualified type: Module::Type varName;
             // ParseCustomTypeVarDecl handles the full pattern
             return ParseCustomTypeVarDecl();

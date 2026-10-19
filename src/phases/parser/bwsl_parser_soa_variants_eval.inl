@@ -1278,12 +1278,12 @@ NodeRef Parser::ParseEvalStatement() {
     // Check for function: eval funcName :: (params) -> type { ... }
     if (IsFunctionDeclStart()) {
         // It's an eval function
-        NodeRef func = ParseFunction();
+        NodeRef func = ParseFunction(true);
         if (func.IsValid()) {
             ast->GetFunction(func).isEval = true;
             const FunctionDeclData& decl = ast->GetFunction(func);
             std::vector<OverloadTypeMask> paramMasks;
-            BuildParamMasks(decl.parameters, paramMasks);
+            BuildParamMasks(decl, paramMasks);
             // Mark as eval in symbol table
             Symbol* sym = SymbolTable::LookupFunctionOverload(&symbolTable, decl.name,
                 paramMasks.data(), static_cast<u32>(paramMasks.size()));

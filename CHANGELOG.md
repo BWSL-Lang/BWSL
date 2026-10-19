@@ -25,6 +25,21 @@
   `@bounds(>=0, <=1) float4 tint;`, or per component, as in
   `@bounds(>0, -10<y<0) float4 offsets;`. A bounded component is never
   NaN. See "Value Bounds" in the language reference.
+- Functions and struct methods can take pointer parameters, `Type^ name`,
+  to update the caller's variables: `swap :: (int^ a, int^ b)` called as
+  `swap(^x, ^y)`. Writes through the parameter reach the caller, and two
+  parameters given the same address alias. The argument must point to a
+  local variable, a field of one or an array element; pointers to
+  resources, stage inputs and outputs or shared memory are rejected. `T^`
+  and `T` overload separately, and a constrained `Number^` parameter is
+  specialized by its pointee. Functions can't return pointers. See
+  "Pointer parameters" in the language reference.
+- `Module::helper(...);` is accepted as a statement. It previously failed to
+  parse ("Expected variable name"), so a void module function couldn't be
+  called.
+- A pointer to an element of a struct's array field (`^s.values[i]`) or to
+  a `self` field named without `self.` now points at the element. It
+  previously pointed at a copy, so writes through it were lost.
 - `@centroid` on a vertex output assignment evaluates the varying inside the
   primitive under MSAA, so edge pixels don't extrapolate it past its vertex
   values: `@centroid output.atlasUV = uv;`. It combines with
@@ -154,6 +169,9 @@
   GLSL ES target with a warning.
 
 ### Diagnostics
+- Passing a value where a pointer parameter is expected, a pointer where a
+  value is expected (including to an intrinsic or constructor), or a pointer
+  to a different type reports the argument and how to fix it.
 - `sample`, `sample_offset` and `sample_cmp` in a compute stage are a source
   error that recommends `sample_lod` or `sample_lod_offset`; they previously
   failed SPIR-V validation. `sample_offset` in a vertex stage is reported the
@@ -179,6 +197,9 @@
   reduced to one arm at compile time.
 
 ### AST JSON
+- A pointer parameter has `isPointer: true` and a `dataType` spelled as
+  written, such as `int^`; its `typeInfo` describes the pointee. Function
+  stable IDs mark pointer parameters with `^`, as in `swap(int^,int^)`.
 - `frexp` and `modf` calls and variables of their result types are typed as
   `builtin:type:BwslFrexpResult` / `builtin:type:BwslModfResult`, and their
   field reads have `member` edges.

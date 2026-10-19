@@ -660,6 +660,7 @@ NodeRef Parser::ClonePassWithParamsAndRemap(NodeRef passRef, const ParamSubstitu
         }
         dstFn.parameterPositions = srcFn.parameterPositions;
         dstFn.parameterArraySizes = srcFn.parameterArraySizes;
+        dstFn.parameterIsPointer = srcFn.parameterIsPointer;
         dstFn.returnTypePosition = srcFn.returnTypePosition;
         dstFn.returnTypeNameHash = srcFn.returnTypeNameHash;
         dstFn.isEval = srcFn.isEval;
@@ -1228,6 +1229,7 @@ NodeRef Parser::ClonePassWithActiveVariants(NodeRef passRef) {
         }
         dstFn.parameterPositions = srcFn.parameterPositions;
         dstFn.parameterArraySizes = srcFn.parameterArraySizes;
+        dstFn.parameterIsPointer = srcFn.parameterIsPointer;
         dstFn.returnTypePosition = srcFn.returnTypePosition;
         dstFn.returnTypeNameHash = srcFn.returnTypeNameHash;
         dstFn.isEval = srcFn.isEval;
@@ -1347,6 +1349,7 @@ NodeRef Parser::SpecializePipelineForVariants(NodeRef pipeline,
         }
         dstFn.parameterPositions = srcFn.parameterPositions;
         dstFn.parameterArraySizes = srcFn.parameterArraySizes;
+        dstFn.parameterIsPointer = srcFn.parameterIsPointer;
         dstFn.returnTypePosition = srcFn.returnTypePosition;
         dstFn.returnTypeNameHash = srcFn.returnTypeNameHash;
         dstFn.isEval = srcFn.isEval;

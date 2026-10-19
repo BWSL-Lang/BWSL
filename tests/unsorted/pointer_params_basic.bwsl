@@ -1,0 +1,87 @@
+// Test: pointer-typed function parameters (`Type^ name`)
+// Tests: swap and accumulate helpers, both parameters aliasing one variable,
+//        forwarding a pointer parameter to another function, passing a
+//        pointer local, overloads that differ only in pointer-ness, and
+//        rebinding a pointer parameter inside the callee
+
+pipeline PointerParamsBasic {
+    resources {
+        output: buffer<int>
+    }
+
+    swap :: (int^ a, int^ b) -> void {
+        int t = a^;
+        a^ = b^;
+        b^ = t;
+    }
+
+    accumulate :: (int^ sum, int value) -> void {
+        sum^ = sum^ + value;
+    }
+
+    // Forwards its own pointer parameter.
+    accumulateTwice :: (int^ sum, int value) -> void {
+        accumulate(sum, value);
+        accumulate(sum, value);
+    }
+
+    // Writes through the pointer and returns a value.
+    doubleInPlace :: (int^ v) -> int {
+        v^ = v^ * 2;
+        return v^ + 1;
+    }
+
+    kind :: (int v) -> int { return 1; }
+    kind :: (int^ v) -> int { return 2; }
+
+    // A pointer parameter is a local pointer: rebinding it changes only what
+    // later writes reach.
+    rebind :: (int^ p) -> int {
+        int local = 40;
+        p^ = 3;
+        p = ^local;
+        p^ = p^ + 2;
+        return local;
+    }
+
+    pass "Compute" {
+        use resources { output }
+
+        compute "Main" [64, 1, 1] {
+            uint idx = input.global_id.x;
+            int n = int(idx);
+
+            int x = n;
+            int y = 100;
+            swap(^x, ^y);              // x = 100, y = n
+            accumulate(^x, 5);         // x = 105
+            accumulateTwice(^y, 3);    // y = n + 6
+
+            // Both parameters point at `same`, so the swap reads and writes
+            // one variable and leaves it unchanged.
+            int same = n + 7;
+            swap(^same, ^same);
+
+            int^ px = ^x;
+            accumulate(px, 1);         // x = 106
+            accumulate(^px^, 1);       // `^px^` is px: x = 107
+
+            // Rebinding a pointer that pointed at a copy makes it valid to
+            // pass again.
+            int4 v = int4(n);
+            int^ retargeted = ^v.x;
+            retargeted = ^y;
+            accumulate(retargeted, 1); // y = n + 7
+
+            int d = 4;
+            int r = doubleInPlace(^d); // d = 8, r = 9
+
+            int kinds = kind(x) * 10 + kind(^x);   // 12
+
+            int rb = 0;
+            int rl = rebind(^rb);      // rb = 3, rl = 42
+
+            resources.output[idx] = x + y + same + d + r + kinds + rb + rl + v.x;
+        }
+    }
+}

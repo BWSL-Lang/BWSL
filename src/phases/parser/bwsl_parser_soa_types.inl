@@ -783,7 +783,7 @@ NodeRef Parser::ParseEnum() {
             NodeRef methodRef = ast->GetEnumDecl(enumNode).methods[i];
             const FunctionDeclData& method = ast->GetFunction(methodRef);
             std::vector<OverloadTypeMask> paramMasks;
-            BuildParamMasks(method.parameters, paramMasks);
+            BuildParamMasks(method, paramMasks);
             Symbol* methodSym = SymbolTable::LookupFunctionOverload(&symbolTable, method.name,
                 paramMasks.data(), static_cast<u32>(paramMasks.size()));
             if (methodSym && methodSym->kind == SymbolKind::FUNCTION) {
@@ -899,7 +899,9 @@ NodeRef Parser::ParseEnumMethod() {
     NodeRef method = ASTFactory::MakeFunction(ast, methodName, CoreType::FLOAT, line, col);
 
     Consume(TokenType::LEFT_PAREN, "Expected '(' after '::'");
-    ParseFunctionParameters(method);
+    // Every pattern arm is evaluated and its result selected, so a write
+    // through a pointer parameter would happen once per arm.
+    ParseFunctionParameters(method, "Enum methods cannot take pointer parameters");
     Consume(TokenType::RIGHT_PAREN, "Expected ')' after parameters");
 
     Consume(TokenType::ARROW, "Expected '->' after parameters");
@@ -939,10 +941,11 @@ NodeRef Parser::ParseEnumMethod() {
         Error("Expected valid return type after '->'");
         return NodeRef::Null();
     }
+    RejectPointerReturnType();
 
     const FunctionDeclData& decl = ast->GetFunction(method);
     std::vector<OverloadTypeMask> paramMasks;
-    BuildParamMasks(decl.parameters, paramMasks);
+    BuildParamMasks(decl, paramMasks);
     u64 signatureKey = HashOverloadSignature(paramMasks.data(), static_cast<u32>(paramMasks.size()));
 
     // Add method to symbol table
@@ -1160,7 +1163,7 @@ NodeRef Parser::ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime) {
     methodDecl.ownerStructTypeHash = ownerStructTypeHash;
 
     Consume(TokenType::LEFT_PAREN, "Expected '(' after '::'");
-    ParseFunctionParameters(method);
+    ParseFunctionParameters(method, isCompileTime ? EVAL_POINTER_PARAMETER_ERROR : nullptr);
     Consume(TokenType::RIGHT_PAREN, "Expected ')' after parameters");
 
     if (Match(TokenType::CONST)) {
@@ -1204,6 +1207,7 @@ NodeRef Parser::ParseStructMethod(u32 ownerStructTypeHash, bool isCompileTime) {
         Error("Expected valid return type after '->'");
         return NodeRef::Null();
     }
+    RejectPointerReturnType();
 
     Consume(TokenType::LEFT_BRACE, "Expected '{' before method body");
     NodeRef body = ParseBlock();
@@ -1287,7 +1291,7 @@ NodeRef Parser::ParseStruct() {
             if (method.IsValid()) {
                 const FunctionDeclData& decl = ast->GetFunction(method);
                 std::vector<OverloadTypeMask> paramMasks;
-                BuildParamMasks(decl.parameters, paramMasks);
+                BuildParamMasks(decl, paramMasks);
                 u64 signatureKey = HashOverloadSignature(paramMasks.data(),
                     static_cast<u32>(paramMasks.size()));
 

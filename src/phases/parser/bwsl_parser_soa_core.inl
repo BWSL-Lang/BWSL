@@ -730,13 +730,13 @@ namespace {
         return {};
     }
 
-    void BuildParamMasks(const ArenaArray<std::pair<ArenaString, ArenaString>>& params,
-        std::vector<OverloadTypeMask>& outMasks) {
+    void BuildParamMasks(const FunctionDeclData& decl, std::vector<OverloadTypeMask>& outMasks) {
         outMasks.clear();
-        outMasks.reserve(params.count);
-        for (u32 i = 0; i < params.count; i++) {
-            const auto& param = params[i];
-            outMasks.push_back(MakeOverloadMaskFromTypeHash(param.second.nameHash));
+        outMasks.reserve(decl.parameters.count);
+        for (u32 i = 0; i < decl.parameters.count; i++) {
+            OverloadTypeMask mask = MakeOverloadMaskFromTypeHash(decl.parameters[i].second.nameHash);
+            if (IsPointerParameter(decl, i)) mask |= OVERLOAD_POINTER_MASK;
+            outMasks.push_back(mask);
         }
     }
 
@@ -780,7 +780,7 @@ namespace {
             if (existing.name.nameHash != decl.name.nameHash) continue;
 
             std::vector<OverloadTypeMask> existingMasks;
-            BuildParamMasks(existing.parameters, existingMasks);
+            BuildParamMasks(existing, existingMasks);
             u64 existingKey = HashOverloadSignature(existingMasks.data(),
                 static_cast<u32>(existingMasks.size()));
             if (existingKey != signatureKey) continue;
@@ -811,7 +811,7 @@ namespace {
             if (existing.isConstMethod != decl.isConstMethod) continue;
 
             std::vector<OverloadTypeMask> existingMasks;
-            BuildParamMasks(existing.parameters, existingMasks);
+            BuildParamMasks(existing, existingMasks);
             u64 existingKey = HashOverloadSignature(existingMasks.data(),
                 static_cast<u32>(existingMasks.size()));
             if (existingKey != signatureKey) continue;
@@ -908,6 +908,7 @@ namespace {
             info.typeName = decl.parameters[i].second;
             info.constraintMask = constraintMasks[i];
             info.isConstrained = isConstrained[i];
+            info.isPointer = IsPointerParameter(decl, i);
             gfn.parameters.Push(arena, info);
         }
 

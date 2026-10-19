@@ -538,7 +538,8 @@ inline void AppendFunctionParameters(std::ostringstream& json, const AST& ast,
     const std::string& idPrefix,
     const ArenaArray<ParameterSourcePositions>* positions = nullptr,
     const ArenaArray<ArenaArray<u32>>* arraySizes = nullptr,
-    const char* sourceFile = nullptr) {
+    const char* sourceFile = nullptr,
+    const ArenaArray<bool>* isPointer = nullptr) {
     json << "[";
     for (u32 i = 0; i < params.count; i++) {
         if (i > 0) json << ",";
@@ -558,7 +559,11 @@ inline void AppendFunctionParameters(std::ostringstream& json, const AST& ast,
         }
         AppendArenaStringFields(json, first, "name", params[i].first);
         const std::string elementType = ResolveArenaString(params[i].second);
-        AppendStringField(json, first, "dataType", elementType);
+        // A `Type^` parameter spells its type as written, like a pointer
+        // local's declaredType; typeInfo describes the pointee.
+        const bool pointer = isPointer && i < isPointer->count && (*isPointer)[i];
+        AppendStringField(json, first, "dataType", pointer ? elementType + "^" : elementType);
+        if (pointer) AppendBoolField(json, first, "isPointer", true);
         AppendFieldName(json, first, "typeInfo");
         AppendDeclarationTypeInfo(json, elementType,
             arraySizes && i < arraySizes->count ? ArraySizes((*arraySizes)[i]) : std::vector<u32>{});
@@ -1136,7 +1141,8 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             AppendArenaStringFields(json, first, "name", node.name);
             AppendFieldName(json, first, "parameters");
             AppendFunctionParameters(json, ast, node.parameters, NodeRefId(ref) + "/parameter:",
-                                     &node.parameterPositions, &node.parameterArraySizes, ast.GetDeclarationSource(ref));
+                                     &node.parameterPositions, &node.parameterArraySizes, ast.GetDeclarationSource(ref),
+                                     &node.parameterIsPointer);
             const std::string returnType = FunctionReturnTypeToString(ast, node, ast.GetDeclarationSource(ref));
             AppendStringField(json, first, "returnType", returnType);
             AppendFieldName(json, first, "returnTypeInfo");

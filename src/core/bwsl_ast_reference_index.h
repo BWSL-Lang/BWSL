@@ -551,7 +551,9 @@ private:
         target.id = NodeId(ref);
         target.returnType = CanonicalType(FunctionReturnType(ref), owner);
         for (u32 i = 0; i < function.parameters.count; i++) {
-            target.parameterTypes.push_back(CanonicalType(ResolveName(function.parameters[i].second), owner));
+            std::string type = CanonicalType(ResolveName(function.parameters[i].second), owner);
+            if (IsPointerParameter(function, i)) type = PointerType(type);
+            target.parameterTypes.push_back(type);
         }
         functionsByScope_[ScopedKey(owner, name)].push_back(target);
     }
@@ -566,6 +568,7 @@ private:
         for (u32 i = 0; i < function.parameters.count; i++) {
             if (i > 0) result += ",";
             result += ResolveName(function.parameters[i].second);
+            if (IsPointerParameter(function, i)) result += "^";
             if (i < function.parameterArraySizes.count) {
                 const auto& sizes = function.parameterArraySizes[i];
                 for (u32 j = 0; j < sizes.count; j++) result += "[" + std::to_string(sizes[j]) + "]";
@@ -994,6 +997,12 @@ private:
         return EnsureType(typeName, CurrentOwner());
     }
 
+    // Expression and overload types spell a pointer as its pointee's type
+    // followed by `^`, so `f(int)` and `f(int^)` resolve separately.
+    static std::string PointerType(const std::string& pointee) {
+        return pointee.empty() ? std::string() : pointee + "^";
+    }
+
     // Intrinsic result structs (frexp, modf) have no declaration in source;
     // their fields still resolve like those of a declared struct.
     Binding EnsureBuiltinStruct(const StdLib::BuiltinStructType& structure) {
@@ -1341,7 +1350,9 @@ private:
             if (i < function.parameterPositions.count) {
                 CheckShadowing(ref, parameterId, name, function.parameterPositions[i].namePosition, "Parameter");
             }
-            Bind(name, {parameterId, CanonicalType(type, functionId)});
+            std::string boundType = CanonicalType(type, functionId);
+            if (IsPointerParameter(function, i)) boundType = PointerType(boundType);
+            Bind(name, {parameterId, boundType});
         }
         VisitNode(function.body);
         PopScope();
@@ -1366,7 +1377,12 @@ private:
         AddQualifierReference(NodeId(ref), variable.typePosition,
                               "/type-qualifier", ast_.GetDeclarationSource(ref));
         CheckShadowing(ref, NodeId(ref), name, variable.namePosition, "Variable");
-        Bind(name, {NodeId(ref), CanonicalType(type, CurrentOwner())});
+        // A pointer local (`Type^ p`) has its pointee's type plus `^`, like a
+        // pointer parameter.
+        const size_t caret = type.find('^');
+        Bind(name, {NodeId(ref), caret == std::string::npos
+                                     ? CanonicalType(type, CurrentOwner())
+                                     : PointerType(CanonicalType(type.substr(0, caret), CurrentOwner()))});
     }
 
     Binding EnsureInterface(const std::string& name, bool fragmentOutput) {
@@ -1673,7 +1689,14 @@ private:
                     unary.op == UnaryOpType::PRE_DECREMENT ||
                     unary.op == UnaryOpType::POST_INCREMENT ||
                     unary.op == UnaryOpType::POST_DECREMENT;
-                return VisitExpr(unary.operand, mutating ? "write" : "read");
+                ExprInfo info = VisitExpr(unary.operand, mutating ? "write" : "read");
+                if (unary.op == UnaryOpType::ADDRESS_OF) {
+                    info.type = PointerType(info.type);
+                } else if (unary.op == UnaryOpType::DEREFERENCE && !info.type.empty() &&
+                           info.type.back() == '^') {
+                    info.type.pop_back();
+                }
+                return info;
             }
             case ASTNodeType::TERNARY_EXPRESSION: {
                 const TernaryExprData& ternary = ast_.GetTernaryExpression(ref);

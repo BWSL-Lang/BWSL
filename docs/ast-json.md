@@ -50,7 +50,9 @@ Positions are one-based.
 - Function parameters include `id`, `name`, `dataType`, `line`, `column`,
   `typeLine`, `typeColumn`, `nameLine`, and `nameColumn`. Anonymous parameters
   omit name positions (`line`/`column` is then the type); synthesized
-  parameters may have no source positions.
+  parameters may have no source positions. A pointer parameter (`int^ p`)
+  has `isPointer: true` and a `dataType` spelled as written (`int^`), like a
+  pointer local's `declaredType`; its `typeInfo` describes the pointee.
 - Struct fields include `id` (matching their reference-index symbol IDs),
   `name`, `dataType`, `typeInfo`, and the same position fields as parameters.
 - Pass `fragmentOutputs` entries include `id` (matching the reference index's
@@ -128,7 +130,8 @@ therefore reports `float` or `Light`, never the placeholder `array`. Existing
 local `arrayDimensions`/`arrayLength` and field `arraySize` properties remain
 for compatibility; use `typeInfo` for a consistent representation. Field
 `typeInfo.arrayDimensions` now describes actual arrays instead of marking
-vectors as arrays. Function stable IDs include parameter dimensions.
+vectors as arrays. Function stable IDs include parameter dimensions and a
+`^` after each pointer parameter type, as in `.../function:swap(int^,int^)->void`.
 
 This export describes supported syntax; it does not add array return types or
 change array argument/overload checking.

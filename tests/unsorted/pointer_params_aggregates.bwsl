@@ -1,0 +1,89 @@
+// Test: pointer parameters to aggregates and their parts
+// Tests: struct pointees read and written through `p^.field`, pointers to
+//        struct fields (including nested ones), array elements with constant
+//        and dynamic indices, elements of an array field, vector and matrix
+//        pointees, and calls inside loops and branches
+
+pipeline PointerParamsAggregates {
+    resources {
+        output: buffer<int>
+    }
+
+    struct Pair {
+        int a;
+        int b;
+    }
+
+    struct Holder {
+        Pair inner;
+        int[4] values;
+    }
+
+    accumulate :: (int^ sum, int value) -> void {
+        sum^ = sum^ + value;
+    }
+
+    bumpPair :: (Pair^ p, int amount) -> void {
+        p^.a = p^.a + amount;
+        p^.b = p^.b * 2;
+    }
+
+    setY :: (int4^ v, int y) -> void {
+        v^.y = y;
+    }
+
+    setColumn :: (mat2^ m) -> void {
+        m^[1] = float2(3.0, 4.0);
+    }
+
+    pass "Compute" {
+        use resources { output }
+
+        compute "Main" [64, 1, 1] {
+            uint idx = input.global_id.x;
+            int n = int(idx);
+
+            Pair pair;
+            pair.a = 1;
+            pair.b = 2;
+            bumpPair(^pair, n);           // a = 1 + n, b = 4
+            accumulate(^pair.b, 10);      // b = 14
+
+            int[4] arr;
+            arr[0] = 1;
+            arr[1] = 2;
+            arr[2] = 3;
+            arr[3] = 4;
+            accumulate(^arr[0], 20);
+            accumulate(^arr[n % 4], 50);
+
+            Holder h;
+            h.inner = pair;
+            h.values[0] = 0;
+            h.values[1] = 0;
+            h.values[2] = 0;
+            h.values[3] = 0;
+            accumulate(^h.inner.a, 3);
+            accumulate(^h.values[n % 4], 7);
+
+            int4 v = int4(1, 2, 3, 4);
+            setY(^v, 9);
+
+            mat2 m = mat2(1.0);
+            setColumn(^m);
+
+            int total = 0;
+            for (int i = 0; i < 4; i++) {
+                if (i % 2 == n % 2) {
+                    accumulate(^total, arr[i]);
+                } else {
+                    accumulate(^h.values[i], 1);
+                }
+            }
+
+            resources.output[idx] = pair.a + pair.b + arr[0] + arr[1] + arr[2] + arr[3] +
+                h.inner.a + h.values[0] + h.values[1] + h.values[2] + h.values[3] +
+                v.y + int(m[1].y) + total;
+        }
+    }
+}
