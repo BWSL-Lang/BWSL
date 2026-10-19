@@ -691,6 +691,7 @@ TRANSLATION_EXTRA_ARGS = {
     "phi_variables": ("--optimizations", "phi-variables"),
     "phi_variables_output_store": ("--optimizations", "phi-variables"),
     "branch_hints_unenforced": ("--optimizations", "no-enforce-branch-hints"),
+    "loop_unrolling": ("--optimizations", "loop-unrolling"),
 }
 
 TRANSLATION_EXPECTATION_TESTS = {
@@ -897,6 +898,12 @@ TRANSLATION_EXPECTATION_TESTS = {
         "frag": {
             "spirv_count_exactly": {"OpPhi": 4},
             "glsl_contains": ["for (int"],
+        },
+    },
+    # Only the loop with a break and the one with a run-time bound stay.
+    "loop_unrolling": {
+        "frag": {
+            "spirv_count_exactly": {"OpLoopMerge": 2},
         },
     },
     "ssa_dead_loop_phis": {

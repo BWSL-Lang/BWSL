@@ -30,6 +30,7 @@ enum class OptimizationId : u8 {
     PHI_VARIABLES,          // SPIRV-Cross output: a variable carried through phis stays one variable
     ENFORCE_BRANCH_HINTS,   // @branch keeps its branch on drivers that ignore DontFlatten (AMD)
     SPLIT_STRUCTS,          // a local struct variable becomes one variable per field
+    LOOP_UNROLLING,         // a for loop with a small constant trip count becomes copies of its body
     COUNT,
 };
 
@@ -61,6 +62,7 @@ inline constexpr OptimizationInfo OPTIMIZATIONS[] = {
     {OptimizationId::PHI_VARIABLES, "phi-variables"},
     {OptimizationId::ENFORCE_BRANCH_HINTS, "enforce-branch-hints"},
     {OptimizationId::SPLIT_STRUCTS, "split-structs"},
+    {OptimizationId::LOOP_UNROLLING, "loop-unrolling"},
 };
 static_assert(sizeof(OPTIMIZATIONS) / sizeof(OPTIMIZATIONS[0]) == size_t(OptimizationId::COUNT),
               "every optimization needs a name");
@@ -85,9 +87,11 @@ struct GroupInfo {
 // compiler, and faster only with the struct split. Turn it on by name.
 // ENFORCE_BRANCH_HINTS is for AMD's compiler, which flattens an @branch if
 // anyway. It made NVIDIA's Vulkan output slightly faster too.
-// SPLIT_STRUCTS is new and in no group yet: turn it on by name.
-inline constexpr u64 DEFAULT_SET =
-    ALL & ~Bit(OptimizationId::PHI_VARIABLES) & ~Bit(OptimizationId::SPLIT_STRUCTS);
+// SPLIT_STRUCTS and LOOP_UNROLLING are new and in no group yet: turn them on
+// by name.
+inline constexpr u64 DEFAULT_SET = ALL & ~Bit(OptimizationId::PHI_VARIABLES) &
+                                   ~Bit(OptimizationId::SPLIT_STRUCTS) &
+                                   ~Bit(OptimizationId::LOOP_UNROLLING);
 
 inline constexpr GroupInfo GROUPS[] = {
     {"off", 0, 0, 0},

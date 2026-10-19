@@ -169,6 +169,7 @@ inline void IRLowering::PopLoopContext(u32 continueTarget, u32 breakTarget) {
 
 inline void IRLowering::LowerForCStyle(NodeRef ref) {
   const ForCStyleData &forLoop = ast->GetForCStyle(ref);
+  UnrollCheckpoint checkpoint = BeginUnrollCandidate();
 
   // Snapshot variable→register map *before* the init clause runs so
   // the iterator binding itself (e.g. `int x = …`) doesn't leak out
@@ -273,6 +274,11 @@ inline void IRLowering::LowerForCStyle(NodeRef ref) {
   // increment clause introduced) so subsequent references resolve to
   // shadowed outer variables with their original types.
   variableRegisters = std::move(savedOuterVariableRegisters);
+
+  if (hasBranch) {
+    UnrollForCStyle(ref, checkpoint,
+                    {loopHeader, branchIdx, bodyStart, continueTarget, backEdgeIdx, 0xFFFF});
+  }
 }
 
 // Whether adding `step` to an iterator that just passed the loop condition
@@ -292,6 +298,7 @@ static bool RangeStepMayWrap(bool isUnsigned, bool inclusive, bool constantEnd,
 
 inline void IRLowering::LowerForRange(NodeRef ref) {
     const ForRangeData& forLoop = ast->GetForRange(ref);
+    UnrollCheckpoint checkpoint = BeginUnrollCandidate();
     auto savedOuterVariableRegisters = variableRegisters;
     bool isUnsigned = IsExpressionUnsigned(forLoop.rangeEnd);
     CoreType iterType = isUnsigned ? CoreType::UINT : CoreType::INT;
@@ -436,6 +443,8 @@ inline void IRLowering::LowerForRange(NodeRef ref) {
     program.structureInfo[branchIdx] = IRProgram::PackStructure(IRProgram::STRUCT_LOOP_HEADER, loopEnd);
     program.continueInfo[branchIdx] = continueTarget;
     variableRegisters = std::move(savedOuterVariableRegisters);
+    UnrollForRange(ref, checkpoint, {loopHeader, branchIdx, bodyStart, continueTarget, backEdgeIdx, iterReg},
+                   iterType);
 }
 
 inline void IRLowering::LowerForCollection(NodeRef ref) {
