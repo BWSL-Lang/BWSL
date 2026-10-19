@@ -379,7 +379,7 @@ bool WGSLBuilder::PrepareTextureInstruction(u32 instruction) {
     const CoreType textureType = static_cast<CoreType>(textures.types[texture]);
     const u16 destination = ir->destinations[instruction];
     const CoreType type = static_cast<CoreType>(ir->registerTypes[destination]);
-    const CoreType expectedResult = opcode == IR::OP_TEX_SIZE ? CoreType::INT2 :
+    const CoreType expectedResult = opcode == IR::OP_TEX_SIZE ? StdLib::TextureSizeType(textureType) :
                                     opcode == IR::OP_TEX_LEVELS ? CoreType::INT : CoreType::FLOAT4;
     if (type != expectedResult) {
         return Fail("WGSL texture operation has an incompatible result type");
@@ -455,7 +455,14 @@ bool WGSLBuilder::WriteTextureExpression(TextWriter& writer, u32 instruction) {
     const bool comparison = opcode == IR::OP_TEX_SAMPLE_CMP;
     const u16 coords = ir->GetOperand(instruction, 1);
     if (query || depth) {
-        writer.Text(query ? (opcode == IR::OP_TEX_LEVELS ? "i32(" : "vec2<i32>(") : "vec4<f32>(");
+        writer.Text(opcode == IR::OP_TEX_LEVELS ? "i32(" :
+                    !query ? "vec4<f32>(" :
+                    StdLib::TextureSizeType(textureType) == CoreType::INT3 ? "vec3<i32>(" : "vec2<i32>(");
+    }
+    // textureDimensions of a 2D array is its layer size; the layer count
+    // comes from textureNumLayers.
+    if (opcode == IR::OP_TEX_SIZE && array) {
+        writer.Text("vec3<u32>(");
     }
     const char* function = opcode == IR::OP_TEX_SAMPLE ? "textureSample" :
                            opcode == IR::OP_TEX_SAMPLE_LOD ? "textureSampleLevel" :
@@ -518,9 +525,10 @@ bool WGSLBuilder::WriteTextureExpression(TextWriter& writer, u32 instruction) {
         }
     }
     writer.Text(")");
-    // BWSL's texture_size contract is int2 even for 3D/cube resources.
-    if (opcode == IR::OP_TEX_SIZE && textureType == CoreType::TEXTURE3D) {
-        writer.Text(".xy");
+    if (opcode == IR::OP_TEX_SIZE && array) {
+        writer.Text(", textureNumLayers(bwsl_texture_");
+        writer.Number(textures.slots[texture]);
+        writer.Text("))");
     }
     if (query || depth) {
         writer.Text(")");

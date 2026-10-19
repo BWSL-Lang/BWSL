@@ -8,6 +8,12 @@
   `@bounds(>=0, <=1) float4 tint;`, or per component, as in
   `@bounds(>0, -10<y<0) float4 offsets;`. A bounded component is never
   NaN. See "Value Bounds" in the language reference.
+- `texture_size` returns `int3` for a `texture3D` (width, height, depth) and
+  a `texture2DArray` (width, height, layers), as GLSL `textureSize`, HLSL
+  `GetDimensions` and Metal do. It was `int2` for every texture, dropping the
+  depth and the layer count. `texture2D` and `textureCube` still return
+  `int2`. Code that stores a volume or array size in an `int2` should take
+  `.xy`; overloads on the result now pick their `int3` version.
 
 ### Backends
 - Experimental native WGSL output is available with `-wgsl` for compute,

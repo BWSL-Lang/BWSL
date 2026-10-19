@@ -5263,21 +5263,19 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
   case IR::OP_TEX_SIZE: {
     u16 tex_reg = ir->GetOperand(ir_idx, 0);
     u16 lod_reg = ir->GetOperand(ir_idx, 1);
+    // OpImageQuerySizeLod returns one component per native dimension: int3
+    // for volumes and 2D arrays. Lowering types the result the same way.
+    u16 slot = tex_reg & 0x0FFF;
+    CoreType size_type = slot < 32 && (textureIsVolume[slot] || textureIsArray[slot])
+                             ? CoreType::INT3 : CoreType::INT2;
     SampledTextureLoad texture{};
-    if (!LoadSampledTexture(tex_reg, CoreType::INT2, dest, true, &texture)) {
+    if (!LoadSampledTexture(tex_reg, size_type, dest, true, &texture)) {
       break;
     }
 
-    u32 result_type = GetResultType(ir->destinations[ir_idx], tex_reg);
+    u32 result_type = GetTypeId(size_type);
     u32 lod_id = GetSpirvId(lod_reg);
-    if (textureIsVolume[texture.slot] || textureIsArray[texture.slot]) {
-      // The source API returns xy; query all native dimensions first.
-      u32 size = AllocateId();
-      Emit(spv::OpImageQuerySizeLod, GetTypeId(CoreType::INT3), size, texture.imageId, lod_id);
-      Emit(spv::OpVectorShuffle, result_type, dest, size, size, 0, 1);
-    } else {
-      Emit(spv::OpImageQuerySizeLod, result_type, dest, texture.imageId, lod_id);
-    }
+    Emit(spv::OpImageQuerySizeLod, result_type, dest, texture.imageId, lod_id);
     break;
   }
 

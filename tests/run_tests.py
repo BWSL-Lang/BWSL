@@ -666,6 +666,21 @@ TRANSLATION_EXPECTATION_TESTS = {
             "gles_not_contains": ["mediump"],
         },
     },
+    # Issue #204: texture_size has one component per native dimension.
+    "texture_size_dimensions": {
+        "frag": {
+            "spirv_count_exactly": {"OpImageQuerySizeLod %v2int": 2, "OpImageQuerySizeLod %v3int": 4},
+            "metal_contains": ["get_depth(1)", "t_layers.get_array_size()", "t_shadowLayers.get_array_size()"],
+            "hlsl_contains": ["GetDimensions(Level, ret.x, ret.y, ret.z, Param)"],
+            "glsl_contains": ["textureSize(t_volume, 0).z"],
+        },
+    },
+    "texture_size_texture_array": {
+        "frag": {
+            "spirv_count_exactly": {"OpImageQuerySizeLod %v3int": 6},
+            "spirv_not_contains": ["OpImageQuerySizeLod %v2int"],
+        },
+    },
     "output_depth_builtin": {
         "frag": {
             "spirv_contains": [

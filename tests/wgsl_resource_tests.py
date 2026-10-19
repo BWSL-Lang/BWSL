@@ -61,7 +61,7 @@ def main():
             resources { tex: texture2D result: buffer<float4> }
             pass "Main" { use resources { tex, result }
         ''' + body + "}}"
-    for name in ("uniform_struct_dynamic_index", "texture_resources_cube_3d_array", "texture_sample_grad_cmp_gather", "texture_query_size_levels"):
+    for name in ("uniform_struct_dynamic_index", "texture_resources_cube_3d_array", "texture_sample_grad_cmp_gather", "texture_query_size_levels", "texture_size_dimensions"):
         sources[name] = (ROOT / "tests/unsorted" / f"{name}.bwsl").read_text()
     records = []
     for name, source in sources.items():
