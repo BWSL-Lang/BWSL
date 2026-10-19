@@ -298,7 +298,10 @@ inline bool IRLowering::IsFunctionLocalPlace(NodeRef expr) {
                                &fieldIndex, &fieldType, &fieldTypeHash);
       }
       u16 reg = var->second;
-      if ((reg & 0xC000) != 0 || reg >= MAX_REGISTERS) return false;
+      if ((reg & 0xC000) != 0 || reg >= program.registerCount ||
+          GetResourceHandleType(expr, reg) != CoreType::INVALID) {
+        return false;
+      }
       u32 storage = program.registerStorageInfo[reg];
       if (storage & (IRProgram::STORAGE_IS_SHARED |
                      IRProgram::STORAGE_IS_UNIFORM_ARRAY)) {
@@ -317,15 +320,21 @@ inline bool IRLowering::IsFunctionLocalPlace(NodeRef expr) {
 
 // A pointer value made by `^`, as opposed to a storage buffer, shared or
 // local array register that also carries STORAGE_IS_PTR. Only `^` records a
-// pointee type in bits 8-15.
+// pointee type in bits 8-15. Storage info past the allocated registers is
+// uninitialized, and sampler handles (0x3000 | slot) fall in that range.
 inline bool IRLowering::IsPointerValue(u16 reg) const {
-  if ((reg & 0xC000) != 0 || reg >= MAX_REGISTERS) return false;
+  if ((reg & 0xC000) != 0 || reg >= program.registerCount) return false;
   u32 storage = program.registerStorageInfo[reg];
   constexpr u32 notPointer = IRProgram::STORAGE_IS_SHARED |
                              IRProgram::STORAGE_IS_LOCAL_ARRAY |
                              IRProgram::STORAGE_IS_UNIFORM_ARRAY;
   return (storage & IRProgram::STORAGE_IS_PTR) && !(storage & notPointer) &&
          ((storage >> 8) & 0xFF) != 0;
+}
+
+inline bool IRLowering::IsPointerArgument(NodeRef argument, u16 reg) const {
+  return GetResourceHandleType(argument, reg) == CoreType::INVALID &&
+         IsPointerValue(reg);
 }
 
 inline void IRLowering::DeclarePointerVariable(u16 reg, u16 source) {

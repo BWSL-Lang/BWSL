@@ -99,9 +99,9 @@ inline u16 IRLowering::CopyArgumentValue(u16 source) {
 
 // ============= Pointer arguments =============
 
-inline OverloadTypeMask IRLowering::ArgumentOverloadMask(u16 reg) {
+inline OverloadTypeMask IRLowering::ArgumentOverloadMask(NodeRef argument, u16 reg) {
   bool isRegister = (reg & 0xC000) == 0 && reg < MAX_REGISTERS;
-  if (IsPointerValue(reg)) {
+  if (IsPointerArgument(argument, reg)) {
     CoreType pointee =
         static_cast<CoreType>((program.registerStorageInfo[reg] >> 8) & 0xFF);
     u32 customHash =
@@ -227,7 +227,8 @@ inline bool IRLowering::ReportPointerArgumentMismatch(
 inline bool IRLowering::ReportPointerArgumentToBuiltin(
     const FunctionCallData &call, const u16 *args, u32 argCount) {
   for (u32 i = 0; i < argCount; i++) {
-    if (!IsPointerValue(args[i])) continue;
+    NodeRef argument = i < call.arguments.count ? call.arguments[i] : NodeRef::Null();
+    if (!IsPointerArgument(argument, args[i])) continue;
     std::string name = call.name.isHashOnly()
                            ? ReverseLookup::GetString(call.name.nameHash)
                            : call.name.ToString(sourceBase);
@@ -236,8 +237,7 @@ inline bool IRLowering::ReportPointerArgumentToBuiltin(
              "Error: argument %u of '%s' is a pointer, but '%s' takes "
              "values; dereference it (`ptr^`)\n",
              i + 1, name.c_str(), name.c_str());
-    ReportErrorAt(i < call.arguments.count ? call.arguments[i] : NodeRef::Null(),
-                  msg);
+    ReportErrorAt(argument, msg);
     return true;
   }
   return false;
@@ -1834,7 +1834,8 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   std::vector<OverloadTypeMask> argMasks;
   argMasks.reserve(argCount);
   for (u32 i = 0; i < argCount; i++) {
-    argMasks.push_back(ArgumentOverloadMask(args[i]));
+    argMasks.push_back(ArgumentOverloadMask(
+        i < call.arguments.count ? call.arguments[i] : NodeRef::Null(), args[i]));
   }
 
   bool foundName = false;
@@ -2096,7 +2097,8 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
       argMasks.push_back(MakeOverloadMask(argHandleTypes[i]));
       continue;
     }
-    argMasks.push_back(ArgumentOverloadMask(args[i]));
+    argMasks.push_back(ArgumentOverloadMask(
+        i < call.arguments.count ? call.arguments[i] : NodeRef::Null(), args[i]));
   }
 
   // The first same-named candidate with the right arity that was rejected,
@@ -2477,7 +2479,8 @@ inline NodeRef IRLowering::TryResolveGenericFunction(const FunctionCallData &cal
   for (u32 i = 0; i < argCount; i++) {
     // A pointer argument specializes a `Constraint^` parameter by its
     // pointee.
-    argIsPointer[i] = IsPointerValue(args[i]);
+    argIsPointer[i] = IsPointerArgument(
+        i < call.arguments.count ? call.arguments[i] : NodeRef::Null(), args[i]);
     argTypes[i] = argIsPointer[i]
         ? static_cast<CoreType>((program.registerStorageInfo[args[i]] >> 8) & 0xFF)
         : GetRegisterType(args[i]);

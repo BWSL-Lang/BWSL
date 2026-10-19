@@ -481,6 +481,9 @@ struct IRLowering {
   void EndPointerLoop();
   bool IsFunctionLocalPlace(NodeRef expr);
   bool IsPointerValue(u16 reg) const;
+  // IsPointerValue for a call argument: a texture or sampler handle shares
+  // the register range, so only the argument expression can rule one out.
+  bool IsPointerArgument(NodeRef argument, u16 reg) const;
   // `Type^ p = q` and pointer parameter copies, and `p = q`.
   void DeclarePointerVariable(u16 reg, u16 source);
   void AssignPointerVariable(u16 reg, u16 source);
@@ -488,7 +491,7 @@ struct IRLowering {
                                     u32 index, PointerProblem problem);
   // An argument's overload mask; a pointer argument describes its pointee
   // and carries OVERLOAD_POINTER_MASK.
-  OverloadTypeMask ArgumentOverloadMask(u16 reg);
+  OverloadTypeMask ArgumentOverloadMask(NodeRef argument, u16 reg);
   // Binds a `Type^` parameter of an inlined call to the caller's pointer.
   void BindPointerParameter(const FunctionCallData &call,
                             const FunctionDeclData &function, u32 index,

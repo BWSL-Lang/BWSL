@@ -82,6 +82,18 @@ def gather_shader() -> str:
         "output.color=gather(resources.tex,float2(acc),0); }}}\n")
 
 
+def sampler_handle_shader(pointers: int = 6500) -> str:
+    # Every `^x` and pointer local fills a register, so register 0x3000 is a
+    # pointer when `sample` runs. The sampler handle 0x3000 | slot shares that
+    # number and must not be read as a pointer argument.
+    return (
+        "pipeline SamplerHandle { resources { tex: texture2D smp: sampler }\n"
+        'pass "Main" { use resources {tex, smp} vertex {output.position=float4(1.0);}\n'
+        "fragment {float x=input.position.x;\n" +
+        "".join(f"float^ p{i}=^x;\n" for i in range(pointers)) +
+        "output.color=sample(resources.tex,resources.smp,float2(x)); }}}\n")
+
+
 def run_register_namespace_tests(compiler: Path, output: Path,
                                  runner: Path | None = None) -> tuple[int, int]:
     compiler = compiler.resolve()
@@ -170,6 +182,10 @@ def run_register_namespace_tests(compiler: Path, output: Path,
                             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                             self.assert_located_error(result, "integer constant limit exceeded")
                             self.assertFalse(any(target.glob("*.spv")))
+
+        def test_sampler_handle_is_not_a_pointer_argument(self):
+            result, _ = compile_shader("sampler_handle", sampler_handle_shader())
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
         def test_gather_invalid_marker_with_large_ssa_capacity(self):
             result, target = compile_shader("gather_marker", gather_shader(), internals=True,
