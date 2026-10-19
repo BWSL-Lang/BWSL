@@ -975,7 +975,9 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       u16 texReg = args[0];
       u16 lodReg = (argCount >= 2) ? args[1] : EmitConstantInt(0);
       builder.EmitInstruction(OP_TEX_SIZE, dest, texReg, lodReg);
-      SetRegisterType(dest, CoreType::INT2);
+      // Storage images have no handle type here; they are only 2D.
+      SetRegisterType(dest, StdLib::TextureSizeType(
+                                GetResourceHandleType(call.arguments[0], texReg)));
       return dest;
     }
     case Intrinsic::TEXTURE_LEVELS: {

@@ -1,0 +1,34 @@
+// Test: texture_size on texture array elements (#204)
+// Tests: an element of a texture3D array reports int3 (w, h, depth) and an
+//        element of a texture2DArray array int3 (w, h, layers), for constant
+//        and dynamic indices.
+
+pipeline TextureSizeTextureArray {
+    attributes {
+        position: float3
+        slice: uint
+    }
+
+    resources {
+        volumes: texture3D[2]
+        layerSets: texture2DArray[2]
+    }
+
+    pass "Main" {
+        use attributes { position, slice }
+        use resources { volumes, layerSets }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            @flat output.slice = attributes.slice;
+        }
+
+        fragment {
+            int3 first = texture_size(resources.volumes[0]);
+            int3 picked = texture_size(resources.volumes[input.slice], 1);
+            int3 layers = texture_size(resources.layerSets[input.slice]);
+            int3 lastLayers = texture_size(resources.layerSets[1], 1);
+            output.color = float4(float(first.z), float(picked.z), float(layers.z), float(lastLayers.z));
+        }
+    }
+}

@@ -513,7 +513,7 @@ constexpr IntrinsicData INTRINSICS[] = {
     TEXTURE_INTRINSIC(LOAD, "load", 3, 4, 0),                // SpvOpImageFetch
     TEXTURE_INTRINSIC(LOAD_OFFSET, "load_offset", 4, 5, 0),  // OpImageFetch + offset
     INTRINSIC_FIXED(STORE, "store", mask(CoreType::VOID), mask(CoreType::CUSTOM), mask(CoreType::INT2), mask(CoreType::FLOAT4), 0, IntrinsicFlags::TEXTURE_OP | IntrinsicFlags::CUSTOM_HLSL, SPV_MAP(spv::OpImageWrite, SPV_EXT_NONE)),
-    INTRINSIC_VAR(TEXTURE_SIZE, "texture_size", 1, 2, mask(CoreType::INT2), TypeMasks::TEXTURE_TYPES, mask(CoreType::INT), 0, 0, 0, 0, IntrinsicFlags::TEXTURE_OP, SPV_MAP(spv::OpImageQuerySizeLod, SPV_EXT_NONE)),
+    INTRINSIC_VAR(TEXTURE_SIZE, "texture_size", 1, 2, mask(CoreType::INT2) | mask(CoreType::INT3), TypeMasks::TEXTURE_TYPES, mask(CoreType::INT), 0, 0, 0, 0, IntrinsicFlags::TEXTURE_OP, SPV_MAP(spv::OpImageQuerySizeLod, SPV_EXT_NONE)),
     INTRINSIC_FIXED(TEXTURE_LEVELS, "texture_levels", mask(CoreType::INT), TypeMasks::TEXTURE_TYPES, 0, 0, 0, IntrinsicFlags::TEXTURE_OP, SPV_MAP(spv::OpImageQueryLevels, SPV_EXT_NONE)),
 
     // Synchronization
@@ -656,6 +656,15 @@ inline bool IsValidForStage(const IntrinsicData* data, ShaderStage stage) {
         return stage == ShaderStage::Vertex;
     }
     return true;
+}
+
+// Result type of texture_size: one component per native dimension, as
+// GLSL textureSize, HLSL GetDimensions and WGSL textureDimensions plus
+// textureNumLayers report it. Volumes add the depth and 2D arrays the layer
+// count; a cube face is square-sided and 2D.
+constexpr CoreType TextureSizeType(CoreType texture) {
+    return texture == CoreType::TEXTURE3D || texture == CoreType::TEXTURE2DARRAY
+        ? CoreType::INT3 : CoreType::INT2;
 }
 
 // Implicit-LOD sampling and screen-space derivatives are computed across the

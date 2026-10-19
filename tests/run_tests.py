@@ -326,6 +326,7 @@ ERROR_CASE_TESTS = {
     "struct_as_varying.bwsl": "SPIR-V validation failed",
     "assign_to_input.bwsl": "cannot assign to input.* - stage inputs are read-only",
     "vector_narrow_assign.bwsl": "cannot implicitly convert int3 to int2; vector widths must match, use a swizzle such as .xy to narrow",
+    "texture_size_volume_into_int2.bwsl": "cannot implicitly convert int3 to int2; vector widths must match, use a swizzle such as .xy to narrow",
     "vector_narrow_reassign.bwsl": "cannot implicitly convert int3 to int2; vector widths must match, use a swizzle such as .xy to narrow",
     "vector_widen_assign.bwsl": "cannot implicitly convert int2 to int3; vector widths must match, use a constructor such as int3(value, ...) to widen",
     "vector_component_type_assign.bwsl": "cannot implicitly convert int3 to float3; vector component types must match, convert with float3(...)",
@@ -722,6 +723,21 @@ TRANSLATION_EXPECTATION_TESTS = {
                 "noperspective in vec2 v_screenUV",
             ],
             "gles_not_contains": ["mediump"],
+        },
+    },
+    # Issue #204: texture_size has one component per native dimension.
+    "texture_size_dimensions": {
+        "frag": {
+            "spirv_count_exactly": {"OpImageQuerySizeLod %v2int": 2, "OpImageQuerySizeLod %v3int": 4},
+            "metal_contains": ["get_depth(1)", "t_layers.get_array_size()", "t_shadowLayers.get_array_size()"],
+            "hlsl_contains": ["GetDimensions(Level, ret.x, ret.y, ret.z, Param)"],
+            "glsl_contains": ["textureSize(t_volume, 0).z"],
+        },
+    },
+    "texture_size_texture_array": {
+        "frag": {
+            "spirv_count_exactly": {"OpImageQuerySizeLod %v3int": 6},
+            "spirv_not_contains": ["OpImageQuerySizeLod %v2int"],
         },
     },
     "eval_vector_arithmetic": {

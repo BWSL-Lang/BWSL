@@ -1,0 +1,12 @@
+// texture_size of a texture3D is int3 (w, h, depth) since #204; storing it
+// in an int2 needs an explicit .xy.
+pipeline TextureSizeVolumeIntoInt2 {
+    resources { volume: texture3D data: buffer<int4> }
+    pass "Main" {
+        use resources { volume, data }
+        compute "Main" [1, 1, 1] {
+            int2 size = texture_size(resources.volume, 0);
+            resources.data[0] = int4(size, 0, 0);
+        }
+    }
+}

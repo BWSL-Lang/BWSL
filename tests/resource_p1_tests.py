@@ -50,6 +50,8 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
             if source.stem.startswith("texture3D_") or source.stem == "texture3d_drops_z":
                 if "texture3d<float>" not in metal or "texture2d<float>" in metal:
                     row["errors"].append("3D texture dimension was lost")
+            if source.stem == "texture3D_queries" and "get_depth(1)" not in metal:
+                row["errors"].append("texture_size dropped the 3D texture depth")
             if source.stem == "texture_slot_32":
                 if set(by_name) != {"tex32"} or by_name["tex32"]["binding"] != 0 or ".sample(" not in metal:
                     row["errors"].append("High-slot live texture was not compacted/reflected")
@@ -105,7 +107,8 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
                  "sampler_operations", "texture_query_size_levels", "pointer_address_taken_control_flow",
                  "texture_sample_grad_cmp_gather", "gl_interface_names", "gl_interface_names_mixed",
                  "gl_interface_names_keyword_fallback", "gl_interface_names_nested",
-                 "gl_interface_names_uniform_arrays", "texture_array"):
+                 "gl_interface_names_uniform_arrays", "texture_array",
+                 "texture_size_dimensions", "texture_size_texture_array"):
         modes = ("-gles", "-gles-direct")
         if name.startswith("gl_interface_names"):
             modes += ("-glsl",)
@@ -113,7 +116,8 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
             directory = out / (name + mode)
             directory.mkdir(exist_ok=True)
             source = ROOT / "tests/resource_p1" / (name + ".bwsl")
-            if name in {"texture_query_size_levels", "pointer_address_taken_control_flow", "texture_sample_grad_cmp_gather"}:
+            if name in {"texture_query_size_levels", "pointer_address_taken_control_flow", "texture_sample_grad_cmp_gather",
+                        "texture_size_dimensions", "texture_size_texture_array"}:
                 source = ROOT / "tests/unsorted" / (name + ".bwsl")
             result = command([compiler, source, mode, "-bindings", "-validation", "strict", "-o", directory])
             row = {"source": name + mode, "steps": [result], "errors": []}
@@ -175,6 +179,11 @@ def run_resource_p1_suite(compiler: Path, output_dir: Path, verbose: bool = Fals
                 for element in range(3):
                     if not re.search(r"t_textures\[" + str(element) + r"u?\]", text):
                         row["errors"].append(f"GL texture array element {element} is never sampled")
+            # Issue #204: volumes and 2D arrays report a third size component.
+            if name == "texture_size_dimensions":
+                for texture in ("volume", "layers", "shadowLayers"):
+                    if not re.search(r"ivec3 \w+ = textureSize\(t_" + texture + r",", text):
+                        row["errors"].append("GL texture_size lost the third dimension of " + texture)
             if name == "texture3d_drops_z" and "sampler3D" not in text:
                 row["errors"].append("GLES lost the 3D texture type")
             if name in {"texture_slot_32", "resource_slot_32_mixed"} and mode == "-gles-direct" and "t_tex32" not in text:

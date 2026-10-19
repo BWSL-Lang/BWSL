@@ -11,6 +11,13 @@
   compiled on SPIR-V-based targets but broke `-gles-direct` and `-wgsl`,
   widening silently repeated components (`.xyx`) or read out of bounds, and
   the other cases failed SPIR-V validation.
+- `texture_size` returns `int3` for a `texture3D` (width, height, depth) and
+  a `texture2DArray` (width, height, layers), as GLSL `textureSize`, HLSL
+  `GetDimensions` and Metal do. It was `int2` for every texture, dropping the
+  depth and the layer count. `texture2D` and `textureCube` still return
+  `int2`. `int2 s = texture_size(volume);` is now a source error; write
+  `texture_size(volume).xy`. Overloads on the result pick their `int3`
+  version.
 
 ### Language
 - `@bounds(...)` promises the range of an attribute, a scalar or vector

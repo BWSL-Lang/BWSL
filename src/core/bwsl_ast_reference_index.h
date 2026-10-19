@@ -141,11 +141,20 @@ inline CoreType BuiltinTypeFromName(const std::string& name) {
 // Result type of an intrinsic call from its stdlib entry: the fixed return
 // type when there is one, else the widest argument the return mask accepts
 // (normalize, lerp, smoothstep), else the mask's type of that argument's width
-// (asfloat, isnan). Empty when the arguments are untyped.
+// (asfloat, isnan). texture_size follows its texture's dimensions. Empty when
+// the arguments are untyped.
 inline std::string IntrinsicResultType(const StdLib::IntrinsicData& intrinsic,
                                        const std::vector<std::string>& argumentTypes) {
     const TypeMask returns = intrinsic.returnTypes;
     if (returns == 0) return {};
+    if (intrinsic.enumIndex == static_cast<u8>(StdLib::Intrinsic::TEXTURE_SIZE)) {
+        // Texture types are spelled in camel case (texture3D).
+        std::string texture = argumentTypes.empty() ? std::string() : argumentTypes[0];
+        std::transform(texture.begin(), texture.end(), texture.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return SourceTypeName(StdLib::TextureSizeType(BuiltinTypeFromName(texture)));
+    }
     if ((returns & (returns - 1)) == 0) {
         for (u32 i = 1; i < static_cast<u32>(CoreType::COUNT); i++) {
             CoreType core = static_cast<CoreType>(i);

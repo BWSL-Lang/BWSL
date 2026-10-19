@@ -1867,17 +1867,13 @@ void GLESBuilder::EmitInstruction(u32 instIdx) {
             return;
 
         case IR::OP_TEX_SIZE:
+            // textureSize is ivec3 for 3D and array samplers, as the IR types it.
             EmitRegWithDecl(dest);
             out.Lit(" = textureSize(");
             EmitTexture(Op(instIdx, 0), ir->metadata[instIdx]);  // sampler
             out.Lit(", ");
             EmitExpr(Op(instIdx, 1));  // lod
-            out.Chr(')');
-            if (Type(instIdx) == static_cast<u16>(CoreType::INT2)) {
-                const TextureBinding* texture = FindTextureBinding(Op(instIdx, 0) & 0x0FFF);
-                if (texture && (texture->isVolume || texture->isArray)) out.Lit(".xy");
-            }
-            out.Chr(';');
+            out.Lit(");");
             return;
 
         case IR::OP_TEX_LEVELS:
