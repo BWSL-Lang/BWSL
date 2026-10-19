@@ -78,8 +78,13 @@ for some sampling operations.
 
 Currently enforced restrictions include:
 
-- derivative intrinsics are fragment-only
-- `sample_bias` is fragment-only
+- derivative intrinsics (`ddx`, `ddy`, `fwidth` and their fine and coarse
+  forms) are fragment-only
+- implicit-LOD sampling (`sample`, `sample_offset`, `sample_bias`,
+  `sample_bias_offset` and `sample_cmp`) is fragment-only; vertex and compute
+  stages use `sample_lod`, `sample_lod_offset` or `sample_grad`
+- both rules also apply to helper functions: a call is rejected, during
+  lowering, when a vertex or compute stage calls the helper that contains it
 - `barrier`, `memoryBarrier`, and `storageBarrier` are rejected outside compute
   stages during lowering
 - built-in input names such as `input.vertex_id` and `input.global_id` are

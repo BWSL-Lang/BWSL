@@ -77,10 +77,14 @@ struct MemberAccessData {
     bool isModuleQualified = false; // True if using :: (module access) instead of . (field access)
 };
 
-// 8 bytes
+// 12 bytes
 struct ArrayAccessData {
     NodeRef array;
     NodeRef index;
+    // Declared dimensions this subscript consumes: 1, or N when the parser
+    // flattened a full `a[i][j]...` access of an N-dimensional array.
+    u8 indexedDimensions = 1;
+    u8 _pad[3];
 };
 
 // 12 bytes - very common
@@ -1266,11 +1270,13 @@ namespace ASTFactory {
         return ast->MakeNodeRef(ASTNodeType::MEMBER_ACCESS, index, line, col);
     }
 
-    inline NodeRef MakeArrayAccess(AST* ast, NodeRef array, NodeRef index, u32 line = 0, u32 col = 0) {
+    inline NodeRef MakeArrayAccess(AST* ast, NodeRef array, NodeRef index, u32 line = 0, u32 col = 0,
+                                   u8 indexedDimensions = 1) {
         u32 idx = ast->arrayAccesses.count;
         ArrayAccessData data;
         data.array = array;
         data.index = index;
+        data.indexedDimensions = indexedDimensions;
         ast->arrayAccesses.Push(ast->arena, data);
 
         if (ast->nodeCount >= ast->nodeCapacity) {
@@ -2252,7 +2258,7 @@ namespace ASTClone {
         NodeRef array = CloneNode(ctx, src.array);
         NodeRef index = CloneNode(ctx, src.index);
 
-        return ASTFactory::MakeArrayAccess(ctx.ast, array, index, line, col);
+        return ASTFactory::MakeArrayAccess(ctx.ast, array, index, line, col, src.indexedDimensions);
     }
 
     // Clone a ternary expression

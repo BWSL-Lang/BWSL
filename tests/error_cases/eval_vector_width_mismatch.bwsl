@@ -1,0 +1,14 @@
+// Compile-time vector arithmetic needs vectors of the same width.
+pipeline EvalVectorWidthMismatch {
+    resources { data: buffer<float4> }
+    pass "Main" {
+        use resources { data }
+        compute "Main" [1, 1, 1] {
+            eval {
+                eval float3 tint = float3(0.2, 0.4, 0.6);
+                tint = tint + float2(1.0, 2.0);
+                resources.data[0] = float4(tint, 1.0);
+            }
+        }
+    }
+}

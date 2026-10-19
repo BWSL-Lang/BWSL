@@ -963,6 +963,11 @@ private:
             if (found != typesByScope_.end()) return found->second;
         }
 
+        if (const StdLib::BuiltinStructType* structure =
+                StdLib::FindBuiltinStructType(Utils::HashStr(typeName.c_str()))) {
+            return EnsureBuiltinStruct(*structure);
+        }
+
         // Unknown user types must not become invented builtin symbols.
         bool builtin = false;
         for (u32 i = 1; i < static_cast<u32>(CoreType::COUNT); i++) {
@@ -987,6 +992,26 @@ private:
 
     Binding EnsureType(const std::string& typeName) {
         return EnsureType(typeName, CurrentOwner());
+    }
+
+    // Intrinsic result structs (frexp, modf) have no declaration in source;
+    // their fields still resolve like those of a declared struct.
+    Binding EnsureBuiltinStruct(const StdLib::BuiltinStructType& structure) {
+        const std::string id = std::string("builtin:type:") + structure.name;
+        auto known = typesByName_.find(id);
+        if (known != typesByName_.end()) return known->second;
+        AddSymbol({id, "struct", structure.name, id, "builtin", {}, {}});
+        SetStableId(id, id);
+        for (u32 i = 0; i < structure.fieldCount; i++) {
+            const std::string fieldName = structure.fields[i].name;
+            const std::string fieldId = id + "/field:" + fieldName;
+            const std::string fieldType = SourceTypeName(structure.fields[i].type);
+            AddSymbol({fieldId, "struct-field", fieldName, fieldId, id, fieldType, {}});
+            SetStableId(fieldId, fieldId);
+            fields_[ScopedKey(id, fieldName)] = {fieldId, fieldType};
+        }
+        typesByName_[id] = {id, id};
+        return {id, id};
     }
 
     std::string CanonicalType(std::string name, std::string owner) {
@@ -1468,7 +1493,11 @@ private:
             return {field->second.type, field->second.id};
         }
 
-        if (type.id.rfind("STRUCT_DECL:", 0) == 0) {
+        const std::string builtinPrefix = "builtin:type:";
+        const bool builtinStruct = type.id.rfind(builtinPrefix, 0) == 0 &&
+            StdLib::FindBuiltinStructType(
+                Utils::HashStr(type.id.c_str() + builtinPrefix.size())) != nullptr;
+        if (type.id.rfind("STRUCT_DECL:", 0) == 0 || builtinStruct) {
             Error(ref, "Unknown field '" + memberName + "' on type '" + TypeSpelling(type.id) + "'", memberName);
         }
         // Vector component/swizzle access is structural, not a declaration, so
@@ -1560,7 +1589,8 @@ private:
                 Error(ref, "Unknown function '" + name + "'", name);
             }
             AddReference(NodeId(ref), type.id, "construct");
-            return {name, type.id};
+            // Builtin structs are typed by their id, like declared structs.
+            return {type.id.empty() ? name : type.type, type.id};
         }
         const std::string builtinId = "builtin:function:" + name;
         AddSymbol({builtinId, "intrinsic", name, builtinId, "builtin", {}, {}});
@@ -1570,8 +1600,12 @@ private:
         std::vector<std::string> argumentTypes;
         argumentTypes.reserve(arguments.size());
         for (const ExprInfo& argument : arguments) argumentTypes.push_back(argument.type);
-        return {IntrinsicResultType(StdLib::INTRINSICS[call.intrinsicIndex], argumentTypes),
-                builtinId};
+        const StdLib::IntrinsicData& intrinsic = StdLib::INTRINSICS[call.intrinsicIndex];
+        if (const StdLib::BuiltinStructType* structure = StdLib::FindBuiltinStructResult(
+                static_cast<StdLib::Intrinsic>(intrinsic.enumIndex))) {
+            return {EnsureBuiltinStruct(*structure).type, builtinId};
+        }
+        return {IntrinsicResultType(intrinsic, argumentTypes), builtinId};
     }
 
     ExprInfo VisitExpr(NodeRef ref, const std::string& role) {

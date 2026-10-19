@@ -1,0 +1,14 @@
+// An eval function in a pipeline constant needs compile-time arguments.
+pipeline PipelineConstEvalCallRuntimeArg {
+    resources { data: buffer<float> }
+    eval circleArea :: (float radius) -> float {
+        return 3.14159265359 * radius * radius;
+    }
+    const float AREA = circleArea(resources.data[1]);
+    pass "Main" {
+        use resources { data }
+        compute "Main" [1, 1, 1] {
+            resources.data[0] = AREA;
+        }
+    }
+}

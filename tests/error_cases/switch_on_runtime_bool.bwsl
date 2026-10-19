@@ -1,0 +1,21 @@
+// Error case: switching on a runtime bool selector. Only a compile-time bool
+// (such as a bool variant) is allowed, because the switch is pruned to one arm.
+pipeline SwitchOnRuntimeBool {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            bool x = attributes.position.x > 0.5;
+            float r = 0.0;
+            switch (x) {
+                case true: r = 1.0;
+                default: r = 2.0;
+            }
+            output.position = float4(attributes.position, r);
+        }
+    }
+}
