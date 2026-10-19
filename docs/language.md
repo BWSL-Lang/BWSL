@@ -199,6 +199,13 @@ fragment {
   texture unit (GL) or texture register (Metal, HLSL); Vulkan uses one
   binding with a descriptor count. Resources declared after the array follow
   its last element. `bindings.json` reports the array once, with `count`.
+  WGSL has no texture arrays outside `binding_array`, so `-wgsl` binds each
+  element as its own texture at its slot, and `*.wgsl.bindings.json` lists
+  each element with `arrayLength` and `arrayIndex`. WGSL only allows
+  implicit-LOD functions such as `sample` and `sample_cmp` in uniform control
+  flow, so give them a uniform index there, such as a resource or a
+  constant; `sample_lod`, `sample_grad`, `gather`, `load` and `texture_size`
+  accept any index.
 - The array has one sampler per element (GL, Metal) or is paired with one
   explicit sampler. It can't share a sampler with other textures or be passed
   to a function.

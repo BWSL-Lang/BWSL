@@ -15,6 +15,9 @@
   uniforms and sampled textures. `-bindings` emits WebGPU binding metadata.
   WGSL-only compilation bypasses SPIR-V; request `-spv` or another target
   alongside `-wgsl` to generate both. `-all` keeps its existing targets.
+  Texture arrays (`texture2D[N]` and the other sampled kinds) bind each
+  element as its own WGSL texture, reported per element in the bindings
+  metadata with `arrayLength` and `arrayIndex`.
 - Constant values are propagated through the whole shader, including across
   branches, loops and inlined functions. Arithmetic, comparisons and
   conversions on constants are folded, `x && true`, `x || false` and their

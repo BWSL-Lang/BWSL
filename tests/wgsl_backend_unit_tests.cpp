@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <memory>
 #include <vector>
 
 using namespace BWSL;
@@ -247,6 +248,45 @@ static void TestGraphicsInterfaces() {
     assert(fragment.builder.Source().find("dpdx(") != std::string_view::npos);
 }
 
+// Element i of a texture array at slot b is texture b + i in IR. Each one
+// becomes its own WGSL binding, named by the array's declaration; a
+// comparison on one element makes every element a depth texture.
+static void TestTextureArrayElements() {
+    std::vector<u8> scratch(64 * 1024);
+    BWSL_Arena symbolArena;
+    symbolArena.Initialize(scratch.data(), scratch.size());
+    std::unique_ptr<SymbolTableData> symbols(new SymbolTableData());
+    symbols->resources.Init(&symbolArena, 2);
+    ResourceData textures;
+    textures.type = ResourceBinding::Texture;
+    textures.coreType = static_cast<u8>(CoreType::TEXTURE2D);
+    textures.bindingIndex = 1;
+    textures.arraySize = 3;
+    symbols->resources.Push(&symbolArena, textures);
+
+    WGSLFixture fixture;
+    assert(fixture.builder.Initialize(&fixture.arena, &fixture.ir, nullptr, symbols.get(), ShaderStage::Fragment));
+    fixture.Add(IR::OP_LOAD_INPUT, 0, CoreType::FLOAT2, 5);
+    fixture.Add(IR::OP_LOAD_INPUT, 1, CoreType::FLOAT, 6);
+    fixture.Add(IR::OP_TEX_SAMPLE, 2, CoreType::FLOAT4, 0x6003, 0);
+    fixture.Add(IR::OP_TEX_SAMPLE_CMP, 3, CoreType::FLOAT4, 0x6001, 0);
+    fixture.operands[3 * 4 + 2] = 1;
+    fixture.Add(IR::OP_FADD, 4, CoreType::FLOAT4, 2, 3);
+    fixture.Add(IR::OP_STORE_OUTPUT, 4, CoreType::VOID, OutputSlot::COLOR);
+    fixture.Add(IR::OP_RET, 0xFFFF, CoreType::VOID);
+    assert(fixture.builder.Emit());
+    const WGSL::WGSLBuilder& builder = fixture.builder;
+    assert(builder.textures.count == 2);
+    assert(builder.textures.slots[0] == 1 && builder.textures.slots[1] == 3);
+    assert(builder.textures.depth[0] && builder.textures.depth[1]);
+    const std::string_view source = builder.Source();
+    assert(source.find("@group(2) @binding(1) var bwsl_texture_1: texture_depth_2d;") != std::string_view::npos);
+    assert(source.find("@group(2) @binding(3) var bwsl_texture_3: texture_depth_2d;") != std::string_view::npos);
+    assert(source.find("bwsl_texture_2") == std::string_view::npos);
+    assert(source.find("@group(3) @binding(33) var bwsl_sampler_33: sampler_comparison;") != std::string_view::npos);
+    assert(source.find("@group(3) @binding(35) var bwsl_sampler_35: sampler;") != std::string_view::npos);
+}
+
 static void TestInvalidGraphicsInterfaces() {
     WGSLFixture wrongStage;
     wrongStage.Add(IR::OP_LOAD_ATTR, 0, CoreType::FLOAT4, 0);
@@ -384,6 +424,7 @@ int main() {
     TestSSAInitializesNewMetadata();
     TestGraphicsInterfaces();
     TestInvalidGraphicsInterfaces();
+    TestTextureArrayElements();
     TestDistantAccumulationIsMaterialized();
     TestStorageLoadKeepsItsEvaluationPoint();
     TestTypedNodeMapsSurviveGrowthAndUpdates();
