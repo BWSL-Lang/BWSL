@@ -311,18 +311,13 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
                     analysis->usedTextureMask |= (1 << binding);
                 }
             }
-            u16 binding = 0xFFFF;
+            // An explicit sampler is only in the metadata; operand 1 is the
+            // coordinate.
             if (TextureOpHasExplicitSampler(ir->metadata[i])) {
-                binding = GetTextureOpExplicitSamplerBinding(ir->metadata[i]);
-            } else {
-                // Legacy IR used operand 1 for explicit samplers.
-                u16 samplerReg = ir->GetOperand(i, 1);
-                if (IR::IsSamplerHandle(samplerReg)) {
-                    binding = IR::SamplerHandleSlot(samplerReg);
+                u16 binding = GetTextureOpExplicitSamplerBinding(ir->metadata[i]);
+                if (binding < 32) {
+                    analysis->usedSamplerMask |= (1 << binding);
                 }
-            }
-            if (binding < 32) {
-                analysis->usedSamplerMask |= (1 << binding);
             }
             break;
         }

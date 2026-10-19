@@ -2518,12 +2518,19 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
         break;
 
     case ResourceBinding::Sampler:
-      dest = IR::MakeSamplerHandle(resData.bindingIndex);
+      // Same encoding as a texture. Only texture calls take a sampler, and
+      // they tell the two apart by the argument's type (IsSamplerArgument).
+      dest = IR::MakeResourceHandle(resData.bindingIndex);
       break;
 
     default:
       break;
     }
+
+    // A texture, storage image or sampler handle is an operand code, not a
+    // register, so there is no register metadata to record for it.
+    if (IR::IsUintConstant(dest))
+      return dest;
 
     // Use explicit type from render config
     CoreType resourceType = static_cast<CoreType>(resData.coreType);

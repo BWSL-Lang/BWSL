@@ -321,7 +321,7 @@ inline bool IRLowering::IsFunctionLocalPlace(NodeRef expr) {
 // A pointer value made by `^`, as opposed to a storage buffer, shared or
 // local array register that also carries STORAGE_IS_PTR. Only `^` records a
 // pointee type in bits 8-15. Storage info past the allocated registers is
-// uninitialized, and sampler handles (0x3000 | slot) fall in that range.
+// uninitialized.
 inline bool IRLowering::IsPointerValue(u16 reg) const {
   if (!IR::IsRegister(reg) || reg >= program.registerCount) return false;
   u32 storage = program.registerStorageInfo[reg];

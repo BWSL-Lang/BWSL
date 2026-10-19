@@ -202,10 +202,10 @@ struct IRLowering {
 
   // Texture and sampler parameters of an inlined function, keyed by name
   // hash. They bind to the caller's resource handle (IR::MakeResourceHandle
-  // for textures, IR::MakeSamplerHandle for samplers) rather than a copy. The texture
-  // encoding is shared with uint constants, so the register alone can't say
-  // it holds a texture; this records the handle and its type for overload
-  // resolution in nested calls.
+  // for textures and samplers alike) rather than a copy. That encoding is shared
+  // with uint constants, so the register alone can't say it holds a texture
+  // or a sampler; this records the handle and its type for overload
+  // resolution and texture calls in nested calls.
   struct ResourceHandleVariable {
     u16 handle;
     CoreType type;
@@ -642,6 +642,10 @@ struct IRLowering {
   // lowered to resource handle `reg` (a bound resource, a constant texture
   // array element, or a texture/sampler parameter), or INVALID otherwise.
   CoreType GetResourceHandleType(NodeRef expr, u16 reg) const;
+  // Whether a texture call's argument is a separate sampler. A sampler
+  // handle has the same operand code as a texture or uint constant, so
+  // only the argument expression can say.
+  bool IsSamplerArgument(NodeRef argument, u16 reg) const;
   u16 LowerTextureArrayElement(NodeRef ref);
   bool TryLowerDynamicTextureArrayCall(NodeRef ref, u16* result);
 

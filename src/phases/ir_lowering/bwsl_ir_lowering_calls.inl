@@ -1056,7 +1056,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       OpCode texOp = IntrinsicToOpcode(intrinsic);
       u16 texReg = args[0]; // A resource handle
       const bool hasExplicitSampler =
-          argCount >= 3 && IR::IsSamplerHandle(args[1]);
+          argCount >= 3 && IsSamplerArgument(call.arguments[1], args[1]);
       u16 coordReg = hasExplicitSampler ? args[2] : args[1];
 
       switch (intrinsic) {
@@ -1095,7 +1095,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       if (hasExplicitSampler) {
         BWSL::SetTextureOpExplicitSamplerMetadata(program,
                                                   builder.currentInstruction - 1,
-                                                  static_cast<u16>(IR::SamplerHandleSlot(args[1])));
+                                                  static_cast<u16>(IR::ResourceHandleSlot(args[1])));
       }
 
       // Texture samples always return float4
@@ -1107,7 +1107,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       OpCode texOp = IntrinsicToOpcode(intrinsic);
       u16 texReg = args[0]; // A resource handle
       const bool hasExplicitSampler =
-          argCount >= 4 && IR::IsSamplerHandle(args[1]);
+          argCount >= 4 && IsSamplerArgument(call.arguments[1], args[1]);
       u16 coordReg = hasExplicitSampler ? args[2] : args[1];
       u16 componentReg = hasExplicitSampler ? args[3] : args[2];
       u16 offsetReg = IR::InvalidOperand;
@@ -1119,7 +1119,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       if (hasExplicitSampler) {
         BWSL::SetTextureOpExplicitSamplerMetadata(program,
                                                   builder.currentInstruction - 1,
-                                                  static_cast<u16>(IR::SamplerHandleSlot(args[1])));
+                                                  static_cast<u16>(IR::ResourceHandleSlot(args[1])));
       }
 
       SetRegisterType(dest, CoreType::FLOAT4);
@@ -1130,7 +1130,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       OpCode texOp = IntrinsicToOpcode(intrinsic);
       u16 texReg = args[0];
       const bool hasExplicitSampler =
-          argCount >= 4 && IR::IsSamplerHandle(args[1]);
+          argCount >= 4 && IsSamplerArgument(call.arguments[1], args[1]);
       u16 coordReg = hasExplicitSampler ? args[2] : args[1];
       u16 lodReg = hasExplicitSampler ? args[3] : args[2];
       u16 offsetReg = (intrinsic == Intrinsic::LOAD_OFFSET)
@@ -1140,7 +1140,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       if (hasExplicitSampler) {
         BWSL::SetTextureOpExplicitSamplerMetadata(program,
                                                   builder.currentInstruction - 1,
-                                                  static_cast<u16>(IR::SamplerHandleSlot(args[1])));
+                                                  static_cast<u16>(IR::ResourceHandleSlot(args[1])));
       }
       SetRegisterType(dest, CoreType::FLOAT4);
       return dest;
@@ -2709,6 +2709,10 @@ inline CoreType IRLowering::GetResourceHandleType(NodeRef expr, u16 reg) const {
         resource.type == ResourceBinding::Sampler)
         return static_cast<CoreType>(resource.coreType);
     return CoreType::INVALID;
+}
+
+inline bool IRLowering::IsSamplerArgument(NodeRef argument, u16 reg) const {
+    return GetResourceHandleType(argument, reg) == CoreType::SAMPLER;
 }
 
 inline u16 IRLowering::LowerTextureArrayElement(NodeRef ref) {

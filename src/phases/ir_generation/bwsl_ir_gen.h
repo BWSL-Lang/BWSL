@@ -80,7 +80,8 @@ constexpr u16 MakeUintConstant(u32 index) { return static_cast<u16>(UintConstant
 constexpr u16 MakeFloatConstant(u32 index) { return static_cast<u16>(FloatConstantBase + index); }
 constexpr u16 MakeBoolConstant(u32 index) { return static_cast<u16>(BoolConstantBase + index); }
 
-// Texture and storage image operands name their binding slot as a uint code.
+// Texture, storage image and sampler operands name their binding slot as a
+// uint code; the expression's type says which kind it is.
 constexpr u32 ResourceHandleLimit = 0x1000;
 constexpr u16 MakeResourceHandle(u32 slot) { return MakeUintConstant(slot); }
 constexpr bool IsResourceHandle(u16 value) {
@@ -91,12 +92,6 @@ constexpr bool IsResourceHandle(u16 value) {
 constexpr u32 ResourceHandleSlot(u16 value) {
     return (IsUintConstant(value) ? UintConstantIndex(value) : value) & (ResourceHandleLimit - 1);
 }
-
-// Sampler operands of sampling calls are 0x3000 | slot. That number is also a
-// register, so only the operand's position says which it is.
-constexpr u16 MakeSamplerHandle(u32 slot) { return static_cast<u16>(0x3000 | slot); }
-constexpr bool IsSamplerHandle(u16 value) { return (value & 0xF000) == 0x3000; }
-constexpr u32 SamplerHandleSlot(u16 value) { return value & 0x0FFF; }
 
 // Instruction flags (IRProgram::flags).
 // On a signed OP_IMOD: neither operand is negative, so the remainder is
