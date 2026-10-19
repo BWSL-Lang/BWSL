@@ -1,0 +1,19 @@
+pipeline BitIntrinsics {
+    resources {
+        source: buffer<int>
+        result: buffer<int>
+    }
+    pass "Compute" {
+        use resources { source, result }
+        compute "Main" [64, 1, 1] {
+            uint index = input.global_id.x;
+            int value = resources.source[index];
+            uint bits = asuint(value);
+            resources.result[index * 5u] = count_bits(value);
+            resources.result[index * 5u + 1u] = first_bit_high(value);
+            resources.result[index * 5u + 2u] = first_bit_low(value);
+            resources.result[index * 5u + 3u] = asint(first_bit_high(bits & ~1u));
+            resources.result[index * 5u + 4u] = asint(first_bit_low(bits));
+        }
+    }
+}

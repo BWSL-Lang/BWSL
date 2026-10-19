@@ -285,8 +285,10 @@ BuiltinOperation MathOperation(u16 opcode) {
         case IR::OP_DEGREES: return {"degrees", 1};
         case IR::OP_RADIANS: return {"radians", 1};
         case IR::OP_POPCNT: return {"countOneBits", 1};
-        case IR::OP_CLZ: return {"countLeadingZeros", 1};
-        case IR::OP_CTZ: return {"countTrailingZeros", 1};
+        // first_bit_high/low are bit indices, -1 for no bit, like FindUMsb,
+        // FindSMsb and FindILsb; not leading/trailing zero counts.
+        case IR::OP_CLZ: return {"firstLeadingBit", 1};
+        case IR::OP_CTZ: return {"firstTrailingBit", 1};
         case IR::OP_REVERSE_BITS: return {"reverseBits", 1};
         case IR::OP_ANY: return {"any", 1};
         case IR::OP_ALL: return {"all", 1};

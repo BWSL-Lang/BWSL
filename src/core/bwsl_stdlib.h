@@ -321,8 +321,10 @@ constexpr BackendNames BACKEND_NAMES[] = {
     // Bit operations
     {"popcount", "countbits", "bitCount"},              // COUNT_BITS
     {"reverse_bits", "reversebits", "bitfieldReverse"}, // REVERSE_BITS
-    {"ctz", "firstbitlow", "findLSB"},                  // FIRST_BIT_LOW
-    {"clz", "firstbithigh", "findMSB"},                 // FIRST_BIT_HIGH
+    // MSL has no bit-index builtins: its ctz/clz count zeros and return 32
+    // for 0, where these return the bit's index and -1.
+    {nullptr, "firstbitlow", "findLSB"},                // FIRST_BIT_LOW (custom Metal)
+    {nullptr, "firstbithigh", "findMSB"},               // FIRST_BIT_HIGH (custom Metal)
     {"extract_bits", nullptr, "bitfieldExtract"},       // BITFIELD_EXTRACT
     {"insert_bits", nullptr, "bitfieldInsert"},         // BITFIELD_INSERT
     {"pack_unorm2x16", nullptr, "packUnorm2x16"},       // PACK_UNORM2X16
@@ -545,7 +547,7 @@ constexpr IntrinsicData INTRINSICS[] = {
     INTRINSIC_FIXED(COUNT_BITS, "count_bits", mask(CoreType::INT), mask(CoreType::INT) | mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(spv::OpBitCount, SPV_EXT_NONE)),
     INTRINSIC_FIXED(REVERSE_BITS, "reverse_bits", mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT) | mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(spv::OpBitReverse, SPV_EXT_NONE)),
     INTRINSIC_FIXED(FIRST_BIT_LOW, "first_bit_low", mask(CoreType::INT), mask(CoreType::INT) | mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450FindILsb)),
-    INTRINSIC_FIXED(FIRST_BIT_HIGH, "first_bit_high", mask(CoreType::INT), mask(CoreType::INT) | mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450FindSMsb)), // FindSMsb for signed, FindUMsb for unsigned
+    INTRINSIC_FIXED(FIRST_BIT_HIGH, "first_bit_high", mask(CoreType::INT), mask(CoreType::INT) | mask(CoreType::UINT), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450FindSMsb)), // the SPIR-V backend picks FindSMsb for signed, FindUMsb for unsigned
     INTRINSIC_FIXED(BITFIELD_EXTRACT, "bitfield_extract", mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT), mask(CoreType::INT), 0, 0, SPV_MAP(spv::OpBitFieldSExtract, SPV_EXT_NONE)),
     INTRINSIC_FIXED(BITFIELD_INSERT, "bitfield_insert", mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT) | mask(CoreType::UINT), mask(CoreType::INT), mask(CoreType::INT), 0, SPV_MAP(spv::OpBitFieldInsert, SPV_EXT_NONE)),
     INTRINSIC_FIXED(PACK_UNORM2X16, "pack_unorm2x16", mask(CoreType::UINT), mask(CoreType::FLOAT2), 0, 0, 0, 0, SPV_MAP(SPV_OP_NONE, GLSLstd450PackUnorm2x16)),

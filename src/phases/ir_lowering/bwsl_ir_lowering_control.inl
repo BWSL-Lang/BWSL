@@ -1100,6 +1100,7 @@ inline void IRLowering::LowerReturn(NodeRef ref) {
                        inlineReturnFlagReg != 0xFFFF);
   if (!ret.value.IsNull()) {
     u16 valueReg = LowerExpression(ret.value);
+    if (inlineReturn) CheckStoreShape(ret.value, valueReg, inlineReturnType);
 
     // If we're inlining a function, store to the return register instead of
     // emitting OP_RET

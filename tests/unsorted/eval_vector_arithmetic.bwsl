@@ -1,6 +1,6 @@
 // Vector eval locals in compile-time arithmetic, swizzles and constructors
-// (#209): component-wise + - * / (and % on ints) with vectors and scalar
-// broadcast, unary minus, swizzle reads and writes.
+// (#209): component-wise + - * / % with vectors and scalar broadcast,
+// unary minus, swizzle reads and writes.
 pipeline EvalVectorArithmetic {
     resources {
         data: buffer<float4>
@@ -34,6 +34,10 @@ pipeline EvalVectorArithmetic {
                 eval float m = 5.0 % 2u;
                 eval bool lt = 1u < 2.0;
                 eval if (lt) { resources.data[3] = float4(m, 3u * 0.5, 0.0, 1.0); }
+
+                // Float % is floored, like mod(): the result has the divisor's sign.
+                eval float3 w = float3(-7.5, 7.5, -7.5);
+                resources.data[4] = float4(w % float3(2.0, -2.0, -2.0), (w % 2.0).x);
 
                 eval int3 v = int3(-7, 7, -8);
                 resources.idata[0] = int4(v / 2, -v.x);

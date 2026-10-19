@@ -1,0 +1,23 @@
+// Error case: a swizzle store takes a value of the swizzle's width.
+pipeline VectorWidth {
+    attributes {
+        position: float3
+    }
+
+    pass "Main" {
+        use attributes { position }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.position.xy;
+        }
+
+        fragment {
+            int2 small = int2(int(input.uv.x), int(input.uv.y));
+            int3 large = int3(small, int(input.uv.x * 3.0));
+            int2 value = small;
+            value.xy = large;
+            output.color = float4(float(value.x), float(value.y), 0.0, 1.0);
+        }
+    }
+}

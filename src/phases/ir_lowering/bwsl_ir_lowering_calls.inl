@@ -184,6 +184,7 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
       LowerBlock(arm.body);
     } else {
       u16 value = LowerExpression(arm.body);
+      CheckStoreShape(arm.body, value, inlineReturnType);
       builder.EmitInstruction(OP_STORE_REG, inlineReturnReg, value);
       SetRegisterType(inlineReturnReg, GetRegisterType(value));
       if (value < MAX_REGISTERS) program.registerStructTypes[inlineReturnReg] = program.registerStructTypes[value];
@@ -1017,16 +1018,10 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         u32 condWidth = (mask(condType) & TypeMasks::BOOL_VECTORS) ? GetVectorDimension(condType)
                       : condType == CoreType::BOOL                  ? 1
                                                                     : 0;
-        // Scalar and vector CoreType names are the source spelling in upper case.
-        auto typeName = [](CoreType type) {
-            std::string name = CoreTypeToString(type);
-            for (char& c : name) c = static_cast<char>(tolower(c));
-            return name;
-        };
         // A value's type as the source names it: a struct by its name.
         auto valueTypeName = [&](u16 reg, CoreType type) {
             u32 hash = type == CoreType::CUSTOM ? program.registerStructTypes[reg] : 0;
-            if (hash == 0) return typeName(type);
+            if (hash == 0) return SourceTypeName(type);
             std::string name = ReverseLookup::GetString(hash);
             return name.rfind("<hash:", 0) == 0 ? std::string("a struct") : name;
         };
@@ -1035,7 +1030,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
             snprintf(msg, sizeof(msg),
                      "Error: 'select' condition (argument 3) is %s, but must be bool; "
                      "the order is select(false_value, true_value, condition)\n",
-                     typeName(condType).c_str());
+                     SourceTypeName(condType).c_str());
             ReportErrorAt(call.arguments[2], msg);
             return 0;
         }
@@ -1064,7 +1059,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
             snprintf(msg, sizeof(msg),
                      "Error: 'select' condition is %s, but the values are %s; "
                      "use a bool or a bool vector of the same width\n",
-                     typeName(condType).c_str(), typeName(falseType).c_str());
+                     SourceTypeName(condType).c_str(), SourceTypeName(falseType).c_str());
             ReportErrorAt(call.arguments[2], msg);
             return 0;
         }
@@ -1093,6 +1088,13 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       case Intrinsic::ANY:
       case Intrinsic::ALL:
         resultType = CoreType::BOOL;
+        break;
+      case Intrinsic::STEP:
+      case Intrinsic::SMOOTHSTEP:
+        // Scalar edges apply to every component of x, the last argument.
+        if (argCount > 0) {
+          resultType = GetRegisterType(args[argCount - 1]);
+        }
         break;
       case Intrinsic::AS_FLOAT: {
         CoreType argType = argCount > 0 ? GetRegisterType(args[0]) : CoreType::UINT;
@@ -1800,11 +1802,13 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   u16 returnReg = AllocateRegister();
   u16 savedReturnReg = inlineReturnReg;
   u16 savedReturnFlagReg = inlineReturnFlagReg;
+  CoreType savedReturnType = inlineReturnType;
   u32 savedReturnCounter = inlineReturnCounter;
   u32 savedReturnFlagReads = inlineReturnFlagReads;
   u32 savedModuleIndex = inlineModuleIndex;
 
   inlineReturnReg = returnReg;
+  inlineReturnType = method.returnType;
   inlineReturnFlagReg = AllocateRegister();
   SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
   u32 inlineFirstInstruction = builder.currentInstruction;
@@ -1826,6 +1830,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
     LowerBlock(method.body);
   } else {
     u16 exprResult = LowerExpression(method.body);
+    CheckStoreShape(method.body, exprResult, inlineReturnType);
     builder.EmitInstruction(OP_STORE_REG, returnReg, exprResult);
   }
 
@@ -1836,6 +1841,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   DropUnreadReturnFlag(inlineFirstInstruction);
   inlineReturnReg = savedReturnReg;
   inlineReturnFlagReg = savedReturnFlagReg;
+  inlineReturnType = savedReturnType;
   inlineReturnCounter = savedReturnCounter;
   inlineReturnFlagReads = savedReturnFlagReads;
   inlineModuleIndex = savedModuleIndex;
@@ -2180,10 +2186,12 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   // Save the current return register and module index for nested inlining
   u16 savedReturnReg = inlineReturnReg;
   u16 savedReturnFlagReg = inlineReturnFlagReg;
+  CoreType savedReturnType = inlineReturnType;
   u32 savedReturnCounter = inlineReturnCounter;
   u32 savedReturnFlagReads = inlineReturnFlagReads;
   u32 savedModuleIndex = inlineModuleIndex;
   inlineReturnReg = returnReg;
+  inlineReturnType = func.returnType;
   inlineReturnFlagReg = AllocateRegister();
   SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
   u32 inlineFirstInstruction = builder.currentInstruction;
@@ -2223,6 +2231,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   } else {
     // Single expression body
     u16 exprResult = LowerExpression(func.body);
+    CheckStoreShape(func.body, exprResult, inlineReturnType);
     builder.EmitInstruction(OP_STORE_REG, returnReg, exprResult);
   }
 
@@ -2234,6 +2243,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   DropUnreadReturnFlag(inlineFirstInstruction);
   inlineReturnReg = savedReturnReg;
   inlineReturnFlagReg = savedReturnFlagReg;
+  inlineReturnType = savedReturnType;
   inlineReturnCounter = savedReturnCounter;
   inlineReturnFlagReads = savedReturnFlagReads;
   inlineModuleIndex = savedModuleIndex;
