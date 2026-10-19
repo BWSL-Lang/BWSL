@@ -245,6 +245,11 @@
   [0, 100] instead of special-casing the ends, so near black and white they
   return the lightness as given with a tiny chroma rather than exactly 0;
   the RGB result is unchanged.
+- `Math::fast_atan2(y, x)` (with `float2`/`float3`/`float4` overloads) is a
+  branch-free `atan2` within 1.2e-5 rad. GPUs have no `atan` instruction, so
+  the exact version is a software routine with branches for IEEE edge
+  cases. `fast_atan2(0, 0)` is 0; infinities and the sign of zero aren't
+  handled.
 
 ### Tooling
 - `make wasm` and `make wasm-debug` link with `em++`, so they build with
