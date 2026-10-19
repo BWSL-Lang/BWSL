@@ -8,6 +8,14 @@
   `@bounds(>=0, <=1) float4 tint;`, or per component, as in
   `@bounds(>0, -10<y<0) float4 offsets;`. A bounded component is never
   NaN. See "Value Bounds" in the language reference.
+- Vector `eval` values work in compile-time arithmetic: `+ - * /` between
+  vectors of the same width or with a scalar on either side, `%` and bit
+  operations on `int` and `uint` vectors, unary minus, swizzle reads such as
+  `tint.y` or `tint.zyx`, and swizzle stores such as `tint.xy = ...`.
+  Constructors built from these, like `float3(tint.x, 1.0, tint.z)`, fold
+  too. `uint` scalar arithmetic in eval code now works as well.
+- Module constant initializers can use vector arithmetic and swizzles, as in
+  `const float2 SOUTH = NORTH * -1.0;`.
 
 ### Backends
 - Experimental native WGSL output is available with `-wgsl` for compute,

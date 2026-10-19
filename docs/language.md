@@ -652,18 +652,17 @@ Note:
 
 - Scalar and vector module constants are folded at compile time. Their type
   must be a scalar or a `float`, `int` or `uint` vector. The initializer may use literals,
-  other constants, scalar arithmetic, and scalar or vector constructors:
+  other constants, arithmetic, swizzles, and scalar or vector constructors:
 
   ```bwsl
   module Dirs {
       const float HALF_PI = 3.14159265 * 0.5;
       const float2 NORTH = float2(0.0, -1.0);
+      const float2 SOUTH = NORTH * -1.0;
   }
   ```
 
-  Vector arithmetic (`NORTH * 2.0`), swizzles (`NORTH.y`) and matrix
-  constants are not supported in module constant initializers yet. Uses of
-  the constant can still be swizzled (`Dirs::NORTH.y`).
+  Matrix constants are not supported in module constant initializers yet.
 
 Fixed arrays of core types can be declared `const` at module, pipeline, pass,
 or local scope. Brace initializers must supply every element. Module array

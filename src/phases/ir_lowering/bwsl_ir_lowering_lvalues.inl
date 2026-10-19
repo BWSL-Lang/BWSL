@@ -6,45 +6,7 @@ namespace BWSL::IR {
 
 namespace {
 
-inline bool DecodeSwizzleByHash(u32 nameHash, u16 lengthHint, u8 outIndices[4],
-                                u32 *outLength) {
-  const char xyzw[] = {'x', 'y', 'z', 'w'};
-  const char rgba[] = {'r', 'g', 'b', 'a'};
-  const char *sets[] = {xyzw, rgba};
-
-  u32 minLen = 1;
-  u32 maxLen = 4;
-  if (lengthHint >= 1 && lengthHint <= 4) {
-    minLen = lengthHint;
-    maxLen = lengthHint;
-  }
-
-  for (u32 setIdx = 0; setIdx < 2; setIdx++) {
-    const char *chars = sets[setIdx];
-    for (u32 len = minLen; len <= maxLen; len++) {
-      u32 combinations = 1u << (len * 2); // 4^len
-      for (u32 n = 0; n < combinations; n++) {
-        char candidate[4] = {};
-        u8 indices[4] = {};
-        for (u32 i = 0; i < len; i++) {
-          u32 shift = (len - 1 - i) * 2;
-          u8 idx = static_cast<u8>((n >> shift) & 0x3);
-          candidate[i] = chars[idx];
-          indices[i] = idx;
-        }
-        if (Utils::HashStr(candidate, static_cast<u16>(len)) == nameHash) {
-          for (u32 i = 0; i < len; i++) {
-            outIndices[i] = indices[i];
-          }
-          *outLength = len;
-          return true;
-        }
-      }
-    }
-  }
-
-  return false;
-}
+using Utils::DecodeSwizzleByHash;
 
 // Reports an error and returns false if a swizzle on a vector of
 // `vectorType` uses a component past its end, e.g. .z or .xyzw on a float2.
