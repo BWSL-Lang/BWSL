@@ -22,6 +22,11 @@
   time as at runtime. `eval` code and `const` initializers truncated, so
   `-7.5 % 2.0` was `-1.5` there but `0.5` in runtime code; both now give
   `0.5`, the sign of the divisor, like `mod()`. `fmod()` still truncates.
+- `BwslFrexpResult` and `BwslModfResult`, the structs `frexp` and `modf`
+  return, can be named as types again: locals, arrays, parameters, return
+  types, struct fields and constructors. Since v0.10 they were rejected with
+  "Unknown type". A user struct can't take either name, and reading a field
+  they don't have is a source error.
 
 ### Backends
 - Experimental native WGSL output is available with `-wgsl` for compute,
@@ -130,6 +135,9 @@
   `condition != 0` (see Breaking changes).
 
 ### AST JSON
+- `frexp` and `modf` calls and variables of their result types are typed as
+  `builtin:type:BwslFrexpResult` / `builtin:type:BwslModfResult`, and their
+  field reads have `member` edges.
 - A call that passes a struct resource or an enum variant directly, such as
   `read(resources.data)` or `weight(variants.quality)`, now has its `call`
   edge in `referenceIndex.references`.

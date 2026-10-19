@@ -457,10 +457,7 @@ struct IRLowering {
 
   u32 RegisterStructTypeFromData(u32 typeNameHash, StructData *structData);
 
-  u32 RegisterBuiltinStructType(const char *typeName,
-                                const char *const *fieldNames,
-                                const CoreType *fieldTypes,
-                                u32 fieldCount);
+  u32 RegisterBuiltinStructType(const StdLib::BuiltinStructType &builtin);
 
   bool IsSumEnumTypeHash(u32 typeHash);
 

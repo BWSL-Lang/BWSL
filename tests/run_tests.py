@@ -195,6 +195,8 @@ ERROR_CASE_TESTS = {
     "intrinsic_module_function_name.bwsl": "reserved for a built-in intrinsic",
     "intrinsic_struct_method_name.bwsl": "reserved for a built-in intrinsic",
     "intrinsic_enum_method_name.bwsl": "reserved for a built-in intrinsic",
+    "builtin_result_struct_redeclared.bwsl": "Struct name 'BwslFrexpResult' is reserved for a built-in type",
+    "builtin_result_unknown_field.bwsl": "Unknown field 'fraction' on type 'BwslFrexpResult'",
     "attribute_capacity.bwsl": "supported limit of 16 attributes",
     "array_negative_remainder_index.bwsl": "out of bounds",
     'function_void_return_value.bwsl': 'Void function cannot return a value',
@@ -590,6 +592,26 @@ AST_JSON_REFERENCE_TESTS = {
             {"to": "PASS:0/interface:uv", "role": "output", "from_prefix": "MEMBER_ACCESS:"},
             {"to": "PASS:0/interface:uv", "role": "input", "from_prefix": "MEMBER_ACCESS:"},
             {"to": "builtin:type:float2", "role": "type", "from_prefix": "VARIABLE_DECL:"},
+        ],
+    },
+    "builtin_result_types": {
+        "symbols": [
+            {
+                "match": {"kind": "struct", "name": "BwslModfResult"},
+                "expect": {"id": "builtin:type:BwslModfResult", "owner": "builtin"},
+            },
+            {
+                "match": {"kind": "struct-field", "name": "mantissa"},
+                "expect": {"id": "builtin:type:BwslFrexpResult/field:mantissa",
+                           "owner": "builtin:type:BwslFrexpResult", "type": "float"},
+            },
+        ],
+        "references": [
+            {"to": "FUNCTION:0", "role": "call", "from_prefix": "FUNCTION_CALL:"},
+            {"to": "builtin:type:BwslModfResult", "role": "construct", "from_prefix": "FUNCTION_CALL:"},
+            {"to": "builtin:type:BwslModfResult", "role": "type", "from_prefix": "FUNCTION:0/parameter:"},
+            {"to": "builtin:type:BwslModfResult/field:whole", "role": "member", "from_prefix": "MEMBER_ACCESS:"},
+            {"to": "builtin:type:BwslFrexpResult/field:mantissa", "role": "member", "from_prefix": "MEMBER_ACCESS:"},
         ],
     },
 }
