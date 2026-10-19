@@ -2,6 +2,16 @@
 
 ## unreleased
 
+### Breaking changes
+- Assignments, initializers, returns and component-wise operators no longer
+  change a vector's shape implicitly. `int2 s = size3;` needs `size3.xy`,
+  `int3 v = size2;` needs `int3(size2, z)`, `float3 f = i3;` needs
+  `float3(i3)`, `float2 h = 0.5;` needs `float2(0.5)`, and `int2 + int3` is
+  rejected. Each reports a source error naming the fix. Before, narrowing
+  compiled on SPIR-V-based targets but broke `-gles-direct` and `-wgsl`,
+  widening silently repeated components (`.xyx`) or read out of bounds, and
+  the other cases failed SPIR-V validation.
+
 ### Language
 - `@bounds(...)` promises the range of an attribute, a scalar or vector
   resource, or a struct field: `@bounds(>0, <10) int count;`,

@@ -40,6 +40,8 @@ CASES = {
     "nested_while": ("int i=0; float r=0.0; while(i<3){int j=0; while(j<4){r+=float(i+j);j++;}i++;} output.color=float4(r);", [30]*4),
     "loop_phi_swap": ("float a=1.0; float b=2.0; for(int i=0;i<3;i++){float t=a;a=b;b=t;} output.color=float4(a,b,a,b);", [2,1,2,1]),
     "switch_in_loop": ("float r=0.0; for(int i=0;i<4;i++){switch(i){case 0:{r+=1.0;} case 1:{r+=2.0;} default:{r+=4.0;}}} output.color=float4(r);", [11]*4),
+    "vector_width_explicit": ("int3 b=int3(1,2,3);int2 n=b.xy;int3 w=int3(n,7);w.xy=n.yx;float3 f=float3(w);"
+                              "float2 s=float2(1.0);output.color=float4(f,float(n.y)+s.x);", [2,1,7,3]),
     "swizzle_write": ("float4 v=float4(1.0,2.0,3.0,4.0);v.yx=v.zw;output.color=v;", [4,3,3,4]),
     "dynamic_vector_store": ("float4 v=float4(1.0,2.0,3.0,4.0);for(int i=0;i<4;i++){v[i]+=float(i);}output.color=v;", [1,3,5,7]),
     "integer_vector_index": ("int4 v=int4(7,8,9,10);int r=0;for(int i=0;i<4;i++){r+=v[i];}output.color=float4(float(r));", [34]*4),

@@ -74,6 +74,16 @@ an explicit integer conversion or bitcast when starting with a floating value.
 Scalar float-to-int/uint assignment performs the same truncating conversion
 as the corresponding explicit cast.
 
+Implicit conversion on assignment, initialization and `return` is scalar to
+scalar only. A vector value must already have the target's width and
+component type, a scalar does not splat into a vector, and a vector does not
+collapse to a scalar. Spell the conversion out: a swizzle narrows
+(`size3.xy`), a constructor widens (`int3(size2, 1)`), converts component
+types (`float3(cells)`) or splats (`float2(0.5)`). The same applies to struct
+fields, array elements and swizzle stores, whose value must match the
+swizzle's width. Component-wise binary operators reject two vector operands
+of different widths; a scalar operand still applies to every component.
+
 Signed integer `/` truncates toward zero, and `%` returns the corresponding
 remainder: `a - b * (a / b)`. A nonzero remainder has the sign of the dividend,
 so `-4 % 3` is `-1` and `4 % -3` is `1`. This also applies component-wise to
