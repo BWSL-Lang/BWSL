@@ -1627,9 +1627,10 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     u32 offset_id = GetSpirvId(offset_reg);
     u32 count_id = GetSpirvId(count_reg);
     CoreType base_type = GetOperandType(base_reg);
+    // Zero-extend uint fields, including each component of a uint vector.
     spv::Op extract_op =
-        (base_type == CoreType::UINT) ? spv::OpBitFieldUExtract
-                                      : spv::OpBitFieldSExtract;
+        (CoreTypeScalarType(base_type) == CoreType::UINT) ? spv::OpBitFieldUExtract
+                                                          : spv::OpBitFieldSExtract;
     Emit(extract_op, result_type, dest, base_id, offset_id, count_id);
     break;
   }

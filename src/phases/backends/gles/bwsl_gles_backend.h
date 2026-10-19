@@ -132,7 +132,7 @@ static constexpr OpInfo BIT_OPS[] = {
     {"bwsl_count_bits", 1, 1},     // OP_POPCNT (helper function)
     {"bwsl_first_bit_high", 1, 1}, // OP_CLZ (helper function)
     {"bwsl_first_bit_low", 1, 1},  // OP_CTZ (helper function)
-    {"bitfieldReverse", 1, 1}, // OP_REVERSE_BITS
+    {"bwsl_reverse_bits", 1, 1},   // OP_REVERSE_BITS (helper function)
 };
 
 // Math functions: OP_SQRT (0x80) through OP_COSH (0x8F).
@@ -310,6 +310,35 @@ inline bool SupportsLocalPointers(const IR::IRProgram& program) {
     return true;
 }
 
+// Why the direct emitter can't express the program, as a target capability
+// error, or null when it can. These features need GLSL ES 3.10+ (or Vulkan
+// semantics), so the program is excluded from the target rather than emitted
+// with the operations missing.
+inline const char* UnsupportedFeatureError(const IR::IRProgram& program) {
+    for (u32 i = 0; i < program.instructionCount; i++) {
+        switch (static_cast<IR::OpCode>(program.opcodes[i])) {
+            // Uniform arrays are read through LOAD_UNIFORM and storage-pointer
+            // ops rooted at it; STORAGE_PTR is always a storage buffer.
+            case IR::OP_STORAGE_PTR: case IR::OP_LOAD_BUFFER: case IR::OP_STORE_BUFFER:
+                return "error: GLSL ES 300 does not support storage buffers (requires ES 310+)";
+            case IR::OP_IMG_LOAD: case IR::OP_IMG_STORE:
+                return "error: GLSL ES 300 does not support storage images (requires ES 310+)";
+            case IR::OP_LOAD_SHARED: case IR::OP_STORE_SHARED:
+            case IR::OP_ATOMIC_ADD: case IR::OP_ATOMIC_SUB: case IR::OP_ATOMIC_MIN:
+            case IR::OP_ATOMIC_MAX: case IR::OP_ATOMIC_AND: case IR::OP_ATOMIC_OR:
+            case IR::OP_ATOMIC_XOR: case IR::OP_ATOMIC_XCHG: case IR::OP_ATOMIC_CMP_XCHG:
+                return "error: GLSL ES 300 does not support shared memory or atomics (requires ES 310+)";
+            case IR::OP_WAVE_MIN: case IR::OP_WAVE_MAX: case IR::OP_WAVE_ALL:
+            case IR::OP_WAVE_ANY: case IR::OP_WAVE_BALLOT: case IR::OP_WAVE_READ_FIRST:
+            case IR::OP_WAVE_READ_LANE: case IR::OP_WAVE_SUM: case IR::OP_WAVE_MUL:
+                return "error: GLSL ES does not support subgroup operations (requires Vulkan semantics)";
+            default:
+                break;
+        }
+    }
+    return nullptr;
+}
+
 static constexpr u8 REG_DECLARED = 0x01;
 
 // ============================================================================
@@ -423,7 +452,7 @@ private:
     // ===== Emission =====
     void EmitHeader();
     void EmitBitHelpers();
-    u16 BitOperandType(u32 instIdx) const;
+    u16 BitOperandType(u32 instIdx, u32 operandIdx = 0) const;
     void EmitInputs();
     void EmitOutputs();
     void EmitUniforms();

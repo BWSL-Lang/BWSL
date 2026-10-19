@@ -13,6 +13,37 @@ import struct
 import subprocess
 
 
+# 32-bit references for reverse_bits, bitfield_extract and bitfield_insert
+# (SPIR-V OpBitReverse, OpBitField[SU]Extract, OpBitFieldInsert).
+def _s32(x):
+    x &= 0xFFFFFFFF
+    return x - (1 << 32) if x & 0x80000000 else x
+
+
+def _reverse(x):
+    return int(f'{x & 0xFFFFFFFF:032b}'[::-1], 2)
+
+
+def _extract(x, offset, count, signed):
+    if count == 0:
+        return 0
+    field = ((x & 0xFFFFFFFF) >> offset) & ((1 << count) - 1)
+    return field - (1 << count) if signed and field >> (count - 1) else field
+
+
+def _insert(base, insert, offset, count):
+    mask = ((1 << count) - 1) << offset
+    return (base & ~mask & 0xFFFFFFFF) | ((insert << offset) & mask)
+
+
+def _bitfield_pixels(pixel):
+    # One pixel per column, n = 0..3, repeated for the four rows.
+    return [v for _ in range(4) for n in range(4) for v in pixel(n, (n - 2) * 0x1234 + n)]
+
+
+BITFIELD_PRELUDE = "int n=int((input.uv.x+1.0)*2.0);int x=(n-2)*0x1234+n;uint u=uint(x+20000);"
+
+
 CASES = {
     "uniform_arrays": (
         "int i=input.uv.x<0.0?0:1; "
@@ -73,6 +104,31 @@ CASES = {
                         "output.color=float4(float(h.x),float(h.w),float(l.x),float(l.w));",
                         [v for _ in range(4) for pixel in ([31,-1,1,-1],[31,30,0,30],[-1,31,-1,31],[0,31,0,30])
                          for v in pixel]),
+    # reverse_bits, bitfield_extract and bitfield_insert: ES 3.00 has no
+    # bitfieldReverse/Extract/Insert, so they lower to helper functions.
+    "reverse_bits": (BITFIELD_PRELUDE + "uint w=uint(n)*6u+1u;uint2 v=reverse_bits(uint2(w+2u,w+4u));"
+                     "int3 r=reverse_bits(int3(n,-n,n<<4));"
+                     "output.color=float4(float(reverse_bits(w)),float(reverse_bits(n)),float(v.y),float(r.z));",
+                     _bitfield_pixels(lambda n, x: [_reverse(6*n+1), _s32(_reverse(n)), _reverse(6*n+5),
+                                                    _s32(_reverse(n << 4))])),
+    "bitfield_extract": (BITFIELD_PRELUDE + "int3 e=bitfield_extract(int3(x,-x,x<<20),n,5);"
+                         "uint2 f=bitfield_extract(uint2(u,u*3u),n+2,9);"
+                         "output.color=float4(float(bitfield_extract(x,4,8)),float(bitfield_extract(u,n*3,7)),"
+                         "float(e.y),float(f.y));",
+                         _bitfield_pixels(lambda n, x: [_extract(x, 4, 8, True), _extract(x+20000, n*3, 7, False),
+                                                        _extract(-x, n, 5, True), _extract(3*(x+20000), n+2, 9, False)])),
+    "bitfield_insert": (BITFIELD_PRELUDE + "int2 r=bitfield_insert(int2(x,-x),int2(n,-1),n+1,4);"
+                        "uint3 s=bitfield_insert(uint3(u),uint3(7u,uint(n),9u),n*4,3);"
+                        "output.color=float4(float(bitfield_insert(x,-3,n*2,6)),float(bitfield_insert(u,uint(n)+5u,8,n+1)),"
+                        "float(r.y),float(s.y));",
+                        _bitfield_pixels(lambda n, x: [_s32(_insert(x, -3, n*2, 6)), _insert(x+20000, n+5, 8, n+1),
+                                                       _s32(_insert(-x, -1, n+1, 4)), _insert(x+20000, n, n*4, 3)])),
+    # Full-width fields (count 32, shift 0) and empty fields at offset 32.
+    "bitfield_edges": (BITFIELD_PRELUDE + "int o=8*(n+1);"
+                       "output.color=float4(float(bitfield_extract(x,o-8,40-o)),float(bitfield_extract(u,o,32-o)),"
+                       "float(bitfield_insert(x,-1,o,32-o)),float(bitfield_insert(x,n*7,0,40-o)));",
+                       _bitfield_pixels(lambda n, x: [_extract(x, 8*n, 32-8*n, True), _extract(x+20000, 8*n+8, 24-8*n, False),
+                                                      _s32(_insert(x, -1, 8*n+8, 24-8*n)), _s32(_insert(x, n*7, 0, 32-8*n))])),
     "matrix_store": ("mat2 m=mat2(1.0);m[1][0]=7.0;mat2 t=transpose(m);output.color=float4(t[0][0],t[0][1],t[1][0],t[1][1]);", [1,7,0,1]),
     "classification_select": ("float4 v=float4(0.0,1.0,-1.0,2.0);bool4 f=isfinite(v);bool4 n=isnormal(v);output.color=float4(all(f)?1.0:0.0,all(n)?1.0:0.0,any(n)?1.0:0.0,isnan(1.0)?1.0:0.0);", [1,0,1,0]),
     "fma": ("float4 r=fma(float4(2.0),float4(3.0),float4(4.0));output.color=r;", [10]*4),

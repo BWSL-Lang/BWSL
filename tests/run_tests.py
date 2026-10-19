@@ -703,6 +703,13 @@ TRANSLATION_EXPECTATION_TESTS = {
             "metal_contains": ["popcount(", "spvFindSMSB(", "spvFindUMSB(", "spvFindLSB("],
         },
     },
+    # Unsigned fields, including uint vector components, zero-extend.
+    "intrinsics_bitfield": {
+        "frag": {
+            "spirv_contains": ["OpBitReverse", "OpBitFieldSExtract", "OpBitFieldUExtract", "OpBitFieldInsert"],
+            "spirv_count_exactly": {"OpBitFieldUExtract": 2, "OpBitFieldSExtract": 2},
+        },
+    },
     "types_matrices": {
         "vert": {
             "ir_contains": ["MAT_CONSTRUCT", "COS", "SIN"],

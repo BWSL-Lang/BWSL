@@ -87,6 +87,19 @@
   `findLSB`; the shader gets small helper functions for the ones it uses.
   `count_bits` on a `uint` no longer emits `uint r = bitCount(x)`, which
   failed to compile.
+- Direct GLES output of `reverse_bits`, `bitfield_extract` and
+  `bitfield_insert` compiles as GLSL ES 3.00 too. It called the ES 3.10
+  builtins `bitfieldReverse`, `bitfieldExtract` and `bitfieldInsert`.
+- `bitfield_extract` on a `uint2`, `uint3` or `uint4` zero-extends each
+  field, as it does on a `uint`. SPIR-V and the targets compiled from it
+  sign-extended them, so a field with its top bit set came out with every
+  higher bit set.
+- GLSL ES output no longer drops storage buffer, storage image, shared
+  memory, atomic and wave operations. A shader using `ldexp` or `modf` with
+  a storage buffer was emitted as GLSL ES that read undeclared variables;
+  like any other shader using these features, it now fails `-gles` and
+  `-gles-direct` with the feature GLSL ES 3.00 lacks, and `-all` omits the
+  GLSL ES target with a warning.
 
 ### Diagnostics
 - Ternary arms of different types, such as `c ? float3(1.0) : float2(1.0)`,
