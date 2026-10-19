@@ -248,6 +248,9 @@ struct RegInfo {
     u8 flags;
     // Array registers otherwise carry only their element CoreType.
     u32 arraySize;
+    // Local arrays whose only write is one complete fill with constants:
+    // first store + 1. The values go into the declaration instead.
+    u32 constantFill;
     // Uniform-array pointer definition + 1; zero denotes an ordinary value.
     u32 uniformPointerInstruction;
     // Definition + 1 of a pointer into a local struct variable
@@ -424,6 +427,8 @@ private:
     void EmitUniforms();
     void EmitMain();
     void PrepareArrayRegisters();
+    u32 GetArrayFillLength(u32 first, u32 end);
+    void EmitArrayFillValue(u32 first, u32 count);
     u32 EmitArrayStoreSequence(u32 first, u32 end);
     void EmitControlFlow();
     struct LoopScope {

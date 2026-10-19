@@ -116,17 +116,32 @@ def run_gles_regression_tests(compiler: Path, output: Path, runner: Path | None 
                           + '} fragment { ' + body + ' } } }')
         try:
             run([compiler, source, '-gles-direct', '-spv', '-bindings', '-validation', 'strict', '-o', folder])
+            # Arrays filled once with constants are initialized where they're
+            # declared; other complete fills become one constructor assignment.
             constructors = {
-                'constant_float_table': ('float', 8), 'constant_vector_table': ('vec2', 4),
-                'constant_int_table': ('int', 4), 'constant_table_in_loop': ('float', 4),
-                'runtime_table': ('float', 4),
+                'constant_float_table': ('float', 8, True), 'constant_vector_table': ('vec2', 4, False),
+                'constant_int_table': ('int', 4, True), 'constant_table_in_loop': ('float', 4, True),
+                'runtime_table': ('float', 4, False),
             }
             if name in constructors:
-                kind, count = constructors[name]
+                kind, count, initialized = constructors[name]
                 fragment_text = (folder / f'{name}.frag').read_text()
-                match = re.search(r'(r\d+) = ' + kind + r'\[' + str(count) + r'\]\(', fragment_text)
-                assert match, 'Complete array fill did not become a constructor assignment'
-                assert not re.search(r'\b' + match[1] + r'\[[^]]+\] = ', fragment_text), 'Per-element table stores remain'
+                constructor = kind + r'\[' + str(count) + r'\]\('
+                declaration = re.search(kind + r' (r\d+)\[' + str(count) + r'\] = ' + constructor, fragment_text)
+                assignment = re.search(r'(r\d+) = ' + constructor, fragment_text)
+                if initialized:
+                    assert declaration, 'Constant table was not initialized in its declaration'
+                    assert not assignment, 'Constant table is also assigned after its declaration'
+                    match = declaration
+                else:
+                    assert assignment, 'Complete array fill did not become a constructor assignment'
+                    assert not declaration, 'Non-constant table was initialized in its declaration'
+                    match = assignment
+                assert not re.search(r'(?m)^\s*' + match[1] + r'\[[^]]+\] = ', fragment_text), 'Per-element table stores remain'
+            if name == 'array_interleaved_updates':
+                # Written again after its constant fill: must not move into the declaration.
+                assert not re.search(r'float r\d+\[2\] = ', (folder / f'{name}.frag').read_text()), \
+                    'Array written after its constant fill was initialized in its declaration'
             if name == 'large_output':
                 assert (folder / f'{name}.frag').stat().st_size > 65536, 'Output-growth path was not exercised'
             for stage in ('vert', 'frag'):
