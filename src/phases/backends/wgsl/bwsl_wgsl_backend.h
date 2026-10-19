@@ -125,6 +125,7 @@ struct InterfaceTable {
     u32* locations = nullptr;
     u8* builtins = nullptr;
     u8* interpolations = nullptr;
+    u8* samplings = nullptr;
     u32 count = 0;
 };
 
@@ -243,7 +244,8 @@ private:
     bool PrepareOutput(u32 instruction, u16 slot, CoreType type);
     bool AddInterface(InterfaceTable& table, InterfaceOrigins& origins, u32* slotMap,
                       u32 instruction, u16 slot, CoreType type, u32 location,
-                      InterfaceBuiltin builtin, InterpolationMode interpolation);
+                      InterfaceBuiltin builtin, InterpolationMode interpolation,
+                      InterpolationSampling sampling);
     void WriteInterfaceAttribute(TextWriter& writer, const InterfaceTable& table,
                                  u32 id, bool varying);
     void PlanExpressions();

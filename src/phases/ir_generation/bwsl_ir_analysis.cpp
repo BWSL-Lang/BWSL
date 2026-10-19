@@ -125,6 +125,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
         // Fragment varyings (slots 0-15)
         analysis->usedInputMask |= (1 << inputSlot);
         analysis->inputInterpolations[inputSlot] = ir->inputInterpolations[inputSlot];
+        analysis->inputSamplings[inputSlot] = ir->inputSamplings[inputSlot];
         // Capture type from destination register
         u16 destReg = ir->destinations[i];
         if (destReg < ir->registerCount && ir->registerTypes) {
@@ -142,6 +143,7 @@ void AnalyzeIR(IRAnalysis *analysis, const IR::IRProgram *ir) {
             if (slot < 32) {
                 analysis->usedOutputMask |= (1 << slot);
                 analysis->outputInterpolations[slot] = ir->outputInterpolations[slot];
+                analysis->outputSamplings[slot] = ir->outputSamplings[slot];
                 // Capture type from destination register (value is in dest for
                 // STORE_OUTPUT) Note: EmitInstruction(OP_STORE_OUTPUT, valueReg, slot)
                 // puts value in destinations

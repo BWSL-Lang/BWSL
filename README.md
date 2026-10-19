@@ -10,8 +10,9 @@ A graphics pipeline keeps its vertex and fragment stages together. Values writte
 to `output.uv` in the vertex stage become interpolated `input.uv` values in the
 fragment stage. Floating-point varyings use perspective-correct interpolation by
 default. Decorate the vertex-stage output assignment with `@noperspective` for
-linear interpolation in screen space, or `@flat` to disable interpolation—for
-example, `@flat output.uv = attributes.texcoord;`. See
+linear interpolation in screen space, `@flat` to disable interpolation, or
+`@centroid` to keep MSAA edge pixels inside the primitive—for example,
+`@flat output.uv = attributes.texcoord;`. See
 [varying interpolation](https://www.bwsl.dev/docs/language/shader-io#interpolation-qualifiers).
 
 <!-- These are BWSL examples; hlsl provides approximate highlighting on GitHub. -->

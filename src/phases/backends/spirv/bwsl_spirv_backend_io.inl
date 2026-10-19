@@ -6,7 +6,11 @@
 namespace BWSL {
 
 static void EmitInterpolationDecoration(SPIRVBuilder& builder, u32 var_id,
-                                        InterpolationMode interpolation) {
+                                        InterpolationMode interpolation,
+                                        InterpolationSampling sampling) {
+  if (sampling == InterpolationSampling::Centroid) {
+    builder.EmitDecoration(var_id, spv::DecorationCentroid, nullptr, 0);
+  }
   switch (interpolation) {
   case InterpolationMode::Flat:
     builder.EmitDecoration(var_id, spv::DecorationFlat, nullptr, 0);
@@ -168,7 +172,8 @@ void SPIRVBuilder::DeclareInputOutput() {
                                            locationCounter, spv::BuiltInMax);
       EmitInterpolationDecoration(
           *this, var_id,
-          static_cast<InterpolationMode>(analysis.outputInterpolations[slot]));
+          static_cast<InterpolationMode>(analysis.outputInterpolations[slot]),
+          static_cast<InterpolationSampling>(analysis.outputSamplings[slot]));
 
       // GLSL ES 300 matches varyings by name, not location
       EmitVaryingName(var_id, slot - OutputSlot::VARYING0, locationCounter);
@@ -211,7 +216,8 @@ void SPIRVBuilder::DeclareInputOutput() {
                                            location, spv::BuiltInMax);
       EmitInterpolationDecoration(
           *this, var_id,
-          static_cast<InterpolationMode>(analysis.inputInterpolations[slot]));
+          static_cast<InterpolationMode>(analysis.inputInterpolations[slot]),
+          static_cast<InterpolationSampling>(analysis.inputSamplings[slot]));
 
       // GLSL ES 300 matches varyings by name, not location
       EmitVaryingName(var_id, location, location);

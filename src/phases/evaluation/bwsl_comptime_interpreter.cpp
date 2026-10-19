@@ -447,7 +447,7 @@ static NodeRef CloneNodeImpl(ComptimeState* state, NodeRef node) {
             const AssignmentData& src = state->ast->GetAssignment(node);
             return ASTFactory::MakeAssignment(state->ast, CloneNode(state, src.target),
                                               CloneNode(state, src.value), line, col,
-                                              src.interpolation, src.isCompound);
+                                              src.interpolation, src.isCompound, src.sampling);
         }
         case ASTNodeType::BLOCK:
             return CloneBlockLike(state, node, false);

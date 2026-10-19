@@ -91,9 +91,11 @@ struct IRProgram {
     alignas(64) u8* resourceStageFlags;   // Which stages need this
     u32 resourceCount;
 
-    // Interpolation mode per vertex output / fragment input slot.
+    // Interpolation mode and sampling per vertex output / fragment input slot.
     u8 outputInterpolations[32];
     u8 inputInterpolations[32];
+    u8 outputSamplings[32];       // InterpolationSampling
+    u8 inputSamplings[32];
 
     // @bounds(...) of the values loads read, for the optimizer; null where a
     // declaration has none. A load of an uncompressed attribute, of a scalar

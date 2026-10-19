@@ -857,11 +857,12 @@ inline void IRLowering::LowerAssignment(NodeRef ref) {
     nodeRegisters[ast->GetBinaryOp(assign.value).left.packed] = oldValue;
   }
   u16 valueReg = LowerExpression(assign.value);
-  StoreLValue(assign.target, valueReg, assign.interpolation);
+  StoreLValue(assign.target, valueReg, assign.interpolation, assign.sampling);
 }
 
 inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
-                                  InterpolationMode interpolation) {
+                                  InterpolationMode interpolation,
+                                  InterpolationSampling sampling) {
   // Array element and nested field writes must honor the root declaration's
   // const flag. The direct identifier path below only covers whole values.
   NodeRef root = target;
@@ -996,7 +997,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
         builder.EmitInstruction(OP_STRUCT_INSERT, updated, objectReg,
                                 static_cast<u16>(fieldIndex), valueReg);
         program.metadata[builder.currentInstruction - 1] = structHash;
-        StoreLValue(access.object, updated, interpolation);
+        StoreLValue(access.object, updated, interpolation, sampling);
         return;
       }
       if ((mask(objectType) & (TypeMasks::FLOAT_VECTORS |
@@ -1033,7 +1034,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
             builder.EmitInstruction(OP_VEC_INSERT, next, updated, indices[j], component);
             updated = next;
           }
-          StoreLValue(access.object, updated, interpolation);
+          StoreLValue(access.object, updated, interpolation, sampling);
           return;
         }
       }
@@ -1066,7 +1067,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
             nameStr = nameBuf;
           }
           u16 slot = (u16)ResolveOutputSlotForStore(outputNameHash, outputType,
-                                               nameStr, interpolation);
+                                               nameStr, interpolation, sampling);
 
           u16 outputReg = AllocateRegister();
           SetRegisterType(outputReg, outputType);
@@ -1181,7 +1182,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           nameStr = nameBuf;
         }
         u16 slot = (u16)ResolveOutputSlotForStore(nameHash, valueType, nameStr,
-                                             interpolation, target);
+                                             interpolation, sampling, target);
         CoreType declaredOutputType = GetFragmentOutputType(nameHash);
         if (currentStage == ShaderStage::Fragment &&
             declaredOutputType != CoreType::INVALID &&
@@ -1550,7 +1551,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
             program.registerStructTypes[updated] = structHash;
             builder.EmitInstruction(OP_STRUCT_ARRAY_INSERT, updated, objectReg, field, indexReg, valueReg);
             program.metadata[builder.currentInstruction - 1] = structHash;
-            StoreLValue(fieldAccess.object, updated, interpolation);
+            StoreLValue(fieldAccess.object, updated, interpolation, sampling);
             return;
           }
         }
@@ -1590,7 +1591,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
         SetRegisterType(newVecReg, baseType);
         builder.EmitInstruction(OP_VEC_INSERT_DYNAMIC, newVecReg, baseReg,
                                 valueReg, indexReg);
-        StoreLValue(arrAccess.array, newVecReg, interpolation);
+        StoreLValue(arrAccess.array, newVecReg, interpolation, sampling);
         return;
       }
 
@@ -1620,7 +1621,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
         SetRegisterType(updated, baseType);
         builder.EmitInstruction(OP_MAT_CONSTRUCT, updated, columns[0], columns[1], columns[2], columns[3]);
         program.metadata[builder.currentInstruction - 1] = count;
-        StoreLValue(arrAccess.array, updated, interpolation);
+        StoreLValue(arrAccess.array, updated, interpolation, sampling);
         return;
       }
     }
@@ -2630,6 +2631,8 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       u32 varyingIndex = inputSlot - OutputSlot::VARYING0;
       program.inputInterpolations[inputSlot] =
           static_cast<u8>(currentPassVaryings->GetInterpolation(varyingIndex));
+      program.inputSamplings[inputSlot] =
+          static_cast<u8>(currentPassVaryings->GetSampling(varyingIndex));
       // A flat varying (integers always are) is one vertex's value, so it
       // keeps the range the vertex stage gave it.
       if (varyingIndex < currentPassVaryings->count &&
@@ -2892,7 +2895,10 @@ static inline bool IsPerspectiveInterpolationType(CoreType type) {
 
 inline u32 IRLowering::ResolveOutputSlotForStore(
     u32 nameHash, CoreType valueType, const char *nameStr,
-    InterpolationMode interpolation, NodeRef diagnosticNode) {
+    InterpolationMode interpolation, InterpolationSampling sampling,
+    NodeRef diagnosticNode) {
+  const bool decorated = interpolation != InterpolationMode::Default ||
+                         sampling != InterpolationSampling::Center;
   if (currentStage == ShaderStage::Fragment && !IsBuiltinOutput(nameHash)) {
     char msg[256];
     if (nameStr && nameStr[0] != '\0') {
@@ -2907,7 +2913,7 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
     return OutputSlot::COLOR;
   }
   if (IsBuiltinOutput(nameHash)) {
-    if (interpolation != InterpolationMode::Default) {
+    if (decorated) {
       ReportError("Error: interpolation decorators can only be used on vertex-to-fragment varyings\n");
     }
     return GetBuiltinOutputSlot(nameHash);
@@ -2916,7 +2922,12 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
       !IsPerspectiveInterpolationType(valueType)) {
     ReportError("Error: @noperspective can only be used on floating-point varyings\n");
   }
-  if (interpolation != InterpolationMode::Default &&
+  // Integer varyings are always flat, so centroid sampling has nothing to move.
+  if (sampling == InterpolationSampling::Centroid &&
+      !IsPerspectiveInterpolationType(valueType)) {
+    ReportError("Error: @centroid can only be used on floating-point varyings\n");
+  }
+  if (decorated &&
       (currentStage != ShaderStage::Vertex || !currentPassVaryings)) {
     ReportError("Error: interpolation decorators can only be used on vertex-to-fragment varyings\n");
   }
@@ -2926,7 +2937,7 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
     CoreType existingType = CoreType::INVALID;
     u32 varyingCount = currentPassVaryings->count;
     u32 varyingIndex = currentPassVaryings->AddOrGetSlot(
-        nameHash, valueType, nameStr, interpolation, &conflict, &typeConflict,
+        nameHash, valueType, nameStr, interpolation, sampling, &conflict, &typeConflict,
         &existingType);
     if (currentPassVaryings->count > varyingCount) {
       CheckVaryingGLName(varyingIndex, diagnosticNode);
@@ -2957,6 +2968,8 @@ inline u32 IRLowering::ResolveOutputSlotForStore(
     if (slot < 32) {
       program.outputInterpolations[slot] = static_cast<u8>(
           currentPassVaryings->GetInterpolation(varyingIndex));
+      program.outputSamplings[slot] = static_cast<u8>(
+          currentPassVaryings->GetSampling(varyingIndex));
     }
     if (currentStage == ShaderStage::Vertex) program.varyingBoundsOut = currentPassVaryings->bounds;
     return slot;

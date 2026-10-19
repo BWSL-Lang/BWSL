@@ -42,6 +42,7 @@ struct VaryingInfo {
   u32 slot;      // Assigned slot index (0, 1, 2, ...)
   CoreType type; // Type of the varying (FLOAT3, FLOAT4, etc.)
   InterpolationMode interpolation;
+  InterpolationSampling sampling;
   char name[32]; // Actual name string for GLES output
 };
 
@@ -63,10 +64,13 @@ struct PassVaryingContext {
   const std::vector<GLReservedName> *reservedGLNames = nullptr;
 
   // Add a new varying or return existing slot
+  // A store without decorators keeps the varying's qualifiers; a decorated
+  // store sets them or, once set, must repeat them (`conflict` otherwise).
   // `typeConflict` reports a store whose type differs from the varying's
   // first-assigned type; `existingType` receives that first type.
   u32 AddOrGetSlot(u32 nameHash, CoreType type, const char *nameStr = nullptr,
                    InterpolationMode interpolation = InterpolationMode::Default,
+                   InterpolationSampling sampling = InterpolationSampling::Center,
                    bool *conflict = nullptr, bool *typeConflict = nullptr,
                    CoreType *existingType = nullptr) {
     if (conflict) {
@@ -85,10 +89,14 @@ struct PassVaryingContext {
             varyings[i].type != CoreType::INVALID && varyings[i].type != type) {
           *typeConflict = true;
         }
-        if (interpolation != InterpolationMode::Default) {
-          if (varyings[i].interpolation == InterpolationMode::Default) {
+        if (interpolation != InterpolationMode::Default ||
+            sampling != InterpolationSampling::Center) {
+          if (varyings[i].interpolation == InterpolationMode::Default &&
+              varyings[i].sampling == InterpolationSampling::Center) {
             varyings[i].interpolation = interpolation;
-          } else if (varyings[i].interpolation != interpolation && conflict) {
+            varyings[i].sampling = sampling;
+          } else if ((varyings[i].interpolation != interpolation ||
+                      varyings[i].sampling != sampling) && conflict) {
             *conflict = true;
           }
         }
@@ -115,6 +123,7 @@ struct PassVaryingContext {
     varyings[count].slot = slot;
     varyings[count].type = type;
     varyings[count].interpolation = interpolation;
+    varyings[count].sampling = sampling;
     // Store actual name for GLES output
     if (nameStr) {
       strncpy(varyings[count].name, nameStr, 31);
@@ -146,6 +155,12 @@ struct PassVaryingContext {
     if (slot < count)
       return varyings[slot].interpolation;
     return InterpolationMode::Default;
+  }
+
+  InterpolationSampling GetSampling(u32 slot) const {
+    if (slot < count)
+      return varyings[slot].sampling;
+    return InterpolationSampling::Center;
   }
 };
 
@@ -495,7 +510,8 @@ struct IRLowering {
 
   void LowerAssignment(NodeRef ref);
   void StoreLValue(NodeRef target, u16 valueReg,
-                   InterpolationMode interpolation = InterpolationMode::Default);
+                   InterpolationMode interpolation = InterpolationMode::Default,
+                   InterpolationSampling sampling = InterpolationSampling::Center);
 
   void LowerIfStatement(NodeRef ref);
   // Lowers an if, with block.statements[restFirst..] appended to its then
@@ -608,6 +624,7 @@ struct IRLowering {
   u32 ResolveOutputSlotForStore(u32 nameHash, CoreType valueType,
                                 const char *nameStr,
                                 InterpolationMode interpolation,
+                                InterpolationSampling sampling,
                                 NodeRef diagnosticNode = NodeRef::Null());
 
   u32 ResolveOutputSlotForLoad(u32 nameHash);
