@@ -327,9 +327,8 @@ void Parser::ParseModuleBody(NodeRef module, const ArenaString& moduleNameArena,
                 }
             } else {
                 Error("Module constant initializers must be built from literals and "
-                      "other constants with scalar arithmetic and scalar or vector "
-                      "constructors, e.g. float2(0.0, -1.0); vector arithmetic and "
-                      "swizzles are not supported here");
+                      "other constants with arithmetic, swizzles and scalar or vector "
+                      "constructors, e.g. float2(0.0, -1.0) * 2.0");
             }
 
             if (hasValue) {

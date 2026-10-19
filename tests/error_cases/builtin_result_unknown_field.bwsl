@@ -1,0 +1,12 @@
+// Error case (#212): fields of the built-in frexp/modf result structs are
+// checked like those of a declared struct.
+pipeline BuiltinResultUnknownField {
+    resources { results: buffer<float> }
+    pass "Compute" {
+        use resources { results }
+        compute "Main" [1, 1, 1] {
+            BwslFrexpResult parts = frexp(2.0);
+            resources.results[0] = parts.fraction;
+        }
+    }
+}

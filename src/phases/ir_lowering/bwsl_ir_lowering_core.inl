@@ -273,6 +273,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   constVariables.clear();
   constantVectors.clear();
   arrayBaseRegisters.clear();
+  localArrayDimensions.clear();
   structTypeMap.clear();
   variableStructTypes.clear();
 }

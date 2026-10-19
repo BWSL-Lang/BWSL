@@ -359,6 +359,8 @@ struct SymbolTableData {
     
     u32 currentScope;
     ArenaArray<u32> scopeStartIndices;  // Where each scope starts in symbols array
+    ArenaArray<u32> scopeSerials;       // Unique id of each open scope, parallel to scopeStartIndices
+    u32 nextScopeSerial;
     
     //---------------------------- Module data -----------------------------------//
     
@@ -466,6 +468,7 @@ namespace SymbolTable {
         table->enums.Init(arena, 32);
         table->constraints.Init(arena, 16);
         table->scopeStartIndices.Init(arena, 16);
+        table->scopeSerials.Init(arena, 16);
         table->evalConstants.Init(arena, 16);      // Initialize eval constants array
         table->evalFunctionIndices.Init(arena, 8); // Initialize eval function indices
         table->specializationRegistry.count = 0;   // Initialize specialization registry
@@ -477,6 +480,8 @@ namespace SymbolTable {
 
         // Global scope starts at index 0
         table->scopeStartIndices.Push(arena, 0);
+        table->scopeSerials.Push(arena, 0);
+        table->nextScopeSerial = 1;
     }
 
     
@@ -1076,6 +1081,12 @@ namespace SymbolTable {
     inline void EnterScope(SymbolTableData* table) {
         table->currentScope++;
         table->scopeStartIndices.Push(table->arena, table->symbols.count);
+        table->scopeSerials.Push(table->arena, table->nextScopeSerial++);
+    }
+
+    // True while the scope that was open at `level` with `serial` has not exited.
+    inline bool IsScopeOpen(const SymbolTableData* table, u32 level, u32 serial) {
+        return level <= table->currentScope && table->scopeSerials[level] == serial;
     }
 
     inline void ExitScope(SymbolTableData* table) {
@@ -1093,6 +1104,7 @@ namespace SymbolTable {
         table->symbols.count = scopeStart;
         table->symbolPrevious.count = scopeStart;
         table->scopeStartIndices.count--;  // Pop the scope start index
+        table->scopeSerials.count--;
         table->currentScope--;
     }
     

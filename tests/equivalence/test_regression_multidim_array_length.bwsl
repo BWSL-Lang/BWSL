@@ -1,0 +1,57 @@
+// Regression (#208): `.length` on a multi-dimensional array returned the
+// flattened element count (6 for `float[2][3]`), and `.length` on a partly
+// indexed one was rejected as an invalid swizzle. `grid.length` is the outer
+// dimension and `grid[i].length` the next one, for any index. Nested loops
+// bounded by them must visit and index each element exactly once, including
+// through a multi-dimensional function parameter.
+pipeline EquivMultidimArrayLength {
+
+    struct Item {
+        int length;
+    }
+
+    sumGrid :: (float[2][3] g) -> float {
+        float s = 0.0;
+        for (i in 0..g.length) {
+            for (j in 0..g[i].length) {
+                s += g[i][j];
+            }
+        }
+        return s + float(g.length * 10 + g[1].length);
+    }
+
+    resources {
+        output: buffer<float>
+    }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int k = int(idx % 2u);
+
+            float[2][3] grid;
+            for (i in 0..grid.length) {
+                for (j in 0..grid[i].length) {
+                    grid[i][j] = float(i * 10 + j);
+                }
+            }
+
+            int[2][3][4] cube;
+            Item[2][3] items;
+            items[1][2].length = 7;
+
+            // grid holds 0 1 2 10 11 12: sum 36, plus 2 * 10 + 3.
+            float[8] results = {
+                float(grid.length),
+                float(grid[k].length),
+                float(cube.length * 100 + cube[1].length * 10 + cube[0][k].length),
+                float(items[0].length),
+                float(items[1][2].length),
+                grid[1][2],
+                grid[k][2],
+                sumGrid(grid)
+            };
+            resources.output[idx] = results[idx];
+        }
+    }
+}

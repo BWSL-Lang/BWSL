@@ -236,6 +236,11 @@ struct IRLowering {
   };
   std::unordered_map<u16, StructArrayValueInfo> structArrayValueRegs;
 
+  // Declared dimensions (outer to inner) of multi-dimensional local arrays,
+  // keyed by local array index. The array itself is flattened, so
+  // localArraySizes holds the product; `.length` needs the dimensions.
+  std::unordered_map<u32, ArenaArray<u32>> localArrayDimensions;
+
   // Vector temporaries built from scalar constants only, mapped to the
   // OP_VEC_CONSTRUCT that defines them. These registers are written once, so
   // arithmetic on them can be folded into another constant vector.
@@ -472,10 +477,7 @@ struct IRLowering {
 
   u32 RegisterStructTypeFromData(u32 typeNameHash, StructData *structData);
 
-  u32 RegisterBuiltinStructType(const char *typeName,
-                                const char *const *fieldNames,
-                                const CoreType *fieldTypes,
-                                u32 fieldCount);
+  u32 RegisterBuiltinStructType(const StdLib::BuiltinStructType &builtin);
 
   bool IsSumEnumTypeHash(u32 typeHash);
 
@@ -536,6 +538,8 @@ struct IRLowering {
   u16 CopyArgumentValue(u16 source);
   void RegisterLocalArray(u16 reg, CoreType elementType, u32 structHash,
                           u32 length, u32 nameHash);
+  void RecordParameterArrayDimensions(u16 paramReg, const FunctionDeclData &fn,
+                                      u32 paramIndex);
 
   u16 TryLowerStructMethodCall(const FunctionCallData &call, u16 receiverReg,
                                u16 *args, u32 argCount, u16 dest,

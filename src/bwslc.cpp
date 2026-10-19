@@ -2189,11 +2189,33 @@ static std::string BuildWGSLBindingsJson(const WGSL::WGSLBuilder& builder,
         const CoreType type = static_cast<CoreType>(builder.textures.types[id]);
         const char* dimension = type == CoreType::TEXTURE3D ? "3d" : type == CoreType::TEXTURECUBE ? "cube" :
                                 type == CoreType::TEXTURE2DARRAY ? "2d-array" : "2d";
+        // WGSL has no texture arrays outside binding_array, so element i of a
+        // texture array is its own binding at the array's slot + i.
+        std::string name;
+        u32 arrayLength = 0;
+        u32 arrayIndex = 0;
+        for (u32 index = 0; index < symbols.resources.count; ++index) {
+            const ResourceData& declaration = symbols.resources[index];
+            if (declaration.type == ::ResourceBinding::Texture && slot >= declaration.bindingIndex &&
+                slot - declaration.bindingIndex < GetResourceSlotCount(declaration)) {
+                name = GetResourceNameByIndex(symbols, index, sourceBase);
+                arrayLength = declaration.arraySize;
+                arrayIndex = slot - declaration.bindingIndex;
+                break;
+            }
+        }
         json << (haveResource ? ",\n" : "\n")
-             << "    {\"name\": \"" << EscapeJsonString(resourceName(::ResourceBinding::Texture, slot))
+             << "    {\"name\": \"" << EscapeJsonString(name)
              << "\", \"type\": \"texture\", \"group\": 2, \"binding\": " << slot
              << ", \"logicalSlot\": " << slot << ", \"viewDimension\": \"" << dimension
-             << "\", \"sampleType\": \"" << (builder.textures.depth[id] ? "depth" : "float") << "\"}";
+             << "\", \"sampleType\": \"" << (builder.textures.depth[id] ? "depth" : "float")
+             << "\", \"arrayLength\": " << arrayLength << ", \"arrayIndex\": ";
+        if (arrayLength != 0) {
+            json << arrayIndex;
+        } else {
+            json << "null";
+        }
+        json << "}";
         haveResource = true;
     }
     for (u32 id = 0; id < builder.samplers.count; ++id) {

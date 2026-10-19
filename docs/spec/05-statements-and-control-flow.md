@@ -120,6 +120,12 @@ The current parser accepts:
 - `case` labels with one or more comma-separated values
 - `default`
 
+The selector must be an `int`, `uint` or enum value, and case labels must be
+integer, enum or bool constants. A selector that is a compile-time constant,
+such as a `bool` variant, keeps only the matching arm and may be a `bool`.
+A runtime `bool` or `float` selector, or a `float` case label, is a source
+error.
+
 ## Discard
 
 `discard;` is accepted as a statement form. It is intended for fragment-stage
@@ -190,15 +196,39 @@ The current comptime value domain is limited to scalar and numeric vector litera
 existing enum, module, and variant constants. Richer comptime data is planned
 but not currently part of the language.
 
+Vector values are evaluated component-wise, with the same results as at run
+time. `+`, `-`, `*`, `/` and `%` take two vectors of the same component type and
+width, or a vector and a scalar in either order; the scalar is applied to every
+component. An `int` or `uint` scalar promotes to match a `float` vector, and a
+nonnegative `int` scalar converts to match a `uint` vector; other component
+types must match. The bit operators apply to `int` and `uint` vectors.
+Integer division truncates toward zero and integer division by zero is
+rejected; float `%` is floored, as described in Expressions. Unary `-` negates each component. Swizzle reads (`tint.y`,
+`tint.zyx`) produce a scalar or vector, and swizzle stores to an eval binding
+(`tint.xy = float2(1.0, 0.5);`) take a scalar for one component or a vector of
+the same type for several, with distinct components. Vector comparisons are
+not evaluated at compile time.
+
+```bwsl
+eval float3 tint = float3(0.2, 0.4, 0.6);
+tint = tint * 2.0;
+eval float g = tint.y;
+tint = float3(tint.x, 1.0, tint.z);
+```
+
 ### Eval Functions
 
 Pipeline-scope eval functions can be called with compile-time arguments from eval
-initializers or runtime expressions. Their result is substituted into emitted code.
+initializers, pipeline-, pass- and local-scope `const` initializers, or runtime
+expressions. Their result is substituted into emitted code. A pipeline constant
+whose eval call has runtime arguments is rejected at its declaration.
 
 ```bwsl
 eval taps :: (int quality) -> int {
     return quality * 2 + 1;
 }
+
+const int TAPS = taps(2);
 ```
 
 Function execution supports typed local declarations, assignments, scalar
