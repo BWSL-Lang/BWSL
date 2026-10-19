@@ -878,6 +878,20 @@ inline u16 IRLowering::LowerBinaryOp(NodeRef ref) {
     }
   }
 
+  // Component-wise operators never pad or truncate a vector operand.
+  constexpr TypeMask vectors = TypeMasks::VECTOR_TYPES | TypeMasks::BOOL_VECTORS;
+  if ((leftMask & vectors) && (rightMask & vectors) &&
+      GetVectorDimension(leftType) != GetVectorDimension(rightType)) {
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+             "Error: vector operands have different widths (%s and %s); use "
+             "a swizzle or constructor to match them\n",
+             SourceTypeName(leftType).c_str(),
+             SourceTypeName(rightType).c_str());
+    ReportErrorAt(ref, msg);
+    return 0xFFFF;
+  }
+
   OpCode op = OP_NOP;
   CoreType resultType = leftType;
 
