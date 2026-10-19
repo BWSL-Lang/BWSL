@@ -18,8 +18,9 @@ vertex main0_out main0(main0_in in [[stage_in]])
     main0_out out = {};
     float _36 = in.a_position.x;
     float _28 = 0.0;
+    bool _61 = _36 > 0.0;
     float _12;
-    if (_36 > 0.0)
+    if (_61)
     {
         float _29 = 1.0;
         _12 = _29;
@@ -71,7 +72,7 @@ vertex main0_out main0(main0_in in [[stage_in]])
         _14 = _15;
     }
     float _18;
-    if (_36 > 0.0)
+    if (_61)
     {
         float _17;
         if (_36 < 1.0)
@@ -103,7 +104,7 @@ vertex main0_out main0(main0_in in [[stage_in]])
     }
     float _41 = 0.0;
     float _20;
-    if ((_36 > 0.0) && (in.a_position.y > 0.0))
+    if (_61 && (in.a_position.y > 0.0))
     {
         _20 = _36 * in.a_position.y;
     }
@@ -135,7 +136,7 @@ vertex main0_out main0(main0_in in [[stage_in]])
     }
     float _47 = 0.0;
     float _23;
-    if (_36 > 0.0)
+    if (_61)
     {
         _23 = (_36 * 2.0) + 1.0;
     }

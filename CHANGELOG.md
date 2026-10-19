@@ -16,10 +16,37 @@
   Vectors and matrices fold too: construction, swizzles, `dot`, `cross`,
   `transpose` and matrix products. For example, `gain` set to `2.0` on both
   sides of an `if` becomes the constant `2.0`, and `float3(2.0) * m[0]` with
-  a constant `m` becomes a constant vector. Folding skips results that can
-  differ between GPUs:
-  NaN, infinities, denormals, `-0.0`, integer division of negative values
-  and conversions that are out of range or inexact.
+  a constant `m` becomes a constant vector.
+  Intrinsics with constant arguments fold as well, from `clamp` and `max` to
+  `pow`, `sin`, `smoothstep`, `normalize`, `reflect`, `determinant` and the
+  bit operations. Math functions are computed in double precision and
+  rounded once, so they're at least as accurate as the GPU's.
+  A loop whose inputs are all constants and that has no side effects runs
+  at compile time, so a function like `poly(2.0)` that loops over its
+  argument becomes a constant. A loop that runs at most once is no longer
+  emitted as a loop: one whose condition is false on entry disappears, and
+  one whose body always breaks becomes the code of its single pass.
+  A vector or matrix with some constant components keeps them: reading one,
+  through a swizzle, component access, `select` or componentwise
+  arithmetic, gives the constant. `Color::hsluvToRgb(float3(180.0, x,
+  50.0))` keeps only the arithmetic on `x`, and its SPIR-V shrinks from
+  4440 to 1920 bytes.
+  Operations that a constant or a repeated operand decides simplify too:
+  `x * 1.0`, `x + 0.0` and `x / 1.0` become `x`, `0.0 - x` and
+  `x * -1.0` become `-x`, `x / 4.0` becomes `x * 0.25`, and
+  `pow(x, 0.5)` becomes `sqrt(x)`, along with the integer identities,
+  `x ^ x`, `min(x, x)` and double negation. `pow` with an integer exponent
+  up to 16, such as Schlick's `pow(1.0 - VdotH, 5.0)`, becomes
+  multiplications, which are faster and more accurate than the GPU's
+  `pow`. `x * 0.0` and `x - x` stay, since they aren't 0 for an infinite
+  or NaN `x`.
+  A calculation repeated where an earlier one with the same operands is
+  available, such as `sin(x * 2.0)` twice, or `x * 3.0` before a branch
+  and again in its arms, is computed once.
+  Folding skips results that can differ between GPUs:
+  NaN, infinities, denormals, `-0.0`, integer division of negative values,
+  conversions that are out of range or inexact, and math functions outside
+  their domain, such as `sqrt(-1.0)` or `pow(-2.0, 0.5)`.
 - Range loops with a constant step test only the direction they go, and
   drop the wraparound test when their bounds rule it out, unless the body
   assigns the iterator. `for (x in -1..=1)` now comes out as

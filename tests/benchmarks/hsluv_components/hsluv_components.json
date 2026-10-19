@@ -1,0 +1,9 @@
+{
+  "description": "hsluvToRgb with one varying component: hue, saturation and lightness sweeps",
+  "format": "rgba8",
+  "mesh": {"type": "fullscreen"},
+  "attributes": [
+    {"name": "position", "type": "float2"}
+  ],
+  "tolerance": 0.0079
+}

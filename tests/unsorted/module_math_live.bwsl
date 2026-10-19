@@ -28,7 +28,7 @@ pipeline ModuleMathLive {
         }
 
         fragment {
-            float lit = saturate(dot(Math::safe_normalize(input.normal), normalize(float3(0.4, 0.6, 1.0))));
+            float lit = saturate(dot(Math::safe_normalize(input.normal), normalize(float3(0.4, 0.6, input.value))));
             float shaped = Math::smootherstep(-0.5, 1.5, input.value);
             output.color = float4(shaped, lit, Math::ease_out_quad(lit), 1.0);
         }

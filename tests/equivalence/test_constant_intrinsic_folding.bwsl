@@ -1,0 +1,36 @@
+// Intrinsics with constant arguments fold at compile time. Lanes 0-7 store
+// the folded values; lanes 8-15 compute the same calls from run-time
+// arguments, so the GPU's own results are checked against the same
+// expectations.
+pipeline EquivConstantIntrinsicFolding {
+
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [16, 1, 1] {
+            uint idx = input.global_id.x;
+            uint i = idx & 7u;
+            float z = float(idx >> 4u);                              // 0.0, but not a constant
+
+            float4 fa = float4(sqrt(2.0), pow(1.5, 2.5), sin(1.0), atan2(1.0, -2.0));
+            float4 fb = float4(lerp(0.25, 4.0, 0.3),
+                               smoothstep(0.0, 2.0, 0.7) + clamp(5.0, 0.0, 1.0),
+                               length(float3(1.0, 2.0, 2.0)) + exp(0.5),
+                               log2(10.0) + fract(-2.25) + round(2.5) + dot(normalize(float2(3.0, 4.0)), float2(1.0)));
+
+            float4 ra = float4(sqrt(2.0 + z), pow(1.5 + z, 2.5), sin(1.0 + z), atan2(1.0 + z, -2.0));
+            float4 rb = float4(lerp(0.25 + z, 4.0, 0.3),
+                               smoothstep(0.0, 2.0, 0.7 + z) + clamp(5.0 + z, 0.0, 1.0),
+                               length(float3(1.0 + z, 2.0, 2.0)) + exp(0.5 + z),
+                               log2(10.0 + z) + fract(-2.25 + z) + round(2.5 + z) + dot(normalize(float2(3.0 + z, 4.0)), float2(1.0)));
+
+            float4 folded = i < 4u ? fa : fb;
+            float4 computed = i < 4u ? ra : rb;
+            float4 values = idx < 8u ? folded : computed;
+            resources.output[idx] = values[i & 3u];
+        }
+    }
+}

@@ -16,7 +16,7 @@ struct main0_in
 fragment main0_out main0(main0_in in [[stage_in]])
 {
     main0_out out = {};
-    out.m_9 = float4(float3(fast::max(dot(fast::normalize(in.v_normal), fast::normalize(float3(1.0))), 0.0)), 1.0);
+    out.m_9 = float4(float3(fast::max(dot(fast::normalize(in.v_normal), float3(0.57735025882720947265625)), 0.0)), 1.0);
     return out;
 }
 
