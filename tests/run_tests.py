@@ -843,6 +843,32 @@ TRANSLATION_EXPECTATION_TESTS = {
             "hlsl_contains": ["normalize("],
         },
     },
+    # #208: `.length` on a multi-dimensional array is the outer dimension and
+    # on a partly indexed one the next dimension, not the flattened count.
+    "arrays_multidim_length": {
+        "comp": {
+            "glsl_contains": [
+                "_m0[0] = 2000;",
+                "_m0[1] = 3000;",
+                "_m0[2] = 3000;",
+                "_m0[3] = 2000;",
+                "_m0[4] = 3000;",
+                "_m0[5] = 4000;",
+                "_m0[6] = 3000 + ",
+                "< 2;",
+                "< 3;",
+            ],
+            "glsl_not_contains": ["6000", "24000", "< 6;"],
+        },
+    },
+    # Shapes are scoped: once the inner `float[4][5] g` ends, `g[1][2]` uses
+    # the outer stride 3, not 5.
+    "arrays_multidim_shadowing": {
+        "comp": {
+            "glsl_contains": ["(1 * int(3u)) + 2", "(3 * int(5u)) + 4"],
+            "glsl_not_contains": ["(1 * int(5u)) + 2"],
+        },
+    },
     "modules_pbr_lighting": {
         "frag": {
             "ir_contains": ["NORMALIZE", "LERP", "POW"],

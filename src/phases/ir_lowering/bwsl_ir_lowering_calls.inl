@@ -33,6 +33,21 @@ inline void IRLowering::RegisterLocalArray(u16 reg, CoreType elementType,
   program.registerStructTypes[reg] = structHash;
 }
 
+// A `T[2][3]` parameter binds a flattened copy of the argument; record the
+// parameter's declared shape on that copy so `.length` sees the dimensions.
+inline void IRLowering::RecordParameterArrayDimensions(
+    u16 paramReg, const FunctionDeclData &fn, u32 paramIndex) {
+  if (paramReg >= MAX_REGISTERS || paramIndex >= fn.parameterArraySizes.count ||
+      fn.parameterArraySizes[paramIndex].count < 2) {
+    return;
+  }
+  u32 storage = program.registerStorageInfo[paramReg];
+  if (storage & IRProgram::STORAGE_IS_LOCAL_ARRAY) {
+    localArrayDimensions[storage >> IRProgram::STORAGE_BINDING_SHIFT] =
+        fn.parameterArraySizes[paramIndex];
+  }
+}
+
 inline u16 IRLowering::CopyArgumentValue(u16 source) {
   u16 copy = AllocateRegister();
   CoreType type = GetRegisterType(source);
@@ -1769,6 +1784,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
     u32 paramNameHash = param.first.nameHash;
     u16 paramReg = CopyArgumentValue(args[i]);
     variableRegisters[paramNameHash] = paramReg;
+    RecordParameterArrayDimensions(paramReg, method, i);
     constVariables.erase(paramNameHash);
     initializedVariables.insert(paramNameHash); // holds the argument's value
     program.registerNameHashes[paramReg] = paramNameHash; // its own variable
@@ -2143,6 +2159,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
     resourceHandleVariables.erase(paramNameHash);
     u16 paramReg = CopyArgumentValue(args[i]);
     variableRegisters[paramNameHash] = paramReg;
+    RecordParameterArrayDimensions(paramReg, func, i);
     constVariables.erase(paramNameHash);
     initializedVariables.insert(paramNameHash); // holds the argument's value
     program.registerNameHashes[paramReg] = paramNameHash; // its own variable

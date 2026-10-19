@@ -766,9 +766,7 @@ NodeRef Parser::ParseCustomTypeVarDecl() {
         }
     }
 
-    if (arrayDims.size() > 1) {
-        multiDimArrayDims[ArenaString::MakeHashOnly(varName).nameHash] = arrayDims;
-    }
+    BindArrayShape(ArenaString::MakeHashOnly(varName).nameHash, arrayDims);
 
     return varDecl;
 }

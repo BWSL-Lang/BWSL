@@ -441,7 +441,8 @@ static NodeRef CloneNodeImpl(ComptimeState* state, NodeRef node) {
         case ASTNodeType::ARRAY_ACCESS: {
             const ArrayAccessData& src = state->ast->GetArrayAccess(node);
             return ASTFactory::MakeArrayAccess(state->ast, CloneNode(state, src.array),
-                                               CloneNode(state, src.index), line, col);
+                                               CloneNode(state, src.index), line, col,
+                                               src.indexedDimensions);
         }
         case ASTNodeType::ASSIGNMENT: {
             const AssignmentData& src = state->ast->GetAssignment(node);
