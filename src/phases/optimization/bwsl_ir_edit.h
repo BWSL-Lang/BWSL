@@ -30,6 +30,10 @@ struct InstructionInsertions {
     u32 registerEnd;
 };
 
+// The register count AllocateRegister can grow `ir` to: a pass that must
+// not run out halfway checks what it needs against this.
+u32 GetRegisterCeiling(const IR::IRProgram* ir);
+
 // A new register of `type`, or 0xFFFF past the register limit. Registers are
 // added in batches, like SSA's: the program's registerCount includes spare
 // ones of type VOID. Like SSA, it grows the metadata the backends read
@@ -50,7 +54,7 @@ void QueueInstruction(IR::IRBuilder* builder, InstructionInsertions* insertions,
 // Queues an instruction right after instruction `after`, in its block: a
 // jump to the next instruction doesn't run it. Instructions queued after
 // one instruction come before those queued in front of the next, so queue
-// them first.
+// them first. After the last instruction, they go at the end.
 void QueueInstructionAfter(IR::IRBuilder* builder, InstructionInsertions* insertions, u32 after,
                            u16 opcode, u16 dest, const u16 operands[4], u32 metadata);
 

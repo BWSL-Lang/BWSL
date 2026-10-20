@@ -25,7 +25,7 @@ static T* GrowArray(IRMemoryPool* pool, T* values, u32 count, u32 capacity) {
 // so for a large shader they reached the old 14-bit limit long before its
 // registers did, and the rewrites asking for them were skipped. A shader whose
 // registers fit below that limit keeps it, so its output doesn't change.
-static u32 RegisterCeiling(const IRProgram* ir) {
+u32 GetRegisterCeiling(const IRProgram* ir) {
     u32 used = ir->ssaRegisterEnd != 0 ? ir->ssaRegisterEnd : ir->registerCount;
     return used <= IR::LegacyRegisterLimit ? IR::LegacyRegisterLimit : IR::RegisterLimit;
 }
@@ -34,7 +34,7 @@ u16 AllocateRegister(IR::IRBuilder* builder, InstructionInsertions* insertions, 
     IRProgram* ir = builder->program;
     if (insertions->nextRegister == insertions->registerEnd) {
         u32 count = ir->registerCount;
-        u32 capacity = std::min<u32>(count + REGISTER_BATCH, RegisterCeiling(ir));
+        u32 capacity = std::min<u32>(count + REGISTER_BATCH, GetRegisterCeiling(ir));
         if (capacity <= count) return 0xFFFF;
         ir->registerTypes = GrowArray(builder->pool, ir->registerTypes, count, capacity);
         ir->registerStructTypes = GrowArray(builder->pool, ir->registerStructTypes, count, capacity);
@@ -100,8 +100,31 @@ void ApplyInsertions(IR::IRBuilder* builder, CFG* cfg, InstructionInsertions* in
     auto target = [&](u32 index) { return index <= oldCount ? index + shift[index] + afterCount[index] : index; };
     auto moved = [&](u32 index) { return index < oldCount ? index + shift[index + 1] : index; };
 
-    // Back to front, so nothing is overwritten before it moves.
+    // Writes queue items [first, end) from `position` on.
+    auto place = [&](u32 first, u32 end, u32 position, u32 sourceNode) {
+        for (u32 k = first; k < end; k++, position++) {
+            const InsertedInstruction& item = insertions->items[k];
+            ir->opcodes[position] = item.opcode;
+            ir->types[position] = 0;
+            ir->flags[position] = 0;
+            ir->destinations[position] = item.dest;
+            for (u32 slot = 0; slot < 4; slot++) ir->operands[position * 4 + slot] = item.operands[slot];
+            ir->metadata[position] = item.metadata;
+            ir->ClearBranchTargets(position);
+            ir->structureInfo[position] = 0;
+            ir->continueInfo[position] = NO_BLOCK;
+            if (ir->sourceNodes) ir->sourceNodes[position] = sourceNode;
+        }
+    };
+
+    // Back to front, so nothing is overwritten before it moves. Those queued
+    // after the last instruction go at the end.
     u32 next = inserted;
+    u32 tail = next;
+    while (tail > 0 && insertions->items[tail - 1].before >= oldCount) tail--;
+    place(tail, next, oldCount + shift[oldCount],
+          ir->sourceNodes && oldCount > 0 ? ir->sourceNodes[oldCount - 1] : 0);
+    next = tail;
     for (u32 i = oldCount; i-- > 0;) {
         u32 to = moved(i);
         ir->opcodes[to] = ir->opcodes[i];
@@ -128,20 +151,7 @@ void ApplyInsertions(IR::IRBuilder* builder, CFG* cfg, InstructionInsertions* in
         // The instructions queued in front of i, in queue order.
         u32 first = next;
         while (first > 0 && insertions->items[first - 1].before == i) first--;
-        u32 position = i + shift[i];
-        for (u32 k = first; k < next; k++, position++) {
-            const InsertedInstruction& item = insertions->items[k];
-            ir->opcodes[position] = item.opcode;
-            ir->types[position] = 0;
-            ir->flags[position] = 0;
-            ir->destinations[position] = item.dest;
-            for (u32 slot = 0; slot < 4; slot++) ir->operands[position * 4 + slot] = item.operands[slot];
-            ir->metadata[position] = item.metadata;
-            ir->ClearBranchTargets(position);
-            ir->structureInfo[position] = 0;
-            ir->continueInfo[position] = NO_BLOCK;
-            if (ir->sourceNodes) ir->sourceNodes[position] = ir->sourceNodes[to];
-        }
+        place(first, next, i + shift[i], ir->sourceNodes ? ir->sourceNodes[to] : 0);
         next = first;
     }
     ir->instructionCount = newCount;

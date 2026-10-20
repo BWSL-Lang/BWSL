@@ -610,7 +610,8 @@ void SplitLocalStructs(IR::IRBuilder* builder) {
         SplitData data = {};
         data.builder = builder;
         data.ir = ir;
-        data.regCount = std::min<u32>(ir->registerCount, IR::RegisterLimit);
+        u32 ceiling = GetRegisterCeiling(ir);
+        data.regCount = std::min<u32>(ir->registerCount, ceiling);
         IRMemoryPool* pool = builder->pool;
         u32 n = std::max<u32>(data.regCount, 1);
         data.state = (u8*)pool->Allocate(n, 64);
@@ -625,8 +626,9 @@ void SplitLocalStructs(IR::IRBuilder* builder) {
             return;
         }
         if (!ChooseStructs(&data)) return;
-        // Rewriting can't stop halfway, so the registers it needs must exist.
-        if (data.regCount + RegistersNeeded(&data) > IR::RegisterLimit) return;
+        // Rewriting can't stop halfway, so AllocateRegister must be able to
+        // hand out every register it needs.
+        if (data.regCount + RegistersNeeded(&data) > ceiling) return;
         if (!AllocateFields(&data) || !Rewrite(&data)) return;
         ApplyInsertions(builder, nullptr, &data.insertions);
     }
