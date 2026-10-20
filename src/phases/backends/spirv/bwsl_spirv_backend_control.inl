@@ -769,6 +769,11 @@ void SPIRVBuilder::PlanPhiVariables() {
                 valid = held[block] == phiOfReg[value] && op != IR::OP_SWITCH &&
                         op != IR::OP_WAVE_READ_LANE;
             }
+            // These read their destination: the stored value, the array.
+            if (valid && (op == IR::OP_STORE_OUTPUT || op == IR::OP_ARRAY_STORE) &&
+                isMember(ir->destinations[i])) {
+                valid = held[block] == phiOfReg[ir->destinations[i]];
+            }
         }
         for (u32 phi = 0; phi < phiCount && valid; phi++) {
             if (candidate[phi] && ir->phiVariables[phi] == web) continue;

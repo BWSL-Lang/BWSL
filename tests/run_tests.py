@@ -688,6 +688,7 @@ KNOWN_TEST_STEMS: set[str] = set()
 TRANSLATION_EXTRA_ARGS = {
     "interpolation_centroid": ("-gles-direct", "-wgsl"),
     "phi_variables": ("--optimizations", "phi-variables"),
+    "phi_variables_output_store": ("--optimizations", "phi-variables"),
 }
 
 TRANSLATION_EXPECTATION_TESTS = {
@@ -884,6 +885,12 @@ TRANSLATION_EXPECTATION_TESTS = {
     # inlined functions' own merges get phis, not their locals or return flag.
     # With phi-variables, SPIRV-Cross's input (-all) keeps
     # `sum`'s two phis in one Function variable: 4 OpPhi remain.
+    # The output store reads a's previous value: a's phis stay phis.
+    "phi_variables_output_store": {
+        "frag": {
+            "spirv_contains": ["OpPhi %v4float"],
+        },
+    },
     "phi_variables": {
         "frag": {
             "spirv_count_exactly": {"OpPhi": 4},
