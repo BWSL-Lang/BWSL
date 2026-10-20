@@ -6,7 +6,8 @@
 namespace BWSL {
 
 u32 SPIRVBuilder::TranslateArrayStoreSequence(u32 first, u32 end) {
-  if (ir->opcodes[first] != IR::OP_ARRAY_STORE) return 0;
+  if (ir->opcodes[first] != IR::OP_ARRAY_STORE ||
+      !Optimizations::IsEnabled(optimizations, OptimizationId::ARRAY_FILL_STORES)) return 0;
   u16 base = ir->destinations[first];
   if (base >= ir->registerCount || !ir->registerStorageInfo ||
       !(ir->registerStorageInfo[base] & IR::IRProgram::STORAGE_IS_LOCAL_ARRAY)) return 0;

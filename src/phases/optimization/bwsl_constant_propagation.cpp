@@ -130,7 +130,12 @@ struct ConstantPropagationData {
     // its stores' ranges, for ir->varyingBoundsOut.
     ValueRange varyingRanges[16 * 4];
     u8 varyingCounts[16];       // Components stored, 0 for a varying not stored
+    OptimizationSet optimizations;
 };
+
+static bool IsEnabled(const ConstantPropagationData* data, OptimizationId id) {
+    return Optimizations::IsEnabled(data->optimizations, id);
+}
 
 static ConstantValue MakeConstant(CoreType type, u32 bits) {
     ConstantValue value = {ValueState::CONSTANT, type, 1, {}, 0};
@@ -1826,7 +1831,7 @@ static void PropagateWithLoops(ConstantPropagationData* data) {
         // Values their ranges fix fold like constants.
         ComputeRanges(data);
         bool anyFolded = PinPointRanges(data);
-        for (u32 block = 0; block < cfg->blockCount; block++) {
+        for (u32 block = 0; block < cfg->blockCount && IsEnabled(data, OptimizationId::LOOP_EVALUATION); block++) {
             if (!data->blockExecutable[block] || data->loopFolded[block] || !HasBackEdge(cfg, block)) continue;
             if (FoldLoop(data, block)) {
                 data->loopFolded[block] = true;
@@ -2568,7 +2573,7 @@ static void RewriteAlgebraicIdentity(ConstantPropagationData* data, u32 inst) {
         }
         case IR::OP_POW: {
             if (scalar != f) return;
-            if (RewritePowerChain(data, inst)) return;
+            if (IsEnabled(data, OptimizationId::POW_EXPANSION) && RewritePowerChain(data, inst)) return;
             if (IsSplat(data, b, f, FLOAT_ONE_BITS)) RewriteAs(data, inst, IR::OP_LOAD_REG, a);
             else if (IsSplat(data, b, f, FLOAT_TWO_BITS)) RewriteAs(data, inst, IR::OP_FMUL, a, a);
             else if (IsSplat(data, b, f, FLOAT_HALF_BITS)) RewriteAs(data, inst, IR::OP_SQRT, a);
@@ -2663,8 +2668,10 @@ static void RewriteConstants(ConstantPropagationData* data) {
         RewriteOperands(data, i);
         u16 dest = ir->destinations[i];
         if (!IsRegisterOperand(data, dest) || data->states[dest] != ValueState::CONSTANT) {
-            RewriteBitwiseIdentity(data, i);
-            RewriteAlgebraicIdentity(data, i);
+            if (IsEnabled(data, OptimizationId::ALGEBRAIC_IDENTITIES)) {
+                RewriteBitwiseIdentity(data, i);
+                RewriteAlgebraicIdentity(data, i);
+            }
             if (data->rangesReady && data->blockExecutable[data->cfg->instToBlock[i]]) {
                 RewriteWithRanges(data, i, data->cfg->instToBlock[i]);
             }
@@ -2822,8 +2829,11 @@ static void RemoveDeadLoops(ConstantPropagationData* data, BWSL_Arena* arena) {
     bool* onPath = (bool*)AllocateZeroed(arena, cfg->blockCount * sizeof(bool));
     if (!path || !next || !onPath) return;
 
+    // SINGLE_ITERATION_LOOPS turns off only this part: the constant
+    // selections below must become jumps for WGSL either way.
     bool anyRemoved = false;
-    for (u32 header = cfg->blockCount; header-- > 0;) {
+    bool loops = IsEnabled(data, OptimizationId::SINGLE_ITERATION_LOOPS);
+    for (u32 header = cfg->blockCount; loops && header-- > 0;) {
         u32 annotation = FindLoopAnnotation(ir, cfg, header);
         if (annotation >= ir->instructionCount) continue;
         u32 mergeInst = ir->structureInfo[annotation] & IR::IRProgram::STRUCT_TARGET_MASK;
@@ -3035,10 +3045,14 @@ static void PropagateStraightLine(ConstantPropagationData* data) {
         u16 op = ir->opcodes[i];
         if (op == IR::OP_NOP) continue;
         RewriteOperands(data, i);
-        RewriteBitwiseIdentity(data, i);
-        RewriteAlgebraicIdentity(data, i);
-        RecordVaryingRange(data, i, 0);
-        RewriteWithRanges(data, i, 0);
+        if (IsEnabled(data, OptimizationId::ALGEBRAIC_IDENTITIES)) {
+            RewriteBitwiseIdentity(data, i);
+            RewriteAlgebraicIdentity(data, i);
+        }
+        if (data->rangesReady) {
+            RecordVaryingRange(data, i, 0);
+            RewriteWithRanges(data, i, 0);
+        }
         u16 dest = ir->destinations[i];
         if (IsRegisterOperand(data, dest) && !IsUseInDestination(op) && op != IR::OP_JUMP &&
             op != IR::OP_BRANCH && op != IR::OP_SWITCH && op != IR::OP_RET) {
@@ -3057,7 +3071,7 @@ static void PropagateStraightLine(ConstantPropagationData* data) {
         SetRegisterValue(data, dest, isConstant || isPartial ? value : OVERDEFINED_VALUE);
         // The walk's range for the register from here on; one that's a
         // single number is a constant. Float zeros aren't: they could be -0.0.
-        if (HasRange(data, dest)) {
+        if (data->rangesReady && HasRange(data, dest)) {
             u32 offset = data->bitOffsets[dest];
             u32 count = data->bitOffsets[dest + 1] - offset;
             CoreType scalar = GetScalarType(type);
@@ -3137,8 +3151,10 @@ static void RemoveDeadValues(ConstantPropagationData* data, BWSL_Arena* arena) {
         }
     }
 
+    // Without DEAD_VALUES only the phis DropFoldedBranchEdges emptied go.
     u32 workCount = 0;
-    for (u32 reg = 0; reg < regCount; reg++) {
+    bool removeDead = IsEnabled(data, OptimizationId::DEAD_VALUES);
+    for (u32 reg = 0; reg < regCount && removeDead; reg++) {
         if (useCounts[reg] == 0 && IsRemovableDefinition(data, static_cast<u16>(reg))) {
             queued[reg] = true;
             work[workCount++] = reg;
@@ -3167,85 +3183,87 @@ static void RemoveDeadValues(ConstantPropagationData* data, BWSL_Arena* arena) {
         for (u32 slot = 0; slot < 4; slot++) ir->SetOperand(definition, slot, 0xFFFF);
     }
 
-    // Values that only read each other keep each other's use counts up: a
-    // loop variable that its own update and its phis read, and nothing else
-    // (a ray's hit index when only the distance is used). Mark what the rest
-    // reads live, and what live values read; removable values left unmarked
-    // are dead too.
-    bool* live = (bool*)arena->Allocate(regCount * sizeof(bool), 64);
-    memset(live, 0, regCount * sizeof(bool));
-    workCount = 0;
-    auto markLive = [&](u16 operand) {
-        if (IsRegisterOperand(data, operand) && !live[operand]) {
-            live[operand] = true;
-            work[workCount++] = operand;
-        }
-    };
-    auto markOperands = [&](u32 inst) {
-        for (u32 slot = 0; slot < 4 && !HasSlotOperands(ir->opcodes[inst]); slot++) markLive(ir->GetOperand(inst, slot));
-    };
-    // A copy into a variable's register (SSA keeps those for naming, so the
-    // register may have several) reads its source only for whoever reads
-    // the register.
-    auto isCopyInto = [&](u32 inst) {
-        u16 op = ir->opcodes[inst];
-        u16 dest = ir->destinations[inst];
-        return (op == IR::OP_STORE_REG || op == IR::OP_LOAD_REG) && IsRegisterOperand(data, dest) &&
-               (!ir->registerStorageInfo || ir->registerStorageInfo[dest] == 0);
-    };
-    for (u32 i = 0; i < ir->instructionCount; i++) {
-        if (ir->opcodes[i] == IR::OP_NOP || isCopyInto(i)) continue;
-        u16 dest = ir->destinations[i];
-        bool definesValue = IsRegisterOperand(data, dest) && data->definitions[dest] == i;
-        if (definesValue && IsRemovableDefinition(data, dest)) continue;  // Live only if read
-        markOperands(i);
-        if (IsRegisterOperand(data, dest) && !definesValue) markLive(dest);
-    }
-    for (u32 p = 0; p < ir->phiCount; p++) {
-        u16 result = ir->phiResultRegs[p];
-        if (phiDead[p] || (IsRegisterOperand(data, result) && IsRemovableDefinition(data, result))) continue;
-        for (u32 j = 0; j < ir->GetPhiOperandCount(p); j++) markLive(ir->GetPhiOperandValue(p, j));
-    }
-    for (u32 k = 0; k < data->insertions.count; k++) {
-        for (u32 slot = 0; slot < 4; slot++) markLive(data->insertions.items[k].operands[slot]);
-    }
-    for (bool more = true; more;) {
-        while (workCount > 0) {
-            u32 reg = work[--workCount];
-            u32 definition = data->definitions[reg];
-            if (definition == NO_DEFINITION || data->definitionCounts[reg] != 1) continue;
-            if (definition & PHI_REFERENCE) {
-                u32 phi = definition & ~PHI_REFERENCE;
-                if (phiDead[phi]) continue;
-                for (u32 j = 0; j < ir->GetPhiOperandCount(phi); j++) markLive(ir->GetPhiOperandValue(phi, j));
-            } else if (ir->opcodes[definition] != IR::OP_NOP) {
-                markOperands(definition);
+    if (removeDead) {
+        // Values that only read each other keep each other's use counts up: a
+        // loop variable that its own update and its phis read, and nothing else
+        // (a ray's hit index when only the distance is used). Mark what the rest
+        // reads live, and what live values read; removable values left unmarked
+        // are dead too.
+        bool* live = (bool*)arena->Allocate(regCount * sizeof(bool), 64);
+        memset(live, 0, regCount * sizeof(bool));
+        workCount = 0;
+        auto markLive = [&](u16 operand) {
+            if (IsRegisterOperand(data, operand) && !live[operand]) {
+                live[operand] = true;
+                work[workCount++] = operand;
             }
-        }
-        // Copies into registers that became live, whichever definition.
+        };
+        auto markOperands = [&](u32 inst) {
+            for (u32 slot = 0; slot < 4 && !HasSlotOperands(ir->opcodes[inst]); slot++) markLive(ir->GetOperand(inst, slot));
+        };
+        // A copy into a variable's register (SSA keeps those for naming, so the
+        // register may have several) reads its source only for whoever reads
+        // the register.
+        auto isCopyInto = [&](u32 inst) {
+            u16 op = ir->opcodes[inst];
+            u16 dest = ir->destinations[inst];
+            return (op == IR::OP_STORE_REG || op == IR::OP_LOAD_REG) && IsRegisterOperand(data, dest) &&
+                   (!ir->registerStorageInfo || ir->registerStorageInfo[dest] == 0);
+        };
         for (u32 i = 0; i < ir->instructionCount; i++) {
-            if (isCopyInto(i) && live[ir->destinations[i]]) markOperands(i);
+            if (ir->opcodes[i] == IR::OP_NOP || isCopyInto(i)) continue;
+            u16 dest = ir->destinations[i];
+            bool definesValue = IsRegisterOperand(data, dest) && data->definitions[dest] == i;
+            if (definesValue && IsRemovableDefinition(data, dest)) continue;  // Live only if read
+            markOperands(i);
+            if (IsRegisterOperand(data, dest) && !definesValue) markLive(dest);
         }
-        more = workCount > 0;
-    }
-    // Copies into registers nothing reads. A copy of a constant stays: the
-    // backends name the constant after the local (see
-    // RemoveUnreadAssignments), and it keeps nothing else alive.
-    for (u32 i = 0; i < ir->instructionCount; i++) {
-        if (!isCopyInto(i) || live[ir->destinations[i]] || IR::IsConstant(ir->GetOperand(i, 0))) continue;
-        ir->opcodes[i] = IR::OP_NOP;
-        ir->destinations[i] = 0;
-        for (u32 slot = 0; slot < 4; slot++) ir->SetOperand(i, slot, 0xFFFF);
-    }
-    for (u32 reg = 0; reg < regCount; reg++) {
-        if (live[reg] || !IsRemovableDefinition(data, static_cast<u16>(reg))) continue;
-        u32 definition = data->definitions[reg];
-        if (definition & PHI_REFERENCE) {
-            phiDead[definition & ~PHI_REFERENCE] = true;
-        } else if (ir->opcodes[definition] != IR::OP_NOP) {
-            ir->opcodes[definition] = IR::OP_NOP;
-            ir->destinations[definition] = 0;
-            for (u32 slot = 0; slot < 4; slot++) ir->SetOperand(definition, slot, 0xFFFF);
+        for (u32 p = 0; p < ir->phiCount; p++) {
+            u16 result = ir->phiResultRegs[p];
+            if (phiDead[p] || (IsRegisterOperand(data, result) && IsRemovableDefinition(data, result))) continue;
+            for (u32 j = 0; j < ir->GetPhiOperandCount(p); j++) markLive(ir->GetPhiOperandValue(p, j));
+        }
+        for (u32 k = 0; k < data->insertions.count; k++) {
+            for (u32 slot = 0; slot < 4; slot++) markLive(data->insertions.items[k].operands[slot]);
+        }
+        for (bool more = true; more;) {
+            while (workCount > 0) {
+                u32 reg = work[--workCount];
+                u32 definition = data->definitions[reg];
+                if (definition == NO_DEFINITION || data->definitionCounts[reg] != 1) continue;
+                if (definition & PHI_REFERENCE) {
+                    u32 phi = definition & ~PHI_REFERENCE;
+                    if (phiDead[phi]) continue;
+                    for (u32 j = 0; j < ir->GetPhiOperandCount(phi); j++) markLive(ir->GetPhiOperandValue(phi, j));
+                } else if (ir->opcodes[definition] != IR::OP_NOP) {
+                    markOperands(definition);
+                }
+            }
+            // Copies into registers that became live, whichever definition.
+            for (u32 i = 0; i < ir->instructionCount; i++) {
+                if (isCopyInto(i) && live[ir->destinations[i]]) markOperands(i);
+            }
+            more = workCount > 0;
+        }
+        // Copies into registers nothing reads. A copy of a constant stays: the
+        // backends name the constant after the local (see
+        // RemoveUnreadAssignments), and it keeps nothing else alive.
+        for (u32 i = 0; i < ir->instructionCount; i++) {
+            if (!isCopyInto(i) || live[ir->destinations[i]] || IR::IsConstant(ir->GetOperand(i, 0))) continue;
+            ir->opcodes[i] = IR::OP_NOP;
+            ir->destinations[i] = 0;
+            for (u32 slot = 0; slot < 4; slot++) ir->SetOperand(i, slot, 0xFFFF);
+        }
+        for (u32 reg = 0; reg < regCount; reg++) {
+            if (live[reg] || !IsRemovableDefinition(data, static_cast<u16>(reg))) continue;
+            u32 definition = data->definitions[reg];
+            if (definition & PHI_REFERENCE) {
+                phiDead[definition & ~PHI_REFERENCE] = true;
+            } else if (ir->opcodes[definition] != IR::OP_NOP) {
+                ir->opcodes[definition] = IR::OP_NOP;
+                ir->destinations[definition] = 0;
+                for (u32 slot = 0; slot < 4; slot++) ir->SetOperand(definition, slot, 0xFFFF);
+            }
         }
     }
 
@@ -3432,10 +3450,16 @@ static void GroupPhisByBlock(ConstantPropagationData* data) {
     offsets[0] = 0;
 }
 
-void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
+void PropagateConstants(IR::IRBuilder* builder, CFG* cfg, OptimizationSet optimizations) {
     IRProgram* ir = builder->program;
     if (ir->instructionCount == 0 || !ir->registerTypes) return;
     if (cfg && cfg->blockCount == 0) cfg = nullptr;
+    if (!Optimizations::IsEnabled(optimizations, OptimizationId::CONSTANT_PROPAGATION)) {
+        if (Optimizations::IsEnabled(optimizations, OptimizationId::COMMON_SUBEXPRESSIONS)) {
+            EliminateCommonSubexpressions(builder, cfg);
+        }
+        return;
+    }
     bool straightLine = !cfg || cfg->blockCount == 1;
     if (straightLine && ir->phiCount > 0) return;
 
@@ -3484,6 +3508,7 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
     data.cfg = cfg;
     data.regCount = regCount;
     data.straightLine = straightLine;
+    data.optimizations = optimizations;
     data.states = (ValueState*)AllocateZeroed(&arena, regCount * sizeof(ValueState));
     data.bitOffsets = (u32*)AllocateZeroed(&arena, (regCount + 1) * sizeof(u32));
     data.bits = (u32*)AllocateZeroed(&arena, bitCount * sizeof(u32));
@@ -3501,7 +3526,7 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
     data.blockConstraints = (u32*)AllocateZeroed(&arena, blockCount * sizeof(u32));
     data.constraintCapacity = blockCount * 8 + 16;
     data.constraints = (RangeConstraint*)AllocateZeroed(&arena, data.constraintCapacity * sizeof(RangeConstraint));
-    data.rangesReady = straightLine;
+    data.rangesReady = straightLine && IsEnabled(&data, OptimizationId::VALUE_RANGES);
     data.blockExecutable = (bool*)AllocateZeroed(&arena, blockCount * sizeof(bool));
     data.edgeExecutable = (bool*)AllocateZeroed(&arena, edgeCount * sizeof(bool));
     data.blockPhiOffsets = (u32*)AllocateZeroed(&arena, (blockCount + 1) * sizeof(u32));
@@ -3533,7 +3558,7 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
         data.bitOffsets[reg + 1] = data.bitOffsets[reg] + count;
     }
 
-    ForwardLocalStores(&data, &arena);
+    if (IsEnabled(&data, OptimizationId::STORE_FORWARDING)) ForwardLocalStores(&data, &arena);
     FindDefinitions(&data, straightLine);
     if (straightLine) {
         PropagateStraightLine(&data);
@@ -3550,9 +3575,11 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg) {
     }
     ExportVaryingRanges(&data);
     RemoveDeadValues(&data, &arena);
-    if (straightLine) RemoveUnreadAssignments(&data, &arena);
+    if (straightLine && IsEnabled(&data, OptimizationId::DEAD_VALUES)) {
+        RemoveUnreadAssignments(&data, &arena);
+    }
     ApplyInsertions(builder, cfg, &data.insertions);
-    EliminateCommonSubexpressions(builder, cfg);
+    if (IsEnabled(&data, OptimizationId::COMMON_SUBEXPRESSIONS)) EliminateCommonSubexpressions(builder, cfg);
 }
 
 }  // namespace Optimization

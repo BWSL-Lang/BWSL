@@ -172,6 +172,7 @@ struct CompilerConfig {
     bool watch = false;                    // Stay resident and recompile on change
     int watchIntervalMs = 250;             // Poll interval for watch mode
     std::vector<VariantOverride> variantOverrides;
+    OptimizationSet optimizations = Optimizations::Default();  // --optimizations
 };
 
 struct ShaderTiming {
@@ -334,6 +335,12 @@ void PrintUsage(const char* programName) {
     printf("  -validation <auto|strict|off>\n");
     printf("                 SPIR-V validation mode (default: auto)\n");
     printf("  -no-validate   Alias for -validation off (faster compilation)\n");
+    printf("  --optimizations <list>\n");
+    printf("                 Optimizations to run: at most one group (%s;\n",
+           Optimizations::ListGroups().c_str());
+    printf("                 default: default), then names to enable, or to disable\n");
+    printf("                 with no- (e.g. amd,no-dead-values). Names override the group.\n");
+    printf("                 Names: %s\n", Optimizations::ListNames().c_str());
     printf("  -internals     Output BWSL IR and target internals to JSON file\n");
     printf("  -h, --help     Show this help\n");
     printf("----------------------------------------\n");
@@ -2263,7 +2270,8 @@ CompileResult CompileShaderStage(
     bool generateWgsl = false,
     bool generateSpirv = true,
     bool captureWgslBindings = false,
-    bool avoidGlslReservedNames = false  // Rename local debug names reserved in GLSL
+    bool avoidGlslReservedNames = false,  // Rename local debug names reserved in GLSL
+    OptimizationSet optimizations = Optimizations::Default()
 ) {
     using Clock = std::chrono::high_resolution_clock;
     auto shaderStart = Clock::now();
@@ -2345,6 +2353,7 @@ CompileResult CompileShaderStage(
     lowering.diagnosticStream = diagnosticStream;
     lowering.diagnosticPassName = diagnosticPassName;
     lowering.currentStage = stage;
+    lowering.optimizations = optimizations;
     lowering.currentPipeline = pipelineRef;
     lowering.currentPass = passRef;  // For pass-scoped function lookup
     lowering.currentPassData = &pass;
@@ -2470,7 +2479,7 @@ CompileResult CompileShaderStage(
         }
     }
 
-    Optimization::PropagateConstants(&lowering.builder, cfgPtr);
+    Optimization::PropagateConstants(&lowering.builder, cfgPtr, optimizations);
     if (dumpIr) {
         printf("    --- Post-optimization IR ---");
         DumpIR(lowering.program);
@@ -2565,6 +2574,7 @@ CompileResult CompileShaderStage(
                                &lowering.program, cfgPtr, stage,
                                &pass, renderConfig, &glesAnalysis, varyingContext);
         SetAttributeNames(glesBuilder, context.ast, pipelineRef);
+        glesBuilder.optimizations = optimizations;
         if (stage == ShaderStage::Compute && shaderStageData) {
             glesBuilder.SetComputeWorkgroupSize(shaderStageData->workgroupSizeX,
                                                 shaderStageData->workgroupSizeY,
@@ -2616,6 +2626,7 @@ CompileResult CompileShaderStage(
     builder.SetVertexPullingConfig(vpConfig);
     builder.SetEmitDebugNames(debugNames);
     builder.SetAvoidGlslReservedNames(avoidGlslReservedNames);
+    builder.SetOptimizations(optimizations);
     if (varyingContext) {
         for (u32 i = 0; i < varyingContext->count; i++) {
             builder.SetVaryingName(varyingContext->varyings[i].slot,
@@ -3432,6 +3443,22 @@ int main(int argc, char* argv[]) {
             Memory::g_arenaGrowthLimit = static_cast<size_t>(mib) * 1024 * 1024;
         } else if (arg == "-ast-json" || arg == "--ast-json") {
             config.astJson = true;
+        } else if (arg == "-optimizations" || arg == "--optimizations" ||
+                   arg.rfind("--optimizations=", 0) == 0) {
+            std::string list;
+            if (arg.rfind("--optimizations=", 0) == 0) {
+                list = arg.substr(strlen("--optimizations="));
+            } else if (i + 1 < argc) {
+                list = argv[++i];
+            }
+            std::string error = "expects a group or optimization names";
+            if (list.empty() || !Optimizations::Parse(list, &config.optimizations, &error)) {
+                diagnostics.AddMessage(DiagnosticSeverity::Error,
+                                       DiagnosticPhase::CLI,
+                                       DiagnosticMessageId::InvalidOptimizations,
+                                       {DiagnosticArg::String(error)});
+                return emitFailure();
+            }
         } else if ((arg == "-validation" || arg == "--validation") && i + 1 < argc) {
             std::string mode = argv[++i];
             if (mode == "auto") {
@@ -4124,7 +4151,7 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                 false, false, true, false, specializedPipelineRef,
                 pipeline.passes[passIdx], &passVaryings, false, false, false,
                 &config.renderConfig, &diagnostics, passName, config.errorsJson,
-                false, false, false);
+                false, false, false, false, config.optimizations);
             if (!interfaceResult.success) {
                 AddCompileResultDiagnostics(diagnostics, interfaceResult, config.inputFile, passName, "vertex");
                 ++errorCount;
@@ -4149,7 +4176,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        passName,
                                                        config.errorsJson, config.outputWgsl,
                                                        config.generateSpirv, config.outputBindings,
-                                                       config.outputGlsl || config.outputGlslEs);
+                                                       config.outputGlsl || config.outputGlslEs,
+                                                       config.optimizations);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "vertex");
@@ -4192,7 +4220,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        passName,
                                                        config.errorsJson, config.outputWgsl,
                                                        config.generateSpirv, config.outputBindings,
-                                                       config.outputGlsl || config.outputGlslEs);
+                                                       config.outputGlsl || config.outputGlslEs,
+                                                       config.optimizations);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "fragment");
@@ -4235,7 +4264,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        passName,
                                                        config.errorsJson, config.outputWgsl,
                                                        config.generateSpirv, config.outputBindings,
-                                                       config.outputGlsl || config.outputGlslEs);
+                                                       config.outputGlsl || config.outputGlslEs,
+                                                       config.optimizations);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "compute");

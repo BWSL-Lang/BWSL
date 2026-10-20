@@ -68,7 +68,8 @@ inline u16 IRLowering::LowerExpression(NodeRef ref) {
         // #169), as `&&`/`||` operands are. A branch per ternary only adds
         // structured control flow that drivers don't always flatten.
         u32 budget = MAX_SPECULATED_OPERAND_NODES;
-        if (!IsSpeculatableExpression(tern.trueExpr, &budget) ||
+        if (!Optimizations::IsEnabled(optimizations, OptimizationId::SELECT_TERNARIES) ||
+            !IsSpeculatableExpression(tern.trueExpr, &budget) ||
             !IsSpeculatableExpression(tern.falseExpr, &budget)) {
             return LowerTernaryBranches(ref, condReg, 0xFFFF, 0xFFFF);
         }
@@ -981,7 +982,8 @@ inline u16 IRLowering::LowerBinaryOp(NodeRef ref) {
     // with OpLogicalAnd/Or. Branching on it only adds structured control
     // flow that drivers don't always flatten (see issue #157).
     u32 budget = MAX_SPECULATED_OPERAND_NODES;
-    if (IsSpeculatableExpression(binop.right, &budget)) {
+    if (Optimizations::IsEnabled(optimizations, OptimizationId::SPECULATE_LOGICAL_OPS) &&
+        IsSpeculatableExpression(binop.right, &budget)) {
       u16 right = EnsureBoolCondition(LowerExpression(binop.right));
       u16 dest = AllocateRegister();
       SetRegisterType(dest, CoreType::BOOL);

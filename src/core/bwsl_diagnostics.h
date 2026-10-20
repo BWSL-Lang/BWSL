@@ -67,6 +67,7 @@ enum class DiagnosticMessageId : u16 {
     MaxUserVaryingsExceeded,
     ComputeGraphValidationFailed,
     CompilerMemoryExhausted,
+    InvalidOptimizations,
 };
 
 enum class DiagnosticArgKind : u8 {
@@ -339,6 +340,7 @@ public:
             case DiagnosticMessageId::MaxUserVaryingsExceeded: return "MaxUserVaryingsExceeded";
             case DiagnosticMessageId::ComputeGraphValidationFailed: return "ComputeGraphValidationFailed";
             case DiagnosticMessageId::CompilerMemoryExhausted: return "CompilerMemoryExhausted";
+            case DiagnosticMessageId::InvalidOptimizations: return "InvalidOptimizations";
             default: return "Raw";
         }
     }
@@ -515,6 +517,8 @@ private:
                 return "-validation expects auto, strict, or off";
             case DiagnosticMessageId::UnknownOption:
                 return "Unknown option: {0}";
+            case DiagnosticMessageId::InvalidOptimizations:
+                return "--optimizations: {0}";
             case DiagnosticMessageId::CouldNotReadFile:
                 return "Could not read file '{0}'";
             case DiagnosticMessageId::NoPipelineFound:
@@ -567,6 +571,7 @@ private:
             case DiagnosticMessageId::VariantExpectsNameValue: return "BWSL0101";
             case DiagnosticMessageId::ValidationModeExpected: return "BWSL0102";
             case DiagnosticMessageId::UnknownOption: return "BWSL0103";
+            case DiagnosticMessageId::InvalidOptimizations: return "BWSL0104";
             case DiagnosticMessageId::CouldNotReadFile: return "BWSL0200";
             case DiagnosticMessageId::CouldNotWriteSpirv: return "BWSL0201";
             case DiagnosticMessageId::ParseError: return "BWSL1000";

@@ -783,7 +783,9 @@ void GLESBuilder::PrepareArrayRegisters() {
                 i += count ? count - 1 : 0;
             }
         }
-        if (onlyFilledOnce) regInfo[reg].constantFill = fill;
+        if (onlyFilledOnce && Optimizations::IsEnabled(optimizations, OptimizationId::GLES_CONST_TABLES)) {
+            regInfo[reg].constantFill = fill;
+        }
     }
 }
 

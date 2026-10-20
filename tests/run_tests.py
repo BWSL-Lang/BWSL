@@ -21,6 +21,8 @@ BLUE = "\033[0;34m"
 NC = "\033[0m"
 DXC = os.environ.get("BWSL_DXC", "dxc")
 HLSL_SPIRV_OPT = os.environ.get("BWSL_HLSL_SPIRV_OPT")
+# --optimizations for the equivalence suite's compiles (see main).
+EQUIVALENCE_OPTIMIZATIONS: str | None = None
 
 
 INLINE_RETURN_TESTS = {
@@ -2487,6 +2489,7 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
                 "-o", str(test_out),
                 "-modules", str(modules_dir),
                 "-all",
+                *(["--optimizations", EQUIVALENCE_OPTIMIZATIONS] if EQUIVALENCE_OPTIMIZATIONS else []),
             ],
             cwd=root,
         )
@@ -2650,6 +2653,70 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
     print("----------------------------------------")
     print(f"Equivalence: {passed} passed, {failed} failed")
 
+    return passed, failed
+
+
+def run_optimization_flag_tests(bwslc: Path, root: Path, script_dir: Path,
+                                output_dir: Path, modules_dir: Path) -> tuple[int, int]:
+    """--optimizations: bad lists are CLI errors, and groups and names change
+    what's generated."""
+    passed = failed = 0
+    shader = script_dir / "equivalence" / "test_common_subexpressions.bwsl"
+    out_root = output_dir / "optimization_flags"
+
+    def run(args: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(bwslc), *args, "-modules", str(modules_dir)],
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+
+    def report(name: str, ok: bool, message: str = "") -> None:
+        nonlocal passed, failed
+        if ok:
+            print(f"[{GREEN}PASS{NC}] optimizations/{name}")
+            passed += 1
+        else:
+            print(f"[{RED}FAIL{NC}] optimizations/{name}")
+            if message:
+                print(f"       Error: {message}")
+            failed += 1
+
+    errors = {
+        "unknown_name": ("nope", "unknown optimization or group 'nope'"),
+        "two_groups": ("amd,nvidia", "more than one optimization group"),
+        # Only no- disables: a leading - reads like another option.
+        "dash_prefix": ("amd,-dead-values", "unknown optimization or group '-dead-values'"),
+        "enabled_and_disabled": ("common-subexpressions,no-common-subexpressions",
+                                 "'common-subexpressions' is both enabled and disabled"),
+    }
+    for name, (value, expected) in errors.items():
+        result = run([str(shader), "-check", "--optimizations", value])
+        output = result.stdout + result.stderr
+        report(name, result.returncode != 0 and "BWSL0104" in output and expected in output,
+               f"exit={result.returncode} output={output[-300:]!r}")
+
+    def spirv(value: str | None) -> bytes | None:
+        out = out_root / (value or "none").replace(",", "_")
+        args = [str(shader), "-spv", "-o", str(out)]
+        if value is not None:
+            args += [f"--optimizations={value}"]
+        if run(args).returncode != 0:
+            return None
+        files = sorted(out.glob("*.spv"))
+        return b"".join(f.read_bytes() for f in files) if files else None
+
+    unset, default, off = spirv(None), spirv("default"), spirv("off")
+    report("default_when_unset", unset is not None and unset == default)
+    report("off_changes_output", off is not None and off != default)
+    # A name overrides the group, wherever it is in the list.
+    report("name_overrides_group", spirv("common-subexpressions,off") not in (None, off))
+    report("no_prefix_disables", spirv("no-common-subexpressions") not in (None, default))
     return passed, failed
 
 
@@ -2979,7 +3046,7 @@ def run_watch_mode_tests(bwslc: Path, root: Path,
 
 
 def main() -> int:
-    global DXC, HLSL_SPIRV_OPT
+    global DXC, HLSL_SPIRV_OPT, EQUIVALENCE_OPTIMIZATIONS
     parser = argparse.ArgumentParser(description="BWSL Regression Test Runner")
     parser.add_argument("--metal", "-m", action="store_true", help="Enable Metal shader validation (macOS only)")
     parser.add_argument("--hlsl", action="store_true", help="Enable HLSL validation via dxc")
@@ -3006,7 +3073,11 @@ def main() -> int:
         help="Update golden files with current backend output",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed output")
+    parser.add_argument("--optimizations",
+                        help="Compile the equivalence suite with bwslc --optimizations LIST "
+                             "(e.g. off), so each optimization's absence is checked on the GPU")
     args = parser.parse_args()
+    EQUIVALENCE_OPTIMIZATIONS = args.optimizations
 
     if args.dxc:
         resolved_dxc = shutil.which(args.dxc)
@@ -3778,6 +3849,11 @@ def main() -> int:
         bwslc, root, script_dir, output_dir, modules_dir)
     passed += batch_passed
     failed += batch_failed
+
+    flag_passed, flag_failed = run_optimization_flag_tests(
+        bwslc, root, script_dir, output_dir, modules_dir)
+    passed += flag_passed
+    failed += flag_failed
 
     watch_passed, watch_failed = run_watch_mode_tests(bwslc, root, output_dir)
     passed += watch_passed

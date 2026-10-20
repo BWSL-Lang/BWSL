@@ -299,7 +299,39 @@ On Windows, the repo now also includes `build.bat` and `make.bat`. `build.bat` b
 | `-debug-names` | Emit debug names in SPIR-V |
 | `-validation auto\|strict\|off` | Control SPIR-V validation (`auto` is default; linked native builds validate in-process) |
 | `-no-validate` | Alias for `-validation off` |
+| `--optimizations <list>` | Choose optimizations: at most one group (`off`, `default`, `amd`, `nvidia`, `intel`) plus names to enable, or to disable with `no-` (e.g. `amd,no-dead-values`). Names override the group; `default` applies when no group is given. See below |
 | `-internals` | Output SPIR-V disassembly and IR to JSON |
+
+### Optimizations
+
+`--optimizations` takes a comma-separated list. A group picks a starting
+set; names then enable optimizations (`dead-values`) or disable them
+(`no-dead-values`), wherever they appear in the list, so
+`off,common-subexpressions` and `common-subexpressions,off` both run only
+`common-subexpressions`. Without a group the list starts from `default`, which holds
+every optimization not known to slow down any vendor's GPU. The vendor
+groups (`amd`, `nvidia`, `intel`) start from `default` and enable or disable
+what is known to help or hurt on that vendor; today they equal `default`.
+
+| Name | What it does |
+|------|--------------|
+| `constant-propagation` | Folds constants through the shader and keeps only the taken side of a constant branch. The names up to `dead-values` act only while this is on |
+| `loop-evaluation` | Runs loops whose inputs are all constant at compile time |
+| `value-ranges` | Uses `@bounds` and other known ranges to decide comparisons and simplify `min`/`max`/`clamp` |
+| `store-forwarding` | A struct field read takes the value last stored to it |
+| `algebraic-identities` | `x * 1`, `x + 0`, `pow(x, 2)`, bitwise identities, component reads of built vectors |
+| `pow-expansion` | `pow(x, n)` with a small integer `n` becomes multiplications |
+| `single-iteration-loops` | A loop that runs at most once is emitted as straight code |
+| `dead-values` | Removes values nothing reads |
+| `common-subexpressions` | A value computed again is reused |
+| `select-ternaries` | A cheap, side-effect-free `?:` evaluates both arms and selects |
+| `speculate-logical-ops` | A cheap, side-effect-free right operand of `&&`/`\|\|` is evaluated without a branch |
+| `array-fill-stores` | SPIR-V: an array filled element by element, in order, is stored at once |
+| `gles-const-tables` | `-gles-direct`: an array filled once with constants gets them in its declaration |
+
+Turning optimizations off never changes results. With `constant-propagation`
+off, DXC's SPIR-V optimizer (and `spirv-opt -O`, SPIRV-Tools v2026.2) can
+crash on the HLSL of some large shaders; DXIL, and SPIR-V at `-O0`, are fine.
 
 ### WebAssembly Module
 

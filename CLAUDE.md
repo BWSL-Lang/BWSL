@@ -43,6 +43,7 @@ make clean
 ./build/bwslc shader.bwsl -glsl        # SPIR-V + GLSL 450
 ./build/bwslc shader.bwsl -gles        # SPIR-V + GLSL ES 300 (WebGL)
 ./build/bwslc shader.bwsl -modules ./modules -v  # Add module path, verbose
+./build/bwslc shader.bwsl --optimizations off,common-subexpressions  # Only CSE (groups: off, default, amd, nvidia, intel)
 
 # Batch mode: multiple files, a directory (recursive .bwsl scan), or a manifest
 # become one job list; every unit compiles and is reported together (no

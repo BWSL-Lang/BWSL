@@ -918,7 +918,7 @@ static void ComputeRanges(ConstantPropagationData* data) {
     for (u32 k = 0; k < data->bitOffsets[data->regCount]; k++) data->ranges[k] = {};
     memset(data->rangeChanges, 0, data->regCount);
     BuildConstraints(data);
-    data->rangesReady = cfg->dominatorsComputed;
+    data->rangesReady = cfg->dominatorsComputed && IsEnabled(data, OptimizationId::VALUE_RANGES);
     if (!data->rangesReady) return;
     if (!IterateRanges(data)) {
         data->rangesReady = false;  // Didn't settle: trust none of it
