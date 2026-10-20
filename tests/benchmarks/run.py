@@ -550,6 +550,8 @@ def runner_args(prog: Program, bench: dict, inputs: Inputs, width: int, height: 
            "--vbo", str(inputs.vbo), str(inputs.stride),
            "--frames", str(args.frames), "--warmup", str(args.warmup),
            "--budget", str(args.budget)]
+    if prog.api == "vulkan" and args.vk_device is not None:
+        cmd += ["--vk-device", str(args.vk_device)]
     if bench.get("depth"):
         cmd.append("--depth")
     if inputs.ibo:
@@ -863,6 +865,9 @@ def main() -> int:
     ap.add_argument("--warmup", type=int, default=10, help="untimed frames per run")
     ap.add_argument("--budget", type=float, default=1.5,
                     help="seconds of timed frames per run before stopping early")
+    ap.add_argument("--vk-device", type=int,
+                    help="Vulkan device index (vulkaninfo --summary); default: the "
+                         "first discrete GPU")
     ap.add_argument("--rounds", type=int, default=1,
                     help="repeat every backend this many times, interleaved")
     ap.add_argument("--skip-after", type=float, default=10.0,

@@ -15,7 +15,7 @@
 //                [--tex FILE W H FORMAT FILTER WRAP GLNAME SET BINDING]...
 //                [--frames N] [--min-frames N] [--warmup N]
 //                [--warmup-seconds S] [--budget S]
-//                [--readback FILE] [--vk-device INDEX]
+//                [--readback FILE] [--vk-device INDEX] [--pipeline-stats FILE]
 //
 // GL takes GLSL ES source text for --vert/--frag and resolves resources by
 // name (attributes with glGetAttribLocation, uniform blocks with
@@ -41,6 +41,14 @@
 // least --min-frames are timed. --readback writes every target of the last
 // frame as RGBA float32, targets concatenated, rows in GL order (row 0 is NDC
 // y = -1 on both APIs).
+//
+// --pipeline-stats writes what the driver reports about the compiled shaders.
+// Vulkan: VK_KHR_pipeline_executable_properties, statistics such as register
+// and instruction counts, and the text representations it offers (AMD's
+// include the disassembly). GL has no such query: the shader and program info
+// logs, and the readable text in the program binary (glGetProgramBinary),
+// which on NVIDIA is the program in its NV_gpu_program5 assembly, the step
+// before machine code. The raw binary goes to FILE.bin.
 //
 // Prints one JSON object to stdout:
 //   {"api": ..., "device": ..., "driver": ..., "warmup_frames": N,
@@ -210,6 +218,7 @@ struct Args {
     double budget_seconds = 2.0;
     std::string readback_path;
     int vk_device = -1;
+    std::string pipeline_stats_path;
 };
 
 uint32_t parse_u32(const char* s) {
@@ -343,6 +352,8 @@ Args parse_args(int argc, char** argv) {
             a.readback_path = next();
         } else if (f == "--vk-device") {
             a.vk_device = parse_int(next());
+        } else if (f == "--pipeline-stats") {
+            a.pipeline_stats_path = next();
         } else {
             die("unknown argument " + f);
         }
@@ -569,6 +580,9 @@ constexpr GLenum GL_FRAMEBUFFER_COMPLETE = 0x8CD5;
 constexpr GLenum GL_COLOR_ATTACHMENT0 = 0x8CE0;
 constexpr GLenum GL_DEPTH_ATTACHMENT = 0x8D00;
 constexpr GLuint GL_INVALID_INDEX = 0xFFFFFFFFu;
+constexpr GLint GL_TRUE = 1;
+constexpr GLenum GL_PROGRAM_BINARY_RETRIEVABLE_HINT = 0x8257;
+constexpr GLenum GL_PROGRAM_BINARY_LENGTH = 0x8741;
 
 #define BENCH_GL_FUNCTIONS(X)                                                                      \
     X(GLenum, glGetError, (void))                                                                  \
@@ -629,8 +643,14 @@ constexpr GLuint GL_INVALID_INDEX = 0xFFFFFFFFu;
     X(void, glEndQuery, (GLenum))                                                                  \
     X(void, glGetQueryObjectui64v, (GLuint, GLenum, GLuint64*))
 
+// Loaded only for --pipeline-stats, and allowed to be missing.
+#define BENCH_GL_OPTIONAL_FUNCTIONS(X)                                                             \
+    X(void, glProgramParameteri, (GLuint, GLenum, GLint))                                          \
+    X(void, glGetProgramBinary, (GLuint, GLsizei, GLsizei*, GLenum*, void*))
+
 #define BENCH_GL_DECLARE(ret, name, params) ret(GLAPIENTRY* name) params = nullptr;
 BENCH_GL_FUNCTIONS(BENCH_GL_DECLARE)
+BENCH_GL_OPTIONAL_FUNCTIONS(BENCH_GL_DECLARE)
 #undef BENCH_GL_DECLARE
 
 #if defined(_WIN32)
@@ -760,6 +780,9 @@ void load_gl_functions() {
         die("missing GL function " #name);
     BENCH_GL_FUNCTIONS(BENCH_GL_LOAD)
 #undef BENCH_GL_LOAD
+#define BENCH_GL_LOAD_OPTIONAL(ret, name, params) name = (ret(GLAPIENTRY*) params)gl_proc(#name);
+    BENCH_GL_OPTIONAL_FUNCTIONS(BENCH_GL_LOAD_OPTIONAL)
+#undef BENCH_GL_LOAD_OPTIONAL
 }
 
 void gl_check(const char* what) {
@@ -790,6 +813,100 @@ GLuint gl_compile(GLenum stage, const std::string& path) {
     return shader;
 }
 
+std::string gl_shader_log(GLuint shader) {
+    GLint len = 0;
+    glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &len);
+    std::string log(std::max(len, 1), '\0');
+    glGetShaderInfoLog(shader, len, nullptr, log.data());
+    return std::string(log.c_str());
+}
+
+std::string gl_program_log(GLuint prog) {
+    GLint len = 0;
+    glGetProgramiv(prog, GL_INFO_LOG_LENGTH, &len);
+    std::string log(std::max(len, 1), '\0');
+    glGetProgramInfoLog(prog, len, nullptr, log.data());
+    return std::string(log.c_str());
+}
+
+// Program binaries are core since GL 4.1; the 3.3 fallback context may not
+// have them, and querying one there is GL_INVALID_ENUM.
+bool gl_has_program_binary() {
+    // "4.6.0 NVIDIA 617.14": major.minor first.
+    char* end = nullptr;
+    long major = std::strtol((const char*)glGetString(GL_VERSION), &end, 10);
+    long minor = *end == '.' ? std::strtol(end + 1, nullptr, 10) : 0;
+    return (major > 4 || (major == 4 && minor >= 1)) && glProgramParameteri && glGetProgramBinary;
+}
+
+// GL has no statistics query. The info logs say what the compiler chose to
+// say, and the program binary is driver-specific, but NVIDIA's holds each
+// stage in its NV_gpu_program5 assembly (!!NVvp5.0, !!NVfp5.0) as text: the
+// optimized program before register allocation and machine code. Writes the
+// logs and every long run of printable text in the binary to `path`, and the
+// binary to `path`.bin.
+void write_gl_pipeline_stats(GLuint prog, GLuint vs, GLuint fs, const std::string& path) {
+    std::string out = "== GL program: " + std::string((const char*)glGetString(GL_RENDERER)) +
+                      ", " + (const char*)glGetString(GL_VERSION) + "\n";
+    const std::pair<const char*, std::string> logs[] = {
+        {"vertex shader info log", gl_shader_log(vs)},
+        {"fragment shader info log", gl_shader_log(fs)},
+        {"program info log", gl_program_log(prog)},
+    };
+    for (const auto& [name, log] : logs) {
+        if (!log.empty()) out += "-- " + std::string(name) + "\n" + log + "\n";
+    }
+
+    if (!gl_has_program_binary()) {
+        out += "-- this GL context has no program binaries (GL 4.1 or later)\n";
+        write_file(path, out.data(), out.size());
+        return;
+    }
+    // Errors from here on are the binary query's own: report earlier ones.
+    gl_check("linking the program");
+    GLint length = 0;
+    glGetProgramiv(prog, GL_PROGRAM_BINARY_LENGTH, &length);
+    std::vector<char> binary(std::max(length, 0));
+    GLenum format = 0;
+    GLsizei written = 0;
+    if (length > 0) glGetProgramBinary(prog, length, &written, &format, binary.data());
+    GLenum err = glGetError();
+    if (err != GL_NO_ERROR || length <= 0 || written <= 0) {
+        char note[96];
+        std::snprintf(note, sizeof(note), "-- the driver returned no program binary (GL error 0x%04x)\n",
+                      err);
+        out += note;
+        write_file(path, out.data(), out.size());
+        return;
+    }
+    binary.resize(written);
+    write_file(path + ".bin", binary.data(), binary.size());
+    char header[96];
+    std::snprintf(header, sizeof(header), "  binaryFormat = 0x%x\n  binaryLength = %d\n", format,
+                  (int)written);
+    out += header;
+
+    // Runs of printable characters and line breaks at least this long, which
+    // skips the short strings any binary has.
+    constexpr size_t MIN_TEXT = 256;
+    bool any = false;
+    size_t start = 0;
+    for (size_t i = 0; i <= binary.size(); i++) {
+        unsigned char ch = i < binary.size() ? (unsigned char)binary[i] : 0;
+        bool text = (ch >= 0x20 && ch < 0x7f) || ch == '\n' || ch == '\r' || ch == '\t';
+        if (text) continue;
+        if (i - start >= MIN_TEXT) {
+            out += "-- text in the program binary at offset " + std::to_string(start) + "\n";
+            out.append(binary.data() + start, i - start);
+            if (out.back() != '\n') out += "\n";
+            any = true;
+        }
+        start = i + 1;
+    }
+    if (!any) out += "-- the program binary has no readable text on this driver\n";
+    write_file(path, out.data(), out.size());
+}
+
 int run_gl(const Args& a) {
     create_gl_context();
     load_gl_functions();
@@ -804,6 +921,9 @@ int run_gl(const Args& a) {
     GLuint prog = glCreateProgram();
     glAttachShader(prog, vs);
     glAttachShader(prog, fs);
+    if (!a.pipeline_stats_path.empty() && gl_has_program_binary()) {
+        glProgramParameteri(prog, GL_PROGRAM_BINARY_RETRIEVABLE_HINT, GL_TRUE);
+    }
     glLinkProgram(prog);
     GLint linked = 0;
     glGetProgramiv(prog, GL_LINK_STATUS, &linked);
@@ -814,6 +934,7 @@ int run_gl(const Args& a) {
         glGetProgramInfoLog(prog, len, nullptr, log.data());
         die("GL link failed:\n" + log);
     }
+    if (!a.pipeline_stats_path.empty()) write_gl_pipeline_stats(prog, vs, fs, a.pipeline_stats_path);
     glUseProgram(prog);
 
     // ===== Geometry =====
@@ -1042,6 +1163,7 @@ struct VkCtx {
     uint32_t queue_family = UINT32_MAX;
     uint32_t timestamp_bits = 0;
     float timestamp_period = 1.0f;
+    bool executable_info = false;  // VK_KHR_pipeline_executable_properties enabled
 };
 
 uint32_t find_mem_type(const VkCtx& c, uint32_t type_bits, VkMemoryPropertyFlags flags) {
@@ -1218,7 +1340,23 @@ VkCtx make_vk_context(const Args& a, Result& r) {
 #ifdef __APPLE__
     dev_exts.push_back("VK_KHR_portability_subset");
 #endif
+    VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR executable_features{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR};
+    if (!a.pipeline_stats_path.empty()) {
+        uint32_t extensionCount = 0;
+        vkEnumerateDeviceExtensionProperties(c.phys, nullptr, &extensionCount, nullptr);
+        std::vector<VkExtensionProperties> extensions(extensionCount);
+        vkEnumerateDeviceExtensionProperties(c.phys, nullptr, &extensionCount, extensions.data());
+        for (const VkExtensionProperties& e : extensions) {
+            c.executable_info |=
+                std::strcmp(e.extensionName, VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME) == 0;
+        }
+        if (!c.executable_info) die("the device doesn't support VK_KHR_pipeline_executable_properties");
+        dev_exts.push_back(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+        executable_features.pipelineExecutableInfo = VK_TRUE;
+    }
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+    if (c.executable_info) dci.pNext = &executable_features;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
     dci.enabledExtensionCount = (uint32_t)dev_exts.size();
@@ -1226,6 +1364,75 @@ VkCtx make_vk_context(const Args& a, Result& r) {
     VK_CHECK(vkCreateDevice(c.phys, &dci, nullptr, &c.dev));
     vkGetDeviceQueue(c.dev, c.queue_family, 0, &c.queue);
     return c;
+}
+
+// What the driver reports about each compiled stage of `pipeline`.
+void write_pipeline_stats(const VkCtx& c, VkPipeline pipeline, const std::string& path) {
+    auto getProperties = (PFN_vkGetPipelineExecutablePropertiesKHR)vkGetDeviceProcAddr(
+        c.dev, "vkGetPipelineExecutablePropertiesKHR");
+    auto getStatistics = (PFN_vkGetPipelineExecutableStatisticsKHR)vkGetDeviceProcAddr(
+        c.dev, "vkGetPipelineExecutableStatisticsKHR");
+    auto getRepresentations = (PFN_vkGetPipelineExecutableInternalRepresentationsKHR)
+        vkGetDeviceProcAddr(c.dev, "vkGetPipelineExecutableInternalRepresentationsKHR");
+    if (!getProperties || !getStatistics || !getRepresentations)
+        die("VK_KHR_pipeline_executable_properties functions are missing");
+
+    VkPipelineInfoKHR info{VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR};
+    info.pipeline = pipeline;
+    uint32_t count = 0;
+    VK_CHECK(getProperties(c.dev, &info, &count, nullptr));
+    std::vector<VkPipelineExecutablePropertiesKHR> executables(
+        count, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_PROPERTIES_KHR});
+    VK_CHECK(getProperties(c.dev, &info, &count, executables.data()));
+
+    std::string out;
+    for (uint32_t e = 0; e < count; e++) {
+        out += "== " + std::string(executables[e].name) + ": " + executables[e].description +
+               " (subgroup size " + std::to_string(executables[e].subgroupSize) + ")\n";
+        VkPipelineExecutableInfoKHR executable{VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR};
+        executable.pipeline = pipeline;
+        executable.executableIndex = e;
+        uint32_t statCount = 0;
+        VK_CHECK(getStatistics(c.dev, &executable, &statCount, nullptr));
+        std::vector<VkPipelineExecutableStatisticKHR> stats(
+            statCount, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR});
+        VK_CHECK(getStatistics(c.dev, &executable, &statCount, stats.data()));
+        for (const VkPipelineExecutableStatisticKHR& stat : stats) {
+            std::string value;
+            switch (stat.format) {
+                case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR:
+                    value = stat.value.b32 ? "true" : "false";
+                    break;
+                case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR:
+                    value = std::to_string(stat.value.i64);
+                    break;
+                case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR:
+                    value = std::to_string(stat.value.u64);
+                    break;
+                default:
+                    value = std::to_string(stat.value.f64);
+                    break;
+            }
+            out += "  " + std::string(stat.name) + " = " + value + "\n";
+        }
+        uint32_t reprCount = 0;
+        VK_CHECK(getRepresentations(c.dev, &executable, &reprCount, nullptr));
+        std::vector<VkPipelineExecutableInternalRepresentationKHR> reprs(
+            reprCount, {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INTERNAL_REPRESENTATION_KHR});
+        VK_CHECK(getRepresentations(c.dev, &executable, &reprCount, reprs.data()));
+        std::vector<std::vector<char>> data(reprCount);
+        for (uint32_t r = 0; r < reprCount; r++) {
+            data[r].resize(reprs[r].dataSize);
+            reprs[r].pData = data[r].data();
+        }
+        VK_CHECK(getRepresentations(c.dev, &executable, &reprCount, reprs.data()));
+        for (uint32_t r = 0; r < reprCount; r++) {
+            if (!reprs[r].isText) continue;
+            out += "-- " + std::string(reprs[r].name) + ": " + reprs[r].description + "\n";
+            out += std::string(data[r].data(), strnlen(data[r].data(), data[r].size())) + "\n";
+        }
+    }
+    write_file(path, out.data(), out.size());
 }
 
 VkShaderModule make_shader(const VkCtx& c, const std::string& path) {
@@ -1599,8 +1806,13 @@ int run_vulkan(const Args& a) {
     gpci.pDepthStencilState = &ds;
     gpci.layout = pipe_layout;
     gpci.renderPass = render_pass;
+    if (c.executable_info) {
+        gpci.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR |
+                      VK_PIPELINE_CREATE_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR;
+    }
     VkPipeline pipeline;
     VK_CHECK(vkCreateGraphicsPipelines(c.dev, VK_NULL_HANDLE, 1, &gpci, nullptr, &pipeline));
+    if (c.executable_info) write_pipeline_stats(c, pipeline, a.pipeline_stats_path);
 
     // ===== Per-frame command buffers =====
     // Two slots in flight, each with its own pair of timestamp queries. A full
