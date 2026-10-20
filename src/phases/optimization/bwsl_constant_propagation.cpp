@@ -3183,85 +3183,87 @@ static void RemoveDeadValues(ConstantPropagationData* data, BWSL_Arena* arena) {
         for (u32 slot = 0; slot < 4; slot++) ir->SetOperand(definition, slot, 0xFFFF);
     }
 
-    // Values that only read each other keep each other's use counts up: a
-    // loop variable that its own update and its phis read, and nothing else
-    // (a ray's hit index when only the distance is used). Mark what the rest
-    // reads live, and what live values read; removable values left unmarked
-    // are dead too.
-    bool* live = (bool*)arena->Allocate(regCount * sizeof(bool), 64);
-    memset(live, 0, regCount * sizeof(bool));
-    workCount = 0;
-    auto markLive = [&](u16 operand) {
-        if (IsRegisterOperand(data, operand) && !live[operand]) {
-            live[operand] = true;
-            work[workCount++] = operand;
-        }
-    };
-    auto markOperands = [&](u32 inst) {
-        for (u32 slot = 0; slot < 4 && !HasSlotOperands(ir->opcodes[inst]); slot++) markLive(ir->GetOperand(inst, slot));
-    };
-    // A copy into a variable's register (SSA keeps those for naming, so the
-    // register may have several) reads its source only for whoever reads
-    // the register.
-    auto isCopyInto = [&](u32 inst) {
-        u16 op = ir->opcodes[inst];
-        u16 dest = ir->destinations[inst];
-        return (op == IR::OP_STORE_REG || op == IR::OP_LOAD_REG) && IsRegisterOperand(data, dest) &&
-               (!ir->registerStorageInfo || ir->registerStorageInfo[dest] == 0);
-    };
-    for (u32 i = 0; i < ir->instructionCount; i++) {
-        if (ir->opcodes[i] == IR::OP_NOP || isCopyInto(i)) continue;
-        u16 dest = ir->destinations[i];
-        bool definesValue = IsRegisterOperand(data, dest) && data->definitions[dest] == i;
-        if (definesValue && IsRemovableDefinition(data, dest)) continue;  // Live only if read
-        markOperands(i);
-        if (IsRegisterOperand(data, dest) && !definesValue) markLive(dest);
-    }
-    for (u32 p = 0; p < ir->phiCount; p++) {
-        u16 result = ir->phiResultRegs[p];
-        if (phiDead[p] || (IsRegisterOperand(data, result) && IsRemovableDefinition(data, result))) continue;
-        for (u32 j = 0; j < ir->GetPhiOperandCount(p); j++) markLive(ir->GetPhiOperandValue(p, j));
-    }
-    for (u32 k = 0; k < data->insertions.count; k++) {
-        for (u32 slot = 0; slot < 4; slot++) markLive(data->insertions.items[k].operands[slot]);
-    }
-    for (bool more = true; more;) {
-        while (workCount > 0) {
-            u32 reg = work[--workCount];
-            u32 definition = data->definitions[reg];
-            if (definition == NO_DEFINITION || data->definitionCounts[reg] != 1) continue;
-            if (definition & PHI_REFERENCE) {
-                u32 phi = definition & ~PHI_REFERENCE;
-                if (phiDead[phi]) continue;
-                for (u32 j = 0; j < ir->GetPhiOperandCount(phi); j++) markLive(ir->GetPhiOperandValue(phi, j));
-            } else if (ir->opcodes[definition] != IR::OP_NOP) {
-                markOperands(definition);
+    if (removeDead) {
+        // Values that only read each other keep each other's use counts up: a
+        // loop variable that its own update and its phis read, and nothing else
+        // (a ray's hit index when only the distance is used). Mark what the rest
+        // reads live, and what live values read; removable values left unmarked
+        // are dead too.
+        bool* live = (bool*)arena->Allocate(regCount * sizeof(bool), 64);
+        memset(live, 0, regCount * sizeof(bool));
+        workCount = 0;
+        auto markLive = [&](u16 operand) {
+            if (IsRegisterOperand(data, operand) && !live[operand]) {
+                live[operand] = true;
+                work[workCount++] = operand;
             }
-        }
-        // Copies into registers that became live, whichever definition.
+        };
+        auto markOperands = [&](u32 inst) {
+            for (u32 slot = 0; slot < 4 && !HasSlotOperands(ir->opcodes[inst]); slot++) markLive(ir->GetOperand(inst, slot));
+        };
+        // A copy into a variable's register (SSA keeps those for naming, so the
+        // register may have several) reads its source only for whoever reads
+        // the register.
+        auto isCopyInto = [&](u32 inst) {
+            u16 op = ir->opcodes[inst];
+            u16 dest = ir->destinations[inst];
+            return (op == IR::OP_STORE_REG || op == IR::OP_LOAD_REG) && IsRegisterOperand(data, dest) &&
+                   (!ir->registerStorageInfo || ir->registerStorageInfo[dest] == 0);
+        };
         for (u32 i = 0; i < ir->instructionCount; i++) {
-            if (isCopyInto(i) && live[ir->destinations[i]]) markOperands(i);
+            if (ir->opcodes[i] == IR::OP_NOP || isCopyInto(i)) continue;
+            u16 dest = ir->destinations[i];
+            bool definesValue = IsRegisterOperand(data, dest) && data->definitions[dest] == i;
+            if (definesValue && IsRemovableDefinition(data, dest)) continue;  // Live only if read
+            markOperands(i);
+            if (IsRegisterOperand(data, dest) && !definesValue) markLive(dest);
         }
-        more = workCount > 0;
-    }
-    // Copies into registers nothing reads. A copy of a constant stays: the
-    // backends name the constant after the local (see
-    // RemoveUnreadAssignments), and it keeps nothing else alive.
-    for (u32 i = 0; i < ir->instructionCount; i++) {
-        if (!isCopyInto(i) || live[ir->destinations[i]] || IR::IsConstant(ir->GetOperand(i, 0))) continue;
-        ir->opcodes[i] = IR::OP_NOP;
-        ir->destinations[i] = 0;
-        for (u32 slot = 0; slot < 4; slot++) ir->SetOperand(i, slot, 0xFFFF);
-    }
-    for (u32 reg = 0; reg < regCount; reg++) {
-        if (live[reg] || !IsRemovableDefinition(data, static_cast<u16>(reg))) continue;
-        u32 definition = data->definitions[reg];
-        if (definition & PHI_REFERENCE) {
-            phiDead[definition & ~PHI_REFERENCE] = true;
-        } else if (ir->opcodes[definition] != IR::OP_NOP) {
-            ir->opcodes[definition] = IR::OP_NOP;
-            ir->destinations[definition] = 0;
-            for (u32 slot = 0; slot < 4; slot++) ir->SetOperand(definition, slot, 0xFFFF);
+        for (u32 p = 0; p < ir->phiCount; p++) {
+            u16 result = ir->phiResultRegs[p];
+            if (phiDead[p] || (IsRegisterOperand(data, result) && IsRemovableDefinition(data, result))) continue;
+            for (u32 j = 0; j < ir->GetPhiOperandCount(p); j++) markLive(ir->GetPhiOperandValue(p, j));
+        }
+        for (u32 k = 0; k < data->insertions.count; k++) {
+            for (u32 slot = 0; slot < 4; slot++) markLive(data->insertions.items[k].operands[slot]);
+        }
+        for (bool more = true; more;) {
+            while (workCount > 0) {
+                u32 reg = work[--workCount];
+                u32 definition = data->definitions[reg];
+                if (definition == NO_DEFINITION || data->definitionCounts[reg] != 1) continue;
+                if (definition & PHI_REFERENCE) {
+                    u32 phi = definition & ~PHI_REFERENCE;
+                    if (phiDead[phi]) continue;
+                    for (u32 j = 0; j < ir->GetPhiOperandCount(phi); j++) markLive(ir->GetPhiOperandValue(phi, j));
+                } else if (ir->opcodes[definition] != IR::OP_NOP) {
+                    markOperands(definition);
+                }
+            }
+            // Copies into registers that became live, whichever definition.
+            for (u32 i = 0; i < ir->instructionCount; i++) {
+                if (isCopyInto(i) && live[ir->destinations[i]]) markOperands(i);
+            }
+            more = workCount > 0;
+        }
+        // Copies into registers nothing reads. A copy of a constant stays: the
+        // backends name the constant after the local (see
+        // RemoveUnreadAssignments), and it keeps nothing else alive.
+        for (u32 i = 0; i < ir->instructionCount; i++) {
+            if (!isCopyInto(i) || live[ir->destinations[i]] || IR::IsConstant(ir->GetOperand(i, 0))) continue;
+            ir->opcodes[i] = IR::OP_NOP;
+            ir->destinations[i] = 0;
+            for (u32 slot = 0; slot < 4; slot++) ir->SetOperand(i, slot, 0xFFFF);
+        }
+        for (u32 reg = 0; reg < regCount; reg++) {
+            if (live[reg] || !IsRemovableDefinition(data, static_cast<u16>(reg))) continue;
+            u32 definition = data->definitions[reg];
+            if (definition & PHI_REFERENCE) {
+                phiDead[definition & ~PHI_REFERENCE] = true;
+            } else if (ir->opcodes[definition] != IR::OP_NOP) {
+                ir->opcodes[definition] = IR::OP_NOP;
+                ir->destinations[definition] = 0;
+                for (u32 slot = 0; slot < 4; slot++) ir->SetOperand(definition, slot, 0xFFFF);
+            }
         }
     }
 
