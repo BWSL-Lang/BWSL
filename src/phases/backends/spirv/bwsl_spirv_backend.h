@@ -232,7 +232,7 @@ struct SPIRVBuilder {
     bool* edgeEmitted = nullptr;
 
     // Phi webs kept in Function variables for SPIRV-Cross (see
-    // PlanPhiVariables). Empty unless usePhiVariables is set.
+    // PlanPhiVariables), in arena arrays. Empty unless usePhiVariables is set.
     bool usePhiVariables = false;
     struct PhiVariable {
         u32 variableId;
@@ -242,13 +242,21 @@ struct SPIRVBuilder {
         u32 variableId;
         u16 value;
     };
-    std::vector<u32> phiVariableIds;                       // [phiCount] variable, 0: OpPhi
-    std::vector<PhiVariable> phiVariables;                 // declared in the entry block
-    std::vector<std::vector<PhiEdgeStore>> phiEdgeStores;  // [blockCount] before its terminator
-    // [register] for a phi kept in a variable: the variable, and the type
-    // each read loads (GetSpirvId loads it where it's used).
-    std::vector<u32> phiLoadVariables;
-    std::vector<u32> phiLoadTypeIds;
+    u32* phiVariableIds = nullptr;       // [phiVariableIdCount] variable, 0: OpPhi
+    u32 phiVariableIdCount = 0;
+    PhiVariable* phiVariables = nullptr; // [phiVariableCount] declared in the entry block
+    u32 phiVariableCount = 0;
+    // A block's stores, before its terminator: phiEdgeStores from
+    // phiEdgeStoreOffsets[block] up to phiEdgeStoreOffsets[block + 1].
+    u32* phiEdgeStoreOffsets = nullptr;  // [phiEdgeBlockCount + 1]
+    PhiEdgeStore* phiEdgeStores = nullptr;
+    u32 phiEdgeBlockCount = 0;
+    // [phiLoadCount] for a register that is a phi kept in a variable: the
+    // variable, and the type each read loads (GetSpirvId loads it where it's
+    // used); 0 otherwise.
+    u32* phiLoadVariables = nullptr;
+    u32* phiLoadTypeIds = nullptr;
+    u32 phiLoadCount = 0;
 
     // ============= Debug Options =============
     bool emitDebugNames = false;  // Emit OpName/OpMemberName for debugging
@@ -545,7 +553,7 @@ inline u32 SPIRVBuilder::GetSpirvId(u16 ir_register, bool readValue) {
         return loaded;
     }
 
-    if (readValue && ir_register < phiLoadVariables.size() && phiLoadVariables[ir_register] != 0) {
+    if (readValue && ir_register < phiLoadCount && phiLoadVariables[ir_register] != 0) {
         // A phi kept in a variable (see PlanPhiVariables) is read where it's
         // used, as glslang does, so SPIRV-Cross keeps loops in `for` form.
         u32 loaded = AllocateId();

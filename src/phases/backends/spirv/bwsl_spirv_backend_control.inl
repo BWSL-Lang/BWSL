@@ -279,11 +279,11 @@ void SPIRVBuilder::EmitBranch(u32 ir_idx) {
       // We use a simple approach: override the register mapping temporarily
       branchConditionOverride = bool_result;
       branchConditionOverrideReg = cond_reg;
-    } else if (cond_reg < phiLoadVariables.size() && phiLoadVariables[cond_reg] != 0) {
-      // A phi kept in a variable is loaded where it's read: before the
-      // merge instruction, which must come right before the branch.
-      branchConditionOverride = GetSpirvId(cond_reg);
-      branchConditionOverrideReg = cond_reg;
+    } else if (cond_reg < phiLoadCount && phiLoadVariables[cond_reg] != 0) {
+        // A phi kept in a variable is loaded where it's read: before the
+        // merge instruction, which must come right before the branch.
+        branchConditionOverride = GetSpirvId(cond_reg);
+        branchConditionOverrideReg = cond_reg;
     } else {
       branchConditionOverride = 0;
     }
@@ -417,8 +417,8 @@ void SPIRVBuilder::EmitPhiNodes(u32 blockIndex) {
     if (ir->phiBlockIndices[phi_idx] != blockIndex)
       continue;
     // Kept in its web's variable, read where it's used (see GetSpirvId).
-    if (phi_idx < phiVariableIds.size() && phiVariableIds[phi_idx] != 0)
-      continue;
+    if (phi_idx < phiVariableIdCount && phiVariableIds[phi_idx] != 0)
+        continue;
 
     u16 phiResultReg = ir->phiResultRegs[phi_idx];
     u32 operandCount = ir->GetPhiOperandCount(phi_idx);
@@ -609,11 +609,10 @@ u32 SPIRVBuilder::GetEmittedSuccessorCount(u32 block) const {
 // read, no two members share a block, and each store sits on an edge from a
 // block with a single successor.
 void SPIRVBuilder::PlanPhiVariables() {
-    phiVariableIds.assign(ir->phiCount, 0);
-    phiVariables.clear();
-    phiEdgeStores.assign(cfg ? cfg->blockCount : 0, {});
-    phiLoadVariables.assign(idCapacity, 0);
-    phiLoadTypeIds.assign(idCapacity, 0);
+    phiVariableIdCount = 0;
+    phiVariableCount = 0;
+    phiEdgeBlockCount = 0;
+    phiLoadCount = 0;
     if (!usePhiVariables || !cfg || cfg->blockCount == 0 || ir->phiCount == 0 ||
         !ir->phiOperandValues || !ir->phiBlockIndices || !ir->phiVariables || !blockEmission)
         return;
@@ -621,6 +620,39 @@ void SPIRVBuilder::PlanPhiVariables() {
     constexpr u32 NONE = 0xFFFFFFFF;
     constexpr u32 CONFLICT = 0xFFFFFFFE;
     u32 regCount = std::min<u32>(ir->registerCount, idCapacity);
+    u32 phiCount = ir->phiCount;
+    u32 blockCount = cfg->blockCount;
+    u32 operandCount = ir->phiOperandOffsets[phiCount];
+    struct PendingStore {
+        u32 block;
+        u32 variableId;
+        u16 value;
+    };
+    // Everything is per register, phi, block or phi operand; without the
+    // memory, every phi stays an OpPhi.
+    auto allocate = [&](size_t bytes) {
+        void* memory = arena->Allocate(std::max<size_t>(bytes, 1), 64);
+        if (memory) memset(memory, 0, std::max<size_t>(bytes, 1));
+        return memory;
+    };
+    u32* variableIds = (u32*)allocate(phiCount * sizeof(u32));
+    PhiVariable* variables = (PhiVariable*)allocate(phiCount * sizeof(PhiVariable));
+    u32* loadVariables = (u32*)allocate(idCapacity * sizeof(u32));
+    u32* loadTypeIds = (u32*)allocate(idCapacity * sizeof(u32));
+    u32* phiOfReg = (u32*)allocate(regCount * sizeof(u32));
+    bool* candidate = (bool*)allocate(phiCount * sizeof(bool));
+    bool* planned = (bool*)allocate(phiCount * sizeof(bool));
+    u32* members = (u32*)allocate(phiCount * sizeof(u32));
+    u32* memberAt = (u32*)allocate(blockCount * sizeof(u32));
+    u32* held = (u32*)allocate(blockCount * sizeof(u32));
+    PendingStore* pending = (PendingStore*)allocate(operandCount * sizeof(PendingStore));
+    u32* storeOffsets = (u32*)allocate((blockCount + 1) * sizeof(u32));
+    PhiEdgeStore* stores = (PhiEdgeStore*)allocate(operandCount * sizeof(PhiEdgeStore));
+    if (!variableIds || !variables || !loadVariables || !loadTypeIds || !phiOfReg || !candidate ||
+        !planned || !members || !memberAt || !held || !pending || !storeOffsets || !stores)
+        return;
+    for (u32 reg = 0; reg < regCount; reg++) phiOfReg[reg] = NONE;
+
     // Pointers and memory-backed registers keep their own handling.
     auto isPlainRegister = [&](u16 reg) {
         return reg < regCount && localVarIds[reg] == 0 && localPointerTargets[reg].empty() &&
@@ -630,13 +662,11 @@ void SPIRVBuilder::PlanPhiVariables() {
         return IsEdgeEmitted(ir->GetPhiOperandBlock(phi, op), ir->phiBlockIndices[phi]);
     };
 
-    std::vector<u32> phiOfReg(regCount, NONE);
-    std::vector<bool> candidate(ir->phiCount, false);
-    for (u32 phi = 0; phi < ir->phiCount; phi++) {
+    for (u32 phi = 0; phi < phiCount; phi++) {
         u16 trivialValue;
         u32 block = ir->phiBlockIndices[phi];
         CoreType type = static_cast<CoreType>(ir->phiTypes[phi]);
-        if (block >= cfg->blockCount || blockEmission[block] != BlockEmission::REACHABLE ||
+        if (block >= blockCount || blockEmission[block] != BlockEmission::REACHABLE ||
             GetPhiShape(phi, &trivialValue) != PhiShape::MIXED ||
             type < CoreType::BOOL || type > CoreType::MAT4 ||
             !isPlainRegister(ir->phiResultRegs[phi]))
@@ -651,39 +681,37 @@ void SPIRVBuilder::PlanPhiVariables() {
         phiOfReg[ir->phiResultRegs[phi]] = phi;
     }
 
-    std::vector<u32> memberAt(cfg->blockCount, NONE);
-    std::vector<u32> held(cfg->blockCount, NONE);
-    std::vector<u32> members;
-    std::vector<bool> planned(ir->phiCount, false);
-    for (u32 first = 0; first < ir->phiCount; first++) {
+    u32 variableCount = 0;
+    u32 pendingCount = 0;
+    for (u32 first = 0; first < phiCount; first++) {
         if (!candidate[first] || planned[first]) continue;
         u16 web = ir->phiVariables[first];
-        members.clear();
-        for (u32 phi = first; phi < ir->phiCount; phi++) {
+        u32 memberCount = 0;
+        for (u32 phi = first; phi < phiCount; phi++) {
             if (candidate[phi] && ir->phiVariables[phi] == web) {
-                members.push_back(phi);
+                members[memberCount++] = phi;
                 planned[phi] = true;
             }
         }
         // A lone phi gains nothing: SPIRV-Cross assigns it per edge either way.
-        if (members.size() < 2) continue;
+        if (memberCount < 2) continue;
 
         bool valid = true;
-        std::fill(memberAt.begin(), memberAt.end(), NONE);
-        for (u32 phi : members) {
-            u32 block = ir->phiBlockIndices[phi];
+        for (u32 block = 0; block < blockCount; block++) memberAt[block] = NONE;
+        for (u32 m = 0; m < memberCount; m++) {
+            u32 block = ir->phiBlockIndices[members[m]];
             if (memberAt[block] != NONE) valid = false;
-            memberAt[block] = phi;
+            memberAt[block] = members[m];
         }
         if (!valid) continue;
 
         // Which member the variable holds in each block. Only edges into a
         // member's block change it, so a block holds what it was entered
         // with.
-        std::fill(held.begin(), held.end(), NONE);
+        for (u32 block = 0; block < blockCount; block++) held[block] = NONE;
         for (bool changed = true; changed;) {
             changed = false;
-            for (u32 block = 0; block < cfg->blockCount; block++) {
+            for (u32 block = 0; block < blockCount; block++) {
                 if (blockEmission[block] != BlockEmission::REACHABLE) continue;
                 u32 state = memberAt[block];
                 if (state == NONE) {
@@ -702,8 +730,10 @@ void SPIRVBuilder::PlanPhiVariables() {
             }
         }
 
-        std::vector<std::pair<u32, u16>> stores;
-        for (u32 phi : members) {
+        // This web's stores go after the accepted webs' until it's accepted.
+        u32 webStores = pendingCount;
+        for (u32 m = 0; m < memberCount && valid; m++) {
+            u32 phi = members[m];
             for (u32 op = 0; op < ir->GetPhiOperandCount(phi) && valid; op++) {
                 if (!isLive(phi, op)) continue;
                 u32 pred = ir->GetPhiOperandBlock(phi, op);
@@ -714,7 +744,7 @@ void SPIRVBuilder::PlanPhiVariables() {
                     valid = held[pred] == phiOfReg[value];
                 } else if (IR::IsConstant(value) || !IsUndefRegister(value)) {
                     valid = GetEmittedSuccessorCount(pred) == 1;
-                    stores.push_back({pred, value});
+                    pending[pendingCount++] = {pred, 0, value};
                 }
             }
         }
@@ -730,7 +760,7 @@ void SPIRVBuilder::PlanPhiVariables() {
         };
         for (u32 i = 0; i < ir->instructionCount && valid; i++) {
             u32 block = cfg->instToBlock[i];
-            if (block >= cfg->blockCount || blockEmission[block] != BlockEmission::REACHABLE)
+            if (block >= blockCount || blockEmission[block] != BlockEmission::REACHABLE)
                 continue;
             u16 op = ir->opcodes[i];
             for (u32 k = 0; k < 4 && valid; k++) {
@@ -740,32 +770,52 @@ void SPIRVBuilder::PlanPhiVariables() {
                         op != IR::OP_WAVE_READ_LANE;
             }
         }
-        for (u32 phi = 0; phi < ir->phiCount && valid; phi++) {
+        for (u32 phi = 0; phi < phiCount && valid; phi++) {
             if (candidate[phi] && ir->phiVariables[phi] == web) continue;
             for (u32 op = 0; op < ir->GetPhiOperandCount(phi) && valid; op++) {
                 valid = !isMember(ir->GetPhiOperandValue(phi, op));
             }
         }
-        if (!valid) continue;
+        if (!valid) {
+            pendingCount = webStores;
+            continue;
+        }
 
         u32 typeId = GetPhiTypeId(members[0]);
         PhiVariable variable{AllocateId(), GetPointerTypeId(typeId, spv::StorageClassFunction)};
-        phiVariables.push_back(variable);
-        for (u32 phi : members) {
-            phiVariableIds[phi] = variable.variableId;
-            phiLoadVariables[ir->phiResultRegs[phi]] = variable.variableId;
-            phiLoadTypeIds[ir->phiResultRegs[phi]] = typeId;
+        variables[variableCount++] = variable;
+        for (u32 m = 0; m < memberCount; m++) {
+            variableIds[members[m]] = variable.variableId;
+            loadVariables[ir->phiResultRegs[members[m]]] = variable.variableId;
+            loadTypeIds[ir->phiResultRegs[members[m]]] = typeId;
         }
-        for (auto& store : stores) {
-            phiEdgeStores[store.first].push_back({variable.variableId, store.second});
-        }
+        for (u32 k = webStores; k < pendingCount; k++) pending[k].variableId = variable.variableId;
     }
+
+    // Each block's stores together, in the order they were planned.
+    for (u32 k = 0; k < pendingCount; k++) storeOffsets[pending[k].block + 1]++;
+    for (u32 block = 0; block < blockCount; block++) storeOffsets[block + 1] += storeOffsets[block];
+    for (u32 block = 0; block < blockCount; block++) memberAt[block] = storeOffsets[block];
+    for (u32 k = 0; k < pendingCount; k++) {
+        stores[memberAt[pending[k].block]++] = {pending[k].variableId, pending[k].value};
+    }
+
+    phiVariableIds = variableIds;
+    phiVariableIdCount = phiCount;
+    phiVariables = variables;
+    phiVariableCount = variableCount;
+    phiEdgeStoreOffsets = storeOffsets;
+    phiEdgeStores = stores;
+    phiEdgeBlockCount = blockCount;
+    phiLoadVariables = loadVariables;
+    phiLoadTypeIds = loadTypeIds;
+    phiLoadCount = idCapacity;
 }
 
 void SPIRVBuilder::EmitPhiEdgeStores(u32 blockIndex) {
-    if (blockIndex >= phiEdgeStores.size()) return;
-    for (const PhiEdgeStore& store : phiEdgeStores[blockIndex]) {
-        Emit(spv::OpStore, store.variableId, GetSpirvId(store.value));
+    if (blockIndex >= phiEdgeBlockCount) return;
+    for (u32 k = phiEdgeStoreOffsets[blockIndex]; k < phiEdgeStoreOffsets[blockIndex + 1]; k++) {
+        Emit(spv::OpStore, phiEdgeStores[k].variableId, GetSpirvId(phiEdgeStores[k].value));
     }
 }
 
@@ -1038,9 +1088,9 @@ void SPIRVBuilder::EmitFunctionBody() {
 
   // Helper lambda to emit all local pointer OpVariables
   auto emitLocalPointerVars = [&]() {
-    for (const PhiVariable& variable : phiVariables) {
-      Emit(spv::OpVariable, variable.pointerTypeId, variable.variableId,
-           spv::StorageClassFunction);
+    for (u32 v = 0; v < phiVariableCount; v++) {
+        Emit(spv::OpVariable, phiVariables[v].pointerTypeId, phiVariables[v].variableId,
+             spv::StorageClassFunction);
     }
     for (u32 i = 0; i < ir->instructionCount; i++) {
       bool isVarPtr = (ir->opcodes[i] == IR::OP_LOCAL_VAR_PTR);

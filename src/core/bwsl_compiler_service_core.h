@@ -740,6 +740,10 @@ private:
         builder.Initialize(&spirvArena, &lowering.program, stage,
                           &shaderSet.cachedParser->symbolTable, &cfgBuilder.cfg);
         builder.SetOptimizations(config.optimizations);
+        // Every backend but raw SPIR-V goes through SPIRV-Cross, as in bwslc.
+        builder.SetPhiVariables(config.targetBackend != TargetBackend::SPIRV &&
+                                Optimizations::IsEnabled(config.optimizations,
+                                                         OptimizationId::PHI_VARIABLES));
         if (passVaryings) {
             for (u32 i = 0; i < passVaryings->count; i++) {
                 builder.SetVaryingName(passVaryings->varyings[i].slot,
