@@ -829,6 +829,16 @@ std::string gl_program_log(GLuint prog) {
     return std::string(log.c_str());
 }
 
+// Program binaries are core since GL 4.1; the 3.3 fallback context may not
+// have them, and querying one there is GL_INVALID_ENUM.
+bool gl_has_program_binary() {
+    // "4.6.0 NVIDIA 617.14": major.minor first.
+    char* end = nullptr;
+    long major = std::strtol((const char*)glGetString(GL_VERSION), &end, 10);
+    long minor = *end == '.' ? std::strtol(end + 1, nullptr, 10) : 0;
+    return (major > 4 || (major == 4 && minor >= 1)) && glProgramParameteri && glGetProgramBinary;
+}
+
 // GL has no statistics query. The info logs say what the compiler chose to
 // say, and the program binary is driver-specific, but NVIDIA's holds each
 // stage in its NV_gpu_program5 assembly (!!NVvp5.0, !!NVfp5.0) as text: the
@@ -847,17 +857,28 @@ void write_gl_pipeline_stats(GLuint prog, GLuint vs, GLuint fs, const std::strin
         if (!log.empty()) out += "-- " + std::string(name) + "\n" + log + "\n";
     }
 
-    GLint length = 0;
-    glGetProgramiv(prog, GL_PROGRAM_BINARY_LENGTH, &length);
-    if (!glGetProgramBinary || length <= 0) {
-        out += "-- the driver offers no program binary\n";
+    if (!gl_has_program_binary()) {
+        out += "-- this GL context has no program binaries (GL 4.1 or later)\n";
         write_file(path, out.data(), out.size());
         return;
     }
-    std::vector<char> binary(length);
+    // Errors from here on are the binary query's own: report earlier ones.
+    gl_check("linking the program");
+    GLint length = 0;
+    glGetProgramiv(prog, GL_PROGRAM_BINARY_LENGTH, &length);
+    std::vector<char> binary(std::max(length, 0));
     GLenum format = 0;
     GLsizei written = 0;
-    glGetProgramBinary(prog, length, &written, &format, binary.data());
+    if (length > 0) glGetProgramBinary(prog, length, &written, &format, binary.data());
+    GLenum err = glGetError();
+    if (err != GL_NO_ERROR || length <= 0 || written <= 0) {
+        char note[96];
+        std::snprintf(note, sizeof(note), "-- the driver returned no program binary (GL error 0x%04x)\n",
+                      err);
+        out += note;
+        write_file(path, out.data(), out.size());
+        return;
+    }
     binary.resize(written);
     write_file(path + ".bin", binary.data(), binary.size());
     char header[96];
@@ -900,7 +921,7 @@ int run_gl(const Args& a) {
     GLuint prog = glCreateProgram();
     glAttachShader(prog, vs);
     glAttachShader(prog, fs);
-    if (!a.pipeline_stats_path.empty() && glProgramParameteri) {
+    if (!a.pipeline_stats_path.empty() && gl_has_program_binary()) {
         glProgramParameteri(prog, GL_PROGRAM_BINARY_RETRIEVABLE_HINT, GL_TRUE);
     }
     glLinkProgram(prog);
