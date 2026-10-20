@@ -2829,8 +2829,11 @@ static void RemoveDeadLoops(ConstantPropagationData* data, BWSL_Arena* arena) {
     bool* onPath = (bool*)AllocateZeroed(arena, cfg->blockCount * sizeof(bool));
     if (!path || !next || !onPath) return;
 
+    // SINGLE_ITERATION_LOOPS turns off only this part: the constant
+    // selections below must become jumps for WGSL either way.
     bool anyRemoved = false;
-    for (u32 header = cfg->blockCount; header-- > 0;) {
+    bool loops = IsEnabled(data, OptimizationId::SINGLE_ITERATION_LOOPS);
+    for (u32 header = cfg->blockCount; loops && header-- > 0;) {
         u32 annotation = FindLoopAnnotation(ir, cfg, header);
         if (annotation >= ir->instructionCount) continue;
         u32 mergeInst = ir->structureInfo[annotation] & IR::IRProgram::STRUCT_TARGET_MASK;
@@ -3565,7 +3568,7 @@ void PropagateConstants(IR::IRBuilder* builder, CFG* cfg, OptimizationSet optimi
         RecordVaryingRanges(&data);
         RewriteConstants(&data);
         DropFoldedBranchEdges(&data, &arena);
-        if (IsEnabled(&data, OptimizationId::SINGLE_ITERATION_LOOPS)) RemoveDeadLoops(&data, &arena);
+        RemoveDeadLoops(&data, &arena);
         CollapseSingleValuePhis(&data, &arena);
     }
     ExportVaryingRanges(&data);
