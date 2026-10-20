@@ -689,6 +689,13 @@ TRANSLATION_EXTRA_ARGS = {
 }
 
 TRANSLATION_EXPECTATION_TESTS = {
+    # Known indices: only the index read at run time stays dynamic.
+    "constant_vector_index": {
+        "frag": {
+            "spirv_count_exactly": {"OpVectorExtractDynamic": 1},
+            "spirv_not_contains": ["OpVectorInsertDynamic", "OpSelect"],
+        },
+    },
     "struct_in_place_mutation": {
         "frag": {
             "ir_contains": ["LOCAL_INDEX_PTR", "LOCAL_STORE"],

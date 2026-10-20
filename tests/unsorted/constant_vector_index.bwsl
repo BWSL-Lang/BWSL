@@ -1,0 +1,25 @@
+// Indices constant propagation knows read and write like literal ones: no
+// dynamic vector extract or insert, and no select among matrix columns.
+// Only the index read at run time stays dynamic.
+pipeline ConstantVectorIndex {
+    resources {
+        weights: float4
+    }
+
+    pass "Main" {
+        use resources { weights }
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+        }
+        fragment {
+            int i = 2;
+            float x = input.position.x;
+            float4 v = float4(x, x * 2.0, x * 3.0, 1.0);
+            v[i] = v[i - 1] + resources.weights[i];
+            mat3 m = mat3(float3(x), float3(1.0, x, 2.0), float3(3.0));
+            float3 column = m[i - 1];
+            int dynamic = int(input.position.y) & 3;
+            output.color = float4(v[i], column[i], v[dynamic], 1.0);
+        }
+    }
+}

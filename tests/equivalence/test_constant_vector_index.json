@@ -1,0 +1,15 @@
+{
+    "output_size": 32,
+    "output_type": "int",
+    "expected_values": [
+        7,
+        41,
+        8,
+        37,
+        5,
+        10,
+        116,
+        254128
+    ],
+    "tolerance": 0.0
+}

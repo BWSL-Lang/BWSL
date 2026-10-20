@@ -1,0 +1,65 @@
+// A vector indexed by a value constant propagation knows, `v[i]` with
+// `int i = 2`, reads that component as `v[2]` does, and folds when the
+// component is known. Each invocation runs one case.
+pipeline EquivConstantVectorIndex {
+
+    resources {
+        output: buffer<int>
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [8, 1, 1] {
+            uint idx = input.global_id.x;
+            int x = int(idx);
+            float f = float(idx);
+            int result = 0;
+
+            if (idx == 0u) {
+                // A constant vector and a constant index.
+                float4 v = float4(1.5, 2.5, 3.5, 4.5);
+                int i = 2;
+                result = int(v[i] * 2.0);
+            } else if (idx == 1u) {
+                // Known and unknown components, read through known indices.
+                float4 w = float4(f, 10.0, 20.0, 30.0);
+                int k = 1;
+                result = int(w[k] + w[k + 2] + w[k - 1]);
+            } else if (idx == 2u) {
+                // An integer vector and an unsigned index.
+                int4 iv = int4(x, x * 2, x * 3, x * 4);
+                uint j = 3u;
+                result = iv[j];
+            } else if (idx == 3u) {
+                // A matrix element through two known indices.
+                mat3 m = mat3(float3(1.0, 2.0, 3.0), float3(4.0, f, 6.0), float3(7.0, 8.0, 9.0));
+                int c = 1;
+                int r = 1;
+                result = int(m[c][r] * 10.0 + m[c + 1][r - 1]);
+            } else if (idx == 4u) {
+                // An index read at run time stays dynamic.
+                int4 t = int4(5, 6, 7, 8);
+                result = t[x & 3];
+            } else if (idx == 5u) {
+                // An index both arms of a branch agree on.
+                float3 u = float3(f, f * 2.0, f * 3.0);
+                int i = x > 3 ? 1 : 1;
+                result = int(u[i]);
+            } else if (idx == 6u) {
+                // A component written through an index, then read through one.
+                float4 c = float4(f);
+                int k = 2;
+                c[k] += 5.0;
+                result = int(c[k] * 10.0 + c[k - 1]);
+            } else {
+                // A loop's index, the same in every iteration, and a
+                // vector the loop changes.
+                float2 acc = float2(0.0, 1.0);
+                int one = 1;
+                for (int n = 0; n < x; n++) { acc[one] = acc[one] * 2.0; acc[0] += acc[one]; }
+                result = int(acc[0]) * 1000 + int(acc[one]);
+            }
+            resources.output[idx] = result;
+        }
+    }
+}

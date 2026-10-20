@@ -18,7 +18,7 @@ enum class OptimizationId : u8 {
     LOOP_EVALUATION,        // runs loops whose inputs are all constant
     VALUE_RANGES,           // @bounds and other ranges decide comparisons, min/max/clamp
     STORE_FORWARDING,       // a struct field load reads the store that reaches it
-    ALGEBRAIC_IDENTITIES,   // x*1, x+0, pow(x, 2), bitwise identities, component reads
+    ALGEBRAIC_IDENTITIES,   // x*1, x+0, pow(x, 2), bitwise identities, component reads, known indices
     POW_EXPANSION,          // pow(x, n) for an integer n becomes multiplies
     SINGLE_ITERATION_LOOPS, // a loop that runs at most once becomes jumps
     DEAD_VALUES,            // removes values nothing reads
