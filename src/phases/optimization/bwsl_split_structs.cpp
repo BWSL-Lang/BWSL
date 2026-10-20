@@ -58,8 +58,10 @@ static bool Defines(u16 op) {
     }
 }
 
-// Stores that carry the value they store in the destination slot.
-static bool StoresDestination(u16 op) {
+// Stores that carry the value they store in the destination slot. A return
+// carries its value there too, but 0 there means it has none.
+static bool StoresDestination(u16 op, u16 dest) {
+    if (op == IR::OP_RET) return dest != 0;
     switch (op) {
         case IR::OP_STORE_OUTPUT: case IR::OP_STORE_BUFFER: case IR::OP_STORE_SHARED: case IR::OP_STORE_LOCAL:
         case IR::OP_IMG_STORE: case IR::OP_STRUCT_STORE:
@@ -239,7 +241,7 @@ static bool ChooseStructs(SplitData* data) {
     for (u32 i = 0; i < ir->instructionCount; i++) {
         u16 op = ir->opcodes[i];
         u16 dest = ir->destinations[i];
-        if (StoresDestination(op) && IsRegister(data, dest)) {
+        if (StoresDestination(op, dest) && IsRegister(data, dest)) {
             // A store's value in the destination slot: a struct there isn't rewritten.
             reject(dest);
             if (data->pointerStruct[dest] != NO_REGISTER) reject(data->pointerStruct[dest]);
