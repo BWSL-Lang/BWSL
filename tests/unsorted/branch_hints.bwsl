@@ -1,0 +1,31 @@
+// @branch keeps an if as a real branch: its selection is DontFlatten, &&
+// and || inside it branch on each operand, and the values merged where it
+// ends live in one-element Function arrays, stored only where they change.
+// AMD's compiler otherwise turns `if (h > 0.0)` into selects and runs the
+// sqrt for every pixel. @flatten only marks the selection Flatten.
+pipeline BranchHints {
+    pass "Main" {
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+        }
+        fragment {
+            float best = 1.0e9;
+            bool found = false;
+            for (int i = 0; i < 8; i++) {
+                float h = input.position.x - float(i);
+                @branch if (h > 0.0) {
+                    float t = sqrt(h);
+                    if (t > 0.001 && t < best) {
+                        best = t;
+                        found = true;
+                    }
+                }
+            }
+            float shade = 0.0;
+            @flatten if (input.position.y > 0.5) {
+                shade = 1.0;
+            }
+            output.color = float4(best, found ? 1.0 : 0.0, shade, 1.0);
+        }
+    }
+}

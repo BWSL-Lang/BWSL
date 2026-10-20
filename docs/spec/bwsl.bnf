@@ -437,6 +437,7 @@
               | <skip-stmt>
               | <discard-stmt>
               | <const-local-decl>
+              | <selection-hint> <if-stmt>
               | <if-stmt>
               | <for-stmt>
               | <foreach-stmt>
@@ -451,6 +452,9 @@
 <interpolation-decorator> ::= '@' 'flat'
                             | '@' 'noperspective'
                             | '@' 'centroid'
+
+<selection-hint> ::= '@' 'branch'
+                   | '@' 'flatten'
 
 <block-stmt> ::= '{' <statement-list> '}'
 

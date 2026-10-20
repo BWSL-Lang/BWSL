@@ -982,7 +982,8 @@ inline u16 IRLowering::LowerBinaryOp(NodeRef ref) {
     // with OpLogicalAnd/Or. Branching on it only adds structured control
     // flow that drivers don't always flatten (see issue #157).
     u32 budget = MAX_SPECULATED_OPERAND_NODES;
-    if (Optimizations::IsEnabled(optimizations, OptimizationId::SPECULATE_LOGICAL_OPS) &&
+    if (!shortCircuitAll &&
+        Optimizations::IsEnabled(optimizations, OptimizationId::SPECULATE_LOGICAL_OPS) &&
         IsSpeculatableExpression(binop.right, &budget)) {
       u16 right = EnsureBoolCondition(LowerExpression(binop.right));
       u16 dest = AllocateRegister();

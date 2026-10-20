@@ -1,0 +1,13 @@
+// Error case: @branch and @flatten only decorate if statements.
+pipeline BranchHintNotIf {
+    pass "Main" {
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+        }
+        fragment {
+            float x = input.position.x;
+            @branch x = x * 2.0;
+            output.color = float4(x);
+        }
+    }
+}

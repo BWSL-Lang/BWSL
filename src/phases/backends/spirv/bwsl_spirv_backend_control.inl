@@ -320,9 +320,10 @@ void SPIRVBuilder::EmitStructuredControlFlow(u32 ir_idx) {
   case IR::IRProgram::STRUCT_IF_HEADER: {
     // OpSelectionMerge: emit before OpBranchConditional
     // Format: OpSelectionMerge merge_block selection_control
-    // Selection control 0 = None
-    Emit(spv::OpSelectionMerge, mergeLabel,
-         static_cast<u32>(spv::SelectionControlMaskNone));
+    u32 control = spv::SelectionControlMaskNone;
+    if (structInfo & IR::IRProgram::STRUCT_HINT_BRANCH) control = spv::SelectionControlDontFlattenMask;
+    else if (structInfo & IR::IRProgram::STRUCT_HINT_FLATTEN) control = spv::SelectionControlFlattenMask;
+    Emit(spv::OpSelectionMerge, mergeLabel, control);
     break;
   }
 
@@ -608,14 +609,40 @@ u32 SPIRVBuilder::GetEmittedSuccessorCount(u32 block) const {
 // holds the right member on every incoming edge and wherever a member is
 // read, no two members share a block, and each store sits on an edge from a
 // block with a single successor.
+//
+// With ENFORCE_BRANCH_HINTS, on every target, a web with a phi where an
+// @branch if merges is kept in a variable too (see LowerIfWithRest): AMD's
+// compiler can't turn a store on one side of the branch into a select, so it
+// keeps the branch. It must be a one-element array: a scalar variable is
+// promoted to a register before the compiler decides, an array only after.
 void SPIRVBuilder::PlanPhiVariables() {
     phiVariableIdCount = 0;
     phiVariableCount = 0;
     phiEdgeBlockCount = 0;
     phiLoadCount = 0;
-    if (!usePhiVariables || !cfg || cfg->blockCount == 0 || ir->phiCount == 0 ||
-        !ir->phiOperandValues || !ir->phiBlockIndices || !ir->phiVariables || !blockEmission)
+    if (!cfg || cfg->blockCount == 0 || ir->phiCount == 0 || !ir->phiOperandValues ||
+        !ir->phiBlockIndices || !ir->phiVariables || !blockEmission)
         return;
+
+    // Merge blocks of @branch ifs.
+    bool* branchMerge = (bool*)arena->Allocate(cfg->blockCount * sizeof(bool), 64);
+    if (!branchMerge) return;
+    memset(branchMerge, 0, cfg->blockCount * sizeof(bool));
+    bool anyBranchMerge = false;
+    bool enforce = Optimizations::IsEnabled(optimizations, OptimizationId::ENFORCE_BRANCH_HINTS);
+    for (u32 i = 0; enforce && ir->structureInfo && i < ir->instructionCount; i++) {
+        u32 info = ir->structureInfo[i];
+        u32 merge = info & IR::IRProgram::STRUCT_TARGET_MASK;
+        if ((info & IR::IRProgram::STRUCT_TYPE_MASK) != IR::IRProgram::STRUCT_IF_HEADER ||
+            !(info & IR::IRProgram::STRUCT_HINT_BRANCH) || merge >= ir->instructionCount)
+            continue;
+        u32 block = cfg->instToBlock[merge];
+        if (block < cfg->blockCount) {
+            branchMerge[block] = true;
+            anyBranchMerge = true;
+        }
+    }
+    if (!usePhiVariables && !anyBranchMerge) return;
 
     constexpr u32 NONE = 0xFFFFFFFF;
     constexpr u32 CONFLICT = 0xFFFFFFFE;
@@ -626,6 +653,7 @@ void SPIRVBuilder::PlanPhiVariables() {
     struct PendingStore {
         u32 block;
         u32 variableId;
+        u32 elementPointerTypeId;
         u16 value;
     };
     // Everything is per register, phi, block or phi operand; without the
@@ -639,6 +667,7 @@ void SPIRVBuilder::PlanPhiVariables() {
     PhiVariable* variables = (PhiVariable*)allocate(phiCount * sizeof(PhiVariable));
     u32* loadVariables = (u32*)allocate(idCapacity * sizeof(u32));
     u32* loadTypeIds = (u32*)allocate(idCapacity * sizeof(u32));
+    u32* loadElementPointerTypeIds = (u32*)allocate(idCapacity * sizeof(u32));
     u32* phiOfReg = (u32*)allocate(regCount * sizeof(u32));
     bool* candidate = (bool*)allocate(phiCount * sizeof(bool));
     bool* planned = (bool*)allocate(phiCount * sizeof(bool));
@@ -648,7 +677,8 @@ void SPIRVBuilder::PlanPhiVariables() {
     PendingStore* pending = (PendingStore*)allocate(operandCount * sizeof(PendingStore));
     u32* storeOffsets = (u32*)allocate((blockCount + 1) * sizeof(u32));
     PhiEdgeStore* stores = (PhiEdgeStore*)allocate(operandCount * sizeof(PhiEdgeStore));
-    if (!variableIds || !variables || !loadVariables || !loadTypeIds || !phiOfReg || !candidate ||
+    if (!variableIds || !variables || !loadVariables || !loadTypeIds || !loadElementPointerTypeIds ||
+        !phiOfReg || !candidate ||
         !planned || !members || !memberAt || !held || !pending || !storeOffsets || !stores)
         return;
     for (u32 reg = 0; reg < regCount; reg++) phiOfReg[reg] = NONE;
@@ -695,6 +725,9 @@ void SPIRVBuilder::PlanPhiVariables() {
         }
         // A lone phi gains nothing: SPIRV-Cross assigns it per edge either way.
         if (memberCount < 2) continue;
+        bool atBranch = false;
+        for (u32 m = 0; m < memberCount; m++) atBranch |= branchMerge[ir->phiBlockIndices[members[m]]];
+        if (!usePhiVariables && !atBranch) continue;
 
         bool valid = true;
         for (u32 block = 0; block < blockCount; block++) memberAt[block] = NONE;
@@ -744,7 +777,7 @@ void SPIRVBuilder::PlanPhiVariables() {
                     valid = held[pred] == phiOfReg[value];
                 } else if (IR::IsConstant(value) || !IsUndefRegister(value)) {
                     valid = GetEmittedSuccessorCount(pred) == 1;
-                    pending[pendingCount++] = {pred, 0, value};
+                    pending[pendingCount++] = {pred, 0, 0, value};
                 }
             }
         }
@@ -787,14 +820,26 @@ void SPIRVBuilder::PlanPhiVariables() {
         }
 
         u32 typeId = GetPhiTypeId(members[0]);
-        PhiVariable variable{AllocateId(), GetPointerTypeId(typeId, spv::StorageClassFunction)};
+        u32 variableTypeId = typeId;
+        u32 elementPointerTypeId = 0;
+        if (atBranch) {
+            variableTypeId = AllocateId();
+            u32 arrayOps[] = {variableTypeId, typeId, GetIntConstantId(1, true)};
+            EmitToSection(&typesConstants, spv::OpTypeArray, arrayOps, 3);
+            elementPointerTypeId = GetPointerTypeId(typeId, spv::StorageClassFunction);
+        }
+        PhiVariable variable{AllocateId(), GetPointerTypeId(variableTypeId, spv::StorageClassFunction)};
         variables[variableCount++] = variable;
         for (u32 m = 0; m < memberCount; m++) {
             variableIds[members[m]] = variable.variableId;
             loadVariables[ir->phiResultRegs[members[m]]] = variable.variableId;
             loadTypeIds[ir->phiResultRegs[members[m]]] = typeId;
+            loadElementPointerTypeIds[ir->phiResultRegs[members[m]]] = elementPointerTypeId;
         }
-        for (u32 k = webStores; k < pendingCount; k++) pending[k].variableId = variable.variableId;
+        for (u32 k = webStores; k < pendingCount; k++) {
+            pending[k].variableId = variable.variableId;
+            pending[k].elementPointerTypeId = elementPointerTypeId;
+        }
     }
 
     // Each block's stores together, in the order they were planned.
@@ -802,7 +847,8 @@ void SPIRVBuilder::PlanPhiVariables() {
     for (u32 block = 0; block < blockCount; block++) storeOffsets[block + 1] += storeOffsets[block];
     for (u32 block = 0; block < blockCount; block++) memberAt[block] = storeOffsets[block];
     for (u32 k = 0; k < pendingCount; k++) {
-        stores[memberAt[pending[k].block]++] = {pending[k].variableId, pending[k].value};
+        stores[memberAt[pending[k].block]++] = {pending[k].variableId, pending[k].value,
+                                                pending[k].elementPointerTypeId};
     }
 
     phiVariableIds = variableIds;
@@ -814,13 +860,22 @@ void SPIRVBuilder::PlanPhiVariables() {
     phiEdgeBlockCount = blockCount;
     phiLoadVariables = loadVariables;
     phiLoadTypeIds = loadTypeIds;
+    phiLoadElementPointerTypeIds = loadElementPointerTypeIds;
     phiLoadCount = idCapacity;
 }
 
 void SPIRVBuilder::EmitPhiEdgeStores(u32 blockIndex) {
     if (blockIndex >= phiEdgeBlockCount) return;
     for (u32 k = phiEdgeStoreOffsets[blockIndex]; k < phiEdgeStoreOffsets[blockIndex + 1]; k++) {
-        Emit(spv::OpStore, phiEdgeStores[k].variableId, GetSpirvId(phiEdgeStores[k].value));
+        const PhiEdgeStore& store = phiEdgeStores[k];
+        u32 value = GetSpirvId(store.value);
+        u32 pointer = store.variableId;
+        if (store.elementPointerTypeId != 0) {
+            pointer = AllocateId();
+            Emit(spv::OpAccessChain, store.elementPointerTypeId, pointer, store.variableId,
+                 GetIntConstantId(0));
+        }
+        Emit(spv::OpStore, pointer, value);
     }
 }
 

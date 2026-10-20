@@ -300,6 +300,7 @@ ERROR_CASE_TESTS = {
     "array_postfix_declarator.bwsl": "Array size must follow the type",
     "imported_module_diagnostic_file.bwsl": "Array size must follow the field type",
     "attribute_unknown_decorator.bwsl": "Unknown decorator",
+    "branch_hint_not_if.bwsl": "@branch and @flatten can only decorate if statements",
     "duplicate_outputs_block.bwsl": "Only one outputs block is allowed per pass",
     "duplicate_resources_block.bwsl": "Only one resources block is allowed per pipeline",
     "duplicate_module_name.bwsl": "Duplicate module declaration for 'DuplicateModuleName'",
@@ -689,6 +690,7 @@ TRANSLATION_EXTRA_ARGS = {
     "interpolation_centroid": ("-gles-direct", "-wgsl"),
     "phi_variables": ("--optimizations", "phi-variables"),
     "phi_variables_output_store": ("--optimizations", "phi-variables"),
+    "branch_hints_unenforced": ("--optimizations", "no-enforce-branch-hints"),
 }
 
 TRANSLATION_EXPECTATION_TESTS = {
@@ -901,6 +903,25 @@ TRANSLATION_EXPECTATION_TESTS = {
         "frag": {
             "ir_count_exactly": {"  PHI r": 6},
             "spirv_count_exactly": {"OpPhi": 6},
+        },
+    },
+    # @branch: DontFlatten, the && in its body branches, and best/found live
+    # in one-element arrays. @flatten: Flatten. GLES gets no hint at all.
+    "branch_hints": {
+        "frag": {
+            "spirv_contains": ["OpTypeArray %float %uint_1", "OpTypeArray %bool %uint_1"],
+            # "Flatten" also counts the DontFlatten.
+            "spirv_count_exactly": {"DontFlatten": 1, "Flatten": 2, "OpLogicalAnd": 0},
+            "hlsl_contains": ["[branch]", "[flatten]"],
+            "glsl_contains": ["SPIRV_CROSS_BRANCH", "SPIRV_CROSS_FLATTEN", "[1];"],
+            "gles_contains": ["[1];"],
+        },
+    },
+    "branch_hints_unenforced": {
+        "frag": {
+            "spirv_count_exactly": {"DontFlatten": 1, "OpTypeArray %float %uint_1": 0,
+                                    "OpLogicalAnd": 1},
+            "hlsl_contains": ["[branch]"],
         },
     },
     # Issue #189: first_bit_high is FindSMsb on int and FindUMsb on uint.
