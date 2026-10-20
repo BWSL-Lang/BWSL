@@ -2690,7 +2690,9 @@ def run_optimization_flag_tests(bwslc: Path, root: Path, script_dir: Path,
     errors = {
         "unknown_name": ("nope", "unknown optimization or group 'nope'"),
         "two_groups": ("amd,nvidia", "more than one optimization group"),
-        "enabled_and_disabled": ("common-subexpressions,-common-subexpressions",
+        # Only no- disables: a leading - reads like another option.
+        "dash_prefix": ("amd,-dead-values", "unknown optimization or group '-dead-values'"),
+        "enabled_and_disabled": ("common-subexpressions,no-common-subexpressions",
                                  "'common-subexpressions' is both enabled and disabled"),
     }
     for name, (value, expected) in errors.items():
@@ -2714,8 +2716,7 @@ def run_optimization_flag_tests(bwslc: Path, root: Path, script_dir: Path,
     report("off_changes_output", off is not None and off != default)
     # A name overrides the group, wherever it is in the list.
     report("name_overrides_group", spirv("common-subexpressions,off") not in (None, off))
-    report("name_disables", spirv("-common-subexpressions") not in (None, default))
-    report("no_prefix_disables", spirv("no-common-subexpressions") == spirv("-common-subexpressions"))
+    report("no_prefix_disables", spirv("no-common-subexpressions") not in (None, default))
     return passed, failed
 
 

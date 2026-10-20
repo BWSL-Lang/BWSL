@@ -339,7 +339,7 @@ void PrintUsage(const char* programName) {
     printf("                 Optimizations to run: at most one group (%s;\n",
            Optimizations::ListGroups().c_str());
     printf("                 default: default), then names to enable, or to disable\n");
-    printf("                 with a leading - (e.g. amd,-dead-values). Names override the group.\n");
+    printf("                 with no- (e.g. amd,no-dead-values). Names override the group.\n");
     printf("                 Names: %s\n", Optimizations::ListNames().c_str());
     printf("  -internals     Output BWSL IR and target internals to JSON file\n");
     printf("  -h, --help     Show this help\n");

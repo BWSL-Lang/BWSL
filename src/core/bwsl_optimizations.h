@@ -109,7 +109,7 @@ inline const GroupInfo* FindGroup(std::string_view name) {
 }
 
 // Reads a comma-separated list: at most one group, and optimization names,
-// each enabled as written or disabled with a leading `-` or `no-`. With no
+// each enabled as written or disabled with a leading `no-`. With no
 // group the list starts from `default`. Names override the group wherever
 // they are in the list. On failure, *error says why and *out is unchanged.
 inline bool Parse(std::string_view text, OptimizationSet* out, std::string* error) {
@@ -127,10 +127,7 @@ inline bool Parse(std::string_view text, OptimizationSet* out, std::string* erro
         }
         bool off = false;
         std::string_view name = token;
-        if (name.front() == '-' || name.front() == '+') {
-            off = name.front() == '-';
-            name.remove_prefix(1);
-        } else if (name.substr(0, 3) == "no-") {
+        if (name.substr(0, 3) == "no-") {
             OptimizationId ignored;
             // A name that itself starts with "no-" would win, but none does.
             if (!FindOptimization(name, &ignored)) {

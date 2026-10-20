@@ -224,13 +224,13 @@
 - `--optimizations <list>` chooses which optimizations run, in bwslc and in
   the WASM module's flags. The list holds at most one group (`off`,
   `default`, `amd`, `nvidia`, `intel`) and optimization names, each enabled
-  as written or disabled with a leading `-`:
+  as written or disabled with `no-`:
   `--optimizations off,common-subexpressions` runs only common
-  subexpression elimination, `--optimizations amd,-dead-values` runs the
-  AMD set but keeps unread values. Names win over the group. Without the option, or
-  with no group in the list, `default` applies: every optimization not
-  known to slow down any vendor's GPU. The vendor groups start out equal to
-  `default`. `bwslc -h` lists the names.
+  subexpression elimination, `--optimizations amd,no-dead-values` runs the
+  AMD set but keeps unread values. Names win over the group. Without the
+  option, or with no group in the list, `default` applies: every
+  optimization not known to slow down any vendor's GPU. The vendor groups
+  start out equal to `default`. `bwslc -h` lists the names.
 
 ### AST JSON
 - A pointer parameter has `isPointer: true` and a `dataType` spelled as

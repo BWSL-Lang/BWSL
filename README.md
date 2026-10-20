@@ -299,14 +299,14 @@ On Windows, the repo now also includes `build.bat` and `make.bat`. `build.bat` b
 | `-debug-names` | Emit debug names in SPIR-V |
 | `-validation auto\|strict\|off` | Control SPIR-V validation (`auto` is default; linked native builds validate in-process) |
 | `-no-validate` | Alias for `-validation off` |
-| `--optimizations <list>` | Choose optimizations: at most one group (`off`, `default`, `amd`, `nvidia`, `intel`) plus names to enable, or to disable with a leading `-` (e.g. `amd,-dead-values`). Names override the group; `default` applies when no group is given. See below |
+| `--optimizations <list>` | Choose optimizations: at most one group (`off`, `default`, `amd`, `nvidia`, `intel`) plus names to enable, or to disable with `no-` (e.g. `amd,no-dead-values`). Names override the group; `default` applies when no group is given. See below |
 | `-internals` | Output SPIR-V disassembly and IR to JSON |
 
 ### Optimizations
 
 `--optimizations` takes a comma-separated list. A group picks a starting
 set; names then enable optimizations (`dead-values`) or disable them
-(`-dead-values`, or `no-dead-values`), wherever they appear in the list, so
+(`no-dead-values`), wherever they appear in the list, so
 `off,common-subexpressions` and `common-subexpressions,off` both run only
 `common-subexpressions`. Without a group the list starts from `default`, which holds
 every optimization not known to slow down any vendor's GPU. The vendor
