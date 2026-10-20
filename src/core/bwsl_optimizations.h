@@ -27,6 +27,7 @@ enum class OptimizationId : u8 {
     SPECULATE_LOGICAL_OPS,  // a cheap, pure && / || operand is evaluated without a branch
     ARRAY_FILL_STORES,      // SPIR-V: an array filled element by element in order is one store
     GLES_CONST_TABLES,      // direct GLSL ES: a constant array gets its values where declared
+    PHI_VARIABLES,          // SPIRV-Cross output: a variable carried through phis stays one variable
     COUNT,
 };
 
@@ -55,6 +56,7 @@ inline constexpr OptimizationInfo OPTIMIZATIONS[] = {
     {OptimizationId::SPECULATE_LOGICAL_OPS, "speculate-logical-ops"},
     {OptimizationId::ARRAY_FILL_STORES, "array-fill-stores"},
     {OptimizationId::GLES_CONST_TABLES, "gles-const-tables"},
+    {OptimizationId::PHI_VARIABLES, "phi-variables"},
 };
 static_assert(sizeof(OPTIMIZATIONS) / sizeof(OPTIMIZATIONS[0]) == size_t(OptimizationId::COUNT),
               "every optimization needs a name");
@@ -75,7 +77,9 @@ struct GroupInfo {
     u64 disable;
 };
 
-inline constexpr u64 DEFAULT_SET = ALL;
+// PHI_VARIABLES is in no group: on its own it was 5% slower on NVIDIA's GL
+// compiler, and faster only with the struct split. Turn it on by name.
+inline constexpr u64 DEFAULT_SET = ALL & ~Bit(OptimizationId::PHI_VARIABLES);
 
 inline constexpr GroupInfo GROUPS[] = {
     {"off", 0, 0, 0},

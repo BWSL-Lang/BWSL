@@ -1,0 +1,22 @@
+// With phi-variables, an output store reads its value from its destination
+// slot. `old` is a's value before this iteration's update, so a's phis can't
+// share one variable: the store would read the updated value.
+pipeline PhiVariablesOutputStore {
+    pass "Main" {
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+        }
+        fragment {
+            float4 a = input.position;
+            float4 old = float4(0.0);
+            for (int i = 0; i < 4; i++) {
+                old = a;
+                if (input.position.y > float(i)) {
+                    a = a * 0.5 + float4(float(i));
+                }
+                output.color = old;
+            }
+            output.color = output.color + a;
+        }
+    }
+}

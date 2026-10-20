@@ -1,0 +1,32 @@
+// ssa_dead_loop_phis compiled with --optimizations phi-variables.
+pipeline PhiVariables {
+    f :: (float x) -> float {
+        float a = x * 2.0;
+        float b;
+        if (a > 3.0) { b = a + 1.0; } else { b = a - 1.0; }
+        return a * b;
+    }
+
+    g :: (float x) -> float {
+        float a = x * 2.0;
+        if (a < 0.5) { return a; }
+        float b = a + 1.0;
+        return a * b;
+    }
+
+    pass "Main" {
+        vertex {
+            output.position = float4(0.0, 0.0, 0.0, 1.0);
+        }
+        fragment {
+            float sum = 0.0;
+            for (int i = 0; i < 9; i++) {
+                sum += f(input.position.x + float(i));
+            }
+            for (int j = 0; j < 9; j++) {
+                sum += g(input.position.y + float(j));
+            }
+            output.color = float4(sum);
+        }
+    }
+}

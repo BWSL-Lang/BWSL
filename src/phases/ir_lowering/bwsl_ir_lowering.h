@@ -288,8 +288,8 @@ struct IRLowering {
   // without a branch. A few comparisons of locals fit; anything bigger keeps
   // branching so the operand that isn't needed still skips the work.
   static constexpr u32 MAX_SPECULATED_OPERAND_NODES = 16;
-  // Set before lowering: SELECT_TERNARIES and SPECULATE_LOGICAL_OPS.
-  OptimizationSet optimizations = Optimizations::Default();
+    // Set before lowering: SELECT_TERNARIES and SPECULATE_LOGICAL_OPS.
+    OptimizationSet optimizations = Optimizations::Default();
 
   // Stack of currently-inlining function AST nodes, for direct /
   // indirect recursion detection. Packed NodeRefs are 32-bit, so a

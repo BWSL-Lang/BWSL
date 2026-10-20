@@ -231,6 +231,33 @@ struct SPIRVBuilder {
     u32* backEdgeTargets = nullptr;  // [blockCount] header block of a BACK_EDGE block
     bool* edgeEmitted = nullptr;
 
+    // Phi webs kept in Function variables for SPIRV-Cross (see
+    // PlanPhiVariables), in arena arrays. Empty unless usePhiVariables is set.
+    bool usePhiVariables = false;
+    struct PhiVariable {
+        u32 variableId;
+        u32 pointerTypeId;
+    };
+    struct PhiEdgeStore {
+        u32 variableId;
+        u16 value;
+    };
+    u32* phiVariableIds = nullptr;       // [phiVariableIdCount] variable, 0: OpPhi
+    u32 phiVariableIdCount = 0;
+    PhiVariable* phiVariables = nullptr; // [phiVariableCount] declared in the entry block
+    u32 phiVariableCount = 0;
+    // A block's stores, before its terminator: phiEdgeStores from
+    // phiEdgeStoreOffsets[block] up to phiEdgeStoreOffsets[block + 1].
+    u32* phiEdgeStoreOffsets = nullptr;  // [phiEdgeBlockCount + 1]
+    PhiEdgeStore* phiEdgeStores = nullptr;
+    u32 phiEdgeBlockCount = 0;
+    // [phiLoadCount] for a register that is a phi kept in a variable: the
+    // variable, and the type each read loads (GetSpirvId loads it where it's
+    // used); 0 otherwise.
+    u32* phiLoadVariables = nullptr;
+    u32* phiLoadTypeIds = nullptr;
+    u32 phiLoadCount = 0;
+
     // ============= Debug Options =============
     bool emitDebugNames = false;  // Emit OpName/OpMemberName for debugging
     // Suffix local debug names that are reserved in GLSL ("vec4" -> "vec4_").
@@ -394,6 +421,10 @@ struct SPIRVBuilder {
     // PHI nodes
     void EmitPhiNodes(u32 blockIndex);
     void SimplifyTrivialPhis();  // Pre-simplify PHIs with all-same operands
+    void PlanPhiVariables();
+    void EmitPhiEdgeStores(u32 blockIndex);
+    bool IsUndefRegister(u16 reg) const;
+    u32 GetEmittedSuccessorCount(u32 block) const;
     
     // Function emission
     void EmitFunction();
@@ -415,6 +446,9 @@ struct SPIRVBuilder {
     void SetEmitDebugNames(bool emit) { emitDebugNames = emit; }
     void SetAvoidGlslReservedNames(bool avoid) { avoidGlslReservedNames = avoid; }
     void SetOptimizations(OptimizationSet set) { optimizations = set; }
+    // Output for SPIRV-Cross: keep the versions of a variable that pass
+    // through phis in one Function variable (see PlanPhiVariables).
+    void SetPhiVariables(bool use) { usePhiVariables = use; }
 
     // Interface names. These are emitted regardless of emitDebugNames:
     // GL hosts without layout(binding) look blocks and samplers up by name,
@@ -516,6 +550,14 @@ inline u32 SPIRVBuilder::GetSpirvId(u16 ir_register, bool readValue) {
             ? GetStructTypeId(ir->registerStructTypes[ir_register]) : GetTypeId(type);
         u32 loaded = AllocateId();
         Emit(spv::OpLoad, typeId, loaded, localVarIds[ir_register]);
+        return loaded;
+    }
+
+    if (readValue && ir_register < phiLoadCount && phiLoadVariables[ir_register] != 0) {
+        // A phi kept in a variable (see PlanPhiVariables) is read where it's
+        // used, as glslang does, so SPIRV-Cross keeps loops in `for` form.
+        u32 loaded = AllocateId();
+        Emit(spv::OpLoad, phiLoadTypeIds[ir_register], loaded, phiLoadVariables[ir_register]);
         return loaded;
     }
 

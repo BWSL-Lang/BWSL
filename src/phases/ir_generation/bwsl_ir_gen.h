@@ -204,6 +204,7 @@ struct IRProgram {
     alignas(64) u32* phiBlockIndices;           // Which block each PHI belongs to
     alignas(64) u16* phiResultRegs;             // Destination register for each PHI
     alignas(64) u16* phiTypes;                  // CoreType of result
+    alignas(64) u16* phiVariables;              // Source variable: one per variable whose versions meet
     alignas(64) u32* phiOperandOffsets;         // [phiCount + 1] CSR offsets
     alignas(64) u16* phiOperandValues;          // Flattened: value registers
     alignas(64) u32* phiOperandBlocks;          // Flattened: source blocks
