@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import unittest
 
-from local_debug_names_tests import instructions, shader
+from local_debug_names_tests import instructions, names, shader
 
 OP_PHI = 245
 OP_LOOP_MERGE = 246
@@ -918,6 +918,47 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
         def test_fmod_intrinsic_still_truncates(self):
             body = self.mod_fold_glsl("output.color = float4(fmod(-7.25, 2.0));")
             self.assertIn("vec4(-1.25)", body)
+
+        def test_values_that_only_read_each_other_are_removed(self):
+            # A loop variable that only its own update and its phis read is
+            # dead: the sum and the swizzled trail, and the hit index when
+            # only the distance is written. Read by the output, it stays.
+            def loop(output):
+                return '''pipeline DeadCycles {
+                    resources { spheres: buffer<float4> output: buffer<float> }
+                    pass "Run" {
+                        use resources { spheres, output }
+                        compute "Main" [8, 1, 1] {
+                            uint idx = input.global_id.x;
+                            float best = 1000.0;
+                            int bestIndex = -1;
+                            float unusedSum = 0.0;
+                            float3 trail = float3(0.0);
+                            for (int k = 0; k < int(idx) + 4; k++) {
+                                float4 s = resources.spheres[k];
+                                float d = length(s.xyz) - s.w;
+                                unusedSum += d;
+                                trail = trail.yzx + s.xyz;
+                                if (d > 0.0 && d < best) {
+                                    best = d;
+                                    bestIndex = k;
+                                }
+                            }
+                            resources.output[idx] = ''' + output + ''';
+                        }
+                    }
+                }'''
+            cases = {
+                "best": ({"best"}, {"bestIndex", "unusedSum", "trail"}),
+                "best + float(bestIndex)": ({"best", "bestIndex"}, {"unusedSum", "trail"}),
+                "best + unusedSum + trail.x": ({"best", "unusedSum", "trail"}, {"bestIndex"}),
+            }
+            for output, (kept, removed) in cases.items():
+                with self.subTest(output=output):
+                    target = self.compile(loop(output), "-debug-names")
+                    present = set(names(instructions(target / "constprop.comp.spv")).values())
+                    self.assertLessEqual(kept, present)
+                    self.assertFalse(removed & present, removed & present)
 
     result = unittest.TextTestRunner(verbosity=1).run(
         unittest.defaultTestLoader.loadTestsFromTestCase(ConstantPropagationTests))
