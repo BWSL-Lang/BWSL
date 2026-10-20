@@ -65,10 +65,14 @@ header if the numbers look odd. `--vk-device N` runs Vulkan on another GPU
 (the index from `vulkaninfo --summary`), e.g. an integrated one with
 `--backends vk-hand,vk-bwsl`.
 
-To see what a Vulkan driver made of a shader, run `bench_runner` directly
-with `--pipeline-stats FILE`: it writes the driver's statistics (registers,
-instruction counts) and, where the driver exposes them, its internal
-representations such as AMD's ISA, through `VK_KHR_pipeline_executable_properties`.
+To see what a driver made of a shader, run `bench_runner` directly with
+`--pipeline-stats FILE`. On Vulkan it writes the driver's statistics
+(registers, instruction counts) and, where the driver exposes them, its
+internal representations such as AMD's ISA, through
+`VK_KHR_pipeline_executable_properties`. GL has no such query: it writes the
+shader and program info logs and the readable text in the program binary,
+which on NVIDIA is each stage in NV_gpu_program5 assembly (optimized, before
+register allocation), and the raw binary to `FILE.bin`.
 
 ## Verification
 

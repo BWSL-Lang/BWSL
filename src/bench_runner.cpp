@@ -42,10 +42,13 @@
 // frame as RGBA float32, targets concatenated, rows in GL order (row 0 is NDC
 // y = -1 on both APIs).
 //
-// --pipeline-stats (Vulkan) writes what the driver reports about the compiled
-// shaders through VK_KHR_pipeline_executable_properties: statistics such as
-// register and instruction counts, and the text representations it offers
-// (AMD's include the disassembly).
+// --pipeline-stats writes what the driver reports about the compiled shaders.
+// Vulkan: VK_KHR_pipeline_executable_properties, statistics such as register
+// and instruction counts, and the text representations it offers (AMD's
+// include the disassembly). GL has no such query: the shader and program info
+// logs, and the readable text in the program binary (glGetProgramBinary),
+// which on NVIDIA is the program in its NV_gpu_program5 assembly, the step
+// before machine code. The raw binary goes to FILE.bin.
 //
 // Prints one JSON object to stdout:
 //   {"api": ..., "device": ..., "driver": ..., "warmup_frames": N,
@@ -577,6 +580,9 @@ constexpr GLenum GL_FRAMEBUFFER_COMPLETE = 0x8CD5;
 constexpr GLenum GL_COLOR_ATTACHMENT0 = 0x8CE0;
 constexpr GLenum GL_DEPTH_ATTACHMENT = 0x8D00;
 constexpr GLuint GL_INVALID_INDEX = 0xFFFFFFFFu;
+constexpr GLint GL_TRUE = 1;
+constexpr GLenum GL_PROGRAM_BINARY_RETRIEVABLE_HINT = 0x8257;
+constexpr GLenum GL_PROGRAM_BINARY_LENGTH = 0x8741;
 
 #define BENCH_GL_FUNCTIONS(X)                                                                      \
     X(GLenum, glGetError, (void))                                                                  \
@@ -637,8 +643,14 @@ constexpr GLuint GL_INVALID_INDEX = 0xFFFFFFFFu;
     X(void, glEndQuery, (GLenum))                                                                  \
     X(void, glGetQueryObjectui64v, (GLuint, GLenum, GLuint64*))
 
+// Loaded only for --pipeline-stats, and allowed to be missing.
+#define BENCH_GL_OPTIONAL_FUNCTIONS(X)                                                             \
+    X(void, glProgramParameteri, (GLuint, GLenum, GLint))                                          \
+    X(void, glGetProgramBinary, (GLuint, GLsizei, GLsizei*, GLenum*, void*))
+
 #define BENCH_GL_DECLARE(ret, name, params) ret(GLAPIENTRY* name) params = nullptr;
 BENCH_GL_FUNCTIONS(BENCH_GL_DECLARE)
+BENCH_GL_OPTIONAL_FUNCTIONS(BENCH_GL_DECLARE)
 #undef BENCH_GL_DECLARE
 
 #if defined(_WIN32)
@@ -768,6 +780,9 @@ void load_gl_functions() {
         die("missing GL function " #name);
     BENCH_GL_FUNCTIONS(BENCH_GL_LOAD)
 #undef BENCH_GL_LOAD
+#define BENCH_GL_LOAD_OPTIONAL(ret, name, params) name = (ret(GLAPIENTRY*) params)gl_proc(#name);
+    BENCH_GL_OPTIONAL_FUNCTIONS(BENCH_GL_LOAD_OPTIONAL)
+#undef BENCH_GL_LOAD_OPTIONAL
 }
 
 void gl_check(const char* what) {
@@ -798,6 +813,79 @@ GLuint gl_compile(GLenum stage, const std::string& path) {
     return shader;
 }
 
+std::string gl_shader_log(GLuint shader) {
+    GLint len = 0;
+    glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &len);
+    std::string log(std::max(len, 1), '\0');
+    glGetShaderInfoLog(shader, len, nullptr, log.data());
+    return std::string(log.c_str());
+}
+
+std::string gl_program_log(GLuint prog) {
+    GLint len = 0;
+    glGetProgramiv(prog, GL_INFO_LOG_LENGTH, &len);
+    std::string log(std::max(len, 1), '\0');
+    glGetProgramInfoLog(prog, len, nullptr, log.data());
+    return std::string(log.c_str());
+}
+
+// GL has no statistics query. The info logs say what the compiler chose to
+// say, and the program binary is driver-specific, but NVIDIA's holds each
+// stage in its NV_gpu_program5 assembly (!!NVvp5.0, !!NVfp5.0) as text: the
+// optimized program before register allocation and machine code. Writes the
+// logs and every long run of printable text in the binary to `path`, and the
+// binary to `path`.bin.
+void write_gl_pipeline_stats(GLuint prog, GLuint vs, GLuint fs, const std::string& path) {
+    std::string out = "== GL program: " + std::string((const char*)glGetString(GL_RENDERER)) +
+                      ", " + (const char*)glGetString(GL_VERSION) + "\n";
+    const std::pair<const char*, std::string> logs[] = {
+        {"vertex shader info log", gl_shader_log(vs)},
+        {"fragment shader info log", gl_shader_log(fs)},
+        {"program info log", gl_program_log(prog)},
+    };
+    for (const auto& [name, log] : logs) {
+        if (!log.empty()) out += "-- " + std::string(name) + "\n" + log + "\n";
+    }
+
+    GLint length = 0;
+    glGetProgramiv(prog, GL_PROGRAM_BINARY_LENGTH, &length);
+    if (!glGetProgramBinary || length <= 0) {
+        out += "-- the driver offers no program binary\n";
+        write_file(path, out.data(), out.size());
+        return;
+    }
+    std::vector<char> binary(length);
+    GLenum format = 0;
+    GLsizei written = 0;
+    glGetProgramBinary(prog, length, &written, &format, binary.data());
+    binary.resize(written);
+    write_file(path + ".bin", binary.data(), binary.size());
+    char header[96];
+    std::snprintf(header, sizeof(header), "  binaryFormat = 0x%x\n  binaryLength = %d\n", format,
+                  (int)written);
+    out += header;
+
+    // Runs of printable characters and line breaks at least this long, which
+    // skips the short strings any binary has.
+    constexpr size_t MIN_TEXT = 256;
+    bool any = false;
+    size_t start = 0;
+    for (size_t i = 0; i <= binary.size(); i++) {
+        unsigned char ch = i < binary.size() ? (unsigned char)binary[i] : 0;
+        bool text = (ch >= 0x20 && ch < 0x7f) || ch == '\n' || ch == '\r' || ch == '\t';
+        if (text) continue;
+        if (i - start >= MIN_TEXT) {
+            out += "-- text in the program binary at offset " + std::to_string(start) + "\n";
+            out.append(binary.data() + start, i - start);
+            if (out.back() != '\n') out += "\n";
+            any = true;
+        }
+        start = i + 1;
+    }
+    if (!any) out += "-- the program binary has no readable text on this driver\n";
+    write_file(path, out.data(), out.size());
+}
+
 int run_gl(const Args& a) {
     create_gl_context();
     load_gl_functions();
@@ -812,6 +900,9 @@ int run_gl(const Args& a) {
     GLuint prog = glCreateProgram();
     glAttachShader(prog, vs);
     glAttachShader(prog, fs);
+    if (!a.pipeline_stats_path.empty() && glProgramParameteri) {
+        glProgramParameteri(prog, GL_PROGRAM_BINARY_RETRIEVABLE_HINT, GL_TRUE);
+    }
     glLinkProgram(prog);
     GLint linked = 0;
     glGetProgramiv(prog, GL_LINK_STATUS, &linked);
@@ -822,6 +913,7 @@ int run_gl(const Args& a) {
         glGetProgramInfoLog(prog, len, nullptr, log.data());
         die("GL link failed:\n" + log);
     }
+    if (!a.pipeline_stats_path.empty()) write_gl_pipeline_stats(prog, vs, fs, a.pipeline_stats_path);
     glUseProgram(prog);
 
     // ===== Geometry =====
