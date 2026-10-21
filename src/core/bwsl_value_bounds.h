@@ -21,6 +21,10 @@ struct ComponentBounds {
 struct DeclaredBounds {
     ComponentBounds components[4];
     u8 count;  // Components of the declared type: 1 for a scalar
+    // Where `@bounds(...)` is written, packed like AST positions
+    // (AST::PackPosition): its `@`, and just past its `)`.
+    u32 position;
+    u32 endPosition;
 };
 
 }  // namespace BWSL

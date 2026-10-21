@@ -1225,6 +1225,71 @@ value :: () -> float {
         member = next(node for node in self.nodes(data, 'MEMBER_ACCESS') if node['member'] == 'size')
         self.assert_position(member, self.position(source, 15, 'size'), 'name')
 
+    def test_bounds_report_their_resolved_ranges(self):
+        # #245: attributes, resources and struct fields carry the @bounds
+        # they were written with, resolved per component, with the clause's
+        # position; declarations without one have no bounds.
+        data = self.parse("""
+            pipeline P {
+                struct Params {
+                    @bounds(>=0, <=1) float4 tint;
+                    @bounds(>0, -10<y<0) float4 offsets;
+                    @bounds(>0, y<0) float2 split;
+                    float plain;
+                };
+
+                resources {
+                    params: Params
+                    @bounds(>0) scale: float
+                }
+
+                attributes {
+                    position: float3
+                    uv: float2 @bounds(>=0, <=1)
+                }
+
+                pass "Main" {
+                    use attributes { position, uv }
+                    use resources { params, scale }
+                    outputs { c: float4 }
+                    vertex { output.pos = float4(attributes.position, 1.0); output.uv = attributes.uv; }
+                    fragment { output.c = resources.params.tint * resources.scale; }
+                }
+            }
+        """)
+        def field(name):
+            return next(node for node in objects(data['pipelines'])
+                        if isinstance(node.get('id'), str) and '/field:' in node['id'] and node.get('name') == name)
+        inclusive = {'min': 0, 'minInclusive': True, 'max': 1, 'maxInclusive': True, 'mayBeNaN': False}
+        open_above = {'min': 0, 'minInclusive': False, 'max': None, 'maxInclusive': None, 'mayBeNaN': False}
+
+        tint = field('tint')['bounds']
+        self.assertEqual((tint['line'], tint['column'], tint['endLine'], tint['endColumn']), (3, 9, 3, 26))
+        self.assertEqual(tint['components'], [dict(inclusive, component=c) for c in 'xyzw'])
+
+        offsets = field('offsets')['bounds']['components']
+        self.assertEqual(offsets[1], {'component': 'y', 'min': -10, 'minInclusive': False, 'max': 0,
+                                      'maxInclusive': False, 'mayBeNaN': False})
+        self.assertEqual([offsets[i] for i in (0, 2, 3)], [dict(open_above, component=c) for c in 'xzw'])
+
+        # `>0` contradicts `y<0`, so y keeps only its own bound.
+        split = field('split')['bounds']['components']
+        self.assertEqual(split[1], {'component': 'y', 'min': None, 'minInclusive': None, 'max': 0,
+                                    'maxInclusive': False, 'mayBeNaN': False})
+        self.assertEqual(split[0], dict(open_above, component='x'))
+
+        self.assertNotIn('bounds', field('plain'))
+
+        scale = self.nodes(data, 'RESOURCE_DECL', 'scale')[0]['bounds']
+        self.assertEqual((scale['line'], scale['column'], scale['endColumn']), (11, 9, 20))
+        self.assertEqual(scale['components'], [dict(open_above, component=None)])
+        self.assertNotIn('bounds', self.nodes(data, 'RESOURCE_DECL', 'params')[0])
+
+        uv = self.nodes(data, 'ATTRIBUTE_DECL', 'uv')[0]['bounds']
+        self.assertEqual((uv['line'], uv['column'], uv['endColumn']), (16, 20, 37))
+        self.assertEqual(uv['components'], [dict(inclusive, component=c) for c in 'xy'])
+        self.assertNotIn('bounds', self.nodes(data, 'ATTRIBUTE_DECL', 'position')[0])
+
     def test_existing_fixtures(self):
         for path in sorted((ROOT / 'tests' / 'ast_json').glob('*.bwsl')):
             with self.subTest(fixture=path.name):

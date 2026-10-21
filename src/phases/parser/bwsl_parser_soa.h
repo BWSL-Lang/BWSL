@@ -444,6 +444,7 @@ private:
         BoundsClause clauses[16];
         u32 count = 0;
         TokenRef decorator = 0;
+        TokenRef close = 0;  // The `)`
         bool present = false;
     };
     bool IsBoundsDecorator(TokenRef token) const;

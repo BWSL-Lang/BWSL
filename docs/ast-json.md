@@ -86,6 +86,20 @@ Positions are one-based.
   of a `read` edge to the constant's declaration.
 - Attribute declarations use `compression: null` when no compression is declared;
   explicit compression settings remain strings.
+- Attribute declarations, resource declarations and struct fields written with
+  `@bounds(...)` have a `bounds` object; others have none. Its
+  `line`/`column` is the `@` and `endLine`/`endColumn` is just past the `)`.
+  `components` lists the range per component as the compiler resolved it (see
+  "Value Bounds" in the language reference), in order, with `component` set to
+  `x` to `w` for a vector and `null` for a scalar:
+
+  ```json
+  {"component": "y", "min": -10, "minInclusive": false, "max": 0,
+   "maxInclusive": false, "mayBeNaN": false}
+  ```
+
+  A side without a bound has `min` (or `max`) and its `...Inclusive` set to
+  `null`. `mayBeNaN` is `false` when the component has a bound on either side.
 - For-loop initializer declarations carry the same name/type positions as other
   variable declarations.
 
