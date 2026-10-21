@@ -29,6 +29,7 @@ enum class OptimizationId : u8 {
     GLES_CONST_TABLES,      // direct GLSL ES: a constant array gets its values where declared
     PHI_VARIABLES,          // SPIRV-Cross output: a variable carried through phis stays one variable
     ENFORCE_BRANCH_HINTS,   // @branch keeps its branch on drivers that ignore DontFlatten (AMD)
+    SPLIT_STRUCTS,          // a local struct variable becomes one variable per field
     COUNT,
 };
 
@@ -59,6 +60,7 @@ inline constexpr OptimizationInfo OPTIMIZATIONS[] = {
     {OptimizationId::GLES_CONST_TABLES, "gles-const-tables"},
     {OptimizationId::PHI_VARIABLES, "phi-variables"},
     {OptimizationId::ENFORCE_BRANCH_HINTS, "enforce-branch-hints"},
+    {OptimizationId::SPLIT_STRUCTS, "split-structs"},
 };
 static_assert(sizeof(OPTIMIZATIONS) / sizeof(OPTIMIZATIONS[0]) == size_t(OptimizationId::COUNT),
               "every optimization needs a name");
@@ -83,7 +85,9 @@ struct GroupInfo {
 // compiler, and faster only with the struct split. Turn it on by name.
 // ENFORCE_BRANCH_HINTS is for AMD's compiler, which flattens an @branch if
 // anyway. It made NVIDIA's Vulkan output slightly faster too.
-inline constexpr u64 DEFAULT_SET = ALL & ~Bit(OptimizationId::PHI_VARIABLES);
+// SPLIT_STRUCTS is new and in no group yet: turn it on by name.
+inline constexpr u64 DEFAULT_SET =
+    ALL & ~Bit(OptimizationId::PHI_VARIABLES) & ~Bit(OptimizationId::SPLIT_STRUCTS);
 
 inline constexpr GroupInfo GROUPS[] = {
     {"off", 0, 0, 0},

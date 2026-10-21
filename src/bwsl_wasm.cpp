@@ -58,6 +58,7 @@ static constexpr bool USE_DIRECT_GLES = false;
 #include "phases/optimization/bwsl_constant_propagation.h"
 #include "phases/optimization/bwsl_ir_edit.h"
 #include "phases/optimization/bwsl_cse.h"
+#include "phases/optimization/bwsl_split_structs.h"
 #include "phases/parser/bwsl_parser_soa.h"
 #include "core/bwsl_resource_reflection.h"
 #include "core/bwsl_reflection_json.h"
@@ -83,6 +84,7 @@ static constexpr bool USE_DIRECT_GLES = false;
 #include "phases/ssa/bwsl_ssa.cpp"
 #include "phases/optimization/bwsl_ir_edit.cpp"
 #include "phases/optimization/bwsl_cse.cpp"
+#include "phases/optimization/bwsl_split_structs.cpp"
 #include "phases/optimization/bwsl_constant_propagation.cpp"
 #include "phases/backends/spirv/bwsl_spirv_backend.cpp"
 #include "phases/ir_generation/bwsl_compute_graph.cpp"
@@ -578,6 +580,9 @@ static ShaderOutput CompileShaderStage(
     if (lowering.program.instructionCount == 0 ||
         lowering.program.opcodes[lowering.program.instructionCount - 1] != OP_RET) {
         lowering.builder.EmitInstruction(OP_RET, 0, 0);
+    }
+    if (Optimizations::IsEnabled(g_optimizations, OptimizationId::SPLIT_STRUCTS)) {
+        Optimization::SplitLocalStructs(&lowering.builder);
     }
 
     // CFG/SSA for control flow

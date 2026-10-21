@@ -312,6 +312,7 @@ set; names then enable optimizations (`dead-values`) or disable them
 every optimization not known to slow down any vendor's GPU. The vendor
 groups (`amd`, `nvidia`, `intel`) start from `default` and enable or disable
 what is known to help or hurt on that vendor; today they equal `default`.
+`split-structs` and `phi-variables` are in no group yet.
 
 | Name | What it does |
 |------|--------------|
@@ -329,6 +330,7 @@ what is known to help or hurt on that vendor; today they equal `default`.
 | `array-fill-stores` | SPIR-V: an array filled element by element, in order, is stored at once |
 | `gles-const-tables` | `-gles-direct`: an array filled once with constants gets them in its declaration |
 | `enforce-branch-hints` | `@branch if`: `&&`/`\|\|` inside branch on every operand, and values merged after it stay in memory, so drivers that ignore the branch hint (AMD's) keep the branch |
+| `split-structs` | A local struct variable becomes one variable per field, so fields fold, merge and get removed like other variables. New: in no group yet |
 | `phi-variables` | SPIRV-Cross targets (Metal, HLSL, GLSL, GLSL ES): a variable carried through loops and branches stays one variable instead of a copy per edge. In no group yet |
 
 Turning optimizations off never changes results. With `constant-propagation`

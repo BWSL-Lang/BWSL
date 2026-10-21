@@ -2527,6 +2527,8 @@ def run_equivalence_suite(root: Path, bwslc: Path, runner: Path,
                 "-o", str(test_out),
                 "-modules", str(modules_dir),
                 "-all",
+                # Per test ("bwslc_args" in its .json); --optimizations wins.
+                *spec.get("bwslc_args", []),
                 *(["--optimizations", EQUIVALENCE_OPTIMIZATIONS] if EQUIVALENCE_OPTIMIZATIONS else []),
             ],
             cwd=root,
