@@ -1111,8 +1111,16 @@ bool Parser::IsBoundsDecorator(TokenRef token) const {
 //   -10<y<0   component y on both sides (< or <=)
 // A clause without a component applies to every component, except on a
 // side a component clause sets, or where it contradicts one; see
-// ResolveBounds.
+// ResolveBounds. A declaration has one @bounds: a second is an error.
 bool Parser::ParseBoundsDecorator(BoundsSpec* spec) {
+    if (spec->present) {
+        ErrorAtPrevious("A declaration takes one @bounds: put all its clauses in it, as in @bounds(>=0, <=1)");
+        // Its clauses are read so the declaration parses on, into a spec of
+        // their own: the first @bounds keeps its clauses and its position,
+        // and the two can't add up past the clause limit.
+        BoundsSpec ignored;
+        return ParseBoundsDecorator(&ignored);
+    }
     spec->present = true;
     spec->decorator = previous;
     if (!Consume(TokenType::LEFT_PAREN, "Expected '(' after @bounds")) return false;
@@ -1214,7 +1222,9 @@ bool Parser::ParseBoundsDecorator(BoundsSpec* spec) {
         spec->clauses[spec->count++] = clause;
         if (!Match(TokenType::COMMA)) break;
     }
-    return Consume(TokenType::RIGHT_PAREN, "Expected ')' after @bounds");
+    if (!Consume(TokenType::RIGHT_PAREN, "Expected ')' after @bounds")) return false;
+    spec->close = previous;
+    return true;
 }
 
 // Per component: the clauses naming it, then, on a side they leave open,
@@ -1282,6 +1292,11 @@ const DeclaredBounds* Parser::ResolveBounds(const BoundsSpec& spec, const TypeIn
     DeclaredBounds* result = (DeclaredBounds*)arena->Allocate(sizeof(DeclaredBounds), alignof(DeclaredBounds));
     *result = {};
     result->count = static_cast<u8>(count);
+    SourceLocation start = getLocation(stream->GetOffset(spec.decorator));
+    SourceLocation end = getLocation(stream->GetOffset(spec.close));
+    // The decorator token is the name after `@`, which comes right before it.
+    result->position = AST::PackPosition(start.line, start.column > 1 ? start.column - 1 : start.column);
+    result->endPosition = AST::PackPosition(end.line, end.column + stream->GetLength(spec.close));
     for (u32 c = 0; c < count; c++) {
         ComponentBounds own = {0.0, 0.0, 0};
         for (u32 k = 0; k < spec.count; k++) {

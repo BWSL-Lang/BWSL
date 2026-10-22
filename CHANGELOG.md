@@ -250,6 +250,9 @@
   `bwslc -h` lists the names.
 
 ### AST JSON
+- Attribute declarations, resource declarations and struct fields written with
+  `@bounds(...)` have a `bounds` object: the clause's position and the range
+  it promises per component, resolved as the compiler uses it.
 - A pointer parameter has `isPointer: true` and a `dataType` spelled as
   written, such as `int^`; its `typeInfo` describes the pointee. Function
   stable IDs mark pointer parameters with `^`, as in `swap(int^,int^)`.

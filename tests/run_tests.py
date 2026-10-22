@@ -300,6 +300,10 @@ ERROR_CASE_TESTS = {
     "array_postfix_declarator.bwsl": "Array size must follow the type",
     "imported_module_diagnostic_file.bwsl": "Array size must follow the field type",
     "attribute_unknown_decorator.bwsl": "Unknown decorator",
+    "bounds_twice_attribute.bwsl": "A declaration takes one @bounds",
+    "bounds_twice_field.bwsl": "A declaration takes one @bounds",
+    "bounds_twice_resource.bwsl": "A declaration takes one @bounds",
+    "bounds_twice_past_clause_limit.bwsl": "A declaration takes one @bounds",
     "branch_hint_not_if.bwsl": "@branch and @flatten can only decorate if statements",
     "duplicate_outputs_block.bwsl": "Only one outputs block is allowed per pass",
     "duplicate_resources_block.bwsl": "Only one resources block is allowed per pipeline",
@@ -484,6 +488,12 @@ ERROR_CASE_EXPECTED_ERROR_COUNTS = {
     # the helper doesn't add an implicit-conversion error.
     "sample_in_helper_called_from_compute.bwsl": 1,
     "derivative_in_helper_called_from_vertex.bwsl": 1,
+    # A second @bounds is the only error: its clauses don't join the first
+    # one's, so they can't make its range empty or exceed the clause limit.
+    "bounds_twice_attribute.bwsl": 1,
+    "bounds_twice_field.bwsl": 1,
+    "bounds_twice_resource.bwsl": 1,
+    "bounds_twice_past_clause_limit.bwsl": 1,
 }
 
 def diagnostic_output_contains(output: str, expected: str) -> bool:

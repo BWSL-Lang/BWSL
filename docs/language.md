@@ -264,7 +264,8 @@ apply there, and it also doesn't apply where it contradicts the component's
 own: `@bounds(>0, y<10)` keeps y above 0, while `@bounds(>0, y<0)` doesn't.
 
 `@bounds` goes before the declaration or, for attributes and resources, after
-the type on the same line. It applies to `float`, `int` and `uint` scalars and
+the type on the same line. A declaration takes one `@bounds`, with all its
+clauses. It applies to `float`, `int` and `uint` scalars and
 vectors. For a buffer or a struct resource, bound the struct's fields instead.
 
 A bounded component is never NaN, and one bounded on both sides is finite. The

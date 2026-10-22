@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <locale>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -234,6 +235,30 @@ inline void AppendFloatValue(std::ostringstream& json, float value) {
     } else {
         AppendStringValue(json, "-Infinity");
     }
+}
+
+// `value` in as few significant digits, up to 17, as read back to it.
+// Streams in the classic locale, since floating std::to_chars needs a newer
+// macOS deployment target than the project's.
+inline void AppendDoubleValue(std::ostringstream& json, f64 value) {
+    if (!std::isfinite(value)) {
+        AppendStringValue(json, std::isnan(value) ? "NaN" : value > 0.0 ? "Infinity" : "-Infinity");
+        return;
+    }
+    std::string text;
+    for (int precision = 15; precision <= 17; precision++) {
+        std::ostringstream out;
+        out.imbue(std::locale::classic());
+        out.precision(precision);
+        out << value;
+        text = out.str();
+        std::istringstream in(text);
+        in.imbue(std::locale::classic());
+        f64 parsed = 0.0;
+        in >> parsed;
+        if (parsed == value) break;
+    }
+    json << text;
 }
 
 inline void AppendTypeInfo(std::ostringstream& json, const TypeInfo& typeInfo) {
@@ -572,6 +597,50 @@ inline void AppendFunctionParameters(std::ostringstream& json, const AST& ast,
     json << "]";
 }
 
+// A declaration's `@bounds(...)`: where it's written, and the range it
+// promises per component, resolved (see Parser::ResolveBounds). A side
+// without a bound has `min`/`max` null; a component with a bound on either
+// side is never NaN.
+inline void AppendBoundsField(std::ostringstream& json, bool& first, const DeclaredBounds* bounds) {
+    if (!bounds) return;
+    AppendFieldName(json, first, "bounds");
+    bool inner = true;
+    json << "{";
+    AppendPackedPosition(json, inner, bounds->position, "line", "column");
+    AppendPackedPosition(json, inner, bounds->endPosition, "endLine", "endColumn");
+    AppendFieldName(json, inner, "components");
+    json << "[";
+    for (u32 c = 0; c < bounds->count && c < 4; c++) {
+        const ComponentBounds& component = bounds->components[c];
+        if (c > 0) json << ",";
+        bool field = true;
+        json << "{";
+        AppendFieldName(json, field, "component");
+        if (bounds->count == 1) {
+            json << "null";
+        } else {
+            json << "\"" << "xyzw"[c] << "\"";
+        }
+        auto side = [&](const char* value, const char* inclusive, u8 has, u8 exclusive, f64 number) {
+            AppendFieldName(json, field, value);
+            if (!(component.flags & has)) {
+                json << "null";
+                AppendFieldName(json, field, inclusive);
+                json << "null";
+                return;
+            }
+            AppendDoubleValue(json, number);
+            AppendBoolField(json, field, inclusive, !(component.flags & exclusive));
+        };
+        side("min", "minInclusive", ComponentBounds::HAS_LOW, ComponentBounds::LOW_EXCLUSIVE, component.low);
+        side("max", "maxInclusive", ComponentBounds::HAS_HIGH, ComponentBounds::HIGH_EXCLUSIVE, component.high);
+        AppendBoolField(json, field, "mayBeNaN",
+                        !(component.flags & (ComponentBounds::HAS_LOW | ComponentBounds::HAS_HIGH)));
+        json << "}";
+    }
+    json << "]}";
+}
+
 inline void AppendStructFields(std::ostringstream& json, const AST& ast,
                                const ArenaArray<StructFieldData>& fields,
                                const std::string& owner, const char* sourceFile = nullptr) {
@@ -594,6 +663,7 @@ inline void AppendStructFields(std::ostringstream& json, const AST& ast,
             fields[i].arraySize != 0 ? std::vector<u32>{fields[i].arraySize} : std::vector<u32>{},
             &fields[i].type);
         AppendUIntField(json, first, "arraySize", fields[i].arraySize);
+        AppendBoundsField(json, first, fields[i].bounds);
         json << "}";
     }
     json << "]";
@@ -1085,6 +1155,7 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             }
             AppendUIntField(json, first, "attributeIndex", node.attributeIndex);
             AppendBoolField(json, first, "isInstance", node.isInstance);
+            AppendBoundsField(json, first, node.bounds);
             break;
         }
         case ASTNodeType::RESOURCE_DECL: {
@@ -1095,6 +1166,7 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
             AppendTypeQualifierField(json, first, ast, node.payloadTypePosition, NodeRefId(ref),
                                      "typeQualifier", "/type-qualifier", ast.GetDeclarationSource(ref));
             AppendUIntField(json, first, "resourceIndex", node.resourceIndex);
+            AppendBoundsField(json, first, node.bounds);
             break;
         }
         case ASTNodeType::FOR_CSTYLE: {
