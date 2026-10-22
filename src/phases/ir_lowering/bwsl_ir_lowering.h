@@ -412,6 +412,47 @@ struct IRLowering {
 
   void LowerLoop(NodeRef ref);
 
+  // Loop unrolling (LOOP_UNROLLING, bwsl_ir_lowering_unroll.inl). A for loop
+  // is lowered as a loop, then, when its trip count is a compile-time
+  // constant, rolled back to the checkpoint taken before it and lowered
+  // again as one copy of its body per iteration.
+  static constexpr u32 MAX_UNROLL_ITERATIONS = 32;
+  static constexpr u32 MAX_UNROLLED_INSTRUCTIONS = 1024;  // Body instructions times iterations
+  struct UnrollCheckpoint {
+    bool active;
+    u32 instruction;  // Where the loop's lowering starts
+    u32 undefRegCount;
+    u32 switchCount;
+    u32 localArrayCount;
+    u32 sharedVarCount;
+    u32 inlineReturnCounter;
+    u32 inlineReturnFlagReads;
+    // Lowered expressions are reused by AST node, so every copy of the
+    // body starts from what was lowered before the loop.
+    std::unordered_map<u32, u16> nodeRegisters;
+  };
+  // Instruction indices of a lowered loop: its condition runs in
+  // [header, branch), the body in [bodyStart, continueTarget) and the
+  // increment in [continueTarget, backEdge).
+  struct LoopShape {
+    u32 header;
+    u32 branch;
+    u32 bodyStart;
+    u32 continueTarget;
+    u32 backEdge;
+    u16 iterator;  // A range loop's iterator register
+  };
+  UnrollCheckpoint BeginUnrollCandidate() const;
+  // Whether the loop can be unrolled, and then its trip count, which may be
+  // 0. iteratorValues, when given, gets the iterator's value in each
+  // iteration.
+  bool CountLoopIterations(const UnrollCheckpoint &checkpoint, const LoopShape &shape,
+                           u32 *tripCount, std::vector<u32> *iteratorValues);
+  void RollBackLoop(const UnrollCheckpoint &checkpoint);
+  void UnrollForCStyle(NodeRef ref, const UnrollCheckpoint &checkpoint, const LoopShape &shape);
+  void UnrollForRange(NodeRef ref, const UnrollCheckpoint &checkpoint, const LoopShape &shape,
+                      CoreType iterType);
+
   void LowerSwitch(NodeRef ref);
 
   //==========================================================================
@@ -783,3 +824,4 @@ struct IRLowering {
 #include "bwsl_ir_lowering_expr.inl"
 #include "bwsl_ir_lowering_lvalues.inl"
 #include "bwsl_ir_lowering_calls.inl"
+#include "bwsl_ir_lowering_unroll.inl"

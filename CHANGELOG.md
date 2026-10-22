@@ -145,6 +145,17 @@
   whole, such as stored to a buffer or an array. Structs reached through a
   pointer (`^s`) or with an array field stay as they were. Across the test
   corpus, SPIR-V is 5% smaller.
+  With `--optimizations loop-unrolling` (not on by default yet), a `for`
+  loop that runs a constant number of times, up to 32, becomes one copy of
+  its body per iteration, as long as the copies stay under 1024
+  instructions. Each copy sees its iterator as a constant, so
+  `for (int i = 0; i < 4; i++) { sum += w[i] * float(i); }` reads `w[0]`
+  to `w[3]` and multiplies by constants. The bound can be a literal, a
+  variable set to a constant just before the loop, or a constant argument
+  of an inlined function, and an inner loop's bound can be the iterator of
+  an outer loop unrolled around it. A loop with `break`, `skip` or a
+  `return`, one whose body changes the iterator or the bound, or one that
+  declares an array or a `switch` stays a loop.
   Folding skips results that can differ between GPUs:
   NaN, infinities, denormals, `-0.0`, integer division of negative values,
   conversions that are out of range or inexact, and math functions outside

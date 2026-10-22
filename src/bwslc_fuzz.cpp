@@ -100,6 +100,8 @@ static void CompileOneStage(CompilationContext& context, Parser& parser,
     lowering.currentStage = stage;
     lowering.currentPipeline = pipelineRef;
     lowering.currentPass = passRef;
+    // Off by default (loop-unrolling), but fuzzed all the same.
+    lowering.optimizations.enabled |= Optimizations::Bit(OptimizationId::LOOP_UNROLLING);
 
     lowering.LowerGlobalArrayConstants(stageData.body, pass);
     for (u32 i = 0; i < pass.consts.count; i++) {

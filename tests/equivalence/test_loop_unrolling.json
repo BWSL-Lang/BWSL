@@ -1,0 +1,27 @@
+{
+    "bwslc_args": [
+        "--optimizations",
+        "loop-unrolling"
+    ],
+    "output_size": 64,
+    "output_type": "int",
+    "expected_values": [
+        52,
+        1372,
+        38,
+        37,
+        15482,
+        32,
+        330,
+        28,
+        26011,
+        844,
+        42,
+        932,
+        175,
+        70,
+        42,
+        15060
+    ],
+    "tolerance": 0.0
+}
