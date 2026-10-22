@@ -1,0 +1,14 @@
+// Error case: a second @bounds is reported on its own. Its clauses aren't
+// added to the first one's, which used to push the two past the clause
+// limit and then report the attribute's name as missing.
+pipeline BoundsTwicePastClauseLimit {
+    attributes {
+        position: float3
+        @bounds(>0, >0, >0, >0, >0, >0, >0, >0, >0, >0) uv: float2 @bounds(>0, >0, >0, >0, >0, >0, >0, >0, >0, >0)
+    }
+    pass "Main" {
+        use attributes { position, uv }
+        vertex { output.position = float4(attributes.position, attributes.uv.x); }
+        fragment { output.color = float4(1.0); }
+    }
+}

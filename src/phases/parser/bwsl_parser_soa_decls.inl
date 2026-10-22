@@ -1113,9 +1113,13 @@ bool Parser::IsBoundsDecorator(TokenRef token) const {
 // side a component clause sets, or where it contradicts one; see
 // ResolveBounds. A declaration has one @bounds: a second is an error.
 bool Parser::ParseBoundsDecorator(BoundsSpec* spec) {
-    // Its clauses are still read, so the declaration parses on.
     if (spec->present) {
         ErrorAtPrevious("A declaration takes one @bounds: put all its clauses in it, as in @bounds(>=0, <=1)");
+        // Its clauses are read so the declaration parses on, into a spec of
+        // their own: the first @bounds keeps its clauses and its position,
+        // and the two can't add up past the clause limit.
+        BoundsSpec ignored;
+        return ParseBoundsDecorator(&ignored);
     }
     spec->present = true;
     spec->decorator = previous;
