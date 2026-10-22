@@ -1115,14 +1115,22 @@ static ConstantValue EvaluateVectorInstruction(const ConstantPropagationData* da
             }
             return MakeConstant(resultType, vector.bits[index]);
         }
-        case IR::OP_VEC_INSERT: {
-            // INSERT(vector, component index, scalar)
+        case IR::OP_VEC_INSERT:
+        case IR::OP_VEC_INSERT_DYNAMIC: {
+            // INSERT(vector, component index, scalar), and
+            // INSERT_DYNAMIC(vector, scalar, index register)
+            bool dynamic = op == IR::OP_VEC_INSERT_DYNAMIC;
             ConstantValue vector = GetShapedValue(data, ir->GetOperand(inst, 0));
-            ConstantValue scalar = GetShapedValue(data, ir->GetOperand(inst, 2));
-            if (vector.state == ValueState::UNDEFINED || scalar.state == ValueState::UNDEFINED) {
+            ConstantValue scalar = GetShapedValue(data, ir->GetOperand(inst, dynamic ? 1 : 2));
+            ConstantValue position = dynamic ? GetValue(data, ir->GetOperand(inst, 2)) : vector;
+            if (vector.state == ValueState::UNDEFINED || scalar.state == ValueState::UNDEFINED ||
+                position.state == ValueState::UNDEFINED) {
                 return UNDEFINED_VALUE;
             }
-            u32 index = ir->GetOperand(inst, 1);
+            if (dynamic && (position.state != ValueState::CONSTANT || !IsIntegerType(position.type))) {
+                return OVERDEFINED_VALUE;
+            }
+            u32 index = dynamic ? position.bits[0] : ir->GetOperand(inst, 1);
             if (!IsVectorType(vector.type) || vector.type != resultType || index >= vector.count ||
                 scalar.count != 1 || scalar.type != GetScalarType(resultType)) {
                 return OVERDEFINED_VALUE;
@@ -1170,11 +1178,20 @@ static ConstantValue EvaluateVectorInstruction(const ConstantPropagationData* da
             return MakePartial(resultType, count, known, bits);
         }
         case IR::OP_ARRAY_LOAD: {
-            // A column of a matrix value.
+            // A column of a matrix value, or a component of a vector value.
             ConstantValue matrix = GetShapedValue(data, ir->GetOperand(inst, 0));
             ConstantValue column = GetValue(data, ir->GetOperand(inst, 1));
             if (matrix.state == ValueState::UNDEFINED || column.state == ValueState::UNDEFINED) {
                 return UNDEFINED_VALUE;
+            }
+            if (IsVectorType(matrix.type)) {
+                u32 index = column.bits[0];
+                if (column.state != ValueState::CONSTANT || !IsIntegerType(column.type) ||
+                    index >= matrix.count || GetScalarType(matrix.type) != resultType ||
+                    !IsKnown(matrix, index)) {
+                    return OVERDEFINED_VALUE;
+                }
+                return MakeConstant(resultType, matrix.bits[index]);
             }
             u32 n = GetMatrixSize(matrix.type);
             if (n == 0 || column.state != ValueState::CONSTANT || !IsIntegerType(column.type) ||
@@ -1237,10 +1254,10 @@ static ConstantValue EvaluateVectorInstruction(const ConstantPropagationData* da
 
 static bool IsVectorFoldOp(u16 op) {
     return op == IR::OP_VEC_CONSTRUCT || op == IR::OP_VEC_EXTRACT || op == IR::OP_VEC_INSERT ||
-           op == IR::OP_VEC_SHUFFLE || op == IR::OP_ARRAY_LOAD || op == IR::OP_MAT_CONSTRUCT ||
-           op == IR::OP_MAT_MUL || op == IR::OP_MAT_VEC_MUL || op == IR::OP_VEC_MAT_MUL ||
-           op == IR::OP_MAT_SCALE || op == IR::OP_MAT_TRANSPOSE || op == IR::OP_DOT ||
-           op == IR::OP_CROSS || op == IR::OP_MAT_DET || op == IR::OP_MAT_INVERSE ||
+           op == IR::OP_VEC_INSERT_DYNAMIC || op == IR::OP_VEC_SHUFFLE || op == IR::OP_ARRAY_LOAD ||
+           op == IR::OP_MAT_CONSTRUCT || op == IR::OP_MAT_MUL || op == IR::OP_MAT_VEC_MUL ||
+           op == IR::OP_VEC_MAT_MUL || op == IR::OP_MAT_SCALE || op == IR::OP_MAT_TRANSPOSE ||
+           op == IR::OP_DOT || op == IR::OP_CROSS || op == IR::OP_MAT_DET || op == IR::OP_MAT_INVERSE ||
            (op >= IR::OP_LENGTH && op <= IR::OP_FACEFORWARD) || op == IR::OP_ANY || op == IR::OP_ALL;
 }
 
@@ -2451,6 +2468,17 @@ static bool IsUnchangedSince(const ConstantPropagationData* data, u16 source, u3
     return written == NO_DEFINITION || written < definition;
 }
 
+// An index operand's value when it's a known integer below `count`.
+static bool GetKnownIndex(const ConstantPropagationData* data, u16 operand, u32 count, u32* index) {
+    ConstantValue value = GetKnownValue(data, operand);
+    if (value.state != ValueState::CONSTANT || value.count != 1 || !IsIntegerType(value.type) ||
+        value.bits[0] >= count) {
+        return false;
+    }
+    *index = value.bits[0];
+    return true;
+}
+
 // A component read from a vector that was just put together reads where
 // the component came from instead: `float3(a, b, c).y` is b, a component
 // a VEC_INSERT wrote is its scalar, one it didn't is the inner vector's,
@@ -2645,6 +2673,45 @@ static void RewriteAlgebraicIdentity(ConstantPropagationData* data, u32 inst) {
             for (u32 c = 0; c < condition.count; c++) set += condition.bits[c] != 0;
             if (set == 0) RewriteAs(data, inst, IR::OP_LOAD_REG, a);
             else if (set == condition.count) RewriteAs(data, inst, IR::OP_LOAD_REG, b);
+            return;
+        }
+        case IR::OP_ARRAY_LOAD: {
+            // An index constant propagation knows becomes what a literal
+            // index lowers to: `v[i]` with i == 2 reads `v[2]`, a component
+            // read, and a matrix column read takes the index as a constant.
+            // An array's register never has a vector type of the element's
+            // scalar type, or a matrix type with a column result.
+            if (!IsRegisterOperand(data, a)) return;
+            CoreType baseType = GetRegisterType(ir, a);
+            CoreType resultType = GetRegisterType(ir, dest);
+            u32 index;
+            if (!GetKnownIndex(data, b, GetComponentCount(baseType), &index)) return;
+            if (IsVectorType(baseType) && GetScalarType(baseType) == resultType && !IsMemoryBacked(ir, a)) {
+                ir->opcodes[inst] = IR::OP_VEC_EXTRACT;
+                ir->metadata[inst] = 0;
+                ir->SetOperand(inst, 1, static_cast<u16>(index));
+                RewriteComponentRead(data, inst);
+            } else if (u32 n = GetMatrixSize(baseType);
+                       n != 0 && index < n && !IR::IsIntConstant(b) &&
+                       resultType == (n == 2 ? CoreType::FLOAT2 : n == 3 ? CoreType::FLOAT3 : CoreType::FLOAT4)) {
+                u16 constant = InternConstant(data->builder, CoreType::INT, index);
+                if (constant != 0xFFFF) ir->SetOperand(inst, 1, constant);
+            }
+            return;
+        }
+        case IR::OP_VEC_INSERT_DYNAMIC: {
+            // The same for a component write: `v[i] = s` is `v[2] = s`.
+            u16 index = ir->GetOperand(inst, 2);
+            u32 component;
+            if (!IsRegisterOperand(data, a) || IsMemoryBacked(ir, a) ||
+                !IsVectorType(GetRegisterType(ir, a)) || GetRegisterType(ir, a) != GetRegisterType(ir, dest) ||
+                !GetKnownIndex(data, index, GetComponentCount(GetRegisterType(ir, a)), &component)) {
+                return;
+            }
+            ir->opcodes[inst] = IR::OP_VEC_INSERT;
+            ir->metadata[inst] = 0;
+            ir->SetOperand(inst, 1, static_cast<u16>(component));
+            ir->SetOperand(inst, 2, b);
             return;
         }
         case IR::OP_VEC_EXTRACT:

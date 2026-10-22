@@ -320,7 +320,7 @@ what is known to help or hurt on that vendor; today they equal `default`.
 | `loop-evaluation` | Runs loops whose inputs are all constant at compile time |
 | `value-ranges` | Uses `@bounds` and other known ranges to decide comparisons and simplify `min`/`max`/`clamp` |
 | `store-forwarding` | A struct field read takes the value last stored to it |
-| `algebraic-identities` | `x * 1`, `x + 0`, `pow(x, 2)`, bitwise identities, component reads of built vectors |
+| `algebraic-identities` | `x * 1`, `x + 0`, `pow(x, 2)`, bitwise identities, component reads of built vectors, vector and matrix indices known at compile time read and written like literal ones |
 | `pow-expansion` | `pow(x, n)` with a small integer `n` becomes multiplications |
 | `single-iteration-loops` | A loop that runs at most once is emitted as straight code |
 | `dead-values` | Removes values nothing reads |

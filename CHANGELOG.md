@@ -104,6 +104,11 @@
   arithmetic, gives the constant. `Color::hsluvToRgb(float3(180.0, x,
   50.0))` keeps only the arithmetic on `x`, and its SPIR-V shrinks from
   4440 to 1920 bytes.
+  An index into a vector or matrix that is known at compile time works
+  like a literal one: with `int i = 2;`, `v[i]` reads `v.z` instead of
+  indexing at run time, `v[i] = s` writes `v.z`, `m[i]` takes the column
+  directly instead of selecting among all of them, and a component that is
+  a constant folds.
   Operations that a constant or a repeated operand decides simplify too:
   `x * 1.0`, `x + 0.0` and `x / 1.0` become `x`, `0.0 - x` and
   `x * -1.0` become `-x`, `x / 4.0` becomes `x * 0.25`, and
