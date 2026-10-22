@@ -1111,8 +1111,12 @@ bool Parser::IsBoundsDecorator(TokenRef token) const {
 //   -10<y<0   component y on both sides (< or <=)
 // A clause without a component applies to every component, except on a
 // side a component clause sets, or where it contradicts one; see
-// ResolveBounds.
+// ResolveBounds. A declaration has one @bounds: a second is an error.
 bool Parser::ParseBoundsDecorator(BoundsSpec* spec) {
+    // Its clauses are still read, so the declaration parses on.
+    if (spec->present) {
+        ErrorAtPrevious("A declaration takes one @bounds: put all its clauses in it, as in @bounds(>=0, <=1)");
+    }
     spec->present = true;
     spec->decorator = previous;
     if (!Consume(TokenType::LEFT_PAREN, "Expected '(' after @bounds")) return false;

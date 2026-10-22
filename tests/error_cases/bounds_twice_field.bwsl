@@ -1,0 +1,20 @@
+// Error case: a declaration takes one @bounds, not several.
+pipeline BoundsTwiceField {
+    attributes {
+        position: float3
+        uv: float2 @bounds(>=0, <=1)
+    }
+    struct Params {
+        @bounds(>0) @bounds(<10) int count;
+    }
+    resources {
+        params: Params
+        @bounds(>=0, <=1) fade: float
+    }
+    pass "Main" {
+        use attributes { position }
+        use resources { params, fade }
+        vertex { output.position = float4(attributes.position, 1.0); }
+        fragment { output.color = float4(resources.fade + float(resources.params.count)); }
+    }
+}
