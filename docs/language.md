@@ -285,10 +285,12 @@ a workgroup, `input.num_workgroups` is at least 1, and a fragment shader's
 A fragment shader's `@flat`, `@centroid` or integer varying keeps the range the
 vertex stage stored in it. A `@centroid` varying is evaluated inside the
 primitive, so it's a mix of its vertices' values; the compiler takes
-interpolation as not rounding past them, and treats helper lanes (which run
-outside the primitive for derivatives) as not changing visible results. Any
-other interpolated float varying keeps no range: with MSAA, it can be evaluated
-outside the primitive, beyond its vertices' values.
+interpolation as not rounding past them. Helper lanes, which run outside the
+primitive only to compute derivatives, can still extrapolate it, so with a
+clamp removed, a derivative of the varying, and the texture LOD computed from
+one, can differ along triangle edges; the value each covered pixel reads keeps
+its range. Any other interpolated float varying keeps no range: with MSAA, it
+can be evaluated outside the primitive, beyond its vertices' values.
 
 Division isn't correctly rounded on GPUs, so its result can be a little past
 the exact quotient: `lit / 100.0` with `lit` up to 100 can exceed 1.0, and a
