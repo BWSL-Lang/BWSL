@@ -2697,11 +2697,16 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       program.inputSamplings[inputSlot] =
           static_cast<u8>(currentPassVaryings->GetSampling(varyingIndex));
       // A flat varying (integers always are) is one vertex's value, so it
-      // keeps the range the vertex stage gave it.
+      // keeps the range the vertex stage gave it. So does a centroid one: it's
+      // evaluated inside the primitive, a mix of its vertices' values. That
+      // takes interpolation as not rounding past them. Helper lanes still run
+      // outside the primitive, so derivatives of the varying (and the LOD
+      // they give) can change along edges once a clamp is removed.
       if (varyingIndex < currentPassVaryings->count &&
           currentPassVaryings->bounds[varyingIndex].count != 0) {
         CoreType varyingType = currentPassVaryings->varyings[varyingIndex].type;
         if (currentPassVaryings->GetInterpolation(varyingIndex) == InterpolationMode::Flat ||
+            currentPassVaryings->GetSampling(varyingIndex) == InterpolationSampling::Centroid ||
             CoreTypeScalarType(varyingType) != CoreType::FLOAT) {
           program.inputBounds[inputSlot] = &currentPassVaryings->bounds[varyingIndex];
         }
