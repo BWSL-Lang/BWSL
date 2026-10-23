@@ -131,7 +131,9 @@
   Built-in inputs count too: in a `[8, 1, 1]` compute stage,
   `input.local_id.y` is 0 and `min(input.local_id.x, 7u)` is
   `input.local_id.x`, and a fragment shader's `input.position.xy` is never
-  NaN. A `@flat` or integer varying keeps its range in the fragment stage.
+  NaN. A `@flat`, `@centroid` or integer varying keeps its range in the
+  fragment stage, so a `saturate` the vertex stage already applied to a
+  `@centroid` varying isn't repeated.
   Ranges carry through vector conversions such as `int2(q)`, and a struct
   field read back after a store, as in `i.color = c; ... i.color.z`, is the
   value stored, so its constant and range carry too.

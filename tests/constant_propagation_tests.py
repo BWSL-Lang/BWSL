@@ -759,6 +759,39 @@ def run_constant_propagation_tests(compiler: Path) -> tuple[int, int]:
             self.assertNotIn("min(v_index", fragment)
             self.assertIn("clamp(v_shade, 0.0, 1.0)", fragment)
 
+        def test_centroid_varyings_keep_their_ranges(self):
+            # A centroid varying is evaluated inside the primitive, a mix of
+            # its vertices' values, so it keeps their range; one without a
+            # known range (raw may be NaN), and a varying interpolated at the
+            # pixel center, keep their clamps.
+            target = self.compile('''pipeline Centroid {
+                attributes {
+                    position: float3 @bounds(>=-1, <=1)
+                    raw: float
+                }
+                pass "Main" {
+                    use attributes { position, raw }
+                    vertex {
+                        output.position = float4(attributes.position, 1.0);
+                        @centroid output.atlas = saturate(attributes.position.xy);
+                        @centroid @noperspective output.edge = saturate(attributes.position.z);
+                        @centroid output.tint = saturate(attributes.raw);
+                        output.plain = saturate(attributes.position.x);
+                    }
+                    fragment {
+                        output.color = float4(saturate(input.atlas.x) + saturate(input.atlas.y),
+                                              saturate(input.edge), saturate(input.tint), saturate(input.plain));
+                    }
+                }
+            }''', "-glsl")
+            fragment = (target / "constprop.frag").read_text(encoding="utf-8")
+            self.assertIn("centroid in vec2 v_atlas", fragment)
+            body = fragment[fragment.index("void main"):]
+            self.assertNotIn("clamp(v_atlas", body)
+            self.assertNotIn("clamp(v_edge", body)
+            self.assertIn("clamp(v_tint, 0.0, 1.0)", body)
+            self.assertIn("clamp(v_plain, 0.0, 1.0)", body)
+
         def test_vector_conversions_keep_ranges(self):
             # int2(q) converts each component, as int(q.x) does. q is in
             # [0, 65536 / 0.01].
