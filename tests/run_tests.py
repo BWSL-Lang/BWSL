@@ -376,7 +376,7 @@ ERROR_CASE_TESTS = {
     "swizzle_duplicate_write.bwsl": "swizzle assignment target has duplicate components",
     "duplicate_enum_member.bwsl": "Duplicate enum member name",
     "duplicate_struct_field.bwsl": "Duplicate struct field name",
-    "duplicate_pass_name.bwsl": "Duplicate pass name in pipeline",
+    "duplicate_pass_name.bwsl": 'Duplicate pass name "Main" in pipeline (the first pass "Main" is on line 7)',
     "use_attributes_duplicate.bwsl": "Duplicate attribute in 'use attributes'",
     "duplicate_function_params.bwsl": "Duplicate parameter name in function declaration",
     "vec_ctor_arity.bwsl": "vector constructor expects 4 components, got 3",
@@ -465,6 +465,8 @@ ERROR_CASE_EXTRA_EXPECTATIONS = {
     # Both stage-IO diagnostics must point at the offending source line.
     "fragment_reads_attribute.bwsl": ["fragment_reads_attribute.bwsl:19:"],
     "varying_type_conflict.bwsl": ["varying_type_conflict.bwsl:15:"],
+    # At the second pass's name, not the end of its block.
+    "duplicate_pass_name.bwsl": ["duplicate_pass_name.bwsl:14:"],
     "imported_module_diagnostic_file.bwsl": [
         "diagnostic_module_file_modules/Common.bwsl",
         "float4 transformations[9];",

@@ -254,15 +254,21 @@ NodeRef Parser::ParsePipeline() {
                 }
             }
         } else if (Match(TokenType::PASS)) {
+            TokenRef nameToken = current;  // The pass name, reported for a duplicate
             NodeRef pass = ParsePass();
             if (pass.IsValid()) {
                 // Duplicate pass names would emit to the same output file
-                // names, silently clobbering each other on disk.
+                // names, silently clobbering each other on disk. The error
+                // points at the second name, not the end of its pass.
                 const ArenaString &passName = ast->GetPass(pass).name;
                 for (u32 i = 0; i < ast->GetPipeline(pipeline).passes.count; i++) {
                     NodeRef existing = ast->GetPipeline(pipeline).passes[i];
                     if (ast->GetPass(existing).name.nameHash == passName.nameHash) {
-                        Error("Duplicate pass name in pipeline");
+                        u32 line = 0, column = 0;
+                        AST::UnpackPosition(ast->FindPosition(existing), line, column);
+                        std::string name = passName.ToString(sourceBase());
+                        ErrorAt(nameToken, "Duplicate pass name \"" + name + "\" in pipeline (the first pass \"" +
+                                               name + "\" is on line " + std::to_string(line) + ")");
                         break;
                     }
                 }

@@ -213,6 +213,8 @@
   unchanged.
 
 ### Diagnostics
+- A duplicate pass name is reported at the second pass's name, with the line
+  of the first, instead of at the end of the second pass.
 - Passing a value where a pointer parameter is expected, a pointer where a
   value is expected (including to an intrinsic or constructor), or a pointer
   to a different type reports the argument and how to fix it.
