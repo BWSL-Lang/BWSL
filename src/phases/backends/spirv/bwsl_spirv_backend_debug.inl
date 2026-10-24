@@ -1,0 +1,424 @@
+#pragma once
+// Source-level debug info (SetDebugInfo), for GPU debuggers such as
+// RenderDoc and Nsight:
+// - each source file's path as an OpString, and the stage's file as OpSource
+//   with its text;
+// - an OpLine where an instruction's source line changes;
+// - NonSemantic.Shader.DebugInfo.100: a DebugSource with the text of every
+//   file code comes from, the compilation unit, a DebugFunction for the
+//   entry and for each function inlined into it, and per block a DebugScope
+//   (with DebugInlinedAt for inlined code) and DebugLine where the line
+//   changes.
+// Locations come from the IR's source nodes (an instruction's statement or
+// expression) and debug scopes (the inlined function body it's in).
+
+namespace BWSL {
+
+namespace {
+
+// A string's bytes up to `limit`, ending before a UTF-8 continuation byte
+// so a split keeps each piece valid UTF-8.
+u32 DebugTextChunk(const char* text, u32 length, u32 limit) {
+  if (length <= limit) return length;
+  u32 end = limit;
+  while (end > 0 && (static_cast<u8>(text[end]) & 0xC0) == 0x80) end--;
+  return end > 0 ? end : limit;
+}
+
+// Most bytes of a literal string in one instruction of `fixedWords` other
+// words: the word count is 16 bits, and the string ends with a NUL.
+constexpr u32 DebugLiteralLimit(u32 fixedWords) { return (0xFFFF - fixedWords) * 4 - 1; }
+
+void AppendLiteral(std::vector<u32>& words, const char* text, u32 length) {
+  u32 count = (length + 4) / 4;  // Including the terminating NUL
+  size_t start = words.size();
+  words.resize(start + count, 0);
+  memcpy(&words[start], text, length);
+}
+
+}  // namespace
+
+u32 SPIRVBuilder::DebugConstant(u32 value) {
+  for (const auto& entry : debugConstants) {
+    if (entry.first == value) return entry.second;
+  }
+  u32 id = AllocateId();
+  u32 ops[] = {GetTypeId(CoreType::UINT), id, value};
+  EmitToSection(&typesConstants, spv::OpConstant, ops, 3);
+  debugConstants.push_back({value, id});
+  return id;
+}
+
+// An OpString of `text`, shortened to fit one instruction.
+u32 SPIRVBuilder::DebugString(const char* text, u32 length) {
+  u32 id = AllocateId();
+  std::vector<u32> words;
+  words.push_back(id);
+  AppendLiteral(words, text, DebugTextChunk(text, length, DebugLiteralLimit(2)));
+  EmitToSection(&debugSources, spv::OpString, words.data(), static_cast<u32>(words.size()));
+  return id;
+}
+
+// An OpExtInst of the debug info set outside the function; returns its id.
+u32 SPIRVBuilder::DebugGlobal(u32 instruction, const u32* operands, u32 count) {
+  u32 id = AllocateId();
+  std::vector<u32> words = {GetTypeId(CoreType::VOID), id, debugInfoImportId, instruction};
+  words.insert(words.end(), operands, operands + count);
+  EmitToSection(&debugGlobals, spv::OpExtInst, words.data(), static_cast<u32>(words.size()));
+  return id;
+}
+
+void SPIRVBuilder::DebugInFunction(u32 instruction, const u32* operands, u32 count) {
+  u32 wordCount = 5 + count;
+  while (currentFunctionSize + wordCount > currentFunctionCapacity) GrowCurrentFunction();
+  currentFunction[currentFunctionSize++] = (wordCount << 16) | spv::OpExtInst;
+  currentFunction[currentFunctionSize++] = GetTypeId(CoreType::VOID);
+  currentFunction[currentFunctionSize++] = AllocateId();
+  currentFunction[currentFunctionSize++] = debugInfoImportId;
+  currentFunction[currentFunctionSize++] = instruction;
+  for (u32 i = 0; i < count; i++) currentFunction[currentFunctionSize++] = operands[i];
+}
+
+u32 SPIRVBuilder::DebugFileString(u32 file) {
+  if (file >= debugFileStrings.size()) return 0;
+  if (debugFileStrings[file] == 0) {
+    const char* path = debugAst->sourceFiles[file];
+    debugFileStrings[file] = DebugString(path, static_cast<u32>(strlen(path)));
+  }
+  return debugFileStrings[file];
+}
+
+// The file's DebugSource, with its text when the parser kept it; text
+// longer than one OpString continues in DebugSourceContinued.
+u32 SPIRVBuilder::DebugSourceOf(u32 file) {
+  if (file >= debugSourceIds.size()) return 0;
+  if (debugSourceIds[file] != 0) return debugSourceIds[file];
+  const char* text = file < debugAst->sourceTexts.count ? debugAst->sourceTexts[file] : nullptr;
+  u32 length = text ? debugAst->sourceTextLengths[file] : 0;
+  u32 path = DebugFileString(file);
+  if (!text) {
+    u32 ops[] = {path};
+    return debugSourceIds[file] = DebugGlobal(NonSemanticShaderDebugInfo100DebugSource, ops, 1);
+  }
+  u32 first = DebugTextChunk(text, length, DebugLiteralLimit(2));
+  u32 ops[] = {path, DebugString(text, first)};
+  debugSourceIds[file] = DebugGlobal(NonSemanticShaderDebugInfo100DebugSource, ops, 2);
+  for (u32 offset = first; offset < length;) {
+    u32 chunk = DebugTextChunk(text + offset, length - offset, DebugLiteralLimit(2));
+    u32 more[] = {DebugString(text + offset, chunk)};
+    DebugGlobal(NonSemanticShaderDebugInfo100DebugSourceContinued, more, 1);
+    offset += chunk;
+  }
+  return debugSourceIds[file];
+}
+
+// The file a debug scope's code was written in: an inlined function's own,
+// or the stage's.
+u32 SPIRVBuilder::DebugFileOfScope(u32 scope) {
+  if (scope == 0 || scope >= ir->debugScopeCount) return debugMainFile;
+  NodeRef function;
+  function.packed = ir->debugScopeFunctions[scope];
+  u32 file = debugAst->GetDeclarationSourceIndex(function);
+  return file < debugAst->sourceFiles.count ? file : debugMainFile;
+}
+
+bool SPIRVBuilder::DebugPosition(u32 packedNode, u32* line, u32* column) const {
+  if (packedNode == 0xFFFFFFFF) return false;
+  NodeRef node;
+  node.packed = packedNode;
+  u32 position = debugAst->FindPosition(node);
+  if (position == 0) return false;
+  AST::UnpackPosition(position, *line, *column);
+  return *line != 0;
+}
+
+// One DebugFunction per function, however often it's inlined.
+u32 SPIRVBuilder::DebugFunctionOf(NodeRef function) {
+  for (const auto& entry : debugFunctionIds) {
+    if (entry.first == function.packed) return entry.second;
+  }
+  std::string name = "function";
+  if (function.Type() == ASTNodeType::FUNCTION) {
+    std::string written = ReverseLookup::GetString(debugAst->GetFunction(function).name.nameHash);
+    if (!written.empty() && written.rfind("<hash:", 0) != 0) name = written;
+  }
+  u32 file = debugAst->GetDeclarationSourceIndex(function);
+  if (file >= debugAst->sourceFiles.count) file = debugMainFile;
+  u32 line = 0, column = 0;
+  DebugPosition(function.packed, &line, &column);
+  u32 nameString = DebugString(name.c_str(), static_cast<u32>(name.size()));
+  u32 ops[] = {nameString, debugFunctionType, DebugSourceOf(file), DebugConstant(line), DebugConstant(column),
+               debugCompilationUnit, nameString, DebugConstant(NonSemanticShaderDebugInfo100FlagIsPublic),
+               DebugConstant(line)};
+  u32 id = DebugGlobal(NonSemanticShaderDebugInfo100DebugFunction, ops, 9);
+  debugFunctionIds.push_back({function.packed, id});
+  return id;
+}
+
+u32 SPIRVBuilder::DebugScopeFunction(u32 scope) {
+  if (scope >= debugScopeIds.size()) scope = 0;
+  if (debugScopeIds[scope] == 0) {
+    NodeRef function;
+    function.packed = ir->debugScopeFunctions[scope];
+    debugScopeIds[scope] = DebugFunctionOf(function);
+  }
+  return debugScopeIds[scope];
+}
+
+// Where an inlined scope was called: the call's line in the calling scope,
+// itself inlined from its own caller.
+u32 SPIRVBuilder::DebugInlinedAt(u32 scope) {
+  if (scope == 0 || scope >= debugInlinedAtIds.size()) return 0;
+  if (debugInlinedAtIds[scope] != 0) return debugInlinedAtIds[scope];
+  u32 parent = ir->debugScopeParents[scope];
+  if (parent >= ir->debugScopeCount) parent = 0;
+  u32 line = 0, column = 0;
+  DebugPosition(ir->debugScopeCalls[scope], &line, &column);
+  u32 ops[] = {DebugConstant(line), DebugScopeFunction(parent), DebugInlinedAt(parent)};
+  return debugInlinedAtIds[scope] = DebugGlobal(NonSemanticShaderDebugInfo100DebugInlinedAt, ops, parent != 0 ? 3 : 2);
+}
+
+// The extension and the import. Sections are put in order when the module
+// is finished, so this can run after the preamble (SetDebugInfo comes later).
+void SPIRVBuilder::BeginDebugInfo() {
+  if (!debugAst) return;
+  EmitExtension("SPV_KHR_non_semantic_info");
+  debugInfoImportId = AllocateId();
+  std::vector<u32> words = {debugInfoImportId};
+  const char* name = "NonSemantic.Shader.DebugInfo.100";
+  AppendLiteral(words, name, static_cast<u32>(strlen(name)));
+  EmitToSection(&extInstImports, spv::OpExtInstImport, words.data(), static_cast<u32>(words.size()));
+}
+
+// The source text, the compilation unit and the entry's DebugFunction,
+// before the function.
+void SPIRVBuilder::BeginDebugFunction() {
+  if (!debugAst) return;
+  u32 files = debugAst->sourceFiles.count;
+  if (debugMainFile >= files) {
+    debugAst = nullptr;  // No file to point at
+    return;
+  }
+  BeginDebugInfo();
+  debugFileStrings.assign(files, 0);
+  debugSourceIds.assign(files, 0);
+  debugScopeIds.assign(ir->debugScopeCount ? ir->debugScopeCount : 1, 0);
+  debugInlinedAtIds.assign(debugScopeIds.size(), 0);
+
+  // OpSource: the stage's file, its text continued past one instruction.
+  const char* text = debugAst->sourceTexts[debugMainFile];
+  u32 length = text ? debugAst->sourceTextLengths[debugMainFile] : 0;
+  std::vector<u32> source = {static_cast<u32>(spv::SourceLanguageUnknown), 0, DebugFileString(debugMainFile)};
+  u32 first = text ? DebugTextChunk(text, length, DebugLiteralLimit(4)) : 0;
+  if (text) AppendLiteral(source, text, first);
+  EmitToSection(&debugSources, spv::OpSource, source.data(), static_cast<u32>(source.size()));
+  for (u32 offset = first; text && offset < length;) {
+    u32 chunk = DebugTextChunk(text + offset, length - offset, DebugLiteralLimit(1));
+    std::vector<u32> more;
+    AppendLiteral(more, text + offset, chunk);
+    EmitToSection(&debugSources, spv::OpSourceContinued, more.data(), static_cast<u32>(more.size()));
+    offset += chunk;
+  }
+
+  u32 unit[] = {DebugConstant(100), DebugConstant(4), DebugSourceOf(debugMainFile),
+                DebugConstant(static_cast<u32>(spv::SourceLanguageUnknown))};
+  debugCompilationUnit = DebugGlobal(NonSemanticShaderDebugInfo100DebugCompilationUnit, unit, 4);
+  u32 type[] = {DebugConstant(NonSemanticShaderDebugInfo100FlagIsPublic), GetTypeId(CoreType::VOID)};
+  debugFunctionType = DebugGlobal(NonSemanticShaderDebugInfo100DebugTypeFunction, type, 2);
+
+  // The entry: scope 0, starting at the stage.
+  u32 line = 0, column = 0;
+  DebugPosition(debugStage.packed, &line, &column);
+  u32 name = DebugString(debugEntryName.c_str(), static_cast<u32>(debugEntryName.size()));
+  u32 entry[] = {name, debugFunctionType, DebugSourceOf(debugMainFile), DebugConstant(line), DebugConstant(column),
+                 debugCompilationUnit, name, DebugConstant(NonSemanticShaderDebugInfo100FlagIsPublic),
+                 DebugConstant(line)};
+  debugScopeIds[0] = DebugGlobal(NonSemanticShaderDebugInfo100DebugFunction, entry, 9);
+}
+
+// Ties the entry's DebugFunction to the OpFunction: in the entry block,
+// after its OpVariables.
+void SPIRVBuilder::EmitDebugFunctionDefinition() {
+  if (!debugAst) return;
+  u32 ops[] = {debugScopeIds[0], entryPointId};
+  DebugInFunction(NonSemanticShaderDebugInfo100DebugFunctionDefinition, ops, 2);
+  // DebugDeclare's own scope: the entry's, which the first line keeps.
+  u32 scope[] = {debugScopeIds[0]};
+  DebugInFunction(NonSemanticShaderDebugInfo100DebugScope, scope, 1);
+  EmitDebugDeclares();
+  debugLocationValid = true;
+  debugLastScope = 0;
+  debugLastFile = 0xFFFFFFFF;
+  debugLastLine = 0;
+}
+
+// Before IR instruction `irIdx`: its scope and line, where they differ from
+// what the block last emitted. Columns don't count, so a debugger stops
+// once per line rather than per expression on it.
+void SPIRVBuilder::EmitDebugLocation(u32 irIdx) {
+  if (!debugAst || !ir->sourceNodes || irIdx >= ir->instructionCount) return;
+  u32 line = 0, column = 0;
+  if (!DebugPosition(ir->sourceNodes[irIdx], &line, &column)) return;
+  u32 scope = ir->sourceScopes ? ir->sourceScopes[irIdx] : 0;
+  if (scope >= debugScopeIds.size()) scope = 0;
+  u32 file = DebugFileOfScope(scope);
+  bool scopeChanged = !debugLocationValid || scope != debugLastScope;
+  if (!scopeChanged && file == debugLastFile && line == debugLastLine) return;
+  if (scopeChanged) {
+    u32 ops[] = {DebugScopeFunction(scope), DebugInlinedAt(scope)};
+    DebugInFunction(NonSemanticShaderDebugInfo100DebugScope, ops, scope != 0 ? 2 : 1);
+  }
+  u32 lineOps[] = {DebugSourceOf(file), DebugConstant(line), DebugConstant(line), DebugConstant(column),
+                   DebugConstant(column)};
+  DebugInFunction(NonSemanticShaderDebugInfo100DebugLine, lineOps, 5);
+  Emit(spv::OpLine, DebugFileString(file), line, column);
+  debugLocationValid = true;
+  debugLastScope = scope;
+  debugLastFile = file;
+  debugLastLine = line;
+}
+
+// ---- Local variables ----
+
+// The debug type of a scalar, vector or matrix of 32-bit floats, ints,
+// uints or bools; 0 for any other type, whose variables aren't described.
+u32 SPIRVBuilder::DebugTypeOf(CoreType type) {
+  u32 index = static_cast<u32>(type);
+  if (index >= debugTypeIds.size()) debugTypeIds.resize(static_cast<u32>(CoreType::COUNT), 0);
+  if (index >= debugTypeIds.size()) return 0;
+  if (debugTypeIds[index] != 0) return debugTypeIds[index];
+  u32 id = 0;
+  if (type == CoreType::MAT2 || type == CoreType::MAT3 || type == CoreType::MAT4) {
+    CoreType column = type == CoreType::MAT2 ? CoreType::FLOAT2 : type == CoreType::MAT3 ? CoreType::FLOAT3 : CoreType::FLOAT4;
+    u32 columns = type == CoreType::MAT2 ? 2 : type == CoreType::MAT3 ? 3 : 4;
+    u32 ops[] = {DebugTypeOf(column), DebugConstant(columns), GetBoolConstantId(true)};
+    id = DebugGlobal(NonSemanticShaderDebugInfo100DebugTypeMatrix, ops, 3);
+  } else {
+    CoreType scalar = CoreTypeScalarType(type);
+    if (scalar == CoreType::INVALID) return 0;
+    if (scalar != type) {
+      u32 ops[] = {DebugTypeOf(scalar), DebugConstant(CoreTypeScalarComponentCount(type))};
+      id = DebugGlobal(NonSemanticShaderDebugInfo100DebugTypeVector, ops, 2);
+    } else {
+      const char* name = scalar == CoreType::FLOAT ? "float" : scalar == CoreType::INT ? "int"
+                       : scalar == CoreType::UINT ? "uint" : "bool";
+      u32 encoding = scalar == CoreType::FLOAT ? NonSemanticShaderDebugInfo100Float
+                   : scalar == CoreType::INT ? NonSemanticShaderDebugInfo100Signed
+                   : scalar == CoreType::UINT ? NonSemanticShaderDebugInfo100Unsigned
+                                              : NonSemanticShaderDebugInfo100Boolean;
+      u32 ops[] = {DebugString(name, static_cast<u32>(strlen(name))), DebugConstant(32), DebugConstant(encoding),
+                   DebugConstant(NonSemanticShaderDebugInfo100None)};
+      id = DebugGlobal(NonSemanticShaderDebugInfo100DebugTypeBasic, ops, 4);
+    }
+  }
+  return debugTypeIds[index] = id;
+}
+
+u32 SPIRVBuilder::DebugEmptyExpression() {
+  if (debugExpression == 0) debugExpression = DebugGlobal(NonSemanticShaderDebugInfo100DebugExpression, nullptr, 0);
+  return debugExpression;
+}
+
+// The source variable a named register is a value of: one per name and
+// inlined function body, declared at the line it's first assigned on.
+u32 SPIRVBuilder::DebugVariableOf(u16 reg, u32 scope, u32 irIdx) {
+  u32 nameHash = ir->registerNameHashes[reg];
+  for (const DebugVariable& variable : debugVariables) {
+    if (variable.nameHash == nameHash && variable.scope == scope) return variable.id;
+  }
+  u32 type = DebugTypeOf(static_cast<CoreType>(ir->registerTypes[reg]));
+  std::string name = ReverseLookup::GetString(nameHash);
+  if (type == 0 || name.empty() || name.rfind("<hash:", 0) == 0) return 0;
+  u32 line = 0, column = 0;
+  if (irIdx < ir->instructionCount) DebugPosition(ir->sourceNodes[irIdx], &line, &column);
+  u32 ops[] = {DebugString(name.c_str(), static_cast<u32>(name.size())), type, DebugSourceOf(DebugFileOfScope(scope)),
+               DebugConstant(line), DebugConstant(column), DebugScopeFunction(scope),
+               DebugConstant(NonSemanticShaderDebugInfo100FlagIsLocal)};
+  u32 id = DebugGlobal(NonSemanticShaderDebugInfo100DebugLocalVariable, ops, 7);
+  debugVariables.push_back({nameHash, scope, id});
+  return id;
+}
+
+// A DebugValue: named register `reg` holds its source variable's value from
+// here on. Registers kept in memory (address-taken, or a phi variable) are
+// declared instead, or not described.
+void SPIRVBuilder::EmitDebugValue(u16 reg, u32 irIdx) {
+  if (!debugAst || !ir->registerNameHashes || reg >= idCapacity || ir->registerNameHashes[reg] == 0) return;
+  if (localVarIds && localVarIds[reg] != 0) return;
+  if (reg < phiLoadCount && phiLoadVariables[reg] != 0) return;
+  // A pointer is a tag in its own variable, not a value; and a value whose
+  // id a later instruction defines (a phi's operand) isn't one yet.
+  if (ir->registerStorageInfo && (ir->registerStorageInfo[reg] & IR::IRProgram::STORAGE_IS_PTR)) return;
+  if (reg < localPointerTagVars.size() && localPointerTagVars[reg] != 0) return;
+  if (hasPreAllocatedId && hasPreAllocatedId[reg]) return;
+  u32 value = spirvIds[reg];
+  if (value == 0 || IsUndefRegister(reg)) return;
+  u32 scope = irIdx < ir->instructionCount && ir->sourceScopes ? ir->sourceScopes[irIdx] : 0;
+  if (scope >= debugScopeIds.size()) scope = 0;
+  u32 variable = DebugVariableOf(reg, scope, irIdx);
+  if (variable == 0) return;
+  // A copy of the value the variable already has here adds nothing.
+  for (const auto& last : debugBlockValues) {
+    if (last.first == variable && last.second == value) return;
+  }
+  bool replaced = false;
+  for (auto& last : debugBlockValues) {
+    if (last.first == variable) {
+      last.second = value;
+      replaced = true;
+    }
+  }
+  if (!replaced) debugBlockValues.push_back({variable, value});
+  u32 ops[] = {variable, value, DebugEmptyExpression()};
+  DebugInFunction(NonSemanticShaderDebugInfo100DebugValue, ops, 3);
+}
+
+// After IR instruction irIdx: the value it gave a named register.
+void SPIRVBuilder::EmitDebugValues(u32 irIdx) {
+  if (!debugAst || irIdx >= ir->instructionCount) return;
+  switch (ir->opcodes[irIdx]) {
+    case IR::OP_NOP: case IR::OP_JUMP: case IR::OP_BRANCH: case IR::OP_RET: case IR::OP_SWITCH:
+    case IR::OP_DISCARD: case IR::OP_LOCAL_STORE: case IR::OP_ARRAY_STORE: case IR::OP_STORE_OUTPUT:
+    case IR::OP_STORE_BUFFER: case IR::OP_STORE_SHARED: case IR::OP_STORE_LOCAL: case IR::OP_IMG_STORE:
+    case IR::OP_STRUCT_STORE: case IR::OP_BARRIER: case IR::OP_MEM_FENCE:
+      return;
+    default:
+      break;
+  }
+  u16 dest = ir->destinations[irIdx];
+  if (IR::IsConstant(dest)) return;
+  EmitDebugValue(dest, irIdx);
+}
+
+// The values a block's phis give named registers, after the phis.
+void SPIRVBuilder::EmitDebugPhiValues(u32 block) {
+  if (!debugAst || !cfg || block >= cfg->blockCount) return;
+  u32 first = cfg->firstInst[block];
+  for (u32 p = 0; p < ir->phiCount; p++) {
+    if (ir->phiBlockIndices[p] != block) continue;
+    EmitDebugValue(ir->phiResultRegs[p], first);
+  }
+}
+
+// Address-taken locals live in their OpVariable: declared once, in the
+// entry block after the variables.
+void SPIRVBuilder::EmitDebugDeclares() {
+  if (!debugAst || !localVarIds || !ir->registerNameHashes) return;
+  u32 count = std::min<u32>(ir->registerCount, idCapacity);
+  for (u32 reg = 0; reg < count; reg++) {
+    if (localVarIds[reg] == 0 || ir->registerNameHashes[reg] == 0) continue;
+    // The scope and line of its first definition.
+    u32 definition = ir->instructionCount;
+    for (u32 i = 0; i < ir->instructionCount && definition == ir->instructionCount; i++) {
+      if (ir->destinations[i] == reg) definition = i;
+    }
+    u32 scope = definition < ir->instructionCount && ir->sourceScopes ? ir->sourceScopes[definition] : 0;
+    if (scope >= debugScopeIds.size()) scope = 0;
+    u32 variable = DebugVariableOf(static_cast<u16>(reg), scope, definition);
+    if (variable == 0) continue;
+    u32 ops[] = {variable, localVarIds[reg], DebugEmptyExpression()};
+    DebugInFunction(NonSemanticShaderDebugInfo100DebugDeclare, ops, 3);
+  }
+}
+
+}  // namespace BWSL

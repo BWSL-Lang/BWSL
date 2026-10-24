@@ -971,6 +971,9 @@ void SPIRVBuilder::EmitFunction() {
   u32 void_type = GetTypeId(CoreType::VOID);
   u32 func_type_id = GetFunctionTypeId(void_type, nullptr, 0);
 
+  // Source debug info outside the function
+  BeginDebugFunction();
+
   // 5. OpFunction
   // Format: result_type, result_id, function_control, function_type
   Emit(spv::OpFunction, void_type, entryPointId,
@@ -1290,12 +1293,19 @@ void SPIRVBuilder::EmitFunctionBody() {
     Emit(spv::OpLabel, entry_label);
 
     // Emit all local pointer OpVariables at the start of the function
+    ResetDebugLocation();
     emitLocalPointerVars();
+    EmitDebugFunctionDefinition();
 
     for (u32 i = 0; i < ir->instructionCount;) {
+      EmitDebugLocation(i);
       u32 count = TranslateArrayStoreSequence(i, ir->instructionCount);
-      if (count) i += count;
-      else TranslateInstruction(i++);
+      if (count) {
+        i += count;
+      } else {
+        TranslateInstruction(i);
+        EmitDebugValues(i++);
+      }
     }
 
     if (ir->instructionCount == 0 ||
@@ -1314,6 +1324,7 @@ void SPIRVBuilder::EmitFunctionBody() {
     // Emit block label
     u32 labelId = GetOrCreateBlockLabel(firstInst);
     Emit(spv::OpLabel, labelId);
+    ResetDebugLocation();  // Line information ends with each block
 
     // A block a constant branch skips is kept as a label (a construct may
     // still name it as its merge block) and OpUnreachable. Its values can
@@ -1334,10 +1345,15 @@ void SPIRVBuilder::EmitFunctionBody() {
     // Emit all local pointer OpVariables at the start of the FIRST block
     if (blockIdx == 0) {
       emitLocalPointerVars();
+      EmitDebugFunctionDefinition();
     }
 
     // Emit PHI nodes first (required by SPIR-V spec)
     EmitPhiNodes(blockIdx);
+    if (firstInst <= lastInst) {
+      EmitDebugLocation(firstInst);
+      EmitDebugPhiValues(blockIdx);
+    }
 
     // Emit all instructions in this block EXCEPT the terminator
     // We need special handling for terminators to emit merge instructions first
@@ -1346,9 +1362,14 @@ void SPIRVBuilder::EmitFunctionBody() {
 
     u32 endInst = lastIsTerminator ? lastInst : lastInst + 1;
     for (u32 i = firstInst; i < endInst;) {
+      EmitDebugLocation(i);
       u32 count = TranslateArrayStoreSequence(i, endInst);
-      if (count) i += count;
-      else TranslateInstruction(i++);
+      if (count) {
+        i += count;
+      } else {
+        TranslateInstruction(i);
+        EmitDebugValues(i++);
+      }
     }
 
     // Values this block's single outgoing edge brings into phi variables.
@@ -1357,6 +1378,7 @@ void SPIRVBuilder::EmitFunctionBody() {
     // Handle terminator with structured control flow
     if (lastIsTerminator) {
       // Use EmitBranch which handles bool conversion BEFORE merge instruction
+      EmitDebugLocation(lastInst);
       EmitBranch(lastInst);
     } else {
       // Block doesn't end with an explicit terminator
