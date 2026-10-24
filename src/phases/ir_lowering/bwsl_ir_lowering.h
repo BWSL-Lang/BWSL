@@ -192,6 +192,18 @@ struct IRLowering {
         ~SourceNodeGuard() { builder.currentSourceNode = savedNode; }
     };
 
+    // Lowers what follows in the debug scope of `function`'s body, inlined
+    // at the current source node, until it goes out of scope.
+    struct DebugScopeGuard {
+        IRBuilder& builder;
+        u32 savedScope;
+        DebugScopeGuard(IRBuilder& target, NodeRef function)
+            : builder(target), savedScope(target.currentScope) {
+            builder.currentScope = builder.AddDebugScope(function.packed, builder.currentSourceNode);
+        }
+        ~DebugScopeGuard() { builder.currentScope = savedScope; }
+    };
+
 
   // Map AST node refs to registers (keyed by packed NodeRef value)
   std::unordered_map<u32, u16> nodeRegisters;

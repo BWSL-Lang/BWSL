@@ -162,6 +162,7 @@ struct CompilerConfig {
     bool verbose     = false;
     bool dumpIr      = false;
     bool debugNames  = false;              // Emit debug names in SPIR-V for easier debugging
+    bool debugInfo   = false;              // Also source text and lines (-debug-info)
     bool showTiming  = false;              // Print timing information
     ValidationMode validationMode = ValidationMode::Auto;
     bool outputInternals = false;          // Output IR dump + SPIR-V disassembly to JSON file
@@ -334,6 +335,10 @@ void PrintUsage(const char* programName) {
     printf("  -timing        Print timing information\n");
     printf("  -dump-ir       Dump BWSL IR\n");
     printf("  -debug-names   Emit debug names in SPIR-V output\n");
+    printf("  -debug-info    Emit source-level debug info in SPIR-V for GPU debuggers:\n");
+    printf("                 debug names, the source, OpLine and\n");
+    printf("                 NonSemantic.Shader.DebugInfo.100 (needs\n");
+    printf("                 VK_KHR_shader_non_semantic_info before Vulkan 1.3)\n");
     printf("  -validation <auto|strict|off>\n");
     printf("                 SPIR-V validation mode (default: auto)\n");
     printf("  -no-validate   Alias for -validation off (faster compilation)\n");
@@ -2274,7 +2279,8 @@ CompileResult CompileShaderStage(
     bool captureWgslBindings = false,
     bool avoidGlslReservedNames = false,  // Rename local debug names reserved in GLSL
     OptimizationSet optimizations = Optimizations::Default(),
-    bool forSpirvCross = false  // The SPIR-V goes through SPIRV-Cross (Metal/HLSL/GLSL/GLES)
+    bool forSpirvCross = false,  // The SPIR-V goes through SPIRV-Cross (Metal/HLSL/GLSL/GLES)
+    bool debugInfo = false  // Source-level debug info in the SPIR-V (-debug-info)
 ) {
     using Clock = std::chrono::high_resolution_clock;
     auto shaderStart = Clock::now();
@@ -2631,6 +2637,21 @@ CompileResult CompileShaderStage(
     vpConfig.descriptorSet = 0;
     builder.SetVertexPullingConfig(vpConfig);
     builder.SetEmitDebugNames(debugNames);
+    if (debugInfo) {
+        // The stage's file: the pass's, or the scanned document's.
+        NodeRef stageRef = stage == ShaderStage::Vertex   ? pass.vertexShader
+                         : stage == ShaderStage::Fragment ? pass.fragmentShader
+                                                          : pass.computeShader;
+        u32 mainFile = context.ast.GetDeclarationSourceIndex(passRef);
+        for (u32 i = 0; mainFile >= context.ast.sourceFiles.count && i < context.ast.sourceFiles.count; i++) {
+            if (parser.currentSourceName == context.ast.sourceFiles[i]) mainFile = i;
+        }
+        const char* stageName = stage == ShaderStage::Vertex   ? "vertex"
+                              : stage == ShaderStage::Fragment ? "fragment"
+                                                               : "compute";
+        builder.SetDebugInfo(&context.ast, mainFile, stageRef,
+                             (diagnosticPassName.empty() ? std::string("main") : diagnosticPassName) + "." + stageName);
+    }
     builder.SetAvoidGlslReservedNames(avoidGlslReservedNames);
     builder.SetOptimizations(optimizations);
     builder.SetPhiVariables(forSpirvCross &&
@@ -3510,6 +3531,9 @@ int main(int argc, char* argv[]) {
             config.dumpIr = true;
         } else if (arg == "-debug-names") {
             config.debugNames = true;
+        } else if (arg == "-debug-info") {
+            config.debugNames = true;
+            config.debugInfo = true;
         } else if (arg == "-timing") {
             config.showTiming = true;
         } else if (arg == "-no-validate") {
@@ -4187,7 +4211,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        config.outputGlsl || config.outputGlslEs,
                                                        config.optimizations,
                                                        config.outputMetal || config.outputHlsl ||
-                                                           config.outputGlsl || config.outputGlslEs);
+                                                           config.outputGlsl || config.outputGlslEs,
+                                                       config.debugInfo);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "vertex");
@@ -4233,7 +4258,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        config.outputGlsl || config.outputGlslEs,
                                                        config.optimizations,
                                                        config.outputMetal || config.outputHlsl ||
-                                                           config.outputGlsl || config.outputGlslEs);
+                                                           config.outputGlsl || config.outputGlslEs,
+                                                       config.debugInfo);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "fragment");
@@ -4279,7 +4305,8 @@ static JobOutcome CompileInputFile(CompilerConfig config, bool includeJsonHeader
                                                        config.outputGlsl || config.outputGlslEs,
                                                        config.optimizations,
                                                        config.outputMetal || config.outputHlsl ||
-                                                           config.outputGlsl || config.outputGlslEs);
+                                                           config.outputGlsl || config.outputGlslEs,
+                                                       config.debugInfo);
 
             if (!result.success) {
                 AddCompileResultDiagnostics(diagnostics, result, config.inputFile, passName, "compute");

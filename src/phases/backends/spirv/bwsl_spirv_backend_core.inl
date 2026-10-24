@@ -112,10 +112,12 @@ void SPIRVBuilder::Initialize(BWSL_Arena *arena, IR::IRProgram *ir,
   initSection(&memoryModel, 8);
   initSection(&entryPoints, 64);
   initSection(&executionModes, 32);
+  initSection(&debugSources, 64);
   initSection(&debugNames, 256);
   initSection(&decorations, 256);
   initSection(&typesConstants, 512);
   initSection(&globals, 128);
+  initSection(&debugGlobals, 64);
   initSection(&functions, 2048);
 
   // Initialize current function buffer

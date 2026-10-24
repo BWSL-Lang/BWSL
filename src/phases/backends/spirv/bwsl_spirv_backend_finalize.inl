@@ -12,9 +12,9 @@ std::vector<u32> SPIRVBuilder::Finalize() {
   u32 total_size = 5 + // header
                    capabilities.count + extensions.count +
                    extInstImports.count + memoryModel.count +
-                   entryPoints.count + executionModes.count + debugNames.count +
-                   decorations.count + typesConstants.count + globals.count +
-                   functions.count;
+                   entryPoints.count + executionModes.count + debugSources.count +
+                   debugNames.count + decorations.count + typesConstants.count +
+                   globals.count + debugGlobals.count + functions.count;
   spirv.reserve(total_size);
 
   // Header
@@ -35,10 +35,12 @@ std::vector<u32> SPIRVBuilder::Finalize() {
   appendSection(memoryModel);
   appendSection(entryPoints);
   appendSection(executionModes);
+  appendSection(debugSources);
   appendSection(debugNames);
   appendSection(decorations);
   appendSection(typesConstants);
   appendSection(globals);
+  appendSection(debugGlobals);
   appendSection(functions);
 
   return spirv;

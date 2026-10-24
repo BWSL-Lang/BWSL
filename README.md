@@ -297,10 +297,36 @@ On Windows, the repo now also includes `build.bat` and `make.bat`. `build.bat` b
 | `-timing` | Print timing information |
 | `-dump-ir` | Dump BWSL IR |
 | `-debug-names` | Emit debug names in SPIR-V |
+| `-debug-info` | Emit source-level debug info for GPU debuggers (implies `-debug-names`); see [Source debugging](#source-debugging) |
 | `-validation auto\|strict\|off` | Control SPIR-V validation (`auto` is default; linked native builds validate in-process) |
 | `-no-validate` | Alias for `-validation off` |
 | `--optimizations <list>` | Choose optimizations: at most one group (`off`, `default`, `amd`, `nvidia`, `intel`) plus names to enable, or to disable with `no-` (e.g. `amd,no-dead-values`). Names override the group; `default` applies when no group is given. See below |
 | `-internals` | Output SPIR-V disassembly and IR to JSON |
+
+### Source debugging
+
+`-debug-info` lets GPU capture tools such as RenderDoc and Nsight Graphics step
+through a shader line by line against its `.bwsl` source. The SPIR-V gets:
+
+- **Sources:** the source file's text (`OpSource`), and a `DebugSource` with
+  the text of every file code comes from, imported and standard-library
+  modules included.
+- **Lines:** an `OpLine` and a `DebugLine` where the source line changes.
+- **Inlined functions:** a `DebugFunction` for each function inlined into the
+  stage, whose lines run in a scope inlined at the call (`DebugInlinedAt`), so
+  stepping enters the function.
+- **Variables:** a `DebugLocalVariable` for each named local of a scalar,
+  vector or matrix type, with a `DebugValue` where it's assigned.
+
+The GLSL, GLSL ES, HLSL and Metal generated from that SPIR-V carry `#line`
+directives. GLSL uses the standard numbered form (`#line 17 0`), with a comment
+after `#version` listing which number is which file, since the quoted file
+form needs an extension GL drivers don't have. `-gles-direct` and `-wgsl`
+output carry no lines.
+
+The NonSemantic debug info needs `VK_KHR_shader_non_semantic_info` on Vulkan
+before 1.3. Optimizations move, merge and remove code, so for stepping that
+follows the source closely, combine it with `--optimizations off`.
 
 ### Optimizations
 

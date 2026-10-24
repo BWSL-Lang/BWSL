@@ -644,6 +644,11 @@ struct AST {
     // sourceFiles index + 1), so declarations merged from a submodule keep
     // pointing at their own file.
     ArenaArray<const char*> sourceFiles;
+    // Each source file's text, parallel to sourceFiles (null when the parser
+    // didn't read it), for debug info that carries the source. The text is
+    // the parser's, not a copy, and lives as long as the compilation does.
+    ArenaArray<const char*> sourceTexts;
+    ArenaArray<u32> sourceTextLengths;
     NodeU32Map declarationSources;
 
     // @branch / @flatten written on an if statement, keyed by the
@@ -724,6 +729,8 @@ struct AST {
 
         namePositions.Init(arena, NextPowerOfTwo(estimatedNodes));
         sourceFiles.Init(arena, 4);
+        sourceTexts.Init(arena, 4);
+        sourceTextLengths.Init(arena, 4);
         typeAliases.Init(arena, 4);
         declarationSources.Init(arena, 64);
         selectionHints.Init(arena, 16);
@@ -890,12 +897,29 @@ struct AST {
         char* copy = (char*)arena->Allocate(length + 1, 1);
         memcpy(copy, path, length + 1);
         sourceFiles.Push(arena, copy);
+        sourceTexts.Push(arena, nullptr);
+        sourceTextLengths.Push(arena, 0);
         return sourceFiles.count - 1;
+    }
+
+    // Records the text of source file `fileIndex` (see sourceTexts).
+    void SetSourceText(u32 fileIndex, const char* text, u32 length) {
+        if (fileIndex >= sourceTexts.count) return;
+        sourceTexts[fileIndex] = text;
+        sourceTextLengths[fileIndex] = length;
     }
 
     void SetDeclarationSource(NodeRef ref, u32 fileIndex) {
         if (ref.IsNull() || fileIndex >= sourceFiles.count) return;
         declarationSources.Set(arena, ref.packed, fileIndex + 1);
+    }
+
+    // Index in sourceFiles of the file a declaration was written in, or
+    // 0xFFFFFFFF when unrecorded.
+    u32 GetDeclarationSourceIndex(NodeRef ref) const {
+        if (ref.IsNull()) return 0xFFFFFFFF;
+        u32 entry = declarationSources.Find(ref.packed);
+        return (entry == 0 || entry > sourceFiles.count) ? 0xFFFFFFFF : entry - 1;
     }
 
     // Source file a declaration was written in, or nullptr when unrecorded.
