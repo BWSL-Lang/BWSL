@@ -100,7 +100,14 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   program.instructionCount = 0;
   program.instructionCapacity = initialSize;
     program.sourceNodes = (u32*)pool->Allocate(initialSize * sizeof(u32), 64);
+    program.sourceScopes = (u32*)pool->Allocate(initialSize * sizeof(u32), 64);
     program.ssaFailureSourceNode = 0xFFFFFFFF;
+    // Scope 0: the stage's own body.
+    program.debugScopeFunctions = program.debugScopeCalls = program.debugScopeParents = nullptr;
+    program.debugScopeCount = program.debugScopeCapacity = 0;
+    builder.currentScope = 0;
+    builder.AddDebugScope(0xFFFFFFFF, 0xFFFFFFFF);
+    program.debugScopeParents[0] = 0xFFFFFFFF;
   program.opcodes = (u16 *)pool->Allocate(initialSize * sizeof(u16), 64);
   program.types = (u16 *)pool->Allocate(initialSize * sizeof(u16), 64);
   program.flags = (u16 *)pool->Allocate(initialSize * sizeof(u16), 64);

@@ -840,7 +840,10 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
                   if (methodModuleIndex != 0xFFFFFFFF) {
                     inlineModuleIndex = methodModuleIndex;
                   }
-                  armResult = LowerExpression(arm.body);
+                  {
+                    DebugScopeGuard scope(builder, methodRef);
+                    armResult = LowerExpression(arm.body);
+                  }
                   inlineModuleIndex = savedInlineModuleIndex;
                 }
 
@@ -899,7 +902,11 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
               if (methodModuleIndex != 0xFFFFFFFF) {
                 inlineModuleIndex = methodModuleIndex;
               }
-              u16 bodyResult = LowerExpression(method.body);
+              u16 bodyResult = 0;
+              {
+                DebugScopeGuard scope(builder, methodRef);
+                bodyResult = LowerExpression(method.body);
+              }
               inlineModuleIndex = savedInlineModuleIndex;
 
               // Restore variableRegisters
@@ -1970,6 +1977,9 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   u16 savedStructMethodSelfReg = currentStructMethodSelfReg;
   bool savedStructMethodIsConst = currentStructMethodIsConst;
 
+  // The parameters and the body are the method's debug scope.
+  DebugScopeGuard scope(builder, methodRef);
+
   u32 selfHash = Utils::HashStr("self");
   variableRegisters[selfHash] = receiverReg;
   variableStructTypes[selfHash] = receiverStructHash;
@@ -2052,6 +2062,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
     CheckStoreShape(method.body, exprResult, inlineReturnType);
     builder.EmitInstruction(OP_STORE_REG, returnReg, exprResult);
   }
+  builder.currentScope = scope.savedScope;  // What follows is the caller's
 
   if (inlineStackDepth > 0) {
     inlineStackDepth--;
@@ -2366,6 +2377,9 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   currentStructMethodSelfReg = 0xFFFF;
   currentStructMethodIsConst = false;
 
+  // The parameters and the body are the function's debug scope.
+  DebugScopeGuard scope(builder, funcRef);
+
   // Bind parameters to argument registers
   u32 paramCount =
       func.parameters.count < argCount ? func.parameters.count : argCount;
@@ -2469,6 +2483,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
     CheckStoreShape(func.body, exprResult, inlineReturnType);
     builder.EmitInstruction(OP_STORE_REG, returnReg, exprResult);
   }
+  builder.currentScope = scope.savedScope;  // What follows is the caller's
 
   // Restore state
   if (inlineStackDepth > 0) {

@@ -101,7 +101,7 @@ void ApplyInsertions(IR::IRBuilder* builder, CFG* cfg, InstructionInsertions* in
     auto moved = [&](u32 index) { return index < oldCount ? index + shift[index + 1] : index; };
 
     // Writes queue items [first, end) from `position` on.
-    auto place = [&](u32 first, u32 end, u32 position, u32 sourceNode) {
+    auto place = [&](u32 first, u32 end, u32 position, u32 sourceNode, u32 sourceScope) {
         for (u32 k = first; k < end; k++, position++) {
             const InsertedInstruction& item = insertions->items[k];
             ir->opcodes[position] = item.opcode;
@@ -114,6 +114,7 @@ void ApplyInsertions(IR::IRBuilder* builder, CFG* cfg, InstructionInsertions* in
             ir->structureInfo[position] = 0;
             ir->continueInfo[position] = NO_BLOCK;
             if (ir->sourceNodes) ir->sourceNodes[position] = sourceNode;
+            if (ir->sourceScopes) ir->sourceScopes[position] = sourceScope;
         }
     };
 
@@ -123,7 +124,8 @@ void ApplyInsertions(IR::IRBuilder* builder, CFG* cfg, InstructionInsertions* in
     u32 tail = next;
     while (tail > 0 && insertions->items[tail - 1].before >= oldCount) tail--;
     place(tail, next, oldCount + shift[oldCount],
-          ir->sourceNodes && oldCount > 0 ? ir->sourceNodes[oldCount - 1] : 0);
+          ir->sourceNodes && oldCount > 0 ? ir->sourceNodes[oldCount - 1] : 0,
+          ir->sourceScopes && oldCount > 0 ? ir->sourceScopes[oldCount - 1] : 0);
     next = tail;
     for (u32 i = oldCount; i-- > 0;) {
         u32 to = moved(i);
@@ -147,11 +149,13 @@ void ApplyInsertions(IR::IRBuilder* builder, CFG* cfg, InstructionInsertions* in
         ir->structureInfo[to] = structure;
         ir->continueInfo[to] = target(continuation);
         if (ir->sourceNodes) ir->sourceNodes[to] = ir->sourceNodes[i];
+        if (ir->sourceScopes) ir->sourceScopes[to] = ir->sourceScopes[i];
 
         // The instructions queued in front of i, in queue order.
         u32 first = next;
         while (first > 0 && insertions->items[first - 1].before == i) first--;
-        place(first, next, i + shift[i], ir->sourceNodes ? ir->sourceNodes[to] : 0);
+        place(first, next, i + shift[i], ir->sourceNodes ? ir->sourceNodes[to] : 0,
+              ir->sourceScopes ? ir->sourceScopes[to] : 0);
         next = first;
     }
     ir->instructionCount = newCount;

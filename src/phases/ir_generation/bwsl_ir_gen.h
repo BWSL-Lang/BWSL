@@ -112,6 +112,18 @@ struct IRProgram {
     alignas(64) u32* branchFalseTargets;
     // Packed AST node references survive lowering for located SSA failures.
     u32* sourceNodes = nullptr;
+    // Where each instruction was lowered from, for debug info: the debug
+    // scope (below) of the function body its source node is in.
+    u32* sourceScopes = nullptr;
+    // Debug scopes. Scope 0 is the stage's own body; a scope s > 0 is the
+    // body of function debugScopeFunctions[s] (a packed FUNCTION NodeRef)
+    // inlined at the call node debugScopeCalls[s] of scope
+    // debugScopeParents[s].
+    u32* debugScopeFunctions = nullptr;
+    u32* debugScopeCalls = nullptr;
+    u32* debugScopeParents = nullptr;
+    u32 debugScopeCount = 0;
+    u32 debugScopeCapacity = 0;
     u32 ssaFailureSourceNode = 0xFFFFFFFF;
     u32 instructionCount;
     u32 instructionCapacity;
@@ -815,6 +827,7 @@ struct IRBuilder {
     // Working set
     u32 currentInstruction;
     u32 currentSourceNode = 0xFFFFFFFF;
+    u32 currentScope = 0;  // Debug scope instructions are emitted in
     u16 nextRegister;
     
     // Symbol mapping
@@ -849,6 +862,7 @@ struct IRBuilder {
         
         u32 idx = currentInstruction++;
         if (program->sourceNodes) program->sourceNodes[idx] = currentSourceNode;
+        if (program->sourceScopes) program->sourceScopes[idx] = currentScope;
         program->opcodes[idx] = opcode;
         program->destinations[idx] = dest;
         program->operands[idx * 4] = s0;
@@ -936,6 +950,34 @@ struct IRBuilder {
         return MakeBoolConstant(slot);
     }
 
+    // A new debug scope: the body of `function` inlined at `callNode` from
+    // the current scope. Returns its index, or the current scope when the
+    // table can't grow.
+    u32 AddDebugScope(u32 function, u32 callNode) {
+        if (program->debugScopeCount == program->debugScopeCapacity) {
+            u32 capacity = program->debugScopeCapacity ? program->debugScopeCapacity * 2 : 16;
+            auto grow = [&](u32* values) {
+                u32* grown = (u32*)pool->Allocate(capacity * sizeof(u32), 64);
+                if (!grown) return values;
+                if (values) memcpy(grown, values, program->debugScopeCount * sizeof(u32));
+                return grown;
+            };
+            u32* functions = grow(program->debugScopeFunctions);
+            u32* calls = grow(program->debugScopeCalls);
+            u32* parents = grow(program->debugScopeParents);
+            if (functions == program->debugScopeFunctions && program->debugScopeCapacity) return currentScope;
+            program->debugScopeFunctions = functions;
+            program->debugScopeCalls = calls;
+            program->debugScopeParents = parents;
+            program->debugScopeCapacity = capacity;
+        }
+        u32 scope = program->debugScopeCount++;
+        program->debugScopeFunctions[scope] = function;
+        program->debugScopeCalls[scope] = callNode;
+        program->debugScopeParents[scope] = currentScope;
+        return scope;
+    }
+
     void GrowInstructionArrays() {
         u32 oldCapacity = program->instructionCapacity;
         u32 newCapacity = program->instructionCapacity * 2;
@@ -943,6 +985,10 @@ struct IRBuilder {
         if (program->sourceNodes) {
             program->sourceNodes = (u32*)pool->Reallocate(
                 program->sourceNodes, newCapacity * sizeof(u32), 64);
+        }
+        if (program->sourceScopes) {
+            program->sourceScopes = (u32*)pool->Reallocate(
+                program->sourceScopes, newCapacity * sizeof(u32), 64);
         }
 
         // Reallocate all instruction arrays
@@ -1130,6 +1176,8 @@ void EliminateDeadCode(IRProgram* prog) {
                 prog->operands[writeIdx * 4 + 1] = prog->operands[i * 4 + 1];
                 prog->operands[writeIdx * 4 + 2] = prog->operands[i * 4 + 2];
                 prog->operands[writeIdx * 4 + 3] = prog->operands[i * 4 + 3];
+                if (prog->sourceNodes) prog->sourceNodes[writeIdx] = prog->sourceNodes[i];
+                if (prog->sourceScopes) prog->sourceScopes[writeIdx] = prog->sourceScopes[i];
             }
 
             u16 op = prog->opcodes[writeIdx];
@@ -1406,7 +1454,9 @@ void EliminateDeadCode(IRProgram* prog) {
                     prog->operands[writeIdx * 4 + 1] = prog->operands[i * 4 + 1];
                     prog->operands[writeIdx * 4 + 2] = prog->operands[i * 4 + 2];
                     prog->operands[writeIdx * 4 + 3] = prog->operands[i * 4 + 3];
-                    
+                    if (prog->sourceNodes) prog->sourceNodes[writeIdx] = prog->sourceNodes[i];
+                    if (prog->sourceScopes) prog->sourceScopes[writeIdx] = prog->sourceScopes[i];
+
                     // Update metadata for control flow instructions
                     u32 meta = prog->metadata[i];
                     u16 op = prog->opcodes[writeIdx];

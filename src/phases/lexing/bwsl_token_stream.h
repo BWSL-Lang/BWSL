@@ -438,6 +438,7 @@ class alignas(64) TokenStream {
     BWSL_Arena* arena;
     u32* line_starts;
     u32 line_count;
+    size_t source_length = 0;
 
     struct Stats {
         u32 identifier_count;
@@ -449,6 +450,7 @@ class alignas(64) TokenStream {
 public:
     void Init(BWSL_Arena* arena_, const char* source, size_t source_len) {
         arena = arena_;
+        source_length = source_len;
 
         size_t estimated_tokens = (source_len / 6) + 128;
         estimated_tokens = ((estimated_tokens + 15) / 16) * 16;
@@ -628,6 +630,7 @@ public:
     //==========================================================================
 
     const char* GetSourceBase() const { return hot.source_base; }
+    size_t GetSourceLength() const { return source_length; }
     u32 Count() const { return hot.count; }
     const Stats& GetStats() const { return stats; }
     BWSL_Arena* GetArena() const { return arena; }
