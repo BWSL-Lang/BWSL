@@ -1,0 +1,54 @@
+// A member without a written value is the previous member's plus one, or 0
+// for the first (#253): written values aren't ignored, and members don't
+// collide with them. The same rule holds with and without an underlying
+// type, and for an `: int` enum past a negative value.
+pipeline EquivEnumImplicitValues {
+
+    enum Mixed : uint {
+        A = 3,
+        B,
+        C = 7,
+        D
+    }
+
+    enum Untyped {
+        P = 3,
+        Q,
+        R = 7,
+        S
+    }
+
+    enum Later : uint {
+        X,
+        Y = 5,
+        Z
+    }
+
+    enum Signed : int {
+        Low = -2,
+        Next,
+        Zero
+    }
+
+    resources {
+        output: buffer<float>
+    }
+
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            resources.output[0] = float(uint(Mixed::A));
+            resources.output[1] = float(uint(Mixed::B));
+            resources.output[2] = float(uint(Mixed::C));
+            resources.output[3] = float(uint(Mixed::D));
+            resources.output[4] = float(uint(Untyped::Q));
+            resources.output[5] = float(uint(Untyped::S));
+            resources.output[6] = float(uint(Later::X));
+            resources.output[7] = float(uint(Later::Z));
+            resources.output[8] = float(int(Signed::Next));
+            resources.output[9] = float(int(Signed::Zero));
+            Mixed m = Mixed::B;
+            resources.output[10] = m == Mixed::A ? 1.0 : 0.0;
+        }
+    }
+}

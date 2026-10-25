@@ -86,6 +86,10 @@ Positions are one-based.
   of a `read` edge to the constant's declaration.
 - Attribute declarations use `compression: null` when no compression is declared;
   explicit compression settings remain strings.
+- Enum variants (`VARIANT_DECL`) have the `value` the compiler uses, for
+  members without a written value too (the previous member's plus one), signed
+  for an `: int` enum. `valueWritten` says whether it was written as
+  `= value`.
 - Attribute declarations, resource declarations and struct fields written with
   `@bounds(...)` have a `bounds` object; others have none. Its
   `line`/`column` is the `@` and `endLine`/`endColumn` is just past the `)`.

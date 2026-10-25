@@ -376,6 +376,8 @@ ERROR_CASE_TESTS = {
     "swizzle_duplicate_write.bwsl": "swizzle assignment target has duplicate components",
     "duplicate_enum_member.bwsl": "Duplicate enum member name",
     "duplicate_struct_field.bwsl": "Duplicate struct field name",
+    "enum_duplicate_value.bwsl": "Enum members 'A' and 'C' both have the value 1",
+    "enum_implicit_value_overflow.bwsl": "Enum member 'Past' follows the largest uint value",
     "duplicate_pass_name.bwsl": 'Duplicate pass name "Main" in pipeline (the first pass "Main" is on line 7)',
     "use_attributes_duplicate.bwsl": "Duplicate attribute in 'use attributes'",
     "duplicate_function_params.bwsl": "Duplicate parameter name in function declaration",

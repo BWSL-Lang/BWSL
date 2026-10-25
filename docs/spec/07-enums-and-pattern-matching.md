@@ -42,15 +42,24 @@ Payload variants are part of the supported language.
 
 ## Variant Values
 
-The implementation currently assigns enum values as follows:
+- A member written with `= value` has that value.
+- A member without one has the previous member's value plus one, or 0 when it
+  is the first, as in C: `enum E : uint { A = 3, B, C = 7, D }` gives A = 3,
+  B = 4, C = 7 and D = 8.
+- Values are of the underlying type: `uint` when none is given, `int` for
+  `: int`. A member without a value can't follow the largest value of the type.
+- Two members of an enum can't have the same value: a `match` or a comparison
+  couldn't tell them apart.
 
-- explicit `= value` is used when present
-- otherwise plain enums auto-number sequentially from zero
-- flag-like enums auto-assign powers of two
+A flag enum writes each member's value:
 
-Current note: the implementation identifies a flag-like enum using compiler
-heuristics. The final wording should be refined, but the current behavior must
-still be documented.
+```bwsl
+enum Channels : uint {
+    Red   = 0b0001,
+    Green = 0b0010,
+    Blue  = 0b0100
+}
+```
 
 ## Enum Methods
 

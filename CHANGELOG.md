@@ -3,6 +3,14 @@
 ## unreleased
 
 ### Breaking changes
+- An enum member without a written value is the previous member's value
+  plus one, or 0 for the first: `enum E : uint { A = 3, B, C = 7, D }` gives
+  B = 4 and D = 8. Members were numbered by position, ignoring the values
+  written before them, and as powers of two once an enum with an underlying
+  type wrote any value, so `B` was 2 and members could share a value
+  silently (`enum E { A = 3, B, C = 7, D }` gave D = 3, like A). Two members
+  with the same value, or a member without one after the largest value of
+  its type, are now errors.
 - Assignments, initializers, returns and component-wise operators no longer
   change a vector's shape implicitly. `int2 s = size3;` needs `size3.xy`,
   `int3 v = size2;` needs `int3(size2, z)`, `float3 f = i3;` needs
@@ -270,6 +278,9 @@
   `bwslc -h` lists the names.
 
 ### AST JSON
+- Enum variants have the value the compiler uses, also for members without
+  a written one, signed for an `: int` enum, and `valueWritten` says whether
+  it was written. A member without a value reported `4294967295`.
 - Attribute declarations, resource declarations and struct fields written with
   `@bounds(...)` have a `bounds` object: the clause's position and the range
   it promises per component, resolved as the compiler uses it.

@@ -404,9 +404,11 @@ struct EnumDeclData {
         ArenaArray<CoreType> associatedTypes;
         ArenaArray<u32> associatedTypeHashes;
         u32 value;
-        // True when `= value` was written in source. The 0xFFFFFFFF sentinel
-        // alone cannot distinguish auto-numbering from an explicit -1.
+        // True when `= value` was written in source. The value is the
+        // member's either way once the enum is parsed: the written one, or
+        // the previous member's plus one.
         bool hasExplicitValue = false;
+        bool valueSigned = false;  // The enum is `: int`: value is an s32
     };
     VariantInfo currentVariant; // Temporary storage during parsing
 
