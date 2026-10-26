@@ -292,11 +292,19 @@ struct SPIRVBuilder {
     std::vector<std::pair<u32, u32>> debugFunctionIds;  // FUNCTION node -> DebugFunction
     std::vector<std::pair<u32, u32>> debugConstants;    // Value -> its 32-bit OpConstant
     std::vector<u32> debugTypeIds;      // Per CoreType: its debug type, 0 until used
+    std::vector<std::pair<u32, u32>> debugStructTypes;  // Struct hash -> DebugTypeComposite (0: not described)
+    struct DebugArrayType {
+        u32 element;  // Element debug type
+        u32 count;
+        u32 id;       // DebugTypeArray
+    };
+    std::vector<DebugArrayType> debugArrayTypes;
     u32 debugExpression = 0;            // The empty DebugExpression, 0 until used
     struct DebugVariable {
         u32 nameHash;
-        u32 scope;  // IR debug scope
-        u32 id;     // DebugLocalVariable
+        u32 scope;      // IR debug scope
+        u32 id;         // DebugLocalVariable
+        bool declared;  // In memory (DebugDeclare), so values don't describe it
     };
     std::vector<DebugVariable> debugVariables;
     std::vector<std::pair<u32, u32>> debugBlockValues;  // Variable -> the value the block last gave it
@@ -485,7 +493,14 @@ struct SPIRVBuilder {
     u32 DebugInlinedAt(u32 scope);
     bool DebugPosition(u32 packedNode, u32* line, u32* column) const;
     u32 DebugTypeOf(CoreType type);
-    u32 DebugVariableOf(u16 reg, u32 scope, u32 irIdx);
+    u32 DebugTypeOf(CoreType type, u32 structHash);
+    u32 DebugStructType(u32 structHash);
+    u32 DebugArrayTypeOf(u32 element, u32 count);
+    u32 DebugBitsOf(CoreType type, u32 structHash) const;
+    u32 DebugFirstDefinition(u16 reg) const;
+    u32 DebugScopeAt(u32 irIdx) const;
+    u32 DebugVariableOf(u32 nameHash, u32 type, u32 scope, u32 packedNode);
+    void EmitDebugDeclare(u32 nameHash, u32 type, u32 scope, u32 packedNode, u32 pointer);
     u32 DebugEmptyExpression();
     void EmitDebugValue(u16 reg, u32 irIdx);
     void EmitDebugValues(u32 irIdx);
