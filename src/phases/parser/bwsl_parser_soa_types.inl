@@ -647,6 +647,11 @@ NodeRef Parser::ParseEnum() {
     if (Match(TokenType::COLON)) {
         if (MatchMask(TokenMasks::INT_TYPES | TokenMasks::UINT_TYPES)) {
             underlyingType = TokenTypeToReturnType(PreviousTokenType());
+            // Enum values are 32-bit scalars throughout the compiler.
+            if (underlyingType != CoreType::INT && underlyingType != CoreType::UINT) {
+                ErrorAtPrevious("An enum's underlying type is int or uint");
+                underlyingType = CoreType::UINT;
+            }
         } else {
             Error("Expected integer type after ':'");
         }
@@ -773,8 +778,18 @@ NodeRef Parser::ParseEnum() {
             std::string variantName = ReverseLookup::GetString(variant.name.nameHash);
             s64 value = nextValue;
             if (astVariant.currentVariant.hasExplicitValue) {
+                // The written value as written: its sign and magnitude, which
+                // must fit the type.
                 u32 written = astVariant.currentVariant.value;
-                value = isSigned ? static_cast<s64>(static_cast<s32>(written)) : static_cast<s64>(written);
+                bool negative = astVariant.currentVariant.writtenNegative;
+                s64 magnitude = negative ? static_cast<s64>(0u - written) : static_cast<s64>(written);
+                value = negative ? -magnitude : magnitude;
+                if (isSigned ? (value < -2147483648LL || value > 2147483647LL) : value < 0) {
+                    ErrorAt(variantToken, "Enum member '" + variantName + "' is " + std::to_string(value) +
+                                              ", which isn't " + (isSigned ? "an int" : "a uint") + " value" +
+                                              (isSigned ? "" : "; give the enum `: int` for negative values"));
+                    value = 0;
+                }
             } else if (value > (isSigned ? 2147483647LL : 4294967295LL)) {
                 ErrorAt(variantToken, "Enum member '" + variantName + "' follows the largest " + typeName +
                                           " value, so it has none; write its value");
@@ -892,6 +907,7 @@ NodeRef Parser::ParseEnumVariant() {
 
             ast->GetEnumDecl(variant).currentVariant.value = value;
             ast->GetEnumDecl(variant).currentVariant.hasExplicitValue = true;
+            ast->GetEnumDecl(variant).currentVariant.writtenNegative = negative;
         } else {
             Error("Expected constant value after '='");
         }

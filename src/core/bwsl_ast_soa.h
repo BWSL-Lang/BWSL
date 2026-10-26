@@ -409,6 +409,7 @@ struct EnumDeclData {
         // the previous member's plus one.
         bool hasExplicitValue = false;
         bool valueSigned = false;  // The enum is `: int`: value is an s32
+        bool writtenNegative = false;  // Written with a `-`; value holds its two's complement
     };
     VariantInfo currentVariant; // Temporary storage during parsing
 

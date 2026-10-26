@@ -1,0 +1,13 @@
+// Error case: an enum's underlying type is int or uint, and each written
+// value must fit it (#253 review).
+pipeline EnumValueRange {
+    enum E : uint { A = -2 }
+
+    attributes { position: float4 }
+
+    pass "Main" {
+        use attributes { position }
+        vertex { output.position = attributes.position; }
+        fragment { output.color = float4(1.0); }
+    }
+}

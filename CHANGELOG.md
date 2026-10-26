@@ -10,7 +10,10 @@
   type wrote any value, so `B` was 2 and members could share a value
   silently (`enum E { A = 3, B, C = 7, D }` gave D = 3, like A). Two members
   with the same value, or a member without one after the largest value of
-  its type, are now errors.
+  its type, are now errors. So are a written value outside the enum's type
+  (a negative value without `: int`, or `2147483648` for `: int`) and an
+  underlying type other than `int` or `uint`, such as `uint64` or `int2`,
+  which were accepted and treated as 32-bit.
 - Assignments, initializers, returns and component-wise operators no longer
   change a vector's shape implicitly. `int2 s = size3;` needs `size3.xy`,
   `int3 v = size2;` needs `int3(size2, z)`, `float3 f = i3;` needs

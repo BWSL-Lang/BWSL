@@ -46,8 +46,9 @@ Payload variants are part of the supported language.
 - A member without one has the previous member's value plus one, or 0 when it
   is the first, as in C: `enum E : uint { A = 3, B, C = 7, D }` gives A = 3,
   B = 4, C = 7 and D = 8.
-- Values are of the underlying type: `uint` when none is given, `int` for
-  `: int`. A member without a value can't follow the largest value of the type.
+- Values are of the underlying type, `int` or `uint`; `uint` when none is
+  given. A written value must fit the type, so negative values need `: int`,
+  and a member without a value can't follow the largest value of the type.
 - Two members of an enum can't have the same value: a `match` or a comparison
   couldn't tell them apart.
 
