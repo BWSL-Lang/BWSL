@@ -1290,6 +1290,26 @@ value :: () -> float {
         self.assertEqual(uv['components'], [dict(inclusive, component=c) for c in 'xy'])
         self.assertNotIn('bounds', self.nodes(data, 'ATTRIBUTE_DECL', 'position')[0])
 
+    def test_enum_members_report_their_values(self):
+        # #253: a member without a written value is the previous one's plus
+        # one, and the AST says so; an `: int` enum's values are signed.
+        data = self.parse("""
+            pipeline P {
+                enum E : uint { A = 3, B, C = 7, D }
+                enum N : int { M = -2, O }
+                attributes { position: float4 }
+                pass "Main" {
+                    use attributes { position }
+                    vertex { output.position = attributes.position; }
+                    fragment { output.color = float4(float(uint(E::B))); }
+                }
+            }
+        """)
+        values = {enum['name']: [(v['name'], v['value'], v['valueWritten']) for v in enum['variants']]
+                  for enum in data['pipelines'][0]['enums']}
+        self.assertEqual(values['E'], [('A', 3, True), ('B', 4, False), ('C', 7, True), ('D', 8, False)])
+        self.assertEqual(values['N'], [('M', -2, True), ('O', -1, False)])
+
     def test_existing_fixtures(self):
         for path in sorted((ROOT / 'tests' / 'ast_json').glob('*.bwsl')):
             with self.subTest(fixture=path.name):

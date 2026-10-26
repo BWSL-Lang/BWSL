@@ -647,6 +647,11 @@ NodeRef Parser::ParseEnum() {
     if (Match(TokenType::COLON)) {
         if (MatchMask(TokenMasks::INT_TYPES | TokenMasks::UINT_TYPES)) {
             underlyingType = TokenTypeToReturnType(PreviousTokenType());
+            // Enum values are 32-bit scalars throughout the compiler.
+            if (underlyingType != CoreType::INT && underlyingType != CoreType::UINT) {
+                ErrorAtPrevious("An enum's underlying type is int or uint");
+                underlyingType = CoreType::UINT;
+            }
         } else {
             Error("Expected integer type after ':'");
         }
@@ -662,6 +667,7 @@ NodeRef Parser::ParseEnum() {
     // A progress guard keeps malformed input (e.g. `enum::` after a parse
     // error) from trapping us in an allocation-bomb infinite loop: if a full
     // iteration consumes no tokens we force an Advance and bail.
+    std::vector<TokenRef> variantTokens;  // Each member's name, for errors about its value
     while (!Check(TokenType::RIGHT_BRACE) && !Check(TokenType::EOF_TOKEN)) {
         ProgressGuard _pg_(this);
         TokenRef loopStart = current;
@@ -680,6 +686,7 @@ NodeRef Parser::ParseEnum() {
             Error("'eval' keyword must precede a method declaration");
         } else {
             // Variant declaration
+            TokenRef variantToken = current;
             NodeRef variant = ParseEnumVariant();
             if (variant.IsValid()) {
                 // A repeated member name would resolve silently to one of
@@ -695,6 +702,7 @@ NodeRef Parser::ParseEnum() {
                     }
                 }
                 ast->GetEnumDecl(enumNode).variants.Push(arena, variant);
+                variantTokens.push_back(variantToken);
             }
             Match(TokenType::COMMA);
         }
@@ -735,9 +743,16 @@ NodeRef Parser::ParseEnum() {
         if (hasData) {
             enumData.flags |= EnumData::IS_SUM_TYPE;
         }
-        if (hasExplicitValues && underlyingType != CoreType::INVALID) {
-            enumData.flags |= EnumData::IS_FLAG_ENUM;
-        }
+        (void)hasExplicitValues;
+
+        // A member's value is the one written, or else the previous
+        // member's plus one (0 for the first), as in C. Values are of the
+        // underlying type (uint without one, int for `: int`), and two
+        // members can't share one: a match or comparison couldn't tell them
+        // apart.
+        bool isSigned = underlyingType == CoreType::INT;
+        const char* typeName = isSigned ? "int" : "uint";
+        s64 nextValue = 0;
 
         // Copy variants to symbol table
         for (u32 i = 0; i < ast->GetEnumDecl(enumNode).variants.count; i++) {
@@ -759,21 +774,39 @@ NodeRef Parser::ParseEnum() {
             }
 
             // Assign values
+            TokenRef variantToken = i < variantTokens.size() ? variantTokens[i] : previous;
+            std::string variantName = ReverseLookup::GetString(variant.name.nameHash);
+            s64 value = nextValue;
             if (astVariant.currentVariant.hasExplicitValue) {
-                variant.value = astVariant.currentVariant.value;
-            } else {
-                // Auto-assign: for flag enums use powers of 2, otherwise sequential.
-                // Clamp the shift count: more than 31 variants in a flag enum
-                // would shift past the value width (undefined behaviour). The
-                // high bit acts as a saturating sentinel; a semantic error is
-                // surfaced later via enum overflow checking.
-                if (enumData.flags & EnumData::IS_FLAG_ENUM) {
-                    unsigned shift = (i < 31) ? (unsigned)i : 31u;
-                    variant.value = (i == 0) ? 1 : (1u << shift);
-                } else {
-                    variant.value = i;
+                // The written value as written: its sign and magnitude, which
+                // must fit the type.
+                u32 written = astVariant.currentVariant.value;
+                bool negative = astVariant.currentVariant.writtenNegative;
+                s64 magnitude = negative ? static_cast<s64>(0u - written) : static_cast<s64>(written);
+                value = negative ? -magnitude : magnitude;
+                if (isSigned ? (value < -2147483648LL || value > 2147483647LL) : value < 0) {
+                    ErrorAt(variantToken, "Enum member '" + variantName + "' is " + std::to_string(value) +
+                                              ", which isn't " + (isSigned ? "an int" : "a uint") + " value" +
+                                              (isSigned ? "" : "; give the enum `: int` for negative values"));
+                    value = 0;
                 }
+            } else if (value > (isSigned ? 2147483647LL : 4294967295LL)) {
+                ErrorAt(variantToken, "Enum member '" + variantName + "' follows the largest " + typeName +
+                                          " value, so it has none; write its value");
+                value = 0;
             }
+            variant.value = static_cast<u32>(value);
+            nextValue = value + 1;
+            for (u32 k = 0; k < enumData.variants.count; k++) {
+                if (enumData.variants[k].value != variant.value) continue;
+                std::string other = ReverseLookup::GetString(enumData.variants[k].name.nameHash);
+                ErrorAt(variantToken, "Enum members '" + other + "' and '" + variantName + "' both have the value " +
+                                          std::to_string(value) + "; give '" + variantName + "' another value");
+                break;
+            }
+            // The value tools read from the AST (-ast-json).
+            ast->GetEnumDecl(variantRef).currentVariant.value = variant.value;
+            ast->GetEnumDecl(variantRef).currentVariant.valueSigned = isSigned;
 
             enumData.variants.Push(arena, variant);
         }
@@ -874,6 +907,7 @@ NodeRef Parser::ParseEnumVariant() {
 
             ast->GetEnumDecl(variant).currentVariant.value = value;
             ast->GetEnumDecl(variant).currentVariant.hasExplicitValue = true;
+            ast->GetEnumDecl(variant).currentVariant.writtenNegative = negative;
         } else {
             Error("Expected constant value after '='");
         }

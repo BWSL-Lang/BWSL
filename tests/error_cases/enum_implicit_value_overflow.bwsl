@@ -1,0 +1,15 @@
+// Error case: a member without a value after the largest uint has none.
+pipeline EnumImplicitValueOverflow {
+    enum E : uint {
+        Last = 4294967295,
+        Past
+    }
+
+    attributes { position: float4 }
+
+    pass "Main" {
+        use attributes { position }
+        vertex { output.position = attributes.position; }
+        fragment { output.color = float4(float(uint(E::Past))); }
+    }
+}

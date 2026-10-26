@@ -252,11 +252,10 @@ struct EnumData {
     // Method indices (for eval and regular methods)
     ArenaArray<u32> methodIndices;
     
-    // Packed flags: isSumType (bit 0) | isFlagEnum (bit 1)
+    // Packed flags: isSumType (bit 0)
     u8 flags;
     
     static constexpr u8 IS_SUM_TYPE = 0x01;
-    static constexpr u8 IS_FLAG_ENUM = 0x02;
 };
 
 // Generics

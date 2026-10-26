@@ -1325,7 +1325,14 @@ inline void AppendNode(std::ostringstream& json, const AST& ast, NodeRef ref, u3
         case ASTNodeType::VARIANT_DECL: {
             const EnumDeclData& node = ast.GetEnumDecl(ref);
             AppendArenaStringFields(json, first, "name", node.currentVariant.name);
-            AppendUIntField(json, first, "value", node.currentVariant.value);
+            // The member's value, written or computed (the previous one's
+            // plus one), signed for an `: int` enum.
+            if (node.currentVariant.valueSigned) {
+                AppendIntField(json, first, "value", static_cast<s32>(node.currentVariant.value));
+            } else {
+                AppendUIntField(json, first, "value", node.currentVariant.value);
+            }
+            AppendBoolField(json, first, "valueWritten", node.currentVariant.hasExplicitValue);
             AppendFieldName(json, first, "associatedTypes");
             AppendCoreTypeArray(json, node.currentVariant.associatedTypes);
             break;

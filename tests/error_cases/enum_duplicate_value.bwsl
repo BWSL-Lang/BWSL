@@ -1,0 +1,17 @@
+// Error case: two members of an enum can't have the same value. C follows
+// B = 0, so it's 1, which A already is (#253).
+pipeline EnumDuplicateValue {
+    enum E : uint {
+        A = 1,
+        B = 0,
+        C
+    }
+
+    attributes { position: float4 }
+
+    pass "Main" {
+        use attributes { position }
+        vertex { output.position = attributes.position; }
+        fragment { output.color = float4(float(uint(E::C))); }
+    }
+}
