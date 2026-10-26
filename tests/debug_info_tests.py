@@ -19,10 +19,14 @@ OP_EXT_INST_IMPORT = 11
 OP_EXT_INST = 12
 OP_CONSTANT = 43
 
+DEBUG_TYPE_ARRAY = 5
+DEBUG_TYPE_COMPOSITE = 10
+DEBUG_TYPE_MEMBER = 11
 DEBUG_FUNCTION = 20
 DEBUG_SCOPE = 23
 DEBUG_INLINED_AT = 25
 DEBUG_LOCAL_VARIABLE = 26
+DEBUG_DECLARE = 28
 DEBUG_VALUE = 29
 DEBUG_SOURCE = 35
 DEBUG_LINE = 103
@@ -45,6 +49,52 @@ SHADER = textwrap.dedent("""\
             }
             fragment {
                 output.color = shade(input.uv);
+            }
+        }
+    }
+""")
+
+
+COMPOSITES = textwrap.dedent("""\
+    pipeline P {
+        attributes { position: float4  uv: float2 }
+
+        struct Inner {
+            float2 offset;
+            float[3] taps;
+        }
+
+        struct Outer {
+            Inner inner;
+            mat3 basis;
+            int count;
+        }
+
+        make :: (float2 uv) -> Outer {
+            Outer o;
+            o.inner.offset = uv;
+            o.inner.taps[0] = uv.x;
+            o.inner.taps[1] = uv.y;
+            o.inner.taps[2] = 1.0;
+            o.basis = mat3(1.0);
+            o.count = 3;
+            return o;
+        }
+
+        pass "Main" {
+            use attributes { position, uv }
+            outputs { color: float4 }
+            vertex {
+                output.position = attributes.position;
+                output.uv = attributes.uv;
+            }
+            fragment {
+                Outer made = make(input.uv);
+                Inner[2] list;
+                list[0] = made.inner;
+                list[1] = made.inner;
+                float total = list[1].taps[2] + made.inner.taps[int(input.uv.x)];
+                output.color = float4(made.inner.offset, total, 1.0);
             }
         }
     }
@@ -75,6 +125,22 @@ class Module:
 
     def functions(self):
         return {result: self.strings[operands[0]] for result, operands in self.debug_ops(DEBUG_FUNCTION)}
+
+    def variables(self):
+        """DebugLocalVariable id -> (name, function, line, type id)."""
+        functions = self.functions()
+        return {result: (self.strings[operands[0]], functions[operands[5]], self.number(operands[3]), operands[1])
+                for result, operands in self.debug_ops(DEBUG_LOCAL_VARIABLE)}
+
+    def composites(self):
+        """DebugTypeComposite id -> (name, line, [(member name, member type id)])."""
+        members = {result: (self.strings[operands[0]], operands[1]) for result, operands in self.debug_ops(DEBUG_TYPE_MEMBER)}
+        return {result: (self.strings[operands[0]], self.number(operands[3]), [members[m] for m in operands[9:]])
+                for result, operands in self.debug_ops(DEBUG_TYPE_COMPOSITE)}
+
+    def arrays(self):
+        """DebugTypeArray id -> (element type id, count)."""
+        return {result: (operands[0], self.number(operands[1])) for result, operands in self.debug_ops(DEBUG_TYPE_ARRAY)}
 
     def sources(self):
         return {result: self.strings[operands[0]] for result, operands in self.debug_ops(DEBUG_SOURCE)}
@@ -133,6 +199,51 @@ def run_debug_info_tests(compiler: Path) -> tuple[int, int]:
             self.assertIn(("r", "shade", 5), variables.values())
             valued = {operands[0] for _, operands in module.debug_ops(DEBUG_VALUE)}
             self.assertEqual(valued, set(variables))
+            self.assertFalse(module.debug_ops(DEBUG_DECLARE))
+
+        def test_struct_and_array_locals(self):
+            module = Module(self.compile(COMPOSITES, "-debug-info") / "shader.frag.spv")
+            composites = module.composites()
+            by_name = {name: (id, line, members) for id, (name, line, members) in composites.items()}
+            arrays = module.arrays()
+            # Structs at their declarations, a field per member, nested
+            # structs and array fields typed as such.
+            inner, inner_line, inner_members = by_name["Inner"]
+            self.assertEqual(inner_line, 4)
+            self.assertEqual([name for name, _ in inner_members], ["offset", "taps"])
+            self.assertEqual(arrays[inner_members[1][1]][1], 3)
+            outer, outer_line, outer_members = by_name["Outer"]
+            self.assertEqual(outer_line, 9)
+            self.assertEqual([name for name, _ in outer_members], ["inner", "basis", "count"])
+            self.assertEqual(outer_members[0][1], inner)
+            # Locals in memory are declared once, each in the function that
+            # names it: `made` is the fragment's although make's inlined body
+            # assigns it, at the call.
+            variables = module.variables()
+            declared = {operands[0]: operands[1] for _, operands in module.debug_ops(DEBUG_DECLARE)}
+            described = {variables[v][:3]: variables[v][3] for v in declared}
+            self.assertEqual(described[("made", "Main.fragment", 34)], outer)
+            self.assertEqual(described[("o", "make", 16)], outer)
+            self.assertEqual(arrays[described[("list", "Main.fragment", 36)]], (inner, 2))
+            self.assertEqual([v[0] for v in variables.values()].count("made"), 1)
+            # A declared variable's value is its memory's.
+            valued = {operands[0] for _, operands in module.debug_ops(DEBUG_VALUE)}
+            self.assertFalse(valued & set(declared))
+
+        @unittest.skipUnless(shutil.which("xcrun"), "needs the Metal compiler")
+        def test_metal_lines_point_at_the_source(self):
+            target = self.compile(SHADER, "-debug-info", "-metal")
+            ir = self.folder / "shader.frag.ll"
+            result = subprocess.run(
+                ["xcrun", "-sdk", "macosx", "metal", "-S", "-emit-llvm", "-gline-tables-only",
+                 str(target / "shader.frag.metal"), "-o", str(ir)],
+                capture_output=True, text=True, timeout=120)
+            if result.returncode != 0 and "unable to find utility" in result.stderr:
+                self.skipTest(result.stderr.strip())
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            text = ir.read_text(encoding="utf-8")
+            self.assertRegex(text, r'DIFile\(filename: "[^"]*shader\.bwsl"')
+            self.assertRegex(text, r'DISubprogram\(name: "main0", scope: (![0-9]+), file: \1, line: 17')
 
         def test_module_code_points_at_its_file(self):
             helper = textwrap.dedent("""\

@@ -287,11 +287,17 @@
   - `OpLine` and `DebugLine` where the line changes;
   - a `DebugFunction` with a `DebugInlinedAt` scope for each inlined
     function;
-  - local variables (`DebugLocalVariable`, `DebugValue`).
+  - local variables (`DebugLocalVariable`, with `DebugValue`, or
+    `DebugDeclare` for one kept in memory): scalars, vectors, matrices,
+    structs (`DebugTypeComposite`, with a member per field) and fixed-size
+    arrays (`DebugTypeArray`) of them, struct fields that are arrays or
+    structs included.
 
   It uses NonSemantic.Shader.DebugInfo.100, which needs
   `VK_KHR_shader_non_semantic_info` before Vulkan 1.3. The GLSL, HLSL and
   Metal output gets `#line` directives, in GLSL's standard numbered form.
+  The Metal compiler maps its debug lines, the entry function and the
+  locals to the `.bwsl` file through them.
 
 ### AST JSON
 - Enum variants have the value the compiler uses, also for members without

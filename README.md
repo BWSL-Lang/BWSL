@@ -315,14 +315,25 @@ through a shader line by line against its `.bwsl` source. The SPIR-V gets:
 - **Inlined functions:** a `DebugFunction` for each function inlined into the
   stage, whose lines run in a scope inlined at the call (`DebugInlinedAt`), so
   stepping enters the function.
-- **Variables:** a `DebugLocalVariable` for each named local of a scalar,
-  vector or matrix type, with a `DebugValue` where it's assigned.
+- **Variables:** a `DebugLocalVariable` for each named local, with a
+  `DebugValue` where it's assigned, or a `DebugDeclare` of its `OpVariable`
+  when it's kept in memory (a struct written field by field, an
+  address-taken local, a local array). Scalars, vectors and matrices are
+  described, structs as a `DebugTypeComposite` with a member per field, and
+  fixed-size arrays of either as a `DebugTypeArray`.
 
 The GLSL, GLSL ES, HLSL and Metal generated from that SPIR-V carry `#line`
 directives. GLSL uses the standard numbered form (`#line 17 0`), with a comment
 after `#version` listing which number is which file, since the quoted file
 form needs an extension GL drivers don't have. `-gles-direct` and `-wgsl`
 output carry no lines.
+
+For Xcode's Metal debugger, compile the Metal output with debug info
+(`xcrun metal -gline-tables-only` or `-g`): the `#line` directives make its
+lines, the entry function and the locals point at the `.bwsl` file. The
+`.bwsl` text isn't embedded: the debug info records the path bwslc was
+given, a relative one against the directory the Metal source is compiled
+in, so pass bwslc a path that still leads to the file where you debug.
 
 The NonSemantic debug info needs `VK_KHR_shader_non_semantic_info` on Vulkan
 before 1.3. Optimizations move, merge and remove code, so for stepping that
