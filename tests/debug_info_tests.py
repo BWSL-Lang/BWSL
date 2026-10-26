@@ -230,6 +230,39 @@ def run_debug_info_tests(compiler: Path) -> tuple[int, int]:
             valued = {operands[0] for _, operands in module.debug_ops(DEBUG_VALUE)}
             self.assertFalse(valued & set(declared))
 
+        def test_enum_fields_keep_their_struct(self):
+            # Plain and flag enums lower to their integer type and payload
+            # enums to a struct, so a struct with enum fields is described
+            # whole (a field that couldn't be would drop it).
+            quality = textwrap.dedent("""\
+                module Shading {
+                    enum Quality : uint { Low, High }
+                }
+            """)
+            source = SHADER.replace("pipeline P {", textwrap.dedent("""\
+                pipeline P {
+                    import Shading
+                    enum Mode { Off, Dim }
+                    enum Flags : uint { A = 1, B = 2 }
+                    enum Shape { Sphere(float radius), Box(float3 size) }
+                    struct Light { float3 color; Mode mode; Flags flags; Shading::Quality q; Shape shape; }
+                """).rstrip("\n"), 1).replace("output.color = shade(input.uv);", textwrap.dedent("""\
+                    Light light;
+                    light.color = float3(input.uv, 1.0);
+                    light.mode = input.uv.x > 0.5 ? Mode::Dim : Mode::Off;
+                    light.flags = input.uv.y > 0.5 ? Flags::A : Flags::B;
+                    light.q = input.uv.x > 0.25 ? Shading::Quality::High : Shading::Quality::Low;
+                    light.shape = Shape::Sphere(input.uv.x);
+                    float k = (light.mode == Mode::Dim && light.flags == Flags::A) ? 1.0 : 0.5;
+                    if (light.q == Shading::Quality::Low) { k = 0.0; }
+                    output.color = shade(input.uv) * k;"""))
+            module = Module(self.compile(source, "-debug-info", files={"Shading.bwsl": quality}) / "shader.frag.spv")
+            composites = {name: members for name, _, members in module.composites().values()}
+            self.assertEqual([name for name, _ in composites["Light"]], ["color", "mode", "flags", "q", "shape"])
+            self.assertIn("Shape", composites)
+            declared = {module.variables()[operands[0]][0] for _, operands in module.debug_ops(DEBUG_DECLARE)}
+            self.assertIn("light", declared)
+
         @unittest.skipUnless(shutil.which("xcrun"), "needs the Metal compiler")
         def test_metal_lines_point_at_the_source(self):
             target = self.compile(SHADER, "-debug-info", "-metal")
