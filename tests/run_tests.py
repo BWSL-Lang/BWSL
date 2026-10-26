@@ -3945,6 +3945,11 @@ def main() -> int:
     passed += local_names_passed
     failed += local_names_failed
 
+    from debug_info_tests import run_debug_info_tests
+    debug_info_passed, debug_info_failed = run_debug_info_tests(bwslc)
+    passed += debug_info_passed
+    failed += debug_info_failed
+
     from array_initializer_tests import run_array_initializer_tests
     array_passed, array_failed = run_array_initializer_tests(bwslc)
     passed += array_passed

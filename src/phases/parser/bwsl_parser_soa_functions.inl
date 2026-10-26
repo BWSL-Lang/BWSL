@@ -533,6 +533,8 @@ bool Parser::RegisterSubmoduleFromSource(const char* source,
     parsingEmbeddedModule = false;
     submoduleParentFilterHash = parentFilterHash;
     currentSourceName = sourceName ? sourceName : "";
+    ast->SetSourceText(ast->InternSourceFile(currentSourceName.c_str()), persistentSource,
+                       static_cast<u32>(sourceLength));
 
     bool success = false;
     current = 0;
@@ -634,6 +636,8 @@ bool Parser::RegisterModuleFromSource(const std::string& moduleName,
     parsingEmbeddedModule =
         sourceName && strncmp(sourceName, "stdlib://", 9) == 0;
     currentSourceName = sourceName ? sourceName : "";
+    ast->SetSourceText(ast->InternSourceFile(currentSourceName.c_str()), persistentSource,
+                       static_cast<u32>(sourceLength));
 
     bool success = false;
     current = 0;

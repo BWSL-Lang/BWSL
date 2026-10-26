@@ -10,6 +10,8 @@
 namespace BWSL {
 
 NodeRef Parser::ParseDocument() {
+    ast->SetSourceText(ast->InternSourceFile(currentSourceName.c_str()), stream->GetSourceBase(),
+                       static_cast<u32>(stream->GetSourceLength()));
     TokenRef documentStart = current;
     TokenRef previousStart = previous;
 

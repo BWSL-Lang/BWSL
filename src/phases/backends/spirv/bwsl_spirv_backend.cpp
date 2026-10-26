@@ -4,6 +4,7 @@
 #include "core/bwsl_utils.h"
 #include "core/bwsl_resource_reflection.h"
 #include "SPIRV-Headers/include/spirv/unified1/GLSL.std.450.h"
+#include "SPIRV-Headers/include/spirv/unified1/NonSemanticShaderDebugInfo100.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -25,7 +26,8 @@
 // 7. bwsl_spirv_backend_control.inl   - CFG, structured control flow, phis
 // 8. bwsl_spirv_backend_io.inl        - entry IO, builtins, shared vars, pulling
 // 9. bwsl_spirv_backend_resources.inl - resource and descriptor declarations
-// 10. bwsl_spirv_backend_finalize.inl - final assembly and growth helpers
+// 10. bwsl_spirv_backend_debug.inl     - source debug info (OpLine, DebugInfo.100)
+// 11. bwsl_spirv_backend_finalize.inl - final assembly and growth helpers
 
 #include "bwsl_spirv_backend_tables.inl"
 #include "bwsl_spirv_backend_core.inl"
@@ -36,4 +38,5 @@
 #include "bwsl_spirv_backend_control.inl"
 #include "bwsl_spirv_backend_io.inl"
 #include "bwsl_spirv_backend_resources.inl"
+#include "bwsl_spirv_backend_debug.inl"
 #include "bwsl_spirv_backend_finalize.inl"

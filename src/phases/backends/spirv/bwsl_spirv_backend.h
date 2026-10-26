@@ -152,6 +152,8 @@ struct SPIRVBuilder {
 
     Section executionModes; //  All OpExecutionMode or OpExecutionModeId instructions, specifying modes for the declared entry points.
 
+    Section debugSources; // OpString, OpSource and OpSourceContinued for source debug info: before every OpName.
+
     Section debugNames; //  All debug instructions, such as OpString, OpSourceContinued, OpSource, and OpSourceExtension.
 
     Section decorations; //  All decoration instructions, such as OpDecorate, OpMemberDecorate, OpDecorationGroup, and OpGroupDecorate.
@@ -159,6 +161,8 @@ struct SPIRVBuilder {
     Section typesConstants; // This is the main declaration section. All OpType*, OpConstant*, OpSpecConstant*, and global OpVariable instructions must be placed here. This section must precede all function definitions.
     
     Section globals; // see abov - we just seperate out the globals
+
+    Section debugGlobals; // NonSemantic.Shader.DebugInfo.100 instructions outside the function: after the globals
     
     Section functions; // Finally, all functions are defined. Each function definition starts with OpFunction and ends with OpFunctionEnd. Inside, the instructions are organized into a control-flow graph of basic blocks, each starting with OpLabel.
     
@@ -269,6 +273,36 @@ struct SPIRVBuilder {
     // reach GLSL/ESSL output verbatim and fail to compile.
     bool avoidGlslReservedNames = false;
     OptimizationSet optimizations = Optimizations::Default();  // ARRAY_FILL_STORES
+
+    // ============= Source Debug Info =============
+    // Set by SetDebugInfo: the source text (OpSource), line information
+    // (OpLine) and NonSemantic.Shader.DebugInfo.100 for the IR's source
+    // nodes and debug scopes; see bwsl_spirv_backend_debug.inl.
+    const AST* debugAst = nullptr;
+    u32 debugMainFile = 0;              // sourceFiles index of the stage body's file
+    NodeRef debugStage;                 // The stage, where the entry function starts
+    std::string debugEntryName;         // Its name in a debugger, such as "Main.fragment"
+    u32 debugInfoImportId = 0;
+    u32 debugCompilationUnit = 0;
+    u32 debugFunctionType = 0;
+    std::vector<u32> debugFileStrings;  // Per source file: OpString of its path, 0 until used
+    std::vector<u32> debugSourceIds;    // Per source file: its DebugSource, 0 until used
+    std::vector<u32> debugScopeIds;     // Per IR debug scope: its DebugFunction, 0 until used
+    std::vector<u32> debugInlinedAtIds; // Per IR debug scope: its DebugInlinedAt, 0 until used
+    std::vector<std::pair<u32, u32>> debugFunctionIds;  // FUNCTION node -> DebugFunction
+    std::vector<std::pair<u32, u32>> debugConstants;    // Value -> its 32-bit OpConstant
+    std::vector<u32> debugTypeIds;      // Per CoreType: its debug type, 0 until used
+    u32 debugExpression = 0;            // The empty DebugExpression, 0 until used
+    struct DebugVariable {
+        u32 nameHash;
+        u32 scope;  // IR debug scope
+        u32 id;     // DebugLocalVariable
+    };
+    std::vector<DebugVariable> debugVariables;
+    std::vector<std::pair<u32, u32>> debugBlockValues;  // Variable -> the value the block last gave it
+    // The location the current block last emitted.
+    bool debugLocationValid = false;
+    u32 debugLastScope = 0, debugLastFile = 0, debugLastLine = 0;
 
     // ============= Interface Names =============
     // Source names of vertex->fragment varyings, indexed by 0-based varying
@@ -430,6 +464,34 @@ struct SPIRVBuilder {
     bool IsUndefRegister(u16 reg) const;
     u32 GetEmittedSuccessorCount(u32 block) const;
     
+    // Source debug info (bwsl_spirv_backend_debug.inl)
+    void BeginDebugInfo();
+    void BeginDebugFunction();
+    void EmitDebugFunctionDefinition();
+    void EmitDebugLocation(u32 irIdx);
+    void ResetDebugLocation() {
+        debugLocationValid = false;
+        debugBlockValues.clear();
+    }
+    u32 DebugConstant(u32 value);
+    u32 DebugString(const char* text, u32 length);
+    u32 DebugGlobal(u32 instruction, const u32* operands, u32 count);
+    void DebugInFunction(u32 instruction, const u32* operands, u32 count);
+    u32 DebugFileString(u32 file);
+    u32 DebugSourceOf(u32 file);
+    u32 DebugFileOfScope(u32 scope);
+    u32 DebugFunctionOf(NodeRef function);
+    u32 DebugScopeFunction(u32 scope);
+    u32 DebugInlinedAt(u32 scope);
+    bool DebugPosition(u32 packedNode, u32* line, u32* column) const;
+    u32 DebugTypeOf(CoreType type);
+    u32 DebugVariableOf(u16 reg, u32 scope, u32 irIdx);
+    u32 DebugEmptyExpression();
+    void EmitDebugValue(u16 reg, u32 irIdx);
+    void EmitDebugValues(u32 irIdx);
+    void EmitDebugPhiValues(u32 block);
+    void EmitDebugDeclares();
+
     // Function emission
     void EmitFunction();
     void EmitLocalNames();
@@ -448,6 +510,16 @@ struct SPIRVBuilder {
     
     // Debug options
     void SetEmitDebugNames(bool emit) { emitDebugNames = emit; }
+    // Source-level debug info for GPU debuggers, from `ast`'s positions and
+    // source texts: `mainFile` is the sourceFiles index of the file `stage`
+    // (the shader stage's node) is in, and `entryName` the entry function's
+    // name in a debugger.
+    void SetDebugInfo(const AST* ast, u32 mainFile, NodeRef stage, const std::string& entryName) {
+        debugAst = ast;
+        debugMainFile = mainFile;
+        debugStage = stage;
+        debugEntryName = entryName;
+    }
     void SetAvoidGlslReservedNames(bool avoid) { avoidGlslReservedNames = avoid; }
     void SetOptimizations(OptimizationSet set) { optimizations = set; }
     // Output for SPIRV-Cross: keep the versions of a variable that pass

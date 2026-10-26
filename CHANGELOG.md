@@ -279,6 +279,19 @@
   variable carried through loops and branches as one variable in Metal,
   HLSL and GLSL output, instead of copying it on every edge.
   `bwslc -h` lists the names.
+- `-debug-info` emits source-level debug info for GPU debuggers such as
+  RenderDoc and Nsight Graphics, which can then step through the `.bwsl`
+  source. It implies `-debug-names`. The SPIR-V carries:
+  - the source text (`OpSource`, and a `DebugSource` for each file code
+    comes from, modules included);
+  - `OpLine` and `DebugLine` where the line changes;
+  - a `DebugFunction` with a `DebugInlinedAt` scope for each inlined
+    function;
+  - local variables (`DebugLocalVariable`, `DebugValue`).
+
+  It uses NonSemantic.Shader.DebugInfo.100, which needs
+  `VK_KHR_shader_non_semantic_info` before Vulkan 1.3. The GLSL, HLSL and
+  Metal output gets `#line` directives, in GLSL's standard numbered form.
 
 ### AST JSON
 - Enum variants have the value the compiler uses, also for members without

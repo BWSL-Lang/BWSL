@@ -225,6 +225,92 @@ static std::string CheckGLSLESSPIRVCompatRaw(const std::vector<uint32_t>& spirv,
     return {};
 }
 
+// Whether the module carries line information (OpLine, from bwslc
+// -debug-info): the generated source then gets #line directives pointing
+// at the .bwsl lines.
+static bool HasLineInfo(const std::vector<uint32_t>& spirv) {
+    for (size_t offset = 5; offset < spirv.size();) {
+        uint32_t count = spirv[offset] >> 16;
+        if ((spirv[offset] & 0xFFFF) == spv::OpLine) return true;
+        if (count == 0) break;
+        offset += count;
+    }
+    return false;
+}
+
+static void EnableLineDirectives(spirv_cross::CompilerGLSL& compiler, const std::vector<uint32_t>& spirv) {
+    auto options = compiler.get_common_options();
+    options.emit_line_directives = HasLineInfo(spirv);
+    compiler.set_common_options(options);
+}
+
+// Keeps the last of each run of #line directives with no code between
+// them, the only one that applies: SPIRV-Cross writes one per OpLine and
+// per DebugLine, and several source lines often fold into one statement.
+static std::string CollapseLineDirectives(std::string source) {
+    if (source.find("#line ") == std::string::npos) return source;
+    std::string result;
+    result.reserve(source.size());
+    std::string pending;  // A #line not followed by code yet
+    size_t start = 0;
+    while (start < source.size()) {
+        size_t end = source.find('\n', start);
+        if (end == std::string::npos) end = source.size();
+        std::string_view line(source.data() + start, end - start);
+        if (line.rfind("#line ", 0) == 0) {
+            pending.assign(line);
+        } else {
+            if (!pending.empty()) {
+                result.append(pending).push_back('\n');
+                pending.clear();
+            }
+            result.append(line);
+            if (end < source.size()) result.push_back('\n');
+        }
+        start = end + 1;
+    }
+    return result;
+}
+
+// SPIRV-Cross writes GLSL line directives as `#line 12 "file"`, which needs
+// GL_GOOGLE_cpp_style_line_directive, an extension GL drivers don't have.
+// Standard GLSL numbers the source instead: `#line 12 0`. Each file gets a
+// number in the order it first appears, listed in a comment after #version.
+static void UseStandardGLSLLineDirectives(std::string& source) {
+    if (source.find("#line ") == std::string::npos) return;
+    std::vector<std::string> files;
+    std::string result;
+    result.reserve(source.size());
+    size_t start = 0;
+    while (start < source.size()) {
+        size_t end = source.find('\n', start);
+        if (end == std::string::npos) end = source.size();
+        std::string_view line(source.data() + start, end - start);
+        if (line == "#extension GL_GOOGLE_cpp_style_line_directive : require") {
+            start = end + 1;
+            continue;
+        }
+        size_t quote = line.find('"');
+        if (line.rfind("#line ", 0) == 0 && quote != std::string_view::npos && line.back() == '"') {
+            std::string file(line.substr(quote + 1, line.size() - quote - 2));
+            size_t index = 0;
+            while (index < files.size() && files[index] != file) index++;
+            if (index == files.size()) files.push_back(file);
+            result.append(line.substr(0, quote));
+            result.append(std::to_string(index));
+        } else {
+            result.append(line);
+        }
+        if (end < source.size()) result.push_back('\n');
+        start = end + 1;
+    }
+    std::string legend = "// #line source string numbers:\n";
+    for (size_t i = 0; i < files.size(); i++) legend += "//   " + std::to_string(i) + ": " + files[i] + "\n";
+    size_t afterVersion = result.rfind("#version", 0) == 0 ? result.find('\n') : std::string::npos;
+    result.insert(afterVersion == std::string::npos ? 0 : afterVersion + 1, legend);
+    source = std::move(result);
+}
+
 std::string CompileToMSL(const std::vector<uint32_t>& spirv) {
 #ifdef SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS
     // No exceptions - just compile (will abort on error)
@@ -233,13 +319,14 @@ std::string CompileToMSL(const std::vector<uint32_t>& spirv) {
     mslOpts.platform = spirv_cross::CompilerMSL::Options::macOS;
     mslOpts.msl_version = RequiredMSLVersion(compiler);
     compiler.set_msl_options(mslOpts);
+    EnableLineDirectives(compiler, spirv);
     if (auto error = MetalResourceBindingError(compiler); !error.empty()) return error;
 
     // Preserve SPIR-V binding indices in Metal output
     auto entry = compiler.get_entry_points_and_stages()[0];
     preserveBindingIndices(compiler, entry.execution_model);
 
-    return compiler.compile();
+    return CollapseLineDirectives(compiler.compile());
 #else
     try {
         spirv_cross::CompilerMSL compiler(spirv);
@@ -247,13 +334,14 @@ std::string CompileToMSL(const std::vector<uint32_t>& spirv) {
         mslOpts.platform = spirv_cross::CompilerMSL::Options::macOS;
         mslOpts.msl_version = RequiredMSLVersion(compiler);
         compiler.set_msl_options(mslOpts);
+        EnableLineDirectives(compiler, spirv);
         if (auto error = MetalResourceBindingError(compiler); !error.empty()) return error;
 
         // Preserve SPIR-V binding indices in Metal output
         auto entry = compiler.get_entry_points_and_stages()[0];
         preserveBindingIndices(compiler, entry.execution_model);
 
-        return compiler.compile();
+        return CollapseLineDirectives(compiler.compile());
     } catch (const spirv_cross::CompilerError& e) {
         return std::string("error: ") + e.what();
     } catch (const std::exception& e) {
@@ -274,7 +362,8 @@ std::string CompileToHLSL(const std::vector<uint32_t>& spirv, int shaderModel) {
     }
     hlslOpts.shader_model = numWorkgroups && shaderModel < 51 ? 51 : shaderModel;
     compiler.set_hlsl_options(hlslOpts);
-    return compiler.compile();
+    EnableLineDirectives(compiler, spirv);
+    return CollapseLineDirectives(compiler.compile());
 #else
     try {
         spirv_cross::CompilerHLSL compiler(spirv);
@@ -287,7 +376,8 @@ std::string CompileToHLSL(const std::vector<uint32_t>& spirv, int shaderModel) {
         }
         hlslOpts.shader_model = numWorkgroups && shaderModel < 51 ? 51 : shaderModel;
         compiler.set_hlsl_options(hlslOpts);
-        return compiler.compile();
+        EnableLineDirectives(compiler, spirv);
+        return CollapseLineDirectives(compiler.compile());
     } catch (const spirv_cross::CompilerError& e) {
         return std::string("error: ") + e.what();
     } catch (const std::exception& e) {
@@ -477,10 +567,13 @@ std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, b
     // the stage default (Intel iGPUs) then reject or truncate the interface.
     glslOpts.fragment.default_float_precision = spirv_cross::CompilerGLSL::Options::Highp;
     glslOpts.fragment.default_int_precision = spirv_cross::CompilerGLSL::Options::Highp;
+    glslOpts.emit_line_directives = HasLineInfo(spirv);
     compiler.set_common_options(glslOpts);
     combineGLSLSamplers(compiler);
         std::string result = compiler.compile();
     PatchGLSLES300Packing4x8Builtins(result, glslVersion, es);
+    result = CollapseLineDirectives(std::move(result));
+    UseStandardGLSLLineDirectives(result);
     if (auto err = CheckGLSLESEmittedCompat(result, glslVersion, es); !err.empty()) {
         return err;
     }
@@ -504,10 +597,13 @@ std::string CompileToGLSL(const std::vector<uint32_t>& spirv, int glslVersion, b
         // the stage default (Intel iGPUs) then reject or truncate the interface.
         glslOpts.fragment.default_float_precision = spirv_cross::CompilerGLSL::Options::Highp;
         glslOpts.fragment.default_int_precision = spirv_cross::CompilerGLSL::Options::Highp;
+        glslOpts.emit_line_directives = HasLineInfo(spirv);
         compiler.set_common_options(glslOpts);
         combineGLSLSamplers(compiler);
         std::string result = compiler.compile();
         PatchGLSLES300Packing4x8Builtins(result, glslVersion, es);
+        result = CollapseLineDirectives(std::move(result));
+        UseStandardGLSLLineDirectives(result);
         if (auto err = CheckGLSLESEmittedCompat(result, glslVersion, es); !err.empty()) {
             return err;
         }
