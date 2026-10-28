@@ -358,6 +358,8 @@ u32 ValueOperandMask(u16 opcode, u32 metadata) {
         case IR::OP_ARRAY_STORE:
         case IR::OP_VEC_SHUFFLE: return 3;
         case IR::OP_VEC_INSERT: return 5;
+        case IR::OP_BITFIELD_EXTRACT: return 7;
+        case IR::OP_BITFIELD_INSERT: return 15;
         case IR::OP_VEC_INSERT_DYNAMIC:
         case IR::OP_SELECT: return 7;
         case IR::OP_VEC_CONSTRUCT: return (1u << metadata) - 1;
@@ -1557,6 +1559,27 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
             }
             break;
         }
+        case IR::OP_BITFIELD_EXTRACT:
+        case IR::OP_BITFIELD_INSERT: {
+            const bool insert = opcode == IR::OP_BITFIELD_INSERT;
+            CoreType baseType = CoreType::INVALID;
+            CoreType insertType = CoreType::INVALID;
+            CoreType offsetType = CoreType::INVALID;
+            CoreType countType = CoreType::INVALID;
+            if (!OperandType(first, baseType) || (insert && !OperandType(second, insertType)) ||
+                !OperandType(ir->GetOperand(instruction, insert ? 2 : 1), offsetType) ||
+                !OperandType(ir->GetOperand(instruction, insert ? 3 : 2), countType)) {
+                return false;
+            }
+            const CoreType scalar = Scalar(type);
+            if (baseType != type || (insert && insertType != type) ||
+                (scalar != CoreType::INT && scalar != CoreType::UINT) ||
+                (offsetType != CoreType::INT && offsetType != CoreType::UINT) ||
+                (countType != CoreType::INT && countType != CoreType::UINT)) {
+                return Fail("WGSL bitfield operation has incompatible integer operands");
+            }
+            break;
+        }
         case IR::OP_MAT_CONSTRUCT: {
             const u32 columns = MatrixDimension(type);
             if (columns == 0) {
@@ -1981,6 +2004,30 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
                     return false;
                 }
                 if (!WriteConvertedOperand(writer, operand, Shape(Scalar(type), Width(sourceType)))) {
+                    return false;
+                }
+            }
+            writer.Text(")");
+            return true;
+        }
+        case IR::OP_BITFIELD_EXTRACT:
+        case IR::OP_BITFIELD_INSERT: {
+            // extractBits sign-extends i32 and zero-extends u32, like
+            // OpBitFieldSExtract and OpBitFieldUExtract.
+            const bool insert = opcode == IR::OP_BITFIELD_INSERT;
+            writer.Text(insert ? "insertBits(" : "extractBits(");
+            if (!WriteOperand(writer, first)) {
+                return false;
+            }
+            if (insert) {
+                writer.Text(", ");
+                if (!WriteOperand(writer, second)) {
+                    return false;
+                }
+            }
+            for (u32 argument = insert ? 2 : 1; argument < (insert ? 4u : 3u); ++argument) {
+                writer.Text(", ");
+                if (!WriteConvertedOperand(writer, ir->GetOperand(instruction, argument), CoreType::UINT)) {
                     return false;
                 }
             }
