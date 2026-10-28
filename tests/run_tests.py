@@ -467,6 +467,7 @@ ERROR_CASE_TESTS = {
     "vector_index_out_of_bounds.bwsl": "index 3 is out of bounds for mat2, which has 2 columns",
     "struct_store_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
     "struct_constructor_argument_count.bwsl": "struct A constructor expects 2 argument(s), got 1",
+    "enum_payload_too_large.bwsl": "an enum variant's payload can hold at most 64 scalars",
     "empty_struct_in_buffer.bwsl": "resources.particles holds struct Empty, which has no fields",
     "struct_assignment_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
     "storage_struct_field_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",

@@ -591,6 +591,14 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
               return dest;
             }
           }
+          // The enum struct holds at most 64 payload slots
+          // (RegisterEnumAsStructType).
+          if (scalars.size() > 64) {
+            ReportErrorAt(ref, "Error: an enum variant's payload can hold at most "
+                               "64 scalars; split it across variants\n");
+            SetRegisterType(dest, CoreType::INVALID);
+            return dest;
+          }
           u16 current = AllocateRegister();
           SetRegisterType(current, CoreType::CUSTOM);
           program.registerStructTypes[current] = enumStructHash;

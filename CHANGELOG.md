@@ -274,6 +274,8 @@
   two swapped: `atomic_cmp_exchange(x, 5, 100)` stored 5 when x was 100.
 
 ### Diagnostics
+- An enum variant whose payload holds more than 64 scalars, such as five
+  `mat4`s, is a source error. It wrote past the enum's storage.
 - A storage buffer or uniform holding a struct with no fields, directly or
   nested, is a source error at its first use. GLSL and Metal failed with
   SPIRV-Cross layout errors.
