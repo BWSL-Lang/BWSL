@@ -222,6 +222,9 @@
   compile instead of failing with "Shader register limit exceeded" or "SSA
   register limit exceeded". Output for shaders that compiled before is
   unchanged.
+- `atomic_cmp_exchange(pointer, compare, value)` stores `value` when the
+  pointer holds `compare`. SPIR-V and the targets compiled from it had the
+  two swapped: `atomic_cmp_exchange(x, 5, 100)` stored 5 when x was 100.
 
 ### Diagnostics
 - A duplicate pass name is reported at the second pass's name, with the line
