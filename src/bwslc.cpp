@@ -2235,6 +2235,15 @@ static std::string BuildWGSLBindingsJson(const WGSL::WGSLBuilder& builder,
         json << "}";
         haveResource = true;
     }
+    for (u32 id = 0; id < builder.storageImages.count; ++id) {
+        const u32 slot = builder.storageImages.slots[id];
+        json << (haveResource ? ",\n" : "\n")
+             << "    {\"name\": \"" << EscapeJsonString(resourceName(::ResourceBinding::StorageImage, slot))
+             << "\", \"type\": \"storage_texture\", \"group\": 0, \"binding\": " << slot
+             << ", \"logicalSlot\": " << slot
+             << ", \"access\": \"write\", \"format\": \"rgba32float\", \"viewDimension\": \"2d\"}";
+        haveResource = true;
+    }
     for (u32 id = 0; id < builder.samplers.count; ++id) {
         const u32 binding = builder.samplers.bindings[id];
         json << (haveResource ? ",\n" : "\n")

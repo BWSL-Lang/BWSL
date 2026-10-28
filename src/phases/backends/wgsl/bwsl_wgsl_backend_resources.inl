@@ -68,9 +68,17 @@ bool WGSLBuilder::PrepareAdditionalResources() {
     u64 samplerMask = 0;
     u64 comparisonMask = 0;
     u64 ordinaryMask = 0;
+    u32 imageMask = 0;
     for (u32 instruction = 0; instruction < ir->instructionCount; ++instruction) {
         const u16 opcode = TextureBaseOpcode(ir->opcodes[instruction]);
         const u16 operand = ir->GetOperand(instruction, 0);
+        if (opcode == IR::OP_IMG_STORE) {
+            if (!IR::IsResourceHandle(operand) || IR::ResourceHandleSlot(operand) >= 32) {
+                return Fail("WGSL storage images require a declared static slot");
+            }
+            imageMask |= 1u << IR::ResourceHandleSlot(operand);
+            continue;
+        }
         if (opcode == IR::OP_LOAD_UNIFORM) {
             if (operand >= 32) {
                 return Fail("WGSL uniform slot is out of bounds");
@@ -107,6 +115,13 @@ bool WGSLBuilder::PrepareAdditionalResources() {
     uniforms.count = std::popcount(uniformMask);
     textures.count = std::popcount(textureMask);
     samplers.count = std::popcount(samplerMask);
+    storageImages.count = std::popcount(imageMask);
+    storageImages.slots = static_cast<u32*>(Allocate(storageImages.count, sizeof(u32)));
+    for (u32 slot = 0, image = 0; slot < 32; ++slot) {
+        if (imageMask & (1u << slot)) {
+            storageImages.slots[image++] = slot;
+        }
+    }
     if (uniforms.count != 0 && ir->structTypeCount != 0) {
         for (u32 structure = 0; structure < ir->structTypeCount; ++structure) {
             uniformLayouts.fieldCount = std::max(uniformLayouts.fieldCount,
@@ -655,6 +670,13 @@ bool WGSLBuilder::WriteAdditionalResources(TextWriter& writer) {
             writer.Text("<f32>");
         }
         writer.Text(";\n\n");
+    }
+    for (u32 image = 0; image < storageImages.count; ++image) {
+        writer.Text("@group(0) @binding(");
+        writer.Number(storageImages.slots[image]);
+        writer.Text(") var bwsl_image_");
+        writer.Number(storageImages.slots[image]);
+        writer.Text(": texture_storage_2d<rgba32float, write>;\n\n");
     }
     for (u32 sampler = 0; sampler < samplers.count; ++sampler) {
         writer.Text("@group(3) @binding(");

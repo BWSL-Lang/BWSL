@@ -378,6 +378,7 @@ u32 ValueOperandMask(u16 opcode, u32 metadata) {
         case IR::OP_ISNORMAL: return 1;
         case IR::OP_LDEXP:
         case IR::OP_REFLECT: return 3;
+        case IR::OP_IMG_STORE: return 6;
         case IR::OP_REFRACT:
         case IR::OP_FACEFORWARD: return 7;
         case IR::OP_BITFIELD_EXTRACT: return 7;
@@ -412,7 +413,8 @@ u32 MatrixDimension(CoreType type) {
 bool HasResult(u16 opcode) {
     return opcode != IR::OP_NOP && opcode != IR::OP_RET &&
            opcode != IR::OP_STORE_OUTPUT && opcode != IR::OP_DISCARD &&
-           opcode != IR::OP_ARRAY_STORE && opcode != IR::OP_LOCAL_STORE;
+           opcode != IR::OP_ARRAY_STORE && opcode != IR::OP_LOCAL_STORE &&
+           opcode != IR::OP_IMG_STORE;
 }
 
 bool CanBroadcast(CoreType source, CoreType target) {
@@ -974,7 +976,8 @@ bool WGSLBuilder::Prepare() {
     PlanExpressions();
     stats.instructionCount = ir->instructionCount;
     stats.valueCount = values.count;
-    stats.resourceCount = resources.count + uniforms.count + textures.count + samplers.count;
+    stats.resourceCount = resources.count + uniforms.count + textures.count + samplers.count +
+                          storageImages.count;
     return true;
 }
 
@@ -1284,6 +1287,17 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
     }
     if (opcode == IR::OP_DISCARD) {
         return stage == ShaderStage::Fragment || Fail("WGSL discard requires a fragment entry point");
+    }
+    if (opcode == IR::OP_IMG_STORE) {
+        CoreType coordinates = CoreType::INVALID;
+        CoreType texel = CoreType::INVALID;
+        if (!OperandType(second, coordinates) || !OperandType(third, texel)) {
+            return false;
+        }
+        if ((coordinates != CoreType::INT2 && coordinates != CoreType::UINT2) || texel != CoreType::FLOAT4) {
+            return Fail("WGSL image stores require int2 coordinates and a float4 texel");
+        }
+        return stage != ShaderStage::Vertex || Fail("WGSL vertex entry points cannot write storage textures");
     }
     if (IsCopy(opcode)) {
         CoreType sourceType = CoreType::INVALID;
@@ -2300,6 +2314,21 @@ bool WGSLBuilder::WriteInstruction(TextWriter& writer, u32 instruction) {
             return false;
         }
         writer.Text(";\n");
+        return true;
+    }
+    if (opcode == IR::OP_IMG_STORE) {
+        writer.Indent();
+        writer.Text("textureStore(bwsl_image_");
+        writer.Number(IR::ResourceHandleSlot(first));
+        writer.Text(", ");
+        if (!WriteOperand(writer, second)) {
+            return false;
+        }
+        writer.Text(", ");
+        if (!WriteOperand(writer, ir->GetOperand(instruction, 2))) {
+            return false;
+        }
+        writer.Text(");\n");
         return true;
     }
     u32 valueId = registerToValue[destination];

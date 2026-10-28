@@ -75,6 +75,13 @@ struct TextureTable {
     u32 count = 0;
 };
 
+// Write-only rgba32float 2D storage textures, as the SPIR-V backend's
+// storage images. They bind in group 0 at their logical slot.
+struct StorageImageTable {
+    u32* slots = nullptr;
+    u32 count = 0;
+};
+
 struct SamplerTable {
     u32* bindings = nullptr;
     u8* comparison = nullptr;
@@ -173,6 +180,7 @@ struct WGSLBuilder {
     UniformTable uniforms;
     TextureTable textures;
     SamplerTable samplers;
+    StorageImageTable storageImages;
     UniformAddressTable uniformAddresses;
     UniformLayoutTable uniformLayouts;
     InterfaceTable inputs;
