@@ -1402,6 +1402,16 @@ inline bool IRLowering::CheckStoreShape(NodeRef node, u16 valueReg,
     }
   }
   if (sourceType == targetType) return true;
+  if ((mask(targetType) & TypeMasks::MATRIX_TYPES) &&
+      (mask(sourceType) & (TypeMasks::SCALAR_TYPES | TypeMasks::VECTOR_TYPES |
+                           TypeMasks::BOOL_VECTORS))) {
+    std::string message = "Error: cannot implicitly convert " +
+                           SourceTypeName(sourceType) + " to " +
+                           SourceTypeName(targetType) + "; use " +
+                           SourceTypeName(targetType) + "(...) to build a matrix\n";
+    ReportErrorAt(node, message.c_str());
+    return false;
+  }
   if ((mask(sourceType) & TypeMasks::MATRIX_TYPES) &&
       (mask(targetType) & TypeMasks::MATRIX_TYPES)) {
     std::string message = "Error: cannot implicitly convert " +

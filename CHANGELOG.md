@@ -297,7 +297,8 @@
   including one that only gets such a target on a later loop iteration. The
   write was lost.
 - Assigning a matrix of another size, as in `mat2 m = big;` for a `mat3`,
-  is a source error. It failed SPIR-V validation.
+  or a vector or scalar to a matrix, as in `mat2 m = float2(1.0, 2.0);`, is
+  a source error. It failed SPIR-V validation.
 - Assigning or initializing with a value of another struct type, as in
   `A a = b;` for a `B b`, is a source error naming both structs, also for
   array elements and initializers, whole storage buffer elements and
