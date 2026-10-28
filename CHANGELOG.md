@@ -35,6 +35,11 @@
   arm, as in `Flag(on, w): { if (on) { return w; } return -w; }`. It was
   lowered as a return from the shader's entry point and failed SPIR-V
   validation.
+- Calling an `eval` method runs only the arm matching the variant. Every
+  arm ran and the result was picked afterwards, so an arm's side effects,
+  such as a buffer write, happened for every variant. A block arm can end
+  in a bare expression that is its value, also when it returns early
+  elsewhere.
 - `@branch if (...)` asks for a real branch, which a wave skips when none of
   its lanes take it, and `@flatten if (...)` for both sides evaluated. They
   set the SPIR-V selection control (`[branch]`/`[flatten]` in HLSL). For

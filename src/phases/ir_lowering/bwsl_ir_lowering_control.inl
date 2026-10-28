@@ -6,6 +6,16 @@ namespace BWSL::IR {
 
 inline void IRLowering::LowerStatement(NodeRef ref) {
     SourceNodeGuard sourceGuard(builder, ref);
+  if (implicitReturnStatement.IsValid() && ref.packed == implicitReturnStatement.packed) {
+    // A call yields a value unless the function returns nothing.
+    u16 value = LowerExpression(ref);
+    CoreType type = GetRegisterType(value);
+    if (ref.Type() != ASTNodeType::FUNCTION_CALL ||
+        (type != CoreType::VOID && type != CoreType::INVALID)) {
+      LowerReturnValue(ref, value);
+    }
+    return;
+  }
   switch (ref.Type()) {
   case ASTNodeType::ASSIGNMENT:
     LowerAssignment(ref);
@@ -1183,9 +1193,25 @@ inline void IRLowering::LowerReturn(NodeRef ref) {
   bool inlineReturn = (inlineDepth > 0 && inlineReturnReg != 0xFFFF &&
                        inlineReturnFlagReg != 0xFFFF);
   if (!ret.value.IsNull()) {
-    u16 valueReg = LowerExpression(ret.value);
+    LowerReturnValue(ret.value);
+  } else {
+    if (inlineReturn) {
+      u16 trueConst = builder.EmitConstantBool(true);
+      builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg, trueConst);
+      inlineReturnCounter++;
+    } else {
+      builder.EmitInstruction(OP_RET, 0, 0);
+    }
+  }
+}
+
+inline void IRLowering::LowerReturnValue(NodeRef valueNode, u16 valueReg) {
+  bool inlineReturn = (inlineDepth > 0 && inlineReturnReg != 0xFFFF &&
+                       inlineReturnFlagReg != 0xFFFF);
+  {
+    if (valueReg == 0xFFFF) valueReg = LowerExpression(valueNode);
     if (inlineReturn)
-      CheckStoreShape(ret.value, valueReg, inlineReturnType, inlineReturnStructHash);
+      CheckStoreShape(valueNode, valueReg, inlineReturnType, inlineReturnStructHash);
 
     // If we're inlining a function, store to the return register instead of
     // emitting OP_RET
@@ -1208,14 +1234,6 @@ inline void IRLowering::LowerReturn(NodeRef ref) {
       inlineReturnCounter++;
     } else {
       builder.EmitInstruction(OP_RET, valueReg, 0);
-    }
-  } else {
-    if (inlineReturn) {
-      u16 trueConst = builder.EmitConstantBool(true);
-      builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg, trueConst);
-      inlineReturnCounter++;
-    } else {
-      builder.EmitInstruction(OP_RET, 0, 0);
     }
   }
 }

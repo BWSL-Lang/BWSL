@@ -1,0 +1,41 @@
+// Only the arm matching the variant runs: each arm here also counts itself
+// in a buffer. Every arm used to run, and the results were selected after.
+// Block arms may return early, or end in a bare expression that is their
+// value.
+pipeline EquivEvalArmDispatch {
+    resources { output: buffer<float> }
+    enum Item {
+        A(float x),
+        B(float y),
+        C(int n),
+        eval value :: () -> float {
+            A(x): {
+                resources.output[5] += 1.0;
+                float t = x * 2.0;
+                if (t > 10.0) { return 10.0; }
+                t + 1.0;
+            }
+            B(y): {
+                resources.output[6] += 1.0;
+                float s = y;
+                for (int i = 0; i < 3; i++) { s += 1.0; }
+                length(float2(s, 0.0));
+            }
+            C(n): {
+                resources.output[7] += 1.0;
+                if (n < 0) { return -1.0; }
+                1.0 * float(n);
+            }
+        }
+    }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            resources.output[0] = Item::A(2.0).value();
+            resources.output[1] = Item::A(20.0).value();
+            resources.output[2] = Item::B(1.5).value();
+            resources.output[3] = Item::C(-4).value();
+            resources.output[4] = Item::C(7).value();
+        }
+    }
+}

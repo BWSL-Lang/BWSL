@@ -662,10 +662,6 @@ struct IRLowering {
                          u32 enumStructHash, u32 slot);
   // Reads payload slot `slot` of `receiver` as a `type` scalar.
   u16 ReadEnumPayloadSlot(u16 receiver, u32 slot, CoreType type);
-  // The value of an eval arm's body. A block body returns like an inlined
-  // function body, so a `return` inside an `if` or a loop ends the arm
-  // rather than the entry point.
-  u16 LowerEvalArm(NodeRef body, CoreType returnType, u32 returnTypeHash);
 
   // Register an enum sum type as a struct in the IR.
   // Layout: { int tag; <flattened payload fields for the widest variant> }.
@@ -695,6 +691,12 @@ struct IRLowering {
                        bool restInThen);
 
   void LowerReturn(NodeRef ref);
+  // Returns `valueNode`'s value: into the inline frame when inlining,
+  // otherwise from the function.
+  void LowerReturnValue(NodeRef valueNode, u16 valueReg = 0xFFFF);
+  // The trailing bare expression of a pattern arm's block, lowered as the
+  // arm's return value.
+  NodeRef implicitReturnStatement = NodeRef::Null();
 
   u16 LowerLiteral(NodeRef ref);
 

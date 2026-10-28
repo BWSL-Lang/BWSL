@@ -182,56 +182,6 @@ inline void IRLowering::ReportPointerArgumentProblem(NodeRef argument,
   ReportErrorAt(argument, msg);
 }
 
-inline u16 IRLowering::LowerEvalArm(NodeRef body, CoreType returnType,
-                                    u32 returnTypeHash) {
-  if (body.Type() != ASTNodeType::BLOCK) return LowerExpression(body);
-  // A block ending in a bare expression yields that expression's value,
-  // which only the block-expression lowering supports.
-  const BlockData &block = ast->GetBlock(body);
-  if (block.statements.count > 0) {
-    switch (block.statements[block.statements.count - 1].Type()) {
-    case ASTNodeType::LITERAL:
-    case ASTNodeType::IDENTIFIER:
-    case ASTNodeType::BINARY_OP:
-    case ASTNodeType::UNARY_OP:
-    case ASTNodeType::FUNCTION_CALL:
-    case ASTNodeType::MEMBER_ACCESS:
-    case ASTNodeType::ARRAY_ACCESS:
-      return LowerExpression(body);
-    default:
-      break;
-    }
-  }
-  u16 returnReg = AllocateRegister();
-  SetRegisterType(returnReg, returnType);
-  builder.EmitInstruction(OP_STORE_REG, returnReg, EmitZeroConstant(returnType));
-  u16 savedReturnReg = inlineReturnReg;
-  u16 savedReturnFlagReg = inlineReturnFlagReg;
-  CoreType savedReturnType = inlineReturnType;
-  u32 savedReturnCounter = inlineReturnCounter;
-  u32 savedReturnFlagReads = inlineReturnFlagReads;
-  u32 savedReturnStructHash = inlineReturnStructHash;
-  inlineReturnReg = returnReg;
-  inlineReturnType = returnType;
-  inlineReturnStructHash = returnType == CoreType::CUSTOM ? returnTypeHash : 0;
-  inlineReturnFlagReg = AllocateRegister();
-  SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
-  builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg, builder.EmitConstantBool(false));
-  inlineReturnCounter = 0;
-  inlineReturnFlagReads = 0;
-  inlineDepth++;
-  LowerBlock(body);
-  inlineDepth--;
-  inlineReturnReg = savedReturnReg;
-  inlineReturnFlagReg = savedReturnFlagReg;
-  inlineReturnType = savedReturnType;
-  inlineReturnStructHash = savedReturnStructHash;
-  inlineReturnStructHash = savedReturnStructHash;
-  inlineReturnCounter = savedReturnCounter;
-  inlineReturnFlagReads = savedReturnFlagReads;
-  return returnReg;
-}
-
 inline void IRLowering::ReportPointerStoreProblem(NodeRef target,
                                                   PointerProblem problem) {
   if (target.IsValid() && !reportedPointerArguments.insert(target.packed).second)
@@ -450,7 +400,28 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
     }
     controlDepth++;
     if (arm.body.Type() == ASTNodeType::BLOCK) {
+      // A block ending in a bare expression yields that expression.
+      const BlockData &block = ast->GetBlock(arm.body);
+      NodeRef savedImplicit = implicitReturnStatement;
+      implicitReturnStatement = NodeRef::Null();
+      if (block.statements.count > 0) {
+        NodeRef last = block.statements[block.statements.count - 1];
+        switch (last.Type()) {
+        case ASTNodeType::LITERAL:
+        case ASTNodeType::IDENTIFIER:
+        case ASTNodeType::BINARY_OP:
+        case ASTNodeType::UNARY_OP:
+        case ASTNodeType::MEMBER_ACCESS:
+        case ASTNodeType::ARRAY_ACCESS:
+        case ASTNodeType::FUNCTION_CALL:
+          implicitReturnStatement = last;
+          break;
+        default:
+          break;
+        }
+      }
       LowerBlock(arm.body);
+      implicitReturnStatement = savedImplicit;
     } else {
       u16 value = LowerExpression(arm.body);
       CheckStoreShape(arm.body, value, inlineReturnType, inlineReturnStructHash);
@@ -806,168 +777,55 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
                   variableRegisters[param.first.nameHash] = CopyArgumentValue(args[argIdx++]);
                 }
               }
-              auto baseVarRegs = variableRegisters;
-
-              // For each arm, check if tag == variantIndex, evaluate body,
-              // select
+              // Only the matching arm runs: it returns into an inline frame,
+              // as an inlined function body does.
               u16 resultReg = AllocateRegister();
               SetRegisterType(resultReg, method.returnType);
-
-              u16 initValue = EmitZeroConstant(method.returnType);
-              builder.EmitInstruction(OP_STORE_REG, resultReg, initValue);
-
-              u16 matchedReg = builder.EmitConstantBool(false);
-              u32 underscoreHash = Utils::HashStr("_");
-
-              for (u32 armIdx = 0; armIdx < pm.arms.count; armIdx++) {
-                NodeRef armRef = pm.arms[armIdx];
-                if (armRef.Type() != ASTNodeType::PATTERN_MATCH_ARM) {
-                  continue;
-                }
-                const PatternMatchData &arm = ast->GetPatternMatch(armRef);
-
-                u16 condReg = 0xFFFF;
-                u32 variantIdx = 0xFFFFFFFF;
-                if (!arm.isDefault) {
-                  for (u32 v = 0; v < enumData.variants.count; v++) {
-                    if (enumData.variants[v].name.nameHash ==
-                        arm.variantHash) {
-                      variantIdx = v;
-                      break;
-                    }
-                  }
-                  if (variantIdx == 0xFFFFFFFF) {
-                    continue;
-                  }
-                  u16 expectedTag = EmitConstantInt(variantIdx);
-                  condReg = AllocateRegister();
-                  builder.EmitInstruction(OP_IEQ, condReg, tagReg,
-                                          expectedTag);
-                  SetRegisterType(condReg, CoreType::BOOL);
-
-                  u16 newMatched = AllocateRegister();
-                  builder.EmitInstruction(OP_OR, newMatched, matchedReg,
-                                          condReg);
-                  SetRegisterType(newMatched, CoreType::BOOL);
-                  matchedReg = newMatched;
-                } else {
-                  u16 notMatched = AllocateRegister();
-                  builder.EmitInstruction(OP_NOT, notMatched, matchedReg);
-                  SetRegisterType(notMatched, CoreType::BOOL);
-                  condReg = notMatched;
-                }
-
-                variableRegisters = baseVarRegs;
-
-                if (variantIdx != 0xFFFFFFFF) {
-                  const EnumData::Variant &variant =
-                      enumData.variants[variantIdx];
-                  u32 payloadIndex = 0;
-                  u32 bindingIdx = 0;
-
-                  for (u32 t = 0; t < variant.associatedTypes.count; t++) {
-                    CoreType assocType = variant.associatedTypes[t];
-                    u32 assocHash = 0;
-                    if (t < variant.associatedTypeHashes.count) {
-                      assocHash = variant.associatedTypeHashes[t];
-                    }
-                    u32 componentCount =
-                        GetEnumPayloadFieldCount(assocType, assocHash);
-                    if (bindingIdx >= arm.bindings.count) {
-                      payloadIndex += componentCount;
-                      continue;
-                    }
-
-                    const auto &binding = arm.bindings[bindingIdx++];
-                    if (binding.first.nameHash == underscoreHash) {
-                      payloadIndex += componentCount;
-                      continue;
-                    }
-
-                    bool isNestedSumEnum =
-                        assocType == CoreType::CUSTOM && assocHash != 0 &&
-                        IsSumEnumTypeHash(assocHash);
-
-                    if (isNestedSumEnum) {
-                      u16 fieldReg = AllocateRegister();
-                      u16 fieldIdx = EmitConstantInt(payloadIndex);
-                      builder.EmitInstruction(OP_ENUM_FIELD, fieldReg,
-                                              selfReg, fieldIdx);
-                      SetRegisterType(fieldReg, CoreType::CUSTOM);
-                      u32 structHash = LookupOrRegisterStructType(assocHash);
-                      program.registerStructTypes[fieldReg] =
-                          structHash != 0 ? structHash : assocHash;
-                      variableRegisters[binding.first.nameHash] = fieldReg;
-                    } else if (componentCount == 1) {
-                      u16 fieldReg = 0;
-                      if (assocType != CoreType::CUSTOM) {
-                        fieldReg = ReadEnumPayloadSlot(selfReg, payloadIndex, assocType);
-                      } else {
-                        fieldReg = AllocateRegister();
-                        builder.EmitInstruction(OP_ENUM_FIELD, fieldReg, selfReg,
-                                                EmitConstantInt(payloadIndex));
-                        SetRegisterType(fieldReg, assocType);
-                      }
-                      if (assocType == CoreType::CUSTOM && assocHash != 0) {
-                        u32 structHash = LookupOrRegisterStructType(assocHash);
-                        program.registerStructTypes[fieldReg] =
-                            structHash != 0 ? structHash : assocHash;
-                      }
-                      variableRegisters[binding.first.nameHash] = fieldReg;
-                    } else {
-                      if (assocType == CoreType::CUSTOM) {
-                        ReportError("Error: binding flattened struct enum "
-                                    "payloads is not supported yet\n");
-                        payloadIndex += componentCount;
-                        continue;
-                      }
-                      u16 components[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
-                      CoreType scalarType = GetScalarComponentType(assocType);
-                      for (u32 c = 0; c < componentCount && c < 4; c++) {
-                        components[c] = ReadEnumPayloadSlot(selfReg, payloadIndex + c,
-                                                            scalarType);
-                      }
-
-                      u16 vecReg = AllocateRegister();
-                      builder.EmitInstruction(OP_VEC_CONSTRUCT, vecReg,
-                                              components[0], components[1],
-                                              components[2], components[3]);
-                      program.metadata[builder.currentInstruction - 1] =
-                          componentCount;
-                      SetRegisterType(vecReg, assocType);
-                      variableRegisters[binding.first.nameHash] = vecReg;
-                    }
-
-                    payloadIndex += componentCount;
-                  }
-                }
-
-                u16 armResult = 0;
-                if (!arm.body.IsNull()) {
-                  u32 savedInlineModuleIndex = inlineModuleIndex;
-                  if (methodModuleIndex != 0xFFFFFFFF) {
-                    inlineModuleIndex = methodModuleIndex;
-                  }
-                  {
-                    DebugScopeGuard scope(builder, methodRef);
-                    armResult = LowerEvalArm(arm.body, method.returnType,
-                                             method.returnTypeHash);
-                  }
-                  inlineModuleIndex = savedInlineModuleIndex;
-                }
-
-                u16 newResult = AllocateRegister();
-                builder.EmitInstruction(OP_SELECT, newResult, resultReg,
-                                        armResult, condReg);
-                SetRegisterType(newResult, method.returnType);
-                resultReg = newResult;
+              builder.EmitInstruction(OP_STORE_REG, resultReg,
+                                      EmitZeroConstant(method.returnType));
+              if (method.returnType == CoreType::CUSTOM && method.returnTypeHash != 0) {
+                u32 structHash = LookupOrRegisterStructType(method.returnTypeHash);
+                program.registerStructTypes[resultReg] =
+                    structHash != 0 ? structHash : method.returnTypeHash;
               }
+              u16 savedReturnReg = inlineReturnReg;
+              u16 savedReturnFlagReg = inlineReturnFlagReg;
+              CoreType savedReturnType = inlineReturnType;
+              u32 savedReturnStructHash = inlineReturnStructHash;
+              u32 savedReturnCounter = inlineReturnCounter;
+              u32 savedReturnFlagReads = inlineReturnFlagReads;
+              u32 savedInlineModuleIndex = inlineModuleIndex;
+              inlineReturnReg = resultReg;
+              inlineReturnType = method.returnType;
+              inlineReturnStructHash =
+                  method.returnType == CoreType::CUSTOM ? method.returnTypeHash : 0;
+              inlineReturnFlagReg = AllocateRegister();
+              SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
+              builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg,
+                                      builder.EmitConstantBool(false));
+              inlineReturnCounter = 0;
+              inlineReturnFlagReads = 0;
+              if (methodModuleIndex != 0xFFFFFFFF) inlineModuleIndex = methodModuleIndex;
+              inlineDepth++;
+              {
+                DebugScopeGuard scope(builder, methodRef);
+                LowerEnumPatternBody(method.body, selfReg, enumData);
+              }
+              inlineDepth--;
+              inlineReturnReg = savedReturnReg;
+              inlineReturnFlagReg = savedReturnFlagReg;
+              inlineReturnType = savedReturnType;
+              inlineReturnStructHash = savedReturnStructHash;
+              inlineReturnCounter = savedReturnCounter;
+              inlineReturnFlagReads = savedReturnFlagReads;
+              inlineModuleIndex = savedInlineModuleIndex;
 
               variableRegisters = savedVarRegs;
               nodeRegisters = savedNodeRegisters;
 
               builder.EmitInstruction(OP_STORE_REG, dest, resultReg);
               SetRegisterType(dest, method.returnType);
+              if (dest < MAX_REGISTERS) program.registerStructTypes[dest] = program.registerStructTypes[resultReg];
               return dest;
             } else {
               // Non-pattern-match method body (e.g., normal method that calls
