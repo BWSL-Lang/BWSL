@@ -66,7 +66,9 @@ def compare(actual: list[int], reference: list[int], kind: str, tolerance: float
             got_value, want_value = as_float(got), as_float(want)
             if math.isnan(got_value) and math.isnan(want_value):
                 continue
-            if abs(got_value - want_value) <= max(tolerance, 1e-5) * max(1.0, abs(want_value)):
+            # An infinite bound would accept any value.
+            if not math.isinf(want_value) and \
+                    abs(got_value - want_value) <= max(tolerance, 1e-5) * max(1.0, abs(want_value)):
                 continue
             errors.append(f"word {index}: {got_value} != {want_value}")
         else:
