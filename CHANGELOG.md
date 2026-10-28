@@ -31,6 +31,10 @@
   version.
 
 ### Language
+- A `return` inside an `if` or a loop in an `eval` arm's block ends the
+  arm, as in `Flag(on, w): { if (on) { return w; } return -w; }`. It was
+  lowered as a return from the shader's entry point and failed SPIR-V
+  validation.
 - `@branch if (...)` asks for a real branch, which a wave skips when none of
   its lanes take it, and `@flatten if (...)` for both sides evaluated. They
   set the SPIR-V selection control (`[branch]`/`[flatten]` in HLSL). For

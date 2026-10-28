@@ -182,6 +182,51 @@ inline void IRLowering::ReportPointerArgumentProblem(NodeRef argument,
   ReportErrorAt(argument, msg);
 }
 
+inline u16 IRLowering::LowerEvalArm(NodeRef body, CoreType returnType) {
+  if (body.Type() != ASTNodeType::BLOCK) return LowerExpression(body);
+  // A block ending in a bare expression yields that expression's value,
+  // which only the block-expression lowering supports.
+  const BlockData &block = ast->GetBlock(body);
+  if (block.statements.count > 0) {
+    switch (block.statements[block.statements.count - 1].Type()) {
+    case ASTNodeType::LITERAL:
+    case ASTNodeType::IDENTIFIER:
+    case ASTNodeType::BINARY_OP:
+    case ASTNodeType::UNARY_OP:
+    case ASTNodeType::FUNCTION_CALL:
+    case ASTNodeType::MEMBER_ACCESS:
+    case ASTNodeType::ARRAY_ACCESS:
+      return LowerExpression(body);
+    default:
+      break;
+    }
+  }
+  u16 returnReg = AllocateRegister();
+  SetRegisterType(returnReg, returnType);
+  builder.EmitInstruction(OP_STORE_REG, returnReg, EmitZeroConstant(returnType));
+  u16 savedReturnReg = inlineReturnReg;
+  u16 savedReturnFlagReg = inlineReturnFlagReg;
+  CoreType savedReturnType = inlineReturnType;
+  u32 savedReturnCounter = inlineReturnCounter;
+  u32 savedReturnFlagReads = inlineReturnFlagReads;
+  inlineReturnReg = returnReg;
+  inlineReturnType = returnType;
+  inlineReturnFlagReg = AllocateRegister();
+  SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
+  builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg, builder.EmitConstantBool(false));
+  inlineReturnCounter = 0;
+  inlineReturnFlagReads = 0;
+  inlineDepth++;
+  LowerBlock(body);
+  inlineDepth--;
+  inlineReturnReg = savedReturnReg;
+  inlineReturnFlagReg = savedReturnFlagReg;
+  inlineReturnType = savedReturnType;
+  inlineReturnCounter = savedReturnCounter;
+  inlineReturnFlagReads = savedReturnFlagReads;
+  return returnReg;
+}
+
 inline void IRLowering::ReportPointerStoreProblem(NodeRef target,
                                                   PointerProblem problem) {
   if (target.IsValid() && !reportedPointerArguments.insert(target.packed).second)
@@ -900,7 +945,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
                   }
                   {
                     DebugScopeGuard scope(builder, methodRef);
-                    armResult = LowerExpression(arm.body);
+                    armResult = LowerEvalArm(arm.body, method.returnType);
                   }
                   inlineModuleIndex = savedInlineModuleIndex;
                 }

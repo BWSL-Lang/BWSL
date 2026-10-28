@@ -661,6 +661,10 @@ struct IRLowering {
                          u32 enumStructHash, u32 slot);
   // Reads payload slot `slot` of `receiver` as a `type` scalar.
   u16 ReadEnumPayloadSlot(u16 receiver, u32 slot, CoreType type);
+  // The value of an eval arm's body. A block body returns like an inlined
+  // function body, so a `return` inside an `if` or a loop ends the arm
+  // rather than the entry point.
+  u16 LowerEvalArm(NodeRef body, CoreType returnType);
 
   // Register an enum sum type as a struct in the IR.
   // Layout: { int tag; <flattened payload fields for the widest variant> }.
