@@ -543,6 +543,11 @@ bool WGSLBuilder::WriteFullType(TextWriter& writer, CoreType type, u32 structTyp
         if (index == InvalidId) {
             return Fail("WGSL struct value is missing its struct type");
         }
+        // WGSL structs need a member, so a struct without fields has no
+        // declaration to name.
+        if (ir->structTypes[index].fieldCount == 0) {
+            return Fail("WGSL cannot use a struct type with no fields");
+        }
         writer.Text("BWSLStruct");
         writer.Number(index);
     } else {
