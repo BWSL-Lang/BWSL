@@ -1266,8 +1266,25 @@ inline std::string IRLowering::SourceTypeName(CoreType type) {
 // vector: each takes an explicit swizzle or constructor. Reports the mismatch
 // at `node` and returns false; matrices and aggregates are checked elsewhere.
 inline bool IRLowering::CheckStoreShape(NodeRef node, u16 valueReg,
-                                        CoreType targetType) {
+                                        CoreType targetType,
+                                        u32 targetStructHash) {
   CoreType sourceType = GetRegisterType(valueReg);
+  if (sourceType == CoreType::CUSTOM && targetType == CoreType::CUSTOM &&
+      targetStructHash != 0 && IR::IsRegister(valueReg) &&
+      valueReg < program.registerCount) {
+    u32 sourceStructHash = program.registerStructTypes[valueReg];
+    if (sourceStructHash != 0 && sourceStructHash != targetStructHash) {
+      u32 source = LookupOrRegisterStructType(sourceStructHash);
+      u32 target = LookupOrRegisterStructType(targetStructHash);
+      if (source != 0 && target != 0 && source != target) {
+        std::string message = "Error: cannot assign a value of struct " +
+                              ReverseLookup::GetString(source) + " to struct " +
+                              ReverseLookup::GetString(target) + "\n";
+        ReportErrorAt(node, message.c_str());
+        return false;
+      }
+    }
+  }
   if (sourceType == targetType) return true;
   constexpr TypeMask vectors = TypeMasks::VECTOR_TYPES | TypeMasks::BOOL_VECTORS;
   constexpr TypeMask values = vectors | TypeMasks::SCALAR_TYPES;

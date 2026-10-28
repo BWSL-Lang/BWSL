@@ -250,6 +250,9 @@
   two swapped: `atomic_cmp_exchange(x, 5, 100)` stored 5 when x was 100.
 
 ### Diagnostics
+- Assigning or initializing with a value of another struct type, as in
+  `A a = b;` for a `B b`, is a source error naming both structs. It failed
+  SPIR-V validation.
 - `store()` on a sampled texture or a sampler is a source error. It
   compiled as a write to a storage image at that binding.
 - An enum variant payload of the wrong shape, such as a `float3` for

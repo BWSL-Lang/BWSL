@@ -767,7 +767,10 @@ struct IRLowering {
   u16 EmitConstantUint(u32 value);
 
   u16 ConvertRegisterToType(u16 reg, CoreType targetType);
-  bool CheckStoreShape(NodeRef node, u16 valueReg, CoreType targetType);
+  // Reports a value that can't be stored as `targetType` without an explicit
+  // conversion. `targetStructHash` names the target struct when it is known.
+  bool CheckStoreShape(NodeRef node, u16 valueReg, CoreType targetType,
+                       u32 targetStructHash = 0);
   static std::string SourceTypeName(CoreType type);
   u16 TryConvertScalarConstant(u16 reg, CoreType targetType);
   u16 TryFoldScalarArithmetic(OpCode op, u16 left, u16 right);

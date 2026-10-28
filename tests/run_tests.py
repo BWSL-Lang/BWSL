@@ -464,6 +464,8 @@ ERROR_CASE_TESTS = {
     "enum_payload_shape.bwsl": "cannot implicitly convert float3 to float",
     "store_to_texture.bwsl": "store() writes to a storage image",
     "storage_vector_index_out_of_bounds.bwsl": "array index 2 is out of bounds for array of length 2",
+    "struct_assignment_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
+    "storage_struct_field_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
 }
 
 ERROR_CASE_MODULE_DIRS = {

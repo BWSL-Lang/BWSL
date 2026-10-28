@@ -565,7 +565,7 @@ inline bool IRLowering::TryStoreLocalPlace(NodeRef target, u16 valueReg) {
                             EmitZeroStruct(program.registerStructTypes[place.rootReg]));
     initializedVariables.insert(place.rootNameHash);
   }
-  if (!CheckStoreShape(target, valueReg, place.type)) return true;
+  if (!CheckStoreShape(target, valueReg, place.type, place.structHash)) return true;
   ResolveLocalPlace(target, true, &place);
   if (place.type != CoreType::CUSTOM && place.type != CoreType::ENUM)
     valueReg = ConvertRegisterToType(valueReg, place.type);
@@ -721,7 +721,7 @@ inline bool IRLowering::TryStoreStoragePlace(NodeRef target, u16 valueReg) {
       ReportErrorAt(target, "Error: assign a storage buffer's array field one element at a time\n");
       return true;
     }
-    if (!CheckStoreShape(target, valueReg, place.type)) return true;
+    if (!CheckStoreShape(target, valueReg, place.type, place.structHash)) return true;
     if (place.type != CoreType::CUSTOM && place.type != CoreType::ENUM)
       valueReg = ConvertRegisterToType(valueReg, place.type);
     ResolveStoragePlace(target, true, &place);
@@ -991,7 +991,10 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref, u32 bindingNameHash,
         }
       }
 
-      if (!isArray && !CheckStoreShape(ref, initReg, coreType)) return;
+      if (!isArray &&
+          !CheckStoreShape(ref, initReg, coreType,
+                           coreType == CoreType::CUSTOM ? program.registerStructTypes[varReg] : 0))
+        return;
       u16 storedInitReg = ConvertRegisterToType(initReg, coreType);
       builder.EmitInstruction(OP_STORE_REG, varReg, storedInitReg);
       // Propagate pointer storage info if the init expression is a pointer
@@ -1115,13 +1118,14 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
         variableRegisters.find(ident.name.nameHash) == variableRegisters.end()) {
       u32 fieldIndex = 0xFFFF;
       CoreType fieldType = CoreType::INVALID;
+      u32 fieldTypeHash = 0;
       if (FindStructField(currentStructMethodTypeHash, ident.name.nameHash,
-                          &fieldIndex, &fieldType, nullptr)) {
+                          &fieldIndex, &fieldType, &fieldTypeHash)) {
         if (currentStructMethodIsConst) {
           ReportError("Error: cannot assign to receiver field inside const method\n");
           return;
         }
-        if (!CheckStoreShape(target, valueReg, fieldType)) return;
+        if (!CheckStoreShape(target, valueReg, fieldType, fieldTypeHash)) return;
         valueReg = ConvertRegisterToType(valueReg, fieldType);
         u16 newStructReg = AllocateRegister();
         SetRegisterType(newStructReg, CoreType::CUSTOM);
@@ -1161,7 +1165,8 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
     bool declared = variableRegisters.find(ident.name.nameHash) !=
                     variableRegisters.end();
     u16 varReg = GetOrAllocateVariable(ident.name.nameHash);
-    if (declared && !CheckStoreShape(target, valueReg, GetRegisterType(varReg)))
+    if (declared && !CheckStoreShape(target, valueReg, GetRegisterType(varReg),
+                                     program.registerStructTypes[varReg]))
       return;
     valueReg = ConvertRegisterToType(valueReg, GetRegisterType(varReg));
     builder.EmitInstruction(OP_STORE_REG, varReg, valueReg);
@@ -1200,12 +1205,13 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
                            ? program.registerStructTypes[objectReg] : 0;
       u32 fieldIndex = 0;
       CoreType fieldType = CoreType::INVALID;
+      u32 fieldTypeHash = 0;
       if (structHash && FindStructField(structHash, access.member.nameHash,
-                                       &fieldIndex, &fieldType, nullptr)) {
+                                       &fieldIndex, &fieldType, &fieldTypeHash)) {
         u16 updated = AllocateRegister();
         SetRegisterType(updated, objectType);
         program.registerStructTypes[updated] = structHash;
-        if (!CheckStoreShape(target, valueReg, fieldType)) return;
+        if (!CheckStoreShape(target, valueReg, fieldType, fieldTypeHash)) return;
         valueReg = ConvertRegisterToType(valueReg, fieldType);
         builder.EmitInstruction(OP_STRUCT_INSERT, updated, objectReg,
                                 static_cast<u16>(fieldIndex), valueReg);
@@ -1471,10 +1477,11 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           }
 
           if (fieldIndex != 0xFFFF) {
-            CoreType fieldType = static_cast<CoreType>(
-                program.structFieldTypes[program.structTypes[structIt->second]
-                                             .fieldOffset + fieldIndex]);
-            if (!CheckStoreShape(target, valueReg, fieldType)) return;
+            u32 fieldSlot = program.structTypes[structIt->second].fieldOffset + fieldIndex;
+            CoreType fieldType = static_cast<CoreType>(program.structFieldTypes[fieldSlot]);
+            if (!CheckStoreShape(target, valueReg, fieldType,
+                                 program.structFieldTypeHashes[fieldSlot]))
+              return;
             valueReg = ConvertRegisterToType(valueReg, fieldType);
             // Emit struct insert: dest = struct with field=value
             // We modify the struct in place by creating a new struct value
