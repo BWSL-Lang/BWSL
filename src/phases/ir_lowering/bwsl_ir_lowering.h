@@ -573,10 +573,21 @@ struct IRLowering {
     std::vector<std::pair<u16, u16>> copies;  // (destination, source)
     std::vector<PendingPointerArgument> arguments;
     std::vector<std::pair<u16, NodeRef>> stores;  // (pointer, `p^ = ...` target)
+    // Pointer variables assigned at the top of the body so far: every path
+    // through an iteration does that before what follows, so a use after it
+    // can't see a target from the previous iteration.
+    // Maps each to its problem then (-1: none), which is what a use later in
+    // the body sees, whatever the variable held before the loop.
+    u32 depth = 0;
+    std::unordered_map<u16, int> killed;
   };
   std::vector<PointerLoopFrame> pointerLoops;
   std::unordered_set<u32> reportedPointerArguments;  // Packed NodeRefs
   void BeginPointerLoop();
+  // The problem a use of pointer `reg` sees here: an innermost loop's
+  // top-level reassignment wins over the variable's state, which also
+  // covers the loop running zero times.
+  bool FindPointerProblem(u16 reg, PointerProblem *out) const;
   void EndPointerLoop();
   bool IsFunctionLocalPlace(NodeRef expr);
   bool IsPointerValue(u16 reg) const;

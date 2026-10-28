@@ -340,7 +340,14 @@ inline bool IRLowering::IsPointerArgument(NodeRef argument, u16 reg) const {
 
 inline void IRLowering::DeclarePointerVariable(u16 reg, u16 source) {
   variableDepth[reg] = controlDepth;
-  if (!pointerLoops.empty()) pointerLoops.back().copies.push_back({reg, source});
+  if (!pointerLoops.empty()) {
+    pointerLoops.back().copies.push_back({reg, source});
+    if (controlDepth == pointerLoops.back().depth) {
+      auto problem = pointerProblems.find(source);
+      pointerLoops.back().killed[reg] =
+          problem != pointerProblems.end() ? static_cast<int>(problem->second) : -1;
+    }
+  }
   auto problem = pointerProblems.find(source);
   if (problem != pointerProblems.end()) {
     pointerProblems[reg] = problem->second;
@@ -350,7 +357,14 @@ inline void IRLowering::DeclarePointerVariable(u16 reg, u16 source) {
 }
 
 inline void IRLowering::AssignPointerVariable(u16 reg, u16 source) {
-  if (!pointerLoops.empty()) pointerLoops.back().copies.push_back({reg, source});
+  if (!pointerLoops.empty()) {
+    pointerLoops.back().copies.push_back({reg, source});
+    if (controlDepth == pointerLoops.back().depth) {
+      auto problem = pointerProblems.find(source);
+      pointerLoops.back().killed[reg] =
+          problem != pointerProblems.end() ? static_cast<int>(problem->second) : -1;
+    }
+  }
   auto problem = pointerProblems.find(source);
   if (problem != pointerProblems.end()) {
     pointerProblems[reg] = problem->second;
@@ -362,9 +376,24 @@ inline void IRLowering::AssignPointerVariable(u16 reg, u16 source) {
   }
 }
 
+inline bool IRLowering::FindPointerProblem(u16 reg, PointerProblem *out) const {
+  for (auto frame = pointerLoops.rbegin(); frame != pointerLoops.rend(); ++frame) {
+    auto killed = frame->killed.find(reg);
+    if (killed == frame->killed.end()) continue;
+    if (killed->second < 0) return false;
+    *out = static_cast<PointerProblem>(killed->second);
+    return true;
+  }
+  auto problem = pointerProblems.find(reg);
+  if (problem == pointerProblems.end()) return false;
+  *out = problem->second;
+  return true;
+}
+
 inline void IRLowering::BeginPointerLoop() {
   controlDepth++;
   pointerLoops.emplace_back();
+  pointerLoops.back().depth = controlDepth;
 }
 
 inline void IRLowering::EndPointerLoop() {
@@ -398,9 +427,12 @@ inline void IRLowering::EndPointerLoop() {
   if (!pointerLoops.empty()) {
     PointerLoopFrame &outer = pointerLoops.back();
     outer.copies.insert(outer.copies.end(), frame.copies.begin(), frame.copies.end());
-    outer.arguments.insert(outer.arguments.end(), frame.arguments.begin(),
-                           frame.arguments.end());
-    outer.stores.insert(outer.stores.end(), frame.stores.begin(), frame.stores.end());
+    for (const PendingPointerArgument &pending : frame.arguments) {
+      if (!outer.killed.count(pending.source)) outer.arguments.push_back(pending);
+    }
+    for (const auto &store : frame.stores) {
+      if (!outer.killed.count(store.first)) outer.stores.push_back(store);
+    }
   }
 }
 

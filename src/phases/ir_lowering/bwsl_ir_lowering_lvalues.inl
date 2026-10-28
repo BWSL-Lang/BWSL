@@ -1921,13 +1921,14 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
     if (unaryOp.op == UnaryOpType::DEREFERENCE) {
       // Get the pointer value
       u16 ptrReg = LowerExpression(unaryOp.operand);
-      auto problem = pointerProblems.find(ptrReg);
-      if (problem != pointerProblems.end()) {
-        ReportPointerStoreProblem(target, problem->second);
+      PointerProblem problem;
+      if (FindPointerProblem(ptrReg, &problem)) {
+        ReportPointerStoreProblem(target, problem);
         return;
       }
       // A later store in an enclosing loop can still give it such a target.
-      if (!pointerLoops.empty()) pointerLoops.back().stores.push_back({ptrReg, target});
+      if (!pointerLoops.empty() && !pointerLoops.back().killed.count(ptrReg))
+        pointerLoops.back().stores.push_back({ptrReg, target});
       // Store through the pointer
       // Format: dest=0 (no result), s0=ptr, s1=value
       builder.EmitInstruction(OP_LOCAL_STORE, 0, ptrReg, valueReg);
