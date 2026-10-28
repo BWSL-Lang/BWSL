@@ -358,6 +358,7 @@ u32 ValueOperandMask(u16 opcode, u32 metadata) {
         case IR::OP_ARRAY_STORE:
         case IR::OP_VEC_SHUFFLE: return 3;
         case IR::OP_VEC_INSERT: return 5;
+        case IR::OP_LDEXP: return 3;
         case IR::OP_BITFIELD_EXTRACT: return 7;
         case IR::OP_BITFIELD_INSERT: return 15;
         case IR::OP_VEC_INSERT_DYNAMIC:
@@ -1559,6 +1560,19 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
             }
             break;
         }
+        case IR::OP_LDEXP: {
+            CoreType valueType = CoreType::INVALID;
+            CoreType exponentType = CoreType::INVALID;
+            if (!OperandType(first, valueType) || !OperandType(second, exponentType)) {
+                return false;
+            }
+            if (valueType != type || Scalar(type) != CoreType::FLOAT ||
+                (Scalar(exponentType) != CoreType::INT && Scalar(exponentType) != CoreType::UINT) ||
+                (Width(exponentType) != 1 && Width(exponentType) != Width(type))) {
+                return Fail("WGSL ldexp requires f32 values and integer exponents");
+            }
+            break;
+        }
         case IR::OP_BITFIELD_EXTRACT:
         case IR::OP_BITFIELD_INSERT: {
             const bool insert = opcode == IR::OP_BITFIELD_INSERT;
@@ -2008,6 +2022,28 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
                 }
             }
             writer.Text(")");
+            return true;
+        }
+        case IR::OP_LDEXP: {
+            // WGSL wants an i32 exponent of the value's shape.
+            CoreType exponentType = CoreType::INVALID;
+            if (!OperandType(second, exponentType)) {
+                return false;
+            }
+            writer.Text("ldexp(");
+            if (!WriteOperand(writer, first)) {
+                return false;
+            }
+            writer.Text(", ");
+            const bool splat = Width(exponentType) != Width(type);
+            if (splat) {
+                WriteType(writer, Shape(CoreType::INT, Width(type)));
+                writer.Text("(");
+            }
+            if (!WriteConvertedOperand(writer, second, Shape(CoreType::INT, Width(exponentType)))) {
+                return false;
+            }
+            writer.Text(splat ? "))" : ")");
             return true;
         }
         case IR::OP_BITFIELD_EXTRACT:
