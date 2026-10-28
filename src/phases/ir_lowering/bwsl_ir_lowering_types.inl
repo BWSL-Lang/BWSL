@@ -643,12 +643,8 @@ inline u16 IRLowering::EnumPayloadToSlots(NodeRef node, u16 reg, CoreType type,
   }
   u16 bits = AllocateRegister();
   if (component == CoreType::BOOL) {
-    if (type != CoreType::BOOL) {
-      ReportErrorAt(node, "Error: a bool vector payload can't share its slots "
-                          "with another variant's payload of another type; "
-                          "reorder the payloads or use a uint vector\n");
-      return 0xFFFF;
-    }
+    // Bool vectors are stored one component at a time (see the enum
+    // constructor), so only a scalar reaches here.
     SetRegisterType(bits, CoreType::FLOAT);
     builder.EmitInstruction(OP_SELECT, bits, builder.EmitConstant(0.0f),
                             builder.EmitConstant(1.0f), reg);

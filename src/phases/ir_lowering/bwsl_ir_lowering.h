@@ -656,8 +656,7 @@ struct IRLowering {
   // The storage type of payload slot `slot` of an enum's struct.
   CoreType EnumPayloadSlotType(u32 enumStructHash, u32 slot);
   // A payload value of `type` starting at `slot`, converted to its storage:
-  // float bits when its slots are shared with another type. Reports at
-  // `node` and returns 0xFFFF when it can't be stored there.
+  // float bits when its slots are shared with another type.
   u16 EnumPayloadToSlots(NodeRef node, u16 reg, CoreType type,
                          u32 enumStructHash, u32 slot);
   // Reads payload slot `slot` of `receiver` as a `type` scalar.

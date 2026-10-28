@@ -10,12 +10,14 @@ pipeline EquivEnumMixedPayloads {
         Offset(int dx, float3 dir),
         Flag(bool on, float w),
         Cell(uint3 at),
+        Mask(bool3 bits),
         eval value :: () -> float {
             Count(n): float(n)
             Size(r): r
             Offset(dx, dir): float(dx) + dir.x + dir.y * 10.0 + dir.z * 100.0
             Flag(on, w): select(-w, w, on)
             Cell(at): float(at.x + at.y * 10u + at.z * 100u)
+            Mask(bits): select(0.0, 1.0, bits.x) + select(0.0, 10.0, bits.y) + select(0.0, 100.0, bits.z)
         }
     }
     pass "Compute" {
@@ -28,6 +30,7 @@ pipeline EquivEnumMixedPayloads {
             resources.output[4] = Item::Flag(true, 1.5).value();
             resources.output[5] = Item::Flag(false, 1.5).value();
             resources.output[6] = Item::Cell(uint3(1u, 2u, 3u)).value();
+            resources.output[7] = Item::Mask(bool3(true, false, true)).value();
         }
     }
 }

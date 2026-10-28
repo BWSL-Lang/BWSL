@@ -104,8 +104,9 @@
 ### Backends
 - Enum variants whose payloads put different types at the same position,
   such as `Count(uint n)` and `Size(float r)`, compile and keep each value
-  exactly. They failed SPIR-V validation. A payload argument of another
-  scalar kind, as in `Count(7.0)`, converts like an assignment.
+  exactly, bool vectors included. They failed SPIR-V validation. A payload
+  argument of another scalar kind, as in `Count(7.0)`, converts like an
+  assignment.
 - Atomics on a storage buffer element, such as
   `atomic_max(resources.counters[0], v)` on a `buffer<int>`, compile in a
   stage that also declares `shared` memory. The element was mistaken for

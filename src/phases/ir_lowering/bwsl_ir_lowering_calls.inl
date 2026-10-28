@@ -553,13 +553,14 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         // scalar kind converts like an assignment, and slots shared with
         // another type hold its bits as floats.
         const EnumData::Variant &variant = enumData.variants[variantIndex];
-        // Struct and matrix payloads are written one scalar slot at a time.
+        // Struct, matrix and bool vector payloads are written one scalar
+        // slot at a time.
         bool flatten = false;
         for (u32 i = 0; i < argCount; i++) {
           CoreType type = variant.associatedTypes[i];
           u32 hash = i < variant.associatedTypeHashes.count
                          ? variant.associatedTypeHashes[i] : 0;
-          flatten |= (mask(type) & TypeMasks::MATRIX_TYPES) != 0 ||
+          flatten |= (mask(type) & (TypeMasks::MATRIX_TYPES | TypeMasks::BOOL_VECTORS)) != 0 ||
                      (type == CoreType::CUSTOM && hash != 0 && !IsSumEnumTypeHash(hash));
         }
         u32 slot = 0;
@@ -575,10 +576,6 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
           if (!flatten)
             args[i] = EnumPayloadToSlots(call.arguments[i], args[i], type,
                                          enumStructHash, slot);
-          if (args[i] == 0xFFFF) {
-            SetRegisterType(dest, CoreType::INVALID);
-            return dest;
-          }
           slot += GetEnumPayloadFieldCount(type, hash);
         }
 
