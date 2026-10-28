@@ -106,6 +106,12 @@ bool WGSLBuilder::PrepareRegisters() {
         }
         registerFlags[ir->localArrayRegisters[array]] |= RegisterVariable;
     }
+    for (u32 shared = 0; shared < ir->sharedVarCount; ++shared) {
+        if (!valid(ir->sharedRegisters[shared])) {
+            return Fail("WGSL workgroup variable register is out of bounds");
+        }
+        registerFlags[ir->sharedRegisters[shared]] |= RegisterVariable;
+    }
     for (u32 instruction = 0; instruction < ir->instructionCount; ++instruction) {
         const u16 opcode = ir->opcodes[instruction];
         const u16 destination = ir->destinations[instruction];
@@ -746,22 +752,29 @@ bool WGSLBuilder::WriteMemoryInstruction(TextWriter& writer, u32 instruction, bo
             return WriteTrackedAccess(writer, instruction, reference);
         }
     }
+    if (opcode >= IR::OP_ATOMIC_ADD && opcode <= IR::OP_ATOMIC_CMP_XCHG) {
+        return WriteAtomicInstruction(writer, instruction);
+    }
     if (opcode == IR::OP_LOCAL_STORE) {
+        const bool atomic = IsAtomicReference(registerToValue[first]);
         writer.Indent();
+        writer.Text(atomic ? "atomicStore(&" : "");
         if (!WriteReference(writer, registerToValue[first])) {
             return false;
         }
-        writer.Text(" = ");
+        writer.Text(atomic ? ", " : " = ");
         if (!WriteOperand(writer, second)) {
             return false;
         }
-        writer.Text(";\n");
+        writer.Text(atomic ? ");\n" : ";\n");
         return true;
     }
     if (opcode == IR::OP_ARRAY_STORE && destination < ir->registerCount &&
         registerToValue[destination] != InvalidId &&
         values.kinds[registerToValue[destination]] != static_cast<u8>(ValueKind::StorageRoot)) {
+        const bool atomic = IsAtomicReference(registerToValue[destination]);
         writer.Indent();
+        writer.Text(atomic ? "atomicStore(&" : "");
         if (!WriteReference(writer, registerToValue[destination])) {
             return false;
         }
@@ -769,11 +782,11 @@ bool WGSLBuilder::WriteMemoryInstruction(TextWriter& writer, u32 instruction, bo
         if (!WriteOperand(writer, first)) {
             return false;
         }
-        writer.Text("] = ");
+        writer.Text(atomic ? "], " : "] = ");
         if (!WriteOperand(writer, second)) {
             return false;
         }
-        writer.Text(";\n");
+        writer.Text(atomic ? ");\n" : ";\n");
         return true;
     }
     if (IsCopy(opcode) && !IR::IsConstant(first) && first < ir->registerCount &&
@@ -1159,5 +1172,162 @@ bool WGSLBuilder::PrepareStorageStruct(u32 structId) {
     storageAlignments[structId] = structAlignment;
     storageSizes[structId] = structSize;
     storageStates[structId] = 2;
+    return true;
+}
+
+// Atomic elements: the root is a workgroup variable or a primitive buffer.
+bool WGSLBuilder::IsAtomicReference(u32 reference) const {
+    for (u32 node = reference; node != InvalidId; node = values.parents[node]) {
+        const ValueKind kind = static_cast<ValueKind>(values.kinds[node]);
+        if (kind == ValueKind::StorageRoot || kind == ValueKind::StorageElement) {
+            return (resources.access[values.resourceIds[node]] & AccessAtomic) != 0;
+        }
+        if (kind == ValueKind::Value) {
+            return (values.variables[node] & VariableAtomic) != 0;
+        }
+        if (kind != ValueKind::Reference) {
+            return false;
+        }
+    }
+    return false;
+}
+
+bool WGSLBuilder::WriteAtomicType(TextWriter& writer, CoreType type, u32 arrayLength) {
+    if (arrayLength != 0) {
+        writer.Text("array<");
+    }
+    writer.Text(type == CoreType::INT ? "atomic<i32>" : "atomic<u32>");
+    if (arrayLength != 0) {
+        writer.Text(", ");
+        writer.Number(arrayLength);
+        writer.Text(">");
+    }
+    return true;
+}
+
+// WGSL atomics are typed: the workgroup variable or buffer an atomic
+// operation targets holds atomic<i32>/atomic<u32> elements, and its other
+// loads and stores become atomicLoad and atomicStore.
+bool WGSLBuilder::PrepareAtomicInstruction(u32 instruction) {
+    const u16 opcode = ir->opcodes[instruction];
+    const u16 pointer = ir->GetOperand(instruction, 0);
+    const u32 reference = !IR::IsConstant(pointer) && pointer < ir->registerCount ? registerToValue[pointer] : InvalidId;
+    if (reference == InvalidId) {
+        return Fail("WGSL atomic operation requires a pointer");
+    }
+    const CoreType type = static_cast<CoreType>(values.types[reference]);
+    if ((type != CoreType::INT && type != CoreType::UINT) || values.arrayLengths[reference] != 0) {
+        return Fail("WGSL atomics operate on i32 and u32 only");
+    }
+    // The pointer must be the whole root or one element of an array root.
+    u32 node = reference;
+    while (values.kinds[node] == static_cast<u8>(ValueKind::Reference) &&
+           static_cast<Accessor>(values.accessors[node]) == Accessor::Whole) {
+        node = values.parents[node];
+    }
+    if (values.kinds[node] == static_cast<u8>(ValueKind::Reference) &&
+        static_cast<Accessor>(values.accessors[node]) == Accessor::Index) {
+        node = values.parents[node];
+        if (values.kinds[node] != static_cast<u8>(ValueKind::Value) || values.arrayLengths[node] == 0) {
+            return Fail("WGSL atomics require a workgroup or storage-buffer integer, or an array of them");
+        }
+    }
+    const ValueKind kind = static_cast<ValueKind>(values.kinds[node]);
+    if (kind == ValueKind::StorageElement) {
+        resources.access[values.resourceIds[node]] |= AccessAtomic | AccessRead | AccessWrite;
+    } else if (kind == ValueKind::Value && (values.variables[node] & VariableWorkgroup) &&
+               values.structTypes[node] == 0) {
+        values.variables[node] |= VariableAtomic;
+    } else {
+        return Fail("WGSL atomics require a workgroup or storage-buffer integer, or an array of them");
+    }
+    for (u32 argument = 1; argument < (opcode == IR::OP_ATOMIC_CMP_XCHG ? 3u : 2u); ++argument) {
+        CoreType argumentType = CoreType::INVALID;
+        if (!OperandType(ir->GetOperand(instruction, argument), argumentType)) {
+            return false;
+        }
+        if (argumentType != CoreType::INT && argumentType != CoreType::UINT) {
+            return Fail("WGSL atomic operands must be i32 or u32");
+        }
+    }
+    return DefineValue(instruction, type, ValueKind::Value);
+}
+
+bool WGSLBuilder::WriteAtomicInstruction(TextWriter& writer, u32 instruction) {
+    const u16 opcode = ir->opcodes[instruction];
+    const u32 reference = registerToValue[ir->GetOperand(instruction, 0)];
+    const u32 result = registerToValue[ir->destinations[instruction]];
+    const CoreType type = static_cast<CoreType>(values.types[reference]);
+    const u16 value = ir->GetOperand(instruction, 1);
+    if (opcode == IR::OP_ATOMIC_CMP_XCHG) {
+        // atomic_cmp_exchange(pointer, compare, value) is strong; WGSL's
+        // may fail spuriously, so retry until it exchanges or sees
+        // another value.
+        const u16 compare = value;
+        const u16 replacement = ir->GetOperand(instruction, 2);
+        if (!values.functionScope[result]) {
+            writer.Indent();
+            writer.Text("var ");
+            WriteValueName(writer, result);
+            writer.Text(": ");
+            WriteType(writer, type);
+            writer.Text(";\n");
+        }
+        writer.Indent();
+        writer.Text("loop {\n");
+        ++writer.indentation;
+        writer.Indent();
+        writer.Text("let bwsl_exchange = atomicCompareExchangeWeak(&");
+        if (!WriteReference(writer, reference)) {
+            return false;
+        }
+        writer.Text(", ");
+        if (!WriteConvertedOperand(writer, compare, type)) {
+            return false;
+        }
+        writer.Text(", ");
+        if (!WriteConvertedOperand(writer, replacement, type)) {
+            return false;
+        }
+        writer.Text(");\n");
+        writer.Indent();
+        WriteValueName(writer, result);
+        writer.Text(" = bwsl_exchange.old_value;\n");
+        writer.Indent();
+        writer.Text("if (bwsl_exchange.exchanged || bwsl_exchange.old_value != ");
+        if (!WriteConvertedOperand(writer, compare, type)) {
+            return false;
+        }
+        writer.Text(") {\n");
+        ++writer.indentation;
+        writer.Indent();
+        writer.Text("break;\n");
+        --writer.indentation;
+        writer.Indent();
+        writer.Text("}\n");
+        --writer.indentation;
+        writer.Indent();
+        writer.Text("}\n");
+        return true;
+    }
+    const char* function = opcode == IR::OP_ATOMIC_ADD ? "atomicAdd(&" : opcode == IR::OP_ATOMIC_SUB ? "atomicSub(&" :
+                           opcode == IR::OP_ATOMIC_MIN ? "atomicMin(&" : opcode == IR::OP_ATOMIC_MAX ? "atomicMax(&" :
+                           opcode == IR::OP_ATOMIC_AND ? "atomicAnd(&" : opcode == IR::OP_ATOMIC_OR ? "atomicOr(&" :
+                           opcode == IR::OP_ATOMIC_XOR ? "atomicXor(&" : "atomicExchange(&";
+    writer.Indent();
+    if (!values.functionScope[result]) {
+        writer.Text("let ");
+    }
+    WriteValueName(writer, result);
+    writer.Text(" = ");
+    writer.Text(function);
+    if (!WriteReference(writer, reference)) {
+        return false;
+    }
+    writer.Text(", ");
+    if (!WriteConvertedOperand(writer, value, type)) {
+        return false;
+    }
+    writer.Text(");\n");
     return true;
 }

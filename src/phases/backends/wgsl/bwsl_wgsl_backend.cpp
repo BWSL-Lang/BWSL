@@ -383,6 +383,15 @@ u32 ValueOperandMask(u16 opcode, u32 metadata) {
         case IR::OP_REFLECT: return 3;
         case IR::OP_IMG_STORE: return 6;
         case IR::OP_LOCAL_LOAD: return 1;
+        case IR::OP_ATOMIC_ADD:
+        case IR::OP_ATOMIC_SUB:
+        case IR::OP_ATOMIC_MIN:
+        case IR::OP_ATOMIC_MAX:
+        case IR::OP_ATOMIC_AND:
+        case IR::OP_ATOMIC_OR:
+        case IR::OP_ATOMIC_XOR:
+        case IR::OP_ATOMIC_XCHG: return 3;
+        case IR::OP_ATOMIC_CMP_XCHG: return 7;
         case IR::OP_LOCAL_STORE: return 3;
         case IR::OP_STRUCT_INSERT: return 5;
         case IR::OP_STRUCT_ARRAY_INSERT: return 13;
@@ -905,8 +914,8 @@ bool WGSLBuilder::Prepare() {
     if (!structured && ir->phiCount != 0) {
         return Fail("WGSL requires a CFG for phi nodes");
     }
-    if (ir->sharedVarCount != 0) {
-        return Fail("WGSL backend does not support workgroup storage");
+    if (ir->sharedVarCount != 0 && stage != ShaderStage::Compute) {
+        return Fail("WGSL workgroup storage requires a compute entry point");
     }
     if (ir->instructionCount != 0 && (ir->opcodes == nullptr || ir->destinations == nullptr ||
         ir->operands == nullptr || ir->types == nullptr || ir->metadata == nullptr)) {
@@ -1019,6 +1028,7 @@ bool WGSLBuilder::Prepare() {
         u32 structType = (type == CoreType::CUSTOM || type == CoreType::ENUM) && ir->registerStructTypes != nullptr
             ? ir->registerStructTypes[reg] : 0;
         u32 arrayLength = 0;
+        u8 flags = VariableMutable;
         for (u32 array = 0; array < ir->localArrayCount; ++array) {
             if (ir->localArrayRegisters[array] == reg) {
                 type = static_cast<CoreType>(ir->localArrayTypes[array]);
@@ -1026,12 +1036,19 @@ bool WGSLBuilder::Prepare() {
                 arrayLength = ir->localArraySizes[array];
             }
         }
+        for (u32 shared = 0; shared < ir->sharedVarCount; ++shared) {
+            if (ir->sharedRegisters[shared] == reg) {
+                type = static_cast<CoreType>(ir->sharedTypes[shared]);
+                arrayLength = ir->sharedArraySizes[shared];
+                flags |= VariableWorkgroup;
+            }
+        }
         const bool aggregate = (type == CoreType::CUSTOM || type == CoreType::ENUM) && StructIndex(structType) != InvalidId;
         if (Width(type) == 0 && MatrixDimension(type) == 0 && !aggregate) {
             return Fail("WGSL local variable has an unsupported type");
         }
         const u32 value = NewValue(static_cast<u16>(reg), type, structType, arrayLength, ValueKind::Value);
-        values.variables[value] = VariableMutable;
+        values.variables[value] = flags;
     }
     for (u32 reg = 0; reg < registerMapCount; ++reg) {
         if (registerFlags[reg] & RegisterTracked) {
@@ -1249,6 +1266,7 @@ void WGSLBuilder::PlanExpressions() {
             opcode == IR::OP_ARRAY_LOAD || opcode == IR::OP_STORAGE_LOAD || opcode == IR::OP_VEC_INSERT ||
             opcode == IR::OP_VEC_INSERT_DYNAMIC || opcode == IR::OP_LOCAL_LOAD ||
             opcode == IR::OP_STRUCT_INSERT || opcode == IR::OP_STRUCT_ARRAY_INSERT ||
+            (opcode >= IR::OP_ATOMIC_ADD && opcode <= IR::OP_ATOMIC_CMP_XCHG) ||
             (opcode == IR::OP_SELECT && IsAggregate(static_cast<CoreType>(values.types[value]),
                                                      values.arrayLengths[value]))) {
             continue;
@@ -1444,6 +1462,12 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
     }
     if (opcode == IR::OP_DISCARD) {
         return stage == ShaderStage::Fragment || Fail("WGSL discard requires a fragment entry point");
+    }
+    if (opcode == IR::OP_BARRIER || opcode == IR::OP_MEM_FENCE) {
+        return stage == ShaderStage::Compute || Fail("WGSL barriers require a compute entry point");
+    }
+    if (opcode >= IR::OP_ATOMIC_ADD && opcode <= IR::OP_ATOMIC_CMP_XCHG) {
+        return PrepareAtomicInstruction(instruction);
     }
     if (opcode == IR::OP_IMG_STORE) {
         CoreType coordinates = CoreType::INVALID;
@@ -2040,6 +2064,16 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
     u16 first = ir->GetOperand(instruction, 0);
     u16 second = ir->GetOperand(instruction, 1);
     CoreType type = static_cast<CoreType>(values.types[valueId]);
+    if ((opcode == IR::OP_ARRAY_LOAD || opcode == IR::OP_STORAGE_LOAD || opcode == IR::OP_LOCAL_LOAD) &&
+        !writingAtomicLoad && !IR::IsConstant(first) && first < ir->registerCount &&
+        registerToValue[first] != InvalidId && IsAtomicReference(registerToValue[first])) {
+        writingAtomicLoad = true;
+        writer.Text("atomicLoad(&");
+        const bool written = WriteExpression(writer, instruction, valueId);
+        writer.Text(")");
+        writingAtomicLoad = false;
+        return written;
+    }
     if (IsCopy(opcode)) {
         return WriteOperand(writer, first);
     }
@@ -2524,6 +2558,17 @@ bool WGSLBuilder::WriteInstruction(TextWriter& writer, u32 instruction) {
         writer.Text("discard;\n");
         return true;
     }
+    if (opcode == IR::OP_BARRIER || opcode == IR::OP_MEM_FENCE) {
+        // WGSL has no fence without an execution barrier; a memory fence
+        // over buffer and workgroup memory takes both barriers.
+        if (opcode == IR::OP_MEM_FENCE) {
+            writer.Indent();
+            writer.Text("storageBarrier();\n");
+        }
+        writer.Indent();
+        writer.Text("workgroupBarrier();\n");
+        return true;
+    }
     u16 first = ir->GetOperand(instruction, 0);
     u16 second = ir->GetOperand(instruction, 1);
     u16 destination = ir->destinations[instruction];
@@ -2555,7 +2600,9 @@ bool WGSLBuilder::WriteInstruction(TextWriter& writer, u32 instruction) {
     }
     u32 valueId = registerToValue[destination];
     if (opcode == IR::OP_ARRAY_STORE) {
+        const bool atomic = IsAtomicReference(valueId);
         writer.Indent();
+        writer.Text(atomic ? "atomicStore(&" : "");
         if (!WriteStorageAddress(writer, valueId)) {
             return false;
         }
@@ -2563,11 +2610,11 @@ bool WGSLBuilder::WriteInstruction(TextWriter& writer, u32 instruction) {
         if (!WriteOperand(writer, first)) {
             return false;
         }
-        writer.Text("] = ");
+        writer.Text(atomic ? "], " : "] = ");
         if (!WriteOperand(writer, second)) {
             return false;
         }
-        writer.Text(";\n");
+        writer.Text(atomic ? ");\n" : ";\n");
         return true;
     }
     if (values.kinds[valueId] != static_cast<u8>(ValueKind::Value)) {
@@ -2754,12 +2801,35 @@ bool WGSLBuilder::WriteModule(TextWriter& writer) {
         writer.Text(")\nvar<storage, ");
         writer.Text((resources.access[resource] & AccessWrite) != 0 ? "read_write> " : "read> ");
         WriteResourceName(writer, resourceOrigins.logicalSlots[resource]);
-        writer.Text(": array<");
+        writer.Text(": ");
+        if ((resources.access[resource] & AccessAtomic) != 0) {
+            writer.Text("array<");
+            if (!WriteAtomicType(writer, static_cast<CoreType>(resources.elementTypes[resource]), 0)) {
+                return false;
+            }
+            writer.Text(">;\n\n");
+            continue;
+        }
+        writer.Text("array<");
         if (!WriteFullType(writer, static_cast<CoreType>(resources.elementTypes[resource]),
                            resources.structTypes[resource], 0)) {
             return false;
         }
         writer.Text(">;\n\n");
+    }
+    for (u32 value = 0; value < values.count; ++value) {
+        if (!(values.variables[value] & VariableWorkgroup)) {
+            continue;
+        }
+        writer.Text("var<workgroup> ");
+        WriteValueName(writer, value);
+        writer.Text(": ");
+        if (!((values.variables[value] & VariableAtomic)
+                  ? WriteAtomicType(writer, static_cast<CoreType>(values.types[value]), values.arrayLengths[value])
+                  : WriteValueType(writer, value))) {
+            return false;
+        }
+        writer.Text(";\n\n");
     }
     if (outputs.count != 0) {
         writer.Text("struct BWSLOutput {\n");
@@ -2827,7 +2897,8 @@ bool WGSLBuilder::WriteModule(TextWriter& writer) {
         }
     }
     for (u32 value = 0; value < values.count; ++value) {
-        if (values.kinds[value] != static_cast<u8>(ValueKind::Value) || !values.functionScope[value]) {
+        if (values.kinds[value] != static_cast<u8>(ValueKind::Value) || !values.functionScope[value] ||
+            (values.variables[value] & VariableWorkgroup)) {
             continue;
         }
         writer.Indent();

@@ -32,6 +32,8 @@ enum class Accessor : u8 {
 enum VariableFlags : u8 {
     VariableMutable = 1,   // Assigned more than once or through pointers
     VariableSnapshot = 2,  // Tracked pointer: also keeps its target's index
+    VariableWorkgroup = 4, // A var<workgroup> at module scope
+    VariableAtomic = 8,    // Workgroup var of atomic<T> (or array of them)
 };
 
 // The possible targets of each tracked pointer, in CSR form. A target is
@@ -46,6 +48,7 @@ struct TrackedPointerTable {
 enum ResourceAccess : u8 {
     AccessRead = 1,
     AccessWrite = 2,
+    AccessAtomic = 4, // Elements are atomic<T>
 };
 
 // All arrays share a dense ValueId. Register allocation can contain holes;
@@ -248,6 +251,7 @@ private:
     u32* storageAlignments = nullptr;
     u32* storageSizes = nullptr;
     u32* storageMemberSizes = nullptr;
+    bool writingAtomicLoad = false;
     u32 dispatchNode = InvalidId; // Tracked pointer resolved to dispatchTarget
     u32 dispatchTarget = InvalidId;
     u32 resourceForSlot[32] = {};
@@ -336,6 +340,10 @@ private:
     bool PrepareStorageStruct(u32 structId);
     bool StorageShape(CoreType type, u32 structType, u32& alignment, u32& size);
     void MarkAccess(u32 reference, u8 access);
+    bool PrepareAtomicInstruction(u32 instruction);
+    bool IsAtomicReference(u32 reference) const;
+    bool WriteAtomicType(TextWriter& writer, CoreType type, u32 arrayLength);
+    bool WriteAtomicInstruction(TextWriter& writer, u32 instruction);
     bool PrepareTrackedPointers();
     u32 TrackedIndex(u32 valueId) const;
     u32 TrackedNode(u32 reference) const;
