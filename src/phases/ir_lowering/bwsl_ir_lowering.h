@@ -529,8 +529,9 @@ struct IRLowering {
   };
   // Like ResolveLocalPlace, for places rooted in a storage buffer element.
   bool ResolveStoragePlace(NodeRef expr, bool emit, StoragePlace *out);
-  // Stores to a place below a buffer element. Returns false when `target`
-  // isn't one, so the caller lowers the store as before.
+  // Stores to a place below a buffer element, and reports stores to
+  // read-only resources. Returns false when `target` is neither, so the
+  // caller lowers the store as before.
   bool TryStoreStoragePlace(NodeRef target, u16 valueReg);
 
   u16 LowerUnaryOp(NodeRef ref);

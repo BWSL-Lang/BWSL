@@ -699,7 +699,13 @@ inline bool IRLowering::TryStoreStoragePlace(NodeRef target, u16 valueReg) {
       ast->GetIdentifier(root).identifierKind != SpecialIdentifier::RESOURCES) {
     return false;
   }
-  if (!StorageBufferOf(this, resource)) return false;
+  if (!StorageBufferOf(this, resource)) {
+    std::string name = resource.Type() == ASTNodeType::MEMBER_ACCESS
+                           ? ast->GetMemberAccess(resource).member.ToString() : std::string();
+    ReportErrorAt(target, ("Error: resources." + name +
+                           " is read-only; only storage buffer elements can be assigned\n").c_str());
+    return true;
+  }
   // `resources.buffer[i] = value` stores the element directly.
   if (target.Type() == ASTNodeType::ARRAY_ACCESS &&
       StorageBufferOf(this, ast->GetArrayAccess(target).array)) {

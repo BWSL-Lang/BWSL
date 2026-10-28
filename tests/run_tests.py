@@ -459,6 +459,7 @@ ERROR_CASE_TESTS = {
     "remaining_duplicate_struct.bwsl": "Duplicate struct declaration",
     "remaining_duplicate_case.bwsl": "Duplicate switch case value",
     "remaining_duplicate_default.bwsl": "Duplicate switch default case",
+    "uniform_field_assignment.bwsl": "resources.params is read-only",
 }
 
 ERROR_CASE_MODULE_DIRS = {

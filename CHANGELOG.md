@@ -236,6 +236,9 @@
   two swapped: `atomic_cmp_exchange(x, 5, 100)` stored 5 when x was 100.
 
 ### Diagnostics
+- Assigning to a uniform or another read-only resource, as in
+  `resources.params.offset.y = 2.0`, is a source error. The store was
+  silently dropped.
 - A duplicate pass name is reported at the second pass's name, with the line
   of the first, instead of at the end of the second pass.
 - Passing a value where a pointer parameter is expected, a pointer where a
