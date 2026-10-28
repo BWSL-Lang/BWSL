@@ -813,6 +813,20 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
               }
               // Only the matching arm runs: it returns into an inline frame,
               // as an inlined function body does.
+              for (u32 i = 0; i < inlineStackDepth; i++) {
+                if (inlineStackPacked[i] != methodRef.packed) continue;
+                if (!recursionDiagnosed) {
+                  recursionDiagnosed = true;
+                  ReportErrorAt(ref, "Error: recursion is not supported — a function "
+                                     "calls itself (directly or through another "
+                                     "function). SPIR-V execution is stack-less; "
+                                     "rewrite the algorithm iteratively.\n");
+                }
+                variableRegisters = savedVarRegs;
+                nodeRegisters = savedNodeRegisters;
+                SetRegisterType(dest, CoreType::INVALID);
+                return dest;
+              }
               u16 resultReg = AllocateRegister();
               SetRegisterType(resultReg, method.returnType);
               builder.EmitInstruction(OP_STORE_REG, resultReg,
@@ -841,10 +855,13 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
               inlineReturnFlagReads = 0;
               if (methodModuleIndex != 0xFFFFFFFF) inlineModuleIndex = methodModuleIndex;
               inlineDepth++;
+              bool pushed = inlineStackDepth < MAX_INLINE_DEPTH;
+              if (pushed) inlineStackPacked[inlineStackDepth++] = methodRef.packed;
               {
                 DebugScopeGuard scope(builder, methodRef);
                 LowerEnumPatternBody(method.body, selfReg, enumData);
               }
+              if (pushed) inlineStackDepth--;
               inlineDepth--;
               inlineReturnReg = savedReturnReg;
               inlineReturnFlagReg = savedReturnFlagReg;

@@ -468,6 +468,7 @@ ERROR_CASE_TESTS = {
     "struct_store_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
     "struct_constructor_argument_count.bwsl": "struct A constructor expects 2 argument(s), got 1",
     "enum_payload_too_large.bwsl": "an enum variant's payload can hold at most 64 scalars",
+    "eval_method_recursion.bwsl": "recursion is not supported",
     "empty_struct_in_buffer.bwsl": "resources.particles holds struct Empty, which has no fields",
     "struct_assignment_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
     "storage_struct_field_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
