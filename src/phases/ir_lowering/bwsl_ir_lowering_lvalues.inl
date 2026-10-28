@@ -573,6 +573,188 @@ inline bool IRLowering::TryStoreLocalPlace(NodeRef target, u16 valueReg) {
   return true;
 }
 
+// The storage buffer `resources.name` names, or nullptr.
+inline const ResourceData *StorageBufferOf(IRLowering *lowering, NodeRef expr) {
+  if (expr.Type() != ASTNodeType::MEMBER_ACCESS) return nullptr;
+  const MemberAccessData &access = lowering->ast->GetMemberAccess(expr);
+  if (access.object.Type() != ASTNodeType::IDENTIFIER ||
+      lowering->ast->GetIdentifier(access.object).identifierKind !=
+          SpecialIdentifier::RESOURCES) {
+    return nullptr;
+  }
+  Symbol *sym = SymbolTable::LookupByHash(
+      const_cast<SymbolTableData *>(lowering->symbols), access.member.nameHash);
+  if (!sym || sym->kind != SymbolKind::RESOURCE) return nullptr;
+  const ResourceData &resource = lowering->symbols->resources[sym->index];
+  return resource.type == ResourceBinding::StorageBuffer ? &resource : nullptr;
+}
+
+inline bool IRLowering::ResolveStoragePlace(NodeRef expr, bool emit,
+                                            StoragePlace *out) {
+  // A pointer below the element carries no binding: the SPIR-V backend reads
+  // the binding as "this indexes the buffer itself".
+  const auto pointer = [&](const StoragePlace &place, u32 storageInfo) {
+    u16 dest = AllocateRegister();
+    if (dest >= MAX_REGISTERS) return u16(0xFFFF);
+    SetRegisterType(dest, place.type);
+    program.registerStructTypes[dest] = place.structHash;
+    program.registerStorageInfo[dest] = storageInfo;
+    return dest;
+  };
+  if (expr.Type() == ASTNodeType::ARRAY_ACCESS) {
+    const ArrayAccessData &access = ast->GetArrayAccess(expr);
+    if (const ResourceData *buffer = StorageBufferOf(this, access.array)) {
+      *out = {};
+      out->structHash = buffer->structTypeHash;
+      out->type = buffer->structTypeHash != 0
+                      ? CoreType::CUSTOM
+                      : static_cast<CoreType>(buffer->coreType);
+      if (!emit) return true;
+      u16 base = LowerExpression(access.array);
+      u16 index = LowerExpression(access.index);
+      // No depth: its bits overlap STORAGE_IS_SHARED, which would make the
+      // backend address a field of this element as workgroup memory.
+      out->reg = pointer(*out, (buffer->bindingIndex << IRProgram::STORAGE_BINDING_SHIFT) |
+                                   IRProgram::STORAGE_IS_PTR);
+      if (out->reg == 0xFFFF) return false;
+      builder.EmitInstruction(OP_STORAGE_INDEX, out->reg, base, index);
+      return true;
+    }
+    StoragePlace base;
+    if (!ResolveStoragePlace(access.array, emit, &base)) return false;
+    *out = base;
+    if (base.arrayLength != 0) {
+      out->arrayLength = 0;
+    } else if (mask(base.type) & TypeMasks::MATRIX_TYPES) {
+      out->type = base.type == CoreType::MAT4 ? CoreType::FLOAT4 :
+                  base.type == CoreType::MAT3 ? CoreType::FLOAT3 : CoreType::FLOAT2;
+    } else if (GetVectorDimension(base.type) > 1) {
+      out->type = GetScalarComponentType(base.type);
+    } else {
+      return false;
+    }
+    if (!emit) return true;
+    u16 index = LowerExpression(access.index);
+    if (base.arrayLength != 0) CheckConstIndexInBounds(index, access.index, base.arrayLength);
+    out->reg = pointer(*out, 0);
+    if (out->reg == 0xFFFF) return false;
+    builder.EmitInstruction(OP_STORAGE_INDEX, out->reg, base.reg, index);
+    return true;
+  }
+  if (expr.Type() != ASTNodeType::MEMBER_ACCESS) return false;
+  const MemberAccessData &access = ast->GetMemberAccess(expr);
+  StoragePlace base;
+  if (access.isModuleQualified || !ResolveStoragePlace(access.object, false, &base) ||
+      base.arrayLength != 0) {
+    return false;
+  }
+  if (base.type == CoreType::CUSTOM) {
+    u32 field = 0;
+    CoreType fieldType = CoreType::INVALID;
+    if (!FindStructField(base.structHash, access.member.nameHash, &field, &fieldType, nullptr))
+      return false;
+    auto structIt = structTypeMap.find(base.structHash);
+    u32 member = program.structTypes[structIt->second].fieldOffset + field;
+    *out = {};
+    out->type = fieldType;
+    out->structHash = (fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM)
+                          ? program.structFieldTypeHashes[member] : 0;
+    out->arrayLength = program.structFieldArraySizes ? program.structFieldArraySizes[member] : 0;
+    if (!emit) return true;
+    ResolveStoragePlace(access.object, true, &base);
+    out->reg = pointer(*out, 0);
+    if (out->reg == 0xFFFF) return false;
+    builder.EmitInstruction(OP_STORAGE_FIELD, out->reg, base.reg, static_cast<u16>(field));
+    program.metadata[builder.currentInstruction - 1] = base.structHash;
+    return true;
+  }
+  // One vector component; a longer swizzle is not one place.
+  u8 indices[4] = {};
+  u32 length = 0;
+  if (GetVectorDimension(base.type) < 2 ||
+      !DecodeSwizzleByHash(access.member.nameHash, access.member.nameLength, indices, &length) ||
+      length != 1 || indices[0] >= GetVectorDimension(base.type)) {
+    return false;
+  }
+  *out = {};
+  out->type = GetScalarComponentType(base.type);
+  if (!emit) return true;
+  ResolveStoragePlace(access.object, true, &base);
+  out->reg = pointer(*out, 0);
+  if (out->reg == 0xFFFF) return false;
+  builder.EmitInstruction(OP_STORAGE_INDEX, out->reg, base.reg,
+                          EmitConstantUint(indices[0]));
+  return true;
+}
+
+inline bool IRLowering::TryStoreStoragePlace(NodeRef target, u16 valueReg) {
+  NodeRef root = target;
+  NodeRef resource = target;
+  while (root.Type() == ASTNodeType::MEMBER_ACCESS || root.Type() == ASTNodeType::ARRAY_ACCESS) {
+    resource = root;
+    root = root.Type() == ASTNodeType::MEMBER_ACCESS ? ast->GetMemberAccess(root).object
+                                                     : ast->GetArrayAccess(root).array;
+  }
+  if (root.Type() != ASTNodeType::IDENTIFIER ||
+      ast->GetIdentifier(root).identifierKind != SpecialIdentifier::RESOURCES) {
+    return false;
+  }
+  if (!StorageBufferOf(this, resource)) return false;
+  // `resources.buffer[i] = value` stores the element directly.
+  if (target.Type() == ASTNodeType::ARRAY_ACCESS &&
+      StorageBufferOf(this, ast->GetArrayAccess(target).array)) {
+    return false;
+  }
+  StoragePlace place;
+  if (ResolveStoragePlace(target, false, &place)) {
+    if (place.arrayLength != 0) {
+      ReportErrorAt(target, "Error: assign a storage buffer's array field one element at a time\n");
+      return true;
+    }
+    if (!CheckStoreShape(target, valueReg, place.type)) return true;
+    if (place.type != CoreType::CUSTOM && place.type != CoreType::ENUM)
+      valueReg = ConvertRegisterToType(valueReg, place.type);
+    ResolveStoragePlace(target, true, &place);
+    builder.EmitInstruction(OP_LOCAL_STORE, 0, place.reg, valueReg);
+    return true;
+  }
+  // A swizzle stores each component through its own pointer.
+  if (target.Type() == ASTNodeType::MEMBER_ACCESS) {
+    const MemberAccessData &access = ast->GetMemberAccess(target);
+    StoragePlace vector;
+    u8 indices[4] = {};
+    u32 length = 0;
+    if (ResolveStoragePlace(access.object, false, &vector) && vector.arrayLength == 0 &&
+        GetVectorDimension(vector.type) > 1 &&
+        DecodeSwizzleByHash(access.member.nameHash, access.member.nameLength, indices, &length)) {
+      if (!CheckSwizzleInRange(this, target, vector.type, indices, length)) return true;
+      for (u32 i = 0; i < length; ++i) {
+        for (u32 j = 0; j < i; ++j) {
+          if (indices[i] == indices[j]) {
+            ReportError("Error: swizzle assignment target has duplicate components\n");
+            return true;
+          }
+        }
+      }
+      CoreType component = GetScalarComponentType(vector.type);
+      if (!CheckStoreShape(target, valueReg, GetVectorType(component, length))) return true;
+      ResolveStoragePlace(access.object, true, &vector);
+      for (u32 i = 0; i < length; ++i) {
+        u16 value = AllocateRegister();
+        SetRegisterType(value, component);
+        builder.EmitInstruction(OP_VEC_EXTRACT, value, valueReg, static_cast<u16>(i));
+        u16 element = AllocateRegister();
+        SetRegisterType(element, component);
+        program.registerStorageInfo[element] = 0;
+        builder.EmitInstruction(OP_STORAGE_INDEX, element, vector.reg, EmitConstantUint(indices[i]));
+        builder.EmitInstruction(OP_LOCAL_STORE, 0, element, value);
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
 inline void IRLowering::LowerVariableDecl(NodeRef ref, u32 bindingNameHash,
                                           const VariableData *bindingData) {
   const VariableDeclData &varDecl = ast->GetVariableDecl(ref);
@@ -913,6 +1095,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
     }
   }
   if (TryStoreLocalPlace(target, valueReg)) return;
+  if (TryStoreStoragePlace(target, valueReg)) return;
 
   if (target.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &ident = ast->GetIdentifier(target);

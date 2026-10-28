@@ -516,6 +516,23 @@ struct IRLowering {
   // isn't a place, so the caller lowers the store as before.
   bool TryStoreLocalPlace(NodeRef target, u16 valueReg);
 
+  // A place inside a storage buffer element: a field, an array field's
+  // element or a vector component of `resources.buffer[i]`. Stores go
+  // through a STORAGE_INDEX/STORAGE_FIELD pointer chain, so they write only
+  // that place: rebuilding the element would overwrite fields that other
+  // invocations write at the same time.
+  struct StoragePlace {
+    u16 reg = 0xFFFF;         // Pointer register
+    CoreType type = CoreType::INVALID;  // Value type (element type of an array field)
+    u32 structHash = 0;       // Struct type when type is CUSTOM
+    u32 arrayLength = 0;      // > 0: an array field
+  };
+  // Like ResolveLocalPlace, for places rooted in a storage buffer element.
+  bool ResolveStoragePlace(NodeRef expr, bool emit, StoragePlace *out);
+  // Stores to a place below a buffer element. Returns false when `target`
+  // isn't one, so the caller lowers the store as before.
+  bool TryStoreStoragePlace(NodeRef target, u16 valueReg);
+
   u16 LowerUnaryOp(NodeRef ref);
   u16 LowerAddressOf(const UnaryOpData &unop, bool *pointsAtCopy,
                      bool *pointsAtArray);

@@ -56,6 +56,10 @@
 - A pointer to an element of a struct's array field (`^s.values[i]`) or to
   a `self` field named without `self.` now points at the element. It
   previously pointed at a copy, so writes through it were lost.
+- Assigning to a field, an array field's element or a vector component of
+  a storage buffer element, as in `resources.particles[i].position.y = 1.0`
+  or `resources.particles[i].weights[2] = w`, writes that place. The store
+  was dropped or went to a copy of the element.
 - `@centroid` on a vertex output assignment evaluates the varying inside the
   primitive under MSAA, so edge pixels don't extrapolate it past its vertex
   values: `@centroid output.atlasUV = uv;`. It combines with
