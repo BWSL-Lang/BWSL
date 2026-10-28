@@ -251,6 +251,7 @@ private:
                                  u32 id, bool varying);
     void PlanExpressions();
     u32 OperandMask(u32 instruction) const;
+    u32 VectorArgumentCount(u32 instruction) const;
     void CountUse(u16 operand, u32 count = 1);
     bool WriteModule(TextWriter& writer);
     bool WriteInstruction(TextWriter& writer, u32 instruction);

@@ -296,6 +296,29 @@ BuiltinOperation MathOperation(u16 opcode) {
     }
 }
 
+struct PackOperation {
+    const char* name;
+    CoreType argument;
+    CoreType result;
+};
+
+// Packing builtins share GLSL.std.450's component order and rounding.
+PackOperation PackingOperation(u16 opcode) {
+    switch (opcode) {
+        case IR::OP_PACK_UNORM4X8: return {"pack4x8unorm", CoreType::FLOAT4, CoreType::UINT};
+        case IR::OP_PACK_SNORM4X8: return {"pack4x8snorm", CoreType::FLOAT4, CoreType::UINT};
+        case IR::OP_PACK_UNORM2X16: return {"pack2x16unorm", CoreType::FLOAT2, CoreType::UINT};
+        case IR::OP_PACK_SNORM2X16: return {"pack2x16snorm", CoreType::FLOAT2, CoreType::UINT};
+        case IR::OP_PACK_HALF2X16: return {"pack2x16float", CoreType::FLOAT2, CoreType::UINT};
+        case IR::OP_UNPACK_UNORM4X8: return {"unpack4x8unorm", CoreType::UINT, CoreType::FLOAT4};
+        case IR::OP_UNPACK_SNORM4X8: return {"unpack4x8snorm", CoreType::UINT, CoreType::FLOAT4};
+        case IR::OP_UNPACK_UNORM2X16: return {"unpack2x16unorm", CoreType::UINT, CoreType::FLOAT2};
+        case IR::OP_UNPACK_SNORM2X16: return {"unpack2x16snorm", CoreType::UINT, CoreType::FLOAT2};
+        case IR::OP_UNPACK_HALF2X16: return {"unpack2x16float", CoreType::UINT, CoreType::FLOAT2};
+        default: return {nullptr, CoreType::INVALID, CoreType::INVALID};
+    }
+}
+
 bool IsCopy(u16 opcode) {
     return opcode == IR::OP_LOAD_CONST || opcode == IR::OP_LOAD_REG ||
            opcode == IR::OP_STORE_REG;
@@ -319,6 +342,9 @@ u32 ValueOperandMask(u16 opcode, u32 metadata) {
     const BuiltinOperation function = MathOperation(opcode);
     if (function.name != nullptr) {
         return (1u << function.argumentCount) - 1;
+    }
+    if (PackingOperation(opcode).name != nullptr) {
+        return 1;
     }
     switch (opcode) {
         case IR::OP_STORAGE_LOAD:
@@ -937,7 +963,24 @@ u32 WGSLBuilder::OperandMask(u32 instruction) const {
             ? MatrixDimension(static_cast<CoreType>(ir->registerTypes[destination])) : 0;
         return (1u << columns) - 1;
     }
+    if (opcode == IR::OP_VEC_CONSTRUCT) {
+        return (1u << VectorArgumentCount(instruction)) - 1;
+    }
     return ValueOperandMask(opcode, ir->metadata[instruction]);
+}
+
+u32 WGSLBuilder::VectorArgumentCount(u32 instruction) const {
+    // Some lowerings leave the count out of metadata; then the operands
+    // run until the first unused slot.
+    const u32 metadata = ir->metadata[instruction];
+    if (metadata >= 1 && metadata <= 4) {
+        return metadata;
+    }
+    u32 count = 0;
+    while (count < 4 && ir->GetOperand(instruction, count) != IR::UnusedOperand) {
+        ++count;
+    }
+    return count;
 }
 
 void WGSLBuilder::CountUse(u16 operand, u32 count) {
@@ -1347,6 +1390,18 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
         return DefineValue(instruction, type, ValueKind::Value);
     }
 
+    const PackOperation packing = PackingOperation(opcode);
+    if (packing.name != nullptr) {
+        CoreType argumentType = CoreType::INVALID;
+        if (!OperandType(first, argumentType)) {
+            return false;
+        }
+        if (argumentType != packing.argument || type != packing.result) {
+            return Fail("WGSL packing builtin has incompatible operand or result types");
+        }
+        return DefineValue(instruction, type, ValueKind::Value);
+    }
+
     switch (opcode) {
         case IR::OP_FNEG:
         case IR::OP_INEG:
@@ -1438,7 +1493,7 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
             break;
         }
         case IR::OP_VEC_CONSTRUCT: {
-            u32 argumentCount = ir->metadata[instruction];
+            u32 argumentCount = VectorArgumentCount(instruction);
             if (argumentCount == 0 || argumentCount > 4 || Width(type) < 2) {
                 return Fail("WGSL vector constructor has invalid argument metadata");
             }
@@ -1765,6 +1820,16 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
     if (IsSampledTextureOpcode(opcode)) {
         return WriteTextureExpression(writer, instruction);
     }
+    const PackOperation packing = PackingOperation(opcode);
+    if (packing.name != nullptr) {
+        writer.Text(packing.name);
+        writer.Text("(");
+        if (!WriteOperand(writer, first)) {
+            return false;
+        }
+        writer.Text(")");
+        return true;
+    }
     if (uniforms.count != 0 && values.resourceIds[valueId] != InvalidId &&
         (opcode == IR::OP_LOAD_UNIFORM || opcode == IR::OP_STRUCT_EXTRACT ||
          opcode == IR::OP_STRUCT_ARRAY_EXTRACT || opcode == IR::OP_STORAGE_LOAD || opcode == IR::OP_ARRAY_LOAD)) {
@@ -1905,7 +1970,7 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
         case IR::OP_VEC_CONSTRUCT: {
             WriteType(writer, type);
             writer.Text("(");
-            u32 argumentCount = ir->metadata[instruction];
+            u32 argumentCount = VectorArgumentCount(instruction);
             for (u32 argument = 0; argument < argumentCount; ++argument) {
                 if (argument != 0) {
                     writer.Text(", ");
