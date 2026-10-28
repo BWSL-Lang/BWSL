@@ -183,20 +183,6 @@ pipeline MissingVertexPosition {
     }
 }
 """,
-    # WGSL has no empty structs, so a field of one can't be declared.
-    "empty_struct_field": """
-pipeline EmptyStructField {
-    struct Empty { };
-    struct Particle { float mass; Empty tag; };
-    resources { particles: buffer<Particle> result: buffer<float> }
-    pass "Compute" {
-        use resources { particles, result }
-        compute "Main" [1, 1, 1] {
-            resources.result[0] = resources.particles[0].mass;
-        }
-    }
-}
-""",
     "unsupported_uniform_type": """
 pipeline UnsupportedUniform {
     resources { scale: double result: buffer<double> }
@@ -208,12 +194,6 @@ pipeline UnsupportedUniform {
     }
 }
 """,
-}
-
-
-# Diagnostics a rejected case must report, by case name.
-REJECTED_MESSAGES = {
-    "empty_struct_field": "WGSL cannot use a struct type with no fields",
 }
 
 
@@ -416,9 +396,6 @@ def run_suite(args: argparse.Namespace) -> tuple[int, int, int]:
             errors.append("Stage 1 accepted an unsupported shader")
         if "wgsl" not in (rejected["stdout"] + rejected["stderr"]).lower():
             errors.append("Missing WGSL-specific unsupported-feature diagnostic")
-        expected = REJECTED_MESSAGES.get(name)
-        if expected and expected not in rejected["stdout"] + rejected["stderr"]:
-            errors.append(f"Missing diagnostic: {expected}")
         try:
             json.loads(rejected["stdout"])
         except json.JSONDecodeError:

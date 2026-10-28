@@ -543,11 +543,6 @@ bool WGSLBuilder::WriteFullType(TextWriter& writer, CoreType type, u32 structTyp
         if (index == InvalidId) {
             return Fail("WGSL struct value is missing its struct type");
         }
-        // WGSL structs need a member, so a struct without fields has no
-        // declaration to name.
-        if (ir->structTypes[index].fieldCount == 0) {
-            return Fail("WGSL cannot use a struct type with no fields");
-        }
         writer.Text("BWSLStruct");
         writer.Number(index);
     } else {
@@ -670,12 +665,14 @@ bool WGSLBuilder::WriteStructDeclarations(TextWriter& writer) {
             }
             --depth;
             states[index] = 2;
-            if (info.fieldCount == 0) {
-                continue;
-            }
             writer.Text("struct BWSLStruct");
             writer.Number(index);
             writer.Text(" {\n");
+            // WGSL structs need a member. Buffers can't hold an empty
+            // struct (lowering reports it), so only locals see this one.
+            if (info.fieldCount == 0) {
+                writer.Text("    bwsl_empty: u32,\n");
+            }
             for (u32 field = 0; field < info.fieldCount; ++field) {
                 CoreType type = CoreType::INVALID;
                 u32 structType = 0;

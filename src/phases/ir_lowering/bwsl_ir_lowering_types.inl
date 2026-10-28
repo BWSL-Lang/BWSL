@@ -26,7 +26,7 @@ inline u16 IRLowering::EmitZeroStruct(u32 structTypeHash) {
       structInfo = FindStructInfo(structTypeHash);
     }
   }
-  if (!structInfo || structInfo->fieldCount == 0) {
+  if (!structInfo) {
     return EmitZeroConstant(CoreType::FLOAT);
   }
 
