@@ -102,7 +102,7 @@ bool WGSLBuilder::PrepareControl() {
             continue;
         }
         const u16 opcode = ir->opcodes[instruction];
-        u32 mask = ValueOperandMask(opcode, ir->metadata[instruction]);
+        u32 mask = OperandMask(instruction);
         if (IsCopy(opcode) || opcode == IR::OP_STORAGE_LOAD || opcode == IR::OP_STORAGE_FIELD ||
             opcode == IR::OP_STRUCT_EXTRACT || opcode == IR::OP_BRANCH || opcode == IR::OP_SWITCH) {
             mask = 1;

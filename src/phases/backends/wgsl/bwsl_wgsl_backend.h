@@ -213,6 +213,7 @@ private:
     char errorMessage[256] = {};
     u32 errorInstruction = InvalidId;
     u32 currentInstruction = InvalidId;
+    u32 helperFunctions = 0; // Bit set of WGSL helpers the module must define
     bool attemptedEmission = false;
     bool structured = false;
     bool writingSource = false;
@@ -249,6 +250,7 @@ private:
     void WriteInterfaceAttribute(TextWriter& writer, const InterfaceTable& table,
                                  u32 id, bool varying);
     void PlanExpressions();
+    u32 OperandMask(u32 instruction) const;
     void CountUse(u16 operand, u32 count = 1);
     bool WriteModule(TextWriter& writer);
     bool WriteInstruction(TextWriter& writer, u32 instruction);

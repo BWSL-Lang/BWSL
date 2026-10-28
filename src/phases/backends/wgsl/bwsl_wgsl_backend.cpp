@@ -335,6 +335,9 @@ u32 ValueOperandMask(u16 opcode, u32 metadata) {
         case IR::OP_VEC_INSERT_DYNAMIC:
         case IR::OP_SELECT: return 7;
         case IR::OP_VEC_CONSTRUCT: return (1u << metadata) - 1;
+        case IR::OP_MAT_TRANSPOSE:
+        case IR::OP_MAT_DET:
+        case IR::OP_MAT_INVERSE:
         case IR::OP_VEC_EXTRACT:
         case IR::OP_FNEG:
         case IR::OP_INEG:
@@ -349,6 +352,11 @@ u32 ValueOperandMask(u16 opcode, u32 metadata) {
         case IR::OP_BITCAST: return 1;
         default: return 0;
     }
+}
+
+u32 MatrixDimension(CoreType type) {
+    return type >= CoreType::MAT2 && type <= CoreType::MAT4
+        ? static_cast<u32>(type) - static_cast<u32>(CoreType::MAT2) + 2 : 0;
 }
 
 bool HasResult(u16 opcode) {
@@ -920,6 +928,18 @@ bool WGSLBuilder::Prepare() {
     return true;
 }
 
+u32 WGSLBuilder::OperandMask(u32 instruction) const {
+    const u16 opcode = ir->opcodes[instruction];
+    if (opcode == IR::OP_MAT_CONSTRUCT) {
+        // One column vector per operand; metadata is not always set.
+        const u16 destination = ir->destinations[instruction];
+        const u32 columns = destination < ir->registerCount
+            ? MatrixDimension(static_cast<CoreType>(ir->registerTypes[destination])) : 0;
+        return (1u << columns) - 1;
+    }
+    return ValueOperandMask(opcode, ir->metadata[instruction]);
+}
+
 void WGSLBuilder::CountUse(u16 operand, u32 count) {
     if (IR::IsConstant(operand)) return;
     operand = values.aliasOperands[registerToValue[operand]];
@@ -986,7 +1006,7 @@ void WGSLBuilder::PlanExpressions() {
                 CountUse(index < leftWidth ? first : second);
             }
         } else {
-            const u32 mask = ValueOperandMask(opcode, ir->metadata[instruction]);
+            const u32 mask = OperandMask(instruction);
             for (u32 argument = 0; argument < 4; ++argument) {
                 if ((mask & (1u << argument)) != 0) {
                     CountUse(ir->GetOperand(instruction, argument));
@@ -1014,7 +1034,7 @@ void WGSLBuilder::PlanExpressions() {
             continue;
         }
         const u16 opcode = ir->opcodes[instruction];
-        const u32 mask = ValueOperandMask(opcode, ir->metadata[instruction]);
+        const u32 mask = OperandMask(instruction);
         if (values.useCounts[value] != 1 || mask == 0 ||
             values.kinds[value] != static_cast<u8>(ValueKind::Value) ||
             opcode == IR::OP_ARRAY_LOAD || opcode == IR::OP_STORAGE_LOAD || opcode == IR::OP_VEC_INSERT ||
@@ -1142,6 +1162,10 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
         ValueKind kind = static_cast<ValueKind>(values.kinds[base]);
         if (opcode == IR::OP_ARRAY_LOAD && kind == ValueKind::Value) {
             CoreType vectorType = static_cast<CoreType>(values.types[base]);
+            const u32 columns = MatrixDimension(vectorType);
+            if (columns != 0 && type == Shape(CoreType::FLOAT, columns) && RequireIndex(second)) {
+                return DefineValue(instruction, type, ValueKind::Value);
+            }
             if (Width(vectorType) < 2 || type != Scalar(vectorType) || !RequireIndex(second)) {
                 return Fail("WGSL backend array loads require a storage buffer or vector");
             }
@@ -1332,6 +1356,9 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
             if (!OperandType(first, sourceType)) {
                 return false;
             }
+            if (opcode == IR::OP_FNEG && sourceType == type && MatrixDimension(type) != 0) {
+                break;
+            }
             if (sourceType != type || Width(type) == 0) {
                 return Fail("WGSL unary operand has an incompatible type");
             }
@@ -1472,6 +1499,39 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
                 if (index >= Width(left) + Width(right)) {
                     return Fail("WGSL shuffle component index is out of bounds");
                 }
+            }
+            break;
+        }
+        case IR::OP_MAT_CONSTRUCT: {
+            const u32 columns = MatrixDimension(type);
+            if (columns == 0) {
+                return Fail("WGSL matrix constructor requires a square f32 matrix result");
+            }
+            for (u32 column = 0; column < columns; ++column) {
+                CoreType columnType = CoreType::INVALID;
+                if (!OperandType(ir->GetOperand(instruction, column), columnType)) {
+                    return false;
+                }
+                if (columnType != Shape(CoreType::FLOAT, columns)) {
+                    return Fail("WGSL matrix constructor columns must match its dimension");
+                }
+            }
+            break;
+        }
+        case IR::OP_MAT_TRANSPOSE:
+        case IR::OP_MAT_DET:
+        case IR::OP_MAT_INVERSE: {
+            CoreType matrix = CoreType::INVALID;
+            if (!OperandType(first, matrix)) {
+                return false;
+            }
+            const CoreType expected = opcode == IR::OP_MAT_DET ? CoreType::FLOAT : matrix;
+            if (MatrixDimension(matrix) == 0 || type != expected) {
+                return Fail("WGSL matrix function has an incompatible type");
+            }
+            if (opcode == IR::OP_MAT_INVERSE) {
+                // WGSL has no inverse builtin; a helper per dimension.
+                helperFunctions |= 1u << (MatrixDimension(matrix) - 2);
             }
             break;
         }
@@ -1782,6 +1842,15 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
         case IR::OP_FNEG:
         case IR::OP_INEG:
         case IR::OP_NOT:
+            if (MatrixDimension(type) != 0) {
+                // WGSL negation accepts scalars and vectors only.
+                writer.Text("(");
+                if (!WriteOperand(writer, first)) {
+                    return false;
+                }
+                writer.Text(" * -1.0f)");
+                return true;
+            }
             writer.Text("(");
             if (opcode == IR::OP_INEG && Scalar(type) == CoreType::UINT) {
                 WriteType(writer, type);
@@ -1849,6 +1918,40 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
                 if (!WriteConvertedOperand(writer, operand, Shape(Scalar(type), Width(sourceType)))) {
                     return false;
                 }
+            }
+            writer.Text(")");
+            return true;
+        }
+        case IR::OP_MAT_CONSTRUCT: {
+            WriteType(writer, type);
+            writer.Text("(");
+            for (u32 column = 0; column < MatrixDimension(type); ++column) {
+                if (column != 0) {
+                    writer.Text(", ");
+                }
+                if (!WriteOperand(writer, ir->GetOperand(instruction, column))) {
+                    return false;
+                }
+            }
+            writer.Text(")");
+            return true;
+        }
+        case IR::OP_MAT_TRANSPOSE:
+        case IR::OP_MAT_DET:
+        case IR::OP_MAT_INVERSE: {
+            CoreType matrix = CoreType::INVALID;
+            if (!OperandType(first, matrix)) {
+                return false;
+            }
+            if (opcode == IR::OP_MAT_INVERSE) {
+                writer.Text("bwsl_inverse");
+                writer.Number(MatrixDimension(matrix));
+                writer.Text("(");
+            } else {
+                writer.Text(opcode == IR::OP_MAT_DET ? "determinant(" : "transpose(");
+            }
+            if (!WriteOperand(writer, first)) {
+                return false;
             }
             writer.Text(")");
             return true;
@@ -2010,10 +2113,60 @@ void WGSLBuilder::WriteInterfaceAttribute(TextWriter& writer, const InterfaceTab
 #include "bwsl_wgsl_backend_resources.inl"
 #include "bwsl_wgsl_backend_control.inl"
 
+static void WriteHelperFunctions(TextWriter& writer, u32 helpers) {
+    // Adjugate over determinant, as GLSL.std.450 MatrixInverse; m[c][r].
+    if (helpers & 1u) {
+        writer.Text("fn bwsl_inverse2(m: mat2x2<f32>) -> mat2x2<f32> {\n"
+                    "    return mat2x2<f32>(m[1][1], -m[0][1], -m[1][0], m[0][0]) * (1.0f / determinant(m));\n"
+                    "}\n\n");
+    }
+    if (helpers & 2u) {
+        writer.Text("fn bwsl_inverse3(m: mat3x3<f32>) -> mat3x3<f32> {\n"
+                    "    let r = mat3x3<f32>(cross(m[1], m[2]), cross(m[2], m[0]), cross(m[0], m[1]));\n"
+                    "    return transpose(r) * (1.0f / dot(m[0], r[0]));\n"
+                    "}\n\n");
+    }
+    if (helpers & 4u) {
+        writer.Text("fn bwsl_inverse4(m: mat4x4<f32>) -> mat4x4<f32> {\n"
+                    "    let b00 = m[0][0] * m[1][1] - m[0][1] * m[1][0];\n"
+                    "    let b01 = m[0][0] * m[1][2] - m[0][2] * m[1][0];\n"
+                    "    let b02 = m[0][0] * m[1][3] - m[0][3] * m[1][0];\n"
+                    "    let b03 = m[0][1] * m[1][2] - m[0][2] * m[1][1];\n"
+                    "    let b04 = m[0][1] * m[1][3] - m[0][3] * m[1][1];\n"
+                    "    let b05 = m[0][2] * m[1][3] - m[0][3] * m[1][2];\n"
+                    "    let b06 = m[2][0] * m[3][1] - m[2][1] * m[3][0];\n"
+                    "    let b07 = m[2][0] * m[3][2] - m[2][2] * m[3][0];\n"
+                    "    let b08 = m[2][0] * m[3][3] - m[2][3] * m[3][0];\n"
+                    "    let b09 = m[2][1] * m[3][2] - m[2][2] * m[3][1];\n"
+                    "    let b10 = m[2][1] * m[3][3] - m[2][3] * m[3][1];\n"
+                    "    let b11 = m[2][2] * m[3][3] - m[2][3] * m[3][2];\n"
+                    "    let d = 1.0f / (b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06);\n"
+                    "    return mat4x4<f32>(\n"
+                    "        vec4<f32>(m[1][1] * b11 - m[1][2] * b10 + m[1][3] * b09,\n"
+                    "                  m[0][2] * b10 - m[0][1] * b11 - m[0][3] * b09,\n"
+                    "                  m[3][1] * b05 - m[3][2] * b04 + m[3][3] * b03,\n"
+                    "                  m[2][2] * b04 - m[2][1] * b05 - m[2][3] * b03) * d,\n"
+                    "        vec4<f32>(m[1][2] * b08 - m[1][0] * b11 - m[1][3] * b07,\n"
+                    "                  m[0][0] * b11 - m[0][2] * b08 + m[0][3] * b07,\n"
+                    "                  m[3][2] * b02 - m[3][0] * b05 - m[3][3] * b01,\n"
+                    "                  m[2][0] * b05 - m[2][2] * b02 + m[2][3] * b01) * d,\n"
+                    "        vec4<f32>(m[1][0] * b10 - m[1][1] * b08 + m[1][3] * b06,\n"
+                    "                  m[0][1] * b08 - m[0][0] * b10 - m[0][3] * b06,\n"
+                    "                  m[3][0] * b04 - m[3][1] * b02 + m[3][3] * b00,\n"
+                    "                  m[2][1] * b02 - m[2][0] * b04 - m[2][3] * b00) * d,\n"
+                    "        vec4<f32>(m[1][1] * b07 - m[1][0] * b09 - m[1][2] * b06,\n"
+                    "                  m[0][0] * b09 - m[0][1] * b07 + m[0][2] * b06,\n"
+                    "                  m[3][1] * b01 - m[3][0] * b03 - m[3][2] * b00,\n"
+                    "                  m[2][0] * b03 - m[2][1] * b01 + m[2][2] * b00) * d);\n"
+                    "}\n\n");
+    }
+}
+
 bool WGSLBuilder::WriteModule(TextWriter& writer) {
     if (!WriteAdditionalResources(writer)) {
         return false;
     }
+    WriteHelperFunctions(writer, helperFunctions);
     for (u32 resource = 0; resource < resources.count; ++resource) {
         writer.Text("@group(");
         writer.Number(resources.groups[resource]);
