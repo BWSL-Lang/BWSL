@@ -421,6 +421,30 @@ bool CanBroadcast(CoreType source, CoreType target) {
     return source == target || (Width(source) == 1 && Scalar(source) == Scalar(target));
 }
 
+bool IsInteger(CoreType type) {
+    return Scalar(type) == CoreType::INT || Scalar(type) == CoreType::UINT;
+}
+
+// SPIR-V integer instructions accept operands of either signedness: they
+// read the bits. Lowering relies on that (`loop (1u)` compares an int
+// counter with 1u), so i32 and u32 operands are reinterpreted for WGSL.
+bool CanBroadcastInteger(CoreType source, CoreType target) {
+    return CanBroadcast(source, target) ||
+           (IsInteger(source) && IsInteger(target) &&
+            (Width(source) == 1 || Width(source) == Width(target)));
+}
+
+// The operand type a comparison reads its operands as.
+CoreType ComparisonOperandType(u16 opcode, CoreType left, u32 width) {
+    if (opcode >= IR::OP_ILT && opcode <= IR::OP_IGE) {
+        return Shape(CoreType::INT, width);
+    }
+    if (opcode >= IR::OP_ULT && opcode <= IR::OP_UGE) {
+        return Shape(CoreType::UINT, width);
+    }
+    return Shape(Scalar(left), width);
+}
+
 } // namespace
 
 const char* InterfaceBuiltinName(InterfaceBuiltin builtin) {
@@ -1324,15 +1348,20 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
         }
         bool comparison = opcode >= IR::OP_FEQ && opcode <= IR::OP_UGE;
         bool shift = opcode == IR::OP_SHL || opcode == IR::OP_SHR || opcode == IR::OP_ASR;
-        CoreType operandType = comparison ? Shape(Scalar(left), Width(type)) : type;
+        CoreType operandType = comparison ? ComparisonOperandType(opcode, left, Width(type)) : type;
+        const bool integer = (opcode >= IR::OP_IADD && opcode <= IR::OP_IMOD) ||
+                             (opcode >= IR::OP_IEQ && opcode <= IR::OP_UGE) ||
+                             opcode == IR::OP_AND || opcode == IR::OP_OR || opcode == IR::OP_XOR;
         if (shift) {
             if ((Scalar(type) != CoreType::INT && Scalar(type) != CoreType::UINT) ||
-                left != type || (Scalar(right) != CoreType::INT && Scalar(right) != CoreType::UINT) ||
+                !IsInteger(left) || Width(left) != Width(type) ||
+                (Scalar(right) != CoreType::INT && Scalar(right) != CoreType::UINT) ||
                 (Width(right) != 1 && Width(right) != Width(type))) {
                 return Fail("WGSL shift operands have incompatible integer types");
             }
         } else {
-            if (Width(type) == 0 || !CanBroadcast(left, operandType) || !CanBroadcast(right, operandType)) {
+            const auto compatible = integer ? CanBroadcastInteger : CanBroadcast;
+            if (Width(type) == 0 || !compatible(left, operandType) || !compatible(right, operandType)) {
                 return Fail("WGSL binary operands have incompatible types or vector widths");
             }
             CoreType scalar = Scalar(operandType);
@@ -1830,10 +1859,17 @@ bool WGSLBuilder::WriteConvertedOperand(TextWriter& writer, u16 operand, CoreTyp
     }
     WriteType(writer, target);
     writer.Text("(");
+    // A splat takes its own component type: vec2<i32>(i32(x)), not (x).
+    const bool convertScalar = Width(sourceType) == 1 && Width(target) > 1 &&
+                               Scalar(sourceType) != Scalar(target);
+    if (convertScalar) {
+        WriteType(writer, Scalar(target));
+        writer.Text("(");
+    }
     if (!WriteOperand(writer, operand)) {
         return false;
     }
-    writer.Text(")");
+    writer.Text(convertScalar ? "))" : ")");
     return true;
 }
 
@@ -1866,7 +1902,7 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
             if (!OperandType(first, left)) {
                 return false;
             }
-            operandType = Shape(Scalar(left), Width(type));
+            operandType = ComparisonOperandType(opcode, left, Width(type));
         }
         bool shift = opcode == IR::OP_SHL || opcode == IR::OP_SHR || opcode == IR::OP_ASR;
         CoreType shiftType = operandType;
