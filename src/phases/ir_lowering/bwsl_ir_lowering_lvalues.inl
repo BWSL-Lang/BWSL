@@ -1650,7 +1650,9 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
 
             CoreType memberType =
                 static_cast<CoreType>(program.structFieldTypes[memberOffset]);
-            if (!CheckStoreShape(target, valueReg, memberType)) return;
+            if (!CheckStoreShape(target, valueReg, memberType,
+                                 program.structFieldTypeHashes[memberOffset]))
+              return;
             valueReg = ConvertRegisterToType(valueReg, memberType);
 
             u16 indexReg = LowerExpression(arrAccess.index);
