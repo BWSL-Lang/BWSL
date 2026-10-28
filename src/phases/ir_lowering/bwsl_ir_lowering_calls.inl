@@ -182,6 +182,30 @@ inline void IRLowering::ReportPointerArgumentProblem(NodeRef argument,
   ReportErrorAt(argument, msg);
 }
 
+inline void IRLowering::ReportPointerStoreProblem(NodeRef target,
+                                                  PointerProblem problem) {
+  if (target.IsValid() && !reportedPointerArguments.insert(target.packed).second)
+    return;
+  const char *reason = "";
+  switch (problem) {
+  case PointerProblem::NON_LOCAL:
+    reason = "a resource, stage input or output, or shared memory";
+    break;
+  case PointerProblem::TEMPORARY:
+    reason = "a temporary copy (a vector component, matrix column or "
+             "computed value)";
+    break;
+  case PointerProblem::WHOLE_ARRAY:
+    reason = "a whole array";
+    break;
+  }
+  char msg[256];
+  snprintf(msg, sizeof(msg),
+           "Error: this write through a pointer would be lost: the pointer "
+           "points to %s; assign to the place directly\n", reason);
+  ReportErrorAt(target, msg);
+}
+
 inline void IRLowering::ReportNonLocalPointerVariable(u16 source) {
   auto address = nonLocalAddresses.find(source);
   if (address == nonLocalAddresses.end()) return;

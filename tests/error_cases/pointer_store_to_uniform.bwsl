@@ -1,0 +1,13 @@
+// Error case: a write to a uniform through `(^resources.x)^`. It pointed to
+// a copy and was dropped.
+pipeline WrongAcceptPointerStoreToUniform {
+    struct Params { float scale; float3 offset; };
+    resources { params: Params output: buffer<float> }
+    pass "Compute" {
+        use resources { params, output }
+        compute "Main" [1, 1, 1] {
+            (^resources.params.scale)^ = 2.0;
+            resources.output[0] = resources.params.scale;
+        }
+    }
+}

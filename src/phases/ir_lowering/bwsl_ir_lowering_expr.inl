@@ -390,12 +390,17 @@ inline void IRLowering::EndPointerLoop() {
                                    pending.index, problem->second);
     }
   }
+  for (const auto &[pointer, target] : frame.stores) {
+    auto problem = pointerProblems.find(pointer);
+    if (problem != pointerProblems.end()) ReportPointerStoreProblem(target, problem->second);
+  }
   // An enclosing loop's back edge can carry a problem into this one too.
   if (!pointerLoops.empty()) {
     PointerLoopFrame &outer = pointerLoops.back();
     outer.copies.insert(outer.copies.end(), frame.copies.begin(), frame.copies.end());
     outer.arguments.insert(outer.arguments.end(), frame.arguments.begin(),
                            frame.arguments.end());
+    outer.stores.insert(outer.stores.end(), frame.stores.begin(), frame.stores.end());
   }
 }
 

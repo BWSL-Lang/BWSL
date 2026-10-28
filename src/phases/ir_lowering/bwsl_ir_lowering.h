@@ -571,6 +571,7 @@ struct IRLowering {
   struct PointerLoopFrame {
     std::vector<std::pair<u16, u16>> copies;  // (destination, source)
     std::vector<PendingPointerArgument> arguments;
+    std::vector<std::pair<u16, NodeRef>> stores;  // (pointer, `p^ = ...` target)
   };
   std::vector<PointerLoopFrame> pointerLoops;
   std::unordered_set<u32> reportedPointerArguments;  // Packed NodeRefs
@@ -586,6 +587,8 @@ struct IRLowering {
   void AssignPointerVariable(u16 reg, u16 source);
   void ReportPointerArgumentProblem(NodeRef argument, u32 functionNameHash,
                                     u32 index, PointerProblem problem);
+  // A store through a pointer to a copy would be lost; reported at `target`.
+  void ReportPointerStoreProblem(NodeRef target, PointerProblem problem);
   // `^` expressions with a NON_LOCAL target, by result register. A pointer
   // variable given one would read and write a copy, so storing one in a
   // variable is reported at the `^`.

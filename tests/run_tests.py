@@ -468,6 +468,9 @@ ERROR_CASE_TESTS = {
     "storage_struct_field_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
     "matrix_size_mismatch.bwsl": "cannot implicitly convert mat3 to mat2",
     "enum_payload_struct_mismatch.bwsl": "cannot assign a value of struct B to struct A",
+    "pointer_store_to_copy.bwsl": "the pointer points to a temporary copy",
+    "pointer_store_to_copy_in_loop.bwsl": "the pointer points to a temporary copy",
+    "pointer_store_to_uniform.bwsl": "the pointer points to a resource",
 }
 
 ERROR_CASE_MODULE_DIRS = {

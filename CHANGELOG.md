@@ -250,6 +250,11 @@
   two swapped: `atomic_cmp_exchange(x, 5, 100)` stored 5 when x was 100.
 
 ### Diagnostics
+- A write through a pointer to a copy is a source error: a pointer to a
+  vector component (`float^ p = ^v.x; p^ = 9.0;`), to a resource, a stage
+  input or output or shared memory (`(^resources.params.scale)^ = 2.0;`),
+  including one that only gets such a target on a later loop iteration. The
+  write was lost.
 - Assigning a matrix of another size, as in `mat2 m = big;` for a `mat3`,
   is a source error. It failed SPIR-V validation.
 - Assigning or initializing with a value of another struct type, as in
