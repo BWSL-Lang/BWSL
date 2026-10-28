@@ -73,10 +73,10 @@ u32 WGSLBuilder::NewValue(u16 reg, CoreType type, u32 structType, u32 arrayLengt
     return id;
 }
 
-void WGSLBuilder::CopyValueShape(u32 target, u32 source) {
-    values.types[target] = values.types[source];
-    values.structTypes[target] = values.structTypes[source];
-    values.arrayLengths[target] = values.arrayLengths[source];
+void WGSLBuilder::CopyValueShape(u32 target, u32 from) {
+    values.types[target] = values.types[from];
+    values.structTypes[target] = values.structTypes[from];
+    values.arrayLengths[target] = values.arrayLengths[from];
 }
 
 bool WGSLBuilder::IsMutable(u16 operand) const {
@@ -134,18 +134,18 @@ bool WGSLBuilder::PrepareRegisters() {
         for (u32 instruction = 0; instruction < ir->instructionCount; ++instruction) {
             const u16 opcode = ir->opcodes[instruction];
             const u16 destination = ir->destinations[instruction];
-            const u16 source = ir->GetOperand(instruction, 0);
-            if (!valid(destination) || !valid(source)) {
+            const u16 base = ir->GetOperand(instruction, 0);
+            if (!valid(destination) || !valid(base)) {
                 continue;
             }
             u8 flags = registerFlags[destination];
             if ((opcode == IR::OP_STORAGE_INDEX || opcode == IR::OP_STORAGE_FIELD) &&
-                (registerFlags[source] & (RegisterVariable | RegisterPointer))) {
+                (registerFlags[base] & (RegisterVariable | RegisterPointer))) {
                 flags |= RegisterPointer;
             }
-            if (IsCopy(opcode) && (registerFlags[source] & RegisterPointer)) {
+            if (IsCopy(opcode) && (registerFlags[base] & RegisterPointer)) {
                 flags |= RegisterPointer;
-                if ((registerFlags[source] & RegisterTracked) || (flags & RegisterRedefined)) {
+                if ((registerFlags[base] & RegisterTracked) || (flags & RegisterRedefined)) {
                     flags |= RegisterTracked;
                 }
             }
@@ -328,36 +328,36 @@ bool WGSLBuilder::PrepareMemoryInstruction(u32 instruction, bool& handled) {
         case IR::OP_LOAD_CONST:
         case IR::OP_LOAD_REG:
         case IR::OP_STORE_REG: {
-            const u32 source = valueOf(first);
+            const u32 copied = valueOf(first);
             if (destination < ir->registerCount && destination < IR::RegisterLimit &&
                 (registerFlags[destination] & RegisterTracked)) {
                 // Selects the target; targets are gathered afterwards.
                 const u32 tracked = registerToValue[destination];
-                if (source == InvalidId || values.kinds[source] != static_cast<u8>(ValueKind::Reference)) {
+                if (copied == InvalidId || values.kinds[copied] != static_cast<u8>(ValueKind::Reference)) {
                     return Fail("WGSL pointer is assigned something that is not a local pointer");
                 }
                 if (static_cast<CoreType>(values.types[tracked]) == CoreType::INVALID) {
-                    CopyValueShape(tracked, source);
-                } else if (values.types[tracked] != values.types[source] ||
-                           values.structTypes[tracked] != values.structTypes[source] ||
-                           values.arrayLengths[tracked] != values.arrayLengths[source]) {
+                    CopyValueShape(tracked, copied);
+                } else if (values.types[tracked] != values.types[copied] ||
+                           values.structTypes[tracked] != values.structTypes[copied] ||
+                           values.arrayLengths[tracked] != values.arrayLengths[copied]) {
                     return Fail("WGSL pointer is reassigned to a target of another type");
                 }
                 return true;
             }
-            if (source != InvalidId && values.kinds[source] == static_cast<u8>(ValueKind::UniformAddress)) {
+            if (copied != InvalidId && values.kinds[copied] == static_cast<u8>(ValueKind::UniformAddress)) {
                 if (!(registerFlags[destination] & RegisterVariable)) {
                     return Fail("WGSL uniform address copy was not prepared as a uniform access");
                 }
-                return DefineValue(instruction, static_cast<CoreType>(values.types[source]), ValueKind::Value,
-                                   uniformAddresses.structTypes[source], uniformAddresses.lengths[source]);
+                return DefineValue(instruction, static_cast<CoreType>(values.types[copied]), ValueKind::Value,
+                                   uniformAddresses.structTypes[copied], uniformAddresses.lengths[copied]);
             }
-            if (source == InvalidId || values.kinds[source] != static_cast<u8>(ValueKind::Reference)) {
+            if (copied == InvalidId || values.kinds[copied] != static_cast<u8>(ValueKind::Reference)) {
                 handled = false;
                 return true;
             }
-            return defineReference(source, Accessor::Whole, 0xFFFF, static_cast<CoreType>(values.types[source]),
-                                   values.structTypes[source], values.arrayLengths[source]);
+            return defineReference(copied, Accessor::Whole, 0xFFFF, static_cast<CoreType>(values.types[copied]),
+                                   values.structTypes[copied], values.arrayLengths[copied]);
         }
         default:
             handled = false;
@@ -799,29 +799,29 @@ bool WGSLBuilder::WriteMemoryInstruction(TextWriter& writer, u32 instruction, bo
         (registerFlags[destination] & RegisterTracked)) {
         // tag = target (or the copied pointer's tag), and its index.
         const u32 tracked = registerToValue[destination];
-        const u32 source = valueOf(first);
-        const bool sourceTracked = static_cast<Accessor>(values.accessors[source]) == Accessor::Tracked;
+        const u32 copied = valueOf(first);
+        const bool copiedTracked = static_cast<Accessor>(values.accessors[copied]) == Accessor::Tracked;
         writer.Indent();
         WriteValueName(writer, tracked);
         writer.Text(" = ");
-        if (sourceTracked) {
-            WriteValueName(writer, source);
+        if (copiedTracked) {
+            WriteValueName(writer, copied);
         } else {
-            writer.Number(source);
+            writer.Number(copied);
             writer.Text("u");
         }
         writer.Text(";\n");
         if (values.variables[tracked] & VariableSnapshot) {
-            const bool index = !sourceTracked && static_cast<Accessor>(values.accessors[source]) == Accessor::Index &&
-                               !IR::IsConstant(values.indexOperands[source]);
-            if (index || (sourceTracked && (values.variables[source] & VariableSnapshot))) {
+            const bool index = !copiedTracked && static_cast<Accessor>(values.accessors[copied]) == Accessor::Index &&
+                               !IR::IsConstant(values.indexOperands[copied]);
+            if (index || (copiedTracked && (values.variables[copied] & VariableSnapshot))) {
                 writer.Indent();
                 WriteValueName(writer, tracked);
                 writer.Text("_i = ");
-                if (sourceTracked) {
-                    WriteValueName(writer, source);
+                if (copiedTracked) {
+                    WriteValueName(writer, copied);
                     writer.Text("_i");
-                } else if (!WriteConvertedOperand(writer, values.indexOperands[source], CoreType::INT)) {
+                } else if (!WriteConvertedOperand(writer, values.indexOperands[copied], CoreType::INT)) {
                     return false;
                 }
                 writer.Text(";\n");
@@ -998,14 +998,14 @@ bool WGSLBuilder::PrepareTrackedPointers() {
         changed = false;
         for (u32 instruction = 0; instruction < ir->instructionCount; ++instruction) {
             const u16 destination = ir->destinations[instruction];
-            const u16 source = ir->GetOperand(instruction, 0);
-            if (!IsCopy(ir->opcodes[instruction]) || IR::IsConstant(source) || destination >= ir->registerCount ||
+            const u16 copied = ir->GetOperand(instruction, 0);
+            if (!IsCopy(ir->opcodes[instruction]) || IR::IsConstant(copied) || destination >= ir->registerCount ||
                 destination >= IR::RegisterLimit || !(registerFlags[destination] & RegisterTracked) ||
                 (structured && !control.reachable[cfg->instToBlock[instruction]])) {
                 continue;
             }
             u64* set = sets + static_cast<size_t>(TrackedIndex(registerToValue[destination])) * words;
-            const u32 sourceValue = registerToValue[source];
+            const u32 sourceValue = registerToValue[copied];
             const u32 sourceIndex = TrackedIndex(sourceValue);
             if (sourceIndex == InvalidId) {
                 const u64 bit = u64(1) << (sourceValue % 64);

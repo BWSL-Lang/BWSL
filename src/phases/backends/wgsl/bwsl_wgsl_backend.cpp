@@ -1550,10 +1550,10 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
         if (type != sourceType) {
             return Fail("WGSL SSA copy changes type without an explicit conversion");
         }
-        const u32 source = IR::IsConstant(first) ? InvalidId : registerToValue[first];
+        const u32 copied = IR::IsConstant(first) ? InvalidId : registerToValue[first];
         if (!DefineValue(instruction, type, ValueKind::Value,
-                         source != InvalidId ? values.structTypes[source] : 0,
-                         source != InvalidId ? values.arrayLengths[source] : 0)) {
+                         copied != InvalidId ? values.structTypes[copied] : 0,
+                         copied != InvalidId ? values.arrayLengths[copied] : 0)) {
             return false;
         }
         // A copy of a variable takes its current value, so it is written
