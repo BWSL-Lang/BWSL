@@ -463,6 +463,7 @@ ERROR_CASE_TESTS = {
     "pointer_variable_to_shared.bwsl": "a pointer variable can't point to",
     "enum_payload_shape.bwsl": "cannot implicitly convert float3 to float",
     "store_to_texture.bwsl": "store() writes to a storage image",
+    "storage_vector_index_out_of_bounds.bwsl": "array index 2 is out of bounds for array of length 2",
 }
 
 ERROR_CASE_MODULE_DIRS = {

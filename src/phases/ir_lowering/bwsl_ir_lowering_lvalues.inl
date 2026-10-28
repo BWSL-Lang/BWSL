@@ -633,7 +633,13 @@ inline bool IRLowering::ResolveStoragePlace(NodeRef expr, bool emit,
     }
     if (!emit) return true;
     u16 index = LowerExpression(access.index);
-    if (base.arrayLength != 0) CheckConstIndexInBounds(index, access.index, base.arrayLength);
+    // A matrix has one column per index, a vector one component.
+    u32 length = base.arrayLength;
+    if (length == 0) {
+      length = base.type == CoreType::MAT4 ? 4 : base.type == CoreType::MAT3 ? 3 :
+               base.type == CoreType::MAT2 ? 2 : GetVectorDimension(base.type);
+    }
+    CheckConstIndexInBounds(index, access.index, length);
     out->reg = pointer(*out, 0);
     if (out->reg == 0xFFFF) return false;
     builder.EmitInstruction(OP_STORAGE_INDEX, out->reg, base.reg, index);
