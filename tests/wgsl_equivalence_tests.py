@@ -167,6 +167,9 @@ def main() -> int:
     if gpu_missing and args.require_gpu:
         print("A GPU was required but no WebGPU adapter is available")
         return 1
+    if args.require_gpu and counts["pass"] == 0:
+        print("A GPU was required but no test completed a GPU run")
+        return 1
     return int(counts["fail"] != 0)
 
 
