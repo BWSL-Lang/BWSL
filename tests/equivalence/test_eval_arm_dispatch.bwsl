@@ -1,13 +1,14 @@
 // Only the arm matching the variant runs: each arm here also counts itself
 // in a buffer. Every arm used to run, and the results were selected after.
 // Block arms may return early, or end in a bare expression that is their
-// value.
+// value, a ternary included.
 pipeline EquivEvalArmDispatch {
     resources { output: buffer<float> }
     enum Item {
         A(float x),
         B(float y),
         C(int n),
+        D(float z),
         eval value :: () -> float {
             A(x): {
                 resources.output[5] += 1.0;
@@ -26,6 +27,10 @@ pipeline EquivEvalArmDispatch {
                 if (n < 0) { return -1.0; }
                 1.0 * float(n);
             }
+            D(z): {
+                float m = z * 2.0;
+                m > 0.0 ? m : -m;
+            }
         }
     }
     pass "Compute" {
@@ -36,6 +41,7 @@ pipeline EquivEvalArmDispatch {
             resources.output[2] = Item::B(1.5).value();
             resources.output[3] = Item::C(-4).value();
             resources.output[4] = Item::C(7).value();
+            resources.output[8] = Item::D(-1.25).value();
         }
     }
 }

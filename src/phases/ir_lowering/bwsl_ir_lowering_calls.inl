@@ -395,6 +395,7 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
         case ASTNodeType::MEMBER_ACCESS:
         case ASTNodeType::ARRAY_ACCESS:
         case ASTNodeType::FUNCTION_CALL:
+        case ASTNodeType::TERNARY_EXPRESSION:
           implicitReturnStatement = last;
           break;
         default:
