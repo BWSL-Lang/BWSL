@@ -69,7 +69,7 @@ bool WGSLBuilder::PrepareAdditionalResources() {
     u64 comparisonMask = 0;
     u64 ordinaryMask = 0;
     for (u32 instruction = 0; instruction < ir->instructionCount; ++instruction) {
-        const u16 opcode = ir->opcodes[instruction];
+        const u16 opcode = TextureBaseOpcode(ir->opcodes[instruction]);
         const u16 operand = ir->GetOperand(instruction, 0);
         if (opcode == IR::OP_LOAD_UNIFORM) {
             if (operand >= 32) {
@@ -382,8 +382,57 @@ bool WGSLBuilder::WriteUniformLoad(TextWriter& writer, u32 value) {
     return true;
 }
 
+bool WGSLBuilder::WriteTextureOffset(TextWriter& writer, u16 operand, u32 width) {
+    // WGSL texel offsets are const-expressions in -8 through 7; follow the
+    // offset back to its integer constants and write them as literals.
+    CoreType type = CoreType::INVALID;
+    if (!OperandType(operand, type)) {
+        return false;
+    }
+    if (type != Shape(CoreType::INT, width)) {
+        return Fail("WGSL texel offset has the wrong shape or scalar type");
+    }
+    u16 components[4] = {operand, 0xFFFF, 0xFFFF, 0xFFFF};
+    if (width > 1) {
+        const u16 alias = values.aliasOperands[registerToValue[operand]];
+        const u32 producer = IR::IsConstant(alias) ? InvalidId
+            : values.producerInstructions[registerToValue[alias]];
+        if (producer == InvalidId || ir->opcodes[producer] != IR::OP_VEC_CONSTRUCT ||
+            VectorArgumentCount(producer) != width) {
+            return Fail("WGSL texel offsets must be constant");
+        }
+        for (u32 component = 0; component < width; ++component) {
+            components[component] = ir->GetOperand(producer, component);
+        }
+    }
+    WriteType(writer, type);
+    writer.Text("(");
+    for (u32 component = 0; component < width; ++component) {
+        u16 value = components[component];
+        if (!IR::IsConstant(value)) {
+            value = values.aliasOperands[registerToValue[value]];
+        }
+        if (!IR::IsIntConstant(value)) {
+            return Fail("WGSL texel offsets must be constant");
+        }
+        s32 offset = 0;
+        const u32 bits = ir->intConstants[IR::IntConstantIndex(value)];
+        std::memcpy(&offset, &bits, sizeof(offset));
+        if (offset < -8 || offset > 7) {
+            return Fail("WGSL texel offsets must be in the range -8 through 7");
+        }
+        writer.Text(component != 0 ? ", " : "");
+        if (!WriteOperand(writer, value)) {
+            return false;
+        }
+    }
+    writer.Text(")");
+    return true;
+}
+
 bool WGSLBuilder::PrepareTextureInstruction(u32 instruction) {
-    const u16 opcode = ir->opcodes[instruction];
+    const u16 opcode = TextureBaseOpcode(ir->opcodes[instruction]);
+    const bool offset = opcode != ir->opcodes[instruction];
     const u32 texture = textureForSlot[IR::UintConstantIndex(ir->GetOperand(instruction, 0))];
     const CoreType textureType = static_cast<CoreType>(textures.types[texture]);
     const u16 destination = ir->destinations[instruction];
@@ -450,11 +499,24 @@ bool WGSLBuilder::PrepareTextureInstruction(u32 instruction) {
     if (textureType == CoreType::TEXTURECUBE && opcode == IR::OP_TEX_FETCH) {
         return Fail("WGSL textureLoad does not accept cube textures");
     }
+    if (offset) {
+        if (textureType == CoreType::TEXTURECUBE ||
+            (opcode == IR::OP_TEX_GATHER && textureType == CoreType::TEXTURE3D)) {
+            return Fail("WGSL has no texel offsets for this texture type");
+        }
+        // Validate the offset once; the size pass discards the text.
+        TextWriter discard;
+        const u16 operand = ir->GetOperand(instruction, opcode == IR::OP_TEX_SAMPLE ? 2 : 3);
+        if (!WriteTextureOffset(discard, operand, textureType == CoreType::TEXTURE3D ? 3 : 2)) {
+            return false;
+        }
+    }
     return DefineValue(instruction, type, ValueKind::Value);
 }
 
 bool WGSLBuilder::WriteTextureExpression(TextWriter& writer, u32 instruction) {
-    const u16 opcode = ir->opcodes[instruction];
+    const u16 opcode = TextureBaseOpcode(ir->opcodes[instruction]);
+    const bool offset = opcode != ir->opcodes[instruction];
     const u32 texture = textureForSlot[IR::UintConstantIndex(ir->GetOperand(instruction, 0))];
     const CoreType textureType = static_cast<CoreType>(textures.types[texture]);
     const bool array = textureType == CoreType::TEXTURE2DARRAY;
@@ -495,13 +557,29 @@ bool WGSLBuilder::WriteTextureExpression(TextWriter& writer, u32 instruction) {
         writer.Text(", bwsl_sampler_");
         writer.Number((metadata & 0x80000000u) ? (metadata & 0xFFFFu) : 32 + textures.slots[texture]);
     }
+    const u32 offsetWidth = textureType == CoreType::TEXTURE3D ? 3 : 2;
+    const u16 offsetOperand = ir->GetOperand(instruction, opcode == IR::OP_TEX_SAMPLE ? 2 : 3);
     if (!query) {
         writer.Text(", ");
+        // textureLoad has no offset parameter; offset the texel instead.
+        if (load && offset) {
+            writer.Text("(");
+        }
         if (!WriteOperand(writer, coords)) {
             return false;
         }
         if (array) {
-            writer.Text(".xy, i32(");
+            writer.Text(".xy");
+        }
+        if (load && offset) {
+            writer.Text(" + ");
+            if (!WriteTextureOffset(writer, offsetOperand, offsetWidth)) {
+                return false;
+            }
+            writer.Text(")");
+        }
+        if (array) {
+            writer.Text(", i32(");
             if (!load) {
                 // BWSL/SPIR-V sampling selects the nearest array layer.
                 // Vulkan permits floor(layer + 0.5); integer texel fetches
@@ -530,6 +608,12 @@ bool WGSLBuilder::WriteTextureExpression(TextWriter& writer, u32 instruction) {
     } else if (opcode == IR::OP_TEX_SIZE) {
         writer.Text(", ");
         if (!WriteConvertedOperand(writer, coords, CoreType::INT)) {
+            return false;
+        }
+    }
+    if (offset && !load) {
+        writer.Text(", ");
+        if (!WriteTextureOffset(writer, offsetOperand, offsetWidth)) {
             return false;
         }
     }

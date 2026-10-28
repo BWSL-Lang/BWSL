@@ -230,6 +230,7 @@ private:
     bool WriteUniformOffset(TextWriter& writer, u32 value);
     bool WriteUniformLoad(TextWriter& writer, u32 value);
     bool WriteTextureExpression(TextWriter& writer, u32 instruction);
+    bool WriteTextureOffset(TextWriter& writer, u16 operand, u32 width);
     bool WriteAdditionalResources(TextWriter& writer);
     u32 UniformTypeSize(CoreType type, u32 structHash);
     bool PrepareUniformLayout(u32 structId);

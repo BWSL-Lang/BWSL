@@ -56,7 +56,20 @@ struct TextWriter {
 
 namespace {
 
+// The texture operation an offset variant applies its offset to.
+u16 TextureBaseOpcode(u16 opcode) {
+    switch (opcode) {
+        case IR::OP_TEX_SAMPLE_OFFSET: return IR::OP_TEX_SAMPLE;
+        case IR::OP_TEX_SAMPLE_LOD_OFFSET: return IR::OP_TEX_SAMPLE_LOD;
+        case IR::OP_TEX_SAMPLE_BIAS_OFFSET: return IR::OP_TEX_SAMPLE_BIAS;
+        case IR::OP_TEX_GATHER_OFFSET: return IR::OP_TEX_GATHER;
+        case IR::OP_TEX_FETCH_OFFSET: return IR::OP_TEX_FETCH;
+        default: return opcode;
+    }
+}
+
 bool IsSampledTextureOpcode(u16 opcode) {
+    opcode = TextureBaseOpcode(opcode);
     return opcode == IR::OP_TEX_SAMPLE || opcode == IR::OP_TEX_SAMPLE_LOD ||
            opcode == IR::OP_TEX_SAMPLE_BIAS || opcode == IR::OP_TEX_SAMPLE_GRAD ||
            opcode == IR::OP_TEX_SAMPLE_CMP || opcode == IR::OP_TEX_GATHER ||
@@ -327,6 +340,8 @@ bool IsCopy(u16 opcode) {
 // must not be interpreted as value references when counting expression uses.
 u32 ValueOperandMask(u16 opcode, u32 metadata) {
     if (IsSampledTextureOpcode(opcode)) {
+        // A texel offset is written as a constant expression, not a use.
+        opcode = TextureBaseOpcode(opcode);
         return opcode == IR::OP_TEX_SAMPLE_GRAD ? 14 :
                opcode == IR::OP_TEX_LEVELS ? 0 :
                opcode == IR::OP_TEX_SAMPLE || opcode == IR::OP_TEX_SIZE ? 2 : 6;
