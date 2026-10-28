@@ -182,6 +182,16 @@ inline void IRLowering::ReportPointerArgumentProblem(NodeRef argument,
   ReportErrorAt(argument, msg);
 }
 
+inline void IRLowering::ReportNonLocalPointerVariable(u16 source) {
+  auto address = nonLocalAddresses.find(source);
+  if (address == nonLocalAddresses.end()) return;
+  ReportErrorAt(address->second,
+                "Error: a pointer variable can't point to a resource, stage "
+                "input or output, or shared memory; copy the value into a "
+                "local variable and point to that\n");
+  nonLocalAddresses.erase(address);
+}
+
 inline bool IRLowering::ReportPointerArgumentMismatch(
     const FunctionCallData &call, const FunctionDeclData &function,
     const OverloadTypeMask *argMasks, u32 argCount) {

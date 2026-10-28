@@ -993,6 +993,7 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref, u32 bindingNameHash,
                                       IR::IRProgram::STORAGE_IS_PTR)) {
         program.registerStorageInfo[varReg] =
             program.registerStorageInfo[initReg];
+        ReportNonLocalPointerVariable(initReg);
         DeclarePointerVariable(varReg, initReg);
         // Also propagate the struct type hash for `TypeName^ p = ^s;` so
         // `p^.field` later resolves the struct layout.
@@ -1163,6 +1164,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
                                      IR::IRProgram::STORAGE_IS_PTR)) {
       program.registerStorageInfo[varReg] =
           program.registerStorageInfo[valueReg];
+      ReportNonLocalPointerVariable(valueReg);
       AssignPointerVariable(varReg, valueReg);
     }
     initializedVariables.insert(ident.name.nameHash);

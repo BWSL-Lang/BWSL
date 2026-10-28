@@ -586,6 +586,11 @@ struct IRLowering {
   void AssignPointerVariable(u16 reg, u16 source);
   void ReportPointerArgumentProblem(NodeRef argument, u32 functionNameHash,
                                     u32 index, PointerProblem problem);
+  // `^` expressions with a NON_LOCAL target, by result register. A pointer
+  // variable given one would read and write a copy, so storing one in a
+  // variable is reported at the `^`.
+  std::unordered_map<u16, NodeRef> nonLocalAddresses;
+  void ReportNonLocalPointerVariable(u16 source);
   // An argument's overload mask; a pointer argument describes its pointee
   // and carries OVERLOAD_POINTER_MASK.
   OverloadTypeMask ArgumentOverloadMask(NodeRef argument, u16 reg);

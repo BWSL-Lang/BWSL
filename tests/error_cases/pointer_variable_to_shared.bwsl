@@ -1,0 +1,15 @@
+// Error case: a pointer variable can't point to shared memory. It pointed at
+// a copy, so writes through it never reached the shared array.
+pipeline WrongAcceptPointerVariableToShared {
+    resources { output: buffer<uint> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [4, 1, 1] {
+            shared uint[2] values;
+            uint^ p = ^values[0];
+            p^ = 5u;
+            barrier();
+            resources.output[input.local_index] = values[0];
+        }
+    }
+}

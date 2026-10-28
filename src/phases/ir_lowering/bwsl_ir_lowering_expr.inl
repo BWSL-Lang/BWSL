@@ -414,6 +414,7 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
     if (IR::IsRegister(pointer)) {
       if (!isLocal) {
         pointerProblems[pointer] = PointerProblem::NON_LOCAL;
+        nonLocalAddresses[pointer] = ref;
       } else if (pointsAtArray) {
         pointerProblems[pointer] = PointerProblem::WHOLE_ARRAY;
       } else if (pointsAtCopy) {

@@ -246,6 +246,9 @@
   two swapped: `atomic_cmp_exchange(x, 5, 100)` stored 5 when x was 100.
 
 ### Diagnostics
+- A pointer variable pointing to a resource, a stage input or output, or
+  shared memory, as in `uint^ p = ^values[0];` on a `shared` array, is a
+  source error. It pointed to a copy, so writes through it were lost.
 - Assigning to a uniform or another read-only resource, as in
   `resources.params.offset.y = 2.0`, is a source error. The store was
   silently dropped.
