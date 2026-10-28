@@ -552,8 +552,8 @@ Parallel edge copies snapshot every incoming value before any phi destination
 is assigned, preserving swaps/cycles. Phi and cross-block values have function
 scope; ordinary values stay local and bounded pure expressions can inline within
 their block. Storage loads retain their original evaluation points. IR undefined
-temporaries select a typed zero, which is a valid undefined-value choice; stage
-output reads still require definite assignment across every incoming path.
+temporaries select a typed zero, which is a valid undefined-value choice; a stage
+output read before any assignment also reads zero.
 
 Loops emit WGSL `loop`/`continuing`, including final conditional continuing exits
 as `break if`. BWSL switch arms lower to structured condition chains so a BWSL
