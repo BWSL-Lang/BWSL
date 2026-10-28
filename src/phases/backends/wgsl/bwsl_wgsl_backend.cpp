@@ -278,7 +278,6 @@ BuiltinOperation MathOperation(u16 opcode) {
         case IR::OP_LENGTH: return {"length", 1};
         case IR::OP_NORMALIZE: return {"normalize", 1};
         case IR::OP_DISTANCE: return {"distance", 2};
-        case IR::OP_REFLECT: return {"reflect", 2};
         case IR::OP_LERP: return {"mix", 3};
         case IR::OP_SMOOTHSTEP: return {"smoothstep", 3};
         case IR::OP_STEP: return {"step", 2};
@@ -358,7 +357,10 @@ u32 ValueOperandMask(u16 opcode, u32 metadata) {
         case IR::OP_ARRAY_STORE:
         case IR::OP_VEC_SHUFFLE: return 3;
         case IR::OP_VEC_INSERT: return 5;
-        case IR::OP_LDEXP: return 3;
+        case IR::OP_LDEXP:
+        case IR::OP_REFLECT: return 3;
+        case IR::OP_REFRACT:
+        case IR::OP_FACEFORWARD: return 7;
         case IR::OP_BITFIELD_EXTRACT: return 7;
         case IR::OP_BITFIELD_INSERT: return 15;
         case IR::OP_VEC_INSERT_DYNAMIC:
@@ -1373,7 +1375,7 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
             if (opcode >= IR::OP_UMIN && opcode <= IR::OP_UCLAMP && scalar != CoreType::UINT) {
                 return Fail("WGSL unsigned integer builtin requires u32 operands");
             }
-            if ((opcode == IR::OP_DOT || opcode == IR::OP_NORMALIZE || opcode == IR::OP_REFLECT) &&
+            if ((opcode == IR::OP_DOT || opcode == IR::OP_NORMALIZE) &&
                 Width(argumentType) < 2) {
                 return Fail("WGSL vector builtin requires vector operands");
             }
@@ -1556,6 +1558,25 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
                 u32 index = (ir->metadata[instruction] >> (4 * component)) & 0xF;
                 if (index >= Width(left) + Width(right)) {
                     return Fail("WGSL shuffle component index is out of bounds");
+                }
+            }
+            break;
+        }
+        case IR::OP_REFLECT:
+        case IR::OP_REFRACT:
+        case IR::OP_FACEFORWARD: {
+            const u32 count = opcode == IR::OP_REFLECT ? 2 : 3;
+            if (Scalar(type) != CoreType::FLOAT || Width(type) == 0) {
+                return Fail("WGSL geometric builtin requires f32 operands");
+            }
+            for (u32 argument = 0; argument < count; ++argument) {
+                CoreType argumentType = CoreType::INVALID;
+                if (!OperandType(ir->GetOperand(instruction, argument), argumentType)) {
+                    return false;
+                }
+                const bool eta = opcode == IR::OP_REFRACT && argument == 2;
+                if (eta ? argumentType != CoreType::FLOAT : !CanBroadcast(argumentType, type)) {
+                    return Fail("WGSL geometric builtin arguments have incompatible types");
                 }
             }
             break;
@@ -2022,6 +2043,39 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
                 }
             }
             writer.Text(")");
+            return true;
+        }
+        case IR::OP_REFLECT:
+        case IR::OP_REFRACT:
+        case IR::OP_FACEFORWARD: {
+            // WGSL defines these for vectors only. A scalar is the x of a
+            // vector padded with zero, which adds nothing to any dot product.
+            const bool scalar = Width(type) == 1;
+            writer.Text(opcode == IR::OP_REFLECT ? "reflect(" :
+                        opcode == IR::OP_REFRACT ? "refract(" : "faceForward(");
+            const u32 count = opcode == IR::OP_REFLECT ? 2 : 3;
+            for (u32 argument = 0; argument < count; ++argument) {
+                if (argument != 0) {
+                    writer.Text(", ");
+                }
+                const u16 operand = ir->GetOperand(instruction, argument);
+                if (opcode == IR::OP_REFRACT && argument == 2) {
+                    if (!WriteOperand(writer, operand)) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (scalar) {
+                    writer.Text("vec2<f32>(");
+                }
+                if (!WriteConvertedOperand(writer, operand, type)) {
+                    return false;
+                }
+                if (scalar) {
+                    writer.Text(", 0.0f)");
+                }
+            }
+            writer.Text(scalar ? ").x" : ")");
             return true;
         }
         case IR::OP_LDEXP: {
