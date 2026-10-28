@@ -461,6 +461,7 @@ ERROR_CASE_TESTS = {
     "remaining_duplicate_default.bwsl": "Duplicate switch default case",
     "uniform_field_assignment.bwsl": "resources.params is read-only",
     "pointer_variable_to_shared.bwsl": "a pointer variable can't point to",
+    "enum_payload_shape.bwsl": "cannot implicitly convert float3 to float",
 }
 
 ERROR_CASE_MODULE_DIRS = {

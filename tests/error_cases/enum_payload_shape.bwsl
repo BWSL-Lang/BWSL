@@ -1,0 +1,18 @@
+// Error case: an enum payload keeps its declared shape. A float3 for a float
+// payload was accepted, and backends stored only part of it.
+pipeline WrongAcceptEnumPayloadShape {
+    resources { output: buffer<float> }
+    enum Shape {
+        Sphere(float radius),
+        eval size :: () -> float {
+            Sphere(r): r
+        }
+    }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            Shape s = Shape::Sphere(float3(1.0, 2.0, 3.0));
+            resources.output[0] = s.size();
+        }
+    }
+}

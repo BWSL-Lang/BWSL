@@ -246,6 +246,9 @@
   two swapped: `atomic_cmp_exchange(x, 5, 100)` stored 5 when x was 100.
 
 ### Diagnostics
+- An enum variant payload of the wrong shape, such as a `float3` for
+  `Sphere(float radius)`, is a source error naming the fix. It compiled and
+  stored only the vector's first component.
 - A pointer variable pointing to a resource, a stage input or output, or
   shared memory, as in `uint^ p = ^values[0];` on a `shared` array, is a
   source error. It pointed to a copy, so writes through it were lost.

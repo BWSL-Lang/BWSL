@@ -517,6 +517,13 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
           ReportError(msg);
           return 0;
         }
+        // A payload keeps its declared shape: a vector for a scalar field
+        // would spill into the next field's storage, or be cut short.
+        for (u32 i = 0; i < argCount; i++) {
+          if (!CheckStoreShape(call.arguments[i], args[i],
+                               enumData.variants[variantIndex].associatedTypes[i]))
+            return 0;
+        }
 
         // Register the enum as a struct type if not already done
         u32 enumStructHash =
