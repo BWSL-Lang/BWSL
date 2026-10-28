@@ -25,11 +25,22 @@ enum class Accessor : u8 {
     Whole,
     Field,
     Index,
+    Tracked, // A u32 tag var names the target; see TrackedPointerTable
 };
 
 // Flags of a value that lives in a WGSL variable rather than a let.
 enum VariableFlags : u8 {
     VariableMutable = 1,   // Assigned more than once or through pointers
+    VariableSnapshot = 2,  // Tracked pointer: also keeps its target's index
+};
+
+// The possible targets of each tracked pointer, in CSR form. A target is
+// an untracked Reference value; its value id is the tag that selects it.
+struct TrackedPointerTable {
+    u32* values = nullptr;   // Tracked pointer value ids
+    u32* offsets = nullptr;  // count + 1 offsets into targets
+    u32* targets = nullptr;
+    u32 count = 0;
 };
 
 enum ResourceAccess : u8 {
@@ -199,6 +210,7 @@ struct WGSLBuilder {
     TextureTable textures;
     SamplerTable samplers;
     StorageImageTable storageImages;
+    TrackedPointerTable trackedPointers;
     UniformAddressTable uniformAddresses;
     UniformLayoutTable uniformLayouts;
     InterfaceTable inputs;
@@ -228,6 +240,8 @@ private:
     u32* registerToValue = nullptr;
     u8* registerFlags = nullptr; // RegisterFlags, by register
     u32 lastDefined = InvalidId; // Value set by the latest DefineValue
+    u32 dispatchNode = InvalidId; // Tracked pointer resolved to dispatchTarget
+    u32 dispatchTarget = InvalidId;
     u32 resourceForSlot[32] = {};
     u32 uniformForSlot[32] = {};
     u32 textureForSlot[32] = {};
@@ -311,6 +325,11 @@ private:
     bool WriteMemoryInstruction(TextWriter& writer, u32 instruction, bool& handled);
     bool WriteStructExpression(TextWriter& writer, u32 instruction, u32 valueId, bool& handled);
     bool IsMutable(u16 operand) const;
+    bool PrepareTrackedPointers();
+    u32 TrackedIndex(u32 valueId) const;
+    u32 TrackedNode(u32 reference) const;
+    bool WriteTrackedAccess(TextWriter& writer, u32 instruction, u32 reference);
+    void CountTrackedTargets(u32 tracked);
 };
 
 } // namespace WGSL

@@ -15,6 +15,7 @@ enum RegisterFlag : u8 {
     RegisterVariable = 2,  // Lives in a WGSL var
     RegisterDefined = 4,
     RegisterRedefined = 8,
+    RegisterTracked = 16,  // A pointer whose target is a run-time tag
 };
 
 bool IsAggregate(CoreType type, u32 arrayLength) {
@@ -99,6 +100,12 @@ bool WGSLBuilder::PrepareRegisters() {
     }
     std::memset(registerFlags, 0, registers);
     const auto valid = [&](u16 reg) { return !IR::IsConstant(reg) && reg < registers; };
+    for (u32 array = 0; array < ir->localArrayCount; ++array) {
+        if (!valid(ir->localArrayRegisters[array])) {
+            return Fail("WGSL local array register is out of bounds");
+        }
+        registerFlags[ir->localArrayRegisters[array]] |= RegisterVariable;
+    }
     for (u32 instruction = 0; instruction < ir->instructionCount; ++instruction) {
         const u16 opcode = ir->opcodes[instruction];
         const u16 destination = ir->destinations[instruction];
@@ -113,16 +120,31 @@ bool WGSLBuilder::PrepareRegisters() {
             registerFlags[destination] |= RegisterPointer;
         }
     }
+    // Pointers: into a local array, and copies of pointers. A pointer
+    // assigned more than once, or copied from such a pointer, has its
+    // target chosen at run time and is tracked.
     for (bool changed = true; changed;) {
         changed = false;
         for (u32 instruction = 0; instruction < ir->instructionCount; ++instruction) {
+            const u16 opcode = ir->opcodes[instruction];
             const u16 destination = ir->destinations[instruction];
             const u16 source = ir->GetOperand(instruction, 0);
-            if (IsCopy(ir->opcodes[instruction]) && valid(destination) && valid(source) &&
-                (registerFlags[source] & RegisterPointer) && !(registerFlags[destination] & RegisterPointer)) {
-                registerFlags[destination] |= RegisterPointer;
-                changed = true;
+            if (!valid(destination) || !valid(source)) {
+                continue;
             }
+            u8 flags = registerFlags[destination];
+            if ((opcode == IR::OP_STORAGE_INDEX || opcode == IR::OP_STORAGE_FIELD) &&
+                (registerFlags[source] & (RegisterVariable | RegisterPointer))) {
+                flags |= RegisterPointer;
+            }
+            if (IsCopy(opcode) && (registerFlags[source] & RegisterPointer)) {
+                flags |= RegisterPointer;
+                if ((registerFlags[source] & RegisterTracked) || (flags & RegisterRedefined)) {
+                    flags |= RegisterTracked;
+                }
+            }
+            changed |= flags != registerFlags[destination];
+            registerFlags[destination] = flags;
         }
     }
     for (u32 instruction = 0; instruction < ir->instructionCount; ++instruction) {
@@ -132,12 +154,6 @@ bool WGSLBuilder::PrepareRegisters() {
              opcode == IR::OP_LOCAL_INDEX_PTR) && valid(base) && !(registerFlags[base] & RegisterPointer)) {
             registerFlags[base] |= RegisterVariable;
         }
-    }
-    for (u32 array = 0; array < ir->localArrayCount; ++array) {
-        if (!valid(ir->localArrayRegisters[array])) {
-            return Fail("WGSL local array register is out of bounds");
-        }
-        registerFlags[ir->localArrayRegisters[array]] |= RegisterVariable;
     }
     for (u32 reg = 0; reg < registers; ++reg) {
         if ((registerFlags[reg] & RegisterRedefined) && !(registerFlags[reg] & RegisterPointer)) {
@@ -170,7 +186,7 @@ bool WGSLBuilder::PrepareMemoryInstruction(u32 instruction, bool& handled) {
             return Fail("WGSL pointer register is out of bounds");
         }
         if (registerToValue[destination] != InvalidId) {
-            return Fail("WGSL pointers that are reassigned to another variable are not supported");
+            return Fail("WGSL pointer register is defined by more than one address computation");
         }
         const u32 value = NewValue(destination, type, structType, arrayLength, ValueKind::Reference);
         values.producerInstructions[value] = instruction;
@@ -302,6 +318,22 @@ bool WGSLBuilder::PrepareMemoryInstruction(u32 instruction, bool& handled) {
         case IR::OP_LOAD_REG:
         case IR::OP_STORE_REG: {
             const u32 source = valueOf(first);
+            if (destination < ir->registerCount && destination < IR::RegisterLimit &&
+                (registerFlags[destination] & RegisterTracked)) {
+                // Selects the target; targets are gathered afterwards.
+                const u32 tracked = registerToValue[destination];
+                if (source == InvalidId || values.kinds[source] != static_cast<u8>(ValueKind::Reference)) {
+                    return Fail("WGSL pointer is assigned something that is not a local pointer");
+                }
+                if (static_cast<CoreType>(values.types[tracked]) == CoreType::INVALID) {
+                    CopyValueShape(tracked, source);
+                } else if (values.types[tracked] != values.types[source] ||
+                           values.structTypes[tracked] != values.structTypes[source] ||
+                           values.arrayLengths[tracked] != values.arrayLengths[source]) {
+                    return Fail("WGSL pointer is reassigned to a target of another type");
+                }
+                return true;
+            }
             if (source != InvalidId && values.kinds[source] == static_cast<u8>(ValueKind::UniformAddress)) {
                 if (!(registerFlags[destination] & RegisterVariable)) {
                     return Fail("WGSL uniform address copy was not prepared as a uniform access");
@@ -471,11 +503,34 @@ bool WGSLBuilder::WriteReference(TextWriter& writer, u32 valueId) {
         WriteValueName(writer, valueId);
         return true;
     }
+    const Accessor accessor = static_cast<Accessor>(values.accessors[valueId]);
+    if (kind == ValueKind::Reference && accessor == Accessor::Tracked) {
+        // Inside a switch on the tag: the case's target, with the index
+        // the pointer kept when it was assigned.
+        const u32 target = dispatchTarget;
+        if (valueId != dispatchNode || target == InvalidId) {
+            return Fail("WGSL tracked pointer is used outside its target dispatch");
+        }
+        dispatchNode = InvalidId;
+        const bool snapshot = (values.variables[valueId] & VariableSnapshot) != 0 &&
+            static_cast<Accessor>(values.accessors[target]) == Accessor::Index &&
+            !IR::IsConstant(values.indexOperands[target]);
+        const bool written = snapshot ? WriteReference(writer, values.parents[target]) : WriteReference(writer, target);
+        dispatchNode = valueId;
+        if (!written) {
+            return false;
+        }
+        if (snapshot) {
+            writer.Text("[");
+            WriteValueName(writer, valueId);
+            writer.Text("_i]");
+        }
+        return true;
+    }
     if (kind != ValueKind::Reference || values.parents[valueId] == InvalidId ||
         !WriteReference(writer, values.parents[valueId])) {
         return Fail("WGSL pointer has no valid access path");
     }
-    const Accessor accessor = static_cast<Accessor>(values.accessors[valueId]);
     if (accessor == Accessor::Field) {
         writer.Text(".f");
         writer.Number(values.indexOperands[valueId]);
@@ -624,6 +679,54 @@ bool WGSLBuilder::WriteMemoryInstruction(TextWriter& writer, u32 instruction, bo
     const u16 first = ir->GetOperand(instruction, 0);
     const u16 second = ir->GetOperand(instruction, 1);
     const u16 destination = ir->destinations[instruction];
+    const auto valueOf = [&](u16 reg) -> u32 {
+        return !IR::IsConstant(reg) && reg < ir->registerCount && reg < IR::RegisterLimit
+            ? registerToValue[reg] : InvalidId;
+    };
+    if (IsCopy(opcode) && destination < ir->registerCount && destination < IR::RegisterLimit &&
+        (registerFlags[destination] & RegisterTracked)) {
+        // tag = target (or the copied pointer's tag), and its index.
+        const u32 tracked = registerToValue[destination];
+        const u32 source = valueOf(first);
+        const bool sourceTracked = static_cast<Accessor>(values.accessors[source]) == Accessor::Tracked;
+        writer.Indent();
+        WriteValueName(writer, tracked);
+        writer.Text(" = ");
+        if (sourceTracked) {
+            WriteValueName(writer, source);
+        } else {
+            writer.Number(source);
+            writer.Text("u");
+        }
+        writer.Text(";\n");
+        if (values.variables[tracked] & VariableSnapshot) {
+            const bool index = !sourceTracked && static_cast<Accessor>(values.accessors[source]) == Accessor::Index &&
+                               !IR::IsConstant(values.indexOperands[source]);
+            if (index || (sourceTracked && (values.variables[source] & VariableSnapshot))) {
+                writer.Indent();
+                WriteValueName(writer, tracked);
+                writer.Text("_i = ");
+                if (sourceTracked) {
+                    WriteValueName(writer, source);
+                    writer.Text("_i");
+                } else if (!WriteConvertedOperand(writer, values.indexOperands[source], CoreType::INT)) {
+                    return false;
+                }
+                writer.Text(";\n");
+            }
+        }
+        return true;
+    }
+    {
+        // Loads and stores through a pointer whose target is a tag.
+        const u16 pointer = opcode == IR::OP_LOCAL_STORE || opcode == IR::OP_LOCAL_LOAD ||
+                            opcode == IR::OP_STORAGE_LOAD || opcode == IR::OP_ARRAY_LOAD ? first :
+                            opcode == IR::OP_ARRAY_STORE ? destination : 0xFFFF;
+        const u32 reference = pointer != 0xFFFF ? valueOf(pointer) : InvalidId;
+        if (reference != InvalidId && TrackedNode(reference) != InvalidId) {
+            return WriteTrackedAccess(writer, instruction, reference);
+        }
+    }
     if (opcode == IR::OP_LOCAL_STORE) {
         writer.Indent();
         if (!WriteReference(writer, registerToValue[first])) {
@@ -724,5 +827,195 @@ bool WGSLBuilder::WriteMemoryInstruction(TextWriter& writer, u32 instruction, bo
         return false;
     }
     writer.Text(";\n");
+    return true;
+}
+
+u32 WGSLBuilder::TrackedNode(u32 reference) const {
+    for (u32 node = reference; node != InvalidId; node = values.parents[node]) {
+        if (values.kinds[node] != static_cast<u8>(ValueKind::Reference)) {
+            return InvalidId;
+        }
+        if (static_cast<Accessor>(values.accessors[node]) == Accessor::Tracked) {
+            return node;
+        }
+    }
+    return InvalidId;
+}
+
+u32 WGSLBuilder::TrackedIndex(u32 valueId) const {
+    for (u32 index = 0; index < trackedPointers.count; ++index) {
+        if (trackedPointers.values[index] == valueId) {
+            return index;
+        }
+    }
+    return InvalidId;
+}
+
+// Gathers each tracked pointer's possible targets from the assignments to
+// it, through copies of other tracked pointers.
+bool WGSLBuilder::PrepareTrackedPointers() {
+    for (u32 value = 0; value < values.count; ++value) {
+        trackedPointers.count += values.kinds[value] == static_cast<u8>(ValueKind::Reference) &&
+                                 static_cast<Accessor>(values.accessors[value]) == Accessor::Tracked;
+    }
+    if (trackedPointers.count == 0) {
+        return true;
+    }
+    const u32 words = (values.count + 63) / 64;
+    trackedPointers.values = static_cast<u32*>(Allocate(trackedPointers.count, sizeof(u32)));
+    trackedPointers.offsets = static_cast<u32*>(Allocate(trackedPointers.count + 1, sizeof(u32)));
+    u64* sets = static_cast<u64*>(Allocate(static_cast<size_t>(trackedPointers.count) * words, sizeof(u64)));
+    if (errorMessage[0] != '\0') {
+        return false;
+    }
+    std::memset(sets, 0, static_cast<size_t>(trackedPointers.count) * words * sizeof(u64));
+    for (u32 value = 0, index = 0; value < values.count; ++value) {
+        if (values.kinds[value] == static_cast<u8>(ValueKind::Reference) &&
+            static_cast<Accessor>(values.accessors[value]) == Accessor::Tracked) {
+            trackedPointers.values[index++] = value;
+        }
+    }
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (u32 instruction = 0; instruction < ir->instructionCount; ++instruction) {
+            const u16 destination = ir->destinations[instruction];
+            const u16 source = ir->GetOperand(instruction, 0);
+            if (!IsCopy(ir->opcodes[instruction]) || IR::IsConstant(source) || destination >= ir->registerCount ||
+                destination >= IR::RegisterLimit || !(registerFlags[destination] & RegisterTracked) ||
+                (structured && !control.reachable[cfg->instToBlock[instruction]])) {
+                continue;
+            }
+            u64* set = sets + static_cast<size_t>(TrackedIndex(registerToValue[destination])) * words;
+            const u32 sourceValue = registerToValue[source];
+            const u32 sourceIndex = TrackedIndex(sourceValue);
+            if (sourceIndex == InvalidId) {
+                const u64 bit = u64(1) << (sourceValue % 64);
+                changed |= (set[sourceValue / 64] & bit) == 0;
+                set[sourceValue / 64] |= bit;
+                continue;
+            }
+            const u64* other = sets + static_cast<size_t>(sourceIndex) * words;
+            for (u32 word = 0; word < words; ++word) {
+                changed |= (set[word] | other[word]) != set[word];
+                set[word] |= other[word];
+            }
+        }
+    }
+    u32 total = 0;
+    for (size_t word = 0; word < static_cast<size_t>(trackedPointers.count) * words; ++word) {
+        total += static_cast<u32>(std::popcount(sets[word]));
+    }
+    trackedPointers.targets = static_cast<u32*>(Allocate(total, sizeof(u32)));
+    if (errorMessage[0] != '\0') {
+        return false;
+    }
+    u32 cursor = 0;
+    for (u32 index = 0; index < trackedPointers.count; ++index) {
+        const u32 tracked = trackedPointers.values[index];
+        trackedPointers.offsets[index] = cursor;
+        for (u32 target = 0; target < values.count; ++target) {
+            if (!(sets[static_cast<size_t>(index) * words + target / 64] & (u64(1) << (target % 64)))) {
+                continue;
+            }
+            // A target's own path is fixed; only its last index is kept
+            // per assignment.
+            if (TrackedNode(target) != InvalidId) {
+                return Fail("WGSL pointer targets cannot themselves be reassigned pointers");
+            }
+            if (static_cast<Accessor>(values.accessors[target]) == Accessor::Index &&
+                !IR::IsConstant(values.indexOperands[target])) {
+                values.variables[tracked] |= VariableSnapshot;
+            }
+            trackedPointers.targets[cursor++] = target;
+        }
+        if (cursor == trackedPointers.offsets[index]) {
+            return Fail("WGSL pointer is used without being assigned a target");
+        }
+    }
+    trackedPointers.offsets[trackedPointers.count] = cursor;
+    return true;
+}
+
+// Counts what each target's path reads where the pointer is used.
+void WGSLBuilder::CountTrackedTargets(u32 tracked) {
+    const u32 index = TrackedIndex(tracked);
+    if (index == InvalidId) {
+        return;
+    }
+    for (u32 item = trackedPointers.offsets[index]; item < trackedPointers.offsets[index + 1]; ++item) {
+        const u32 target = trackedPointers.targets[item];
+        const bool snapshot = (values.variables[tracked] & VariableSnapshot) != 0 &&
+            static_cast<Accessor>(values.accessors[target]) == Accessor::Index;
+        CountUse(valueOrigins.registers[snapshot ? values.parents[target] : target]);
+    }
+}
+
+// switch (tag) { case target: { access through target; } ... }
+bool WGSLBuilder::WriteTrackedAccess(TextWriter& writer, u32 instruction, u32 reference) {
+    const u16 opcode = ir->opcodes[instruction];
+    const u32 tracked = TrackedNode(reference);
+    const u32 index = TrackedIndex(tracked);
+    const bool load = opcode == IR::OP_LOCAL_LOAD || opcode == IR::OP_STORAGE_LOAD || opcode == IR::OP_ARRAY_LOAD;
+    const u32 result = load ? registerToValue[ir->destinations[instruction]] : InvalidId;
+    if (index == InvalidId) {
+        return Fail("WGSL tracked pointer has no targets");
+    }
+    if (load && !values.functionScope[result]) {
+        writer.Indent();
+        writer.Text("var ");
+        WriteValueName(writer, result);
+        writer.Text(": ");
+        if (!WriteValueType(writer, result)) {
+            return false;
+        }
+        writer.Text(";\n");
+    }
+    writer.Indent();
+    writer.Text("switch (");
+    WriteValueName(writer, tracked);
+    writer.Text(") {\n");
+    ++writer.indentation;
+    const u32 begin = trackedPointers.offsets[index];
+    const u32 end = trackedPointers.offsets[index + 1];
+    for (u32 item = begin; item < end; ++item) {
+        writer.Indent();
+        if (item + 1 == end) {
+            writer.Text("default: {\n");
+        } else {
+            writer.Text("case ");
+            writer.Number(trackedPointers.targets[item]);
+            writer.Text("u: {\n");
+        }
+        ++writer.indentation;
+        writer.Indent();
+        dispatchNode = tracked;
+        dispatchTarget = trackedPointers.targets[item];
+        if (load) {
+            WriteValueName(writer, result);
+            writer.Text(" = ");
+        }
+        bool written = WriteReference(writer, reference);
+        if (written && (opcode == IR::OP_ARRAY_LOAD || opcode == IR::OP_ARRAY_STORE)) {
+            writer.Text("[");
+            written = WriteOperand(writer, ir->GetOperand(instruction, opcode == IR::OP_ARRAY_LOAD ? 1 : 0));
+            writer.Text("]");
+        }
+        if (written && !load) {
+            writer.Text(" = ");
+            written = WriteOperand(writer, ir->GetOperand(instruction, 1));
+        }
+        dispatchNode = InvalidId;
+        dispatchTarget = InvalidId;
+        if (!written) {
+            return false;
+        }
+        writer.Text(";\n");
+        --writer.indentation;
+        writer.Indent();
+        writer.Text("}\n");
+    }
+    --writer.indentation;
+    writer.Indent();
+    writer.Text("}\n");
     return true;
 }

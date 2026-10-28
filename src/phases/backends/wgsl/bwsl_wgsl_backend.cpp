@@ -941,7 +941,7 @@ bool WGSLBuilder::Prepare() {
         return false;
     }
     for (u32 reg = 0; reg < registerMapCount; ++reg) {
-        definitionCount += (registerFlags[reg] & RegisterVariable) != 0;
+        definitionCount += (registerFlags[reg] & (RegisterVariable | RegisterTracked)) != 0;
     }
     if (definitionCount != 0) {
         values.types = static_cast<u16*>(Allocate(definitionCount, sizeof(u16)));
@@ -999,6 +999,13 @@ bool WGSLBuilder::Prepare() {
         const u32 value = NewValue(static_cast<u16>(reg), type, structType, arrayLength, ValueKind::Value);
         values.variables[value] = VariableMutable;
     }
+    for (u32 reg = 0; reg < registerMapCount; ++reg) {
+        if (registerFlags[reg] & RegisterTracked) {
+            // Its target shape comes from its first assignment.
+            const u32 value = NewValue(static_cast<u16>(reg), CoreType::INVALID, 0, 0, ValueKind::Reference);
+            values.accessors[value] = static_cast<u8>(Accessor::Tracked);
+        }
+    }
     for (u32 index = 0; index < ir->undefRegCount; ++index) {
         const u16 reg = ir->undefRegs[index];
         const CoreType type = static_cast<CoreType>(ir->undefRegTypes[index]);
@@ -1026,6 +1033,9 @@ bool WGSLBuilder::Prepare() {
         }
     }
     currentInstruction = InvalidId;
+    if (!PrepareTrackedPointers()) {
+        return false;
+    }
     if (stage == ShaderStage::Vertex && outputForSlot[OutputSlot::POSITION] == InvalidId) {
         return Fail("WGSL vertex entry point must write output.position");
     }
@@ -1100,6 +1110,11 @@ void WGSLBuilder::CountUse(u16 operand, u32 count) {
                     CountUse(valueOrigins.registers[node]);
                     break;
                 }
+                if (static_cast<Accessor>(values.accessors[node]) == Accessor::Tracked) {
+                    values.useCounts[node] += count;
+                    CountTrackedTargets(node);
+                    break;
+                }
                 if (static_cast<Accessor>(values.accessors[node]) == Accessor::Index) {
                     CountUse(values.indexOperands[node]);
                 }
@@ -1141,6 +1156,9 @@ void WGSLBuilder::PlanExpressions() {
         const u16 second = ir->GetOperand(instruction, 1);
         if (opcode == IR::OP_STORE_OUTPUT) {
             CountUse(ir->destinations[instruction]);
+        } else if (IsCopy(opcode) && ir->destinations[instruction] < ir->registerCount &&
+                   (registerFlags[ir->destinations[instruction]] & RegisterTracked)) {
+            CountUse(first);
         } else if (HasResult(opcode) && opcode != IR::OP_JUMP && opcode != IR::OP_BRANCH &&
                    opcode != IR::OP_SWITCH &&
                    values.kinds[registerToValue[ir->destinations[instruction]]] != static_cast<u8>(ValueKind::Value)) {
@@ -2756,6 +2774,19 @@ bool WGSLBuilder::WriteModule(TextWriter& writer) {
     writer.Text(" {\n");
     if (outputs.count != 0) {
         writer.Text("    var bwsl_output: BWSLOutput;\n");
+    }
+    for (u32 index = 0; index < trackedPointers.count; ++index) {
+        const u32 tracked = trackedPointers.values[index];
+        writer.Indent();
+        writer.Text("var ");
+        WriteValueName(writer, tracked);
+        writer.Text(": u32;\n");
+        if (values.variables[tracked] & VariableSnapshot) {
+            writer.Indent();
+            writer.Text("var ");
+            WriteValueName(writer, tracked);
+            writer.Text("_i: i32;\n");
+        }
     }
     for (u32 value = 0; value < values.count; ++value) {
         if (values.kinds[value] != static_cast<u8>(ValueKind::Value) || !values.functionScope[value]) {
