@@ -254,6 +254,9 @@
   two swapped: `atomic_cmp_exchange(x, 5, 100)` stored 5 when x was 100.
 
 ### Diagnostics
+- A constant index past a vector's components or a matrix's columns, as in
+  `p[2]` on a `float2` or `m[3]` on a `mat2`, is a source error naming the
+  type. A write compiled silently and a read failed SPIR-V validation.
 - A write through a pointer to a copy is a source error: a pointer to a
   vector component (`float^ p = ^v.x; p^ = 9.0;`), to a resource, a stage
   input or output or shared memory (`(^resources.params.scale)^ = 2.0;`),

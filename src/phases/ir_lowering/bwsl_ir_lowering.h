@@ -766,6 +766,10 @@ struct IRLowering {
   u16 AllocateRegister();
 
   u16 EmitConstantInt(u32 value);
+  // Reports a constant index past a vector's components or a matrix's
+  // columns. Returns false when it reported.
+  bool CheckConstComponentIndex(u16 indexReg, NodeRef indexExpr,
+                                CoreType containerType);
   bool CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
                                  NodeRef indexExpr = NodeRef::Null());
   bool CheckConstIndexInBounds(u16 indexReg, NodeRef indexExpr, u32 length);

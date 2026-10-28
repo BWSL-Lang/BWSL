@@ -1024,6 +1024,25 @@ inline bool TryFoldArrayIndex(AST* ast, NodeRef ref, s64* value, bool* isUnsigne
   return true;
 }
 
+inline bool IRLowering::CheckConstComponentIndex(u16 indexReg, NodeRef indexExpr,
+                                                 CoreType containerType) {
+  bool matrix = (mask(containerType) & TypeMasks::MATRIX_TYPES) != 0;
+  u32 length = containerType == CoreType::MAT4 ? 4 :
+               containerType == CoreType::MAT3 ? 3 :
+               containerType == CoreType::MAT2 ? 2 : GetVectorDimension(containerType);
+  if (length < 2) return true;
+  s64 index;
+  if (!TryGetConstIndex(indexReg, indexExpr, &index)) return true;
+  if (index >= 0 && index < static_cast<s64>(length)) return true;
+  char msg[192];
+  snprintf(msg, sizeof(msg),
+           "Error: index %lld is out of bounds for %s, which has %u %s\n",
+           static_cast<long long>(index), SourceTypeName(containerType).c_str(),
+           length, matrix ? "columns" : "components");
+  ReportErrorAt(indexExpr, msg);
+  return false;
+}
+
 // Reports an error when a constant index into a local array of known length
 // is statically out of bounds (negative or >= length). Returns true when the
 // access is fine or cannot be checked statically.

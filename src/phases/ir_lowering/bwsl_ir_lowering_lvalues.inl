@@ -633,13 +633,11 @@ inline bool IRLowering::ResolveStoragePlace(NodeRef expr, bool emit,
     }
     if (!emit) return true;
     u16 index = LowerExpression(access.index);
-    // A matrix has one column per index, a vector one component.
-    u32 length = base.arrayLength;
-    if (length == 0) {
-      length = base.type == CoreType::MAT4 ? 4 : base.type == CoreType::MAT3 ? 3 :
-               base.type == CoreType::MAT2 ? 2 : GetVectorDimension(base.type);
+    if (base.arrayLength != 0) {
+      CheckConstIndexInBounds(index, access.index, base.arrayLength);
+    } else {
+      CheckConstComponentIndex(index, access.index, base.type);
     }
-    CheckConstIndexInBounds(index, access.index, length);
     out->reg = pointer(*out, 0);
     if (out->reg == 0xFFFF) return false;
     builder.EmitInstruction(OP_STORAGE_INDEX, out->reg, base.reg, index);
@@ -1833,6 +1831,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           (baseType == CoreType::BOOL2  || baseType == CoreType::BOOL3 ||
            baseType == CoreType::BOOL4) ? (valueType == CoreType::BOOL) : false;
       if (baseIsVec && valueIsComponent) {
+        if (!CheckConstComponentIndex(indexReg, arrAccess.index, baseType)) return;
         u16 newVecReg = AllocateRegister();
         SetRegisterType(newVecReg, baseType);
         builder.EmitInstruction(OP_VEC_INSERT_DYNAMIC, newVecReg, baseReg,
@@ -1848,6 +1847,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
       CoreType expectedCol = (baseType == CoreType::MAT4) ? CoreType::FLOAT4 :
                             (baseType == CoreType::MAT3) ? CoreType::FLOAT3 : CoreType::FLOAT2;
       if (!localArray && baseIsMat && valueType == expectedCol) {
+        if (!CheckConstComponentIndex(indexReg, arrAccess.index, baseType)) return;
         u32 count = baseType == CoreType::MAT4 ? 4 : baseType == CoreType::MAT3 ? 3 : 2;
         u16 columns[4] = {};
         for (u32 c = 0; c < count; ++c) {
@@ -2067,6 +2067,7 @@ inline u16 IRLowering::LowerArrayAccess(NodeRef ref) {
       }
 
       if (!isLocalArray) {
+        CheckConstComponentIndex(indexReg, access.index, baseType);
         // Matrix subscript returns a column vector
         if (baseType == CoreType::MAT2)
           elemType = CoreType::FLOAT2;
