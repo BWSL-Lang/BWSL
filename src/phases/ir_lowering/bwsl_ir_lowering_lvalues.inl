@@ -612,8 +612,6 @@ inline bool IRLowering::ResolveStoragePlace(NodeRef expr, bool emit,
       if (!emit) return true;
       u16 base = LowerExpression(access.array);
       u16 index = LowerExpression(access.index);
-      // No depth: its bits overlap STORAGE_IS_SHARED, which would make the
-      // backend address a field of this element as workgroup memory.
       out->reg = pointer(*out, (buffer->bindingIndex << IRProgram::STORAGE_BINDING_SHIFT) |
                                    IRProgram::STORAGE_IS_PTR);
       if (out->reg == 0xFFFF) return false;
@@ -1984,13 +1982,9 @@ inline u16 IRLowering::LowerArrayAccess(NodeRef ref) {
     // Propagate storage info for the pointer (in case of further chaining)
     u32 srcInfo = program.registerStorageInfo[baseReg];
     u32 binding = (srcInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
-    u32 depth = ((srcInfo & IR::IRProgram::STORAGE_DEPTH_MASK) >>
-                 IR::IRProgram::STORAGE_DEPTH_SHIFT) +
-                1;
     u32 sharedFlag = srcInfo & IR::IRProgram::STORAGE_IS_SHARED;
     program.registerStorageInfo[ptrReg] =
         (binding << IR::IRProgram::STORAGE_BINDING_SHIFT) |
-        (depth << IR::IRProgram::STORAGE_DEPTH_SHIFT) |
         IR::IRProgram::STORAGE_IS_PTR | sharedFlag;
     {
       CoreType baseType = GetRegisterType(baseReg);
@@ -2124,13 +2118,9 @@ inline u16 IRLowering::LowerStoragePointerForAtomic(NodeRef ref) {
 
   u32 srcInfo = program.registerStorageInfo[baseReg];
   u32 binding = (srcInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
-  u32 depth = ((srcInfo & IR::IRProgram::STORAGE_DEPTH_MASK) >>
-               IR::IRProgram::STORAGE_DEPTH_SHIFT) +
-              1;
   u32 sharedFlag = srcInfo & IR::IRProgram::STORAGE_IS_SHARED;
   program.registerStorageInfo[ptrReg] =
       (binding << IR::IRProgram::STORAGE_BINDING_SHIFT) |
-      (depth << IR::IRProgram::STORAGE_DEPTH_SHIFT) |
       IR::IRProgram::STORAGE_IS_PTR | sharedFlag;
 
   CoreType baseType = GetRegisterType(baseReg);
@@ -2312,16 +2302,12 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
                                   fieldIndex);
           program.metadata[builder.currentInstruction - 1] = structTypeHash;
 
-          // Propagate storage pointer info (increment depth)
+          // Propagate storage pointer info
           u32 srcInfo = program.registerStorageInfo[objectReg];
           u32 binding = (srcInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
-          u32 depth = ((srcInfo & IR::IRProgram::STORAGE_DEPTH_MASK) >>
-                       IR::IRProgram::STORAGE_DEPTH_SHIFT) +
-                      1;
           u32 sharedFlag = srcInfo & IR::IRProgram::STORAGE_IS_SHARED;
           program.registerStorageInfo[dest] =
               (binding << IR::IRProgram::STORAGE_BINDING_SHIFT) |
-              (depth << IR::IRProgram::STORAGE_DEPTH_SHIFT) |
               IR::IRProgram::STORAGE_IS_PTR | sharedFlag;
         } else {
           // Regular struct field access - emit OP_STRUCT_EXTRACT

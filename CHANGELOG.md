@@ -88,6 +88,11 @@
   they don't have is a source error.
 
 ### Backends
+- Atomics on a storage buffer element, such as
+  `atomic_max(resources.counters[0], v)` on a `buffer<int>`, compile in a
+  stage that also declares `shared` memory. The element was mistaken for
+  workgroup memory and read with the shared variable's type, which failed
+  SPIR-V validation.
 - A member after a nested struct starts past the struct's padding. In
   `struct Outer { Middle mid; float2 uv; }`, with `Middle` 36 bytes, `uv`
   was at offset 40, inside `mid`'s 48 padded bytes, which SPIR-V

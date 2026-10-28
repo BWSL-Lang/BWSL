@@ -1,0 +1,29 @@
+// Atomics on an `int` storage buffer in a stage that also has workgroup
+// memory. The buffer element pointers were mistaken for workgroup pointers,
+// so loading through them used the shared array's `uint` type and failed
+// SPIR-V validation.
+pipeline EquivAtomicIntBuffer {
+    resources {
+        counters: buffer<int>
+    }
+    pass "Compute" {
+        use resources { counters }
+        compute "Main" [64, 1, 1] {
+            shared uint[1] total;
+            uint lid = input.local_index;
+            if (lid == 0u) {
+                total[0] = 0u;
+            }
+            barrier();
+            atomic_add(total[0], 1u);
+            atomic_max(resources.counters[0], int(lid));
+            atomic_min(resources.counters[1], -int(lid));
+            atomic_or(resources.counters[2], 1 << int(lid % 16u));
+            atomic_cmp_exchange(resources.counters[3], 0, 7);
+            barrier();
+            if (lid == 0u) {
+                atomic_add(resources.counters[4], int(total[0]));
+            }
+        }
+    }
+}
