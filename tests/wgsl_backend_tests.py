@@ -176,18 +176,6 @@ def runtime_cases() -> dict[str, dict]:
 
 
 REJECTED = {
-    "local_array": """
-pipeline UnsupportedLocalArray {
-    resources { result: buffer<float> }
-    pass "Compute" { use resources { result }
-        compute "Main" [1, 1, 1] {
-            float[2] values;
-            values[0] = float(input.global_id.x);
-            resources.result[0] = values[0];
-        }
-    }
-}
-""",
     "vertex_without_position": """
 pipeline MissingVertexPosition {
     pass "Draw" {

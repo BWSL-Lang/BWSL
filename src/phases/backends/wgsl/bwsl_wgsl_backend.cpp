@@ -871,8 +871,8 @@ bool WGSLBuilder::Prepare() {
     if (!structured && ir->phiCount != 0) {
         return Fail("WGSL requires a CFG for phi nodes");
     }
-    if (ir->sharedVarCount != 0 || ir->localArrayCount != 0) {
-        return Fail("WGSL backend does not support workgroup storage or local arrays");
+    if (ir->sharedVarCount != 0) {
+        return Fail("WGSL backend does not support workgroup storage");
     }
     if (ir->instructionCount != 0 && (ir->opcodes == nullptr || ir->destinations == nullptr ||
         ir->operands == nullptr || ir->types == nullptr || ir->metadata == nullptr)) {
