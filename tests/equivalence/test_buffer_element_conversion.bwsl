@@ -1,0 +1,16 @@
+// A whole storage buffer element store converts the value to the element
+// type like any assignment. A float stored into a buffer<int> element was
+// stored as a float and failed SPIR-V validation.
+pipeline EquivBufferElementConversion {
+    resources { output: buffer<int> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            float f = 2.75;
+            uint u = 7u;
+            resources.output[0] = f;
+            resources.output[1] = u;
+            resources.output[2] = -f;
+        }
+    }
+}

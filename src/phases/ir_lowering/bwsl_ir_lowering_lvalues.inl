@@ -1889,9 +1889,15 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
       // `resources.buffer[i] = value` stores a whole element.
       u32 binding = program.registerStorageInfo[baseReg] >> IR::IRProgram::STORAGE_BINDING_SHIFT;
       u32 elementStructHash = binding < 32 ? program.bufferElementStructTypes[binding] : 0;
-      if (elementStructHash != 0 &&
-          !CheckStoreShape(target, valueReg, CoreType::CUSTOM, elementStructHash))
-        return;
+      CoreType elementType = elementStructHash != 0
+          ? CoreType::CUSTOM
+          : binding < 32 ? static_cast<CoreType>(program.bufferElementCoreTypes[binding])
+                         : CoreType::INVALID;
+      if (elementType != CoreType::INVALID && elementType != CoreType::VOID) {
+        if (!CheckStoreShape(target, valueReg, elementType, elementStructHash)) return;
+        if (elementType != CoreType::CUSTOM)
+          valueReg = ConvertRegisterToType(valueReg, elementType);
+      }
     }
     if (baseReg < MAX_REGISTERS) {
       CoreType baseType =

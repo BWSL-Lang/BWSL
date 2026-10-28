@@ -111,6 +111,9 @@
   they don't have is a source error.
 
 ### Backends
+- Storing a value of another scalar kind into a storage buffer element, as
+  in `resources.ints[0] = 2.75;` for a `buffer<int>`, converts it like an
+  assignment. It failed SPIR-V validation.
 - Enum variants whose payloads put different types at the same position,
   such as `Count(uint n)` and `Size(float r)`, compile and keep each value
   exactly, bool vectors included. They failed SPIR-V validation. A payload
