@@ -2534,6 +2534,18 @@ CompileResult CompileShaderStage(
                                            shaderStageData->workgroupSizeY,
                                            shaderStageData->workgroupSizeZ);
         if (!wgslBuilder.Emit()) {
+            // Report at the source the failing instruction was lowered from,
+            // when it has one.
+            const u32 failed = wgslBuilder.ErrorInstruction();
+            NodeRef node;
+            node.packed = failed < lowering.program.instructionCount && lowering.program.sourceNodes
+                              ? lowering.program.sourceNodes[failed] : 0xFFFFFFFFu;
+            if (node.IsValid()) {
+                lowering.ReportErrorAt(node, ("Error: " + std::string(wgslBuilder.Error()) + "\n").c_str());
+                result.error = lowering.diagnostics.back();
+                result.diagnosticsAlreadyReported = diagnosticStream != nullptr;
+                return result;
+            }
             result.error = "WGSL: ";
             result.error += wgslBuilder.Error();
             if (wgslBuilder.ErrorInstruction() != 0xFFFFFFFFu) {
