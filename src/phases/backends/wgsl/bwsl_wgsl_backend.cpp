@@ -383,6 +383,8 @@ u32 ValueOperandMask(u16 opcode, u32 metadata) {
         case IR::OP_REFLECT: return 3;
         case IR::OP_IMG_STORE: return 6;
         case IR::OP_LOCAL_LOAD:
+        case IR::OP_MODF_STRUCT:
+        case IR::OP_FREXP_STRUCT:
         case IR::OP_ENUM_TAG:
         case IR::OP_ENUM_FIELD: return 1;
         case IR::OP_ATOMIC_ADD:
@@ -1233,6 +1235,8 @@ void WGSLBuilder::PlanExpressions() {
             // The floor-based expansion mentions each argument twice.
             CountUse(first, 2);
             CountUse(second, 2);
+        } else if (opcode == IR::OP_MODF_STRUCT || opcode == IR::OP_FREXP_STRUCT) {
+            CountUse(first, 2);
         } else if (opcode == IR::OP_VEC_SHUFFLE) {
             const u32 value = registerToValue[ir->destinations[instruction]];
             const u32 leftWidth = Width(static_cast<CoreType>(values.types[registerToValue[first]]));

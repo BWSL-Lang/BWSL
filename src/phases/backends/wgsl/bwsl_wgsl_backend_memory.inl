@@ -454,6 +454,27 @@ bool WGSLBuilder::PrepareStructInstruction(u32 instruction, bool& handled) {
             }
             return DefineValue(instruction, CoreType::CUSTOM, ValueKind::Value, structType, 0);
         }
+        case IR::OP_MODF_STRUCT:
+        case IR::OP_FREXP_STRUCT: {
+            // { fraction, whole } and { mantissa, exponent }.
+            const u32 structType = destination < ir->registerCount ? ir->registerStructTypes[destination] : 0;
+            const u32 index = StructIndex(structType);
+            CoreType argumentType = CoreType::INVALID;
+            if (!OperandType(first, argumentType)) {
+                return false;
+            }
+            CoreType secondField = CoreType::INVALID;
+            u32 fieldStruct = 0;
+            u32 fieldLength = 0;
+            if (index == InvalidId || ir->structTypes[index].fieldCount != 2 ||
+                !FieldShape(structType, 1, secondField, fieldStruct, fieldLength) ||
+                Scalar(argumentType) != CoreType::FLOAT ||
+                static_cast<CoreType>(ir->structFieldTypes[ir->structTypes[index].fieldOffset]) != argumentType ||
+                secondField != (opcode == IR::OP_MODF_STRUCT ? argumentType : Shape(CoreType::INT, Width(argumentType)))) {
+                return Fail("WGSL modf/frexp result struct does not match its argument");
+            }
+            return DefineValue(instruction, CoreType::CUSTOM, ValueKind::Value, structType, 0);
+        }
         case IR::OP_ENUM_TAG:
         case IR::OP_ENUM_FIELD: {
             u32 base = InvalidId;
@@ -701,6 +722,22 @@ bool WGSLBuilder::WriteStructExpression(TextWriter& writer, u32 instruction, u32
                 writer.Text("]");
             }
             return true;
+        case IR::OP_MODF_STRUCT:
+        case IR::OP_FREXP_STRUCT: {
+            const bool modf = opcode == IR::OP_MODF_STRUCT;
+            if (!WriteValueType(writer, valueId)) {
+                return false;
+            }
+            for (u32 field = 0; field < 2; ++field) {
+                writer.Text(field == 0 ? (modf ? "(modf(" : "(frexp(") : (modf ? ", modf(" : ", frexp("));
+                if (!WriteOperand(writer, first)) {
+                    return false;
+                }
+                writer.Text(field == 0 ? ").fract" : modf ? ").whole" : ").exp");
+            }
+            writer.Text(")");
+            return true;
+        }
         case IR::OP_ENUM_TAG:
             if (!WriteOperand(writer, first)) {
                 return false;
