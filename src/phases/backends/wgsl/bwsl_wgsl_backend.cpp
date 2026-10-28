@@ -751,30 +751,10 @@ bool WGSLBuilder::PrepareResources(u32 usedSlots) {
         if (!StorageShape(type, structHash, alignment, stride)) {
             return false;
         }
-        // Array elements are 16-byte aligned beyond 8 bytes, as in the
-        // SPIR-V backend's runtime arrays; WGSL rounds to the alignment.
+        // A buffer of structs strides by the struct's laid-out size, which
+        // is a multiple of its alignment; other elements round up to theirs.
         if (type == CoreType::CUSTOM) {
-            // A buffer of structs pads each element to 16 bytes. A small
-            // struct takes the padding as its size, unless another struct
-            // also holds it.
-            const u32 structId = StructIndex(structHash);
-            const IR::IRProgram::StructTypeInfo& info = ir->structTypes[structId];
-            stride = (info.totalSize + 15) & ~15u;
-            if (storageSizes[structId] != stride) {
-                for (u32 holder = 0; holder < ir->structTypeCount; ++holder) {
-                    if (storageStates[holder] != 2 || holder == structId) {
-                        continue;
-                    }
-                    const IR::IRProgram::StructTypeInfo& other = ir->structTypes[holder];
-                    for (u32 member = 0; member < other.fieldCount; ++member) {
-                        if (ir->structFieldTypeHashes[other.fieldOffset + member] == structHash) {
-                            return Fail("WGSL cannot pad a small struct both in a buffer and inside another struct");
-                        }
-                    }
-                }
-                storageMemberSizes[info.fieldOffset + info.fieldCount - 1] += stride - storageSizes[structId];
-                storageSizes[structId] = stride;
-            }
+            stride = ir->structTypes[StructIndex(structHash)].totalSize;
         } else {
             stride = (stride + alignment - 1) & ~(alignment - 1);
         }

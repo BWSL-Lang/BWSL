@@ -339,7 +339,10 @@ private:
     bool WriteStructExpression(TextWriter& writer, u32 instruction, u32 valueId, bool& handled);
     bool IsMutable(u16 operand) const;
     bool PrepareStorageStruct(u32 structId);
-    bool StorageShape(CoreType type, u32 structType, u32& alignment, u32& size);
+    // `std430Matrices`: a struct laid out with std430, where a mat2 column
+    // is 8 bytes, as in WGSL.
+    bool StorageShape(CoreType type, u32 structType, u32& alignment, u32& size,
+                      bool std430Matrices = false);
     void MarkAccess(u32 reference, u8 access);
     bool PrepareAtomicInstruction(u32 instruction);
     bool IsAtomicReference(u32 reference) const;

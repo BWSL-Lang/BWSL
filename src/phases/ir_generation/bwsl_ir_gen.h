@@ -235,7 +235,9 @@ struct IRProgram {
         u32 nameHash;                   // Hash of struct type name
         u32 fieldCount;                 // Number of fields
         u32 fieldOffset;                // Offset into structFieldTypes/structFieldOffsets arrays
-        u32 totalSize;                  // Total byte size (std140 layout)
+        u32 totalSize;                  // Byte size, a multiple of alignment
+        u32 alignment;                  // std430 or std140 alignment
+        u32 std140;                     // Nonzero: std140 rules (reachable from a uniform)
     };
     alignas(64) StructTypeInfo* structTypes;    // Array of struct type definitions
     alignas(64) u16* structFieldTypes;          // Flattened: CoreType for each field
@@ -243,6 +245,7 @@ struct IRProgram {
     alignas(64) u32* structFieldTypeHashes;     // Flattened: custom type hash for each field (0 if not custom)
     alignas(64) u32* structFieldByteOffsets;    // Flattened: byte offset of each field (std140)
     alignas(64) u32* structFieldArraySizes;     // Flattened: array size for each field (0 = not array)
+    alignas(64) u32* structFieldArrayStrides;   // Flattened: element stride of an array field (0 = not array)
     u32 structTypeCount;
     u32 structTypeCapacity;
     u32 structFieldCapacity;

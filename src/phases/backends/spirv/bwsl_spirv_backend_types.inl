@@ -130,67 +130,10 @@ u32 SPIRVBuilder::GetStructTypeId(u32 structTypeHash) {
       u32 arrayOps[] = {arrayTypeId, baseTypeId, lengthConstId};
       EmitToSection(&typesConstants, spv::OpTypeArray, arrayOps, 3);
 
-      // Calculate element stride for std140 layout (aligned to 16 bytes)
-      u32 fieldSize = 0;
-      if ((fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM) &&
-          ir->structFieldTypeHashes) {
-        // For custom structs, use totalSize from IR
-        u32 fieldTypeHash =
-            ir->structFieldTypeHashes[structInfo->fieldOffset + i];
-        if (fieldTypeHash != 0) {
-          for (u32 j = 0; j < ir->structTypeCount; j++) {
-            if (ir->structTypes[j].nameHash == fieldTypeHash) {
-              fieldSize = ir->structTypes[j].totalSize;
-              break;
-            }
-          }
-        }
-      }
-      if (fieldSize == 0) {
-        // Fall back to core type size
-        switch (fieldType) {
-        case CoreType::FLOAT:
-        case CoreType::INT:
-        case CoreType::UINT:
-        case CoreType::BOOL:
-          fieldSize = 4;
-          break;
-        case CoreType::FLOAT2:
-        case CoreType::INT2:
-        case CoreType::UINT2:
-          fieldSize = 8;
-          break;
-        case CoreType::FLOAT3:
-        case CoreType::INT3:
-        case CoreType::UINT3:
-          fieldSize = 12;
-          break;
-        case CoreType::FLOAT4:
-        case CoreType::INT4:
-        case CoreType::UINT4:
-          fieldSize = 16;
-          break;
-        case CoreType::MAT2:
-          fieldSize = 32;
-          break;
-        case CoreType::MAT3:
-          fieldSize = 48;
-          break;
-        case CoreType::MAT4:
-          fieldSize = 64;
-          break;
-        default:
-          fieldSize = 4;
-          break;
-        }
-      }
-      // std430 layout: scalars and vec2 use natural stride, vec3+ rounds to 16
-      u32 stride;
-      if (fieldSize <= 8) {
-        stride = fieldSize; // Natural size for scalars (4) and vec2 (8)
-      } else {
-        stride = (fieldSize + 15) & ~15; // Round to 16 for vec3, vec4, mat
-      }
+      // Lowering laid the struct out (std430 or std140).
+      u32 stride = ir->structFieldArrayStrides
+                       ? ir->structFieldArrayStrides[structInfo->fieldOffset + i]
+                       : 16;
       u32 stride_val[] = {stride};
       EmitDecoration(arrayTypeId, spv::DecorationArrayStride, stride_val, 1);
 
@@ -223,9 +166,11 @@ u32 SPIRVBuilder::GetStructTypeId(u32 structTypeHash) {
       // Emit ColMajor decoration (no value)
       u32 col_major_ops[] = {struct_type_id, i, spv::DecorationColMajor};
       EmitToSection(&decorations, spv::OpMemberDecorate, col_major_ops, 3);
-      // Emit MatrixStride decoration (16 bytes per column for std140)
+      // A mat2 column is 8 bytes apart in std430, 16 in std140; wider
+      // columns are 16 apart in both.
+      u32 matrixStride = fieldType == CoreType::MAT2 && !structInfo->std140 ? 8 : 16;
       u32 matrix_stride_ops[] = {struct_type_id, i, spv::DecorationMatrixStride,
-                                 16};
+                                 matrixStride};
       EmitToSection(&decorations, spv::OpMemberDecorate, matrix_stride_ops, 4);
     }
 

@@ -205,6 +205,9 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   program.structFieldArraySizes =
       (u32 *)pool->Allocate(fieldCapacity * sizeof(u32), 64);
   memset(program.structFieldArraySizes, 0, fieldCapacity * sizeof(u32));
+  program.structFieldArrayStrides =
+      (u32 *)pool->Allocate(fieldCapacity * sizeof(u32), 64);
+  memset(program.structFieldArrayStrides, 0, fieldCapacity * sizeof(u32));
   memset(program.structFieldTypeHashes, 0, fieldCapacity * sizeof(u32));
   program.structFieldBounds = (const DeclaredBounds **)pool->Allocate(
       fieldCapacity * sizeof(const DeclaredBounds *), 64);
@@ -286,6 +289,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   structTypeMap.clear();
   variableStructTypes.clear();
   pointerProblems.clear();
+  ComputeStd140Structs();
   nonLocalAddresses.clear();
   controlDepth = 0;
   variableDepth.clear();

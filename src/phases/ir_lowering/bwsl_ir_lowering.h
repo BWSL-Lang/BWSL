@@ -644,6 +644,17 @@ struct IRLowering {
   // The struct type `typeHash` is, or holds at any depth, with no fields;
   // 0 when there is none.
   u32 FindEmptyStruct(u32 typeHash, u32 depth = 0);
+  // Buffer layout. Structs reachable from a uniform use std140 rules, and
+  // so does any struct holding one, so a block never mixes the two; the
+  // rest use std430, which is also WGSL's storage layout. Keyed by the
+  // struct's own (unqualified) name hash.
+  std::unordered_set<u32> std140Structs;
+  void ComputeStd140Structs();
+  // Lays out the fields of program.structTypes[structIdx], whose types are
+  // filled in: offsets, array strides, alignment and size.
+  void LayoutStructType(u32 structIdx);
+  // Size and alignment of one (non-array) value of `type` in a struct.
+  void FieldLayout(CoreType type, u32 typeHash, bool std140, u32 *size, u32 *align);
   std::unordered_set<u32> reportedEmptyStructResources;  // Resource name hashes
 
   bool FindStructField(u32 structTypeHash, u32 fieldNameHash,

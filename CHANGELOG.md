@@ -3,6 +3,15 @@
 ## unreleased
 
 ### Breaking changes
+- Struct data in storage buffers follows std430 and uniform structs follow
+  std140 (see "Buffer layout" in the language reference). A nested struct
+  was always 16-byte aligned and padded and a `buffer<Struct>` element was
+  rounded up to 16 bytes, while arrays inside structs used std430 strides;
+  the mix couldn't be expressed in GLSL or HLSL in many cases. Hosts writing
+  buffers by hand must follow the new rules: `buffer<Tag>` with
+  `struct Tag { float value; int count; }` is now 8 bytes per element, not
+  16, and a small struct after a scalar array or inside another struct may
+  move. A uniform struct's arrays now have 16-byte strides.
 - An enum member without a written value is the previous member's value
   plus one, or 0 for the first: `enum E : uint { A = 3, B, C = 7, D }` gives
   B = 4 and D = 8. Members were numbered by position, ignoring the values

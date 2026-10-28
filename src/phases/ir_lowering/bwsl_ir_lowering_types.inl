@@ -304,8 +304,7 @@ inline u32 IRLowering::RegisterStructTypeFromSymbol(u32 typeNameHash,
   }
   info.fieldOffset = fieldOffset;
 
-  // Calculate total size and copy field info (std140 layout)
-  u32 currentOffset = 0;
+  // Copy field info; LayoutStructType places the fields.
   for (u32 i = 0; i < structData.fields.count; i++) {
     if (fieldOffset + i >= program.structFieldCapacity)
       break;
@@ -319,54 +318,9 @@ inline u32 IRLowering::RegisterStructTypeFromSymbol(u32 typeNameHash,
                                                   : 0;
     program.structFieldArraySizes[fieldOffset + i] = field.arraySize;
     program.structFieldBounds[fieldOffset + i] = field.bounds;
-
-    // std140 alignment rules - for arrays, account for array length
-    u32 fieldSize = GetTypeSize(field.type.coreType);
-    u32 alignment = GetTypeAlignment(field.type.coreType);
-
-    // For CUSTOM types (nested structs), ensure nested struct is registered
-    // and get its size
-    if (field.type.coreType == CoreType::CUSTOM &&
-        field.type.customTypeHash != 0) {
-      // First, ensure the nested struct is registered (recursively)
-      auto it = structTypeMap.find(field.type.customTypeHash);
-      if (it == structTypeMap.end()) {
-        // Nested struct not registered yet - register it now
-        LookupOrRegisterStructType(field.type.customTypeHash);
-        it = structTypeMap.find(field.type.customTypeHash);
-      }
-
-      if (it != structTypeMap.end()) {
-        u32 nestedIdx = it->second;
-        fieldSize = program.structTypes[nestedIdx].totalSize;
-        // Struct alignment is max of its member alignments, minimum 16 for
-        // std140
-        alignment = 16;
-        // The struct is padded to its alignment, so the next member can't
-        // start inside it. Arrays keep their element stride below.
-        if (field.arraySize == 0) fieldSize = (fieldSize + 15) & ~15u;
-      }
-    }
-
-    currentOffset = (currentOffset + alignment - 1) & ~(alignment - 1);
-    program.structFieldByteOffsets[fieldOffset + i] = currentOffset;
-    if (field.arraySize > 0) {
-      // std430 layout: scalars and vec2 use natural stride, vec3+ rounds to
-      // 16
-      u32 arrayStride;
-      if (fieldSize <= 8) {
-        arrayStride = fieldSize; // Natural size for scalars (4) and vec2 (8)
-      } else {
-        arrayStride =
-            (fieldSize + 15) & ~15; // Round to 16 for vec3, vec4, mat
-      }
-      currentOffset += arrayStride * field.arraySize;
-    } else {
-      currentOffset += fieldSize;
-    }
   }
 
-  info.totalSize = currentOffset;
+  LayoutStructType(structIdx);
   return typeNameHash;
 }
 
@@ -389,8 +343,7 @@ inline u32 IRLowering::RegisterStructTypeFromData(u32 typeNameHash, StructData *
   }
   info.fieldOffset = fieldOffset;
 
-  // Calculate total size and copy field info
-  u32 currentOffset = 0;
+  // Copy field info; LayoutStructType places the fields.
   for (u32 i = 0; i < structData->fields.count; i++) {
     if (fieldOffset + i >= program.structFieldCapacity)
       break;
@@ -404,53 +357,9 @@ inline u32 IRLowering::RegisterStructTypeFromData(u32 typeNameHash, StructData *
                                                   : 0;
     program.structFieldArraySizes[fieldOffset + i] = field.arraySize;
     program.structFieldBounds[fieldOffset + i] = field.bounds;
-
-    u32 fieldSize = GetTypeSize(field.type.coreType);
-    u32 alignment = GetTypeAlignment(field.type.coreType);
-
-    // For CUSTOM types (nested structs), ensure nested struct is registered
-    // and get its size
-    if (field.type.coreType == CoreType::CUSTOM &&
-        field.type.customTypeHash != 0) {
-      // First, ensure the nested struct is registered (recursively)
-      auto it = structTypeMap.find(field.type.customTypeHash);
-      if (it == structTypeMap.end()) {
-        // Nested struct not registered yet - register it now
-        LookupOrRegisterStructType(field.type.customTypeHash);
-        it = structTypeMap.find(field.type.customTypeHash);
-      }
-
-      if (it != structTypeMap.end()) {
-        u32 nestedIdx = it->second;
-        fieldSize = program.structTypes[nestedIdx].totalSize;
-        // Struct alignment is max of its member alignments, minimum 16 for
-        // std140
-        alignment = 16;
-        // The struct is padded to its alignment, so the next member can't
-        // start inside it. Arrays keep their element stride below.
-        if (field.arraySize == 0) fieldSize = (fieldSize + 15) & ~15u;
-      }
-    }
-
-    currentOffset = (currentOffset + alignment - 1) & ~(alignment - 1);
-    program.structFieldByteOffsets[fieldOffset + i] = currentOffset;
-    if (field.arraySize > 0) {
-      // std430 layout: scalars and vec2 use natural stride, vec3+ rounds to
-      // 16
-      u32 arrayStride;
-      if (fieldSize <= 8) {
-        arrayStride = fieldSize; // Natural size for scalars (4) and vec2 (8)
-      } else {
-        arrayStride =
-            (fieldSize + 15) & ~15; // Round to 16 for vec3, vec4, mat
-      }
-      currentOffset += arrayStride * field.arraySize;
-    } else {
-      currentOffset += fieldSize;
-    }
   }
 
-  info.totalSize = currentOffset;
+  LayoutStructType(structIdx);
   return typeNameHash;
 }
 
@@ -487,7 +396,6 @@ IRLowering::RegisterBuiltinStructType(const StdLib::BuiltinStructType &builtin) 
     return 0;
   }
 
-  u32 currentOffset = 0;
   for (u32 i = 0; i < fieldCount; i++) {
     const CoreType fieldType = builtin.fields[i].type;
     u32 fieldNameHash = Utils::HashStr(builtin.fields[i].name);
@@ -498,14 +406,9 @@ IRLowering::RegisterBuiltinStructType(const StdLib::BuiltinStructType &builtin) 
     program.structFieldNameHashes[fieldOffset + i] = fieldNameHash;
     program.structFieldTypeHashes[fieldOffset + i] = 0;
     program.structFieldArraySizes[fieldOffset + i] = 0;
-
-    u32 alignment = GetTypeAlignment(fieldType);
-    currentOffset = (currentOffset + alignment - 1) & ~(alignment - 1);
-    program.structFieldByteOffsets[fieldOffset + i] = currentOffset;
-    currentOffset += GetTypeSize(fieldType);
   }
 
-  info.totalSize = currentOffset;
+  LayoutStructType(structIdx);
   return typeNameHash;
 }
 
@@ -671,6 +574,92 @@ inline u16 IRLowering::ReadEnumPayloadSlot(u16 receiver, u32 slot, CoreType type
     builder.EmitInstruction(OP_BITCAST, value, field);
   }
   return value;
+}
+
+inline void IRLowering::ComputeStd140Structs() {
+  std140Structs.clear();
+  if (!symbols) return;
+  std::vector<u32> pending;
+  for (u32 r = 0; r < symbols->resources.count; r++) {
+    const ResourceData &resource = symbols->resources[r];
+    if (resource.type == ResourceBinding::UniformBuffer && resource.structTypeHash != 0)
+      pending.push_back(resource.structTypeHash);
+  }
+  // Every struct a uniform reaches.
+  while (!pending.empty()) {
+    StructData *data = LookupStructDataByHash(pending.back());
+    pending.pop_back();
+    if (!data || !std140Structs.insert(data->name.nameHash).second) continue;
+    for (u32 f = 0; f < data->fields.count; f++) {
+      if (data->fields[f].type.coreType == CoreType::CUSTOM)
+        pending.push_back(data->fields[f].type.customTypeHash);
+    }
+  }
+}
+
+inline void IRLowering::FieldLayout(CoreType type, u32 typeHash, bool std140,
+                                    u32 *size, u32 *align) {
+  if (type == CoreType::CUSTOM && typeHash != 0) {
+    u32 nested = LookupOrRegisterStructType(typeHash);
+    auto it = structTypeMap.find(nested != 0 ? nested : typeHash);
+    if (it != structTypeMap.end()) {
+      const IRProgram::StructTypeInfo &info = program.structTypes[it->second];
+      *size = info.totalSize;
+      *align = info.alignment;
+      return;
+    }
+  }
+  if (mask(type) & TypeMasks::MATRIX_TYPES) {
+    // Columns are vectors: a mat2 column is 8-byte aligned in std430.
+    u32 columns = type == CoreType::MAT4 ? 4 : type == CoreType::MAT3 ? 3 : 2;
+    u32 stride = std140 || columns > 2 ? 16 : 8;
+    *size = columns * stride;
+    *align = stride;
+    return;
+  }
+  *size = GetTypeSize(type);
+  *align = GetTypeAlignment(type);
+}
+
+inline void IRLowering::LayoutStructType(u32 structIdx) {
+  const u32 fieldCount = program.structTypes[structIdx].fieldCount;
+  const u32 firstField = program.structTypes[structIdx].fieldOffset;
+  bool std140 = std140Structs.count(program.structTypes[structIdx].nameHash) != 0;
+  // Register nested structs first; one laid out with std140 makes this one
+  // std140 too.
+  for (u32 f = 0; f < fieldCount && firstField + f < program.structFieldCapacity; f++) {
+    u32 field = firstField + f;
+    if (program.structFieldTypes[field] != static_cast<u16>(CoreType::CUSTOM)) continue;
+    u32 nested = LookupOrRegisterStructType(program.structFieldTypeHashes[field]);
+    auto it = structTypeMap.find(nested);
+    if (it != structTypeMap.end() && program.structTypes[it->second].std140) std140 = true;
+  }
+  u32 offset = 0;
+  u32 structAlign = 4;
+  for (u32 f = 0; f < fieldCount && firstField + f < program.structFieldCapacity; f++) {
+    u32 field = firstField + f;
+    u32 size = 0;
+    u32 align = 4;
+    FieldLayout(static_cast<CoreType>(program.structFieldTypes[field]),
+                program.structFieldTypeHashes[field], std140, &size, &align);
+    u32 stride = 0;
+    if (program.structFieldArraySizes[field] != 0) {
+      // std140 rounds an array's element alignment and stride up to 16.
+      if (std140 && align < 16) align = 16;
+      stride = (size + align - 1) & ~(align - 1);
+      size = stride * program.structFieldArraySizes[field];
+    }
+    offset = (offset + align - 1) & ~(align - 1);
+    program.structFieldByteOffsets[field] = offset;
+    program.structFieldArrayStrides[field] = stride;
+    offset += size;
+    if (align > structAlign) structAlign = align;
+  }
+  if (std140 && structAlign < 16) structAlign = 16;
+  IRProgram::StructTypeInfo &info = program.structTypes[structIdx];
+  info.alignment = structAlign;
+  info.std140 = std140 ? 1 : 0;
+  info.totalSize = (offset + structAlign - 1) & ~(structAlign - 1);
 }
 
 inline u32 IRLowering::FindEmptyStruct(u32 typeHash, u32 depth) {
@@ -906,13 +895,10 @@ inline u32 IRLowering::RegisterEnumAsStructType(u32 enumNameHash, u32 enumIndex)
   }
 
   // Field 0: tag (int)
-  u32 currentOffset = 0;
   program.structFieldTypes[fieldOffset] = static_cast<u16>(CoreType::INT);
   program.structFieldNameHashes[fieldOffset] = Utils::HashStr("tag");
   program.structFieldTypeHashes[fieldOffset] = 0;
   program.structFieldArraySizes[fieldOffset] = 0;
-  program.structFieldByteOffsets[fieldOffset] = currentOffset;
-  currentOffset += 4; // int is 4 bytes
 
   // Fields 1..N: payload storage
   for (u32 i = 0; i < maxPayloadFieldCount; i++) {
@@ -929,24 +915,9 @@ inline u32 IRLowering::RegisterEnumAsStructType(u32 enumNameHash, u32 enumIndex)
         (fieldType == CoreType::CUSTOM) ? fieldTypeHash : 0;
     program.structFieldArraySizes[fIdx] = 0;
 
-    u32 fieldSize = GetTypeSize(fieldType);
-    u32 alignment = GetTypeAlignment(fieldType);
-    if (fieldType == CoreType::CUSTOM && fieldTypeHash != 0) {
-      u32 nestedHash = LookupOrRegisterStructType(fieldTypeHash);
-      auto nestedIt =
-          structTypeMap.find(nestedHash != 0 ? nestedHash : fieldTypeHash);
-      if (nestedIt != structTypeMap.end()) {
-        fieldSize = (program.structTypes[nestedIt->second].totalSize + 15) & ~15u;
-        alignment = 16;
-      }
-    }
-
-    currentOffset = (currentOffset + alignment - 1) & ~(alignment - 1);
-    program.structFieldByteOffsets[fIdx] = currentOffset;
-    currentOffset += fieldSize;
   }
 
-  info.totalSize = currentOffset;
+  LayoutStructType(structIdx);
   return enumNameHash;
 }
 

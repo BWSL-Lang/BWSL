@@ -1155,7 +1155,8 @@ void WGSLBuilder::MarkAccess(u32 reference, u8 access) {
 }
 
 // WGSL alignment and size of a storage-buffer member type.
-bool WGSLBuilder::StorageShape(CoreType type, u32 structType, u32& alignment, u32& size) {
+bool WGSLBuilder::StorageShape(CoreType type, u32 structType, u32& alignment, u32& size,
+                               bool std430Matrices) {
     if (type == CoreType::CUSTOM || type == CoreType::ENUM) {
         const u32 index = StructIndex(structType);
         if (index == InvalidId || !PrepareStorageStruct(index)) {
@@ -1169,7 +1170,12 @@ bool WGSLBuilder::StorageShape(CoreType type, u32 structType, u32& alignment, u3
         return Fail("WGSL storage buffers cannot hold bool, which is not host-shareable");
     }
     if (type == CoreType::MAT2) {
-        return Fail("WGSL mat2x2 has an 8-byte column stride; BWSL storage buffers use 16");
+        if (!std430Matrices) {
+            return Fail("WGSL mat2x2 has an 8-byte column stride; std140 structs and mat2 buffers use 16");
+        }
+        alignment = 8;
+        size = 16;
+        return true;
     }
     if (MatrixDimension(type) != 0) {
         alignment = 16;
@@ -1211,23 +1217,9 @@ bool WGSLBuilder::PrepareStorageStruct(u32 structId) {
     }
     storageStates[structId] = 1;
     const IR::IRProgram::StructTypeInfo& info = ir->structTypes[structId];
-    u32 structSize = (info.totalSize + 15) & ~15u;
+    // Lowering laid the struct out; its size includes the end padding.
+    const u32 structSize = info.totalSize;
     u32 structAlignment = 4;
-    if (info.totalSize <= 8) {
-        for (u32 field = 0; field < info.fieldCount; ++field) {
-            CoreType type = CoreType::INVALID;
-            u32 fieldStruct = 0;
-            u32 arrayLength = 0;
-            u32 alignment = 0;
-            u32 size = 0;
-            if (!FieldShape(info.nameHash, field, type, fieldStruct, arrayLength) ||
-                !StorageShape(type, fieldStruct, alignment, size)) {
-                return false;
-            }
-            structAlignment = std::max(structAlignment, alignment);
-        }
-        structSize = (info.totalSize + structAlignment - 1) & ~(structAlignment - 1);
-    }
     for (u32 field = 0; field < info.fieldCount; ++field) {
         CoreType type = CoreType::INVALID;
         u32 fieldStruct = 0;
@@ -1235,14 +1227,11 @@ bool WGSLBuilder::PrepareStorageStruct(u32 structId) {
         u32 alignment = 0;
         u32 size = 0;
         if (!FieldShape(info.nameHash, field, type, fieldStruct, arrayLength) ||
-            !StorageShape(type, fieldStruct, alignment, size)) {
+            !StorageShape(type, fieldStruct, alignment, size, info.std140 == 0)) {
             return false;
         }
         if (arrayLength != 0) {
-            // BWSL's array stride: natural up to 8 bytes, else 16-aligned.
-            const u32 bwslSize = type == CoreType::CUSTOM || type == CoreType::ENUM
-                ? ir->structTypes[StructIndex(fieldStruct)].totalSize : Width(type) * 4 + MatrixDimension(type) * 16;
-            const u32 bwslStride = bwslSize <= 8 ? bwslSize : (bwslSize + 15) & ~15u;
+            const u32 bwslStride = ir->structFieldArrayStrides[info.fieldOffset + field];
             const u32 stride = (size + alignment - 1) & ~(alignment - 1);
             if (stride != bwslStride) {
                 return Fail("WGSL cannot give a storage array field its BWSL stride");

@@ -385,8 +385,7 @@ void SPIRVBuilder::DeclareResources() {
               break;
             }
           }
-          // Align to 16 bytes (std430 alignment for structs)
-          structSize = (structSize + 15) & ~15;
+          // totalSize is already a multiple of the struct's alignment.
           u32 stride_ops[] = {runtime_array_type, spv::DecorationArrayStride,
                               structSize};
           EmitToSection(&decorations, spv::OpDecorate, stride_ops, 3);
