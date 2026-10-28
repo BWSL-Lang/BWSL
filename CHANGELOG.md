@@ -254,6 +254,9 @@
   two swapped: `atomic_cmp_exchange(x, 5, 100)` stored 5 when x was 100.
 
 ### Diagnostics
+- A positional struct constructor with the wrong number of arguments, as
+  in `A(b)` for a two-field `A`, or an argument of the wrong type, is a
+  source error. It failed SPIR-V validation. `A(a)` with an `A` copies it.
 - A constant index past a vector's components or a matrix's columns, as in
   `p[2]` on a `float2` or `m[3]` on a `mat2`, is a source error naming the
   type. A write compiled silently and a read failed SPIR-V validation.

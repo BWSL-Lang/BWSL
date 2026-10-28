@@ -1901,6 +1901,42 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
               fieldCount = program.structTypes[it->second].fieldCount;
             }
 
+            // `S(s)` with an S copies it.
+            if (argCount == 1 && GetRegisterType(args[0]) == CoreType::CUSTOM &&
+                IR::IsRegister(args[0]) &&
+                LookupOrRegisterStructType(program.registerStructTypes[args[0]]) ==
+                    structTypeHash) {
+              return args[0];
+            }
+            if (it != structTypeMap.end() && argCount != fieldCount) {
+              char msg[192];
+              snprintf(msg, sizeof(msg),
+                       "Error: struct %s constructor expects %u argument(s), "
+                       "got %u\n",
+                       ReverseLookup::GetString(structTypeHash).c_str(),
+                       fieldCount, argCount);
+              ReportErrorAt(ref, msg);
+              SetRegisterType(dest, CoreType::INVALID);
+              return dest;
+            }
+            if (it != structTypeMap.end()) {
+              const IRProgram::StructTypeInfo &info = program.structTypes[it->second];
+              for (u32 i = 0; i < argCount; i++) {
+                u32 field = info.fieldOffset + i;
+                CoreType fieldType = static_cast<CoreType>(program.structFieldTypes[field]);
+                NodeRef argument = i < call.arguments.count ? call.arguments[i] : NodeRef::Null();
+                if (program.structFieldArraySizes[field] == 0 &&
+                    !CheckStoreShape(argument, args[i], fieldType,
+                                     program.structFieldTypeHashes[field])) {
+                  SetRegisterType(dest, CoreType::INVALID);
+                  return dest;
+                }
+                if (program.structFieldArraySizes[field] == 0 &&
+                    fieldType != CoreType::CUSTOM && fieldType != CoreType::ENUM)
+                  args[i] = ConvertRegisterToType(args[i], fieldType);
+              }
+            }
+
             if (argCount <= 4 && fieldCount <= 4) {
               u16 op0 = argCount > 0 ? args[0] : 0xFFFF;
               u16 op1 = argCount > 1 ? args[1] : 0xFFFF;
