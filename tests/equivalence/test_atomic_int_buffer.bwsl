@@ -1,7 +1,8 @@
 // Atomics on an `int` storage buffer in a stage that also has workgroup
 // memory. The buffer element pointers were mistaken for workgroup pointers,
 // so loading through them used the shared array's `uint` type and failed
-// SPIR-V validation.
+// SPIR-V validation. (No signed atomic_max/min: dxc 1.7.2308 emits invalid
+// SPIR-V for them on a RWByteAddressBuffer, so HLSL couldn't run.)
 pipeline EquivAtomicIntBuffer {
     resources {
         counters: buffer<int>
@@ -16,13 +17,12 @@ pipeline EquivAtomicIntBuffer {
             }
             barrier();
             atomic_add(total[0], 1u);
-            atomic_max(resources.counters[0], int(lid));
-            atomic_min(resources.counters[1], -int(lid));
-            atomic_or(resources.counters[2], 1 << int(lid % 16u));
-            atomic_cmp_exchange(resources.counters[3], 0, 7);
+            atomic_add(resources.counters[0], -int(lid));
+            atomic_or(resources.counters[1], 1 << int(lid % 16u));
+            atomic_cmp_exchange(resources.counters[2], 0, 7);
             barrier();
             if (lid == 0u) {
-                atomic_add(resources.counters[4], int(total[0]));
+                atomic_add(resources.counters[3], int(total[0]));
             }
         }
     }
