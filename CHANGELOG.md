@@ -265,6 +265,9 @@
   two swapped: `atomic_cmp_exchange(x, 5, 100)` stored 5 when x was 100.
 
 ### Diagnostics
+- A storage buffer or uniform holding a struct with no fields, directly or
+  nested, is a source error at its first use. GLSL and Metal failed with
+  SPIRV-Cross layout errors.
 - A positional struct constructor with the wrong number of arguments, as
   in `A(b)` for a two-field `A`, or an argument of the wrong type, is a
   source error. It failed SPIR-V validation. `A(a)` with an `A` copies it.

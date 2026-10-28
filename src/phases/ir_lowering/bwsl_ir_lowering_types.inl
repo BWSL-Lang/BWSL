@@ -673,6 +673,18 @@ inline u16 IRLowering::ReadEnumPayloadSlot(u16 receiver, u32 slot, CoreType type
   return value;
 }
 
+inline u32 IRLowering::FindEmptyStruct(u32 typeHash, u32 depth) {
+  StructData *data = typeHash != 0 && depth < 32 ? LookupStructDataByHash(typeHash) : nullptr;
+  if (!data) return 0;
+  if (data->fields.count == 0) return typeHash;
+  for (u32 i = 0; i < data->fields.count; i++) {
+    const StructData::Field &field = data->fields[i];
+    if (field.type.coreType != CoreType::CUSTOM) continue;
+    if (u32 empty = FindEmptyStruct(field.type.customTypeHash, depth + 1)) return empty;
+  }
+  return 0;
+}
+
 inline bool IRLowering::FlattenEnumPayload(
     NodeRef node, u16 value, CoreType type, u32 typeHash,
     std::vector<std::pair<u16, CoreType>> &scalars) {

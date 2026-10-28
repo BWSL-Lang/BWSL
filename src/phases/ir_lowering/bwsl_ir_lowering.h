@@ -641,6 +641,10 @@ struct IRLowering {
   bool IsSumEnumTypeHash(u32 typeHash);
 
   StructData *LookupStructDataByHash(u32 typeHash);
+  // The struct type `typeHash` is, or holds at any depth, with no fields;
+  // 0 when there is none.
+  u32 FindEmptyStruct(u32 typeHash, u32 depth = 0);
+  std::unordered_set<u32> reportedEmptyStructResources;  // Resource name hashes
 
   bool FindStructField(u32 structTypeHash, u32 fieldNameHash,
                        u32 *outFieldIndex, CoreType *outFieldType = nullptr,

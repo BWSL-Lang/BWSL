@@ -1,0 +1,13 @@
+// Error case: a buffer element holding an empty struct. GLSL and Metal
+// failed with SPIRV-Cross layout errors and WGSL named an undeclared type.
+pipeline WrongAcceptEmptyStructInBuffer {
+    struct Empty { };
+    struct Particle { float mass; Empty tag; };
+    resources { particles: buffer<Particle> result: buffer<float> }
+    pass "Compute" {
+        use resources { particles, result }
+        compute "Main" [1, 1, 1] {
+            resources.result[0] = resources.particles[0].mass;
+        }
+    }
+}

@@ -2649,6 +2649,18 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       return 0;
 
     const ResourceData &resData = symbols->resources[sym->index];
+    // GLSL, Metal and WGSL have no empty structs to lay out in a buffer.
+    if ((resData.type == ResourceBinding::StorageBuffer ||
+         resData.type == ResourceBinding::UniformBuffer) &&
+        reportedEmptyStructResources.insert(access.member.nameHash).second) {
+      if (u32 empty = FindEmptyStruct(resData.structTypeHash)) {
+        std::string message = "Error: resources." + access.member.ToString() +
+                              " holds struct " + ReverseLookup::GetString(empty) +
+                              ", which has no fields; a buffer can't hold an "
+                              "empty struct, so give it a field or remove it\n";
+        ReportErrorAt(ref, message.c_str());
+      }
+    }
     u16 dest = AllocateRegister();
 
     switch (resData.type) {
