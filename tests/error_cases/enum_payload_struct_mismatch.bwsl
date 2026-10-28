@@ -1,5 +1,4 @@
-// Error case: an enum payload given a value of another struct type, or a
-// matrix of another size.
+// Error case: an enum payload given a value of another struct type.
 pipeline WrongAcceptEnumPayloadStructMismatch {
     struct A { float x; float y; };
     struct B { float2 v; };
@@ -18,8 +17,7 @@ pipeline WrongAcceptEnumPayloadStructMismatch {
             B b;
             b.v = float2(1.0, 2.0);
             Shape s = Shape::Point(b);
-            Shape t = Shape::Box(mat3(1.0));
-            resources.output[0] = s.size() + t.size();
+            resources.output[0] = s.size();
         }
     }
 }

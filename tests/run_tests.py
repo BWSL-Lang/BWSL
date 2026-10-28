@@ -467,6 +467,7 @@ ERROR_CASE_TESTS = {
     "vector_index_out_of_bounds.bwsl": "index 3 is out of bounds for mat2, which has 2 columns",
     "struct_store_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
     "struct_constructor_argument_count.bwsl": "struct A constructor expects 2 argument(s), got 1",
+    "enum_payload_matrix_mismatch.bwsl": "cannot implicitly convert mat3 to mat2; matrix sizes must match",
     "enum_payload_too_large.bwsl": "an enum variant's payload can hold at most 64 scalars",
     "eval_method_recursion.bwsl": "recursion is not supported",
     "vector_to_matrix.bwsl": "cannot implicitly convert float2 to mat2",
@@ -492,6 +493,15 @@ ERROR_CASE_EXTRA_EXPECTATIONS = {
     "varying_type_conflict.bwsl": ["varying_type_conflict.bwsl:15:"],
     # At the second pass's name, not the end of its block.
     "duplicate_pass_name.bwsl": ["duplicate_pass_name.bwsl:14:"],
+    # Both the vector and the matrix index are reported.
+    "vector_index_out_of_bounds.bwsl": ["index 2 is out of bounds for float2, which has 2 components"],
+    # Each store path reports at its own line.
+    "struct_store_type_mismatch.bwsl": [
+        "struct_store_type_mismatch.bwsl:9:",
+        "struct_store_type_mismatch.bwsl:21:",
+        "struct_store_type_mismatch.bwsl:22:",
+        "struct_store_type_mismatch.bwsl:23:",
+    ],
     "imported_module_diagnostic_file.bwsl": [
         "diagnostic_module_file_modules/Common.bwsl",
         "float4 transformations[9];",
