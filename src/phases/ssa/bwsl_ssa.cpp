@@ -794,7 +794,12 @@ void SSAConstructor::RenameBlock(u32 block, RenameState& state,
             (op >= IR::OP_AND && op <= IR::OP_PACK_SNORM4X8) || // Bitwise/packing
             (op >= IR::OP_FEQ && op <= IR::OP_UGE) ||       // Comparison
             (op >= IR::OP_SQRT && op <= IR::OP_FACEFORWARD) || // Math functions
+            (op >= IR::OP_MAT_MUL && op <= IR::OP_MAT_SCALE) || // Matrix operations
             op == IR::OP_TANH ||                            // Non-contiguous math function
+            op == IR::OP_IMG_STORE ||                       // Image store coordinate and texel
+            (op >= IR::OP_ATOMIC_ADD && op <= IR::OP_ATOMIC_CMP_XCHG) || // Atomic values
+            op == IR::OP_WAVE_MIN || op == IR::OP_WAVE_MAX ||
+            (op >= IR::OP_WAVE_ALL && op <= IR::OP_WAVE_MUL) || // Wave operations
             op == IR::OP_ANY || op == IR::OP_ALL ||         // Boolean vector reductions
             op == IR::OP_PACK_UNORM2X16 || op == IR::OP_UNPACK_UNORM2X16 ||
             op == IR::OP_PACK_SNORM2X16 || op == IR::OP_UNPACK_SNORM2X16 ||
