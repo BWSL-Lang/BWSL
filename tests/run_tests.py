@@ -466,6 +466,7 @@ ERROR_CASE_TESTS = {
     "storage_vector_index_out_of_bounds.bwsl": "array index 2 is out of bounds for array of length 2",
     "struct_assignment_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
     "storage_struct_field_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
+    "matrix_size_mismatch.bwsl": "cannot implicitly convert mat3 to mat2",
 }
 
 ERROR_CASE_MODULE_DIRS = {

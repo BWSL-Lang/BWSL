@@ -250,6 +250,8 @@
   two swapped: `atomic_cmp_exchange(x, 5, 100)` stored 5 when x was 100.
 
 ### Diagnostics
+- Assigning a matrix of another size, as in `mat2 m = big;` for a `mat3`,
+  is a source error. It failed SPIR-V validation.
 - Assigning or initializing with a value of another struct type, as in
   `A a = b;` for a `B b`, is a source error naming both structs. It failed
   SPIR-V validation.

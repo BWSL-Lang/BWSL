@@ -1286,6 +1286,15 @@ inline bool IRLowering::CheckStoreShape(NodeRef node, u16 valueReg,
     }
   }
   if (sourceType == targetType) return true;
+  if ((mask(sourceType) & TypeMasks::MATRIX_TYPES) &&
+      (mask(targetType) & TypeMasks::MATRIX_TYPES)) {
+    std::string message = "Error: cannot implicitly convert " +
+                           SourceTypeName(sourceType) + " to " +
+                           SourceTypeName(targetType) +
+                           "; matrix sizes must match\n";
+    ReportErrorAt(node, message.c_str());
+    return false;
+  }
   constexpr TypeMask vectors = TypeMasks::VECTOR_TYPES | TypeMasks::BOOL_VECTORS;
   constexpr TypeMask values = vectors | TypeMasks::SCALAR_TYPES;
   bool sourceVector = (mask(sourceType) & vectors) != 0;
