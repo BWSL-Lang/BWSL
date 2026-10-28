@@ -86,7 +86,12 @@
 ### Backends
 - Experimental native WGSL output is available with `-wgsl` for compute,
   vertex and fragment shaders, including structured control flow, std140
-  uniforms and sampled textures. `-bindings` emits WebGPU binding metadata.
+  uniforms, sampled textures with texel offsets, storage image writes,
+  structs, enums with payloads, local arrays, pointers, storage buffers of
+  structs and matrices, workgroup memory, barriers and atomics. Wave
+  operations use WGSL's `subgroups` extension, which the host must enable
+  on its device. `-bindings` emits WebGPU binding metadata, including the
+  device features a shader requires.
   WGSL-only compilation bypasses SPIR-V; request `-spv` or another target
   alongside `-wgsl` to generate both. `-all` keeps its existing targets.
   Texture arrays (`texture2D[N]` and the other sampled kinds) bind each
