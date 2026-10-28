@@ -17,6 +17,19 @@ enum class ValueKind : u8 {
     StorageRoot,
     StorageElement,
     UniformAddress,
+    Reference, // A path into a variable: its parent plus one accessor
+};
+
+// How a Reference value reaches into its parent.
+enum class Accessor : u8 {
+    Whole,
+    Field,
+    Index,
+};
+
+// Flags of a value that lives in a WGSL variable rather than a let.
+enum VariableFlags : u8 {
+    VariableMutable = 1,   // Assigned more than once or through pointers
 };
 
 enum ResourceAccess : u8 {
@@ -37,6 +50,11 @@ struct ValueTable {
     u32* useInstructions = nullptr; // Single-use consumer, for bounded deferral
     u8* inlineDepths = nullptr; // Zero materializes; nonzero bounds expression depth
     u8* functionScope = nullptr; // Phi/cross-block values; other values stay local
+    u32* structTypes = nullptr; // Struct type hash of CUSTOM/ENUM values
+    u32* arrayLengths = nullptr; // Nonzero for fixed-size array values
+    u32* parents = nullptr; // Reference values: the value they reach into
+    u8* accessors = nullptr; // Reference values: Accessor into the parent
+    u8* variables = nullptr; // VariableFlags
     u32 count = 0;
 };
 
@@ -208,6 +226,8 @@ private:
     const SymbolTableData* symbols = nullptr;
     ShaderStage stage = ShaderStage::Compute;
     u32* registerToValue = nullptr;
+    u8* registerFlags = nullptr; // RegisterFlags, by register
+    u32 lastDefined = InvalidId; // Value set by the latest DefineValue
     u32 resourceForSlot[32] = {};
     u32 uniformForSlot[32] = {};
     u32 textureForSlot[32] = {};
@@ -237,6 +257,8 @@ private:
     bool PrepareTextureInstruction(u32 instruction);
     bool WriteUniformOffset(TextWriter& writer, u32 value);
     bool WriteUniformLoad(TextWriter& writer, u32 value);
+    bool WriteUniformValue(TextWriter& writer, u32 value, CoreType type, u32 structHash,
+                           u32 arrayLength, u32 extraBytes);
     bool WriteTextureExpression(TextWriter& writer, u32 instruction);
     bool WriteTextureOffset(TextWriter& writer, u16 operand, u32 width);
     bool WriteAdditionalResources(TextWriter& writer);
@@ -272,7 +294,23 @@ private:
     bool ValueId(u16 reg, u32& valueId);
     bool NumericOperand(u16 operand, CoreType& type);
     bool RequireIndex(u16 operand);
-    bool DefineValue(u32 instruction, CoreType type, ValueKind kind);
+    // structType InvalidId takes the result register's struct type.
+    bool DefineValue(u32 instruction, CoreType type, ValueKind kind,
+                     u32 structType = InvalidId, u32 arrayLength = 0);
+    u32 NewValue(u16 reg, CoreType type, u32 structType, u32 arrayLength, ValueKind kind);
+    void CopyValueShape(u32 target, u32 source);
+    u32 StructIndex(u32 structHash) const;
+    bool FieldShape(u32 structHash, u32 field, CoreType& type, u32& structType, u32& arrayLength);
+    bool PrepareRegisters();
+    bool PrepareMemoryInstruction(u32 instruction, bool& handled);
+    bool PrepareStructInstruction(u32 instruction, bool& handled);
+    bool WriteFullType(TextWriter& writer, CoreType type, u32 structType, u32 arrayLength);
+    bool WriteValueType(TextWriter& writer, u32 valueId);
+    bool WriteReference(TextWriter& writer, u32 valueId);
+    bool WriteStructDeclarations(TextWriter& writer);
+    bool WriteMemoryInstruction(TextWriter& writer, u32 instruction, bool& handled);
+    bool WriteStructExpression(TextWriter& writer, u32 instruction, u32 valueId, bool& handled);
+    bool IsMutable(u16 operand) const;
 };
 
 } // namespace WGSL

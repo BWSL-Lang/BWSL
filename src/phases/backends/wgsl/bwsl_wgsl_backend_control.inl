@@ -135,20 +135,15 @@ bool WGSLBuilder::PrepareControl() {
         const u32 block = ir->phiBlockIndices[phi];
         const u16 reg = ir->phiResultRegs[phi];
         const CoreType type = static_cast<CoreType>(ir->phiTypes[phi]);
+        const u32 structType = (type == CoreType::CUSTOM || type == CoreType::ENUM) && reg < ir->registerCount &&
+            ir->registerStructTypes != nullptr ? ir->registerStructTypes[reg] : 0;
         if (block >= blocks || reg >= ir->registerCount || reg >= IR::RegisterLimit ||
-            registerToValue[reg] != InvalidId || Width(type) == 0) {
+            registerToValue[reg] != InvalidId ||
+            (Width(type) == 0 && MatrixDimension(type) == 0 && StructIndex(structType) == InvalidId)) {
             return Fail("WGSL phi has an invalid block, register or type");
         }
         ++control.phiOffsets[block + 1];
-        const u32 value = values.count++;
-        registerToValue[reg] = value;
-        values.types[value] = static_cast<u16>(type);
-        values.producerInstructions[value] = InvalidId;
-        values.kinds[value] = static_cast<u8>(ValueKind::Value);
-        values.resourceIds[value] = InvalidId;
-        values.indexOperands[value] = 0xFFFF;
-        values.aliasOperands[value] = reg;
-        valueOrigins.registers[value] = reg;
+        NewValue(reg, type, structType, 0, ValueKind::Value);
     }
     for (u32 block = 1; block <= blocks; ++block) {
         control.phiOffsets[block] += control.phiOffsets[block - 1];

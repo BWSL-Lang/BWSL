@@ -88,13 +88,13 @@ static void TestVectorStride() {
 }
 
 static void TestInvalidIRHasNoOutput() {
+    // A register SSA left with two definitions is one WGSL variable.
     WGSLFixture duplicate;
     duplicate.Add(IR::OP_LOAD_CONST, 1, CoreType::UINT, IR::MakeUintConstant(0));
     duplicate.Add(IR::OP_LOAD_CONST, 1, CoreType::UINT, IR::MakeUintConstant(1));
-    assert(!duplicate.builder.Emit());
-    assert(std::strstr(duplicate.builder.Error(), "SSA") != nullptr);
-    assert(duplicate.builder.ErrorInstruction() == 1);
-    assert(duplicate.builder.Source().empty());
+    assert(duplicate.builder.Emit());
+    assert(duplicate.builder.Source().find("var v0: u32;") != std::string_view::npos);
+    assert(duplicate.builder.Source().find("v0 = 7u;") != std::string_view::npos);
 
     WGSLFixture undefined;
     undefined.Add(IR::OP_LOAD_REG, 2, CoreType::UINT, 7);

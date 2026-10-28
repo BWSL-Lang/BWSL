@@ -245,7 +245,7 @@ bool WGSLBuilder::PrepareUniformInstruction(u32 instruction, bool& handled) {
         if (!DefineValue(instruction, type, address ? ValueKind::UniformAddress : ValueKind::Value)) {
             return false;
         }
-        const u32 value = values.count - 1;
+        const u32 value = lastDefined;
         values.resourceIds[value] = uniform;
         uniformAddresses.lengths[value] = uniforms.arrayLengths[uniform];
         uniformAddresses.structTypes[value] = uniforms.structTypes[uniform];
@@ -255,7 +255,9 @@ bool WGSLBuilder::PrepareUniformInstruction(u32 instruction, bool& handled) {
                        opcode == IR::OP_STRUCT_ARRAY_EXTRACT;
     const bool index = opcode == IR::OP_STORAGE_INDEX || opcode == IR::OP_ARRAY_LOAD;
     const bool load = opcode == IR::OP_STORAGE_LOAD;
-    if (!(field || index || load || IsCopy(opcode)) || IR::IsConstant(first) ||
+    // A copy into a variable loads the whole value; see the memory shard.
+    if ((IsCopy(opcode) && (registerFlags[destination] & RegisterVariable)) ||
+        !(field || index || load || IsCopy(opcode)) || IR::IsConstant(first) ||
         first >= ir->registerCount || registerToValue[first] == InvalidId ||
         values.kinds[registerToValue[first]] != static_cast<u8>(ValueKind::UniformAddress)) {
         handled = false;
@@ -302,7 +304,7 @@ bool WGSLBuilder::PrepareUniformInstruction(u32 instruction, bool& handled) {
     if (!DefineValue(instruction, type, address ? ValueKind::UniformAddress : ValueKind::Value)) {
         return false;
     }
-    const u32 value = values.count - 1;
+    const u32 value = lastDefined;
     values.resourceIds[value] = values.resourceIds[base];
     uniformAddresses.bases[value] = base;
     uniformAddresses.byteOffsets[value] = byteOffset;
@@ -337,11 +339,82 @@ bool WGSLBuilder::WriteUniformOffset(TextWriter& writer, u32 value) {
 
 bool WGSLBuilder::WriteUniformLoad(TextWriter& writer, u32 value) {
     const CoreType type = static_cast<CoreType>(values.types[value]);
+    if (values.kinds[value] == static_cast<u8>(ValueKind::UniformAddress)) {
+        return WriteUniformValue(writer, value, type, uniformAddresses.structTypes[value],
+                                 uniformAddresses.lengths[value], 0);
+    }
+    return WriteUniformValue(writer, value, type, 0, 0, 0);
+}
+
+// Loads `extraBytes` past the address `value`: a struct field by field
+// and an array element by element, from the uniform's std140 words.
+bool WGSLBuilder::WriteUniformValue(TextWriter& writer, u32 value, CoreType type, u32 structHash,
+                                    u32 arrayLength, u32 extraBytes) {
+    if (arrayLength != 0) {
+        const u32 stride = (UniformTypeSize(type, structHash) + 15) & ~15u;
+        if (!WriteFullType(writer, type, structHash, arrayLength)) {
+            return false;
+        }
+        writer.Text("(");
+        for (u32 element = 0; element < arrayLength; ++element) {
+            writer.Text(element != 0 ? ", " : "");
+            if (!WriteUniformValue(writer, value, type, structHash, 0, extraBytes + element * stride)) {
+                return false;
+            }
+        }
+        writer.Text(")");
+        return true;
+    }
+    if (type == CoreType::CUSTOM) {
+        const u32 structId = StructIndex(structHash);
+        if (structId == InvalidId || !PrepareUniformLayout(structId)) {
+            return Fail("WGSL uniform struct is missing its layout");
+        }
+        if (!WriteFullType(writer, type, structHash, 0)) {
+            return false;
+        }
+        writer.Text("(");
+        const IR::IRProgram::StructTypeInfo& info = ir->structTypes[structId];
+        for (u32 member = 0; member < info.fieldCount; ++member) {
+            const u32 field = info.fieldOffset + member;
+            writer.Text(member != 0 ? ", " : "");
+            CoreType fieldType = CoreType::INVALID;
+            u32 fieldStruct = 0;
+            u32 fieldLength = 0;
+            if (!FieldShape(structHash, member, fieldType, fieldStruct, fieldLength)) {
+                return false;
+            }
+            // A field array's stride comes from the field's own layout.
+            if (fieldLength != 0) {
+                if (!WriteFullType(writer, fieldType, fieldStruct, fieldLength)) {
+                    return false;
+                }
+                writer.Text("(");
+                for (u32 element = 0; element < fieldLength; ++element) {
+                    writer.Text(element != 0 ? ", " : "");
+                    if (!WriteUniformValue(writer, value, fieldType, fieldStruct, 0,
+                                           extraBytes + uniformLayouts.offsets[field] +
+                                           element * uniformLayouts.strides[field])) {
+                        return false;
+                    }
+                }
+                writer.Text(")");
+            } else if (!WriteUniformValue(writer, value, fieldType, fieldStruct, 0,
+                                          extraBytes + uniformLayouts.offsets[field])) {
+                return false;
+            }
+        }
+        writer.Text(")");
+        return true;
+    }
     const bool matrix = type >= CoreType::MAT2 && type <= CoreType::MAT4;
     const u32 columns = matrix ? static_cast<u32>(type) - static_cast<u32>(CoreType::MAT2) + 2 : 1;
     const u32 width = matrix ? columns : Width(type);
     const CoreType scalar = matrix ? CoreType::FLOAT : Scalar(type);
-    u32 staticOffset = 0;
+    if (width == 0) {
+        return Fail("WGSL uniform value has an unsupported type");
+    }
+    u32 staticOffset = extraBytes;
     for (u32 address = value; address != InvalidId; address = uniformAddresses.bases[address]) {
         staticOffset += uniformAddresses.byteOffsets[address];
         if ((uniformAddresses.strides[address] & 15u) != 0) {
@@ -370,6 +443,11 @@ bool WGSLBuilder::WriteUniformLoad(TextWriter& writer, u32 value) {
         writer.Text("[(");
         if (!WriteUniformOffset(writer, value)) {
             return false;
+        }
+        if (extraBytes / 4 != 0) {
+            writer.Text(" + ");
+            writer.Number(extraBytes / 4);
+            writer.Text("u");
         }
         writer.Text(") / 4u");
         if (column != 0) {

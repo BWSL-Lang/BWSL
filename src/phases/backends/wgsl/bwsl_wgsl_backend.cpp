@@ -382,6 +382,10 @@ u32 ValueOperandMask(u16 opcode, u32 metadata) {
         case IR::OP_LDEXP:
         case IR::OP_REFLECT: return 3;
         case IR::OP_IMG_STORE: return 6;
+        case IR::OP_LOCAL_LOAD: return 1;
+        case IR::OP_LOCAL_STORE: return 3;
+        case IR::OP_STRUCT_INSERT: return 5;
+        case IR::OP_STRUCT_ARRAY_INSERT: return 13;
         case IR::OP_REFRACT:
         case IR::OP_FACEFORWARD: return 7;
         case IR::OP_BITFIELD_EXTRACT: return 7;
@@ -417,7 +421,7 @@ bool HasResult(u16 opcode) {
     return opcode != IR::OP_NOP && opcode != IR::OP_RET &&
            opcode != IR::OP_STORE_OUTPUT && opcode != IR::OP_DISCARD &&
            opcode != IR::OP_ARRAY_STORE && opcode != IR::OP_LOCAL_STORE &&
-           opcode != IR::OP_IMG_STORE;
+           opcode != IR::OP_IMG_STORE && opcode != IR::OP_BARRIER && opcode != IR::OP_MEM_FENCE;
 }
 
 bool CanBroadcast(CoreType source, CoreType target) {
@@ -449,6 +453,8 @@ CoreType ComparisonOperandType(u16 opcode, CoreType left, u32 width) {
 }
 
 } // namespace
+
+#include "bwsl_wgsl_backend_memory.inl"
 
 const char* InterfaceBuiltinName(InterfaceBuiltin builtin) {
     return BuiltinName(builtin);
@@ -626,34 +632,36 @@ bool WGSLBuilder::RequireIndex(u16 operand) {
     return true;
 }
 
-bool WGSLBuilder::DefineValue(u32 instruction, CoreType type, ValueKind kind) {
+bool WGSLBuilder::DefineValue(u32 instruction, CoreType type, ValueKind kind,
+                              u32 structType, u32 arrayLength) {
     u16 reg = ir->destinations[instruction];
     if (reg >= IR::RegisterLimit || reg >= ir->registerCount) {
         return Fail("WGSL result register is out of bounds");
     }
+    if (structType == InvalidId) {
+        structType = (type == CoreType::CUSTOM || type == CoreType::ENUM) && ir->registerStructTypes != nullptr
+            ? ir->registerStructTypes[reg] : 0;
+    }
+    if (registerFlags[reg] & RegisterVariable) {
+        // Every definition of a variable register assigns its one var.
+        const u32 id = registerToValue[reg];
+        if (kind != ValueKind::Value || values.types[id] != static_cast<u16>(type) ||
+            values.structTypes[id] != structType || values.arrayLengths[id] != arrayLength) {
+            return Fail("WGSL assignment changes the type of a local variable");
+        }
+        lastDefined = id;
+        return true;
+    }
     if (registerToValue[reg] != InvalidId) {
         return Fail("WGSL backend requires SSA: result register has multiple definitions");
     }
-    if (Width(type) == 0 && !(type >= CoreType::MAT2 && type <= CoreType::MAT4) &&
+    const bool aggregate = (type == CoreType::CUSTOM || type == CoreType::ENUM) && StructIndex(structType) != InvalidId;
+    if (Width(type) == 0 && MatrixDimension(type) == 0 && !aggregate &&
         !(kind == ValueKind::UniformAddress && type == CoreType::CUSTOM)) {
         return Fail("WGSL value type is unsupported");
     }
-    u32 id = values.count++;
-    registerToValue[reg] = id;
-    values.types[id] = static_cast<u16>(type);
+    const u32 id = NewValue(reg, type, structType, arrayLength, kind);
     values.producerInstructions[id] = instruction;
-    values.kinds[id] = static_cast<u8>(kind);
-    values.resourceIds[id] = InvalidId;
-    values.indexOperands[id] = 0xFFFF;
-    values.aliasOperands[id] = reg;
-    valueOrigins.registers[id] = reg;
-    if (uniforms.count != 0) {
-        uniformAddresses.bases[id] = InvalidId;
-        uniformAddresses.byteOffsets[id] = 0;
-        uniformAddresses.strides[id] = 0;
-        uniformAddresses.lengths[id] = 0;
-        uniformAddresses.structTypes[id] = 0;
-    }
     return true;
 }
 
@@ -929,6 +937,12 @@ bool WGSLBuilder::Prepare() {
     const u32 registerMapCount = ir->registerCount < IR::RegisterLimit
         ? ir->registerCount : IR::RegisterLimit;
     registerToValue = static_cast<u32*>(Allocate(registerMapCount, sizeof(u32)));
+    if (!PrepareRegisters()) {
+        return false;
+    }
+    for (u32 reg = 0; reg < registerMapCount; ++reg) {
+        definitionCount += (registerFlags[reg] & RegisterVariable) != 0;
+    }
     if (definitionCount != 0) {
         values.types = static_cast<u16*>(Allocate(definitionCount, sizeof(u16)));
         values.producerInstructions = static_cast<u32*>(Allocate(definitionCount, sizeof(u32)));
@@ -940,6 +954,11 @@ bool WGSLBuilder::Prepare() {
         values.useInstructions = static_cast<u32*>(Allocate(definitionCount, sizeof(u32)));
         values.inlineDepths = static_cast<u8*>(Allocate(definitionCount, sizeof(u8)));
         values.functionScope = static_cast<u8*>(Allocate(definitionCount, sizeof(u8)));
+        values.structTypes = static_cast<u32*>(Allocate(definitionCount, sizeof(u32)));
+        values.arrayLengths = static_cast<u32*>(Allocate(definitionCount, sizeof(u32)));
+        values.parents = static_cast<u32*>(Allocate(definitionCount, sizeof(u32)));
+        values.accessors = static_cast<u8*>(Allocate(definitionCount, sizeof(u8)));
+        values.variables = static_cast<u8*>(Allocate(definitionCount, sizeof(u8)));
         valueOrigins.registers = static_cast<u16*>(Allocate(definitionCount, sizeof(u16)));
         if (uniforms.count != 0) {
             uniformAddresses.bases = static_cast<u32*>(Allocate(definitionCount, sizeof(u32)));
@@ -958,21 +977,41 @@ bool WGSLBuilder::Prepare() {
     // Undefined SSA temporaries may arise from an unobserved inlined-return
     // path. WGSL's typed zero is one valid choice for the IR's undefined value.
     // Stage output reads retain the separate definite-assignment check.
+    for (u32 reg = 0; reg < registerMapCount; ++reg) {
+        if (!(registerFlags[reg] & RegisterVariable)) {
+            continue;
+        }
+        CoreType type = static_cast<CoreType>(ir->registerTypes[reg]);
+        u32 structType = (type == CoreType::CUSTOM || type == CoreType::ENUM) && ir->registerStructTypes != nullptr
+            ? ir->registerStructTypes[reg] : 0;
+        u32 arrayLength = 0;
+        for (u32 array = 0; array < ir->localArrayCount; ++array) {
+            if (ir->localArrayRegisters[array] == reg) {
+                type = static_cast<CoreType>(ir->localArrayTypes[array]);
+                structType = ir->localArrayStructTypes != nullptr ? ir->localArrayStructTypes[array] : 0;
+                arrayLength = ir->localArraySizes[array];
+            }
+        }
+        const bool aggregate = (type == CoreType::CUSTOM || type == CoreType::ENUM) && StructIndex(structType) != InvalidId;
+        if (Width(type) == 0 && MatrixDimension(type) == 0 && !aggregate) {
+            return Fail("WGSL local variable has an unsupported type");
+        }
+        const u32 value = NewValue(static_cast<u16>(reg), type, structType, arrayLength, ValueKind::Value);
+        values.variables[value] = VariableMutable;
+    }
     for (u32 index = 0; index < ir->undefRegCount; ++index) {
         const u16 reg = ir->undefRegs[index];
         const CoreType type = static_cast<CoreType>(ir->undefRegTypes[index]);
-        if (reg >= registerMapCount || registerToValue[reg] != InvalidId || Width(type) == 0) {
+        if (reg < registerMapCount && (registerFlags[reg] & RegisterVariable)) {
+            continue; // A variable starts zero-initialized.
+        }
+        const u32 structType = (type == CoreType::CUSTOM || type == CoreType::ENUM) && reg < registerMapCount &&
+            ir->registerStructTypes != nullptr ? ir->registerStructTypes[reg] : 0;
+        if (reg >= registerMapCount || registerToValue[reg] != InvalidId ||
+            (Width(type) == 0 && MatrixDimension(type) == 0 && StructIndex(structType) == InvalidId)) {
             return Fail("WGSL undefined SSA temporary has an invalid register or type");
         }
-        const u32 value = values.count++;
-        registerToValue[reg] = value;
-        values.types[value] = static_cast<u16>(type);
-        values.producerInstructions[value] = InvalidId;
-        values.kinds[value] = static_cast<u8>(ValueKind::Value);
-        values.resourceIds[value] = InvalidId;
-        values.indexOperands[value] = 0xFFFF;
-        values.aliasOperands[value] = reg;
-        valueOrigins.registers[value] = reg;
+        NewValue(reg, type, structType, 0, ValueKind::Value);
     }
     if (structured && !PrepareControl()) {
         return false;
@@ -1020,6 +1059,13 @@ u32 WGSLBuilder::OperandMask(u32 instruction) const {
     if (opcode == IR::OP_VEC_CONSTRUCT) {
         return (1u << VectorArgumentCount(instruction)) - 1;
     }
+    if (opcode == IR::OP_STRUCT_CONSTRUCT) {
+        const u16 destination = ir->destinations[instruction];
+        const u32 index = destination < ir->registerCount && ir->registerStructTypes != nullptr
+            ? StructIndex(ir->registerStructTypes[destination]) : InvalidId;
+        const u32 fields = index != InvalidId ? ir->structTypes[index].fieldCount : 0;
+        return fields <= 4 ? (1u << fields) - 1 : 0;
+    }
     return ValueOperandMask(opcode, ir->metadata[instruction]);
 }
 
@@ -1047,6 +1093,19 @@ void WGSLBuilder::CountUse(u16 operand, u32 count) {
             CountUse(values.indexOperands[value]);
             return;
         }
+        if (kind == ValueKind::Reference) {
+            // A pointer is written as its path wherever it is used.
+            for (u32 node = value; node != InvalidId; node = values.parents[node]) {
+                if (values.kinds[node] != static_cast<u8>(ValueKind::Reference)) {
+                    CountUse(valueOrigins.registers[node]);
+                    break;
+                }
+                if (static_cast<Accessor>(values.accessors[node]) == Accessor::Index) {
+                    CountUse(values.indexOperands[node]);
+                }
+            }
+            return;
+        }
         if (kind == ValueKind::UniformAddress) {
             for (u32 address = value; address != InvalidId; address = uniformAddresses.bases[address]) {
                 if (values.indexOperands[address] != 0xFFFF) {
@@ -1069,7 +1128,8 @@ void WGSLBuilder::PlanExpressions() {
         values.useCounts[value] = 0;
         values.useInstructions[value] = InvalidId;
         values.inlineDepths[value] = 0;
-        values.functionScope[value] = structured && values.producerInstructions[value] == InvalidId ? 1 : 0;
+        values.functionScope[value] = (structured && values.producerInstructions[value] == InvalidId) ||
+                                      values.variables[value] != 0;
     }
     for (u32 instruction = 0; instruction < ir->instructionCount; ++instruction) {
         currentInstruction = instruction;
@@ -1135,7 +1195,10 @@ void WGSLBuilder::PlanExpressions() {
         if (values.useCounts[value] != 1 || mask == 0 ||
             values.kinds[value] != static_cast<u8>(ValueKind::Value) ||
             opcode == IR::OP_ARRAY_LOAD || opcode == IR::OP_STORAGE_LOAD || opcode == IR::OP_VEC_INSERT ||
-            opcode == IR::OP_VEC_INSERT_DYNAMIC) {
+            opcode == IR::OP_VEC_INSERT_DYNAMIC || opcode == IR::OP_LOCAL_LOAD ||
+            opcode == IR::OP_STRUCT_INSERT || opcode == IR::OP_STRUCT_ARRAY_INSERT ||
+            (opcode == IR::OP_SELECT && IsAggregate(static_cast<CoreType>(values.types[value]),
+                                                     values.arrayLengths[value]))) {
             continue;
         }
         // Preserve distant vector accumulations at their original evaluation
@@ -1153,6 +1216,8 @@ void WGSLBuilder::PlanExpressions() {
             if (IR::IsConstant(operand)) continue;
             operand = values.aliasOperands[registerToValue[operand]];
             if (!IR::IsConstant(operand)) {
+                // A variable read stays where the variable has this value.
+                if (values.variables[registerToValue[operand]] != 0) depth = 255;
                 const u32 childDepth = values.inlineDepths[registerToValue[operand]];
                 if (childDepth + 1 > depth) depth = childDepth + 1;
             }
@@ -1189,6 +1254,16 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
             return true;
         }
     }
+    {
+        bool handled = false;
+        if (!PrepareMemoryInstruction(instruction, handled) ||
+            (!handled && !PrepareStructInstruction(instruction, handled))) {
+            return false;
+        }
+        if (handled) {
+            return true;
+        }
+    }
     if (IsSampledTextureOpcode(opcode)) {
         return PrepareTextureInstruction(instruction);
     }
@@ -1214,7 +1289,7 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
         if (!DefineValue(instruction, element, ValueKind::StorageRoot)) {
             return false;
         }
-        values.resourceIds[values.count - 1] = resource;
+        values.resourceIds[lastDefined] = resource;
         return true;
     }
     if (IsCopy(opcode) && !IR::IsConstant(first)) {
@@ -1228,7 +1303,7 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
             if (!DefineValue(instruction, element, kind)) {
                 return false;
             }
-            u32 result = values.count - 1;
+            u32 result = lastDefined;
             values.resourceIds[result] = values.resourceIds[sourceId];
             values.indexOperands[result] = values.indexOperands[sourceId];
             return true;
@@ -1246,7 +1321,7 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
         if (!DefineValue(instruction, element, ValueKind::StorageElement)) {
             return false;
         }
-        u32 result = values.count - 1;
+        u32 result = lastDefined;
         values.resourceIds[result] = values.resourceIds[base];
         values.indexOperands[result] = second;
         return true;
@@ -1336,11 +1411,18 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
         if (type != sourceType) {
             return Fail("WGSL SSA copy changes type without an explicit conversion");
         }
-        if (!DefineValue(instruction, type, ValueKind::Value)) {
+        const u32 source = IR::IsConstant(first) ? InvalidId : registerToValue[first];
+        if (!DefineValue(instruction, type, ValueKind::Value,
+                         source != InvalidId ? values.structTypes[source] : 0,
+                         source != InvalidId ? values.arrayLengths[source] : 0)) {
             return false;
         }
-        values.aliasOperands[values.count - 1] = IR::IsConstant(first)
-            ? first : values.aliasOperands[registerToValue[first]];
+        // A copy of a variable takes its current value, so it is written
+        // out; other copies are the value they copy.
+        if (!(registerFlags[destination] & RegisterVariable) && !IsMutable(first)) {
+            values.aliasOperands[lastDefined] = IR::IsConstant(first)
+                ? first : values.aliasOperands[registerToValue[first]];
+        }
         return true;
     }
 
@@ -1747,8 +1829,14 @@ bool WGSLBuilder::WriteOperand(TextWriter& writer, u16 operand) {
         if (!IR::IsConstant(operand)) {
             const u32 valueId = registerToValue[operand];
             const u32 producer = values.producerInstructions[valueId];
+            if (values.variables[valueId] != 0) {
+                WriteValueName(writer, valueId);
+                return true;
+            }
             if (producer == InvalidId && !structured) {
-                WriteType(writer, type);
+                if (!WriteValueType(writer, valueId)) {
+                    return false;
+                }
                 writer.Text("()");
                 return true;
             }
@@ -1983,6 +2071,15 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
          opcode == IR::OP_STRUCT_ARRAY_EXTRACT || opcode == IR::OP_STORAGE_LOAD || opcode == IR::OP_ARRAY_LOAD)) {
         return WriteUniformLoad(writer, valueId);
     }
+    {
+        bool handled = false;
+        if (!WriteStructExpression(writer, instruction, valueId, handled)) {
+            return false;
+        }
+        if (handled) {
+            return true;
+        }
+    }
     if (opcode == IR::OP_MAT_MUL || opcode == IR::OP_MAT_VEC_MUL ||
         opcode == IR::OP_VEC_MAT_MUL || opcode == IR::OP_MAT_SCALE) {
         writer.Text("(");
@@ -2024,10 +2121,14 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
             writer.Number(outputForSlot[first]);
             return true;
         case IR::OP_STORAGE_LOAD:
-            return WriteStorageAddress(writer, registerToValue[first]);
+            return WriteReference(writer, registerToValue[first]);
         case IR::OP_ARRAY_LOAD: {
             u32 base = registerToValue[first];
-            if (values.kinds[base] == static_cast<u8>(ValueKind::Value)) {
+            if (values.kinds[base] == static_cast<u8>(ValueKind::Reference)) {
+                if (!WriteReference(writer, base)) {
+                    return false;
+                }
+            } else if (values.kinds[base] == static_cast<u8>(ValueKind::Value)) {
                 if (!WriteOperand(writer, first)) {
                     return false;
                 }
@@ -2339,11 +2440,26 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
 
 bool WGSLBuilder::WriteInstruction(TextWriter& writer, u32 instruction) {
     u16 opcode = ir->opcodes[instruction];
-    if (opcode == IR::OP_NOP) {
+    if (opcode == IR::OP_NOP || opcode == IR::OP_LOAD_INPUT || opcode == IR::OP_LOAD_ATTR) {
         return true;
     }
-    if (IsCopy(opcode) || opcode == IR::OP_LOAD_INPUT || opcode == IR::OP_LOAD_ATTR) {
-        return true;
+    {
+        bool handled = false;
+        if (!WriteMemoryInstruction(writer, instruction, handled)) {
+            return false;
+        }
+        if (handled) {
+            return true;
+        }
+    }
+    if (IsCopy(opcode)) {
+        // Only copies that are not aliases of their source are written.
+        const u16 copy = ir->destinations[instruction];
+        const u32 copyValue = copy < ir->registerCount ? registerToValue[copy] : InvalidId;
+        if (copyValue == InvalidId || values.kinds[copyValue] != static_cast<u8>(ValueKind::Value) ||
+            values.aliasOperands[copyValue] != copy) {
+            return true;
+        }
     }
     if (opcode == IR::OP_RET) {
         writer.Indent();
@@ -2409,7 +2525,7 @@ bool WGSLBuilder::WriteInstruction(TextWriter& writer, u32 instruction) {
     }
     bool insertion = opcode == IR::OP_VEC_INSERT || opcode == IR::OP_VEC_INSERT_DYNAMIC;
     writer.Indent();
-    if (!structured || !values.functionScope[valueId]) {
+    if (!values.functionScope[valueId]) {
         writer.Text(insertion ? "var " : "let ");
     }
     WriteValueName(writer, valueId);
@@ -2573,7 +2689,7 @@ static void WriteHelperFunctions(TextWriter& writer, u32 helpers) {
 }
 
 bool WGSLBuilder::WriteModule(TextWriter& writer) {
-    if (!WriteAdditionalResources(writer)) {
+    if (!WriteStructDeclarations(writer) || !WriteAdditionalResources(writer)) {
         return false;
     }
     WriteHelperFunctions(writer, helperFunctions);
@@ -2641,18 +2757,20 @@ bool WGSLBuilder::WriteModule(TextWriter& writer) {
     if (outputs.count != 0) {
         writer.Text("    var bwsl_output: BWSLOutput;\n");
     }
-    if (structured) {
-        for (u32 value = 0; value < values.count; ++value) {
-            if (values.kinds[value] != static_cast<u8>(ValueKind::Value) || !values.functionScope[value]) {
-                continue;
-            }
-            writer.Indent();
-            writer.Text("var ");
-            WriteValueName(writer, value);
-            writer.Text(": ");
-            WriteType(writer, static_cast<CoreType>(values.types[value]));
-            writer.Text(";\n");
+    for (u32 value = 0; value < values.count; ++value) {
+        if (values.kinds[value] != static_cast<u8>(ValueKind::Value) || !values.functionScope[value]) {
+            continue;
         }
+        writer.Indent();
+        writer.Text("var ");
+        WriteValueName(writer, value);
+        writer.Text(": ");
+        if (!WriteValueType(writer, value)) {
+            return false;
+        }
+        writer.Text(";\n");
+    }
+    if (structured) {
         std::memset(control.visited, 0, cfg->blockCount);
         if (!WriteRegion(writer, cfg->entryBlock, InvalidId, {}, 0)) {
             return false;
