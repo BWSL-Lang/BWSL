@@ -462,6 +462,7 @@ ERROR_CASE_TESTS = {
     "uniform_field_assignment.bwsl": "resources.params is read-only",
     "pointer_variable_to_shared.bwsl": "a pointer variable can't point to",
     "enum_payload_shape.bwsl": "cannot implicitly convert float3 to float",
+    "store_to_texture.bwsl": "store() writes to a storage image",
 }
 
 ERROR_CASE_MODULE_DIRS = {

@@ -952,6 +952,17 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
 
     OpCode op = OP_NOP;
 
+    // A sampled texture or a sampler is a handle too, but only a storage
+    // image can be written.
+    if (intrinsic == Intrinsic::STORE && argCount > 0 &&
+        GetResourceHandleType(call.arguments[0], args[0]) != CoreType::INVALID) {
+      ReportErrorAt(call.arguments[0],
+                    "Error: store() writes to a storage image; declare the "
+                    "resource as image2D\n");
+      SetRegisterType(dest, CoreType::INVALID);
+      return dest;
+    }
+
     switch (intrinsic) {
     case Intrinsic::ABS: {
       CoreType argType = GetRegisterType(args[0]);
