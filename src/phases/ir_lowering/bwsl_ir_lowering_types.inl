@@ -603,6 +603,12 @@ inline void IRLowering::AppendEnumPayloadLayout(CoreType type, u32 typeHash,
 
   CoreType scalarType = GetScalarComponentType(type);
   u32 componentCount = ScalarComponentCount(type);
+  // A matrix takes one float slot per element, column by column.
+  if (mask(type) & TypeMasks::MATRIX_TYPES) {
+    u32 columns = type == CoreType::MAT4 ? 4 : type == CoreType::MAT3 ? 3 : 2;
+    scalarType = CoreType::FLOAT;
+    componentCount = columns * columns;
+  }
   for (u32 c = 0; c < componentCount && fieldCount < maxFields; c++) {
     fieldTypes[fieldCount] = scalarType;
     fieldTypeHashes[fieldCount] = 0;
@@ -668,6 +674,118 @@ inline u16 IRLowering::ReadEnumPayloadSlot(u16 receiver, u32 slot, CoreType type
   } else {
     builder.EmitInstruction(OP_BITCAST, value, field);
   }
+  return value;
+}
+
+inline bool IRLowering::FlattenEnumPayload(
+    NodeRef node, u16 value, CoreType type, u32 typeHash,
+    std::vector<std::pair<u16, CoreType>> &scalars) {
+  if (type == CoreType::CUSTOM && typeHash != 0 && !IsSumEnumTypeHash(typeHash)) {
+    u32 structHash = LookupOrRegisterStructType(typeHash);
+    auto it = structTypeMap.find(structHash);
+    if (it == structTypeMap.end()) return true;
+    const IRProgram::StructTypeInfo info = program.structTypes[it->second];
+    for (u32 f = 0; f < info.fieldCount; f++) {
+      u32 slot = info.fieldOffset + f;
+      if (program.structFieldArraySizes[slot] != 0) {
+        ReportErrorAt(node, "Error: an enum payload struct can't have array "
+                            "fields; wrap the array in a separate variant\n");
+        return false;
+      }
+      CoreType fieldType = static_cast<CoreType>(program.structFieldTypes[slot]);
+      u32 fieldHash = program.structFieldTypeHashes[slot];
+      u16 field = AllocateRegister();
+      SetRegisterType(field, fieldType);
+      if (fieldType == CoreType::CUSTOM) {
+        u32 fieldStruct = LookupOrRegisterStructType(fieldHash);
+        program.registerStructTypes[field] = fieldStruct != 0 ? fieldStruct : fieldHash;
+      }
+      builder.EmitInstruction(OP_STRUCT_EXTRACT, field, value, static_cast<u16>(f));
+      program.metadata[builder.currentInstruction - 1] = structHash;
+      if (!FlattenEnumPayload(node, field, fieldType, fieldHash, scalars)) return false;
+    }
+    return true;
+  }
+  if (mask(type) & TypeMasks::MATRIX_TYPES) {
+    u32 columns = type == CoreType::MAT4 ? 4 : type == CoreType::MAT3 ? 3 : 2;
+    CoreType columnType = GetVectorType(CoreType::FLOAT, columns);
+    for (u32 c = 0; c < columns; c++) {
+      u16 column = AllocateRegister();
+      SetRegisterType(column, columnType);
+      builder.EmitInstruction(OP_ARRAY_LOAD, column, value, EmitConstantInt(c));
+      FlattenEnumPayload(node, column, columnType, 0, scalars);
+    }
+    return true;
+  }
+  u32 width = GetVectorDimension(type);
+  if (width > 1 && type != CoreType::CUSTOM && type != CoreType::ENUM) {
+    CoreType component = GetScalarComponentType(type);
+    for (u32 c = 0; c < width; c++) {
+      u16 scalar = AllocateRegister();
+      SetRegisterType(scalar, component);
+      builder.EmitInstruction(OP_VEC_EXTRACT, scalar, value, static_cast<u16>(c));
+      scalars.push_back({scalar, component});
+    }
+    return true;
+  }
+  scalars.push_back({value, type});
+  return true;
+}
+
+inline u16 IRLowering::ReadEnumPayloadValue(u16 receiver, u32 *slot, CoreType type,
+                                            u32 typeHash) {
+  if (type == CoreType::CUSTOM && typeHash != 0 && !IsSumEnumTypeHash(typeHash)) {
+    u32 structHash = LookupOrRegisterStructType(typeHash);
+    auto it = structTypeMap.find(structHash);
+    u16 current = AllocateRegister();
+    SetRegisterType(current, CoreType::CUSTOM);
+    program.registerStructTypes[current] = structHash;
+    AddUndefRegister(current, CoreType::CUSTOM);
+    if (it == structTypeMap.end()) return current;
+    const IRProgram::StructTypeInfo info = program.structTypes[it->second];
+    for (u32 f = 0; f < info.fieldCount; f++) {
+      u32 fieldSlot = info.fieldOffset + f;
+      u16 field = ReadEnumPayloadValue(
+          receiver, slot, static_cast<CoreType>(program.structFieldTypes[fieldSlot]),
+          program.structFieldTypeHashes[fieldSlot]);
+      u16 next = AllocateRegister();
+      SetRegisterType(next, CoreType::CUSTOM);
+      program.registerStructTypes[next] = structHash;
+      builder.EmitInstruction(OP_STRUCT_INSERT, next, current, static_cast<u16>(f), field);
+      program.metadata[builder.currentInstruction - 1] = structHash;
+      current = next;
+    }
+    return current;
+  }
+  if (type == CoreType::CUSTOM || type == CoreType::ENUM) {
+    // A nested sum enum is one aggregate slot.
+    u16 value = AllocateRegister();
+    SetRegisterType(value, type);
+    u32 structHash = LookupOrRegisterStructType(typeHash);
+    program.registerStructTypes[value] = structHash != 0 ? structHash : typeHash;
+    builder.EmitInstruction(OP_ENUM_FIELD, value, receiver, EmitConstantInt((*slot)++));
+    return value;
+  }
+  if (mask(type) & TypeMasks::MATRIX_TYPES) {
+    u32 columns = type == CoreType::MAT4 ? 4 : type == CoreType::MAT3 ? 3 : 2;
+    u16 parts[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+    for (u32 c = 0; c < columns; c++)
+      parts[c] = ReadEnumPayloadValue(receiver, slot, GetVectorType(CoreType::FLOAT, columns), 0);
+    u16 value = AllocateRegister();
+    SetRegisterType(value, type);
+    builder.EmitInstruction(OP_MAT_CONSTRUCT, value, parts[0], parts[1], parts[2], parts[3]);
+    program.metadata[builder.currentInstruction - 1] = columns;
+    return value;
+  }
+  u32 width = GetVectorDimension(type);
+  if (width < 2) return ReadEnumPayloadSlot(receiver, (*slot)++, type);
+  u16 parts[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+  for (u32 c = 0; c < width; c++)
+    parts[c] = ReadEnumPayloadSlot(receiver, (*slot)++, GetScalarComponentType(type));
+  u16 value = AllocateRegister();
+  SetRegisterType(value, type);
+  builder.EmitInstruction(OP_VEC_CONSTRUCT, value, parts[0], parts[1], parts[2], parts[3]);
+  program.metadata[builder.currentInstruction - 1] = width;
   return value;
 }
 

@@ -662,6 +662,14 @@ struct IRLowering {
                          u32 enumStructHash, u32 slot);
   // Reads payload slot `slot` of `receiver` as a `type` scalar.
   u16 ReadEnumPayloadSlot(u16 receiver, u32 slot, CoreType type);
+  // Struct and matrix payloads are flattened into scalar slots
+  // (AppendEnumPayloadLayout). Appends `value`'s scalars in slot order;
+  // reports at `node` and returns false for a struct with an array field,
+  // which the layout can't hold.
+  bool FlattenEnumPayload(NodeRef node, u16 value, CoreType type, u32 typeHash,
+                          std::vector<std::pair<u16, CoreType>> &scalars);
+  // Rebuilds a payload value of `type` from slots starting at `*slot`.
+  u16 ReadEnumPayloadValue(u16 receiver, u32 *slot, CoreType type, u32 typeHash);
 
   // Register an enum sum type as a struct in the IR.
   // Layout: { int tag; <flattened payload fields for the widest variant> }.

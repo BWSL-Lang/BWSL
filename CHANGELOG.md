@@ -31,6 +31,11 @@
   version.
 
 ### Language
+- A pattern arm can bind a struct payload, as in `Crate(box, w): box.size.x`;
+  it reported "binding flattened struct enum payloads is not supported
+  yet". Payloads holding nested structs or matrices (`Frame(mat2 basis)`)
+  keep their values; they failed SPIR-V validation or stored the wrong
+  slots. A payload struct with an array field is a source error.
 - A `return` inside an `if` or a loop in an `eval` arm's block ends the
   arm, as in `Flag(on, w): { if (on) { return w; } return -w; }`. It was
   lowered as a return from the shader's entry point and failed SPIR-V

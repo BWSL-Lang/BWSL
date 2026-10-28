@@ -370,28 +370,9 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
         u32 width = GetEnumPayloadFieldCount(type, hash);
         if (f < arm.bindings.count && arm.bindings[f].first.nameHash != Utils::HashStr("_")) {
           u32 name = arm.bindings[f].first.nameHash;
-          u16 value = AllocateRegister();
-          SetRegisterType(value, type);
-          if (width == 1 && type != CoreType::CUSTOM) {
-            value = ReadEnumPayloadSlot(receiver, payloadIndex, type);
-          } else if (width == 1 || (type == CoreType::CUSTOM && IsSumEnumTypeHash(hash))) {
-            builder.EmitInstruction(OP_ENUM_FIELD, value, receiver, EmitConstantInt(payloadIndex));
-            if (type == CoreType::CUSTOM) {
-              u32 structHash = LookupOrRegisterStructType(hash);
-              program.registerStructTypes[value] = structHash != 0 ? structHash : hash;
-              variableStructTypes[name] = program.registerStructTypes[value];
-            }
-          } else if (type != CoreType::CUSTOM && width <= 4) {
-            u16 components[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
-            for (u32 c = 0; c < width; ++c) {
-              components[c] = ReadEnumPayloadSlot(receiver, payloadIndex + c,
-                                                  GetScalarComponentType(type));
-            }
-            builder.EmitInstruction(OP_VEC_CONSTRUCT, value, components[0], components[1], components[2], components[3]);
-            program.metadata[builder.currentInstruction - 1] = width;
-          } else {
-            ReportError("Error: binding flattened struct enum payloads is not supported yet\n");
-          }
+          u32 slot = payloadIndex;
+          u16 value = ReadEnumPayloadValue(receiver, &slot, type, hash);
+          if (type == CoreType::CUSTOM) variableStructTypes[name] = program.registerStructTypes[value];
           variableRegisters[name] = value;
           constVariables.erase(name);
         }
@@ -572,6 +553,15 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         // scalar kind converts like an assignment, and slots shared with
         // another type hold its bits as floats.
         const EnumData::Variant &variant = enumData.variants[variantIndex];
+        // Struct and matrix payloads are written one scalar slot at a time.
+        bool flatten = false;
+        for (u32 i = 0; i < argCount; i++) {
+          CoreType type = variant.associatedTypes[i];
+          u32 hash = i < variant.associatedTypeHashes.count
+                         ? variant.associatedTypeHashes[i] : 0;
+          flatten |= (mask(type) & TypeMasks::MATRIX_TYPES) != 0 ||
+                     (type == CoreType::CUSTOM && hash != 0 && !IsSumEnumTypeHash(hash));
+        }
         u32 slot = 0;
         for (u32 i = 0; i < argCount; i++) {
           CoreType type = variant.associatedTypes[i];
@@ -582,13 +572,51 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
             return dest;
           }
           args[i] = ConvertRegisterToType(args[i], type);
-          args[i] = EnumPayloadToSlots(call.arguments[i], args[i], type,
-                                       enumStructHash, slot);
+          if (!flatten)
+            args[i] = EnumPayloadToSlots(call.arguments[i], args[i], type,
+                                         enumStructHash, slot);
           if (args[i] == 0xFFFF) {
             SetRegisterType(dest, CoreType::INVALID);
             return dest;
           }
           slot += GetEnumPayloadFieldCount(type, hash);
+        }
+
+        if (flatten) {
+          std::vector<std::pair<u16, CoreType>> scalars;
+          for (u32 i = 0; i < argCount; i++) {
+            u32 hash = i < variant.associatedTypeHashes.count
+                           ? variant.associatedTypeHashes[i] : 0;
+            if (!FlattenEnumPayload(call.arguments[i], args[i],
+                                    variant.associatedTypes[i], hash, scalars)) {
+              SetRegisterType(dest, CoreType::INVALID);
+              return dest;
+            }
+          }
+          u16 current = AllocateRegister();
+          SetRegisterType(current, CoreType::CUSTOM);
+          program.registerStructTypes[current] = enumStructHash;
+          builder.EmitInstruction(OP_ENUM_CONSTRUCT, current, IR::InvalidOperand,
+                                  IR::InvalidOperand, IR::InvalidOperand,
+                                  IR::InvalidOperand);
+          program.metadata[builder.currentInstruction - 1] =
+              (variantIndex << 16) |
+              ((enumHash != 0 ? enumHash : enumData.name.nameHash) & 0xFF);
+          for (u32 s = 0; s < scalars.size(); s++) {
+            u16 scalar = EnumPayloadToSlots(ref, scalars[s].first, scalars[s].second,
+                                            enumStructHash, s);
+            u16 next = AllocateRegister();
+            SetRegisterType(next, CoreType::CUSTOM);
+            program.registerStructTypes[next] = enumStructHash;
+            builder.EmitInstruction(OP_STRUCT_INSERT, next, current,
+                                    static_cast<u16>(1 + s), scalar);
+            program.metadata[builder.currentInstruction - 1] = enumStructHash;
+            current = next;
+          }
+          builder.EmitInstruction(OP_STORE_REG, dest, current);
+          SetRegisterType(dest, CoreType::CUSTOM);
+          program.registerStructTypes[dest] = enumStructHash;
+          return dest;
         }
 
         // Emit OP_ENUM_CONSTRUCT
