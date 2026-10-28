@@ -467,6 +467,7 @@ ERROR_CASE_TESTS = {
     "struct_assignment_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
     "storage_struct_field_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
     "matrix_size_mismatch.bwsl": "cannot implicitly convert mat3 to mat2",
+    "enum_payload_struct_mismatch.bwsl": "cannot assign a value of struct B to struct A",
 }
 
 ERROR_CASE_MODULE_DIRS = {

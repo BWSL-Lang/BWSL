@@ -532,11 +532,17 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
           CoreType type = variant.associatedTypes[i];
           u32 hash = i < variant.associatedTypeHashes.count
                          ? variant.associatedTypeHashes[i] : 0;
-          if (!CheckStoreShape(call.arguments[i], args[i], type)) return 0;
+          if (!CheckStoreShape(call.arguments[i], args[i], type, hash)) {
+            SetRegisterType(dest, CoreType::INVALID);
+            return dest;
+          }
           args[i] = ConvertRegisterToType(args[i], type);
           args[i] = EnumPayloadToSlots(call.arguments[i], args[i], type,
                                        enumStructHash, slot);
-          if (args[i] == 0xFFFF) return 0;
+          if (args[i] == 0xFFFF) {
+            SetRegisterType(dest, CoreType::INVALID);
+            return dest;
+          }
           slot += GetEnumPayloadFieldCount(type, hash);
         }
 

@@ -259,7 +259,8 @@
   compiled as a write to a storage image at that binding.
 - An enum variant payload of the wrong shape, such as a `float3` for
   `Sphere(float radius)`, is a source error naming the fix. It compiled and
-  stored only the vector's first component.
+  stored only the vector's first component. So is a payload of another
+  struct type or matrix size, which failed SPIR-V validation.
 - A pointer variable pointing to a resource, a stage input or output, or
   shared memory, as in `uint^ p = ^values[0];` on a `shared` array, is a
   source error. It pointed to a copy, so writes through it were lost.
