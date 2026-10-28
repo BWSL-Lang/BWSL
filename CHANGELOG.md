@@ -88,6 +88,11 @@
   they don't have is a source error.
 
 ### Backends
+- A member after a nested struct starts past the struct's padding. In
+  `struct Outer { Middle mid; float2 uv; }`, with `Middle` 36 bytes, `uv`
+  was at offset 40, inside `mid`'s 48 padded bytes, which SPIR-V
+  consumers such as Naga reject as overlapping members. Structs laid out
+  this way move members after a nested struct to the next 16 bytes.
 - Experimental native WGSL output is available with `-wgsl` for compute,
   vertex and fragment shaders, including structured control flow, std140
   uniforms, sampled textures with texel offsets, storage image writes,

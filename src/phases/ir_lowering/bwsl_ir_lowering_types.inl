@@ -342,6 +342,9 @@ inline u32 IRLowering::RegisterStructTypeFromSymbol(u32 typeNameHash,
         // Struct alignment is max of its member alignments, minimum 16 for
         // std140
         alignment = 16;
+        // The struct is padded to its alignment, so the next member can't
+        // start inside it. Arrays keep their element stride below.
+        if (field.arraySize == 0) fieldSize = (fieldSize + 15) & ~15u;
       }
     }
 
@@ -423,6 +426,9 @@ inline u32 IRLowering::RegisterStructTypeFromData(u32 typeNameHash, StructData *
         // Struct alignment is max of its member alignments, minimum 16 for
         // std140
         alignment = 16;
+        // The struct is padded to its alignment, so the next member can't
+        // start inside it. Arrays keep their element stride below.
+        if (field.arraySize == 0) fieldSize = (fieldSize + 15) & ~15u;
       }
     }
 
@@ -722,7 +728,7 @@ inline u32 IRLowering::RegisterEnumAsStructType(u32 enumNameHash, u32 enumIndex)
       auto nestedIt =
           structTypeMap.find(nestedHash != 0 ? nestedHash : fieldTypeHash);
       if (nestedIt != structTypeMap.end()) {
-        fieldSize = program.structTypes[nestedIt->second].totalSize;
+        fieldSize = (program.structTypes[nestedIt->second].totalSize + 15) & ~15u;
         alignment = 16;
       }
     }
