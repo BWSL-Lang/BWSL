@@ -649,6 +649,15 @@ struct IRLowering {
                                u32 &fieldCount, u32 maxFields);
 
   u32 GetEnumPayloadFieldCount(CoreType type, u32 typeHash);
+  // The storage type of payload slot `slot` of an enum's struct.
+  CoreType EnumPayloadSlotType(u32 enumStructHash, u32 slot);
+  // A payload value of `type` starting at `slot`, converted to its storage:
+  // float bits when its slots are shared with another type. Reports at
+  // `node` and returns 0xFFFF when it can't be stored there.
+  u16 EnumPayloadToSlots(NodeRef node, u16 reg, CoreType type,
+                         u32 enumStructHash, u32 slot);
+  // Reads payload slot `slot` of `receiver` as a `type` scalar.
+  u16 ReadEnumPayloadSlot(u16 receiver, u32 slot, CoreType type);
 
   // Register an enum sum type as a struct in the IR.
   // Layout: { int tag; <flattened payload fields for the widest variant> }.

@@ -1,0 +1,33 @@
+// Variants whose payloads put different types in the same slot. Such a slot
+// is stored as float bits; each payload must still read back exactly, and a
+// float argument for an int payload converts like an assignment. These
+// failed SPIR-V validation.
+pipeline EquivEnumMixedPayloads {
+    resources { output: buffer<float> }
+    enum Item {
+        Count(uint n),
+        Size(float r),
+        Offset(int dx, float3 dir),
+        Flag(bool on, float w),
+        Cell(uint3 at),
+        eval value :: () -> float {
+            Count(n): float(n)
+            Size(r): r
+            Offset(dx, dir): float(dx) + dir.x + dir.y * 10.0 + dir.z * 100.0
+            Flag(on, w): select(-w, w, on)
+            Cell(at): float(at.x + at.y * 10u + at.z * 100u)
+        }
+    }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            resources.output[0] = Item::Count(4000000000u).value();
+            resources.output[1] = Item::Count(7.0).value();
+            resources.output[2] = Item::Size(2.5).value();
+            resources.output[3] = Item::Offset(-3, float3(1.0, 2.0, 3.0)).value();
+            resources.output[4] = Item::Flag(true, 1.5).value();
+            resources.output[5] = Item::Flag(false, 1.5).value();
+            resources.output[6] = Item::Cell(uint3(1u, 2u, 3u)).value();
+        }
+    }
+}

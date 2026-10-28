@@ -619,6 +619,58 @@ inline u32 IRLowering::GetEnumPayloadFieldCount(CoreType type, u32 typeHash) {
   return fieldCount;
 }
 
+inline CoreType IRLowering::EnumPayloadSlotType(u32 enumStructHash, u32 slot) {
+  auto it = structTypeMap.find(enumStructHash);
+  if (it == structTypeMap.end()) return CoreType::INVALID;
+  const IRProgram::StructTypeInfo &info = program.structTypes[it->second];
+  if (1 + slot >= info.fieldCount) return CoreType::INVALID;
+  return static_cast<CoreType>(program.structFieldTypes[info.fieldOffset + 1 + slot]);
+}
+
+inline u16 IRLowering::EnumPayloadToSlots(NodeRef node, u16 reg, CoreType type,
+                                          u32 enumStructHash, u32 slot) {
+  CoreType component = GetScalarComponentType(type);
+  if (type == CoreType::CUSTOM || type == CoreType::ENUM ||
+      component == CoreType::FLOAT ||
+      EnumPayloadSlotType(enumStructHash, slot) != CoreType::FLOAT) {
+    return reg;
+  }
+  u16 bits = AllocateRegister();
+  if (component == CoreType::BOOL) {
+    if (type != CoreType::BOOL) {
+      ReportErrorAt(node, "Error: a bool vector payload can't share its slots "
+                          "with another variant's payload of another type; "
+                          "reorder the payloads or use a uint vector\n");
+      return 0xFFFF;
+    }
+    SetRegisterType(bits, CoreType::FLOAT);
+    builder.EmitInstruction(OP_SELECT, bits, builder.EmitConstant(0.0f),
+                            builder.EmitConstant(1.0f), reg);
+    return bits;
+  }
+  SetRegisterType(bits, GetVectorType(CoreType::FLOAT, GetVectorDimension(type)));
+  builder.EmitInstruction(OP_BITCAST, bits, reg);
+  return bits;
+}
+
+inline u16 IRLowering::ReadEnumPayloadSlot(u16 receiver, u32 slot, CoreType type) {
+  CoreType storage = EnumPayloadSlotType(program.registerStructTypes[receiver], slot);
+  bool bits = storage == CoreType::FLOAT && type != CoreType::FLOAT &&
+              (type == CoreType::INT || type == CoreType::UINT || type == CoreType::BOOL);
+  u16 field = AllocateRegister();
+  SetRegisterType(field, bits ? CoreType::FLOAT : type);
+  builder.EmitInstruction(OP_ENUM_FIELD, field, receiver, EmitConstantInt(slot));
+  if (!bits) return field;
+  u16 value = AllocateRegister();
+  SetRegisterType(value, type);
+  if (type == CoreType::BOOL) {
+    builder.EmitInstruction(OP_FNE, value, field, builder.EmitConstant(0.0f));
+  } else {
+    builder.EmitInstruction(OP_BITCAST, value, field);
+  }
+  return value;
+}
+
 inline u32 IRLowering::RegisterEnumAsStructType(u32 enumNameHash, u32 enumIndex) {
   if (!symbols || enumIndex >= symbols->enums.count) {
     return 0;
@@ -673,6 +725,36 @@ inline u32 IRLowering::RegisterEnumAsStructType(u32 enumNameHash, u32 enumIndex)
 
     if (variantFieldCount > maxPayloadFieldCount) {
       maxPayloadFieldCount = variantFieldCount;
+    }
+  }
+
+  // A non-float payload field that shares a slot with another type is stored
+  // entirely as float bits, so it is written and read back with one bitcast
+  // (see EnumPayloadToSlots). Widening one field can widen a slot another
+  // field shares, so repeat until nothing changes.
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (u32 v = 0; v < enumData.variants.count; v++) {
+      const EnumData::Variant &variant = enumData.variants[v];
+      u32 slot = 0;
+      for (u32 t = 0; t < variant.associatedTypes.count; t++) {
+        CoreType type = variant.associatedTypes[t];
+        u32 hash = t < variant.associatedTypeHashes.count
+                       ? variant.associatedTypeHashes[t] : 0;
+        u32 count = GetEnumPayloadFieldCount(type, hash);
+        bool shared = false;
+        if (type != CoreType::CUSTOM && type != CoreType::ENUM &&
+            GetScalarComponentType(type) != CoreType::FLOAT) {
+          for (u32 i = slot; i < slot + count && i < MAX_ENUM_PAYLOAD_FIELDS; i++)
+            shared |= payloadFieldTypes[i] == CoreType::FLOAT;
+        }
+        for (u32 i = slot; shared && i < slot + count && i < MAX_ENUM_PAYLOAD_FIELDS; i++) {
+          changed |= payloadFieldTypes[i] != CoreType::FLOAT;
+          payloadFieldTypes[i] = CoreType::FLOAT;
+          payloadFieldTypeHashes[i] = 0;
+        }
+        slot += count;
+      }
     }
   }
 

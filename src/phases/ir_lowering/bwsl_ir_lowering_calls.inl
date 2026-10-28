@@ -348,7 +348,9 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
           u32 name = arm.bindings[f].first.nameHash;
           u16 value = AllocateRegister();
           SetRegisterType(value, type);
-          if (width == 1 || (type == CoreType::CUSTOM && IsSumEnumTypeHash(hash))) {
+          if (width == 1 && type != CoreType::CUSTOM) {
+            value = ReadEnumPayloadSlot(receiver, payloadIndex, type);
+          } else if (width == 1 || (type == CoreType::CUSTOM && IsSumEnumTypeHash(hash))) {
             builder.EmitInstruction(OP_ENUM_FIELD, value, receiver, EmitConstantInt(payloadIndex));
             if (type == CoreType::CUSTOM) {
               u32 structHash = LookupOrRegisterStructType(hash);
@@ -358,9 +360,8 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
           } else if (type != CoreType::CUSTOM && width <= 4) {
             u16 components[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
             for (u32 c = 0; c < width; ++c) {
-              components[c] = AllocateRegister();
-              SetRegisterType(components[c], GetScalarComponentType(type));
-              builder.EmitInstruction(OP_ENUM_FIELD, components[c], receiver, EmitConstantInt(payloadIndex + c));
+              components[c] = ReadEnumPayloadSlot(receiver, payloadIndex + c,
+                                                  GetScalarComponentType(type));
             }
             builder.EmitInstruction(OP_VEC_CONSTRUCT, value, components[0], components[1], components[2], components[3]);
             program.metadata[builder.currentInstruction - 1] = width;
@@ -517,17 +518,27 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
           ReportError(msg);
           return 0;
         }
-        // A payload keeps its declared shape: a vector for a scalar field
-        // would spill into the next field's storage, or be cut short.
-        for (u32 i = 0; i < argCount; i++) {
-          if (!CheckStoreShape(call.arguments[i], args[i],
-                               enumData.variants[variantIndex].associatedTypes[i]))
-            return 0;
-        }
-
         // Register the enum as a struct type if not already done
         u32 enumStructHash =
             LookupOrRegisterStructType(enumData.name.nameHash);
+
+        // A payload keeps its declared shape: a vector for a scalar field
+        // would spill into the next field's storage, or be cut short. Its
+        // scalar kind converts like an assignment, and slots shared with
+        // another type hold its bits as floats.
+        const EnumData::Variant &variant = enumData.variants[variantIndex];
+        u32 slot = 0;
+        for (u32 i = 0; i < argCount; i++) {
+          CoreType type = variant.associatedTypes[i];
+          u32 hash = i < variant.associatedTypeHashes.count
+                         ? variant.associatedTypeHashes[i] : 0;
+          if (!CheckStoreShape(call.arguments[i], args[i], type)) return 0;
+          args[i] = ConvertRegisterToType(args[i], type);
+          args[i] = EnumPayloadToSlots(call.arguments[i], args[i], type,
+                                       enumStructHash, slot);
+          if (args[i] == 0xFFFF) return 0;
+          slot += GetEnumPayloadFieldCount(type, hash);
+        }
 
         // Emit OP_ENUM_CONSTRUCT
         // operands[0..3] = argument values (field data)
@@ -808,11 +819,15 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
                           structHash != 0 ? structHash : assocHash;
                       variableRegisters[binding.first.nameHash] = fieldReg;
                     } else if (componentCount == 1) {
-                      u16 fieldReg = AllocateRegister();
-                      u16 fieldIdx = EmitConstantInt(payloadIndex);
-                      builder.EmitInstruction(OP_ENUM_FIELD, fieldReg,
-                                              selfReg, fieldIdx);
-                      SetRegisterType(fieldReg, assocType);
+                      u16 fieldReg = 0;
+                      if (assocType != CoreType::CUSTOM) {
+                        fieldReg = ReadEnumPayloadSlot(selfReg, payloadIndex, assocType);
+                      } else {
+                        fieldReg = AllocateRegister();
+                        builder.EmitInstruction(OP_ENUM_FIELD, fieldReg, selfReg,
+                                                EmitConstantInt(payloadIndex));
+                        SetRegisterType(fieldReg, assocType);
+                      }
                       if (assocType == CoreType::CUSTOM && assocHash != 0) {
                         u32 structHash = LookupOrRegisterStructType(assocHash);
                         program.registerStructTypes[fieldReg] =
@@ -829,12 +844,8 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
                       u16 components[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
                       CoreType scalarType = GetScalarComponentType(assocType);
                       for (u32 c = 0; c < componentCount && c < 4; c++) {
-                        u16 compReg = AllocateRegister();
-                        u16 compIdx = EmitConstantInt(payloadIndex + c);
-                        builder.EmitInstruction(OP_ENUM_FIELD, compReg,
-                                                selfReg, compIdx);
-                        SetRegisterType(compReg, scalarType);
-                        components[c] = compReg;
+                        components[c] = ReadEnumPayloadSlot(selfReg, payloadIndex + c,
+                                                            scalarType);
                       }
 
                       u16 vecReg = AllocateRegister();
