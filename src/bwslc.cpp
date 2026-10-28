@@ -2095,6 +2095,8 @@ static std::string BuildWGSLBindingsJson(const WGSL::WGSLBuilder& builder,
     } else {
         json << "null";
     }
+    // WebGPU device features the module's `enable` directives need.
+    json << ",\n  \"requiredFeatures\": [" << (builder.UsesSubgroups() ? "\"subgroups\"" : "") << "]";
     const auto writeInterface = [&](const char* name, const WGSL::InterfaceTable& table,
                                     const WGSL::InterfaceOrigins& origins, bool varying) {
         json << ",\n  \"" << name << "\": [";

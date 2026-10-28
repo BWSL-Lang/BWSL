@@ -234,6 +234,7 @@ struct WGSLBuilder {
     std::string_view Source() const;
     const char* Error() const;
     u32 ErrorInstruction() const;
+    bool UsesSubgroups() const; // The module enables the subgroups extension
 
 private:
     BWSL_Arena* arena = nullptr;

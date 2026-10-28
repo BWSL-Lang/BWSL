@@ -310,6 +310,22 @@ BuiltinOperation MathOperation(u16 opcode) {
 
 // Bits of WGSLBuilder::helperFunctions; bit N-2 is bwsl_inverseN.
 constexpr u32 HelperHalf = 8;
+constexpr u32 HelperSubgroups = 16; // Not a helper: `enable subgroups;`
+
+// Wave operations are the WGSL subgroups extension's builtins.
+const char* WaveOperation(u16 opcode) {
+    switch (opcode) {
+        case IR::OP_WAVE_SUM: return "subgroupAdd";
+        case IR::OP_WAVE_MUL: return "subgroupMul";
+        case IR::OP_WAVE_MIN: return "subgroupMin";
+        case IR::OP_WAVE_MAX: return "subgroupMax";
+        case IR::OP_WAVE_ALL: return "subgroupAll";
+        case IR::OP_WAVE_ANY: return "subgroupAny";
+        case IR::OP_WAVE_READ_FIRST: return "subgroupBroadcastFirst";
+        case IR::OP_WAVE_READ_LANE: return "subgroupShuffle";
+        default: return nullptr;
+    }
+}
 
 struct PackOperation {
     const char* name;
@@ -382,6 +398,14 @@ u32 ValueOperandMask(u16 opcode, u32 metadata) {
         case IR::OP_LDEXP:
         case IR::OP_REFLECT: return 3;
         case IR::OP_IMG_STORE: return 6;
+        case IR::OP_WAVE_SUM:
+        case IR::OP_WAVE_MUL:
+        case IR::OP_WAVE_MIN:
+        case IR::OP_WAVE_MAX:
+        case IR::OP_WAVE_ALL:
+        case IR::OP_WAVE_ANY:
+        case IR::OP_WAVE_READ_FIRST: return 1;
+        case IR::OP_WAVE_READ_LANE: return 3;
         case IR::OP_LOCAL_LOAD:
         case IR::OP_MODF_STRUCT:
         case IR::OP_FREXP_STRUCT:
@@ -516,6 +540,10 @@ const char* WGSLBuilder::Error() const {
 
 u32 WGSLBuilder::ErrorInstruction() const {
     return errorInstruction;
+}
+
+bool WGSLBuilder::UsesSubgroups() const {
+    return (helperFunctions & HelperSubgroups) != 0;
 }
 
 bool WGSLBuilder::Fail(const char* message) {
@@ -1281,6 +1309,7 @@ void WGSLBuilder::PlanExpressions() {
             opcode == IR::OP_VEC_INSERT_DYNAMIC || opcode == IR::OP_LOCAL_LOAD ||
             opcode == IR::OP_STRUCT_INSERT || opcode == IR::OP_STRUCT_ARRAY_INSERT ||
             (opcode >= IR::OP_ATOMIC_ADD && opcode <= IR::OP_ATOMIC_CMP_XCHG) ||
+            WaveOperation(opcode) != nullptr ||
             (opcode == IR::OP_SELECT && IsAggregate(static_cast<CoreType>(values.types[value]),
                                                      values.arrayLengths[value]))) {
             continue;
@@ -1482,6 +1511,25 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
     }
     if (opcode >= IR::OP_ATOMIC_ADD && opcode <= IR::OP_ATOMIC_CMP_XCHG) {
         return PrepareAtomicInstruction(instruction);
+    }
+    if (WaveOperation(opcode) != nullptr) {
+        if (stage == ShaderStage::Vertex) {
+            return Fail("WGSL subgroup operations require a compute or fragment entry point");
+        }
+        CoreType argumentType = CoreType::INVALID;
+        if (!OperandType(first, argumentType)) {
+            return false;
+        }
+        const bool boolean = opcode == IR::OP_WAVE_ALL || opcode == IR::OP_WAVE_ANY;
+        if (boolean ? argumentType != CoreType::BOOL || type != CoreType::BOOL
+                    : Width(argumentType) == 0 || Scalar(argumentType) == CoreType::BOOL || type != argumentType) {
+            return Fail("WGSL subgroup operation has incompatible operand or result types");
+        }
+        if (opcode == IR::OP_WAVE_READ_LANE && !RequireIndex(second)) {
+            return false;
+        }
+        helperFunctions |= HelperSubgroups;
+        return DefineValue(instruction, type, ValueKind::Value);
     }
     if (opcode == IR::OP_IMG_STORE) {
         CoreType coordinates = CoreType::INVALID;
@@ -2157,6 +2205,23 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
     if (IsSampledTextureOpcode(opcode)) {
         return WriteTextureExpression(writer, instruction);
     }
+    if (const char* wave = WaveOperation(opcode)) {
+        // Subgroup operations depend on the active lanes, so they stay
+        // where they are; see PlanExpressions.
+        writer.Text(wave);
+        writer.Text("(");
+        if (!WriteOperand(writer, first)) {
+            return false;
+        }
+        if (opcode == IR::OP_WAVE_READ_LANE) {
+            writer.Text(", ");
+            if (!WriteConvertedOperand(writer, second, CoreType::UINT)) {
+                return false;
+            }
+        }
+        writer.Text(")");
+        return true;
+    }
     const PackOperation packing = PackingOperation(opcode);
     if (packing.name != nullptr) {
         writer.Text(packing.name);
@@ -2803,6 +2868,9 @@ static void WriteHelperFunctions(TextWriter& writer, u32 helpers) {
 }
 
 bool WGSLBuilder::WriteModule(TextWriter& writer) {
+    if (helperFunctions & HelperSubgroups) {
+        writer.Text("enable subgroups;\n\n");
+    }
     if (!WriteStructDeclarations(writer) || !WriteAdditionalResources(writer)) {
         return false;
     }
