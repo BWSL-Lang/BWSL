@@ -344,6 +344,7 @@ private:
     bool IsAtomicReference(u32 reference) const;
     bool WriteAtomicType(TextWriter& writer, CoreType type, u32 arrayLength);
     bool WriteAtomicInstruction(TextWriter& writer, u32 instruction);
+    bool WriteEnumConstruct(TextWriter& writer, u32 instruction, u32 structType);
     bool PrepareTrackedPointers();
     u32 TrackedIndex(u32 valueId) const;
     u32 TrackedNode(u32 reference) const;

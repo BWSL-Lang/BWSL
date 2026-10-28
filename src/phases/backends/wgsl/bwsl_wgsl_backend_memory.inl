@@ -454,6 +454,41 @@ bool WGSLBuilder::PrepareStructInstruction(u32 instruction, bool& handled) {
             }
             return DefineValue(instruction, CoreType::CUSTOM, ValueKind::Value, structType, 0);
         }
+        case IR::OP_ENUM_TAG:
+        case IR::OP_ENUM_FIELD: {
+            u32 base = InvalidId;
+            if (!structOf(first, base)) {
+                return false;
+            }
+            if (opcode == IR::OP_ENUM_TAG) {
+                return DefineValue(instruction, CoreType::INT, ValueKind::Value, 0, 0);
+            }
+            if (!IR::IsIntConstant(second)) {
+                return Fail("WGSL enum payload field index must be constant");
+            }
+            CoreType type = CoreType::INVALID;
+            u32 structType = 0;
+            u32 arrayLength = 0;
+            const u32 field = 1 + ir->intConstants[IR::IntConstantIndex(second)];
+            return FieldShape(values.structTypes[base], field, type, structType, arrayLength) &&
+                   DefineValue(instruction, type, ValueKind::Value, structType, arrayLength);
+        }
+        case IR::OP_ENUM_CONSTRUCT: {
+            const u32 structType = destination < ir->registerCount ? ir->registerStructTypes[destination] : 0;
+            if (StructIndex(structType) == InvalidId) {
+                return Fail("WGSL enum value is missing its struct type");
+            }
+            // The payload's fit is checked as it is written.
+            for (u32 argument = 0; argument < 4; ++argument) {
+                const u16 operand = ir->GetOperand(instruction, argument);
+                CoreType operandType = CoreType::INVALID;
+                if (operand != IR::InvalidOperand && operand != IR::UnusedOperand &&
+                    !OperandType(operand, operandType)) {
+                    return false;
+                }
+            }
+            return DefineValue(instruction, CoreType::CUSTOM, ValueKind::Value, structType, 0);
+        }
         case IR::OP_SELECT: {
             CoreType type = CoreType::INVALID;
             CoreType condition = CoreType::INVALID;
@@ -666,6 +701,21 @@ bool WGSLBuilder::WriteStructExpression(TextWriter& writer, u32 instruction, u32
                 writer.Text("]");
             }
             return true;
+        case IR::OP_ENUM_TAG:
+            if (!WriteOperand(writer, first)) {
+                return false;
+            }
+            writer.Text(".f0");
+            return true;
+        case IR::OP_ENUM_FIELD:
+            if (!WriteOperand(writer, first)) {
+                return false;
+            }
+            writer.Text(".f");
+            writer.Number(1 + ir->intConstants[IR::IntConstantIndex(second)]);
+            return true;
+        case IR::OP_ENUM_CONSTRUCT:
+            return WriteEnumConstruct(writer, instruction, values.structTypes[valueId]);
         case IR::OP_STRUCT_CONSTRUCT: {
             if (!WriteValueType(writer, valueId)) {
                 return false;
@@ -1329,5 +1379,147 @@ bool WGSLBuilder::WriteAtomicInstruction(TextWriter& writer, u32 instruction) {
         return false;
     }
     writer.Text(");\n");
+    return true;
+}
+
+// An enum value is a struct: an int tag (the variant), then the payload
+// fields. Arguments fill the payload in order, as in the SPIR-V backend:
+// a vector into scalar fields is split into components and a struct into
+// non-struct fields is spread over its fields; unfilled fields are zero.
+bool WGSLBuilder::WriteEnumConstruct(TextWriter& writer, u32 instruction, u32 structType) {
+    const u32 index = StructIndex(structType);
+    const IR::IRProgram::StructTypeInfo& info = ir->structTypes[index];
+    if (info.fieldCount == 0 || static_cast<CoreType>(ir->structFieldTypes[info.fieldOffset]) != CoreType::INT) {
+        return Fail("WGSL enum struct must start with an int tag");
+    }
+    if (!WriteFullType(writer, CoreType::CUSTOM, structType, 0)) {
+        return false;
+    }
+    writer.Text("(");
+    writer.Number((ir->metadata[instruction] >> 16) & 0xFFFF);
+    writer.Text("i");
+    u32 field = 1;
+    // Writes `expression` (of `type`) into the next fields.
+    const auto fill = [&](const auto& writeValue, CoreType type, u32 valueStruct, u32 valueLength) -> bool {
+        CoreType fieldType = CoreType::INVALID;
+        u32 fieldStruct = 0;
+        u32 fieldLength = 0;
+        if (field >= info.fieldCount || !FieldShape(structType, field, fieldType, fieldStruct, fieldLength)) {
+            return field >= info.fieldCount || false;
+        }
+        if (fieldType == type && fieldStruct == valueStruct && fieldLength == valueLength) {
+            writer.Text(", ");
+            if (!writeValue(-1)) {
+                return false;
+            }
+            ++field;
+            return true;
+        }
+        if (Width(type) > 1 && valueLength == 0 && fieldLength == 0 && Width(fieldType) == 1) {
+            for (u32 component = 0; component < Width(type) && field < info.fieldCount; ++component) {
+                if (!FieldShape(structType, field, fieldType, fieldStruct, fieldLength) || Width(fieldType) != 1) {
+                    return Fail("WGSL enum payload does not fit its fields");
+                }
+                const bool convert = fieldType != Scalar(type);
+                writer.Text(", ");
+                if (convert) {
+                    WriteType(writer, fieldType);
+                    writer.Text("(");
+                }
+                if (!writeValue(static_cast<s32>(component))) {
+                    return false;
+                }
+                writer.Text(convert ? ")" : "");
+                ++field;
+            }
+            return true;
+        }
+        if (Width(type) == 1 && Width(fieldType) == 1 && valueLength == 0 && fieldLength == 0) {
+            writer.Text(", ");
+            WriteType(writer, fieldType);
+            writer.Text("(");
+            if (!writeValue(-1)) {
+                return false;
+            }
+            writer.Text(")");
+            ++field;
+            return true;
+        }
+        return Fail("WGSL enum payload does not fit its fields");
+    };
+    for (u32 argument = 0; argument < 4; ++argument) {
+        const u16 operand = ir->GetOperand(instruction, argument);
+        if (operand == IR::InvalidOperand || operand == IR::UnusedOperand || field >= info.fieldCount) {
+            continue;
+        }
+        CoreType type = CoreType::INVALID;
+        if (!OperandType(operand, type)) {
+            return false;
+        }
+        const u32 value = IR::IsConstant(operand) ? InvalidId : registerToValue[operand];
+        const u32 valueStruct = value != InvalidId ? values.structTypes[value] : 0;
+        const u32 valueLength = value != InvalidId ? values.arrayLengths[value] : 0;
+        CoreType fieldType = CoreType::INVALID;
+        u32 fieldStruct = 0;
+        u32 fieldLength = 0;
+        if (!FieldShape(structType, field, fieldType, fieldStruct, fieldLength)) {
+            return false;
+        }
+        const auto component = [&](s32 item) {
+            if (!WriteOperand(writer, operand)) {
+                return false;
+            }
+            if (item >= 0) {
+                writer.Bytes(&".x.y.z.w"[item * 2], 2);
+            }
+            return true;
+        };
+        if ((type == CoreType::CUSTOM || type == CoreType::ENUM) && fieldType != CoreType::CUSTOM &&
+            fieldType != CoreType::ENUM && valueLength == 0) {
+            // Spread a struct argument over the following fields.
+            const u32 argumentStruct = StructIndex(valueStruct);
+            for (u32 member = 0; argumentStruct != InvalidId &&
+                 member < ir->structTypes[argumentStruct].fieldCount; ++member) {
+                CoreType memberType = CoreType::INVALID;
+                u32 memberStruct = 0;
+                u32 memberLength = 0;
+                if (!FieldShape(valueStruct, member, memberType, memberStruct, memberLength)) {
+                    return false;
+                }
+                const auto memberValue = [&](s32 item) {
+                    if (!WriteOperand(writer, operand)) {
+                        return false;
+                    }
+                    writer.Text(".f");
+                    writer.Number(member);
+                    if (item >= 0) {
+                        writer.Bytes(&".x.y.z.w"[item * 2], 2);
+                    }
+                    return true;
+                };
+                if (!fill(memberValue, memberType, memberStruct, memberLength)) {
+                    return false;
+                }
+            }
+            continue;
+        }
+        if (!fill(component, type, valueStruct, valueLength)) {
+            return false;
+        }
+    }
+    for (; field < info.fieldCount; ++field) {
+        CoreType fieldType = CoreType::INVALID;
+        u32 fieldStruct = 0;
+        u32 fieldLength = 0;
+        if (!FieldShape(structType, field, fieldType, fieldStruct, fieldLength)) {
+            return false;
+        }
+        writer.Text(", ");
+        if (!WriteFullType(writer, fieldType, fieldStruct, fieldLength)) {
+            return false;
+        }
+        writer.Text("()");
+    }
+    writer.Text(")");
     return true;
 }

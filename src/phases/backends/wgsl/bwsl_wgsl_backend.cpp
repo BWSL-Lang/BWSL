@@ -382,7 +382,9 @@ u32 ValueOperandMask(u16 opcode, u32 metadata) {
         case IR::OP_LDEXP:
         case IR::OP_REFLECT: return 3;
         case IR::OP_IMG_STORE: return 6;
-        case IR::OP_LOCAL_LOAD: return 1;
+        case IR::OP_LOCAL_LOAD:
+        case IR::OP_ENUM_TAG:
+        case IR::OP_ENUM_FIELD: return 1;
         case IR::OP_ATOMIC_ADD:
         case IR::OP_ATOMIC_SUB:
         case IR::OP_ATOMIC_MIN:
@@ -1119,6 +1121,14 @@ u32 WGSLBuilder::OperandMask(u32 instruction) const {
     }
     if (opcode == IR::OP_VEC_CONSTRUCT) {
         return (1u << VectorArgumentCount(instruction)) - 1;
+    }
+    if (opcode == IR::OP_ENUM_CONSTRUCT) {
+        u32 mask = 0;
+        for (u32 argument = 0; argument < 4; ++argument) {
+            const u16 operand = ir->GetOperand(instruction, argument);
+            mask |= (operand != IR::InvalidOperand && operand != IR::UnusedOperand) ? 1u << argument : 0;
+        }
+        return mask;
     }
     if (opcode == IR::OP_STRUCT_CONSTRUCT) {
         const u16 destination = ir->destinations[instruction];
