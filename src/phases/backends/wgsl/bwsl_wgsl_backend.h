@@ -77,6 +77,7 @@ struct ValueOrigins {
 // group 0. Strides are the physical WGSL runtime-array element strides.
 struct ResourceTable {
     u16* elementTypes = nullptr;
+    u32* structTypes = nullptr; // Element struct type hash, or 0
     u8* access = nullptr;
     u32* groups = nullptr;
     u32* bindings = nullptr;
@@ -240,6 +241,13 @@ private:
     u32* registerToValue = nullptr;
     u8* registerFlags = nullptr; // RegisterFlags, by register
     u32 lastDefined = InvalidId; // Value set by the latest DefineValue
+    // Host-shareable struct layouts, by struct index: state (0 unknown,
+    // 1 in progress, 2 laid out), WGSL alignment and size, and each
+    // member's @size by field index.
+    u8* storageStates = nullptr;
+    u32* storageAlignments = nullptr;
+    u32* storageSizes = nullptr;
+    u32* storageMemberSizes = nullptr;
     u32 dispatchNode = InvalidId; // Tracked pointer resolved to dispatchTarget
     u32 dispatchTarget = InvalidId;
     u32 resourceForSlot[32] = {};
@@ -325,6 +333,9 @@ private:
     bool WriteMemoryInstruction(TextWriter& writer, u32 instruction, bool& handled);
     bool WriteStructExpression(TextWriter& writer, u32 instruction, u32 valueId, bool& handled);
     bool IsMutable(u16 operand) const;
+    bool PrepareStorageStruct(u32 structId);
+    bool StorageShape(CoreType type, u32 structType, u32& alignment, u32& size);
+    void MarkAccess(u32 reference, u8 access);
     bool PrepareTrackedPointers();
     u32 TrackedIndex(u32 valueId) const;
     u32 TrackedNode(u32 reference) const;

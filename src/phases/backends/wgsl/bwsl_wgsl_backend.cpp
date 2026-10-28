@@ -672,6 +672,7 @@ bool WGSLBuilder::PrepareResources(u32 usedSlots) {
         return true;
     }
     resources.elementTypes = static_cast<u16*>(Allocate(count, sizeof(u16)));
+    resources.structTypes = static_cast<u32*>(Allocate(count, sizeof(u32)));
     resources.access = static_cast<u8*>(Allocate(count, sizeof(u8)));
     resources.groups = static_cast<u32*>(Allocate(count, sizeof(u32)));
     resources.bindings = static_cast<u32*>(Allocate(count, sizeof(u32)));
@@ -694,22 +695,55 @@ bool WGSLBuilder::PrepareResources(u32 usedSlots) {
                     continue;
                 }
                 CoreType declaredType = static_cast<CoreType>(declaration.coreType);
-                if (type != CoreType::INVALID && declaredType != type) {
+                if (type != CoreType::INVALID && type != CoreType::VOID && declaredType != type) {
                     return Fail("WGSL storage element metadata disagrees with its declaration");
                 }
                 type = declaredType;
                 structHash |= declaration.structTypeHash;
             }
         }
-        if (structHash != 0 || Width(type) == 0 || Scalar(type) == CoreType::BOOL) {
-            return Fail("WGSL backend requires numeric primitive storage-buffer elements");
+        u32 alignment = 0;
+        u32 stride = 0;
+        if (structHash != 0) {
+            type = CoreType::CUSTOM;
+        }
+        if (!StorageShape(type, structHash, alignment, stride)) {
+            return false;
+        }
+        // Array elements are 16-byte aligned beyond 8 bytes, as in the
+        // SPIR-V backend's runtime arrays; WGSL rounds to the alignment.
+        if (type == CoreType::CUSTOM) {
+            // A buffer of structs pads each element to 16 bytes. A small
+            // struct takes the padding as its size, unless another struct
+            // also holds it.
+            const u32 structId = StructIndex(structHash);
+            const IR::IRProgram::StructTypeInfo& info = ir->structTypes[structId];
+            stride = (info.totalSize + 15) & ~15u;
+            if (storageSizes[structId] != stride) {
+                for (u32 holder = 0; holder < ir->structTypeCount; ++holder) {
+                    if (storageStates[holder] != 2 || holder == structId) {
+                        continue;
+                    }
+                    const IR::IRProgram::StructTypeInfo& other = ir->structTypes[holder];
+                    for (u32 member = 0; member < other.fieldCount; ++member) {
+                        if (ir->structFieldTypeHashes[other.fieldOffset + member] == structHash) {
+                            return Fail("WGSL cannot pad a small struct both in a buffer and inside another struct");
+                        }
+                    }
+                }
+                storageMemberSizes[info.fieldOffset + info.fieldCount - 1] += stride - storageSizes[structId];
+                storageSizes[structId] = stride;
+            }
+        } else {
+            stride = (stride + alignment - 1) & ~(alignment - 1);
         }
         resourceForSlot[slot] = id;
         resources.elementTypes[id] = static_cast<u16>(type);
+        resources.structTypes[id] = type == CoreType::CUSTOM ? structHash : 0;
         resources.access[id] = 0;
         resources.groups[id] = 0;
         resources.bindings[id] = slot;
-        resources.strides[id] = Width(type) == 3 ? 16 : 4 * Width(type);
+        resources.strides[id] = stride;
         resourceOrigins.logicalSlots[id] = slot;
         ++id;
     }
@@ -1304,7 +1338,7 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
     if (opcode == IR::OP_STORAGE_PTR) {
         u32 resource = resourceForSlot[first];
         CoreType element = static_cast<CoreType>(resources.elementTypes[resource]);
-        if (!DefineValue(instruction, element, ValueKind::StorageRoot)) {
+        if (!DefineValue(instruction, element, ValueKind::StorageRoot, resources.structTypes[resource])) {
             return false;
         }
         values.resourceIds[lastDefined] = resource;
@@ -1318,7 +1352,8 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
         ValueKind kind = static_cast<ValueKind>(values.kinds[sourceId]);
         if (kind != ValueKind::Value) {
             CoreType element = static_cast<CoreType>(values.types[sourceId]);
-            if (!DefineValue(instruction, element, kind)) {
+            if (!DefineValue(instruction, element, kind, values.structTypes[sourceId],
+                             values.arrayLengths[sourceId])) {
                 return false;
             }
             u32 result = lastDefined;
@@ -1336,7 +1371,7 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
             return Fail("WGSL backend supports one index into a primitive storage buffer");
         }
         CoreType element = static_cast<CoreType>(values.types[base]);
-        if (!DefineValue(instruction, element, ValueKind::StorageElement)) {
+        if (!DefineValue(instruction, element, ValueKind::StorageElement, values.structTypes[base])) {
             return false;
         }
         u32 result = lastDefined;
@@ -1371,7 +1406,7 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
             return Fail("WGSL storage load result does not match its buffer element type");
         }
         resources.access[values.resourceIds[base]] |= AccessRead;
-        return DefineValue(instruction, element, ValueKind::Value);
+        return DefineValue(instruction, element, ValueKind::Value, values.structTypes[base]);
     }
     if (opcode == IR::OP_ARRAY_STORE) {
         u32 base = InvalidId;
@@ -2720,7 +2755,10 @@ bool WGSLBuilder::WriteModule(TextWriter& writer) {
         writer.Text((resources.access[resource] & AccessWrite) != 0 ? "read_write> " : "read> ");
         WriteResourceName(writer, resourceOrigins.logicalSlots[resource]);
         writer.Text(": array<");
-        WriteType(writer, static_cast<CoreType>(resources.elementTypes[resource]));
+        if (!WriteFullType(writer, static_cast<CoreType>(resources.elementTypes[resource]),
+                           resources.structTypes[resource], 0)) {
+            return false;
+        }
         writer.Text(">;\n\n");
     }
     if (outputs.count != 0) {

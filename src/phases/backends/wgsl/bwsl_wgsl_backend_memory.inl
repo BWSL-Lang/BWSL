@@ -177,6 +177,7 @@ bool WGSLBuilder::PrepareMemoryInstruction(u32 instruction, bool& handled) {
     const auto addressable = [&](u32 value) {
         return value != InvalidId &&
                (values.kinds[value] == static_cast<u8>(ValueKind::Reference) ||
+                values.kinds[value] == static_cast<u8>(ValueKind::StorageElement) ||
                 (values.kinds[value] == static_cast<u8>(ValueKind::Value) &&
                  (values.variables[value] & VariableMutable) != 0));
     };
@@ -264,6 +265,7 @@ bool WGSLBuilder::PrepareMemoryInstruction(u32 instruction, bool& handled) {
                 }
                 return Fail("WGSL load through a pointer requires a local pointer");
             }
+            MarkAccess(base, AccessRead);
             return DefineValue(instruction, static_cast<CoreType>(values.types[base]), ValueKind::Value,
                                values.structTypes[base], values.arrayLengths[base]);
         }
@@ -276,6 +278,7 @@ bool WGSLBuilder::PrepareMemoryInstruction(u32 instruction, bool& handled) {
             if (!OperandType(second, type)) {
                 return false;
             }
+            MarkAccess(base, AccessWrite);
             const u32 stored = IR::IsConstant(second) ? InvalidId : registerToValue[second];
             if (type != static_cast<CoreType>(values.types[base]) ||
                 (stored != InvalidId && (values.structTypes[stored] != values.structTypes[base] ||
@@ -294,6 +297,7 @@ bool WGSLBuilder::PrepareMemoryInstruction(u32 instruction, bool& handled) {
             if (!RequireIndex(second)) {
                 return false;
             }
+            MarkAccess(base, AccessRead);
             return DefineValue(instruction, static_cast<CoreType>(values.types[base]), ValueKind::Value,
                                values.structTypes[base], 0);
         }
@@ -307,6 +311,7 @@ bool WGSLBuilder::PrepareMemoryInstruction(u32 instruction, bool& handled) {
             if (!RequireIndex(first) || !OperandType(second, type)) {
                 return false;
             }
+            MarkAccess(base, AccessWrite);
             const u32 stored = IR::IsConstant(second) ? InvalidId : registerToValue[second];
             if (type != static_cast<CoreType>(values.types[base]) ||
                 (stored != InvalidId && values.structTypes[stored] != values.structTypes[base])) {
@@ -555,13 +560,20 @@ bool WGSLBuilder::WriteStructDeclarations(TextWriter& writer) {
         return false;
     }
     std::memset(states, 0, ir->structTypeCount);
-    // Only the structs values use, and the structs they contain.
-    for (u32 value = 0; value < values.count; ++value) {
-        const CoreType valueType = static_cast<CoreType>(values.types[value]);
-        const u32 root = valueType == CoreType::CUSTOM || valueType == CoreType::ENUM
-            ? StructIndex(values.structTypes[value]) : InvalidId;
-        if (root == InvalidId || states[root] != 0 ||
-            values.kinds[value] == static_cast<u8>(ValueKind::UniformAddress)) {
+    // Only the structs values and buffers use, and the structs they
+    // contain.
+    for (u32 item = 0; item < values.count + resources.count; ++item) {
+        u32 root = InvalidId;
+        if (item < values.count) {
+            const CoreType valueType = static_cast<CoreType>(values.types[item]);
+            if ((valueType == CoreType::CUSTOM || valueType == CoreType::ENUM) &&
+                values.kinds[item] != static_cast<u8>(ValueKind::UniformAddress)) {
+                root = StructIndex(values.structTypes[item]);
+            }
+        } else {
+            root = StructIndex(resources.structTypes[item - values.count]);
+        }
+        if (root == InvalidId || states[root] != 0) {
             continue;
         }
         u32 depth = 0;
@@ -604,7 +616,14 @@ bool WGSLBuilder::WriteStructDeclarations(TextWriter& writer) {
                 if (!FieldShape(info.nameHash, field, type, structType, arrayLength)) {
                     return false;
                 }
-                writer.Text("    f");
+                writer.Text("    ");
+                // Host-shareable structs keep the BWSL buffer layout.
+                if (storageStates != nullptr && storageStates[index] == 2) {
+                    writer.Text("@size(");
+                    writer.Number(storageMemberSizes[info.fieldOffset + field]);
+                    writer.Text(") ");
+                }
+                writer.Text("f");
                 writer.Number(field);
                 writer.Text(": ");
                 if (!WriteFullType(writer, type, structType, arrayLength)) {
@@ -1017,5 +1036,128 @@ bool WGSLBuilder::WriteTrackedAccess(TextWriter& writer, u32 instruction, u32 re
     --writer.indentation;
     writer.Indent();
     writer.Text("}\n");
+    return true;
+}
+
+void WGSLBuilder::MarkAccess(u32 reference, u8 access) {
+    for (u32 node = reference; node != InvalidId; node = values.parents[node]) {
+        const ValueKind kind = static_cast<ValueKind>(values.kinds[node]);
+        if (kind == ValueKind::StorageRoot || kind == ValueKind::StorageElement) {
+            resources.access[values.resourceIds[node]] |= access;
+            return;
+        }
+        if (kind != ValueKind::Reference) {
+            return;
+        }
+    }
+}
+
+// WGSL alignment and size of a storage-buffer member type.
+bool WGSLBuilder::StorageShape(CoreType type, u32 structType, u32& alignment, u32& size) {
+    if (type == CoreType::CUSTOM || type == CoreType::ENUM) {
+        const u32 index = StructIndex(structType);
+        if (index == InvalidId || !PrepareStorageStruct(index)) {
+            return errorMessage[0] == '\0' ? Fail("WGSL storage struct is missing its type") : false;
+        }
+        alignment = storageAlignments[index];
+        size = storageSizes[index];
+        return true;
+    }
+    if (Scalar(type) == CoreType::BOOL) {
+        return Fail("WGSL storage buffers cannot hold bool, which is not host-shareable");
+    }
+    if (type == CoreType::MAT2) {
+        return Fail("WGSL mat2x2 has an 8-byte column stride; BWSL storage buffers use 16");
+    }
+    if (MatrixDimension(type) != 0) {
+        alignment = 16;
+        size = 16 * MatrixDimension(type);
+        return true;
+    }
+    const u32 width = Width(type);
+    if (width == 0) {
+        return Fail("WGSL storage buffers hold numbers, vectors, matrices and structs");
+    }
+    alignment = width == 1 ? 4 : width == 2 ? 8 : 16;
+    size = 4 * width;
+    return true;
+}
+
+// Checks that WGSL can give a buffer struct the BWSL member offsets, and
+// sizes each member up to the next one with @size. A struct's size is its
+// BWSL array stride: its own size up to 8 bytes, else rounded to 16.
+bool WGSLBuilder::PrepareStorageStruct(u32 structId) {
+    if (storageStates == nullptr) {
+        u32 fields = 0;
+        for (u32 index = 0; index < ir->structTypeCount; ++index) {
+            fields = std::max(fields, ir->structTypes[index].fieldOffset + ir->structTypes[index].fieldCount);
+        }
+        storageStates = static_cast<u8*>(Allocate(ir->structTypeCount, sizeof(u8)));
+        storageAlignments = static_cast<u32*>(Allocate(ir->structTypeCount, sizeof(u32)));
+        storageSizes = static_cast<u32*>(Allocate(ir->structTypeCount, sizeof(u32)));
+        storageMemberSizes = static_cast<u32*>(Allocate(fields, sizeof(u32)));
+        if (errorMessage[0] != '\0') {
+            return false;
+        }
+        std::memset(storageStates, 0, ir->structTypeCount);
+    }
+    if (storageStates[structId] == 2) {
+        return true;
+    }
+    if (storageStates[structId] == 1) {
+        return Fail("WGSL structs cannot contain themselves");
+    }
+    storageStates[structId] = 1;
+    const IR::IRProgram::StructTypeInfo& info = ir->structTypes[structId];
+    u32 structSize = (info.totalSize + 15) & ~15u;
+    u32 structAlignment = 4;
+    if (info.totalSize <= 8) {
+        for (u32 field = 0; field < info.fieldCount; ++field) {
+            CoreType type = CoreType::INVALID;
+            u32 fieldStruct = 0;
+            u32 arrayLength = 0;
+            u32 alignment = 0;
+            u32 size = 0;
+            if (!FieldShape(info.nameHash, field, type, fieldStruct, arrayLength) ||
+                !StorageShape(type, fieldStruct, alignment, size)) {
+                return false;
+            }
+            structAlignment = std::max(structAlignment, alignment);
+        }
+        structSize = (info.totalSize + structAlignment - 1) & ~(structAlignment - 1);
+    }
+    for (u32 field = 0; field < info.fieldCount; ++field) {
+        CoreType type = CoreType::INVALID;
+        u32 fieldStruct = 0;
+        u32 arrayLength = 0;
+        u32 alignment = 0;
+        u32 size = 0;
+        if (!FieldShape(info.nameHash, field, type, fieldStruct, arrayLength) ||
+            !StorageShape(type, fieldStruct, alignment, size)) {
+            return false;
+        }
+        if (arrayLength != 0) {
+            // BWSL's array stride: natural up to 8 bytes, else 16-aligned.
+            const u32 bwslSize = type == CoreType::CUSTOM || type == CoreType::ENUM
+                ? ir->structTypes[StructIndex(fieldStruct)].totalSize : Width(type) * 4 + MatrixDimension(type) * 16;
+            const u32 bwslStride = bwslSize <= 8 ? bwslSize : (bwslSize + 15) & ~15u;
+            const u32 stride = (size + alignment - 1) & ~(alignment - 1);
+            if (stride != bwslStride) {
+                return Fail("WGSL cannot give a storage array field its BWSL stride");
+            }
+            size = stride * arrayLength;
+        }
+        const u32 offset = ir->structFieldByteOffsets[info.fieldOffset + field];
+        const u32 next = field + 1 < info.fieldCount ? ir->structFieldByteOffsets[info.fieldOffset + field + 1]
+                                                     : structSize;
+        if ((field == 0 && offset != 0) || offset % alignment != 0 || next < offset || next - offset < size) {
+            return Fail("WGSL cannot give a storage struct member its BWSL offset");
+        }
+        storageMemberSizes[info.fieldOffset + field] = next - offset;
+        structAlignment = std::max(structAlignment, alignment);
+    }
+    storageAlignments[structId] = structAlignment;
+    storageSizes[structId] = structSize;
+    storageStates[structId] = 2;
     return true;
 }
