@@ -357,6 +357,10 @@ u32 ValueOperandMask(u16 opcode, u32 metadata) {
         case IR::OP_ARRAY_STORE:
         case IR::OP_VEC_SHUFFLE: return 3;
         case IR::OP_VEC_INSERT: return 5;
+        case IR::OP_ISNAN:
+        case IR::OP_ISINF:
+        case IR::OP_ISFINITE:
+        case IR::OP_ISNORMAL: return 1;
         case IR::OP_LDEXP:
         case IR::OP_REFLECT: return 3;
         case IR::OP_REFRACT:
@@ -1562,6 +1566,19 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
             }
             break;
         }
+        case IR::OP_ISNAN:
+        case IR::OP_ISINF:
+        case IR::OP_ISFINITE:
+        case IR::OP_ISNORMAL: {
+            CoreType argumentType = CoreType::INVALID;
+            if (!OperandType(first, argumentType)) {
+                return false;
+            }
+            if (Scalar(argumentType) != CoreType::FLOAT || type != Shape(CoreType::BOOL, Width(argumentType))) {
+                return Fail("WGSL float classification requires f32 operands and a bool result");
+            }
+            break;
+        }
         case IR::OP_REFLECT:
         case IR::OP_REFRACT:
         case IR::OP_FACEFORWARD: {
@@ -2043,6 +2060,46 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
                 }
             }
             writer.Text(")");
+            return true;
+        }
+        case IR::OP_ISNAN:
+        case IR::OP_ISINF:
+        case IR::OP_ISFINITE:
+        case IR::OP_ISNORMAL: {
+            // WGSL has no classification builtins, and implementations may
+            // assume floats are finite, so test the bits. With the sign
+            // cleared, infinity is 0x7f800000 and NaNs are above it; a
+            // normal number's exponent field is 1 through 254.
+            const CoreType bits = Shape(CoreType::UINT, Width(type));
+            writer.Text("(");
+            if (opcode == IR::OP_ISNORMAL) {
+                writer.Text("((bitcast<");
+                WriteType(writer, bits);
+                writer.Text(">(");
+                if (!WriteOperand(writer, first)) {
+                    return false;
+                }
+                writer.Text(") & ");
+                WriteType(writer, bits);
+                writer.Text("(0x7f800000u)) - ");
+                WriteType(writer, bits);
+                writer.Text("(0x00800000u)) < ");
+                WriteType(writer, bits);
+                writer.Text("(0x7f000000u))");
+                return true;
+            }
+            writer.Text("(bitcast<");
+            WriteType(writer, bits);
+            writer.Text(">(");
+            if (!WriteOperand(writer, first)) {
+                return false;
+            }
+            writer.Text(") & ");
+            WriteType(writer, bits);
+            writer.Text(opcode == IR::OP_ISNAN ? "(0x7fffffffu)) > " :
+                        opcode == IR::OP_ISINF ? "(0x7fffffffu)) == " : "(0x7fffffffu)) < ");
+            WriteType(writer, bits);
+            writer.Text("(0x7f800000u))");
             return true;
         }
         case IR::OP_REFLECT:
