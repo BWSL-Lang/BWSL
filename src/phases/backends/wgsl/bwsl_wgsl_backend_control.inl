@@ -226,8 +226,6 @@ bool WGSLBuilder::ValidateOutputAssignments() {
             const u16 slot = ir->GetOperand(instruction, 0);
             if (opcode == IR::OP_STORE_OUTPUT) {
                 assigned |= 1u << slot;
-            } else if (opcode == IR::OP_LOAD_OUTPUT && !(assigned & (1u << slot))) {
-                return Fail("WGSL output is read before assignment on every incoming path");
             } else if (opcode == IR::OP_RET && stage == ShaderStage::Vertex &&
                        !(assigned & (1u << OutputSlot::POSITION))) {
                 return Fail("WGSL vertex position must be assigned on every return path");

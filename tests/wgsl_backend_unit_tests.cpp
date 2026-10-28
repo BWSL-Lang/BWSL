@@ -304,8 +304,9 @@ static void TestInvalidGraphicsInterfaces() {
     assert(unassignedOutput.builder.Initialize(&unassignedOutput.arena, &unassignedOutput.ir,
                                               nullptr, nullptr, ShaderStage::Fragment));
     unassignedOutput.Add(IR::OP_LOAD_OUTPUT, 0, CoreType::FLOAT4, OutputSlot::COLOR);
-    assert(!unassignedOutput.builder.Emit());
-    assert(std::strstr(unassignedOutput.builder.Error(), "before its first assignment") != nullptr);
+    // bwsl_output starts zeroed; an output never assigned reads a typed zero.
+    assert(unassignedOutput.builder.Emit());
+    assert(unassignedOutput.builder.Source().find("let v0 = vec4<f32>();") != std::string_view::npos);
 
     WGSLFixture integerLinear;
     assert(integerLinear.builder.Initialize(&integerLinear.arena, &integerLinear.ir,

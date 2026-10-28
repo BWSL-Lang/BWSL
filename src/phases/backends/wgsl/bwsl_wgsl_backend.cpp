@@ -1301,8 +1301,10 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
         return OperandType(destination, storedType) && PrepareOutput(instruction, first, storedType);
     }
     if (opcode == IR::OP_LOAD_OUTPUT) {
-        if (first >= 32 || (!structured && outputForSlot[first] == InvalidId)) {
-            return Fail("WGSL stage output is read before its first assignment");
+        // bwsl_output is zero-initialized, so an output read before it is
+        // assigned reads zero; SPIR-V leaves that value undefined.
+        if (first >= 32) {
+            return Fail("WGSL stage output slot is out of bounds");
         }
         if (outputForSlot[first] != InvalidId && outputs.types[outputForSlot[first]] != static_cast<u16>(type)) {
             return Fail("WGSL stage output load has an incompatible type");
@@ -2003,6 +2005,15 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
             return true;
         }
         case IR::OP_LOAD_OUTPUT:
+            if (outputForSlot[first] == InvalidId) {
+                // Never assigned anywhere: not a member of BWSLOutput.
+                WriteType(writer, type);
+                writer.Text("()");
+                return true;
+            }
+            if (outputs.types[outputForSlot[first]] != static_cast<u16>(type)) {
+                return Fail("WGSL stage output load has an incompatible type");
+            }
             writer.Text("bwsl_output.f");
             writer.Number(outputForSlot[first]);
             return true;
