@@ -1,0 +1,28 @@
+// Error case: values of another struct type stored into a local array
+// element, an array initializer, a whole storage buffer element and an
+// early function return. Each failed SPIR-V validation.
+pipeline WrongAcceptStructStoreTypeMismatch {
+    struct A { float x; float y; };
+    struct B { float2 v; };
+    resources { output: buffer<float> data: buffer<A> }
+    makeA :: (B b) -> A {
+        if (b.v.x > 0.0) { return b; }
+        A a;
+        a.x = 0.0;
+        a.y = 0.0;
+        return a;
+    }
+    pass "Compute" {
+        use resources { output, data }
+        compute "Main" [1, 1, 1] {
+            B b;
+            b.v = float2(1.0, 2.0);
+            A[2] items;
+            items[0] = b;
+            A[2] more = { b, b };
+            resources.data[0] = b;
+            A made = makeA(b);
+            resources.output[0] = items[0].x + more[1].x + made.x;
+        }
+    }
+}

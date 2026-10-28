@@ -289,6 +289,7 @@ struct IRLowering {
       0xFFFF; // Register to store return value during inlining
   u16 inlineReturnFlagReg = 0xFFFF; // Bool register for early-return tracking
   CoreType inlineReturnType = CoreType::INVALID; // Declared return type
+  u32 inlineReturnStructHash = 0; // Declared struct return type, if any
   u32 inlineReturnCounter = 0;    // Counts returns seen during current inlining
   u32 inlineReturnFlagReads = 0;  // Counts reads of inlineReturnFlagReg
   u32 inlineReturnGuardDepth = 0; // Suppress nested return guards
@@ -664,7 +665,7 @@ struct IRLowering {
   // The value of an eval arm's body. A block body returns like an inlined
   // function body, so a `return` inside an `if` or a loop ends the arm
   // rather than the entry point.
-  u16 LowerEvalArm(NodeRef body, CoreType returnType);
+  u16 LowerEvalArm(NodeRef body, CoreType returnType, u32 returnTypeHash);
 
   // Register an enum sum type as a struct in the IR.
   // Layout: { int tag; <flattened payload fields for the widest variant> }.

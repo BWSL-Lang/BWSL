@@ -182,7 +182,8 @@ inline void IRLowering::ReportPointerArgumentProblem(NodeRef argument,
   ReportErrorAt(argument, msg);
 }
 
-inline u16 IRLowering::LowerEvalArm(NodeRef body, CoreType returnType) {
+inline u16 IRLowering::LowerEvalArm(NodeRef body, CoreType returnType,
+                                    u32 returnTypeHash) {
   if (body.Type() != ASTNodeType::BLOCK) return LowerExpression(body);
   // A block ending in a bare expression yields that expression's value,
   // which only the block-expression lowering supports.
@@ -209,8 +210,10 @@ inline u16 IRLowering::LowerEvalArm(NodeRef body, CoreType returnType) {
   CoreType savedReturnType = inlineReturnType;
   u32 savedReturnCounter = inlineReturnCounter;
   u32 savedReturnFlagReads = inlineReturnFlagReads;
+  u32 savedReturnStructHash = inlineReturnStructHash;
   inlineReturnReg = returnReg;
   inlineReturnType = returnType;
+  inlineReturnStructHash = returnType == CoreType::CUSTOM ? returnTypeHash : 0;
   inlineReturnFlagReg = AllocateRegister();
   SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
   builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg, builder.EmitConstantBool(false));
@@ -222,6 +225,8 @@ inline u16 IRLowering::LowerEvalArm(NodeRef body, CoreType returnType) {
   inlineReturnReg = savedReturnReg;
   inlineReturnFlagReg = savedReturnFlagReg;
   inlineReturnType = savedReturnType;
+  inlineReturnStructHash = savedReturnStructHash;
+  inlineReturnStructHash = savedReturnStructHash;
   inlineReturnCounter = savedReturnCounter;
   inlineReturnFlagReads = savedReturnFlagReads;
   return returnReg;
@@ -448,7 +453,7 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
       LowerBlock(arm.body);
     } else {
       u16 value = LowerExpression(arm.body);
-      CheckStoreShape(arm.body, value, inlineReturnType);
+      CheckStoreShape(arm.body, value, inlineReturnType, inlineReturnStructHash);
       builder.EmitInstruction(OP_STORE_REG, inlineReturnReg, value);
       SetRegisterType(inlineReturnReg, GetRegisterType(value));
       if (value < MAX_REGISTERS) program.registerStructTypes[inlineReturnReg] = program.registerStructTypes[value];
@@ -945,7 +950,8 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
                   }
                   {
                     DebugScopeGuard scope(builder, methodRef);
-                    armResult = LowerEvalArm(arm.body, method.returnType);
+                    armResult = LowerEvalArm(arm.body, method.returnType,
+                                             method.returnTypeHash);
                   }
                   inlineModuleIndex = savedInlineModuleIndex;
                 }
@@ -2150,8 +2156,10 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   u32 savedReturnFlagReads = inlineReturnFlagReads;
   u32 savedModuleIndex = inlineModuleIndex;
 
+  u32 savedReturnStructHash = inlineReturnStructHash;
   inlineReturnReg = returnReg;
   inlineReturnType = method.returnType;
+  inlineReturnStructHash = method.returnType == CoreType::CUSTOM ? method.returnTypeHash : 0;
   inlineReturnFlagReg = AllocateRegister();
   SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
   u32 inlineFirstInstruction = builder.currentInstruction;
@@ -2173,7 +2181,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
     LowerBlock(method.body);
   } else {
     u16 exprResult = LowerExpression(method.body);
-    CheckStoreShape(method.body, exprResult, inlineReturnType);
+    CheckStoreShape(method.body, exprResult, inlineReturnType, inlineReturnStructHash);
     builder.EmitInstruction(OP_STORE_REG, returnReg, exprResult);
   }
   builder.currentScope = scope.savedScope;  // What follows is the caller's
@@ -2186,6 +2194,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   inlineReturnReg = savedReturnReg;
   inlineReturnFlagReg = savedReturnFlagReg;
   inlineReturnType = savedReturnType;
+  inlineReturnStructHash = savedReturnStructHash;
   inlineReturnCounter = savedReturnCounter;
   inlineReturnFlagReads = savedReturnFlagReads;
   inlineModuleIndex = savedModuleIndex;
@@ -2553,8 +2562,10 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   u32 savedReturnCounter = inlineReturnCounter;
   u32 savedReturnFlagReads = inlineReturnFlagReads;
   u32 savedModuleIndex = inlineModuleIndex;
+  u32 savedReturnStructHash = inlineReturnStructHash;
   inlineReturnReg = returnReg;
   inlineReturnType = func.returnType;
+  inlineReturnStructHash = func.returnType == CoreType::CUSTOM ? func.returnTypeHash : 0;
   inlineReturnFlagReg = AllocateRegister();
   SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
   u32 inlineFirstInstruction = builder.currentInstruction;
@@ -2594,7 +2605,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   } else {
     // Single expression body
     u16 exprResult = LowerExpression(func.body);
-    CheckStoreShape(func.body, exprResult, inlineReturnType);
+    CheckStoreShape(func.body, exprResult, inlineReturnType, inlineReturnStructHash);
     builder.EmitInstruction(OP_STORE_REG, returnReg, exprResult);
   }
   builder.currentScope = scope.savedScope;  // What follows is the caller's
@@ -2608,6 +2619,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   inlineReturnReg = savedReturnReg;
   inlineReturnFlagReg = savedReturnFlagReg;
   inlineReturnType = savedReturnType;
+  inlineReturnStructHash = savedReturnStructHash;
   inlineReturnCounter = savedReturnCounter;
   inlineReturnFlagReads = savedReturnFlagReads;
   inlineModuleIndex = savedModuleIndex;

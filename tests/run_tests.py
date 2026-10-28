@@ -465,6 +465,7 @@ ERROR_CASE_TESTS = {
     "store_to_texture.bwsl": "store() writes to a storage image",
     "storage_vector_index_out_of_bounds.bwsl": "index 2 is out of bounds for float2, which has 2 components",
     "vector_index_out_of_bounds.bwsl": "index 3 is out of bounds for mat2, which has 2 columns",
+    "struct_store_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
     "struct_assignment_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
     "storage_struct_field_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
     "matrix_size_mismatch.bwsl": "cannot implicitly convert mat3 to mat2",

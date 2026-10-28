@@ -920,7 +920,7 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref, u32 bindingNameHash,
       for (u32 i = 0; i < elementCount; i++) {
         u16 elementReg = LowerExpression(initBlock.statements[i]);
         if (!CheckStoreShape(initBlock.statements[i], elementReg,
-                             arrayElementType)) {
+                             arrayElementType, arrayElementStructHash)) {
           return;
         }
         elementRegs[i] = ConvertRegisterToType(elementReg, arrayElementType);
@@ -1880,7 +1880,18 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           arrayIndex < program.localArrayCount
               ? static_cast<CoreType>(program.localArrayTypes[arrayIndex])
               : CoreType::INVALID;
-      if (!CheckStoreShape(target, valueReg, elementType)) return;
+      u32 elementStructHash = arrayIndex < program.localArrayCount
+                                  ? program.localArrayStructTypes[arrayIndex] : 0;
+      if (!CheckStoreShape(target, valueReg, elementType, elementStructHash)) return;
+    } else if (baseReg < MAX_REGISTERS &&
+               (program.registerStorageInfo[baseReg] & IR::IRProgram::STORAGE_IS_PTR) &&
+               !(program.registerStorageInfo[baseReg] & IR::IRProgram::STORAGE_IS_SHARED)) {
+      // `resources.buffer[i] = value` stores a whole element.
+      u32 binding = program.registerStorageInfo[baseReg] >> IR::IRProgram::STORAGE_BINDING_SHIFT;
+      u32 elementStructHash = binding < 32 ? program.bufferElementStructTypes[binding] : 0;
+      if (elementStructHash != 0 &&
+          !CheckStoreShape(target, valueReg, CoreType::CUSTOM, elementStructHash))
+        return;
     }
     if (baseReg < MAX_REGISTERS) {
       CoreType baseType =
