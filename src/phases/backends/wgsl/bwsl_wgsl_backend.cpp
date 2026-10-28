@@ -308,6 +308,9 @@ BuiltinOperation MathOperation(u16 opcode) {
     }
 }
 
+// Bits of WGSLBuilder::helperFunctions; bit N-2 is bwsl_inverseN.
+constexpr u32 HelperHalf = 8;
+
 struct PackOperation {
     const char* name;
     CoreType argument;
@@ -321,12 +324,12 @@ PackOperation PackingOperation(u16 opcode) {
         case IR::OP_PACK_SNORM4X8: return {"pack4x8snorm", CoreType::FLOAT4, CoreType::UINT};
         case IR::OP_PACK_UNORM2X16: return {"pack2x16unorm", CoreType::FLOAT2, CoreType::UINT};
         case IR::OP_PACK_SNORM2X16: return {"pack2x16snorm", CoreType::FLOAT2, CoreType::UINT};
-        case IR::OP_PACK_HALF2X16: return {"pack2x16float", CoreType::FLOAT2, CoreType::UINT};
+        case IR::OP_PACK_HALF2X16: return {"bwsl_pack_half2x16", CoreType::FLOAT2, CoreType::UINT};
         case IR::OP_UNPACK_UNORM4X8: return {"unpack4x8unorm", CoreType::UINT, CoreType::FLOAT4};
         case IR::OP_UNPACK_SNORM4X8: return {"unpack4x8snorm", CoreType::UINT, CoreType::FLOAT4};
         case IR::OP_UNPACK_UNORM2X16: return {"unpack2x16unorm", CoreType::UINT, CoreType::FLOAT2};
         case IR::OP_UNPACK_SNORM2X16: return {"unpack2x16snorm", CoreType::UINT, CoreType::FLOAT2};
-        case IR::OP_UNPACK_HALF2X16: return {"unpack2x16float", CoreType::UINT, CoreType::FLOAT2};
+        case IR::OP_UNPACK_HALF2X16: return {"bwsl_unpack_half2x16", CoreType::UINT, CoreType::FLOAT2};
         default: return {nullptr, CoreType::INVALID, CoreType::INVALID};
     }
 }
@@ -1468,6 +1471,9 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
         if (argumentType != packing.argument || type != packing.result) {
             return Fail("WGSL packing builtin has incompatible operand or result types");
         }
+        if (opcode == IR::OP_PACK_HALF2X16 || opcode == IR::OP_UNPACK_HALF2X16) {
+            helperFunctions |= HelperHalf;
+        }
         return DefineValue(instruction, type, ValueKind::Value);
     }
 
@@ -2464,6 +2470,60 @@ void WGSLBuilder::WriteInterfaceAttribute(TextWriter& writer, const InterfaceTab
 #include "bwsl_wgsl_backend_control.inl"
 
 static void WriteHelperFunctions(TextWriter& writer, u32 helpers) {
+    // pack2x16float and unpack2x16float need f16 support that downlevel
+    // WebGPU implementations (and Naga without SHADER_FLOAT16_IN_FLOAT32)
+    // lack. Convert with integer operations, rounding to nearest even.
+    if (helpers & HelperHalf) {
+        writer.Text("fn bwsl_f32_to_f16(value: f32) -> u32 {\n"
+                    "    let bits = bitcast<u32>(value);\n"
+                    "    let sign = (bits >> 16u) & 0x8000u;\n"
+                    "    let mantissa = bits & 0x7fffffu;\n"
+                    "    if ((bits & 0x7fffffffu) > 0x7f800000u) {\n"
+                    "        return sign | 0x7e00u;\n"
+                    "    }\n"
+                    "    let exponent = i32((bits >> 23u) & 0xffu) - 112;\n"
+                    "    if (exponent >= 31) {\n"
+                    "        return sign | 0x7c00u;\n"
+                    "    }\n"
+                    "    if (exponent < -10) {\n"
+                    "        return sign;\n"
+                    "    }\n"
+                    "    var shift = 13u;\n"
+                    "    var significand = mantissa;\n"
+                    "    var half = (u32(exponent) << 10u);\n"
+                    "    if (exponent <= 0) {\n"
+                    "        shift = u32(14 - exponent);\n"
+                    "        significand = mantissa | 0x800000u;\n"
+                    "        half = 0u;\n"
+                    "    }\n"
+                    "    half = half | (significand >> shift);\n"
+                    "    let rest = significand & ((1u << shift) - 1u);\n"
+                    "    let midpoint = 1u << (shift - 1u);\n"
+                    "    if (rest > midpoint || (rest == midpoint && (half & 1u) != 0u)) {\n"
+                    "        half = half + 1u;\n"
+                    "    }\n"
+                    "    return sign | half;\n"
+                    "}\n\n"
+                    "fn bwsl_f16_to_f32(half: u32) -> f32 {\n"
+                    "    let sign = (half & 0x8000u) << 16u;\n"
+                    "    let exponent = (half >> 10u) & 0x1fu;\n"
+                    "    let mantissa = half & 0x3ffu;\n"
+                    "    if (exponent == 0u) {\n"
+                    "        let magnitude = f32(mantissa) * 0x1p-24f;\n"
+                    "        return select(magnitude, -magnitude, sign != 0u);\n"
+                    "    }\n"
+                    "    if (exponent == 31u) {\n"
+                    "        return bitcast<f32>(sign | 0x7f800000u | (mantissa << 13u));\n"
+                    "    }\n"
+                    "    return bitcast<f32>(sign | ((exponent + 112u) << 23u) | (mantissa << 13u));\n"
+                    "}\n\n"
+                    "fn bwsl_pack_half2x16(value: vec2<f32>) -> u32 {\n"
+                    "    return bwsl_f32_to_f16(value.x) | (bwsl_f32_to_f16(value.y) << 16u);\n"
+                    "}\n\n"
+                    "fn bwsl_unpack_half2x16(packed: u32) -> vec2<f32> {\n"
+                    "    return vec2<f32>(bwsl_f16_to_f32(packed & 0xffffu), bwsl_f16_to_f32(packed >> 16u));\n"
+                    "}\n\n");
+    }
     // Adjugate over determinant, as GLSL.std.450 MatrixInverse; m[c][r].
     if (helpers & 1u) {
         writer.Text("fn bwsl_inverse2(m: mat2x2<f32>) -> mat2x2<f32> {\n"
