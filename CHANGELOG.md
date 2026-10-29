@@ -124,6 +124,13 @@
   stage that also declares `shared` memory. The element was mistaken for
   workgroup memory and read with the shared variable's type, which failed
   SPIR-V validation.
+- Uniform structs whose layout HLSL packing doesn't reproduce compile to
+  HLSL. HLSL packs a scalar or vector into the rest of the previous 16-byte
+  row, and the next member into the unused end of an array, a matrix or a
+  struct, so a uniform such as
+  `struct Params { float a; float3 b; float[3] w; float c; }` failed to
+  cross-compile to HLSL. Uniform structs in HLSL output now carry
+  `bwsl_pad` members that hold every member at its std140 offset.
 - A member after a nested struct starts past the struct's padding. In
   `struct Outer { Middle mid; float2 uv; }`, with `Middle` 36 bytes, `uv`
   was at offset 40, inside `mid`'s 48 padded bytes, which SPIR-V

@@ -247,6 +247,9 @@ must match when it writes the data:
 - A struct a uniform reaches, or one that holds such a struct, uses std140
   in storage buffers too, so one struct has one layout.
 - A buffer can't hold an empty struct.
+- HLSL output keeps these offsets. HLSL packs members tighter than std140,
+  so uniform structs in HLSL output have `bwsl_pad` members filling the
+  gaps.
 
 ```bwsl
 struct Particle { float3 position; float mass; float2 uv; };  // 32 bytes in buffer<Particle>

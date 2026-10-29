@@ -4011,6 +4011,11 @@ def main() -> int:
     passed += constprop_passed
     failed += constprop_failed
 
+    from hlsl_cbuffer_tests import run_hlsl_cbuffer_tests
+    cbuffer_passed, cbuffer_failed = run_hlsl_cbuffer_tests(bwslc)
+    passed += cbuffer_passed
+    failed += cbuffer_failed
+
     from p1_regression_tests import run_p1_regression_tests
     p1_passed, p1_failed = run_p1_regression_tests(bwslc, output_dir / "p1_validation")
     passed += p1_passed

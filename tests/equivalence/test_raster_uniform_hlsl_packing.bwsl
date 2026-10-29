@@ -1,0 +1,61 @@
+// A uniform struct whose std140 offsets HLSL packing does not reproduce: a
+// vector after a scalar; an array and a vector array each followed by a
+// field; and a struct that ends partway through a row followed by a field.
+// HLSL output pads the structs so each field still reads from its std140
+// offset. (DXC's Vulkan output rejects a field packed after a 3-row matrix,
+// so the matrix here is followed by a float3; hlsl_cbuffer_tests.py checks
+// that case in DXIL.) Pixel i reads field i; every pixel also reads a dynamically
+// indexed array element from the uniform, from a modified local copy and
+// through a constructor, and the fields after the short struct.
+pipeline RasterUniformHlslPacking {
+    struct Inner { float k; float2 m; };
+    struct Tail { float t; };
+    struct Params {
+        float a;
+        float3 b;
+        float[3] w;
+        float c;
+        mat3 m;
+        float3 d;
+        Inner inner;
+        float e;
+        float2[2] v;
+        float2 f;
+        Tail tail;
+        float g;
+    };
+    resources { params: Params }
+    pass "Main" {
+        use resources { params }
+        vertex {
+            float2[3] p;
+            p[0] = float2(-1.0, -1.0); p[1] = float2(3.0, -1.0); p[2] = float2(-1.0, 3.0);
+            output.position = float4(p[input.vertex_id], 0.0, 1.0);
+        }
+        fragment {
+            uint i = uint(input.position.x) + 4u * uint(input.position.y);
+            Params u = resources.params;
+            float r = 0.0;
+            if (i == 0u) { r = u.a; }
+            if (i == 1u) { r = u.b.x; }
+            if (i == 2u) { r = u.b.z; }
+            if (i == 3u) { r = u.w[0]; }
+            if (i == 4u) { r = u.w[2]; }
+            if (i == 5u) { r = u.c; }
+            if (i == 6u) { r = u.m[1].y; }
+            if (i == 7u) { r = u.m[2].x; }
+            if (i == 8u) { r = u.d.x; }
+            if (i == 9u) { r = u.inner.k; }
+            if (i == 10u) { r = u.inner.m.y; }
+            if (i == 11u) { r = u.e; }
+            if (i == 12u) { r = u.v[0].x; }
+            if (i == 13u) { r = u.v[1].y; }
+            if (i == 14u) { r = u.f.x; }
+            if (i == 15u) { r = u.f.y; }
+            u.w[i % 3u] = u.w[i % 3u] + 100.0;
+            Params built = Params(u.a, u.b, u.w, u.c, u.m, u.d, u.inner, u.e, u.v, u.f, u.tail, u.g);
+            output.color = float4(r, built.w[i % 3u], resources.params.w[i % 3u],
+                                  u.tail.t * 1000.0 + resources.params.g);
+        }
+    }
+}
