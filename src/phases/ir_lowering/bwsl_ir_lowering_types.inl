@@ -587,8 +587,23 @@ inline void IRLowering::ComputeStd140Structs() {
   }
   // Every struct a uniform reaches.
   while (!pending.Empty()) {
-    StructData *data = LookupStructDataByHash(pending.Back());
+    u32 hash = pending.Back();
     pending.Pop();
+    if (std140Structs.Contains(hash)) continue;
+    // A sum enum is stored as a struct of its tag and payload slots.
+    const EnumData *enumData = SymbolTable::ResolveEnumDataByHash(symbols, hash);
+    if (enumData && (enumData->flags & EnumData::IS_SUM_TYPE)) {
+      std140Structs.Push(pool, hash);
+      for (u32 v = 0; v < enumData->variants.count; v++) {
+        const EnumData::Variant &variant = enumData->variants[v];
+        for (u32 t = 0; t < variant.associatedTypeHashes.count; t++) {
+          if (variant.associatedTypeHashes[t] != 0)
+            pending.Push(pool, variant.associatedTypeHashes[t]);
+        }
+      }
+      continue;
+    }
+    StructData *data = LookupStructDataByHash(hash);
     if (!data || std140Structs.Contains(data->name.nameHash)) continue;
     std140Structs.Push(pool, data->name.nameHash);
     for (u32 f = 0; f < data->fields.count; f++) {
