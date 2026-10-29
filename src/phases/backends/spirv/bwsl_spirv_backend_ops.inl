@@ -5081,7 +5081,10 @@ void SPIRVBuilder::TranslateInstruction(u32 ir_idx) {
     }
 
     if (op == IR::OP_ATOMIC_CMP_XCHG) {
-      u32 cmp_id = GetSpirvId(cmp_reg);
+      // atomic_cmp_exchange(pointer, compare, value): operand 1 is the
+      // comparator and operand 2 the value stored when they are equal.
+      u32 cmp_id = value_id;
+      value_id = GetSpirvId(cmp_reg);
       u32 failureMask = (isShared ? spv::MemorySemanticsWorkgroupMemoryMask
                                   : spv::MemorySemanticsUniformMemoryMask) |
                         spv::MemorySemanticsAcquireMask;

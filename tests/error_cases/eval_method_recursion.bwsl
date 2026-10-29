@@ -1,0 +1,19 @@
+// Error case: an eval method that calls itself. It was inlined until the
+// lowering depth limit and failed without a diagnostic.
+pipeline WrongAcceptEvalMethodRecursion {
+    resources { output: buffer<float> }
+    enum Count {
+        Done(float x),
+        More(float y),
+        eval total :: () -> float {
+            Done(x): x
+            More(y): Count::More(y - 1.0).total() + 1.0
+        }
+    }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            resources.output[0] = Count::More(3.0).total();
+        }
+    }
+}

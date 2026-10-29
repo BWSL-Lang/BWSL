@@ -230,6 +230,33 @@ fragment {
   to a function.
 
 
+### Buffer layout
+
+Struct data in buffers follows the standard GPU layout rules, which the host
+must match when it writes the data:
+
+- A storage buffer (`buffer<T>`) uses std430, WGSL's storage layout: a
+  scalar is 4-byte aligned, a `float2` 8-byte, a `float3` or `float4`
+  16-byte. A struct is aligned to its most aligned member and its size is
+  rounded up to that alignment; a `buffer<Struct>` element is that size. An
+  array field's stride is its element's size rounded up to the element's
+  alignment, and a `mat2`'s columns are 8 bytes apart.
+- A uniform struct uses std140: as above, but a struct, an array element and
+  every matrix column are 16-byte aligned, so array strides are multiples
+  of 16.
+- A struct a uniform reaches, or one that holds such a struct, uses std140
+  in storage buffers too, so one struct has one layout.
+- A buffer can't hold an empty struct.
+- HLSL output keeps these offsets. HLSL packs members tighter than std140,
+  so uniform structs in HLSL output have `bwsl_pad` members filling the
+  gaps.
+
+```bwsl
+struct Particle { float3 position; float mass; float2 uv; };  // 32 bytes in buffer<Particle>
+struct Tag { float value; int count; };                        // 8 bytes in buffer<Tag>
+```
+
+
 ## Value Bounds
 
 `@bounds(...)` promises the range of an attribute, a scalar or vector

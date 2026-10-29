@@ -66,7 +66,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang cmake ninja-build nodejs
+          sudo apt-get install -y --no-install-recommends clang cmake ninja-build nodejs mesa-vulkan-drivers
           rustup toolchain install 1.88.0 --profile minimal
           rustup override set 1.88.0
 
@@ -91,6 +91,10 @@ jobs:
         run: |
           python3 tests/wgsl_control_flow_tests.py --skip-gpu
           python3 tests/wgsl_resource_tests.py --skip-gpu
+
+      # Lavapipe, Mesa's CPU Vulkan driver, runs the WGSL output on wgpu.
+      - name: Compare WGSL with SPIR-V on the compute equivalence suite
+        run: python3 tests/wgsl_equivalence_tests.py --require-gpu
 
       - name: Check in-process and CLI equivalence and record samples
         run: |

@@ -1,0 +1,22 @@
+// The body ends by pointing at a local, but a `skip` leaves the pointer on a
+// vector component for the next iteration's write, which is lost.
+pipeline PointerLoopSkipBackEdge {
+    resources { output: buffer<float> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            float a = 1.0;
+            float3 v = float3(1.0, 2.0, 3.0);
+            float^ p = ^a;
+            for (int i = 0; i < 3; i++) {
+                p^ = p^ + 1.0;
+                p = ^v.x;
+                if (i == 1) {
+                    skip;
+                }
+                p = ^a;
+            }
+            resources.output[0] = a + v.x;
+        }
+    }
+}

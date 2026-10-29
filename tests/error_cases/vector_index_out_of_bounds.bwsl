@@ -1,0 +1,15 @@
+// Error case: constant indices past a vector's components or a matrix's
+// columns. Writes compiled silently; reads failed SPIR-V validation.
+pipeline WrongAcceptVectorIndexOutOfBounds {
+    resources { output: buffer<float> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            float2 p = float2(1.0);
+            p[2] = 1.0;
+            mat2 m = mat2(1.0);
+            m[3] = float2(1.0);
+            resources.output[0] = p[-1] + m[2].x;
+        }
+    }
+}

@@ -3,6 +3,15 @@
 ## unreleased
 
 ### Breaking changes
+- Struct data in storage buffers follows std430 and uniform structs follow
+  std140 (see "Buffer layout" in the language reference). A nested struct
+  was always 16-byte aligned and padded and a `buffer<Struct>` element was
+  rounded up to 16 bytes, while arrays inside structs used std430 strides;
+  the mix couldn't be expressed in GLSL or HLSL in many cases. Hosts writing
+  buffers by hand must follow the new rules: `buffer<Tag>` with
+  `struct Tag { float value; int count; }` is now 8 bytes per element, not
+  16, and a small struct after a scalar array or inside another struct may
+  move. A uniform struct's arrays now have 16-byte strides.
 - An enum member without a written value is the previous member's value
   plus one, or 0 for the first: `enum E : uint { A = 3, B, C = 7, D }` gives
   B = 4 and D = 8. Members were numbered by position, ignoring the values
@@ -31,6 +40,20 @@
   version.
 
 ### Language
+- A pattern arm can bind a struct payload, as in `Crate(box, w): box.size.x`;
+  it reported "binding flattened struct enum payloads is not supported
+  yet". Payloads holding nested structs or matrices (`Frame(mat2 basis)`)
+  keep their values; they failed SPIR-V validation or stored the wrong
+  slots. A payload struct with an array field is a source error.
+- A `return` inside an `if` or a loop in an `eval` arm's block ends the
+  arm, as in `Flag(on, w): { if (on) { return w; } return -w; }`. It was
+  lowered as a return from the shader's entry point and failed SPIR-V
+  validation.
+- Calling an `eval` method runs only the arm matching the variant. Every
+  arm ran and the result was picked afterwards, so an arm's side effects,
+  such as a buffer write, happened for every variant. A block arm can end
+  in a bare expression that is its value, also when it returns early
+  elsewhere.
 - `@branch if (...)` asks for a real branch, which a wave skips when none of
   its lanes take it, and `@flatten if (...)` for both sides evaluated. They
   set the SPIR-V selection control (`[branch]`/`[flatten]` in HLSL). For
@@ -56,6 +79,10 @@
 - A pointer to an element of a struct's array field (`^s.values[i]`) or to
   a `self` field named without `self.` now points at the element. It
   previously pointed at a copy, so writes through it were lost.
+- Assigning to a field, an array field's element or a vector component of
+  a storage buffer element, as in `resources.particles[i].position.y = 1.0`
+  or `resources.particles[i].weights[2] = w`, writes that place. The store
+  was dropped or went to a copy of the element.
 - `@centroid` on a vertex output assignment evaluates the varying inside the
   primitive under MSAA, so edge pixels don't extrapolate it past its vertex
   values: `@centroid output.atlasUV = uv;`. It combines with
@@ -84,9 +111,41 @@
   they don't have is a source error.
 
 ### Backends
+- Storing a value of another scalar kind into a storage buffer element, as
+  in `resources.ints[0] = 2.75;` for a `buffer<int>`, converts it like an
+  assignment. It failed SPIR-V validation.
+- Enum variants whose payloads put different types at the same position,
+  such as `Count(uint n)` and `Size(float r)`, compile and keep each value
+  exactly, bool vectors included. They failed SPIR-V validation. A payload
+  argument of another scalar kind, as in `Count(7.0)`, converts like an
+  assignment.
+- An enum variant with more than four payload fields keeps them all. The
+  fifth and later fields were dropped and read back as zero.
+- Atomics on a storage buffer element, such as
+  `atomic_max(resources.counters[0], v)` on a `buffer<int>`, compile in a
+  stage that also declares `shared` memory. The element was mistaken for
+  workgroup memory and read with the shared variable's type, which failed
+  SPIR-V validation.
+- Uniform structs whose layout HLSL packing doesn't reproduce compile to
+  HLSL. HLSL packs a scalar or vector into the rest of the previous 16-byte
+  row, and the next member into the unused end of an array, a matrix or a
+  struct, so a uniform such as
+  `struct Params { float a; float3 b; float[3] w; float c; }` failed to
+  cross-compile to HLSL. Uniform structs in HLSL output now carry
+  `bwsl_pad` members that hold every member at its std140 offset.
+- A member after a nested struct starts past the struct's padding. In
+  `struct Outer { Middle mid; float2 uv; }`, with `Middle` 36 bytes, `uv`
+  was at offset 40, inside `mid`'s 48 padded bytes, which SPIR-V
+  consumers such as Naga reject as overlapping members. Structs laid out
+  this way move members after a nested struct to the next 16 bytes.
 - Experimental native WGSL output is available with `-wgsl` for compute,
   vertex and fragment shaders, including structured control flow, std140
-  uniforms and sampled textures. `-bindings` emits WebGPU binding metadata.
+  uniforms, sampled textures with texel offsets, storage image writes,
+  structs, enums with payloads, local arrays, pointers, storage buffers of
+  structs and matrices, workgroup memory, barriers and atomics. Wave
+  operations use WGSL's `subgroups` extension, which the host must enable
+  on its device. `-bindings` emits WebGPU binding metadata, including the
+  device features a shader requires.
   WGSL-only compilation bypasses SPIR-V; request `-spv` or another target
   alongside `-wgsl` to generate both. `-all` keeps its existing targets.
   Texture arrays (`texture2D[N]` and the other sampled kinds) bind each
@@ -222,8 +281,57 @@
   compile instead of failing with "Shader register limit exceeded" or "SSA
   register limit exceeded". Output for shaders that compiled before is
   unchanged.
+- `atomic_cmp_exchange(pointer, compare, value)` stores `value` when the
+  pointer holds `compare`. SPIR-V and the targets compiled from it had the
+  two swapped: `atomic_cmp_exchange(x, 5, 100)` stored 5 when x was 100.
 
 ### Diagnostics
+- Storing a bool where a number goes, or a number where a bool goes, as in
+  `int n = true;` or `resources.counts[0] = a > b;`, is a source error
+  naming the fix (`int(value)`, or a comparison such as `value != 0`). It
+  failed SPIR-V validation.
+- Calls can nest 64 deep; the limit was 8. A call deeper than that is a
+  source error at that call. A function call reported "Function not found",
+  and an `eval` method was inlined until an internal limit and failed
+  without a diagnostic.
+- An `eval` method that calls itself reports "recursion is not supported"
+  at the call, as functions and struct methods do. It was inlined until an
+  internal depth limit and failed without a diagnostic.
+- An enum variant whose payload holds more than 64 scalars, such as five
+  `mat4`s, is a source error. It wrote past the enum's storage.
+- A storage buffer or uniform holding a struct with no fields, directly or
+  nested, is a source error at its first use. GLSL and Metal failed with
+  SPIRV-Cross layout errors.
+- A positional struct constructor with the wrong number of arguments, as
+  in `A(b)` for a two-field `A`, or an argument of the wrong type, is a
+  source error. It failed SPIR-V validation. `A(a)` with an `A` copies it.
+- A constant index past a vector's components or a matrix's columns, as in
+  `p[2]` on a `float2` or `m[3]` on a `mat2`, is a source error naming the
+  type. A write compiled silently and a read failed SPIR-V validation.
+- A write through a pointer to a copy is a source error: a pointer to a
+  vector component (`float^ p = ^v.x; p^ = 9.0;`), to a resource, a stage
+  input or output or shared memory (`(^resources.params.scale)^ = 2.0;`),
+  including one that only gets such a target on a later loop iteration. The
+  write was lost.
+- Assigning a matrix of another size, as in `mat2 m = big;` for a `mat3`,
+  or a vector or scalar to a matrix, as in `mat2 m = float2(1.0, 2.0);`, is
+  a source error. It failed SPIR-V validation.
+- Assigning or initializing with a value of another struct type, as in
+  `A a = b;` for a `B b`, is a source error naming both structs, also for
+  array elements and initializers, whole storage buffer elements and
+  function returns. It failed SPIR-V validation.
+- `store()` on a sampled texture or a sampler is a source error. It
+  compiled as a write to a storage image at that binding.
+- An enum variant payload of the wrong shape, such as a `float3` for
+  `Sphere(float radius)`, is a source error naming the fix. It compiled and
+  stored only the vector's first component. So is a payload of another
+  struct type or matrix size, which failed SPIR-V validation.
+- A pointer variable pointing to a resource, a stage input or output, or
+  shared memory, as in `uint^ p = ^values[0];` on a `shared` array, is a
+  source error. It pointed to a copy, so writes through it were lost.
+- Assigning to a uniform or another read-only resource, as in
+  `resources.params.offset.y = 2.0`, is a source error. The store was
+  silently dropped.
 - A duplicate pass name is reported at the second pass's name, with the line
   of the first, instead of at the end of the second pass.
 - Passing a value where a pointer parameter is expected, a pointer where a

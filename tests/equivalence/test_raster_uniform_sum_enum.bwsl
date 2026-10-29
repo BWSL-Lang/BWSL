@@ -1,0 +1,28 @@
+// A sum enum in a uniform struct is laid out with std140 like any struct a
+// uniform reaches: it starts on a 16-byte boundary and the field after it
+// starts on the next one. It was laid out with std430 alignment, which put
+// it right after the first float.
+pipeline RasterUniformSumEnum {
+    enum Shape {
+        Box(float a, float b),
+        Dot(float r),
+        eval sum :: () -> float {
+            Box(a, b): a + b * 10.0
+            Dot(r): r
+        }
+    }
+    struct Params { float a; Shape e; float g; };
+    resources { params: Params }
+    pass "Main" {
+        use resources { params }
+        vertex {
+            float2[3] p;
+            p[0] = float2(-1.0, -1.0); p[1] = float2(3.0, -1.0); p[2] = float2(-1.0, 3.0);
+            output.position = float4(p[input.vertex_id], 0.0, 1.0);
+        }
+        fragment {
+            output.color = float4(resources.params.a, resources.params.e.sum(),
+                                  resources.params.g, 1.0);
+        }
+    }
+}

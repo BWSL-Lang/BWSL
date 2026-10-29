@@ -102,7 +102,7 @@ bool WGSLBuilder::PrepareControl() {
             continue;
         }
         const u16 opcode = ir->opcodes[instruction];
-        u32 mask = ValueOperandMask(opcode, ir->metadata[instruction]);
+        u32 mask = OperandMask(instruction);
         if (IsCopy(opcode) || opcode == IR::OP_STORAGE_LOAD || opcode == IR::OP_STORAGE_FIELD ||
             opcode == IR::OP_STRUCT_EXTRACT || opcode == IR::OP_BRANCH || opcode == IR::OP_SWITCH) {
             mask = 1;
@@ -135,20 +135,15 @@ bool WGSLBuilder::PrepareControl() {
         const u32 block = ir->phiBlockIndices[phi];
         const u16 reg = ir->phiResultRegs[phi];
         const CoreType type = static_cast<CoreType>(ir->phiTypes[phi]);
+        const u32 structType = (type == CoreType::CUSTOM || type == CoreType::ENUM) && reg < ir->registerCount &&
+            ir->registerStructTypes != nullptr ? ir->registerStructTypes[reg] : 0;
         if (block >= blocks || reg >= ir->registerCount || reg >= IR::RegisterLimit ||
-            registerToValue[reg] != InvalidId || Width(type) == 0) {
+            registerToValue[reg] != InvalidId ||
+            (Width(type) == 0 && MatrixDimension(type) == 0 && StructIndex(structType) == InvalidId)) {
             return Fail("WGSL phi has an invalid block, register or type");
         }
         ++control.phiOffsets[block + 1];
-        const u32 value = values.count++;
-        registerToValue[reg] = value;
-        values.types[value] = static_cast<u16>(type);
-        values.producerInstructions[value] = InvalidId;
-        values.kinds[value] = static_cast<u8>(ValueKind::Value);
-        values.resourceIds[value] = InvalidId;
-        values.indexOperands[value] = 0xFFFF;
-        values.aliasOperands[value] = reg;
-        valueOrigins.registers[value] = reg;
+        NewValue(reg, type, structType, 0, ValueKind::Value);
     }
     for (u32 block = 1; block <= blocks; ++block) {
         control.phiOffsets[block] += control.phiOffsets[block - 1];
@@ -226,8 +221,6 @@ bool WGSLBuilder::ValidateOutputAssignments() {
             const u16 slot = ir->GetOperand(instruction, 0);
             if (opcode == IR::OP_STORE_OUTPUT) {
                 assigned |= 1u << slot;
-            } else if (opcode == IR::OP_LOAD_OUTPUT && !(assigned & (1u << slot))) {
-                return Fail("WGSL output is read before assignment on every incoming path");
             } else if (opcode == IR::OP_RET && stage == ShaderStage::Vertex &&
                        !(assigned & (1u << OutputSlot::POSITION))) {
                 return Fail("WGSL vertex position must be assigned on every return path");

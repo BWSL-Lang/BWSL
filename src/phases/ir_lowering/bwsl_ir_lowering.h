@@ -18,6 +18,7 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <type_traits>
 #include <unordered_set>
 #include <vector>
 
@@ -31,6 +32,48 @@ using BWSL::MakeOverloadMask;
 using BWSL::MakeOverloadMaskFromTypeHash;
 using BWSL::OverloadMaskMatches;
 using BWSL::OverloadTypeMask;
+
+// A growable array in the stage's IR memory pool, as ArenaArray is in an
+// arena: growing leaves the old block in the pool. Cleared, it keeps its
+// block; reset with `= {}` when the pool changes.
+template <typename T>
+struct PoolArray {
+  static_assert(std::is_trivially_copyable_v<T>, "PoolArray copies with memcpy");
+  T *data = nullptr;
+  u32 count = 0;
+  u32 capacity = 0;
+
+  void Push(IRMemoryPool *pool, const T &item) {
+    if (count == capacity) {
+      u32 grown = capacity ? capacity * 2 : 16;
+      T *next = static_cast<T *>(pool->Allocate(grown * sizeof(T), alignof(T)));
+      if (count) memcpy(next, data, count * sizeof(T));
+      data = next;
+      capacity = grown;
+    }
+    data[count++] = item;
+  }
+  // `count` items, zeroed.
+  void Zeroed(IRMemoryPool *pool, u32 items) {
+    if (items > capacity) {
+      data = static_cast<T *>(pool->Allocate(items * sizeof(T), alignof(T)));
+      capacity = items;
+    }
+    count = items;
+    if (items) memset(data, 0, items * sizeof(T));
+  }
+  void Clear() { count = 0; }
+  bool Empty() const { return count == 0; }
+  bool Contains(const T &item) const {
+    for (u32 i = 0; i < count; i++)
+      if (data[i] == item) return true;
+    return false;
+  }
+  T &Back() { return data[count - 1]; }
+  void Pop() { count--; }
+  T &operator[](u32 index) { return data[index]; }
+  const T &operator[](u32 index) const { return data[index]; }
+};
 
 // =============================================================================
 // PassVaryingContext - Tracks vertex outputs for fragment input resolution
@@ -289,13 +332,14 @@ struct IRLowering {
       0xFFFF; // Register to store return value during inlining
   u16 inlineReturnFlagReg = 0xFFFF; // Bool register for early-return tracking
   CoreType inlineReturnType = CoreType::INVALID; // Declared return type
+  u32 inlineReturnStructHash = 0; // Declared struct return type, if any
   u32 inlineReturnCounter = 0;    // Counts returns seen during current inlining
   u32 inlineReturnFlagReads = 0;  // Counts reads of inlineReturnFlagReg
   u32 inlineReturnGuardDepth = 0; // Suppress nested return guards
   u32 inlineDepth = 0; // Current inlining depth (for recursion detection)
   u32 inlineModuleIndex =
       0xFFFFFFFF; // Module index during inlining (for unqualified calls)
-  static constexpr u32 MAX_INLINE_DEPTH = 8;
+  static constexpr u32 MAX_INLINE_DEPTH = 64;
   // Largest right operand of `&&`/`||`, or pair of `?:` arms, evaluated
   // without a branch. A few comparisons of locals fit; anything bigger keeps
   // branching so the operand that isn't needed still skips the work.
@@ -516,6 +560,24 @@ struct IRLowering {
   // isn't a place, so the caller lowers the store as before.
   bool TryStoreLocalPlace(NodeRef target, u16 valueReg);
 
+  // A place inside a storage buffer element: a field, an array field's
+  // element or a vector component of `resources.buffer[i]`. Stores go
+  // through a STORAGE_INDEX/STORAGE_FIELD pointer chain, so they write only
+  // that place: rebuilding the element would overwrite fields that other
+  // invocations write at the same time.
+  struct StoragePlace {
+    u16 reg = 0xFFFF;         // Pointer register
+    CoreType type = CoreType::INVALID;  // Value type (element type of an array field)
+    u32 structHash = 0;       // Struct type when type is CUSTOM
+    u32 arrayLength = 0;      // > 0: an array field
+  };
+  // Like ResolveLocalPlace, for places rooted in a storage buffer element.
+  bool ResolveStoragePlace(NodeRef expr, bool emit, StoragePlace *out);
+  // Stores to a place below a buffer element, and reports stores to
+  // read-only resources. Returns false when `target` is neither, so the
+  // caller lowers the store as before.
+  bool TryStoreStoragePlace(NodeRef target, u16 valueReg);
+
   u16 LowerUnaryOp(NodeRef ref);
   u16 LowerAddressOf(const UnaryOpData &unop, bool *pointsAtCopy,
                      bool *pointsAtArray);
@@ -541,23 +603,76 @@ struct IRLowering {
   // possible, and so does its problem.
   u32 controlDepth = 0;
   std::unordered_map<u16, u32> variableDepth;
-  // A pointer argument inside a loop is checked again when the loop ends,
-  // since a store later in the body reaches it through the back edge. Copies
-  // are kept to carry such a problem to the pointers copied from it.
+  // Inside a loop, a pointer can hold a target from a later point in the
+  // body, reached through the back edge. Pointer copies, stores and
+  // arguments there are logged in lowering order, and checked when the
+  // outermost loop ends: each loop's events are replayed until the states
+  // at its start stop changing, so every use sees every target it can have.
   struct PendingPointerArgument {
     u16 source;
     NodeRef argument;
     u32 functionNameHash;
     u32 index;
   };
-  struct PointerLoopFrame {
-    std::vector<std::pair<u16, u16>> copies;  // (destination, source)
-    std::vector<PendingPointerArgument> arguments;
+  struct PointerEvent {
+    // CONTINUE: the loop's continue target, where a `for` increment starts;
+    // the end of the body and every `skip` reach it.
+    // BRANCH_BEGIN, ARM, BRANCH_END: an `if`, `switch`, pattern arm or
+    // return guard, and the start of each of its arms. Each arm starts from
+    // the state at BRANCH_BEGIN, and the arms that reach their end join at
+    // BRANCH_END.
+    enum Kind : u8 { COPY, STORE, ARGUMENT, SKIP, BREAK, CONTINUE, BRANCH_BEGIN, ARM,
+                     BRANCH_END, LOOP_BEGIN, LOOP_END };
+    Kind kind;
+    bool mayBypass; // BRANCH_END: control can pass without running an arm
+    u16 pointer;  // COPY: the destination
+    u16 source;   // COPY
+    u32 argument; // ARGUMENT: index into pointerEventArguments
+    NodeRef target; // STORE: the `p^ = ...` target
   };
-  std::vector<PointerLoopFrame> pointerLoops;
+  // A branch being replayed: its entry state, and the arms joined so far.
+  struct PointerBranch {
+    u8 *entry;
+    u8 *join;
+    bool entryLive;
+    bool joinLive;
+    bool armOpen;
+  };
+  PoolArray<PointerBranch> pointerBranches;
+  PoolArray<PointerEvent> pointerEvents;
+  PoolArray<PendingPointerArgument> pointerEventArguments;
+  PoolArray<u32> pointerLoopDepths; // controlDepth at the top of each loop's body
+  // When the outermost loop ends: the problems each store and argument can
+  // see, as masks, by event index.
+  PoolArray<u8> pointerEventProblems;
+  // What the outermost loop starts from: the problems then, and the first
+  // register allocated in it. A `^` result made in the loop keeps its
+  // problem in pointerProblems.
+  struct PointerProblemEntry {
+    u16 reg;
+    PointerProblem problem;
+  };
+  PoolArray<PointerProblemEntry> pointerProblemsBeforeLoop;
+  u16 pointerLoopFirstRegister = 0;
+  // The replay gives each register the events mention a slot. A state is
+  // one mask of 1 << PointerProblem per slot.
+  PoolArray<u16> pointerSlots;          // By register: its slot, or 0xFFFF
+  PoolArray<u16> pointerSlotRegisters;  // By slot: its register
   std::unordered_set<u32> reportedPointerArguments;  // Packed NodeRefs
   void BeginPointerLoop();
   void EndPointerLoop();
+  u16 PointerSlot(u16 reg);
+  u8 *NewPointerState(const u8 *from);  // A copy of `from`, or zeroed
+  // Replays the loop whose body starts at pointerEvents[begin], from
+  // `state`, and leaves the state after the loop in it. Marks the problems
+  // each store and argument can see in pointerEventProblems. Returns the
+  // index after the loop's LOOP_END.
+  u32 ReplayPointerLoop(u32 begin, u8 *state);
+  bool InPointerLoop() const { return !pointerLoopDepths.Empty(); }
+  void LogPointerEvent(PointerEvent::Kind kind, bool mayBypass = false) {
+    if (InPointerLoop())
+      pointerEvents.Push(pool, {kind, mayBypass, 0, 0, 0, NodeRef::Null()});
+  }
   bool IsFunctionLocalPlace(NodeRef expr);
   bool IsPointerValue(u16 reg) const;
   // IsPointerValue for a call argument: a texture or sampler handle shares
@@ -568,6 +683,17 @@ struct IRLowering {
   void AssignPointerVariable(u16 reg, u16 source);
   void ReportPointerArgumentProblem(NodeRef argument, u32 functionNameHash,
                                     u32 index, PointerProblem problem);
+  // A store through a pointer to a copy would be lost; reported at `target`.
+  void ReportPointerStoreProblem(NodeRef target, PointerProblem problem);
+  // `^` expressions with a NON_LOCAL target, by result register. A pointer
+  // variable given one would read and write a copy, so storing one in a
+  // variable is reported at the `^`.
+  struct NonLocalAddress {
+    u16 reg;  // 0xFFFF once reported
+    NodeRef node;
+  };
+  PoolArray<NonLocalAddress> nonLocalAddresses;
+  void ReportNonLocalPointerVariable(u16 source);
   // An argument's overload mask; a pointer argument describes its pointee
   // and carries OVERLOAD_POINTER_MASK.
   OverloadTypeMask ArgumentOverloadMask(NodeRef argument, u16 reg);
@@ -614,6 +740,21 @@ struct IRLowering {
   bool IsSumEnumTypeHash(u32 typeHash);
 
   StructData *LookupStructDataByHash(u32 typeHash);
+  // The struct type `typeHash` is, or holds at any depth, with no fields;
+  // 0 when there is none.
+  u32 FindEmptyStruct(u32 typeHash, u32 depth = 0);
+  // Buffer layout. Structs reachable from a uniform use std140 rules, and
+  // so does any struct holding one, so a block never mixes the two; the
+  // rest use std430, which is also WGSL's storage layout. Keyed by the
+  // struct's own (unqualified) name hash.
+  PoolArray<u32> std140Structs;  // Struct name hashes
+  void ComputeStd140Structs();
+  // Lays out the fields of program.structTypes[structIdx], whose types are
+  // filled in: offsets, array strides, alignment and size.
+  void LayoutStructType(u32 structIdx);
+  // Size and alignment of one (non-array) value of `type` in a struct.
+  void FieldLayout(CoreType type, u32 typeHash, bool std140, u32 *size, u32 *align);
+  PoolArray<u32> reportedEmptyStructResources;  // Resource name hashes
 
   bool FindStructField(u32 structTypeHash, u32 fieldNameHash,
                        u32 *outFieldIndex, CoreType *outFieldType = nullptr,
@@ -626,6 +767,26 @@ struct IRLowering {
                                u32 &fieldCount, u32 maxFields);
 
   u32 GetEnumPayloadFieldCount(CoreType type, u32 typeHash);
+  // The storage type of payload slot `slot` of an enum's struct.
+  CoreType EnumPayloadSlotType(u32 enumStructHash, u32 slot);
+  // A payload value of `type` starting at `slot`, converted to its storage:
+  // float bits when its slots are shared with another type.
+  u16 EnumPayloadToSlots(NodeRef node, u16 reg, CoreType type,
+                         u32 enumStructHash, u32 slot);
+  // Reads payload slot `slot` of `receiver` as a `type` scalar.
+  u16 ReadEnumPayloadSlot(u16 receiver, u32 slot, CoreType type);
+  // Struct and matrix payloads are flattened into scalar slots
+  // (AppendEnumPayloadLayout). Appends `value`'s scalars in slot order;
+  // reports at `node` and returns false for a struct with an array field,
+  // which the layout can't hold.
+  struct PayloadScalar {
+    u16 reg;
+    CoreType type;
+  };
+  bool FlattenEnumPayload(NodeRef node, u16 value, CoreType type, u32 typeHash,
+                          PoolArray<PayloadScalar> &scalars);
+  // Rebuilds a payload value of `type` from slots starting at `*slot`.
+  u16 ReadEnumPayloadValue(u16 receiver, u32 *slot, CoreType type, u32 typeHash);
 
   // Register an enum sum type as a struct in the IR.
   // Layout: { int tag; <flattened payload fields for the widest variant> }.
@@ -655,6 +816,12 @@ struct IRLowering {
                        bool restInThen);
 
   void LowerReturn(NodeRef ref);
+  // Returns `valueNode`'s value: into the inline frame when inlining,
+  // otherwise from the function.
+  void LowerReturnValue(NodeRef valueNode, u16 valueReg = 0xFFFF);
+  // The trailing bare expression of a pattern arm's block, lowered as the
+  // arm's return value.
+  NodeRef implicitReturnStatement = NodeRef::Null();
 
   u16 LowerLiteral(NodeRef ref);
 
@@ -673,13 +840,17 @@ struct IRLowering {
   void RecordParameterArrayDimensions(u16 paramReg, const FunctionDeclData &fn,
                                       u32 paramIndex);
 
-  u16 TryLowerStructMethodCall(const FunctionCallData &call, u16 receiverReg,
-                               u16 *args, u32 argCount, u16 dest,
-                               bool receiverIsConst);
+  u16 TryLowerStructMethodCall(NodeRef ref, const FunctionCallData &call,
+                               u16 receiverReg, u16 *args, u32 argCount,
+                               u16 dest, bool receiverIsConst);
 
   // Try to inline a function call, returns the result register or 0xFFFF if
   // inlining failed
-  u16 TryInlineFunction(const FunctionCallData &call, u16 *args, u32 argCount);
+  u16 TryInlineFunction(NodeRef ref, const FunctionCallData &call, u16 *args, u32 argCount);
+  // Calls inline into one another at most MAX_INLINE_DEPTH deep. Reports the
+  // call that would go deeper, once, and returns an untyped placeholder.
+  u16 ReportInlineDepthExceeded(NodeRef ref);
+  bool inlineDepthDiagnosed = false;
   void LowerEnumPatternBody(NodeRef pattern, u16 receiver, const EnumData &enumData);
 
   // Get type name hash for a CoreType using TypeHashes constants
@@ -727,6 +898,10 @@ struct IRLowering {
   u16 AllocateRegister();
 
   u16 EmitConstantInt(u32 value);
+  // Reports a constant index past a vector's components or a matrix's
+  // columns. Returns false when it reported.
+  bool CheckConstComponentIndex(u16 indexReg, NodeRef indexExpr,
+                                CoreType containerType);
   bool CheckConstArrayIndexBounds(u16 baseReg, u16 indexReg,
                                  NodeRef indexExpr = NodeRef::Null());
   bool CheckConstIndexInBounds(u16 indexReg, NodeRef indexExpr, u32 length);
@@ -735,7 +910,10 @@ struct IRLowering {
   u16 EmitConstantUint(u32 value);
 
   u16 ConvertRegisterToType(u16 reg, CoreType targetType);
-  bool CheckStoreShape(NodeRef node, u16 valueReg, CoreType targetType);
+  // Reports a value that can't be stored as `targetType` without an explicit
+  // conversion. `targetStructHash` names the target struct when it is known.
+  bool CheckStoreShape(NodeRef node, u16 valueReg, CoreType targetType,
+                       u32 targetStructHash = 0);
   static std::string SourceTypeName(CoreType type);
   u16 TryConvertScalarConstant(u16 reg, CoreType targetType);
   u16 TryFoldScalarArithmetic(OpCode op, u16 left, u16 right);

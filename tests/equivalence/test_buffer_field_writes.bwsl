@@ -1,0 +1,36 @@
+// Writes below a storage buffer element: a field, a vector component, a
+// swizzle, an array field's element, and fields of a nested struct. Each
+// must store just that place (they were dropped, or written to a copy), and
+// leave the element's other fields as they were.
+pipeline EquivBufferFieldWrites {
+    // Inner is 16-byte aligned in std430 too: GLSL can't express BWSL's
+    // 16-byte alignment of a struct with smaller members inside a buffer.
+    struct Inner { float4 uv; float[3] w; };
+    struct Particle {
+        float3 position;
+        float mass;
+        float[2] extra;
+        Inner inner;
+    };
+    resources { particles: buffer<Particle> output: buffer<float> }
+    pass "Compute" {
+        use resources { particles, output }
+        compute "Main" [4, 1, 1] {
+            uint i = input.global_id.x;
+            resources.particles[i].mass = resources.particles[i].mass * 2.0;
+            resources.particles[i].position.y = 7.0;
+            resources.particles[i].position.xz = float2(float(i), -float(i));
+            resources.particles[i].extra[1] = float(i) + 0.5;
+            resources.particles[i].inner.uv.y = 9.0;
+            resources.particles[i].inner.w[2] += 1.0;
+            resources.particles[i].inner.w[i % 3u] = 4.0;
+            Particle p = resources.particles[i];
+            uint o = i * 13u;
+            resources.output[o] = p.position.x; resources.output[o + 1u] = p.position.y; resources.output[o + 2u] = p.position.z;
+            resources.output[o + 3u] = p.mass; resources.output[o + 4u] = p.extra[0]; resources.output[o + 5u] = p.extra[1];
+            resources.output[o + 6u] = p.inner.uv.x; resources.output[o + 7u] = p.inner.uv.y;
+            resources.output[o + 8u] = p.inner.w[0]; resources.output[o + 9u] = p.inner.w[1]; resources.output[o + 10u] = p.inner.w[2];
+            resources.output[o + 11u] = p.inner.uv.z; resources.output[o + 12u] = p.inner.uv.w;
+        }
+    }
+}

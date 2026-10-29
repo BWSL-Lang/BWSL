@@ -1,0 +1,17 @@
+// A local struct with a field of an empty struct type. Its zero value put
+// a float in the empty field, and WGSL had no declaration for the empty
+// struct; both failed.
+pipeline EquivEmptyStructLocal {
+    struct Empty { };
+    struct Particle { float mass; Empty tag; };
+    resources { output: buffer<float> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [4, 1, 1] {
+            Particle p;
+            p.mass = float(input.global_id.x) * 1.5;
+            Particle q = p;
+            resources.output[input.global_id.x] = q.mass;
+        }
+    }
+}

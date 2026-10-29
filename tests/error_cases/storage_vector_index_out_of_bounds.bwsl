@@ -1,0 +1,12 @@
+// Error case: a constant index past a storage buffer field's vector width.
+// The store went through an out-of-range access chain.
+pipeline WrongAcceptStorageVectorIndexOutOfBounds {
+    struct Particle { float2 position; float mass; };
+    resources { particles: buffer<Particle> }
+    pass "Compute" {
+        use resources { particles }
+        compute "Main" [1, 1, 1] {
+            resources.particles[0].position[2] = 1.0;
+        }
+    }
+}

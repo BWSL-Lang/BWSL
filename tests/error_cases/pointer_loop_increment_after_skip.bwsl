@@ -1,0 +1,20 @@
+// The body always ends in `skip`, but the `for` increment still runs before
+// the next iteration and points the pointer at a vector component, so the
+// write at the top of the body is lost from the second iteration on.
+pipeline PointerLoopIncrementAfterSkip {
+    resources { output: buffer<float> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            float a = 1.0;
+            float3 v = float3(1.0, 2.0, 3.0);
+            float^ p = ^a;
+            for (int i = 0; i < 3; p = ^v.x) {
+                p^ = p^ + 1.0;
+                i++;
+                skip;
+            }
+            resources.output[0] = a + v.x;
+        }
+    }
+}

@@ -1,0 +1,19 @@
+// Error case: an enum payload given a matrix of another size. It failed
+// SPIR-V validation.
+pipeline WrongAcceptEnumPayloadMatrixMismatch {
+    resources { output: buffer<float> }
+    enum Shape {
+        Point(float x),
+        Box(mat2 basis),
+        eval size :: () -> float {
+            Point(x): x
+            Box(m): m[0].x
+        }
+    }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            resources.output[0] = Shape::Box(mat3(1.0)).size();
+        }
+    }
+}

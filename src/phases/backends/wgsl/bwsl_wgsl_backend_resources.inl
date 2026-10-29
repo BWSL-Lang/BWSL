@@ -68,9 +68,17 @@ bool WGSLBuilder::PrepareAdditionalResources() {
     u64 samplerMask = 0;
     u64 comparisonMask = 0;
     u64 ordinaryMask = 0;
+    u32 imageMask = 0;
     for (u32 instruction = 0; instruction < ir->instructionCount; ++instruction) {
-        const u16 opcode = ir->opcodes[instruction];
+        const u16 opcode = TextureBaseOpcode(ir->opcodes[instruction]);
         const u16 operand = ir->GetOperand(instruction, 0);
+        if (opcode == IR::OP_IMG_STORE) {
+            if (!IR::IsResourceHandle(operand) || IR::ResourceHandleSlot(operand) >= 32) {
+                return Fail("WGSL storage images require a declared static slot");
+            }
+            imageMask |= 1u << IR::ResourceHandleSlot(operand);
+            continue;
+        }
         if (opcode == IR::OP_LOAD_UNIFORM) {
             if (operand >= 32) {
                 return Fail("WGSL uniform slot is out of bounds");
@@ -107,6 +115,13 @@ bool WGSLBuilder::PrepareAdditionalResources() {
     uniforms.count = std::popcount(uniformMask);
     textures.count = std::popcount(textureMask);
     samplers.count = std::popcount(samplerMask);
+    storageImages.count = std::popcount(imageMask);
+    storageImages.slots = static_cast<u32*>(Allocate(storageImages.count, sizeof(u32)));
+    for (u32 slot = 0, image = 0; slot < 32; ++slot) {
+        if (imageMask & (1u << slot)) {
+            storageImages.slots[image++] = slot;
+        }
+    }
     if (uniforms.count != 0 && ir->structTypeCount != 0) {
         for (u32 structure = 0; structure < ir->structTypeCount; ++structure) {
             uniformLayouts.fieldCount = std::max(uniformLayouts.fieldCount,
@@ -230,7 +245,7 @@ bool WGSLBuilder::PrepareUniformInstruction(u32 instruction, bool& handled) {
         if (!DefineValue(instruction, type, address ? ValueKind::UniformAddress : ValueKind::Value)) {
             return false;
         }
-        const u32 value = values.count - 1;
+        const u32 value = lastDefined;
         values.resourceIds[value] = uniform;
         uniformAddresses.lengths[value] = uniforms.arrayLengths[uniform];
         uniformAddresses.structTypes[value] = uniforms.structTypes[uniform];
@@ -240,7 +255,9 @@ bool WGSLBuilder::PrepareUniformInstruction(u32 instruction, bool& handled) {
                        opcode == IR::OP_STRUCT_ARRAY_EXTRACT;
     const bool index = opcode == IR::OP_STORAGE_INDEX || opcode == IR::OP_ARRAY_LOAD;
     const bool load = opcode == IR::OP_STORAGE_LOAD;
-    if (!(field || index || load || IsCopy(opcode)) || IR::IsConstant(first) ||
+    // A copy into a variable loads the whole value; see the memory shard.
+    if ((IsCopy(opcode) && (registerFlags[destination] & RegisterVariable)) ||
+        !(field || index || load || IsCopy(opcode)) || IR::IsConstant(first) ||
         first >= ir->registerCount || registerToValue[first] == InvalidId ||
         values.kinds[registerToValue[first]] != static_cast<u8>(ValueKind::UniformAddress)) {
         handled = false;
@@ -287,7 +304,7 @@ bool WGSLBuilder::PrepareUniformInstruction(u32 instruction, bool& handled) {
     if (!DefineValue(instruction, type, address ? ValueKind::UniformAddress : ValueKind::Value)) {
         return false;
     }
-    const u32 value = values.count - 1;
+    const u32 value = lastDefined;
     values.resourceIds[value] = values.resourceIds[base];
     uniformAddresses.bases[value] = base;
     uniformAddresses.byteOffsets[value] = byteOffset;
@@ -322,11 +339,82 @@ bool WGSLBuilder::WriteUniformOffset(TextWriter& writer, u32 value) {
 
 bool WGSLBuilder::WriteUniformLoad(TextWriter& writer, u32 value) {
     const CoreType type = static_cast<CoreType>(values.types[value]);
+    if (values.kinds[value] == static_cast<u8>(ValueKind::UniformAddress)) {
+        return WriteUniformValue(writer, value, type, uniformAddresses.structTypes[value],
+                                 uniformAddresses.lengths[value], 0);
+    }
+    return WriteUniformValue(writer, value, type, 0, 0, 0);
+}
+
+// Loads `extraBytes` past the address `value`: a struct field by field
+// and an array element by element, from the uniform's std140 words.
+bool WGSLBuilder::WriteUniformValue(TextWriter& writer, u32 value, CoreType type, u32 structHash,
+                                    u32 arrayLength, u32 extraBytes) {
+    if (arrayLength != 0) {
+        const u32 stride = (UniformTypeSize(type, structHash) + 15) & ~15u;
+        if (!WriteFullType(writer, type, structHash, arrayLength)) {
+            return false;
+        }
+        writer.Text("(");
+        for (u32 element = 0; element < arrayLength; ++element) {
+            writer.Text(element != 0 ? ", " : "");
+            if (!WriteUniformValue(writer, value, type, structHash, 0, extraBytes + element * stride)) {
+                return false;
+            }
+        }
+        writer.Text(")");
+        return true;
+    }
+    if (type == CoreType::CUSTOM) {
+        const u32 structId = StructIndex(structHash);
+        if (structId == InvalidId || !PrepareUniformLayout(structId)) {
+            return Fail("WGSL uniform struct is missing its layout");
+        }
+        if (!WriteFullType(writer, type, structHash, 0)) {
+            return false;
+        }
+        writer.Text("(");
+        const IR::IRProgram::StructTypeInfo& info = ir->structTypes[structId];
+        for (u32 member = 0; member < info.fieldCount; ++member) {
+            const u32 field = info.fieldOffset + member;
+            writer.Text(member != 0 ? ", " : "");
+            CoreType fieldType = CoreType::INVALID;
+            u32 fieldStruct = 0;
+            u32 fieldLength = 0;
+            if (!FieldShape(structHash, member, fieldType, fieldStruct, fieldLength)) {
+                return false;
+            }
+            // A field array's stride comes from the field's own layout.
+            if (fieldLength != 0) {
+                if (!WriteFullType(writer, fieldType, fieldStruct, fieldLength)) {
+                    return false;
+                }
+                writer.Text("(");
+                for (u32 element = 0; element < fieldLength; ++element) {
+                    writer.Text(element != 0 ? ", " : "");
+                    if (!WriteUniformValue(writer, value, fieldType, fieldStruct, 0,
+                                           extraBytes + uniformLayouts.offsets[field] +
+                                           element * uniformLayouts.strides[field])) {
+                        return false;
+                    }
+                }
+                writer.Text(")");
+            } else if (!WriteUniformValue(writer, value, fieldType, fieldStruct, 0,
+                                          extraBytes + uniformLayouts.offsets[field])) {
+                return false;
+            }
+        }
+        writer.Text(")");
+        return true;
+    }
     const bool matrix = type >= CoreType::MAT2 && type <= CoreType::MAT4;
     const u32 columns = matrix ? static_cast<u32>(type) - static_cast<u32>(CoreType::MAT2) + 2 : 1;
     const u32 width = matrix ? columns : Width(type);
     const CoreType scalar = matrix ? CoreType::FLOAT : Scalar(type);
-    u32 staticOffset = 0;
+    if (width == 0) {
+        return Fail("WGSL uniform value has an unsupported type");
+    }
+    u32 staticOffset = extraBytes;
     for (u32 address = value; address != InvalidId; address = uniformAddresses.bases[address]) {
         staticOffset += uniformAddresses.byteOffsets[address];
         if ((uniformAddresses.strides[address] & 15u) != 0) {
@@ -356,6 +444,11 @@ bool WGSLBuilder::WriteUniformLoad(TextWriter& writer, u32 value) {
         if (!WriteUniformOffset(writer, value)) {
             return false;
         }
+        if (extraBytes / 4 != 0) {
+            writer.Text(" + ");
+            writer.Number(extraBytes / 4);
+            writer.Text("u");
+        }
         writer.Text(") / 4u");
         if (column != 0) {
             writer.Text(" + ");
@@ -382,8 +475,57 @@ bool WGSLBuilder::WriteUniformLoad(TextWriter& writer, u32 value) {
     return true;
 }
 
+bool WGSLBuilder::WriteTextureOffset(TextWriter& writer, u16 operand, u32 width) {
+    // WGSL texel offsets are const-expressions in -8 through 7; follow the
+    // offset back to its integer constants and write them as literals.
+    CoreType type = CoreType::INVALID;
+    if (!OperandType(operand, type)) {
+        return false;
+    }
+    if (type != Shape(CoreType::INT, width)) {
+        return Fail("WGSL texel offset has the wrong shape or scalar type");
+    }
+    u16 components[4] = {operand, 0xFFFF, 0xFFFF, 0xFFFF};
+    if (width > 1) {
+        const u16 alias = values.aliasOperands[registerToValue[operand]];
+        const u32 producer = IR::IsConstant(alias) ? InvalidId
+            : values.producerInstructions[registerToValue[alias]];
+        if (producer == InvalidId || ir->opcodes[producer] != IR::OP_VEC_CONSTRUCT ||
+            VectorArgumentCount(producer) != width) {
+            return Fail("WGSL texel offsets must be constant");
+        }
+        for (u32 component = 0; component < width; ++component) {
+            components[component] = ir->GetOperand(producer, component);
+        }
+    }
+    WriteType(writer, type);
+    writer.Text("(");
+    for (u32 component = 0; component < width; ++component) {
+        u16 value = components[component];
+        if (!IR::IsConstant(value)) {
+            value = values.aliasOperands[registerToValue[value]];
+        }
+        if (!IR::IsIntConstant(value)) {
+            return Fail("WGSL texel offsets must be constant");
+        }
+        s32 offset = 0;
+        const u32 bits = ir->intConstants[IR::IntConstantIndex(value)];
+        std::memcpy(&offset, &bits, sizeof(offset));
+        if (offset < -8 || offset > 7) {
+            return Fail("WGSL texel offsets must be in the range -8 through 7");
+        }
+        writer.Text(component != 0 ? ", " : "");
+        if (!WriteOperand(writer, value)) {
+            return false;
+        }
+    }
+    writer.Text(")");
+    return true;
+}
+
 bool WGSLBuilder::PrepareTextureInstruction(u32 instruction) {
-    const u16 opcode = ir->opcodes[instruction];
+    const u16 opcode = TextureBaseOpcode(ir->opcodes[instruction]);
+    const bool offset = opcode != ir->opcodes[instruction];
     const u32 texture = textureForSlot[IR::UintConstantIndex(ir->GetOperand(instruction, 0))];
     const CoreType textureType = static_cast<CoreType>(textures.types[texture]);
     const u16 destination = ir->destinations[instruction];
@@ -450,11 +592,24 @@ bool WGSLBuilder::PrepareTextureInstruction(u32 instruction) {
     if (textureType == CoreType::TEXTURECUBE && opcode == IR::OP_TEX_FETCH) {
         return Fail("WGSL textureLoad does not accept cube textures");
     }
+    if (offset) {
+        if (textureType == CoreType::TEXTURECUBE ||
+            (opcode == IR::OP_TEX_GATHER && textureType == CoreType::TEXTURE3D)) {
+            return Fail("WGSL has no texel offsets for this texture type");
+        }
+        // Validate the offset once; the size pass discards the text.
+        TextWriter discard;
+        const u16 operand = ir->GetOperand(instruction, opcode == IR::OP_TEX_SAMPLE ? 2 : 3);
+        if (!WriteTextureOffset(discard, operand, textureType == CoreType::TEXTURE3D ? 3 : 2)) {
+            return false;
+        }
+    }
     return DefineValue(instruction, type, ValueKind::Value);
 }
 
 bool WGSLBuilder::WriteTextureExpression(TextWriter& writer, u32 instruction) {
-    const u16 opcode = ir->opcodes[instruction];
+    const u16 opcode = TextureBaseOpcode(ir->opcodes[instruction]);
+    const bool offset = opcode != ir->opcodes[instruction];
     const u32 texture = textureForSlot[IR::UintConstantIndex(ir->GetOperand(instruction, 0))];
     const CoreType textureType = static_cast<CoreType>(textures.types[texture]);
     const bool array = textureType == CoreType::TEXTURE2DARRAY;
@@ -495,13 +650,29 @@ bool WGSLBuilder::WriteTextureExpression(TextWriter& writer, u32 instruction) {
         writer.Text(", bwsl_sampler_");
         writer.Number((metadata & 0x80000000u) ? (metadata & 0xFFFFu) : 32 + textures.slots[texture]);
     }
+    const u32 offsetWidth = textureType == CoreType::TEXTURE3D ? 3 : 2;
+    const u16 offsetOperand = ir->GetOperand(instruction, opcode == IR::OP_TEX_SAMPLE ? 2 : 3);
     if (!query) {
         writer.Text(", ");
+        // textureLoad has no offset parameter; offset the texel instead.
+        if (load && offset) {
+            writer.Text("(");
+        }
         if (!WriteOperand(writer, coords)) {
             return false;
         }
         if (array) {
-            writer.Text(".xy, i32(");
+            writer.Text(".xy");
+        }
+        if (load && offset) {
+            writer.Text(" + ");
+            if (!WriteTextureOffset(writer, offsetOperand, offsetWidth)) {
+                return false;
+            }
+            writer.Text(")");
+        }
+        if (array) {
+            writer.Text(", i32(");
             if (!load) {
                 // BWSL/SPIR-V sampling selects the nearest array layer.
                 // Vulkan permits floor(layer + 0.5); integer texel fetches
@@ -530,6 +701,12 @@ bool WGSLBuilder::WriteTextureExpression(TextWriter& writer, u32 instruction) {
     } else if (opcode == IR::OP_TEX_SIZE) {
         writer.Text(", ");
         if (!WriteConvertedOperand(writer, coords, CoreType::INT)) {
+            return false;
+        }
+    }
+    if (offset && !load) {
+        writer.Text(", ");
+        if (!WriteTextureOffset(writer, offsetOperand, offsetWidth)) {
             return false;
         }
     }
@@ -571,6 +748,13 @@ bool WGSLBuilder::WriteAdditionalResources(TextWriter& writer) {
             writer.Text("<f32>");
         }
         writer.Text(";\n\n");
+    }
+    for (u32 image = 0; image < storageImages.count; ++image) {
+        writer.Text("@group(0) @binding(");
+        writer.Number(storageImages.slots[image]);
+        writer.Text(") var bwsl_image_");
+        writer.Number(storageImages.slots[image]);
+        writer.Text(": texture_storage_2d<rgba32float, write>;\n\n");
     }
     for (u32 sampler = 0; sampler < samplers.count; ++sampler) {
         writer.Text("@group(3) @binding(");

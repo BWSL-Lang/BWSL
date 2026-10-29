@@ -235,7 +235,9 @@ struct IRProgram {
         u32 nameHash;                   // Hash of struct type name
         u32 fieldCount;                 // Number of fields
         u32 fieldOffset;                // Offset into structFieldTypes/structFieldOffsets arrays
-        u32 totalSize;                  // Total byte size (std140 layout)
+        u32 totalSize;                  // Byte size, a multiple of alignment
+        u32 alignment;                  // std430 or std140 alignment
+        u32 std140;                     // Nonzero: std140 rules (reachable from a uniform)
     };
     alignas(64) StructTypeInfo* structTypes;    // Array of struct type definitions
     alignas(64) u16* structFieldTypes;          // Flattened: CoreType for each field
@@ -243,6 +245,7 @@ struct IRProgram {
     alignas(64) u32* structFieldTypeHashes;     // Flattened: custom type hash for each field (0 if not custom)
     alignas(64) u32* structFieldByteOffsets;    // Flattened: byte offset of each field (std140)
     alignas(64) u32* structFieldArraySizes;     // Flattened: array size for each field (0 = not array)
+    alignas(64) u32* structFieldArrayStrides;   // Flattened: element stride of an array field (0 = not array)
     u32 structTypeCount;
     u32 structTypeCapacity;
     u32 structFieldCapacity;
@@ -252,7 +255,6 @@ struct IRProgram {
 
     // Storage buffer pointer tracking
     // For registers holding storage buffer pointers, stores (binding << 16) | flags
-    // Flags: bit 0 = is pointer, bits 1-7 = depth into struct (0=buffer, 1=field, 2=array element, etc.)
     alignas(64) u32* registerStorageInfo;       // Storage buffer info or 0 if not a storage ptr
     static constexpr u32 STORAGE_IS_PTR = 0x1;
     static constexpr u32 STORAGE_IS_SHARED = 0x2;
@@ -261,8 +263,6 @@ struct IRProgram {
     static constexpr u32 STORAGE_IS_FIELD_PTR = 0x10;     // Pointer targets a field of a local struct via access chain
     static constexpr u32 STORAGE_IS_UNIFORM_ARRAY = 0x8000; // Pointer to an array-typed uniform (Uniform storage class)
     static constexpr u32 STORAGE_BINDING_SHIFT = 16;
-    static constexpr u32 STORAGE_DEPTH_SHIFT = 1;
-    static constexpr u32 STORAGE_DEPTH_MASK = 0x7F << 1;
 
     // Shared (workgroup) variable declarations
     alignas(64) u32* sharedNameHashes;
