@@ -135,9 +135,9 @@ inline void IRLowering::BindPointerParameter(const FunctionCallData &call,
   NodeRef argument = index < call.arguments.count ? call.arguments[index] : NodeRef::Null();
   if (InPointerLoop()) {
     // Checked when the loop ends, against every target it can hold.
-    pointerEvents.push_back({PointerEvent::ARGUMENT, false, arg, 0,
-                             static_cast<u32>(pointerEventArguments.size()), NodeRef::Null()});
-    pointerEventArguments.push_back({arg, argument, function.name.nameHash, index});
+    pointerEvents.Push(pool, {PointerEvent::ARGUMENT, false, arg, 0,
+                              pointerEventArguments.count, NodeRef::Null()});
+    pointerEventArguments.Push(pool, {arg, argument, function.name.nameHash, index});
   } else if (auto problem = pointerProblems.find(arg); problem != pointerProblems.end()) {
     ReportPointerArgumentProblem(argument, function.name.nameHash, index, problem->second);
   }
@@ -206,13 +206,16 @@ inline void IRLowering::ReportPointerStoreProblem(NodeRef target,
 }
 
 inline void IRLowering::ReportNonLocalPointerVariable(u16 source) {
-  auto address = nonLocalAddresses.find(source);
-  if (address == nonLocalAddresses.end()) return;
-  ReportErrorAt(address->second,
-                "Error: a pointer variable can't point to a resource, stage "
-                "input or output, or shared memory; copy the value into a "
-                "local variable and point to that\n");
-  nonLocalAddresses.erase(address);
+  for (u32 i = 0; i < nonLocalAddresses.count; i++) {
+    NonLocalAddress &address = nonLocalAddresses[i];
+    if (address.reg != source) continue;
+    ReportErrorAt(address.node,
+                  "Error: a pointer variable can't point to a resource, stage "
+                  "input or output, or shared memory; copy the value into a "
+                  "local variable and point to that\n");
+    address.reg = 0xFFFF;
+    return;
+  }
 }
 
 inline bool IRLowering::ReportPointerArgumentMismatch(
@@ -583,7 +586,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         }
 
         if (flatten) {
-          std::vector<std::pair<u16, CoreType>> scalars;
+          PoolArray<PayloadScalar> scalars;
           for (u32 i = 0; i < argCount; i++) {
             u32 hash = i < variant.associatedTypeHashes.count
                            ? variant.associatedTypeHashes[i] : 0;
@@ -595,7 +598,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
           }
           // The enum struct holds at most 64 payload slots
           // (RegisterEnumAsStructType).
-          if (scalars.size() > 64) {
+          if (scalars.count > 64) {
             ReportErrorAt(ref, "Error: an enum variant's payload can hold at most "
                                "64 scalars; split it across variants\n");
             SetRegisterType(dest, CoreType::INVALID);
@@ -610,8 +613,8 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
           program.metadata[builder.currentInstruction - 1] =
               (variantIndex << 16) |
               ((enumHash != 0 ? enumHash : enumData.name.nameHash) & 0xFF);
-          for (u32 s = 0; s < scalars.size(); s++) {
-            u16 scalar = EnumPayloadToSlots(ref, scalars[s].first, scalars[s].second,
+          for (u32 s = 0; s < scalars.count; s++) {
+            u16 scalar = EnumPayloadToSlots(ref, scalars[s].reg, scalars[s].type,
                                             enumStructHash, s);
             u16 next = AllocateRegister();
             SetRegisterType(next, CoreType::CUSTOM);

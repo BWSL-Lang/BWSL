@@ -124,7 +124,7 @@ inline void IRLowering::LowerBreak() {
     return;
   }
   if (InPointerLoop())
-    pointerEvents.push_back({PointerEvent::BREAK, false, 0, 0, 0, NodeRef::Null(), controlDepth});
+    pointerEvents.Push(pool, {PointerEvent::BREAK, false, 0, 0, 0, NodeRef::Null(), controlDepth});
   u32 jumpIdx = builder.currentInstruction;
   builder.EmitInstruction(OP_JUMP, 0, 0);
   // Record this break for patching when loop ends
@@ -142,7 +142,7 @@ inline void IRLowering::LowerSkip() {
     return;
   }
   if (InPointerLoop())
-    pointerEvents.push_back({PointerEvent::SKIP, false, 0, 0, 0, NodeRef::Null(), controlDepth});
+    pointerEvents.Push(pool, {PointerEvent::SKIP, false, 0, 0, 0, NodeRef::Null(), controlDepth});
   u32 jumpIdx = builder.currentInstruction;
   builder.EmitInstruction(OP_JUMP, 0, 0);
   // Record this skip for patching when continue target is known

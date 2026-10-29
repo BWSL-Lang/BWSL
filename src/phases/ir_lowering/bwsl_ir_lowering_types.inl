@@ -577,22 +577,23 @@ inline u16 IRLowering::ReadEnumPayloadSlot(u16 receiver, u32 slot, CoreType type
 }
 
 inline void IRLowering::ComputeStd140Structs() {
-  std140Structs.clear();
+  std140Structs = {};
   if (!symbols) return;
-  std::vector<u32> pending;
+  PoolArray<u32> pending;
   for (u32 r = 0; r < symbols->resources.count; r++) {
     const ResourceData &resource = symbols->resources[r];
     if (resource.type == ResourceBinding::UniformBuffer && resource.structTypeHash != 0)
-      pending.push_back(resource.structTypeHash);
+      pending.Push(pool, resource.structTypeHash);
   }
   // Every struct a uniform reaches.
-  while (!pending.empty()) {
-    StructData *data = LookupStructDataByHash(pending.back());
-    pending.pop_back();
-    if (!data || !std140Structs.insert(data->name.nameHash).second) continue;
+  while (!pending.Empty()) {
+    StructData *data = LookupStructDataByHash(pending.Back());
+    pending.Pop();
+    if (!data || std140Structs.Contains(data->name.nameHash)) continue;
+    std140Structs.Push(pool, data->name.nameHash);
     for (u32 f = 0; f < data->fields.count; f++) {
       if (data->fields[f].type.coreType == CoreType::CUSTOM)
-        pending.push_back(data->fields[f].type.customTypeHash);
+        pending.Push(pool, data->fields[f].type.customTypeHash);
     }
   }
 }
@@ -624,7 +625,7 @@ inline void IRLowering::FieldLayout(CoreType type, u32 typeHash, bool std140,
 inline void IRLowering::LayoutStructType(u32 structIdx) {
   const u32 fieldCount = program.structTypes[structIdx].fieldCount;
   const u32 firstField = program.structTypes[structIdx].fieldOffset;
-  bool std140 = std140Structs.count(program.structTypes[structIdx].nameHash) != 0;
+  bool std140 = std140Structs.Contains(program.structTypes[structIdx].nameHash);
   // Register nested structs first; one laid out with std140 makes this one
   // std140 too.
   for (u32 f = 0; f < fieldCount && firstField + f < program.structFieldCapacity; f++) {
@@ -676,7 +677,7 @@ inline u32 IRLowering::FindEmptyStruct(u32 typeHash, u32 depth) {
 
 inline bool IRLowering::FlattenEnumPayload(
     NodeRef node, u16 value, CoreType type, u32 typeHash,
-    std::vector<std::pair<u16, CoreType>> &scalars) {
+    PoolArray<PayloadScalar> &scalars) {
   if (type == CoreType::CUSTOM && typeHash != 0 && !IsSumEnumTypeHash(typeHash)) {
     u32 structHash = LookupOrRegisterStructType(typeHash);
     auto it = structTypeMap.find(structHash);
@@ -721,11 +722,11 @@ inline bool IRLowering::FlattenEnumPayload(
       u16 scalar = AllocateRegister();
       SetRegisterType(scalar, component);
       builder.EmitInstruction(OP_VEC_EXTRACT, scalar, value, static_cast<u16>(c));
-      scalars.push_back({scalar, component});
+      scalars.Push(pool, {scalar, component});
     }
     return true;
   }
-  scalars.push_back({value, type});
+  scalars.Push(pool, {value, type});
   return true;
 }
 

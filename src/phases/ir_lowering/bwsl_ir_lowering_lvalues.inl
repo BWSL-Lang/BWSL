@@ -1931,7 +1931,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
       u16 ptrReg = LowerExpression(unaryOp.operand);
       if (InPointerLoop()) {
         // Checked when the loop ends, against every target it can hold.
-        pointerEvents.push_back({PointerEvent::STORE, false, ptrReg, 0, 0, target});
+        pointerEvents.Push(pool, {PointerEvent::STORE, false, ptrReg, 0, 0, target});
       } else if (auto problem = pointerProblems.find(ptrReg); problem != pointerProblems.end()) {
         ReportPointerStoreProblem(target, problem->second);
         return;
@@ -2660,7 +2660,8 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
     // GLSL, Metal and WGSL have no empty structs to lay out in a buffer.
     if ((resData.type == ResourceBinding::StorageBuffer ||
          resData.type == ResourceBinding::UniformBuffer) &&
-        reportedEmptyStructResources.insert(access.member.nameHash).second) {
+        !reportedEmptyStructResources.Contains(access.member.nameHash)) {
+      reportedEmptyStructResources.Push(pool, access.member.nameHash);
       if (u32 empty = FindEmptyStruct(resData.structTypeHash)) {
         std::string message = "Error: resources." + access.member.ToString() +
                               " holds struct " + ReverseLookup::GetString(empty) +

@@ -291,12 +291,18 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   variableStructTypes.clear();
   pointerProblems.clear();
   ComputeStd140Structs();
-  nonLocalAddresses.clear();
+  nonLocalAddresses = {};
+  reportedEmptyStructResources = {};
   controlDepth = 0;
   variableDepth.clear();
-  pointerEvents.clear();
-  pointerEventArguments.clear();
-  pointerLoopDepths.clear();
+  // Their blocks were in the previous stage's pool.
+  pointerEvents = {};
+  pointerEventArguments = {};
+  pointerLoopDepths = {};
+  pointerEventProblems = {};
+  pointerProblemsBeforeLoop = {};
+  pointerSlots = {};
+  pointerSlotRegisters = {};
   reportedPointerArguments.clear();
 }
 

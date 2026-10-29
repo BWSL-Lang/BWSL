@@ -18,6 +18,7 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <type_traits>
 #include <unordered_set>
 #include <vector>
 
@@ -31,6 +32,48 @@ using BWSL::MakeOverloadMask;
 using BWSL::MakeOverloadMaskFromTypeHash;
 using BWSL::OverloadMaskMatches;
 using BWSL::OverloadTypeMask;
+
+// A growable array in the stage's IR memory pool, as ArenaArray is in an
+// arena: growing leaves the old block in the pool. Cleared, it keeps its
+// block; reset with `= {}` when the pool changes.
+template <typename T>
+struct PoolArray {
+  static_assert(std::is_trivially_copyable_v<T>, "PoolArray copies with memcpy");
+  T *data = nullptr;
+  u32 count = 0;
+  u32 capacity = 0;
+
+  void Push(IRMemoryPool *pool, const T &item) {
+    if (count == capacity) {
+      u32 grown = capacity ? capacity * 2 : 16;
+      T *next = static_cast<T *>(pool->Allocate(grown * sizeof(T), alignof(T)));
+      if (count) memcpy(next, data, count * sizeof(T));
+      data = next;
+      capacity = grown;
+    }
+    data[count++] = item;
+  }
+  // `count` items, zeroed.
+  void Zeroed(IRMemoryPool *pool, u32 items) {
+    if (items > capacity) {
+      data = static_cast<T *>(pool->Allocate(items * sizeof(T), alignof(T)));
+      capacity = items;
+    }
+    count = items;
+    if (items) memset(data, 0, items * sizeof(T));
+  }
+  void Clear() { count = 0; }
+  bool Empty() const { return count == 0; }
+  bool Contains(const T &item) const {
+    for (u32 i = 0; i < count; i++)
+      if (data[i] == item) return true;
+    return false;
+  }
+  T &Back() { return data[count - 1]; }
+  void Pop() { count--; }
+  T &operator[](u32 index) { return data[index]; }
+  const T &operator[](u32 index) const { return data[index]; }
+};
 
 // =============================================================================
 // PassVaryingContext - Tracks vertex outputs for fragment input resolution
@@ -587,30 +630,40 @@ struct IRLowering {
     // the arm it is in.
     u32 depth = 0;
   };
-  std::vector<PointerEvent> pointerEvents;
-  std::vector<PendingPointerArgument> pointerEventArguments;
-  std::vector<u32> pointerLoopDepths; // controlDepth at the top of each loop's body
+  PoolArray<PointerEvent> pointerEvents;
+  PoolArray<PendingPointerArgument> pointerEventArguments;
+  PoolArray<u32> pointerLoopDepths; // controlDepth at the top of each loop's body
+  // When the outermost loop ends: the problems each store and argument can
+  // see, as masks, by event index.
+  PoolArray<u8> pointerEventProblems;
   // What the outermost loop starts from: the problems then, and the first
   // register allocated in it. A `^` result made in the loop keeps its
   // problem in pointerProblems.
-  std::unordered_map<u16, PointerProblem> pointerProblemsBeforeLoop;
+  struct PointerProblemEntry {
+    u16 reg;
+    PointerProblem problem;
+  };
+  PoolArray<PointerProblemEntry> pointerProblemsBeforeLoop;
   u16 pointerLoopFirstRegister = 0;
+  // The replay gives each register the events mention a slot. A state is
+  // one mask of 1 << PointerProblem per slot.
+  PoolArray<u16> pointerSlots;          // By register: its slot, or 0xFFFF
+  PoolArray<u16> pointerSlotRegisters;  // By slot: its register
   std::unordered_set<u32> reportedPointerArguments;  // Packed NodeRefs
   void BeginPointerLoop();
   void EndPointerLoop();
-  // Problems as a mask of 1 << PointerProblem, by register.
-  using PointerState = std::unordered_map<u16, u8>;
-  u8 PointerMask(const PointerState &state, u16 reg) const;
+  u16 PointerSlot(u16 reg);
+  u8 *NewPointerState(const u8 *from);  // A copy of `from`, or zeroed
   // Replays the loop whose body starts at pointerEvents[begin], from
   // `state`, and leaves the state after the loop in it. Marks the problems
-  // each store and argument can see in `seen`. Returns the index after the
-  // loop's LOOP_END.
-  size_t ReplayPointerLoop(size_t begin, PointerState &state, std::vector<u8> &seen);
-  bool InPointerLoop() const { return !pointerLoopDepths.empty(); }
+  // each store and argument can see in pointerEventProblems. Returns the
+  // index after the loop's LOOP_END.
+  u32 ReplayPointerLoop(u32 begin, u8 *state);
+  bool InPointerLoop() const { return !pointerLoopDepths.Empty(); }
   // Logs a BOUNDARY at `outerDepth`, the controlDepth outside the arm.
   void PointerControlBoundary(u32 outerDepth) {
     if (InPointerLoop())
-      pointerEvents.push_back({PointerEvent::BOUNDARY, false, 0, 0, 0, NodeRef::Null(), outerDepth});
+      pointerEvents.Push(pool, {PointerEvent::BOUNDARY, false, 0, 0, 0, NodeRef::Null(), outerDepth});
   }
   bool IsFunctionLocalPlace(NodeRef expr);
   bool IsPointerValue(u16 reg) const;
@@ -627,7 +680,11 @@ struct IRLowering {
   // `^` expressions with a NON_LOCAL target, by result register. A pointer
   // variable given one would read and write a copy, so storing one in a
   // variable is reported at the `^`.
-  std::unordered_map<u16, NodeRef> nonLocalAddresses;
+  struct NonLocalAddress {
+    u16 reg;  // 0xFFFF once reported
+    NodeRef node;
+  };
+  PoolArray<NonLocalAddress> nonLocalAddresses;
   void ReportNonLocalPointerVariable(u16 source);
   // An argument's overload mask; a pointer argument describes its pointee
   // and carries OVERLOAD_POINTER_MASK.
@@ -682,14 +739,14 @@ struct IRLowering {
   // so does any struct holding one, so a block never mixes the two; the
   // rest use std430, which is also WGSL's storage layout. Keyed by the
   // struct's own (unqualified) name hash.
-  std::unordered_set<u32> std140Structs;
+  PoolArray<u32> std140Structs;  // Struct name hashes
   void ComputeStd140Structs();
   // Lays out the fields of program.structTypes[structIdx], whose types are
   // filled in: offsets, array strides, alignment and size.
   void LayoutStructType(u32 structIdx);
   // Size and alignment of one (non-array) value of `type` in a struct.
   void FieldLayout(CoreType type, u32 typeHash, bool std140, u32 *size, u32 *align);
-  std::unordered_set<u32> reportedEmptyStructResources;  // Resource name hashes
+  PoolArray<u32> reportedEmptyStructResources;  // Resource name hashes
 
   bool FindStructField(u32 structTypeHash, u32 fieldNameHash,
                        u32 *outFieldIndex, CoreType *outFieldType = nullptr,
@@ -714,8 +771,12 @@ struct IRLowering {
   // (AppendEnumPayloadLayout). Appends `value`'s scalars in slot order;
   // reports at `node` and returns false for a struct with an array field,
   // which the layout can't hold.
+  struct PayloadScalar {
+    u16 reg;
+    CoreType type;
+  };
   bool FlattenEnumPayload(NodeRef node, u16 value, CoreType type, u32 typeHash,
-                          std::vector<std::pair<u16, CoreType>> &scalars);
+                          PoolArray<PayloadScalar> &scalars);
   // Rebuilds a payload value of `type` from slots starting at `*slot`.
   u16 ReadEnumPayloadValue(u16 receiver, u32 *slot, CoreType type, u32 typeHash);
 
