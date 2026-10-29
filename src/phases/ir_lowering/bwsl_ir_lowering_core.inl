@@ -303,6 +303,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   pointerProblemsBeforeLoop = {};
   pointerSlots = {};
   pointerSlotRegisters = {};
+  pointerBranches = {};
   reportedPointerArguments.clear();
 }
 

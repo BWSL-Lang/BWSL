@@ -341,9 +341,7 @@ inline bool IRLowering::IsPointerArgument(NodeRef argument, u16 reg) const {
 inline void IRLowering::DeclarePointerVariable(u16 reg, u16 source) {
   variableDepth[reg] = controlDepth;
   if (InPointerLoop()) {
-    pointerEvents.Push(pool, {PointerEvent::COPY,
-                              controlDepth != pointerLoopDepths.Back(), reg,
-                              source, 0, NodeRef::Null()});
+    pointerEvents.Push(pool, {PointerEvent::COPY, false, reg, source, 0, NodeRef::Null()});
   }
   auto problem = pointerProblems.find(source);
   if (problem != pointerProblems.end()) {
@@ -355,9 +353,7 @@ inline void IRLowering::DeclarePointerVariable(u16 reg, u16 source) {
 
 inline void IRLowering::AssignPointerVariable(u16 reg, u16 source) {
   if (InPointerLoop()) {
-    pointerEvents.Push(pool, {PointerEvent::COPY,
-                              controlDepth != pointerLoopDepths.Back(), reg,
-                              source, 0, NodeRef::Null()});
+    pointerEvents.Push(pool, {PointerEvent::COPY, false, reg, source, 0, NodeRef::Null()});
   }
   auto problem = pointerProblems.find(source);
   if (problem != pointerProblems.end()) {
@@ -411,15 +407,6 @@ inline u8 *IRLowering::NewPointerState(const u8 *from) {
 
 inline u32 IRLowering::ReplayPointerLoop(u32 begin, u8 *state) {
   u32 slots = pointerSlotRegisters.count;
-  // `entry` holds what a pointer can hold at the top of the body: before
-  // the loop, or after an iteration. `skips` and `exits` collect the states
-  // at `skip` and `break`, starting from none; the skips join the end of the
-  // body at the continue target, and run the `for` increment with it.
-  u8 *entry = NewPointerState(state);
-  u8 *exits = NewPointerState(nullptr);
-  u8 *current = NewPointerState(nullptr);
-  u8 *skips = NewPointerState(nullptr);
-  u8 *backEdge = NewPointerState(nullptr);
   auto merge = [&](u8 *into, const u8 *from) {
     bool changed = false;
     for (u32 slot = 0; slot < slots; slot++) {
@@ -428,75 +415,96 @@ inline u32 IRLowering::ReplayPointerLoop(u32 begin, u8 *state) {
     }
     return changed;
   };
+  // `entry` holds what a pointer can hold at the top of the body: before
+  // the loop, or after an iteration. `skips` and `exits` collect the states
+  // at `skip` and `break`. The skips join the end of the body at the
+  // continue target and run the `for` increment with it. A path that ended
+  // in `skip` or `break` isn't live, and its events are passed over.
+  u8 *entry = NewPointerState(state);
+  u8 *exits = NewPointerState(nullptr);
+  u8 *current = NewPointerState(nullptr);
+  u8 *skips = NewPointerState(nullptr);
+  u8 *backEdge = NewPointerState(nullptr);
+  bool exited = false;
   u32 end = begin;
   for (bool changed = true; changed;) {
     memcpy(current, entry, slots);
     memset(skips, 0, slots);
     memset(backEdge, 0, slots);
-    // After a `skip` or `break`, the rest of its arm doesn't run: events
-    // there are passed over until control leaves the arm.
-    bool dead = false;
-    u32 deadDepth = 0;
+    bool live = true, skipped = false;
     u32 i = begin;
     while (pointerEvents[i].kind != PointerEvent::LOOP_END) {
       const PointerEvent &event = pointerEvents[i];
-      if (dead && event.kind == PointerEvent::BOUNDARY && event.depth < deadDepth) {
-        dead = false;
-      }
-      if (event.kind == PointerEvent::CONTINUE) {
-        // The end of the body, if it runs, and every `skip` arrive here.
-        if (dead) memcpy(current, skips, slots);
-        else merge(current, skips);
-        memset(skips, 0, slots);
-        dead = false;
-      }
-      if (dead) {
-        if (event.kind == PointerEvent::LOOP_BEGIN) {
-          for (u32 nesting = 1; nesting > 0;) {
-            i++;
-            if (pointerEvents[i].kind == PointerEvent::LOOP_BEGIN) nesting++;
-            if (pointerEvents[i].kind == PointerEvent::LOOP_END) nesting--;
-          }
-        }
-        i++;
-        continue;
-      }
       switch (event.kind) {
-      case PointerEvent::COPY: {
-        u8 mask = current[pointerSlots[event.source]];
-        u8 &target = current[pointerSlots[event.pointer]];
-        target = event.conditional ? target | mask : mask;
+      case PointerEvent::COPY:
+        if (live) current[pointerSlots[event.pointer]] = current[pointerSlots[event.source]];
         break;
-      }
       case PointerEvent::STORE:
       case PointerEvent::ARGUMENT:
-        pointerEventProblems[i] |= current[pointerSlots[event.pointer]];
+        if (live) pointerEventProblems[i] |= current[pointerSlots[event.pointer]];
         break;
       case PointerEvent::SKIP:
+        if (live) merge(skips, current), skipped = true;
+        live = false;
+        break;
       case PointerEvent::BREAK:
-        merge(event.kind == PointerEvent::SKIP ? skips : exits, current);
-        dead = true;
-        deadDepth = event.depth;
+        if (live) merge(exits, current), exited = true;
+        live = false;
         break;
       case PointerEvent::CONTINUE:
+        if (skipped) {
+          if (live) merge(current, skips);
+          else memcpy(current, skips, slots);
+          live = true;
+        }
+        memset(skips, 0, slots);
+        skipped = false;
         break;
-      case PointerEvent::BOUNDARY:
+      case PointerEvent::BRANCH_BEGIN:
+        pointerBranches.Push(pool, {NewPointerState(current), NewPointerState(nullptr),
+                                    live, false, false});
         break;
+      case PointerEvent::ARM: {
+        PointerBranch &branch = pointerBranches.Back();
+        if (branch.armOpen && live) merge(branch.join, current), branch.joinLive = true;
+        branch.armOpen = true;
+        memcpy(current, branch.entry, slots);
+        live = branch.entryLive;
+        break;
+      }
+      case PointerEvent::BRANCH_END: {
+        PointerBranch &branch = pointerBranches.Back();
+        if (branch.armOpen && live) merge(branch.join, current), branch.joinLive = true;
+        if (event.mayBypass && branch.entryLive)
+          merge(branch.join, branch.entry), branch.joinLive = true;
+        memcpy(current, branch.join, slots);
+        live = branch.joinLive;
+        pointerBranches.Pop();
+        break;
+      }
       case PointerEvent::LOOP_BEGIN:
-        i = ReplayPointerLoop(i + 1, current);
-        continue;
+        if (live) {
+          i = ReplayPointerLoop(i + 1, current);
+          continue;
+        }
+        for (u32 nesting = 1; nesting > 0;) {
+          i++;
+          if (pointerEvents[i].kind == PointerEvent::LOOP_BEGIN) nesting++;
+          if (pointerEvents[i].kind == PointerEvent::LOOP_END) nesting--;
+        }
+        break;
       case PointerEvent::LOOP_END:
         break;
       }
       i++;
     }
     end = i + 1;
-    if (!dead) merge(backEdge, current);
-    merge(backEdge, skips);  // A loop without a continue target event
+    if (live) merge(backEdge, current);
+    if (skipped) merge(backEdge, skips);  // A loop without a continue target event
     changed = merge(entry, backEdge);
   }
   // The loop may run no iterations, stop at its condition or break.
-  merge(entry, exits);
+  if (exited) merge(entry, exits);
   memcpy(state, entry, slots);
   return end;
 }

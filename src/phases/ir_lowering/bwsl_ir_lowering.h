@@ -615,23 +615,30 @@ struct IRLowering {
     u32 index;
   };
   struct PointerEvent {
-    // BOUNDARY: control enters or leaves a branch arm or switch case.
     // CONTINUE: the loop's continue target, where a `for` increment starts;
     // the end of the body and every `skip` reach it.
-    enum Kind : u8 { COPY, STORE, ARGUMENT, SKIP, BREAK, BOUNDARY, CONTINUE, LOOP_BEGIN, LOOP_END };
+    // BRANCH_BEGIN, ARM, BRANCH_END: an `if`, `switch`, pattern arm or
+    // return guard, and the start of each of its arms. Each arm starts from
+    // the state at BRANCH_BEGIN, and the arms that reach their end join at
+    // BRANCH_END.
+    enum Kind : u8 { COPY, STORE, ARGUMENT, SKIP, BREAK, CONTINUE, BRANCH_BEGIN, ARM,
+                     BRANCH_END, LOOP_BEGIN, LOOP_END };
     Kind kind;
-    // COPY: on some paths through its loop's body only, so the old target
-    // stays possible.
-    bool conditional;
+    bool mayBypass; // BRANCH_END: control can pass without running an arm
     u16 pointer;  // COPY: the destination
     u16 source;   // COPY
     u32 argument; // ARGUMENT: index into pointerEventArguments
     NodeRef target; // STORE: the `p^ = ...` target
-    // SKIP, BREAK: controlDepth there. BOUNDARY: controlDepth outside the
-    // arm. Code after a `skip` or `break` doesn't run until control leaves
-    // the arm it is in.
-    u32 depth = 0;
   };
+  // A branch being replayed: its entry state, and the arms joined so far.
+  struct PointerBranch {
+    u8 *entry;
+    u8 *join;
+    bool entryLive;
+    bool joinLive;
+    bool armOpen;
+  };
+  PoolArray<PointerBranch> pointerBranches;
   PoolArray<PointerEvent> pointerEvents;
   PoolArray<PendingPointerArgument> pointerEventArguments;
   PoolArray<u32> pointerLoopDepths; // controlDepth at the top of each loop's body
@@ -662,14 +669,9 @@ struct IRLowering {
   // index after the loop's LOOP_END.
   u32 ReplayPointerLoop(u32 begin, u8 *state);
   bool InPointerLoop() const { return !pointerLoopDepths.Empty(); }
-  void PointerLoopContinue() {
+  void LogPointerEvent(PointerEvent::Kind kind, bool mayBypass = false) {
     if (InPointerLoop())
-      pointerEvents.Push(pool, {PointerEvent::CONTINUE, false, 0, 0, 0, NodeRef::Null()});
-  }
-  // Logs a BOUNDARY at `outerDepth`, the controlDepth outside the arm.
-  void PointerControlBoundary(u32 outerDepth) {
-    if (InPointerLoop())
-      pointerEvents.Push(pool, {PointerEvent::BOUNDARY, false, 0, 0, 0, NodeRef::Null(), outerDepth});
+      pointerEvents.Push(pool, {kind, mayBypass, 0, 0, 0, NodeRef::Null()});
   }
   bool IsFunctionLocalPlace(NodeRef expr);
   bool IsPointerValue(u16 reg) const;

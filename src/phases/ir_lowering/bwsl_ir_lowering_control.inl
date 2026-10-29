@@ -99,11 +99,12 @@ inline void IRLowering::LowerStatementsWithReturnGuard(const BlockData &block,
   inlineReturnFlagReads++;
 
   u32 falseTarget = builder.currentInstruction;
-  PointerControlBoundary(controlDepth);
+  LogPointerEvent(PointerEvent::BRANCH_BEGIN);
+  LogPointerEvent(PointerEvent::ARM);
   controlDepth++;
   LowerStatements(block, first, true);
   controlDepth--;
-  PointerControlBoundary(controlDepth);
+  LogPointerEvent(PointerEvent::BRANCH_END, true);
 
   u32 mergePoint = builder.currentInstruction;
   builder.EmitInstruction(OP_NOP, 0, 0);
@@ -124,7 +125,7 @@ inline void IRLowering::LowerBreak() {
     return;
   }
   if (InPointerLoop())
-    pointerEvents.Push(pool, {PointerEvent::BREAK, false, 0, 0, 0, NodeRef::Null(), controlDepth});
+    pointerEvents.Push(pool, {PointerEvent::BREAK, false, 0, 0, 0, NodeRef::Null()});
   u32 jumpIdx = builder.currentInstruction;
   builder.EmitInstruction(OP_JUMP, 0, 0);
   // Record this break for patching when loop ends
@@ -142,7 +143,7 @@ inline void IRLowering::LowerSkip() {
     return;
   }
   if (InPointerLoop())
-    pointerEvents.Push(pool, {PointerEvent::SKIP, false, 0, 0, 0, NodeRef::Null(), controlDepth});
+    pointerEvents.Push(pool, {PointerEvent::SKIP, false, 0, 0, 0, NodeRef::Null()});
   u32 jumpIdx = builder.currentInstruction;
   builder.EmitInstruction(OP_JUMP, 0, 0);
   // Record this skip for patching when continue target is known
@@ -239,7 +240,7 @@ inline void IRLowering::LowerForCStyle(NodeRef ref) {
 
   // Continue target = start of increment
   u32 continueTarget = builder.currentInstruction;
-  PointerLoopContinue();
+  LogPointerEvent(PointerEvent::CONTINUE);
 
   // Increment
   if (!forLoop.increment.IsNull()) {
@@ -403,7 +404,7 @@ inline void IRLowering::LowerForRange(NodeRef ref) {
 
     u32 continueTarget = builder.currentInstruction;
 
-    PointerLoopContinue();
+    LogPointerEvent(PointerEvent::CONTINUE);
     // The bounds only rule out wraparound while the body leaves the iterator
     // alone: an assignment or a pointer to it could move it anywhere.
     bool bodyWritesIterator = program.registerStorageInfo[iterReg] != 0;
@@ -521,7 +522,7 @@ inline void IRLowering::LowerForCollection(NodeRef ref) {
 
   // Continue target = start of increment
   u32 continueTarget = builder.currentInstruction;
-  PointerLoopContinue();
+  LogPointerEvent(PointerEvent::CONTINUE);
 
   // Increment index
   builder.EmitInstruction(OP_IADD, indexReg, indexReg, EmitConstantInt(1));
@@ -596,7 +597,7 @@ inline void IRLowering::LowerLoop(NodeRef ref) {
 
     // Continue target = start of increment
     u32 continueTarget = builder.currentInstruction;
-    PointerLoopContinue();
+    LogPointerEvent(PointerEvent::CONTINUE);
 
     // Increment
     builder.EmitInstruction(OP_IADD, iterReg, iterReg, EmitConstantInt(1));
@@ -662,7 +663,7 @@ inline void IRLowering::LowerLoop(NodeRef ref) {
 
     // Continue target = back-edge
     u32 continueTarget = builder.currentInstruction;
-    PointerLoopContinue();
+    LogPointerEvent(PointerEvent::CONTINUE);
 
     // Jump back to loop header
     u32 backEdgeIdx = builder.currentInstruction;
@@ -951,11 +952,12 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
   u32 *caseJumps = (u32 *)alloca(caseArmCount * sizeof(u32));
 
   switchDepth++;
+  LogPointerEvent(PointerEvent::BRANCH_BEGIN);
   controlDepth++;
   for (u32 i = 0; i < caseArmCount; i++) {
     NodeRef caseRef = sw.cases[i];
     const SwitchCaseData &caseData = ast->GetSwitchCase(caseRef);
-    PointerControlBoundary(controlDepth - 1);
+    LogPointerEvent(PointerEvent::ARM);
 
     caseTargets[i] = builder.currentInstruction;
 
@@ -974,7 +976,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
   u32 defaultJumpIdx = 0;
   if (hasDefault) {
     const SwitchCaseData &defaultData = ast->GetSwitchCase(sw.defaultCase);
-    PointerControlBoundary(controlDepth - 1);
+    LogPointerEvent(PointerEvent::ARM);
     if (!defaultData.body.IsNull()) {
       LowerStatement(defaultData.body);
     }
@@ -983,7 +985,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
     builder.EmitInstruction(OP_JUMP, 0, 0);
   }
   controlDepth--;
-  PointerControlBoundary(controlDepth);
+  LogPointerEvent(PointerEvent::BRANCH_END, !hasDefault);
   switchDepth--;
 
   u32 mergePoint = builder.currentInstruction;
@@ -1132,7 +1134,8 @@ inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
   u32 trueTarget = builder.currentInstruction;
 
   // Lower true branch
-  PointerControlBoundary(controlDepth);
+  LogPointerEvent(PointerEvent::BRANCH_BEGIN);
+  LogPointerEvent(PointerEvent::ARM);
   controlDepth++;
   if (rest && restInThen) {
     lowerBranchAndRest(block.statements[1]);
@@ -1140,7 +1143,6 @@ inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
     LowerStatement(block.statements[1]);
   }
   controlDepth--;
-  PointerControlBoundary(controlDepth);
 
   bool restInElse = rest && !restInThen;
   u32 jumpOverElseIdx = 0;
@@ -1153,7 +1155,7 @@ inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
   u32 falseTarget = builder.currentInstruction;
 
   bool needMergePad = true;
-  PointerControlBoundary(controlDepth);
+  LogPointerEvent(PointerEvent::ARM);  // The else arm, empty without one
   controlDepth++;
   if (restInElse) {
     lowerBranchAndRest(block.statements.count > 2 ? block.statements[2]
@@ -1179,7 +1181,7 @@ inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
     needMergePad = true;
   }
   controlDepth--;
-  PointerControlBoundary(controlDepth);
+  LogPointerEvent(PointerEvent::BRANCH_END);
 
   // Set merge point to current instruction (NOP location if we emit one)
   u32 mergePoint = builder.currentInstruction;
