@@ -286,6 +286,10 @@
   two swapped: `atomic_cmp_exchange(x, 5, 100)` stored 5 when x was 100.
 
 ### Diagnostics
+- Storing a bool where a number goes, or a number where a bool goes, as in
+  `int n = true;` or `resources.counts[0] = a > b;`, is a source error
+  naming the fix (`int(value)`, or a comparison such as `value != 0`). It
+  failed SPIR-V validation.
 - An `eval` method that calls itself reports "recursion is not supported"
   at the call, as functions and struct methods do. It was inlined until an
   internal depth limit and failed without a diagnostic.

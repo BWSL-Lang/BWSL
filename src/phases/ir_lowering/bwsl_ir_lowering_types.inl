@@ -1421,6 +1421,20 @@ inline bool IRLowering::CheckStoreShape(NodeRef node, u16 valueReg,
     ReportErrorAt(node, message.c_str());
     return false;
   }
+  // A bool and a number don't convert implicitly either way; the store
+  // failed SPIR-V validation.
+  if ((sourceType == CoreType::BOOL) != (targetType == CoreType::BOOL) &&
+      (mask(sourceType) & TypeMasks::SCALAR_TYPES) &&
+      (mask(targetType) & TypeMasks::SCALAR_TYPES)) {
+    std::string source = SourceTypeName(sourceType);
+    std::string target = SourceTypeName(targetType);
+    std::string message =
+        "Error: cannot implicitly convert " + source + " to " + target +
+        (targetType == CoreType::BOOL ? "; compare instead, such as value != 0\n"
+                                      : "; convert with " + target + "(value)\n");
+    ReportErrorAt(node, message.c_str());
+    return false;
+  }
   constexpr TypeMask vectors = TypeMasks::VECTOR_TYPES | TypeMasks::BOOL_VECTORS;
   constexpr TypeMask values = vectors | TypeMasks::SCALAR_TYPES;
   bool sourceVector = (mask(sourceType) & vectors) != 0;

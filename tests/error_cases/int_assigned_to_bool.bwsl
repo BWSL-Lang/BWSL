@@ -1,0 +1,14 @@
+// Error case: a number doesn't convert to a bool implicitly; it failed
+// SPIR-V validation.
+pipeline IntAssignedToBool {
+    resources { counts: buffer<int> }
+    pass "Main" {
+        use resources { counts }
+        compute "Main" [1, 1, 1] {
+            bool any = resources.counts[1];
+            if (any) {
+                resources.counts[0] = 1;
+            }
+        }
+    }
+}
