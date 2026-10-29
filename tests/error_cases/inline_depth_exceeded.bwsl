@@ -1,0 +1,20 @@
+// Error case: calls nested deeper than the inliner goes. It reported
+// "Function not found" for the innermost call.
+pipeline InlineDepthExceeded {
+    f1 :: (float x) -> float { return f2(x) + 1.0; }
+    f2 :: (float x) -> float { return f3(x) + 1.0; }
+    f3 :: (float x) -> float { return f4(x) + 1.0; }
+    f4 :: (float x) -> float { return f5(x) + 1.0; }
+    f5 :: (float x) -> float { return f6(x) + 1.0; }
+    f6 :: (float x) -> float { return f7(x) + 1.0; }
+    f7 :: (float x) -> float { return f8(x) + 1.0; }
+    f8 :: (float x) -> float { return f9(x) + 1.0; }
+    f9 :: (float x) -> float { return x * 2.0; }
+    resources { output: buffer<float> }
+    pass "Main" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            resources.output[0] = f1(1.0);
+        }
+    }
+}

@@ -761,13 +761,17 @@ struct IRLowering {
   void RecordParameterArrayDimensions(u16 paramReg, const FunctionDeclData &fn,
                                       u32 paramIndex);
 
-  u16 TryLowerStructMethodCall(const FunctionCallData &call, u16 receiverReg,
-                               u16 *args, u32 argCount, u16 dest,
-                               bool receiverIsConst);
+  u16 TryLowerStructMethodCall(NodeRef ref, const FunctionCallData &call,
+                               u16 receiverReg, u16 *args, u32 argCount,
+                               u16 dest, bool receiverIsConst);
 
   // Try to inline a function call, returns the result register or 0xFFFF if
   // inlining failed
-  u16 TryInlineFunction(const FunctionCallData &call, u16 *args, u32 argCount);
+  u16 TryInlineFunction(NodeRef ref, const FunctionCallData &call, u16 *args, u32 argCount);
+  // Calls inline into one another at most MAX_INLINE_DEPTH deep. Reports the
+  // call that would go deeper, once, and returns an untyped placeholder.
+  u16 ReportInlineDepthExceeded(NodeRef ref);
+  bool inlineDepthDiagnosed = false;
   void LowerEnumPatternBody(NodeRef pattern, u16 receiver, const EnumData &enumData);
 
   // Get type name hash for a CoreType using TypeHashes constants

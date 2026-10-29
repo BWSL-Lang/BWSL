@@ -82,6 +82,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
     builder.currentSourceNode = 0xFFFFFFFF;
   builder.nextRegister = 0;
   recursionDiagnosed = false;
+  inlineDepthDiagnosed = false;
   hadError = false;
   suppressErrorOutput = false;
   diagnostics.clear();

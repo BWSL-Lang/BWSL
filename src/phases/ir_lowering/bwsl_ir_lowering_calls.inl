@@ -672,7 +672,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
           }
 
           u16 methodResult = TryLowerStructMethodCall(
-              call, receiverReg, args, argCount, dest, receiverIsConst);
+              ref, call, receiverReg, args, argCount, dest, receiverIsConst);
           if (methodResult != 0xFFFF) {
             return methodResult;
           }
@@ -813,6 +813,11 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
               }
               // Only the matching arm runs: it returns into an inline frame,
               // as an inlined function body does.
+              if (inlineDepth >= MAX_INLINE_DEPTH) {
+                variableRegisters = savedVarRegs;
+                nodeRegisters = savedNodeRegisters;
+                return ReportInlineDepthExceeded(ref);
+              }
               for (u32 i = 0; i < inlineStackDepth; i++) {
                 if (inlineStackPacked[i] != methodRef.packed) continue;
                 if (!recursionDiagnosed) {
@@ -1416,7 +1421,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       // A user function can intentionally use a core type word as its name
       // (for example, `double :: (int x) -> int`). Prefer a matching
       // overload before falling back to constructor/conversion semantics.
-      u16 inlinedResult = TryInlineFunction(call, args, argCount);
+      u16 inlinedResult = TryInlineFunction(ref, call, args, argCount);
       if (inlinedResult != 0xFFFF) {
         builder.EmitInstruction(OP_STORE_REG, dest, inlinedResult);
         CoreType resultType = GetRegisterType(inlinedResult);
@@ -1767,7 +1772,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       }
 
       // Try to inline user function call
-      u16 inlinedResult = TryInlineFunction(call, args, argCount);
+      u16 inlinedResult = TryInlineFunction(ref, call, args, argCount);
       if (inlinedResult != 0xFFFF) {
         // Successfully inlined - copy result to dest
         builder.EmitInstruction(OP_STORE_REG, dest, inlinedResult);
@@ -1917,7 +1922,8 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
   return dest;
 }
 
-inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
+inline u16 IRLowering::TryLowerStructMethodCall(NodeRef ref,
+                                                const FunctionCallData &call,
                                                 u16 receiverReg, u16 *args,
                                                 u32 argCount, u16 dest,
                                                 bool receiverIsConst) {
@@ -2006,7 +2012,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   }
 
   if (inlineDepth >= MAX_INLINE_DEPTH) {
-    return 0xFFFF;
+    return ReportInlineDepthExceeded(ref);
   }
 
   u32 methodModuleIndex = 0xFFFFFFFF;
@@ -2188,7 +2194,22 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   return dest;
 }
 
-inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args, u32 argCount) {
+inline u16 IRLowering::ReportInlineDepthExceeded(NodeRef ref) {
+  if (!inlineDepthDiagnosed) {
+    inlineDepthDiagnosed = true;
+    char msg[192];
+    snprintf(msg, sizeof(msg),
+             "Error: calls are nested more than %u deep here; merge some of "
+             "the functions\n",
+             MAX_INLINE_DEPTH);
+    ReportErrorAt(ref, msg);
+  }
+  u16 placeholder = AllocateRegister();
+  SetRegisterType(placeholder, CoreType::INVALID);
+  return placeholder;
+}
+
+inline u16 IRLowering::TryInlineFunction(NodeRef ref, const FunctionCallData &call, u16 *args, u32 argCount) {
   // Look up the function in the AST
   // Check if this is a module-qualified call (e.g.,
   // Globals::decompressPosition)
@@ -2423,9 +2444,8 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
     }
   }
 
-  // Check inline depth to prevent infinite recursion
   if (inlineDepth >= MAX_INLINE_DEPTH) {
-    return 0xFFFF;
+    return ReportInlineDepthExceeded(ref);
   }
 
   // Save current variable register mappings, struct types, and node register
