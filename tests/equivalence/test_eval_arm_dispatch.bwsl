@@ -28,6 +28,7 @@ pipeline EquivEvalArmDispatch {
                 1.0 * float(n);
             }
             D(z): {
+                resources.output[9] += 1.0;
                 float m = z * 2.0;
                 m > 0.0 ? m : -m;
             }
