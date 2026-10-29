@@ -4016,8 +4016,9 @@ def main() -> int:
     passed += constprop_passed
     failed += constprop_failed
 
-    from hlsl_cbuffer_tests import run_hlsl_cbuffer_tests
-    cbuffer_passed, cbuffer_failed = run_hlsl_cbuffer_tests(bwslc)
+    import hlsl_cbuffer_tests
+    hlsl_cbuffer_tests.DXC = DXC
+    cbuffer_passed, cbuffer_failed = hlsl_cbuffer_tests.run_hlsl_cbuffer_tests(bwslc)
     passed += cbuffer_passed
     failed += cbuffer_failed
 
