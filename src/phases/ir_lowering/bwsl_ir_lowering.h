@@ -560,35 +560,48 @@ struct IRLowering {
   // possible, and so does its problem.
   u32 controlDepth = 0;
   std::unordered_map<u16, u32> variableDepth;
-  // A pointer argument inside a loop is checked again when the loop ends,
-  // since a store later in the body reaches it through the back edge. Copies
-  // are kept to carry such a problem to the pointers copied from it.
+  // Inside a loop, a pointer can hold a target from a later point in the
+  // body, reached through the back edge. Pointer copies, stores and
+  // arguments there are logged in lowering order, and checked when the
+  // outermost loop ends: each loop's events are replayed until the states
+  // at its start stop changing, so every use sees every target it can have.
   struct PendingPointerArgument {
     u16 source;
     NodeRef argument;
     u32 functionNameHash;
     u32 index;
   };
-  struct PointerLoopFrame {
-    std::vector<std::pair<u16, u16>> copies;  // (destination, source)
-    std::vector<PendingPointerArgument> arguments;
-    std::vector<std::pair<u16, NodeRef>> stores;  // (pointer, `p^ = ...` target)
-    // Pointer variables assigned at the top of the body so far: every path
-    // through an iteration does that before what follows, so a use after it
-    // can't see a target from the previous iteration.
-    // Maps each to its problem then (-1: none), which is what a use later in
-    // the body sees, whatever the variable held before the loop.
-    u32 depth = 0;
-    std::unordered_map<u16, int> killed;
+  struct PointerEvent {
+    enum Kind : u8 { COPY, STORE, ARGUMENT, SKIP, BREAK, LOOP_BEGIN, LOOP_END };
+    Kind kind;
+    // COPY: on some paths through its loop's body only, so the old target
+    // stays possible.
+    bool conditional;
+    u16 pointer;  // COPY: the destination
+    u16 source;   // COPY
+    u32 argument; // ARGUMENT: index into pointerEventArguments
+    NodeRef target; // STORE: the `p^ = ...` target
   };
-  std::vector<PointerLoopFrame> pointerLoops;
+  std::vector<PointerEvent> pointerEvents;
+  std::vector<PendingPointerArgument> pointerEventArguments;
+  std::vector<u32> pointerLoopDepths; // controlDepth at the top of each loop's body
+  // What the outermost loop starts from: the problems then, and the first
+  // register allocated in it. A `^` result made in the loop keeps its
+  // problem in pointerProblems.
+  std::unordered_map<u16, PointerProblem> pointerProblemsBeforeLoop;
+  u16 pointerLoopFirstRegister = 0;
   std::unordered_set<u32> reportedPointerArguments;  // Packed NodeRefs
   void BeginPointerLoop();
-  // The problem a use of pointer `reg` sees here: an innermost loop's
-  // top-level reassignment wins over the variable's state, which also
-  // covers the loop running zero times.
-  bool FindPointerProblem(u16 reg, PointerProblem *out) const;
   void EndPointerLoop();
+  // Problems as a mask of 1 << PointerProblem, by register.
+  using PointerState = std::unordered_map<u16, u8>;
+  u8 PointerMask(const PointerState &state, u16 reg) const;
+  // Replays the loop whose body starts at pointerEvents[begin], from
+  // `state`, and leaves the state after the loop in it. Marks the problems
+  // each store and argument can see in `seen`. Returns the index after the
+  // loop's LOOP_END.
+  size_t ReplayPointerLoop(size_t begin, PointerState &state, std::vector<u8> &seen);
+  bool InPointerLoop() const { return !pointerLoopDepths.empty(); }
   bool IsFunctionLocalPlace(NodeRef expr);
   bool IsPointerValue(u16 reg) const;
   // IsPointerValue for a call argument: a texture or sampler handle shares

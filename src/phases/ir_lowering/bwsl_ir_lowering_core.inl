@@ -293,7 +293,9 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   nonLocalAddresses.clear();
   controlDepth = 0;
   variableDepth.clear();
-  pointerLoops.clear();
+  pointerEvents.clear();
+  pointerEventArguments.clear();
+  pointerLoopDepths.clear();
   reportedPointerArguments.clear();
 }
 

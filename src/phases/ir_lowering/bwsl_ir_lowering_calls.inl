@@ -132,15 +132,14 @@ inline OverloadTypeMask IRLowering::ArgumentOverloadMask(NodeRef argument, u16 r
 inline void IRLowering::BindPointerParameter(const FunctionCallData &call,
                                              const FunctionDeclData &function,
                                              u32 index, u16 arg) {
-  PointerProblem problem;
-  if (FindPointerProblem(arg, &problem)) {
-    ReportPointerArgumentProblem(
-        index < call.arguments.count ? call.arguments[index] : NodeRef::Null(),
-        function.name.nameHash, index, problem);
-  } else if (!pointerLoops.empty() && !pointerLoops.back().killed.count(arg)) {
-    pointerLoops.back().arguments.push_back(
-        {arg, index < call.arguments.count ? call.arguments[index] : NodeRef::Null(),
-         function.name.nameHash, index});
+  NodeRef argument = index < call.arguments.count ? call.arguments[index] : NodeRef::Null();
+  if (InPointerLoop()) {
+    // Checked when the loop ends, against every target it can hold.
+    pointerEvents.push_back({PointerEvent::ARGUMENT, false, arg, 0,
+                             static_cast<u32>(pointerEventArguments.size()), NodeRef::Null()});
+    pointerEventArguments.push_back({arg, argument, function.name.nameHash, index});
+  } else if (auto problem = pointerProblems.find(arg); problem != pointerProblems.end()) {
+    ReportPointerArgumentProblem(argument, function.name.nameHash, index, problem->second);
   }
   // The copy keeps the pointer's target, so writes through it reach the
   // caller's variable, and two parameters given the same address alias.

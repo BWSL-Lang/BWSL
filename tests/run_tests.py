@@ -480,6 +480,8 @@ ERROR_CASE_TESTS = {
     "pointer_store_to_copy.bwsl": "the pointer points to a temporary copy",
     "pointer_store_to_copy_in_loop.bwsl": "the pointer points to a temporary copy",
     "pointer_store_to_uniform.bwsl": "the pointer points to a resource",
+    "pointer_loop_conditional_reassign.bwsl": "this write through a pointer would be lost",
+    "pointer_loop_skip_back_edge.bwsl": "this write through a pointer would be lost",
 }
 
 ERROR_CASE_MODULE_DIRS = {
@@ -495,6 +497,9 @@ ERROR_CASE_EXTRA_EXPECTATIONS = {
     "duplicate_pass_name.bwsl": ["duplicate_pass_name.bwsl:14:"],
     # Both the vector and the matrix index are reported.
     "vector_index_out_of_bounds.bwsl": ["index 2 is out of bounds for float2, which has 2 components"],
+    # At the write the branch or the `skip` makes lost.
+    "pointer_loop_conditional_reassign.bwsl": ["pointer_loop_conditional_reassign.bwsl:16:"],
+    "pointer_loop_skip_back_edge.bwsl": ["pointer_loop_skip_back_edge.bwsl:12:"],
     # Each store path reports at its own line.
     "struct_store_type_mismatch.bwsl": [
         "struct_store_type_mismatch.bwsl:9:",

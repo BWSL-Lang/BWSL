@@ -340,13 +340,10 @@ inline bool IRLowering::IsPointerArgument(NodeRef argument, u16 reg) const {
 
 inline void IRLowering::DeclarePointerVariable(u16 reg, u16 source) {
   variableDepth[reg] = controlDepth;
-  if (!pointerLoops.empty()) {
-    pointerLoops.back().copies.push_back({reg, source});
-    if (controlDepth == pointerLoops.back().depth) {
-      auto problem = pointerProblems.find(source);
-      pointerLoops.back().killed[reg] =
-          problem != pointerProblems.end() ? static_cast<int>(problem->second) : -1;
-    }
+  if (InPointerLoop()) {
+    pointerEvents.push_back({PointerEvent::COPY,
+                             controlDepth != pointerLoopDepths.back(), reg,
+                             source, 0, NodeRef::Null()});
   }
   auto problem = pointerProblems.find(source);
   if (problem != pointerProblems.end()) {
@@ -357,13 +354,10 @@ inline void IRLowering::DeclarePointerVariable(u16 reg, u16 source) {
 }
 
 inline void IRLowering::AssignPointerVariable(u16 reg, u16 source) {
-  if (!pointerLoops.empty()) {
-    pointerLoops.back().copies.push_back({reg, source});
-    if (controlDepth == pointerLoops.back().depth) {
-      auto problem = pointerProblems.find(source);
-      pointerLoops.back().killed[reg] =
-          problem != pointerProblems.end() ? static_cast<int>(problem->second) : -1;
-    }
+  if (InPointerLoop()) {
+    pointerEvents.push_back({PointerEvent::COPY,
+                             controlDepth != pointerLoopDepths.back(), reg,
+                             source, 0, NodeRef::Null()});
   }
   auto problem = pointerProblems.find(source);
   if (problem != pointerProblems.end()) {
@@ -376,64 +370,121 @@ inline void IRLowering::AssignPointerVariable(u16 reg, u16 source) {
   }
 }
 
-inline bool IRLowering::FindPointerProblem(u16 reg, PointerProblem *out) const {
-  for (auto frame = pointerLoops.rbegin(); frame != pointerLoops.rend(); ++frame) {
-    auto killed = frame->killed.find(reg);
-    if (killed == frame->killed.end()) continue;
-    if (killed->second < 0) return false;
-    *out = static_cast<PointerProblem>(killed->second);
-    return true;
-  }
-  auto problem = pointerProblems.find(reg);
-  if (problem == pointerProblems.end()) return false;
-  *out = problem->second;
-  return true;
-}
-
 inline void IRLowering::BeginPointerLoop() {
   controlDepth++;
-  pointerLoops.emplace_back();
-  pointerLoops.back().depth = controlDepth;
+  if (!InPointerLoop()) {
+    pointerEvents.clear();
+    pointerEventArguments.clear();
+    pointerProblemsBeforeLoop = pointerProblems;
+    pointerLoopFirstRegister = static_cast<u16>(program.registerCount);
+  }
+  pointerLoopDepths.push_back(controlDepth);
+  pointerEvents.push_back({PointerEvent::LOOP_BEGIN, false, 0, 0, 0, NodeRef::Null()});
+}
+
+inline u8 IRLowering::PointerMask(const PointerState &state, u16 reg) const {
+  auto known = state.find(reg);
+  if (known != state.end()) return known->second;
+  // Not assigned in the loop: a pointer from before it, or a `^` result.
+  const auto &problems = reg < pointerLoopFirstRegister ? pointerProblemsBeforeLoop
+                                                        : pointerProblems;
+  auto problem = problems.find(reg);
+  return problem != problems.end() ? static_cast<u8>(1u << static_cast<u32>(problem->second)) : 0;
+}
+
+inline size_t IRLowering::ReplayPointerLoop(size_t begin, PointerState &state,
+                                            std::vector<u8> &seen) {
+  // `entry` holds what a pointer can hold at the top of the body: before
+  // the loop, or at the end of an iteration or a `skip`. `backEdge` and
+  // `exits` collect the states at those jumps, starting from none.
+  PointerState entry = state, exits;
+  auto merge = [&](PointerState &into, const PointerState &from, bool collecting) {
+    bool changed = false;
+    for (const auto &[reg, mask] : from) {
+      auto known = into.find(reg);
+      u8 before = known != into.end() ? known->second
+                  : collecting        ? 0
+                                      : PointerMask(into, reg);
+      into[reg] = before | mask;
+      changed |= (before | mask) != before;
+    }
+    return changed;
+  };
+  size_t end = begin;
+  for (bool changed = true; changed;) {
+    PointerState current = entry, backEdge;
+    size_t i = begin;
+    while (pointerEvents[i].kind != PointerEvent::LOOP_END) {
+      const PointerEvent &event = pointerEvents[i];
+      switch (event.kind) {
+      case PointerEvent::COPY: {
+        u8 mask = PointerMask(current, event.source);
+        current[event.pointer] =
+            event.conditional ? PointerMask(current, event.pointer) | mask : mask;
+        break;
+      }
+      case PointerEvent::STORE:
+      case PointerEvent::ARGUMENT:
+        seen[i] |= PointerMask(current, event.pointer);
+        break;
+      case PointerEvent::SKIP:
+        merge(backEdge, current, true);
+        break;
+      case PointerEvent::BREAK:
+        merge(exits, current, true);
+        break;
+      case PointerEvent::LOOP_BEGIN:
+        i = ReplayPointerLoop(i + 1, current, seen);
+        continue;
+      case PointerEvent::LOOP_END:
+        break;
+      }
+      i++;
+    }
+    end = i + 1;
+    merge(backEdge, current, true);
+    changed = merge(entry, backEdge, false);
+  }
+  // The loop may run no iterations, stop at its condition or break.
+  merge(entry, exits, false);
+  state = std::move(entry);
+  return end;
 }
 
 inline void IRLowering::EndPointerLoop() {
-  PointerLoopFrame frame = std::move(pointerLoops.back());
-  pointerLoops.pop_back();
+  pointerEvents.push_back({PointerEvent::LOOP_END, false, 0, 0, 0, NodeRef::Null()});
+  pointerLoopDepths.pop_back();
   controlDepth--;
-  // Problems stored anywhere in the body reach every copy made from them on
-  // a later iteration. Kills aren't modeled, so this over-approximates.
-  for (bool changed = true; changed;) {
-    changed = false;
-    for (const auto &[dest, source] : frame.copies) {
-      auto problem = pointerProblems.find(source);
-      if (problem != pointerProblems.end() && !pointerProblems.count(dest)) {
-        pointerProblems[dest] = problem->second;
-        changed = true;
-      }
-    }
-  }
-  for (const PendingPointerArgument &pending : frame.arguments) {
-    auto problem = pointerProblems.find(pending.source);
-    if (problem != pointerProblems.end()) {
+  if (InPointerLoop()) return;
+  PointerState state;
+  std::vector<u8> seen(pointerEvents.size(), 0);
+  ReplayPointerLoop(1, state, seen);
+  for (size_t i = 0; i < pointerEvents.size(); i++) {
+    if (!seen[i]) continue;
+    u32 first = 0;
+    while (!(seen[i] & (1u << first))) first++;
+    PointerProblem problem = static_cast<PointerProblem>(first);
+    const PointerEvent &event = pointerEvents[i];
+    if (event.kind == PointerEvent::STORE) {
+      ReportPointerStoreProblem(event.target, problem);
+    } else if (event.kind == PointerEvent::ARGUMENT) {
+      const PendingPointerArgument &pending = pointerEventArguments[event.argument];
       ReportPointerArgumentProblem(pending.argument, pending.functionNameHash,
-                                   pending.index, problem->second);
+                                   pending.index, problem);
     }
   }
-  for (const auto &[pointer, target] : frame.stores) {
-    auto problem = pointerProblems.find(pointer);
-    if (problem != pointerProblems.end()) ReportPointerStoreProblem(target, problem->second);
-  }
-  // An enclosing loop's back edge can carry a problem into this one too.
-  if (!pointerLoops.empty()) {
-    PointerLoopFrame &outer = pointerLoops.back();
-    outer.copies.insert(outer.copies.end(), frame.copies.begin(), frame.copies.end());
-    for (const PendingPointerArgument &pending : frame.arguments) {
-      if (!outer.killed.count(pending.source)) outer.arguments.push_back(pending);
+  // What each pointer can hold after the loop.
+  for (const auto &[reg, mask] : state) {
+    if (mask == 0) {
+      pointerProblems.erase(reg);
+      continue;
     }
-    for (const auto &store : frame.stores) {
-      if (!outer.killed.count(store.first)) outer.stores.push_back(store);
-    }
+    u32 first = 0;
+    while (!(mask & (1u << first))) first++;
+    pointerProblems[reg] = static_cast<PointerProblem>(first);
   }
+  pointerEvents.clear();
+  pointerEventArguments.clear();
 }
 
 inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {

@@ -1,0 +1,25 @@
+// Pointers that only ever write a local inside loops: one reassigned in an
+// outer loop and written in an inner one, and one copied from it. Before
+// each loop, and at the end of each iteration, the pointer points to a
+// vector component (a copy), which no write reaches.
+pipeline EquivPointerLoopNested {
+    resources { output: buffer<float> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            float a = 1.0;
+            float3 v = float3(1.0, 2.0, 3.0);
+            float^ p = ^v.x;
+            for (int i = 0; i < 3; i++) {
+                p = ^a;
+                for (int j = 0; j < 2; j++) {
+                    p^ = p^ + 1.0;
+                }
+                float^ q = p;
+                q^ = q^ + 0.5;
+                p = ^v.y;
+            }
+            resources.output[0] = a;
+        }
+    }
+}
