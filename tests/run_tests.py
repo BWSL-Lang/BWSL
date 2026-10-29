@@ -482,7 +482,7 @@ ERROR_CASE_TESTS = {
     "pointer_store_to_copy.bwsl": "the pointer points to a temporary copy",
     "pointer_store_to_copy_in_loop.bwsl": "the pointer points to a temporary copy",
     "pointer_store_to_uniform.bwsl": "the pointer points to a resource",
-    "inline_depth_exceeded.bwsl": "calls are nested more than 8 deep here",
+    "inline_depth_exceeded.bwsl": "calls are nested more than 64 deep here",
     "pointer_loop_conditional_reassign.bwsl": "this write through a pointer would be lost",
     "pointer_loop_skip_back_edge.bwsl": "this write through a pointer would be lost",
 }
@@ -501,7 +501,7 @@ ERROR_CASE_EXTRA_EXPECTATIONS = {
     # Both the vector and the matrix index are reported.
     "vector_index_out_of_bounds.bwsl": ["index 2 is out of bounds for float2, which has 2 components"],
     # At the call that goes one level too deep.
-    "inline_depth_exceeded.bwsl": ["inline_depth_exceeded.bwsl:11:"],
+    "inline_depth_exceeded.bwsl": ["inline_depth_exceeded.bwsl:67:"],
     # At the write the branch or the `skip` makes lost.
     "pointer_loop_conditional_reassign.bwsl": ["pointer_loop_conditional_reassign.bwsl:16:"],
     "pointer_loop_skip_back_edge.bwsl": ["pointer_loop_skip_back_edge.bwsl:12:"],

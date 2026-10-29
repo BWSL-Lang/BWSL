@@ -290,10 +290,10 @@
   `int n = true;` or `resources.counts[0] = a > b;`, is a source error
   naming the fix (`int(value)`, or a comparison such as `value != 0`). It
   failed SPIR-V validation.
-- Calls nested more than 8 deep, which the inliner doesn't reach, are a
-  source error at the call that goes too deep. A function call reported
-  "Function not found", and an `eval` method was inlined until an internal
-  limit and failed without a diagnostic.
+- Calls can nest 64 deep; the limit was 8. A call deeper than that is a
+  source error at that call. A function call reported "Function not found",
+  and an `eval` method was inlined until an internal limit and failed
+  without a diagnostic.
 - An `eval` method that calls itself reports "recursion is not supported"
   at the call, as functions and struct methods do. It was inlined until an
   internal depth limit and failed without a diagnostic.

@@ -296,7 +296,7 @@ struct IRLowering {
   u32 inlineDepth = 0; // Current inlining depth (for recursion detection)
   u32 inlineModuleIndex =
       0xFFFFFFFF; // Module index during inlining (for unqualified calls)
-  static constexpr u32 MAX_INLINE_DEPTH = 8;
+  static constexpr u32 MAX_INLINE_DEPTH = 64;
   // Largest right operand of `&&`/`||`, or pair of `?:` arms, evaluated
   // without a branch. A few comparisons of locals fit; anything bigger keeps
   // branching so the operand that isn't needed still skips the work.
