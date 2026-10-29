@@ -616,7 +616,9 @@ struct IRLowering {
   };
   struct PointerEvent {
     // BOUNDARY: control enters or leaves a branch arm or switch case.
-    enum Kind : u8 { COPY, STORE, ARGUMENT, SKIP, BREAK, BOUNDARY, LOOP_BEGIN, LOOP_END };
+    // CONTINUE: the loop's continue target, where a `for` increment starts;
+    // the end of the body and every `skip` reach it.
+    enum Kind : u8 { COPY, STORE, ARGUMENT, SKIP, BREAK, BOUNDARY, CONTINUE, LOOP_BEGIN, LOOP_END };
     Kind kind;
     // COPY: on some paths through its loop's body only, so the old target
     // stays possible.
@@ -660,6 +662,10 @@ struct IRLowering {
   // index after the loop's LOOP_END.
   u32 ReplayPointerLoop(u32 begin, u8 *state);
   bool InPointerLoop() const { return !pointerLoopDepths.Empty(); }
+  void PointerLoopContinue() {
+    if (InPointerLoop())
+      pointerEvents.Push(pool, {PointerEvent::CONTINUE, false, 0, 0, 0, NodeRef::Null()});
+  }
   // Logs a BOUNDARY at `outerDepth`, the controlDepth outside the arm.
   void PointerControlBoundary(u32 outerDepth) {
     if (InPointerLoop())

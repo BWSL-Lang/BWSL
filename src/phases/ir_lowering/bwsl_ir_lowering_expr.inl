@@ -412,11 +412,13 @@ inline u8 *IRLowering::NewPointerState(const u8 *from) {
 inline u32 IRLowering::ReplayPointerLoop(u32 begin, u8 *state) {
   u32 slots = pointerSlotRegisters.count;
   // `entry` holds what a pointer can hold at the top of the body: before
-  // the loop, or at the end of an iteration or a `skip`. `backEdge` and
-  // `exits` collect the states at those jumps, starting from none.
+  // the loop, or after an iteration. `skips` and `exits` collect the states
+  // at `skip` and `break`, starting from none; the skips join the end of the
+  // body at the continue target, and run the `for` increment with it.
   u8 *entry = NewPointerState(state);
   u8 *exits = NewPointerState(nullptr);
   u8 *current = NewPointerState(nullptr);
+  u8 *skips = NewPointerState(nullptr);
   u8 *backEdge = NewPointerState(nullptr);
   auto merge = [&](u8 *into, const u8 *from) {
     bool changed = false;
@@ -429,6 +431,7 @@ inline u32 IRLowering::ReplayPointerLoop(u32 begin, u8 *state) {
   u32 end = begin;
   for (bool changed = true; changed;) {
     memcpy(current, entry, slots);
+    memset(skips, 0, slots);
     memset(backEdge, 0, slots);
     // After a `skip` or `break`, the rest of its arm doesn't run: events
     // there are passed over until control leaves the arm.
@@ -438,6 +441,13 @@ inline u32 IRLowering::ReplayPointerLoop(u32 begin, u8 *state) {
     while (pointerEvents[i].kind != PointerEvent::LOOP_END) {
       const PointerEvent &event = pointerEvents[i];
       if (dead && event.kind == PointerEvent::BOUNDARY && event.depth < deadDepth) {
+        dead = false;
+      }
+      if (event.kind == PointerEvent::CONTINUE) {
+        // The end of the body, if it runs, and every `skip` arrive here.
+        if (dead) memcpy(current, skips, slots);
+        else merge(current, skips);
+        memset(skips, 0, slots);
         dead = false;
       }
       if (dead) {
@@ -464,9 +474,11 @@ inline u32 IRLowering::ReplayPointerLoop(u32 begin, u8 *state) {
         break;
       case PointerEvent::SKIP:
       case PointerEvent::BREAK:
-        merge(event.kind == PointerEvent::SKIP ? backEdge : exits, current);
+        merge(event.kind == PointerEvent::SKIP ? skips : exits, current);
         dead = true;
         deadDepth = event.depth;
+        break;
+      case PointerEvent::CONTINUE:
         break;
       case PointerEvent::BOUNDARY:
         break;
@@ -480,6 +492,7 @@ inline u32 IRLowering::ReplayPointerLoop(u32 begin, u8 *state) {
     }
     end = i + 1;
     if (!dead) merge(backEdge, current);
+    merge(backEdge, skips);  // A loop without a continue target event
     changed = merge(entry, backEdge);
   }
   // The loop may run no iterations, stop at its condition or break.
@@ -507,9 +520,18 @@ inline void IRLowering::EndPointerLoop() {
         event.kind == PointerEvent::ARGUMENT)
       PointerSlot(event.pointer);
   }
+  // A pointer variable declared in the loop has no target before its
+  // declaration; its lowering-time problem may come from a stale one.
+  u8 *declaredInLoop = NewPointerState(nullptr);
+  for (u32 i = 0; i < pointerEvents.count; i++) {
+    const PointerEvent &event = pointerEvents[i];
+    if (event.kind == PointerEvent::COPY && event.pointer >= pointerLoopFirstRegister)
+      declaredInLoop[pointerSlots[event.pointer]] = 1;
+  }
   u8 *state = NewPointerState(nullptr);
   for (u32 slot = 0; slot < pointerSlotRegisters.count; slot++) {
     u16 reg = pointerSlotRegisters[slot];
+    if (declaredInLoop[slot]) continue;
     if (reg < pointerLoopFirstRegister) {
       for (u32 j = 0; j < pointerProblemsBeforeLoop.count; j++)
         if (pointerProblemsBeforeLoop[j].reg == reg)

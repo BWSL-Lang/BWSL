@@ -239,6 +239,7 @@ inline void IRLowering::LowerForCStyle(NodeRef ref) {
 
   // Continue target = start of increment
   u32 continueTarget = builder.currentInstruction;
+  PointerLoopContinue();
 
   // Increment
   if (!forLoop.increment.IsNull()) {
@@ -401,6 +402,8 @@ inline void IRLowering::LowerForRange(NodeRef ref) {
     loopDepth--;
 
     u32 continueTarget = builder.currentInstruction;
+
+    PointerLoopContinue();
     // The bounds only rule out wraparound while the body leaves the iterator
     // alone: an assignment or a pointer to it could move it anywhere.
     bool bodyWritesIterator = program.registerStorageInfo[iterReg] != 0;
@@ -518,6 +521,7 @@ inline void IRLowering::LowerForCollection(NodeRef ref) {
 
   // Continue target = start of increment
   u32 continueTarget = builder.currentInstruction;
+  PointerLoopContinue();
 
   // Increment index
   builder.EmitInstruction(OP_IADD, indexReg, indexReg, EmitConstantInt(1));
@@ -592,6 +596,7 @@ inline void IRLowering::LowerLoop(NodeRef ref) {
 
     // Continue target = start of increment
     u32 continueTarget = builder.currentInstruction;
+    PointerLoopContinue();
 
     // Increment
     builder.EmitInstruction(OP_IADD, iterReg, iterReg, EmitConstantInt(1));
@@ -657,6 +662,7 @@ inline void IRLowering::LowerLoop(NodeRef ref) {
 
     // Continue target = back-edge
     u32 continueTarget = builder.currentInstruction;
+    PointerLoopContinue();
 
     // Jump back to loop header
     u32 backEdgeIdx = builder.currentInstruction;

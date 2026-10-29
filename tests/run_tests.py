@@ -485,6 +485,7 @@ ERROR_CASE_TESTS = {
     "inline_depth_exceeded.bwsl": "calls are nested more than 64 deep here",
     "pointer_loop_conditional_reassign.bwsl": "this write through a pointer would be lost",
     "pointer_loop_skip_back_edge.bwsl": "this write through a pointer would be lost",
+    "pointer_loop_increment_after_skip.bwsl": "this write through a pointer would be lost",
 }
 
 ERROR_CASE_MODULE_DIRS = {
@@ -505,6 +506,7 @@ ERROR_CASE_EXTRA_EXPECTATIONS = {
     # At the write the branch or the `skip` makes lost.
     "pointer_loop_conditional_reassign.bwsl": ["pointer_loop_conditional_reassign.bwsl:16:"],
     "pointer_loop_skip_back_edge.bwsl": ["pointer_loop_skip_back_edge.bwsl:12:"],
+    "pointer_loop_increment_after_skip.bwsl": ["pointer_loop_increment_after_skip.bwsl:13:"],
     # Each store path reports at its own line.
     "struct_store_type_mismatch.bwsl": [
         "struct_store_type_mismatch.bwsl:9:",
