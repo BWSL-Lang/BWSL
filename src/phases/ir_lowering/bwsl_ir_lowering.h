@@ -572,7 +572,8 @@ struct IRLowering {
     u32 index;
   };
   struct PointerEvent {
-    enum Kind : u8 { COPY, STORE, ARGUMENT, SKIP, BREAK, LOOP_BEGIN, LOOP_END };
+    // BOUNDARY: control enters or leaves a branch arm or switch case.
+    enum Kind : u8 { COPY, STORE, ARGUMENT, SKIP, BREAK, BOUNDARY, LOOP_BEGIN, LOOP_END };
     Kind kind;
     // COPY: on some paths through its loop's body only, so the old target
     // stays possible.
@@ -581,6 +582,10 @@ struct IRLowering {
     u16 source;   // COPY
     u32 argument; // ARGUMENT: index into pointerEventArguments
     NodeRef target; // STORE: the `p^ = ...` target
+    // SKIP, BREAK: controlDepth there. BOUNDARY: controlDepth outside the
+    // arm. Code after a `skip` or `break` doesn't run until control leaves
+    // the arm it is in.
+    u32 depth = 0;
   };
   std::vector<PointerEvent> pointerEvents;
   std::vector<PendingPointerArgument> pointerEventArguments;
@@ -602,6 +607,11 @@ struct IRLowering {
   // loop's LOOP_END.
   size_t ReplayPointerLoop(size_t begin, PointerState &state, std::vector<u8> &seen);
   bool InPointerLoop() const { return !pointerLoopDepths.empty(); }
+  // Logs a BOUNDARY at `outerDepth`, the controlDepth outside the arm.
+  void PointerControlBoundary(u32 outerDepth) {
+    if (InPointerLoop())
+      pointerEvents.push_back({PointerEvent::BOUNDARY, false, 0, 0, 0, NodeRef::Null(), outerDepth});
+  }
   bool IsFunctionLocalPlace(NodeRef expr);
   bool IsPointerValue(u16 reg) const;
   // IsPointerValue for a call argument: a texture or sampler handle shares

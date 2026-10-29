@@ -413,9 +413,27 @@ inline size_t IRLowering::ReplayPointerLoop(size_t begin, PointerState &state,
   size_t end = begin;
   for (bool changed = true; changed;) {
     PointerState current = entry, backEdge;
+    // After a `skip` or `break`, the rest of its arm doesn't run: events
+    // there are passed over until control leaves the arm.
+    bool dead = false;
+    u32 deadDepth = 0;
     size_t i = begin;
     while (pointerEvents[i].kind != PointerEvent::LOOP_END) {
       const PointerEvent &event = pointerEvents[i];
+      if (dead && event.kind == PointerEvent::BOUNDARY && event.depth < deadDepth) {
+        dead = false;
+      }
+      if (dead) {
+        if (event.kind == PointerEvent::LOOP_BEGIN) {
+          for (u32 nesting = 1; nesting > 0;) {
+            i++;
+            if (pointerEvents[i].kind == PointerEvent::LOOP_BEGIN) nesting++;
+            if (pointerEvents[i].kind == PointerEvent::LOOP_END) nesting--;
+          }
+        }
+        i++;
+        continue;
+      }
       switch (event.kind) {
       case PointerEvent::COPY: {
         u8 mask = PointerMask(current, event.source);
@@ -428,10 +446,12 @@ inline size_t IRLowering::ReplayPointerLoop(size_t begin, PointerState &state,
         seen[i] |= PointerMask(current, event.pointer);
         break;
       case PointerEvent::SKIP:
-        merge(backEdge, current, true);
-        break;
       case PointerEvent::BREAK:
-        merge(exits, current, true);
+        merge(event.kind == PointerEvent::SKIP ? backEdge : exits, current, true);
+        dead = true;
+        deadDepth = event.depth;
+        break;
+      case PointerEvent::BOUNDARY:
         break;
       case PointerEvent::LOOP_BEGIN:
         i = ReplayPointerLoop(i + 1, current, seen);
@@ -442,7 +462,7 @@ inline size_t IRLowering::ReplayPointerLoop(size_t begin, PointerState &state,
       i++;
     }
     end = i + 1;
-    merge(backEdge, current, true);
+    if (!dead) merge(backEdge, current, true);
     changed = merge(entry, backEdge, false);
   }
   // The loop may run no iterations, stop at its condition or break.

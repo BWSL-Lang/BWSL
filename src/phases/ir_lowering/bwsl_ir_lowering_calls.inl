@@ -378,6 +378,7 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
         payloadIndex += width;
       }
     }
+    PointerControlBoundary(controlDepth);
     controlDepth++;
     if (arm.body.Type() == ASTNodeType::BLOCK) {
       // A block ending in a bare expression yields that expression.
@@ -412,6 +413,7 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
       builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg, builder.EmitConstantBool(true));
     }
     controlDepth--;
+    PointerControlBoundary(controlDepth);
     u32 merge = builder.currentInstruction;
     builder.EmitInstruction(OP_NOP, 0, 0);
     program.SetBranchTargets(branch, bodyStart, merge);

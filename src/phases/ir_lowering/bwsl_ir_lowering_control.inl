@@ -99,9 +99,11 @@ inline void IRLowering::LowerStatementsWithReturnGuard(const BlockData &block,
   inlineReturnFlagReads++;
 
   u32 falseTarget = builder.currentInstruction;
+  PointerControlBoundary(controlDepth);
   controlDepth++;
   LowerStatements(block, first, true);
   controlDepth--;
+  PointerControlBoundary(controlDepth);
 
   u32 mergePoint = builder.currentInstruction;
   builder.EmitInstruction(OP_NOP, 0, 0);
@@ -122,7 +124,7 @@ inline void IRLowering::LowerBreak() {
     return;
   }
   if (InPointerLoop())
-    pointerEvents.push_back({PointerEvent::BREAK, false, 0, 0, 0, NodeRef::Null()});
+    pointerEvents.push_back({PointerEvent::BREAK, false, 0, 0, 0, NodeRef::Null(), controlDepth});
   u32 jumpIdx = builder.currentInstruction;
   builder.EmitInstruction(OP_JUMP, 0, 0);
   // Record this break for patching when loop ends
@@ -140,7 +142,7 @@ inline void IRLowering::LowerSkip() {
     return;
   }
   if (InPointerLoop())
-    pointerEvents.push_back({PointerEvent::SKIP, false, 0, 0, 0, NodeRef::Null()});
+    pointerEvents.push_back({PointerEvent::SKIP, false, 0, 0, 0, NodeRef::Null(), controlDepth});
   u32 jumpIdx = builder.currentInstruction;
   builder.EmitInstruction(OP_JUMP, 0, 0);
   // Record this skip for patching when continue target is known
@@ -947,6 +949,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
   for (u32 i = 0; i < caseArmCount; i++) {
     NodeRef caseRef = sw.cases[i];
     const SwitchCaseData &caseData = ast->GetSwitchCase(caseRef);
+    PointerControlBoundary(controlDepth - 1);
 
     caseTargets[i] = builder.currentInstruction;
 
@@ -965,6 +968,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
   u32 defaultJumpIdx = 0;
   if (hasDefault) {
     const SwitchCaseData &defaultData = ast->GetSwitchCase(sw.defaultCase);
+    PointerControlBoundary(controlDepth - 1);
     if (!defaultData.body.IsNull()) {
       LowerStatement(defaultData.body);
     }
@@ -973,6 +977,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
     builder.EmitInstruction(OP_JUMP, 0, 0);
   }
   controlDepth--;
+  PointerControlBoundary(controlDepth);
   switchDepth--;
 
   u32 mergePoint = builder.currentInstruction;
@@ -1121,6 +1126,7 @@ inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
   u32 trueTarget = builder.currentInstruction;
 
   // Lower true branch
+  PointerControlBoundary(controlDepth);
   controlDepth++;
   if (rest && restInThen) {
     lowerBranchAndRest(block.statements[1]);
@@ -1128,6 +1134,7 @@ inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
     LowerStatement(block.statements[1]);
   }
   controlDepth--;
+  PointerControlBoundary(controlDepth);
 
   bool restInElse = rest && !restInThen;
   u32 jumpOverElseIdx = 0;
@@ -1140,6 +1147,7 @@ inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
   u32 falseTarget = builder.currentInstruction;
 
   bool needMergePad = true;
+  PointerControlBoundary(controlDepth);
   controlDepth++;
   if (restInElse) {
     lowerBranchAndRest(block.statements.count > 2 ? block.statements[2]
@@ -1165,6 +1173,7 @@ inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
     needMergePad = true;
   }
   controlDepth--;
+  PointerControlBoundary(controlDepth);
 
   // Set merge point to current instruction (NOP location if we emit one)
   u32 mergePoint = builder.currentInstruction;
