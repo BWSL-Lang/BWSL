@@ -119,6 +119,8 @@
   exactly, bool vectors included. They failed SPIR-V validation. A payload
   argument of another scalar kind, as in `Count(7.0)`, converts like an
   assignment.
+- An enum variant with more than four payload fields keeps them all. The
+  fifth and later fields were dropped and read back as zero.
 - Atomics on a storage buffer element, such as
   `atomic_max(resources.counters[0], v)` on a `buffer<int>`, compile in a
   stage that also declares `shared` memory. The element was mistaken for

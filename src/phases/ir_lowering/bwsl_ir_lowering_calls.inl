@@ -554,8 +554,9 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         // another type hold its bits as floats.
         const EnumData::Variant &variant = enumData.variants[variantIndex];
         // Struct, matrix and bool vector payloads are written one scalar
-        // slot at a time.
-        bool flatten = false;
+        // slot at a time, and so is a payload of more than four fields,
+        // which OP_ENUM_CONSTRUCT has no operands for.
+        bool flatten = argCount > 4;
         for (u32 i = 0; i < argCount; i++) {
           CoreType type = variant.associatedTypes[i];
           u32 hash = i < variant.associatedTypeHashes.count
