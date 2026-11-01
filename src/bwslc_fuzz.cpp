@@ -47,6 +47,7 @@
 #include "phases/ir_generation/bwsl_ir_gen.cpp"
 #include "phases/ir_generation/bwsl_ir_analysis.cpp"
 #include "phases/control_flow/bwsl_cfg.cpp"
+#include "phases/control_flow/bwsl_quad_divergence.cpp"
 #include "phases/ssa/bwsl_ssa.cpp"
 #include "phases/optimization/bwsl_ir_edit.cpp"
 #include "phases/optimization/bwsl_cse.cpp"

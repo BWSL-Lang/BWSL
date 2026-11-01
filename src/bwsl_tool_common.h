@@ -1,15 +1,61 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "core/bwsl_ast_soa.h"
 #include "phases/ir_generation/bwsl_ir_gen.h"
 #include "core/bwsl_render_config.h"
 #include "core/bwsl_resource_reflection.h"
+#include "phases/control_flow/bwsl_quad_divergence.h"
+#include "phases/ir_lowering/bwsl_ir_lowering.h"
 
 namespace BWSL::ToolCommon {
+
+// Warns (BWSL1302) about each derivative or implicit-LOD sample in a
+// fragment shader that runs in control flow the pixels of a 2x2 quad may
+// take differently, once per source location.
+inline void WarnAboutDivergentDerivatives(IR::IRLowering& lowering, const CFG* cfg, BWSL_Arena* arena) {
+    if (cfg == nullptr || cfg->blockCount < 2) {
+        return;
+    }
+    const IR::IRProgram& ir = lowering.program;
+    QuadDivergenceData found;
+    if (!QuadDivergence::FindDivergentDerivatives(&found, &ir, cfg, arena)) {
+        return;
+    }
+    std::vector<u32> reported;
+    for (u32 k = 0; k < found.count; ++k) {
+        const u32 instruction = found.derivatives[k];
+        NodeRef node;
+        node.packed = ir.sourceNodes ? ir.sourceNodes[instruction] : 0xFFFFFFFFu;
+        const u32 key = node.IsValid() ? node.packed : 0xFFFFFFFFu;
+        if (std::find(reported.begin(), reported.end(), key) != reported.end()) {
+            continue;
+        }
+        reported.push_back(key);
+        const u16 opcode = ir.opcodes[instruction];
+        std::string message = QuadDivergence::IntrinsicName(opcode);
+        message += "() runs in control flow that can differ between the pixels of a 2x2 quad";
+        NodeRef branch;
+        branch.packed = ir.sourceNodes ? ir.sourceNodes[found.branches[k]] : 0xFFFFFFFFu;
+        const DiagnosticSpan branchSpan = lowering.SourceSpan(branch);
+        if (branchSpan.HasLocation()) {
+            message += " (the branch at line " + std::to_string(branchSpan.line) + ")";
+        }
+        message += ", so its derivatives are undefined where they take different paths. "
+                   "Compute it before the branch";
+        if (opcode >= IR::OP_DDX && opcode <= IR::OP_FWIDTH_COARSE) {
+            message += ".";
+        } else {
+            message += ", or pass an explicit level or gradients (sample_lod, sample_grad).";
+        }
+        lowering.ReportWarningAt(node, message, DiagnosticMessageId::DerivativeInDivergentControlFlow);
+    }
+}
 
 inline const char* OpCodeToString(IR::OpCode op) {
     switch (op) {

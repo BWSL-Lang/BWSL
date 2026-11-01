@@ -4018,6 +4018,11 @@ def main() -> int:
     passed += inline_return_passed
     failed += inline_return_failed
 
+    from derivative_divergence_tests import run_derivative_divergence_tests
+    divergence_passed, divergence_failed = run_derivative_divergence_tests(bwslc)
+    passed += divergence_passed
+    failed += divergence_failed
+
     from logical_operator_tests import run_logical_operator_tests
     logical_passed, logical_failed = run_logical_operator_tests(bwslc)
     passed += logical_passed

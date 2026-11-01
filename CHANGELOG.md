@@ -291,6 +291,13 @@
   two swapped: `atomic_cmp_exchange(x, 5, 100)` stored 5 when x was 100.
 
 ### Diagnostics
+- A derivative (`ddx`, `ddy`, `fwidth` and their variants) or a `sample`
+  that picks its mip level, in a fragment shader branch, loop or after an
+  early `return` whose condition can differ between the pixels of a 2x2
+  quad, is a warning (`BWSL1302`) naming the branch. Its result is
+  undefined in quads whose pixels take different paths, on every target.
+  Branches on uniforms, constants and `@flat` or integer varyings don't
+  warn. See "Derivatives in Control Flow" in the language reference.
 - Storing a bool where a number goes, or a number where a bool goes, as in
   `int n = true;` or `resources.counts[0] = a > b;`, is a source error
   naming the fix (`int(value)`, or a comparison such as `value != 0`). It

@@ -960,7 +960,10 @@ input as non-uniform, flat ones included, and Tint (Chrome) rejects all of
 these, while Naga accepts them. So a fragment module that uses an implicit
 derivative and has control flow starts with
 `diagnostic(off, derivative_uniformity);`, which gives every other target's
-behavior. Straight-line modules keep the analysis, and so do barriers and
+behavior. Where the analysis has a point, BWSL warns on every target: its own
+quad-divergence analysis (`phases/control_flow/bwsl_quad_divergence`) reports
+`BWSL1302` for derivatives under branches on values that can differ within a
+quad, and, unlike WGSL's, treats flat varyings as uniform. Straight-line modules keep the analysis, and so do barriers and
 subgroup operations, whose non-uniform use is undefined behavior on every
 target.
 

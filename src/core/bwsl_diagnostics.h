@@ -68,6 +68,7 @@ enum class DiagnosticMessageId : u16 {
     ComputeGraphValidationFailed,
     CompilerMemoryExhausted,
     InvalidOptimizations,
+    DerivativeInDivergentControlFlow,
 };
 
 enum class DiagnosticArgKind : u8 {
@@ -341,6 +342,7 @@ public:
             case DiagnosticMessageId::ComputeGraphValidationFailed: return "ComputeGraphValidationFailed";
             case DiagnosticMessageId::CompilerMemoryExhausted: return "CompilerMemoryExhausted";
             case DiagnosticMessageId::InvalidOptimizations: return "InvalidOptimizations";
+            case DiagnosticMessageId::DerivativeInDivergentControlFlow: return "DerivativeInDivergentControlFlow";
             default: return "Raw";
         }
     }
@@ -583,6 +585,7 @@ private:
             case DiagnosticMessageId::VariantSpecializationFailed: return "BWSL1203";
             case DiagnosticMessageId::LoweringError: return "BWSL1300";
             case DiagnosticMessageId::MaxUserVaryingsExceeded: return "BWSL1301";
+            case DiagnosticMessageId::DerivativeInDivergentControlFlow: return "BWSL1302";
             case DiagnosticMessageId::ShaderStageCompileFailed: return "BWSL1400";
             case DiagnosticMessageId::CrossCompileFailed: return "BWSL1401";
             case DiagnosticMessageId::CompilerMemoryExhausted: return "BWSL1402";

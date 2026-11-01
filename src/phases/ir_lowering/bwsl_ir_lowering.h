@@ -402,6 +402,11 @@ struct IRLowering {
 
   void ReportError(const char *message);
   void ReportErrorAt(NodeRef node, const char *message);
+  // A warning at the source of `node`; compilation goes on.
+  void ReportWarningAt(NodeRef node, const std::string &message, DiagnosticMessageId messageId);
+  DiagnosticSpan SourceSpan(NodeRef node);
+  const char *DiagnosticStageName() const;
+  std::string DiagnosticPassName() const;
   NamespaceKind AliasOwnerKind() const;
   u32 AliasOwnerModuleIndex() const;
 
