@@ -585,9 +585,10 @@ gather; texel fetch; size and level queries. Explicit and implicit samplers have
 ordinary/comparison conflicts are diagnosed. Gather components must be literal
 integers in 0–3. Texel offsets must be constants in -8 through 7, as WGSL
 requires; `load_offset` adds its offset to the texel coordinate. Multisampled
-and integer texture types remain unsupported. WGSL uniformity requirements still apply; the backend does not yet
-provide a complete uniformity analysis. Both independent validators and browser
-pipeline creation remain part of the correctness workflow.
+and integer texture types remain unsupported. Derivative uniformity follows BWSL's
+semantics rather than WGSL's analysis (see "Uniformity" below); the other WGSL
+uniformity requirements (barriers, subgroups) still apply. Both independent
+validators and browser pipeline creation remain part of the correctness workflow.
 
 The new browser material samples a deterministic RGBA texture in a runtime loop,
 uses a padded scalar uniform array, nested layout metadata and a mat4 transform,
@@ -947,6 +948,21 @@ barriers. No reusable uniformity analysis was found in the current BWSL pipeline
 conservative target analysis, and retain external validation during development.
 Do not silence uniformity diagnostics to make generated shaders pass. A full
 production support claim requires covering this validation boundary.
+
+Derivatives are the exception, because silencing them is BWSL's semantics, not a
+workaround. BWSL, like GLSL, HLSL, MSL and SPIR-V, allows `ddx`/`ddy`/`fwidth`
+and implicit-LOD `sample`/`sample_bias`/`sample_cmp` in any fragment control
+flow; their values are undefined only in 2x2 quads whose pixels diverge. Real
+shaders rely on this: sampling after an early return for coordinates outside the
+texture, choosing a texture by a flat input, and `fwidth` in a branch on a loaded
+value. WGSL's analysis is static and stricter: it treats every user-defined
+input as non-uniform, flat ones included, and Tint (Chrome) rejects all of
+these, while Naga accepts them. So a fragment module that uses an implicit
+derivative and has control flow starts with
+`diagnostic(off, derivative_uniformity);`, which gives every other target's
+behavior. Straight-line modules keep the analysis, and so do barriers and
+subgroup operations, whose non-uniform use is undefined behavior on every
+target.
 
 ### Synchronization requires a language decision
 

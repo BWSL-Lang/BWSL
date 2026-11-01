@@ -1,0 +1,52 @@
+// Test: implicit derivatives in non-uniform control flow compile for WGSL
+// Tests: sample() after an early return on an interpolated coordinate, a
+//        switch on a flat input choosing the texture, and fwidth() in a
+//        branch on a loaded texel. GLSL, HLSL, MSL and SPIR-V accept these
+//        (derivatives are undefined only in diverging 2x2 quads); WGSL needs
+//        `diagnostic(off, derivative_uniformity);`, or Tint rejects the module.
+
+pipeline DerivativeUniformity {
+    attributes {
+        position: float3
+        texcoord: float2
+        unit: uint
+    }
+
+    resources {
+        first: texture2D
+        second: texture2D
+        heights: texture2D
+    }
+
+    sampleClamped :: (float2 uv) -> float3 {
+        if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0) {
+            return float3(0.0);
+        }
+        return sample(resources.first, uv).rgb;
+    }
+
+    pass "Main" {
+        use attributes { position, texcoord, unit }
+        use resources { first, second, heights }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+            output.uv = attributes.texcoord;
+            @flat output.unit = attributes.unit;
+        }
+
+        fragment {
+            float3 color = sampleClamped(input.uv + float2(0.01, 0.0));
+            switch (int(input.unit)) {
+                case 0: color += sample(resources.first, input.uv).rgb; break;
+                case 1: color += sample(resources.second, input.uv).rgb; break;
+                default: break;
+            }
+            float height = load(resources.heights, int2(input.uv * 16.0), 0).r;
+            if (height > 0.5) {
+                color *= clamp(fwidth(height), 0.0001, 0.02);
+            }
+            output.color = float4(color, 1.0);
+        }
+    }
+}

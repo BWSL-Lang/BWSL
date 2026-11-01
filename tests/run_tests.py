@@ -747,6 +747,8 @@ KNOWN_TEST_STEMS: set[str] = set()
 # direct GLES backend, and "wgsl_*" keys the native WGSL backend.
 TRANSLATION_EXTRA_ARGS = {
     "interpolation_centroid": ("-gles-direct", "-wgsl"),
+    "wgsl_derivative_uniformity": ("-wgsl",),
+    "wgsl_derivative_uniform_flow": ("-wgsl",),
     "phi_variables": ("--optimizations", "phi-variables"),
     "phi_variables_output_store": ("--optimizations", "phi-variables"),
     "branch_hints_unenforced": ("--optimizations", "no-enforce-branch-hints"),
@@ -886,6 +888,20 @@ TRANSLATION_EXPECTATION_TESTS = {
                 "@location(2) @interpolate(linear, centroid)",
             ],
             "wgsl_not_contains": ["@location(3) @interpolate"],
+        },
+    },
+    # Implicit derivatives in control flow WGSL can't prove uniform (the
+    # BWSL semantics of every other target) turn the uniformity analysis off;
+    # straight-line code keeps it.
+    "wgsl_derivative_uniformity": {
+        "frag": {
+            "wgsl_contains": ["diagnostic(off, derivative_uniformity);", "textureSample(", "fwidth("],
+        },
+    },
+    "wgsl_derivative_uniform_flow": {
+        "frag": {
+            "wgsl_contains": ["textureSample(", "fwidth("],
+            "wgsl_not_contains": ["diagnostic("],
         },
     },
     # Issue #204: texture_size has one component per native dimension.

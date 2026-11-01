@@ -151,6 +151,11 @@
   Texture arrays (`texture2D[N]` and the other sampled kinds) bind each
   element as its own WGSL texture, reported per element in the bindings
   metadata with `arrayLength` and `arrayIndex`.
+  Derivatives and `sample` may be used in branches and loops, as on the
+  other targets: a fragment shader that does so starts with
+  `diagnostic(off, derivative_uniformity);`, without which Chrome rejects
+  it. Like GLSL, the values are undefined only in 2x2 pixel quads whose
+  pixels take different paths.
 - Constant values are propagated through the whole shader, including across
   branches, loops and inlined functions. Arithmetic, comparisons and
   conversions on constants are folded, `x && true`, `x || false` and their

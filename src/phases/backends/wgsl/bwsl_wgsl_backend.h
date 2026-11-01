@@ -282,6 +282,7 @@ private:
     bool PrepareAdditionalResources();
     bool PrepareUniformInstruction(u32 instruction, bool& handled);
     bool PrepareTextureInstruction(u32 instruction);
+    void NoteImplicitDerivative();
     bool WriteUniformOffset(TextWriter& writer, u32 value);
     bool WriteUniformLoad(TextWriter& writer, u32 value);
     bool WriteUniformValue(TextWriter& writer, u32 value, CoreType type, u32 structHash,

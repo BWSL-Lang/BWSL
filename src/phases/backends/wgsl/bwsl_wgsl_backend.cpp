@@ -311,6 +311,11 @@ BuiltinOperation MathOperation(u16 opcode) {
 // Bits of WGSLBuilder::helperFunctions; bit N-2 is bwsl_inverseN.
 constexpr u32 HelperHalf = 8;
 constexpr u32 HelperSubgroups = 16; // Not a helper: `enable subgroups;`
+// Not a helper: `diagnostic(off, derivative_uniformity);`. BWSL, like GLSL,
+// HLSL, MSL and SPIR-V, allows derivatives and implicit-LOD sampling in
+// non-uniform control flow (their values are undefined only in 2x2 quads that
+// diverge); WGSL rejects them unless the module turns the analysis off.
+constexpr u32 HelperDerivativeUniformity = 32;
 
 // Wave operations are the WGSL subgroups extension's builtins.
 const char* WaveOperation(u16 opcode) {
@@ -1607,8 +1612,11 @@ bool WGSLBuilder::PrepareInstruction(u32 instruction) {
 
     BuiltinOperation function = MathOperation(opcode);
     if (function.name != nullptr) {
-        if (opcode >= IR::OP_DDX && opcode <= IR::OP_FWIDTH_COARSE && stage != ShaderStage::Fragment) {
-            return Fail("WGSL derivatives require a fragment entry point");
+        if (opcode >= IR::OP_DDX && opcode <= IR::OP_FWIDTH_COARSE) {
+            if (stage != ShaderStage::Fragment) {
+                return Fail("WGSL derivatives require a fragment entry point");
+            }
+            NoteImplicitDerivative();
         }
         CoreType argumentType = CoreType::INVALID;
         if (!OperandType(first, argumentType)) {
@@ -2847,9 +2855,19 @@ static void WriteHelperFunctions(TextWriter& writer, u32 helpers) {
     }
 }
 
+void WGSLBuilder::NoteImplicitDerivative() {
+    // A single block has no control flow, so WGSL's analysis accepts it.
+    if (structured) {
+        helperFunctions |= HelperDerivativeUniformity;
+    }
+}
+
 bool WGSLBuilder::WriteModule(TextWriter& writer) {
     if (helperFunctions & HelperSubgroups) {
         writer.Text("enable subgroups;\n\n");
+    }
+    if (helperFunctions & HelperDerivativeUniformity) {
+        writer.Text("diagnostic(off, derivative_uniformity);\n\n");
     }
     if (!WriteStructDeclarations(writer) || !WriteAdditionalResources(writer)) {
         return false;
