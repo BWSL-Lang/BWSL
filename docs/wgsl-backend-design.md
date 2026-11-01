@@ -25,9 +25,26 @@ stage varyings, fragment coordinates/depth, multiple color outputs, fragment
 derivatives, conditional discard, primitive storage buffers, structured branches/
 loops/switches, scalar/vector phis, std140 uniforms (including nested structures,
 fixed arrays and matrix reads/products), and sampled 2D/3D/cube/array textures.
-Resource access and load evaluation order are preserved. General aggregate values,
-local arrays, general pointers, storage textures, shared memory and atomics produce explicit target
-diagnostics. Atomic ordering and strong compare-exchange remain future work.
+Resource access and load evaluation order are preserved.
+
+Aggregates and memory follow. Struct types become `BWSLStruct<N>` with fields
+`f0`, `f1`, ...; enums with payloads are their lowered struct (an `i32` tag, then
+the flattened payload). A register SSA leaves in memory (address taken,
+assigned more than once, or a local array) is one WGSL `var`; reads of it stay
+in place and copies of it are written out. Local pointers are access paths
+written where they are loaded or stored; a pointer reassigned to another target
+is a `u32` tag variable dispatched with `switch`, keeping the target's last
+dynamic index from the assignment. Struct storage buffers keep the BWSL buffer
+layout through `@size` on each member; layouts WGSL cannot express (bool and
+`mat2` members, mismatched array strides) are diagnosed. `shared` variables are
+`var<workgroup>`; a variable or buffer targeted by an atomic holds
+`atomic<i32|u32>` elements and its other accesses become `atomicLoad` and
+`atomicStore`. `atomic_cmp_exchange` retries `atomicCompareExchangeWeak` to stay
+strong. Memory fences, which WGSL only has as part of control barriers, emit
+`storageBarrier()` and `workgroupBarrier()`. Wave operations use the `subgroups`
+extension and are listed under `requiredFeatures` in the bindings metadata.
+`tests/wgsl_equivalence_tests.py` runs the compute equivalence suite through the
+backend on the GPU and compares it with the SPIR-V path.
 
 [`bwsl_wgsl_backend.h`](../src/phases/backends/wgsl/bwsl_wgsl_backend.h) defines
 dense value and resource tables as parallel arena arrays. Original registers and
@@ -321,8 +338,9 @@ coordinates use their WGSL builtins. Vertex position must be `float4` and writte
 Fragment colors retain sparse locations; depth maps to `frag_depth`.
 
 Output stores update a local output structure in IR order. Output loads capture
-the value at that point, including across subsequent assignments. Reading an
-output before its first complete assignment is rejected. Fragment derivatives
+the value at that point, including across subsequent assignments. The output
+structure is zero-initialized, so an output read before any assignment reads
+zero. Fragment derivatives
 include ordinary, fine and coarse `ddx`, `ddy` and `fwidth`; unconditional discard
 is supported. Conditional discard still requires structured control flow.
 Vertex storage writes are rejected; read-only storage is available to both
@@ -534,8 +552,8 @@ Parallel edge copies snapshot every incoming value before any phi destination
 is assigned, preserving swaps/cycles. Phi and cross-block values have function
 scope; ordinary values stay local and bounded pure expressions can inline within
 their block. Storage loads retain their original evaluation points. IR undefined
-temporaries select a typed zero, which is a valid undefined-value choice; stage
-output reads still require definite assignment across every incoming path.
+temporaries select a typed zero, which is a valid undefined-value choice; a stage
+output read before any assignment also reads zero.
 
 Loops emit WGSL `loop`/`continuing`, including final conditional continuing exits
 as `break if`. BWSL switch arms lower to structured condition chains so a BWSL
@@ -565,10 +583,9 @@ comparison on any element makes every element a depth texture. Textures
 support ordinary, explicit-LOD, bias, gradient and comparison sampling;
 gather; texel fetch; size and level queries. Explicit and implicit samplers have distinct binding ranges;
 ordinary/comparison conflicts are diagnosed. Gather components must be literal
-integers in 0–3. Local arrays, general aggregate values, storage textures,
-multisampled/integer texture types, texture offset overloads, general matrix
-construction/inversion, workgroup storage, atomics and general pointers remain
-unsupported. WGSL uniformity requirements still apply; the backend does not yet
+integers in 0–3. Texel offsets must be constants in -8 through 7, as WGSL
+requires; `load_offset` adds its offset to the texel coordinate. Multisampled
+and integer texture types remain unsupported. WGSL uniformity requirements still apply; the backend does not yet
 provide a complete uniformity analysis. Both independent validators and browser
 pipeline creation remain part of the correctness workflow.
 

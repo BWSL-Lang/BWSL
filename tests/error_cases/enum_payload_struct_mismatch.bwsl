@@ -1,0 +1,23 @@
+// Error case: an enum payload given a value of another struct type.
+pipeline WrongAcceptEnumPayloadStructMismatch {
+    struct A { float x; float y; };
+    struct B { float2 v; };
+    resources { output: buffer<float> }
+    enum Shape {
+        Point(A at),
+        Box(mat2 basis),
+        eval size :: () -> float {
+            Point(p): p.x
+            Box(m): m[0].x
+        }
+    }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            B b;
+            b.v = float2(1.0, 2.0);
+            Shape s = Shape::Point(b);
+            resources.output[0] = s.size();
+        }
+    }
+}

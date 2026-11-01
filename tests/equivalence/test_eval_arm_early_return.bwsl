@@ -1,0 +1,33 @@
+// An eval arm whose block returns early from inside an `if` and a loop.
+// The early return was lowered as a return from the entry point, which
+// failed SPIR-V validation.
+pipeline EquivEvalArmEarlyReturn {
+    resources { output: buffer<float> }
+    enum Item {
+        Flag(bool on, float w),
+        Steps(int n),
+        eval value :: () -> float {
+            Flag(on, w): {
+                if (on) { return w; }
+                return -w;
+            }
+            Steps(n): {
+                float total = 0.0;
+                for (int i = 0; i < 10; i++) {
+                    if (i == n) { return total; }
+                    total += 1.5;
+                }
+                return -1.0;
+            }
+        }
+    }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            resources.output[0] = Item::Flag(true, 1.5).value();
+            resources.output[1] = Item::Flag(false, 1.5).value();
+            resources.output[2] = Item::Steps(3).value();
+            resources.output[3] = Item::Steps(20).value();
+        }
+    }
+}

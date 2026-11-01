@@ -1,0 +1,6 @@
+{
+    "output_size": 16,
+    "output_type": "int",
+    "expected_values": [-2016, 65535, 7, 64],
+    "tolerance": 0.0
+}

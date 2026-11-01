@@ -1,0 +1,13 @@
+// Error case: a matrix assigned to a matrix variable of another size. It
+// failed SPIR-V validation instead of reporting the source.
+pipeline WrongAcceptMatrixSizeMismatch {
+    resources { output: buffer<float> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            mat3 big = mat3(1.0);
+            mat2 small = big;
+            resources.output[0] = small[0].x;
+        }
+    }
+}

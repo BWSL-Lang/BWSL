@@ -340,7 +340,9 @@ inline bool IRLowering::IsPointerArgument(NodeRef argument, u16 reg) const {
 
 inline void IRLowering::DeclarePointerVariable(u16 reg, u16 source) {
   variableDepth[reg] = controlDepth;
-  if (!pointerLoops.empty()) pointerLoops.back().copies.push_back({reg, source});
+  if (InPointerLoop()) {
+    pointerEvents.Push(pool, {PointerEvent::COPY, false, reg, source, 0, NodeRef::Null()});
+  }
   auto problem = pointerProblems.find(source);
   if (problem != pointerProblems.end()) {
     pointerProblems[reg] = problem->second;
@@ -350,7 +352,9 @@ inline void IRLowering::DeclarePointerVariable(u16 reg, u16 source) {
 }
 
 inline void IRLowering::AssignPointerVariable(u16 reg, u16 source) {
-  if (!pointerLoops.empty()) pointerLoops.back().copies.push_back({reg, source});
+  if (InPointerLoop()) {
+    pointerEvents.Push(pool, {PointerEvent::COPY, false, reg, source, 0, NodeRef::Null()});
+  }
   auto problem = pointerProblems.find(source);
   if (problem != pointerProblems.end()) {
     pointerProblems[reg] = problem->second;
@@ -364,39 +368,210 @@ inline void IRLowering::AssignPointerVariable(u16 reg, u16 source) {
 
 inline void IRLowering::BeginPointerLoop() {
   controlDepth++;
-  pointerLoops.emplace_back();
+  if (!InPointerLoop()) {
+    pointerEvents.Clear();
+    pointerEventArguments.Clear();
+    pointerProblemsBeforeLoop.Clear();
+    for (const auto &[reg, problem] : pointerProblems)
+      pointerProblemsBeforeLoop.Push(pool, {reg, problem});
+    pointerLoopFirstRegister = static_cast<u16>(program.registerCount);
+  }
+  pointerLoopDepths.Push(pool, controlDepth);
+  pointerEvents.Push(pool, {PointerEvent::LOOP_BEGIN, false, 0, 0, 0, NodeRef::Null()});
+}
+
+inline u16 IRLowering::PointerSlot(u16 reg) {
+  if (reg >= pointerSlots.count) {
+    u32 size = std::max<u32>(program.registerCount, pointerSlots.count * 2);
+    if (size <= reg) size = reg + 1u;
+    u16 *grown = static_cast<u16 *>(pool->Allocate(size * sizeof(u16), alignof(u16)));
+    if (pointerSlots.count) memcpy(grown, pointerSlots.data, pointerSlots.count * sizeof(u16));
+    memset(grown + pointerSlots.count, 0xFF, (size - pointerSlots.count) * sizeof(u16));
+    pointerSlots.data = grown;
+    pointerSlots.count = pointerSlots.capacity = size;
+  }
+  if (pointerSlots[reg] == 0xFFFF) {
+    pointerSlots[reg] = static_cast<u16>(pointerSlotRegisters.count);
+    pointerSlotRegisters.Push(pool, reg);
+  }
+  return pointerSlots[reg];
+}
+
+inline u8 *IRLowering::NewPointerState(const u8 *from) {
+  u32 slots = pointerSlotRegisters.count;
+  u8 *state = static_cast<u8 *>(pool->Allocate(slots ? slots : 1, 1));
+  if (from) memcpy(state, from, slots);
+  else memset(state, 0, slots);
+  return state;
+}
+
+inline u32 IRLowering::ReplayPointerLoop(u32 begin, u8 *state) {
+  u32 slots = pointerSlotRegisters.count;
+  auto merge = [&](u8 *into, const u8 *from) {
+    bool changed = false;
+    for (u32 slot = 0; slot < slots; slot++) {
+      changed |= (into[slot] | from[slot]) != into[slot];
+      into[slot] |= from[slot];
+    }
+    return changed;
+  };
+  // `entry` holds what a pointer can hold at the top of the body: before
+  // the loop, or after an iteration. `skips` and `exits` collect the states
+  // at `skip` and `break`. The skips join the end of the body at the
+  // continue target and run the `for` increment with it. A path that ended
+  // in `skip` or `break` isn't live, and its events are passed over.
+  u8 *entry = NewPointerState(state);
+  u8 *exits = NewPointerState(nullptr);
+  u8 *current = NewPointerState(nullptr);
+  u8 *skips = NewPointerState(nullptr);
+  u8 *backEdge = NewPointerState(nullptr);
+  bool exited = false;
+  u32 end = begin;
+  for (bool changed = true; changed;) {
+    memcpy(current, entry, slots);
+    memset(skips, 0, slots);
+    memset(backEdge, 0, slots);
+    bool live = true, skipped = false;
+    u32 i = begin;
+    while (pointerEvents[i].kind != PointerEvent::LOOP_END) {
+      const PointerEvent &event = pointerEvents[i];
+      switch (event.kind) {
+      case PointerEvent::COPY:
+        if (live) current[pointerSlots[event.pointer]] = current[pointerSlots[event.source]];
+        break;
+      case PointerEvent::STORE:
+      case PointerEvent::ARGUMENT:
+        if (live) pointerEventProblems[i] |= current[pointerSlots[event.pointer]];
+        break;
+      case PointerEvent::SKIP:
+        if (live) merge(skips, current), skipped = true;
+        live = false;
+        break;
+      case PointerEvent::BREAK:
+        if (live) merge(exits, current), exited = true;
+        live = false;
+        break;
+      case PointerEvent::CONTINUE:
+        if (skipped) {
+          if (live) merge(current, skips);
+          else memcpy(current, skips, slots);
+          live = true;
+        }
+        memset(skips, 0, slots);
+        skipped = false;
+        break;
+      case PointerEvent::BRANCH_BEGIN:
+        pointerBranches.Push(pool, {NewPointerState(current), NewPointerState(nullptr),
+                                    live, false, false});
+        break;
+      case PointerEvent::ARM: {
+        PointerBranch &branch = pointerBranches.Back();
+        if (branch.armOpen && live) merge(branch.join, current), branch.joinLive = true;
+        branch.armOpen = true;
+        memcpy(current, branch.entry, slots);
+        live = branch.entryLive;
+        break;
+      }
+      case PointerEvent::BRANCH_END: {
+        PointerBranch &branch = pointerBranches.Back();
+        if (branch.armOpen && live) merge(branch.join, current), branch.joinLive = true;
+        if (event.mayBypass && branch.entryLive)
+          merge(branch.join, branch.entry), branch.joinLive = true;
+        memcpy(current, branch.join, slots);
+        live = branch.joinLive;
+        pointerBranches.Pop();
+        break;
+      }
+      case PointerEvent::LOOP_BEGIN:
+        if (live) {
+          i = ReplayPointerLoop(i + 1, current);
+          continue;
+        }
+        for (u32 nesting = 1; nesting > 0;) {
+          i++;
+          if (pointerEvents[i].kind == PointerEvent::LOOP_BEGIN) nesting++;
+          if (pointerEvents[i].kind == PointerEvent::LOOP_END) nesting--;
+        }
+        break;
+      case PointerEvent::LOOP_END:
+        break;
+      }
+      i++;
+    }
+    end = i + 1;
+    if (live) merge(backEdge, current);
+    if (skipped) merge(backEdge, skips);  // A loop without a continue target event
+    changed = merge(entry, backEdge);
+  }
+  // The loop may run no iterations, stop at its condition or break.
+  if (exited) merge(entry, exits);
+  memcpy(state, entry, slots);
+  return end;
 }
 
 inline void IRLowering::EndPointerLoop() {
-  PointerLoopFrame frame = std::move(pointerLoops.back());
-  pointerLoops.pop_back();
+  pointerEvents.Push(pool, {PointerEvent::LOOP_END, false, 0, 0, 0, NodeRef::Null()});
+  pointerLoopDepths.Pop();
   controlDepth--;
-  // Problems stored anywhere in the body reach every copy made from them on
-  // a later iteration. Kills aren't modeled, so this over-approximates.
-  for (bool changed = true; changed;) {
-    changed = false;
-    for (const auto &[dest, source] : frame.copies) {
-      auto problem = pointerProblems.find(source);
-      if (problem != pointerProblems.end() && !pointerProblems.count(dest)) {
-        pointerProblems[dest] = problem->second;
-        changed = true;
-      }
+  if (InPointerLoop()) return;
+  auto firstProblem = [](u8 mask) {
+    u32 first = 0;
+    while (!(mask & (1u << first))) first++;
+    return static_cast<PointerProblem>(first);
+  };
+  // A slot for each pointer the events mention, starting from what it held
+  // before the loop, or for a `^` made in it, its own problem.
+  for (u32 i = 0; i < pointerEvents.count; i++) {
+    const PointerEvent &event = pointerEvents[i];
+    if (event.kind == PointerEvent::COPY) PointerSlot(event.source);
+    if (event.kind == PointerEvent::COPY || event.kind == PointerEvent::STORE ||
+        event.kind == PointerEvent::ARGUMENT)
+      PointerSlot(event.pointer);
+  }
+  // A pointer variable declared in the loop has no target before its
+  // declaration; its lowering-time problem may come from a stale one.
+  u8 *declaredInLoop = NewPointerState(nullptr);
+  for (u32 i = 0; i < pointerEvents.count; i++) {
+    const PointerEvent &event = pointerEvents[i];
+    if (event.kind == PointerEvent::COPY && event.pointer >= pointerLoopFirstRegister)
+      declaredInLoop[pointerSlots[event.pointer]] = 1;
+  }
+  u8 *state = NewPointerState(nullptr);
+  for (u32 slot = 0; slot < pointerSlotRegisters.count; slot++) {
+    u16 reg = pointerSlotRegisters[slot];
+    if (declaredInLoop[slot]) continue;
+    if (reg < pointerLoopFirstRegister) {
+      for (u32 j = 0; j < pointerProblemsBeforeLoop.count; j++)
+        if (pointerProblemsBeforeLoop[j].reg == reg)
+          state[slot] = static_cast<u8>(1u << static_cast<u32>(pointerProblemsBeforeLoop[j].problem));
+    } else if (auto problem = pointerProblems.find(reg); problem != pointerProblems.end()) {
+      state[slot] = static_cast<u8>(1u << static_cast<u32>(problem->second));
     }
   }
-  for (const PendingPointerArgument &pending : frame.arguments) {
-    auto problem = pointerProblems.find(pending.source);
-    if (problem != pointerProblems.end()) {
+  pointerEventProblems.Zeroed(pool, pointerEvents.count);
+  ReplayPointerLoop(1, state);
+  for (u32 i = 0; i < pointerEvents.count; i++) {
+    if (!pointerEventProblems[i]) continue;
+    PointerProblem problem = firstProblem(pointerEventProblems[i]);
+    const PointerEvent &event = pointerEvents[i];
+    if (event.kind == PointerEvent::STORE) {
+      ReportPointerStoreProblem(event.target, problem);
+    } else if (event.kind == PointerEvent::ARGUMENT) {
+      const PendingPointerArgument &pending = pointerEventArguments[event.argument];
       ReportPointerArgumentProblem(pending.argument, pending.functionNameHash,
-                                   pending.index, problem->second);
+                                   pending.index, problem);
     }
   }
-  // An enclosing loop's back edge can carry a problem into this one too.
-  if (!pointerLoops.empty()) {
-    PointerLoopFrame &outer = pointerLoops.back();
-    outer.copies.insert(outer.copies.end(), frame.copies.begin(), frame.copies.end());
-    outer.arguments.insert(outer.arguments.end(), frame.arguments.begin(),
-                           frame.arguments.end());
+  // What each pointer can hold after the loop.
+  for (u32 slot = 0; slot < pointerSlotRegisters.count; slot++) {
+    u16 reg = pointerSlotRegisters[slot];
+    if (state[slot] == 0) pointerProblems.erase(reg);
+    else pointerProblems[reg] = firstProblem(state[slot]);
+    pointerSlots[reg] = 0xFFFF;
   }
+  pointerSlotRegisters.Clear();
+  pointerEvents.Clear();
+  pointerEventArguments.Clear();
 }
 
 inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
@@ -414,6 +589,7 @@ inline u16 IRLowering::LowerUnaryOp(NodeRef ref) {
     if (IR::IsRegister(pointer)) {
       if (!isLocal) {
         pointerProblems[pointer] = PointerProblem::NON_LOCAL;
+        nonLocalAddresses.Push(pool, {pointer, ref});
       } else if (pointsAtArray) {
         pointerProblems[pointer] = PointerProblem::WHOLE_ARRAY;
       } else if (pointsAtCopy) {

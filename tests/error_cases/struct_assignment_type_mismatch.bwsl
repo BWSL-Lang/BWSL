@@ -1,0 +1,16 @@
+// Error case: a value of one struct type assigned to another. It failed
+// SPIR-V validation instead of reporting the source.
+pipeline WrongAcceptStructAssignmentTypeMismatch {
+    struct A { float x; float y; };
+    struct B { float2 v; };
+    resources { output: buffer<float> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            B b;
+            b.v = float2(1.0, 2.0);
+            A a = b;
+            resources.output[0] = a.x;
+        }
+    }
+}

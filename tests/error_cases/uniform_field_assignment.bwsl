@@ -1,0 +1,12 @@
+// Error case: uniforms are read-only. A field store was silently dropped.
+pipeline WrongAcceptUniformFieldAssignment {
+    struct Params { float scale; float3 offset; };
+    resources { params: Params output: buffer<float> }
+    pass "Compute" {
+        use resources { params, output }
+        compute "Main" [1, 1, 1] {
+            resources.params.offset.y = 2.0;
+            resources.output[0] = resources.params.scale;
+        }
+    }
+}

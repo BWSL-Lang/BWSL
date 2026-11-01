@@ -1,0 +1,12 @@
+// Error case: a vector assigned to a matrix. It reached the backend as a
+// vector store into a matrix.
+pipeline WrongAcceptVectorToMatrix {
+    resources { output: buffer<float> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            mat2 m = float2(1.0, 2.0);
+            resources.output[0] = m[0].x;
+        }
+    }
+}

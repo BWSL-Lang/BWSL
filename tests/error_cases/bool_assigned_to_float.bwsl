@@ -1,6 +1,5 @@
-// Error case: assigning a bool to a float local must not compile to a valid
-// shader. Currently caught by SPIR-V validation rather than a front-end
-// diagnostic (see tests/known_issues/README.md).
+// Error case: a bool doesn't convert to a float implicitly; the source error
+// names the explicit conversion.
 pipeline BoolAssignedToFloat {
     attributes {
         position: float3

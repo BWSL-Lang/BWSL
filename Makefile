@@ -527,7 +527,7 @@ test-symbol-table-sanitize:
 
 .PHONY: wgsl-oracle wgsl-tint test-wgsl-unit test-wgsl-unit-sanitize test-wgsl test-wgsl-full benchmark-wgsl
 .PHONY: benchmark-wgsl-web test-wgsl-web benchmark-wgsl-render test-wgsl-render
-.PHONY: wgsl-inprocess test-wgsl-features benchmark-wgsl-inprocess
+.PHONY: wgsl-inprocess test-wgsl-features benchmark-wgsl-inprocess test-wgsl-equivalence
 
 wgsl-inprocess: $(EMBEDDED_MODULE_HEADER) | $(BUILD_DIR_MARKER)
 	$(CXX) $(CXXFLAGS) $(VERSION_FLAGS) $(BWSL_INCLUDE_DIRS) tools/wgsl-bench/inprocess.cpp -o $(BUILD_DIR)/wgsl-inprocess$(EXE_EXT)
@@ -547,8 +547,11 @@ test-wgsl-unit-sanitize:
 test-wgsl: build wgsl-oracle test-wgsl-unit
 	python3 tests/wgsl_backend_tests.py --compiler $(BWSLC_OUT) --oracle $(BUILD_DIR)/wgsl-oracle/release/wgsl-oracle$(EXE_EXT)
 
-test-wgsl-full: build wgsl-oracle wgsl-tint test-wgsl-unit-sanitize test-wgsl-features
+test-wgsl-full: build wgsl-oracle wgsl-tint test-wgsl-unit-sanitize test-wgsl-features test-wgsl-equivalence
 	python3 tests/wgsl_backend_tests.py --compiler $(BWSLC_OUT) --oracle $(BUILD_DIR)/wgsl-oracle/release/wgsl-oracle$(EXE_EXT) --require-gpu --require-tint --tint $(BUILD_DIR)/wgsl-tools/tint/dawn/tint$(EXE_EXT)
+
+test-wgsl-equivalence: build wgsl-oracle
+	python3 tests/wgsl_equivalence_tests.py --compiler $(BWSLC_OUT) --oracle $(BUILD_DIR)/wgsl-oracle/release/wgsl-oracle$(EXE_EXT)
 
 benchmark-wgsl: build wgsl-oracle wgsl-tint
 	python3 scripts/benchmark_wgsl.py --compiler $(BWSLC_OUT) --oracle $(BUILD_DIR)/wgsl-oracle/release/wgsl-oracle$(EXE_EXT) --tint $(BUILD_DIR)/wgsl-tools/tint/bwsl-tint-bench$(EXE_EXT)

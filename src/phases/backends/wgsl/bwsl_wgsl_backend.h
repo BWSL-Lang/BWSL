@@ -17,11 +17,38 @@ enum class ValueKind : u8 {
     StorageRoot,
     StorageElement,
     UniformAddress,
+    Reference, // A path into a variable: its parent plus one accessor
+};
+
+// How a Reference value reaches into its parent.
+enum class Accessor : u8 {
+    Whole,
+    Field,
+    Index,
+    Tracked, // A u32 tag var names the target; see TrackedPointerTable
+};
+
+// Flags of a value that lives in a WGSL variable rather than a let.
+enum VariableFlags : u8 {
+    VariableMutable = 1,   // Assigned more than once or through pointers
+    VariableSnapshot = 2,  // Tracked pointer: also keeps its target's index
+    VariableWorkgroup = 4, // A var<workgroup> at module scope
+    VariableAtomic = 8,    // Workgroup var of atomic<T> (or array of them)
+};
+
+// The possible targets of each tracked pointer, in CSR form. A target is
+// an untracked Reference value; its value id is the tag that selects it.
+struct TrackedPointerTable {
+    u32* values = nullptr;   // Tracked pointer value ids
+    u32* offsets = nullptr;  // count + 1 offsets into targets
+    u32* targets = nullptr;
+    u32 count = 0;
 };
 
 enum ResourceAccess : u8 {
     AccessRead = 1,
     AccessWrite = 2,
+    AccessAtomic = 4, // Elements are atomic<T>
 };
 
 // All arrays share a dense ValueId. Register allocation can contain holes;
@@ -37,6 +64,11 @@ struct ValueTable {
     u32* useInstructions = nullptr; // Single-use consumer, for bounded deferral
     u8* inlineDepths = nullptr; // Zero materializes; nonzero bounds expression depth
     u8* functionScope = nullptr; // Phi/cross-block values; other values stay local
+    u32* structTypes = nullptr; // Struct type hash of CUSTOM/ENUM values
+    u32* arrayLengths = nullptr; // Nonzero for fixed-size array values
+    u32* parents = nullptr; // Reference values: the value they reach into
+    u8* accessors = nullptr; // Reference values: Accessor into the parent
+    u8* variables = nullptr; // VariableFlags
     u32 count = 0;
 };
 
@@ -48,6 +80,7 @@ struct ValueOrigins {
 // group 0. Strides are the physical WGSL runtime-array element strides.
 struct ResourceTable {
     u16* elementTypes = nullptr;
+    u32* structTypes = nullptr; // Element struct type hash, or 0
     u8* access = nullptr;
     u32* groups = nullptr;
     u32* bindings = nullptr;
@@ -72,6 +105,13 @@ struct TextureTable {
     u16* types = nullptr;
     u32* slots = nullptr;
     u8* depth = nullptr;
+    u32 count = 0;
+};
+
+// Write-only rgba32float 2D storage textures, as the SPIR-V backend's
+// storage images. They bind in group 0 at their logical slot.
+struct StorageImageTable {
+    u32* slots = nullptr;
     u32 count = 0;
 };
 
@@ -173,6 +213,8 @@ struct WGSLBuilder {
     UniformTable uniforms;
     TextureTable textures;
     SamplerTable samplers;
+    StorageImageTable storageImages;
+    TrackedPointerTable trackedPointers;
     UniformAddressTable uniformAddresses;
     UniformLayoutTable uniformLayouts;
     InterfaceTable inputs;
@@ -192,6 +234,7 @@ struct WGSLBuilder {
     std::string_view Source() const;
     const char* Error() const;
     u32 ErrorInstruction() const;
+    bool UsesSubgroups() const; // The module enables the subgroups extension
 
 private:
     BWSL_Arena* arena = nullptr;
@@ -200,6 +243,18 @@ private:
     const SymbolTableData* symbols = nullptr;
     ShaderStage stage = ShaderStage::Compute;
     u32* registerToValue = nullptr;
+    u8* registerFlags = nullptr; // RegisterFlags, by register
+    u32 lastDefined = InvalidId; // Value set by the latest DefineValue
+    // Host-shareable struct layouts, by struct index: state (0 unknown,
+    // 1 in progress, 2 laid out), WGSL alignment and size, and each
+    // member's @size by field index.
+    u8* storageStates = nullptr;
+    u32* storageAlignments = nullptr;
+    u32* storageSizes = nullptr;
+    u32* storageMemberSizes = nullptr;
+    bool writingAtomicLoad = false;
+    u32 dispatchNode = InvalidId; // Tracked pointer resolved to dispatchTarget
+    u32 dispatchTarget = InvalidId;
     u32 resourceForSlot[32] = {};
     u32 uniformForSlot[32] = {};
     u32 textureForSlot[32] = {};
@@ -213,6 +268,7 @@ private:
     char errorMessage[256] = {};
     u32 errorInstruction = InvalidId;
     u32 currentInstruction = InvalidId;
+    u32 helperFunctions = 0; // Bit set of WGSL helpers the module must define
     bool attemptedEmission = false;
     bool structured = false;
     bool writingSource = false;
@@ -228,7 +284,10 @@ private:
     bool PrepareTextureInstruction(u32 instruction);
     bool WriteUniformOffset(TextWriter& writer, u32 value);
     bool WriteUniformLoad(TextWriter& writer, u32 value);
+    bool WriteUniformValue(TextWriter& writer, u32 value, CoreType type, u32 structHash,
+                           u32 arrayLength, u32 extraBytes);
     bool WriteTextureExpression(TextWriter& writer, u32 instruction);
+    bool WriteTextureOffset(TextWriter& writer, u16 operand, u32 width);
     bool WriteAdditionalResources(TextWriter& writer);
     u32 UniformTypeSize(CoreType type, u32 structHash);
     bool PrepareUniformLayout(u32 structId);
@@ -249,6 +308,8 @@ private:
     void WriteInterfaceAttribute(TextWriter& writer, const InterfaceTable& table,
                                  u32 id, bool varying);
     void PlanExpressions();
+    u32 OperandMask(u32 instruction) const;
+    u32 VectorArgumentCount(u32 instruction) const;
     void CountUse(u16 operand, u32 count = 1);
     bool WriteModule(TextWriter& writer);
     bool WriteInstruction(TextWriter& writer, u32 instruction);
@@ -260,7 +321,39 @@ private:
     bool ValueId(u16 reg, u32& valueId);
     bool NumericOperand(u16 operand, CoreType& type);
     bool RequireIndex(u16 operand);
-    bool DefineValue(u32 instruction, CoreType type, ValueKind kind);
+    // structType InvalidId takes the result register's struct type.
+    bool DefineValue(u32 instruction, CoreType type, ValueKind kind,
+                     u32 structType = InvalidId, u32 arrayLength = 0);
+    u32 NewValue(u16 reg, CoreType type, u32 structType, u32 arrayLength, ValueKind kind);
+    void CopyValueShape(u32 target, u32 source);
+    u32 StructIndex(u32 structHash) const;
+    bool FieldShape(u32 structHash, u32 field, CoreType& type, u32& structType, u32& arrayLength);
+    bool PrepareRegisters();
+    bool PrepareMemoryInstruction(u32 instruction, bool& handled);
+    bool PrepareStructInstruction(u32 instruction, bool& handled);
+    bool WriteFullType(TextWriter& writer, CoreType type, u32 structType, u32 arrayLength);
+    bool WriteValueType(TextWriter& writer, u32 valueId);
+    bool WriteReference(TextWriter& writer, u32 valueId);
+    bool WriteStructDeclarations(TextWriter& writer);
+    bool WriteMemoryInstruction(TextWriter& writer, u32 instruction, bool& handled);
+    bool WriteStructExpression(TextWriter& writer, u32 instruction, u32 valueId, bool& handled);
+    bool IsMutable(u16 operand) const;
+    bool PrepareStorageStruct(u32 structId);
+    // `std430Matrices`: a struct laid out with std430, where a mat2 column
+    // is 8 bytes, as in WGSL.
+    bool StorageShape(CoreType type, u32 structType, u32& alignment, u32& size,
+                      bool std430Matrices = false);
+    void MarkAccess(u32 reference, u8 access);
+    bool PrepareAtomicInstruction(u32 instruction);
+    bool IsAtomicReference(u32 reference) const;
+    bool WriteAtomicType(TextWriter& writer, CoreType type, u32 arrayLength);
+    bool WriteAtomicInstruction(TextWriter& writer, u32 instruction);
+    bool WriteEnumConstruct(TextWriter& writer, u32 instruction, u32 structType);
+    bool PrepareTrackedPointers();
+    u32 TrackedIndex(u32 valueId) const;
+    u32 TrackedNode(u32 reference) const;
+    bool WriteTrackedAccess(TextWriter& writer, u32 instruction, u32 reference);
+    void CountTrackedTargets(u32 tracked);
 };
 
 } // namespace WGSL

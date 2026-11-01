@@ -82,6 +82,7 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
     builder.currentSourceNode = 0xFFFFFFFF;
   builder.nextRegister = 0;
   recursionDiagnosed = false;
+  inlineDepthDiagnosed = false;
   hadError = false;
   suppressErrorOutput = false;
   diagnostics.clear();
@@ -205,6 +206,9 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   program.structFieldArraySizes =
       (u32 *)pool->Allocate(fieldCapacity * sizeof(u32), 64);
   memset(program.structFieldArraySizes, 0, fieldCapacity * sizeof(u32));
+  program.structFieldArrayStrides =
+      (u32 *)pool->Allocate(fieldCapacity * sizeof(u32), 64);
+  memset(program.structFieldArrayStrides, 0, fieldCapacity * sizeof(u32));
   memset(program.structFieldTypeHashes, 0, fieldCapacity * sizeof(u32));
   program.structFieldBounds = (const DeclaredBounds **)pool->Allocate(
       fieldCapacity * sizeof(const DeclaredBounds *), 64);
@@ -286,9 +290,20 @@ inline void IRLowering::Initialize(IRMemoryPool *memPool, const SymbolTableData 
   structTypeMap.clear();
   variableStructTypes.clear();
   pointerProblems.clear();
+  ComputeStd140Structs();
+  nonLocalAddresses = {};
+  reportedEmptyStructResources = {};
   controlDepth = 0;
   variableDepth.clear();
-  pointerLoops.clear();
+  // Their blocks were in the previous stage's pool.
+  pointerEvents = {};
+  pointerEventArguments = {};
+  pointerLoopDepths = {};
+  pointerEventProblems = {};
+  pointerProblemsBeforeLoop = {};
+  pointerSlots = {};
+  pointerSlotRegisters = {};
+  pointerBranches = {};
   reportedPointerArguments.clear();
 }
 

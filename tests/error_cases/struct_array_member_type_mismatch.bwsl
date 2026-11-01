@@ -1,0 +1,18 @@
+// Error case: a value of another struct type stored into a struct field of
+// a struct array element.
+pipeline WrongAcceptStructArrayMemberTypeMismatch {
+    struct A { float x; float y; };
+    struct B { float2 v; };
+    struct Holder { A a; float w; };
+    resources { output: buffer<float> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            B b;
+            b.v = float2(1.0, 2.0);
+            Holder[2] items;
+            items[0].a = b;
+            resources.output[0] = items[0].a.x;
+        }
+    }
+}

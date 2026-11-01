@@ -565,12 +565,202 @@ inline bool IRLowering::TryStoreLocalPlace(NodeRef target, u16 valueReg) {
                             EmitZeroStruct(program.registerStructTypes[place.rootReg]));
     initializedVariables.insert(place.rootNameHash);
   }
-  if (!CheckStoreShape(target, valueReg, place.type)) return true;
+  if (!CheckStoreShape(target, valueReg, place.type, place.structHash)) return true;
   ResolveLocalPlace(target, true, &place);
   if (place.type != CoreType::CUSTOM && place.type != CoreType::ENUM)
     valueReg = ConvertRegisterToType(valueReg, place.type);
   builder.EmitInstruction(OP_LOCAL_STORE, 0, place.reg, valueReg);
   return true;
+}
+
+// The storage buffer `resources.name` names, or nullptr.
+inline const ResourceData *StorageBufferOf(IRLowering *lowering, NodeRef expr) {
+  if (expr.Type() != ASTNodeType::MEMBER_ACCESS) return nullptr;
+  const MemberAccessData &access = lowering->ast->GetMemberAccess(expr);
+  if (access.object.Type() != ASTNodeType::IDENTIFIER ||
+      lowering->ast->GetIdentifier(access.object).identifierKind !=
+          SpecialIdentifier::RESOURCES) {
+    return nullptr;
+  }
+  Symbol *sym = SymbolTable::LookupByHash(
+      const_cast<SymbolTableData *>(lowering->symbols), access.member.nameHash);
+  if (!sym || sym->kind != SymbolKind::RESOURCE) return nullptr;
+  const ResourceData &resource = lowering->symbols->resources[sym->index];
+  return resource.type == ResourceBinding::StorageBuffer ? &resource : nullptr;
+}
+
+inline bool IRLowering::ResolveStoragePlace(NodeRef expr, bool emit,
+                                            StoragePlace *out) {
+  // A pointer below the element carries no binding: the SPIR-V backend reads
+  // the binding as "this indexes the buffer itself".
+  const auto pointer = [&](const StoragePlace &place, u32 storageInfo) {
+    u16 dest = AllocateRegister();
+    if (dest >= MAX_REGISTERS) return u16(0xFFFF);
+    SetRegisterType(dest, place.type);
+    program.registerStructTypes[dest] = place.structHash;
+    program.registerStorageInfo[dest] = storageInfo;
+    return dest;
+  };
+  if (expr.Type() == ASTNodeType::ARRAY_ACCESS) {
+    const ArrayAccessData &access = ast->GetArrayAccess(expr);
+    if (const ResourceData *buffer = StorageBufferOf(this, access.array)) {
+      *out = {};
+      out->structHash = buffer->structTypeHash;
+      out->type = buffer->structTypeHash != 0
+                      ? CoreType::CUSTOM
+                      : static_cast<CoreType>(buffer->coreType);
+      if (!emit) return true;
+      u16 base = LowerExpression(access.array);
+      u16 index = LowerExpression(access.index);
+      out->reg = pointer(*out, (buffer->bindingIndex << IRProgram::STORAGE_BINDING_SHIFT) |
+                                   IRProgram::STORAGE_IS_PTR);
+      if (out->reg == 0xFFFF) return false;
+      builder.EmitInstruction(OP_STORAGE_INDEX, out->reg, base, index);
+      return true;
+    }
+    StoragePlace base;
+    if (!ResolveStoragePlace(access.array, emit, &base)) return false;
+    *out = base;
+    if (base.arrayLength != 0) {
+      out->arrayLength = 0;
+    } else if (mask(base.type) & TypeMasks::MATRIX_TYPES) {
+      out->type = base.type == CoreType::MAT4 ? CoreType::FLOAT4 :
+                  base.type == CoreType::MAT3 ? CoreType::FLOAT3 : CoreType::FLOAT2;
+    } else if (GetVectorDimension(base.type) > 1) {
+      out->type = GetScalarComponentType(base.type);
+    } else {
+      return false;
+    }
+    if (!emit) return true;
+    u16 index = LowerExpression(access.index);
+    if (base.arrayLength != 0) {
+      CheckConstIndexInBounds(index, access.index, base.arrayLength);
+    } else {
+      CheckConstComponentIndex(index, access.index, base.type);
+    }
+    out->reg = pointer(*out, 0);
+    if (out->reg == 0xFFFF) return false;
+    builder.EmitInstruction(OP_STORAGE_INDEX, out->reg, base.reg, index);
+    return true;
+  }
+  if (expr.Type() != ASTNodeType::MEMBER_ACCESS) return false;
+  const MemberAccessData &access = ast->GetMemberAccess(expr);
+  StoragePlace base;
+  if (access.isModuleQualified || !ResolveStoragePlace(access.object, false, &base) ||
+      base.arrayLength != 0) {
+    return false;
+  }
+  if (base.type == CoreType::CUSTOM) {
+    u32 field = 0;
+    CoreType fieldType = CoreType::INVALID;
+    if (!FindStructField(base.structHash, access.member.nameHash, &field, &fieldType, nullptr))
+      return false;
+    auto structIt = structTypeMap.find(base.structHash);
+    u32 member = program.structTypes[structIt->second].fieldOffset + field;
+    *out = {};
+    out->type = fieldType;
+    out->structHash = (fieldType == CoreType::CUSTOM || fieldType == CoreType::ENUM)
+                          ? program.structFieldTypeHashes[member] : 0;
+    out->arrayLength = program.structFieldArraySizes ? program.structFieldArraySizes[member] : 0;
+    if (!emit) return true;
+    ResolveStoragePlace(access.object, true, &base);
+    out->reg = pointer(*out, 0);
+    if (out->reg == 0xFFFF) return false;
+    builder.EmitInstruction(OP_STORAGE_FIELD, out->reg, base.reg, static_cast<u16>(field));
+    program.metadata[builder.currentInstruction - 1] = base.structHash;
+    return true;
+  }
+  // One vector component; a longer swizzle is not one place.
+  u8 indices[4] = {};
+  u32 length = 0;
+  if (GetVectorDimension(base.type) < 2 ||
+      !DecodeSwizzleByHash(access.member.nameHash, access.member.nameLength, indices, &length) ||
+      length != 1 || indices[0] >= GetVectorDimension(base.type)) {
+    return false;
+  }
+  *out = {};
+  out->type = GetScalarComponentType(base.type);
+  if (!emit) return true;
+  ResolveStoragePlace(access.object, true, &base);
+  out->reg = pointer(*out, 0);
+  if (out->reg == 0xFFFF) return false;
+  builder.EmitInstruction(OP_STORAGE_INDEX, out->reg, base.reg,
+                          EmitConstantUint(indices[0]));
+  return true;
+}
+
+inline bool IRLowering::TryStoreStoragePlace(NodeRef target, u16 valueReg) {
+  NodeRef root = target;
+  NodeRef resource = target;
+  while (root.Type() == ASTNodeType::MEMBER_ACCESS || root.Type() == ASTNodeType::ARRAY_ACCESS) {
+    resource = root;
+    root = root.Type() == ASTNodeType::MEMBER_ACCESS ? ast->GetMemberAccess(root).object
+                                                     : ast->GetArrayAccess(root).array;
+  }
+  if (root.Type() != ASTNodeType::IDENTIFIER ||
+      ast->GetIdentifier(root).identifierKind != SpecialIdentifier::RESOURCES) {
+    return false;
+  }
+  if (!StorageBufferOf(this, resource)) {
+    std::string name = resource.Type() == ASTNodeType::MEMBER_ACCESS
+                           ? ast->GetMemberAccess(resource).member.ToString() : std::string();
+    ReportErrorAt(target, ("Error: resources." + name +
+                           " is read-only; only storage buffer elements can be assigned\n").c_str());
+    return true;
+  }
+  // `resources.buffer[i] = value` stores the element directly.
+  if (target.Type() == ASTNodeType::ARRAY_ACCESS &&
+      StorageBufferOf(this, ast->GetArrayAccess(target).array)) {
+    return false;
+  }
+  StoragePlace place;
+  if (ResolveStoragePlace(target, false, &place)) {
+    if (place.arrayLength != 0) {
+      ReportErrorAt(target, "Error: assign a storage buffer's array field one element at a time\n");
+      return true;
+    }
+    if (!CheckStoreShape(target, valueReg, place.type, place.structHash)) return true;
+    if (place.type != CoreType::CUSTOM && place.type != CoreType::ENUM)
+      valueReg = ConvertRegisterToType(valueReg, place.type);
+    ResolveStoragePlace(target, true, &place);
+    builder.EmitInstruction(OP_LOCAL_STORE, 0, place.reg, valueReg);
+    return true;
+  }
+  // A swizzle stores each component through its own pointer.
+  if (target.Type() == ASTNodeType::MEMBER_ACCESS) {
+    const MemberAccessData &access = ast->GetMemberAccess(target);
+    StoragePlace vector;
+    u8 indices[4] = {};
+    u32 length = 0;
+    if (ResolveStoragePlace(access.object, false, &vector) && vector.arrayLength == 0 &&
+        GetVectorDimension(vector.type) > 1 &&
+        DecodeSwizzleByHash(access.member.nameHash, access.member.nameLength, indices, &length)) {
+      if (!CheckSwizzleInRange(this, target, vector.type, indices, length)) return true;
+      for (u32 i = 0; i < length; ++i) {
+        for (u32 j = 0; j < i; ++j) {
+          if (indices[i] == indices[j]) {
+            ReportError("Error: swizzle assignment target has duplicate components\n");
+            return true;
+          }
+        }
+      }
+      CoreType component = GetScalarComponentType(vector.type);
+      if (!CheckStoreShape(target, valueReg, GetVectorType(component, length))) return true;
+      ResolveStoragePlace(access.object, true, &vector);
+      for (u32 i = 0; i < length; ++i) {
+        u16 value = AllocateRegister();
+        SetRegisterType(value, component);
+        builder.EmitInstruction(OP_VEC_EXTRACT, value, valueReg, static_cast<u16>(i));
+        u16 element = AllocateRegister();
+        SetRegisterType(element, component);
+        program.registerStorageInfo[element] = 0;
+        builder.EmitInstruction(OP_STORAGE_INDEX, element, vector.reg, EmitConstantUint(indices[i]));
+        builder.EmitInstruction(OP_LOCAL_STORE, 0, element, value);
+      }
+      return true;
+    }
+  }
+  return false;
 }
 
 inline void IRLowering::LowerVariableDecl(NodeRef ref, u32 bindingNameHash,
@@ -730,7 +920,7 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref, u32 bindingNameHash,
       for (u32 i = 0; i < elementCount; i++) {
         u16 elementReg = LowerExpression(initBlock.statements[i]);
         if (!CheckStoreShape(initBlock.statements[i], elementReg,
-                             arrayElementType)) {
+                             arrayElementType, arrayElementStructHash)) {
           return;
         }
         elementRegs[i] = ConvertRegisterToType(elementReg, arrayElementType);
@@ -799,7 +989,10 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref, u32 bindingNameHash,
         }
       }
 
-      if (!isArray && !CheckStoreShape(ref, initReg, coreType)) return;
+      if (!isArray &&
+          !CheckStoreShape(ref, initReg, coreType,
+                           coreType == CoreType::CUSTOM ? program.registerStructTypes[varReg] : 0))
+        return;
       u16 storedInitReg = ConvertRegisterToType(initReg, coreType);
       builder.EmitInstruction(OP_STORE_REG, varReg, storedInitReg);
       // Propagate pointer storage info if the init expression is a pointer
@@ -807,6 +1000,7 @@ inline void IRLowering::LowerVariableDecl(NodeRef ref, u32 bindingNameHash,
                                       IR::IRProgram::STORAGE_IS_PTR)) {
         program.registerStorageInfo[varReg] =
             program.registerStorageInfo[initReg];
+        ReportNonLocalPointerVariable(initReg);
         DeclarePointerVariable(varReg, initReg);
         // Also propagate the struct type hash for `TypeName^ p = ^s;` so
         // `p^.field` later resolves the struct layout.
@@ -913,6 +1107,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
     }
   }
   if (TryStoreLocalPlace(target, valueReg)) return;
+  if (TryStoreStoragePlace(target, valueReg)) return;
 
   if (target.Type() == ASTNodeType::IDENTIFIER) {
     const IdentifierData &ident = ast->GetIdentifier(target);
@@ -921,13 +1116,14 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
         variableRegisters.find(ident.name.nameHash) == variableRegisters.end()) {
       u32 fieldIndex = 0xFFFF;
       CoreType fieldType = CoreType::INVALID;
+      u32 fieldTypeHash = 0;
       if (FindStructField(currentStructMethodTypeHash, ident.name.nameHash,
-                          &fieldIndex, &fieldType, nullptr)) {
+                          &fieldIndex, &fieldType, &fieldTypeHash)) {
         if (currentStructMethodIsConst) {
           ReportError("Error: cannot assign to receiver field inside const method\n");
           return;
         }
-        if (!CheckStoreShape(target, valueReg, fieldType)) return;
+        if (!CheckStoreShape(target, valueReg, fieldType, fieldTypeHash)) return;
         valueReg = ConvertRegisterToType(valueReg, fieldType);
         u16 newStructReg = AllocateRegister();
         SetRegisterType(newStructReg, CoreType::CUSTOM);
@@ -967,7 +1163,8 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
     bool declared = variableRegisters.find(ident.name.nameHash) !=
                     variableRegisters.end();
     u16 varReg = GetOrAllocateVariable(ident.name.nameHash);
-    if (declared && !CheckStoreShape(target, valueReg, GetRegisterType(varReg)))
+    if (declared && !CheckStoreShape(target, valueReg, GetRegisterType(varReg),
+                                     program.registerStructTypes[varReg]))
       return;
     valueReg = ConvertRegisterToType(valueReg, GetRegisterType(varReg));
     builder.EmitInstruction(OP_STORE_REG, varReg, valueReg);
@@ -976,6 +1173,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
                                      IR::IRProgram::STORAGE_IS_PTR)) {
       program.registerStorageInfo[varReg] =
           program.registerStorageInfo[valueReg];
+      ReportNonLocalPointerVariable(valueReg);
       AssignPointerVariable(varReg, valueReg);
     }
     initializedVariables.insert(ident.name.nameHash);
@@ -1005,12 +1203,13 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
                            ? program.registerStructTypes[objectReg] : 0;
       u32 fieldIndex = 0;
       CoreType fieldType = CoreType::INVALID;
+      u32 fieldTypeHash = 0;
       if (structHash && FindStructField(structHash, access.member.nameHash,
-                                       &fieldIndex, &fieldType, nullptr)) {
+                                       &fieldIndex, &fieldType, &fieldTypeHash)) {
         u16 updated = AllocateRegister();
         SetRegisterType(updated, objectType);
         program.registerStructTypes[updated] = structHash;
-        if (!CheckStoreShape(target, valueReg, fieldType)) return;
+        if (!CheckStoreShape(target, valueReg, fieldType, fieldTypeHash)) return;
         valueReg = ConvertRegisterToType(valueReg, fieldType);
         builder.EmitInstruction(OP_STRUCT_INSERT, updated, objectReg,
                                 static_cast<u16>(fieldIndex), valueReg);
@@ -1276,10 +1475,11 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           }
 
           if (fieldIndex != 0xFFFF) {
-            CoreType fieldType = static_cast<CoreType>(
-                program.structFieldTypes[program.structTypes[structIt->second]
-                                             .fieldOffset + fieldIndex]);
-            if (!CheckStoreShape(target, valueReg, fieldType)) return;
+            u32 fieldSlot = program.structTypes[structIt->second].fieldOffset + fieldIndex;
+            CoreType fieldType = static_cast<CoreType>(program.structFieldTypes[fieldSlot]);
+            if (!CheckStoreShape(target, valueReg, fieldType,
+                                 program.structFieldTypeHashes[fieldSlot]))
+              return;
             valueReg = ConvertRegisterToType(valueReg, fieldType);
             // Emit struct insert: dest = struct with field=value
             // We modify the struct in place by creating a new struct value
@@ -1450,7 +1650,9 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
 
             CoreType memberType =
                 static_cast<CoreType>(program.structFieldTypes[memberOffset]);
-            if (!CheckStoreShape(target, valueReg, memberType)) return;
+            if (!CheckStoreShape(target, valueReg, memberType,
+                                 program.structFieldTypeHashes[memberOffset]))
+              return;
             valueReg = ConvertRegisterToType(valueReg, memberType);
 
             u16 indexReg = LowerExpression(arrAccess.index);
@@ -1631,6 +1833,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           (baseType == CoreType::BOOL2  || baseType == CoreType::BOOL3 ||
            baseType == CoreType::BOOL4) ? (valueType == CoreType::BOOL) : false;
       if (baseIsVec && valueIsComponent) {
+        if (!CheckConstComponentIndex(indexReg, arrAccess.index, baseType)) return;
         u16 newVecReg = AllocateRegister();
         SetRegisterType(newVecReg, baseType);
         builder.EmitInstruction(OP_VEC_INSERT_DYNAMIC, newVecReg, baseReg,
@@ -1646,6 +1849,7 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
       CoreType expectedCol = (baseType == CoreType::MAT4) ? CoreType::FLOAT4 :
                             (baseType == CoreType::MAT3) ? CoreType::FLOAT3 : CoreType::FLOAT2;
       if (!localArray && baseIsMat && valueType == expectedCol) {
+        if (!CheckConstComponentIndex(indexReg, arrAccess.index, baseType)) return;
         u32 count = baseType == CoreType::MAT4 ? 4 : baseType == CoreType::MAT3 ? 3 : 2;
         u16 columns[4] = {};
         for (u32 c = 0; c < count; ++c) {
@@ -1678,7 +1882,24 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
           arrayIndex < program.localArrayCount
               ? static_cast<CoreType>(program.localArrayTypes[arrayIndex])
               : CoreType::INVALID;
-      if (!CheckStoreShape(target, valueReg, elementType)) return;
+      u32 elementStructHash = arrayIndex < program.localArrayCount
+                                  ? program.localArrayStructTypes[arrayIndex] : 0;
+      if (!CheckStoreShape(target, valueReg, elementType, elementStructHash)) return;
+    } else if (baseReg < MAX_REGISTERS &&
+               (program.registerStorageInfo[baseReg] & IR::IRProgram::STORAGE_IS_PTR) &&
+               !(program.registerStorageInfo[baseReg] & IR::IRProgram::STORAGE_IS_SHARED)) {
+      // `resources.buffer[i] = value` stores a whole element.
+      u32 binding = program.registerStorageInfo[baseReg] >> IR::IRProgram::STORAGE_BINDING_SHIFT;
+      u32 elementStructHash = binding < 32 ? program.bufferElementStructTypes[binding] : 0;
+      CoreType elementType = elementStructHash != 0
+          ? CoreType::CUSTOM
+          : binding < 32 ? static_cast<CoreType>(program.bufferElementCoreTypes[binding])
+                         : CoreType::INVALID;
+      if (elementType != CoreType::INVALID && elementType != CoreType::VOID) {
+        if (!CheckStoreShape(target, valueReg, elementType, elementStructHash)) return;
+        if (elementType != CoreType::CUSTOM)
+          valueReg = ConvertRegisterToType(valueReg, elementType);
+      }
     }
     if (baseReg < MAX_REGISTERS) {
       CoreType baseType =
@@ -1708,6 +1929,13 @@ inline void IRLowering::StoreLValue(NodeRef target, u16 valueReg,
     if (unaryOp.op == UnaryOpType::DEREFERENCE) {
       // Get the pointer value
       u16 ptrReg = LowerExpression(unaryOp.operand);
+      if (InPointerLoop()) {
+        // Checked when the loop ends, against every target it can hold.
+        pointerEvents.Push(pool, {PointerEvent::STORE, false, ptrReg, 0, 0, target});
+      } else if (auto problem = pointerProblems.find(ptrReg); problem != pointerProblems.end()) {
+        ReportPointerStoreProblem(target, problem->second);
+        return;
+      }
       // Store through the pointer
       // Format: dest=0 (no result), s0=ptr, s1=value
       builder.EmitInstruction(OP_LOCAL_STORE, 0, ptrReg, valueReg);
@@ -1795,13 +2023,9 @@ inline u16 IRLowering::LowerArrayAccess(NodeRef ref) {
     // Propagate storage info for the pointer (in case of further chaining)
     u32 srcInfo = program.registerStorageInfo[baseReg];
     u32 binding = (srcInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
-    u32 depth = ((srcInfo & IR::IRProgram::STORAGE_DEPTH_MASK) >>
-                 IR::IRProgram::STORAGE_DEPTH_SHIFT) +
-                1;
     u32 sharedFlag = srcInfo & IR::IRProgram::STORAGE_IS_SHARED;
     program.registerStorageInfo[ptrReg] =
         (binding << IR::IRProgram::STORAGE_BINDING_SHIFT) |
-        (depth << IR::IRProgram::STORAGE_DEPTH_SHIFT) |
         IR::IRProgram::STORAGE_IS_PTR | sharedFlag;
     {
       CoreType baseType = GetRegisterType(baseReg);
@@ -1862,6 +2086,7 @@ inline u16 IRLowering::LowerArrayAccess(NodeRef ref) {
       }
 
       if (!isLocalArray) {
+        CheckConstComponentIndex(indexReg, access.index, baseType);
         // Matrix subscript returns a column vector
         if (baseType == CoreType::MAT2)
           elemType = CoreType::FLOAT2;
@@ -1935,13 +2160,9 @@ inline u16 IRLowering::LowerStoragePointerForAtomic(NodeRef ref) {
 
   u32 srcInfo = program.registerStorageInfo[baseReg];
   u32 binding = (srcInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
-  u32 depth = ((srcInfo & IR::IRProgram::STORAGE_DEPTH_MASK) >>
-               IR::IRProgram::STORAGE_DEPTH_SHIFT) +
-              1;
   u32 sharedFlag = srcInfo & IR::IRProgram::STORAGE_IS_SHARED;
   program.registerStorageInfo[ptrReg] =
       (binding << IR::IRProgram::STORAGE_BINDING_SHIFT) |
-      (depth << IR::IRProgram::STORAGE_DEPTH_SHIFT) |
       IR::IRProgram::STORAGE_IS_PTR | sharedFlag;
 
   CoreType baseType = GetRegisterType(baseReg);
@@ -2123,16 +2344,12 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
                                   fieldIndex);
           program.metadata[builder.currentInstruction - 1] = structTypeHash;
 
-          // Propagate storage pointer info (increment depth)
+          // Propagate storage pointer info
           u32 srcInfo = program.registerStorageInfo[objectReg];
           u32 binding = (srcInfo >> IR::IRProgram::STORAGE_BINDING_SHIFT);
-          u32 depth = ((srcInfo & IR::IRProgram::STORAGE_DEPTH_MASK) >>
-                       IR::IRProgram::STORAGE_DEPTH_SHIFT) +
-                      1;
           u32 sharedFlag = srcInfo & IR::IRProgram::STORAGE_IS_SHARED;
           program.registerStorageInfo[dest] =
               (binding << IR::IRProgram::STORAGE_BINDING_SHIFT) |
-              (depth << IR::IRProgram::STORAGE_DEPTH_SHIFT) |
               IR::IRProgram::STORAGE_IS_PTR | sharedFlag;
         } else {
           // Regular struct field access - emit OP_STRUCT_EXTRACT
@@ -2440,6 +2657,19 @@ inline u16 IRLowering::LowerMemberAccess(NodeRef ref) {
       return 0;
 
     const ResourceData &resData = symbols->resources[sym->index];
+    // GLSL, Metal and WGSL have no empty structs to lay out in a buffer.
+    if ((resData.type == ResourceBinding::StorageBuffer ||
+         resData.type == ResourceBinding::UniformBuffer) &&
+        !reportedEmptyStructResources.Contains(access.member.nameHash)) {
+      reportedEmptyStructResources.Push(pool, access.member.nameHash);
+      if (u32 empty = FindEmptyStruct(resData.structTypeHash)) {
+        std::string message = "Error: resources." + access.member.ToString() +
+                              " holds struct " + ReverseLookup::GetString(empty) +
+                              ", which has no fields; a buffer can't hold an "
+                              "empty struct, so give it a field or remove it\n";
+        ReportErrorAt(ref, message.c_str());
+      }
+    }
     u16 dest = AllocateRegister();
 
     switch (resData.type) {

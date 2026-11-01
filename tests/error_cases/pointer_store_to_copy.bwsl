@@ -1,0 +1,14 @@
+// Error case: a write through a pointer to a copy. `^v.x` points to a copy
+// of the component, so the write never reached `v`.
+pipeline WrongAcceptPointerStoreToCopy {
+    resources { output: buffer<float> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            float3 v = float3(1.0, 2.0, 3.0);
+            float^ p = ^v.x;
+            p^ = 9.0;
+            resources.output[0] = v.x;
+        }
+    }
+}

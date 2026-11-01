@@ -1,0 +1,16 @@
+// Error case: a struct field of a storage buffer element assigned a value of
+// another struct type.
+pipeline WrongAcceptStorageStructFieldTypeMismatch {
+    struct A { float x; float y; };
+    struct B { float2 v; };
+    struct Particle { A a; float mass; };
+    resources { particles: buffer<Particle> }
+    pass "Compute" {
+        use resources { particles }
+        compute "Main" [1, 1, 1] {
+            B b;
+            b.v = float2(1.0, 2.0);
+            resources.particles[0].a = b;
+        }
+    }
+}

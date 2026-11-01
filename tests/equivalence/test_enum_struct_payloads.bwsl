@@ -1,0 +1,36 @@
+// Struct and matrix enum payloads are stored one scalar slot at a time and
+// rebuilt when a pattern arm binds them. Binding a struct payload was
+// unsupported, nested structs and matrices didn't fit their slots, and
+// Crate's uint field shares a slot with Ball's float.
+pipeline EquivEnumStructPayloads {
+    struct Inner { float a; float2 b; };
+    struct Box { uint id; float3 size; Inner inner; };
+    resources { output: buffer<float> }
+    enum Shape {
+        Ball(float r),
+        Crate(Box box, float w),
+        Frame(mat2 basis, mat3 rotation),
+        eval value :: () -> float {
+            Ball(r): r
+            Crate(box, w): float(box.id % 1000u) + box.size.x * 10.0 + box.size.y * 100.0 + box.size.z * 1000.0 + box.inner.a * 10000.0 + box.inner.b.y * 100000.0 + w * 1000000.0
+            Frame(basis, rotation): basis[0].x + basis[0].y * 10.0 + basis[1].x * 100.0 + basis[1].y * 1000.0 + rotation[2].z * 10000.0 + rotation[1].x * 100000.0
+        }
+    }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            Box b;
+            b.id = 4000000123u;
+            b.size = float3(1.0, 2.0, 3.0);
+            b.inner.a = 4.0;
+            b.inner.b = float2(9.0, 5.0);
+            resources.output[0] = Shape::Crate(b, 7.0).value();
+            resources.output[1] = Shape::Ball(2.5).value();
+            mat2 basis = mat2(float2(1.0, 2.0), float2(3.0, 4.0));
+            mat3 rotation = mat3(float3(0.0, 0.0, 0.0), float3(6.0, 0.0, 0.0), float3(0.0, 0.0, 5.0));
+            resources.output[2] = Shape::Frame(basis, rotation).value();
+            b.id = 7u;
+            resources.output[3] = Shape::Crate(b, 0.0).value();
+        }
+    }
+}

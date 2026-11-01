@@ -26,7 +26,7 @@ inline u16 IRLowering::EmitZeroStruct(u32 structTypeHash) {
       structInfo = FindStructInfo(structTypeHash);
     }
   }
-  if (!structInfo || structInfo->fieldCount == 0) {
+  if (!structInfo) {
     return EmitZeroConstant(CoreType::FLOAT);
   }
 
@@ -304,8 +304,7 @@ inline u32 IRLowering::RegisterStructTypeFromSymbol(u32 typeNameHash,
   }
   info.fieldOffset = fieldOffset;
 
-  // Calculate total size and copy field info (std140 layout)
-  u32 currentOffset = 0;
+  // Copy field info; LayoutStructType places the fields.
   for (u32 i = 0; i < structData.fields.count; i++) {
     if (fieldOffset + i >= program.structFieldCapacity)
       break;
@@ -319,51 +318,9 @@ inline u32 IRLowering::RegisterStructTypeFromSymbol(u32 typeNameHash,
                                                   : 0;
     program.structFieldArraySizes[fieldOffset + i] = field.arraySize;
     program.structFieldBounds[fieldOffset + i] = field.bounds;
-
-    // std140 alignment rules - for arrays, account for array length
-    u32 fieldSize = GetTypeSize(field.type.coreType);
-    u32 alignment = GetTypeAlignment(field.type.coreType);
-
-    // For CUSTOM types (nested structs), ensure nested struct is registered
-    // and get its size
-    if (field.type.coreType == CoreType::CUSTOM &&
-        field.type.customTypeHash != 0) {
-      // First, ensure the nested struct is registered (recursively)
-      auto it = structTypeMap.find(field.type.customTypeHash);
-      if (it == structTypeMap.end()) {
-        // Nested struct not registered yet - register it now
-        LookupOrRegisterStructType(field.type.customTypeHash);
-        it = structTypeMap.find(field.type.customTypeHash);
-      }
-
-      if (it != structTypeMap.end()) {
-        u32 nestedIdx = it->second;
-        fieldSize = program.structTypes[nestedIdx].totalSize;
-        // Struct alignment is max of its member alignments, minimum 16 for
-        // std140
-        alignment = 16;
-      }
-    }
-
-    currentOffset = (currentOffset + alignment - 1) & ~(alignment - 1);
-    program.structFieldByteOffsets[fieldOffset + i] = currentOffset;
-    if (field.arraySize > 0) {
-      // std430 layout: scalars and vec2 use natural stride, vec3+ rounds to
-      // 16
-      u32 arrayStride;
-      if (fieldSize <= 8) {
-        arrayStride = fieldSize; // Natural size for scalars (4) and vec2 (8)
-      } else {
-        arrayStride =
-            (fieldSize + 15) & ~15; // Round to 16 for vec3, vec4, mat
-      }
-      currentOffset += arrayStride * field.arraySize;
-    } else {
-      currentOffset += fieldSize;
-    }
   }
 
-  info.totalSize = currentOffset;
+  LayoutStructType(structIdx);
   return typeNameHash;
 }
 
@@ -386,8 +343,7 @@ inline u32 IRLowering::RegisterStructTypeFromData(u32 typeNameHash, StructData *
   }
   info.fieldOffset = fieldOffset;
 
-  // Calculate total size and copy field info
-  u32 currentOffset = 0;
+  // Copy field info; LayoutStructType places the fields.
   for (u32 i = 0; i < structData->fields.count; i++) {
     if (fieldOffset + i >= program.structFieldCapacity)
       break;
@@ -401,50 +357,9 @@ inline u32 IRLowering::RegisterStructTypeFromData(u32 typeNameHash, StructData *
                                                   : 0;
     program.structFieldArraySizes[fieldOffset + i] = field.arraySize;
     program.structFieldBounds[fieldOffset + i] = field.bounds;
-
-    u32 fieldSize = GetTypeSize(field.type.coreType);
-    u32 alignment = GetTypeAlignment(field.type.coreType);
-
-    // For CUSTOM types (nested structs), ensure nested struct is registered
-    // and get its size
-    if (field.type.coreType == CoreType::CUSTOM &&
-        field.type.customTypeHash != 0) {
-      // First, ensure the nested struct is registered (recursively)
-      auto it = structTypeMap.find(field.type.customTypeHash);
-      if (it == structTypeMap.end()) {
-        // Nested struct not registered yet - register it now
-        LookupOrRegisterStructType(field.type.customTypeHash);
-        it = structTypeMap.find(field.type.customTypeHash);
-      }
-
-      if (it != structTypeMap.end()) {
-        u32 nestedIdx = it->second;
-        fieldSize = program.structTypes[nestedIdx].totalSize;
-        // Struct alignment is max of its member alignments, minimum 16 for
-        // std140
-        alignment = 16;
-      }
-    }
-
-    currentOffset = (currentOffset + alignment - 1) & ~(alignment - 1);
-    program.structFieldByteOffsets[fieldOffset + i] = currentOffset;
-    if (field.arraySize > 0) {
-      // std430 layout: scalars and vec2 use natural stride, vec3+ rounds to
-      // 16
-      u32 arrayStride;
-      if (fieldSize <= 8) {
-        arrayStride = fieldSize; // Natural size for scalars (4) and vec2 (8)
-      } else {
-        arrayStride =
-            (fieldSize + 15) & ~15; // Round to 16 for vec3, vec4, mat
-      }
-      currentOffset += arrayStride * field.arraySize;
-    } else {
-      currentOffset += fieldSize;
-    }
   }
 
-  info.totalSize = currentOffset;
+  LayoutStructType(structIdx);
   return typeNameHash;
 }
 
@@ -481,7 +396,6 @@ IRLowering::RegisterBuiltinStructType(const StdLib::BuiltinStructType &builtin) 
     return 0;
   }
 
-  u32 currentOffset = 0;
   for (u32 i = 0; i < fieldCount; i++) {
     const CoreType fieldType = builtin.fields[i].type;
     u32 fieldNameHash = Utils::HashStr(builtin.fields[i].name);
@@ -492,14 +406,9 @@ IRLowering::RegisterBuiltinStructType(const StdLib::BuiltinStructType &builtin) 
     program.structFieldNameHashes[fieldOffset + i] = fieldNameHash;
     program.structFieldTypeHashes[fieldOffset + i] = 0;
     program.structFieldArraySizes[fieldOffset + i] = 0;
-
-    u32 alignment = GetTypeAlignment(fieldType);
-    currentOffset = (currentOffset + alignment - 1) & ~(alignment - 1);
-    program.structFieldByteOffsets[fieldOffset + i] = currentOffset;
-    currentOffset += GetTypeSize(fieldType);
   }
 
-  info.totalSize = currentOffset;
+  LayoutStructType(structIdx);
   return typeNameHash;
 }
 
@@ -597,6 +506,12 @@ inline void IRLowering::AppendEnumPayloadLayout(CoreType type, u32 typeHash,
 
   CoreType scalarType = GetScalarComponentType(type);
   u32 componentCount = ScalarComponentCount(type);
+  // A matrix takes one float slot per element, column by column.
+  if (mask(type) & TypeMasks::MATRIX_TYPES) {
+    u32 columns = type == CoreType::MAT4 ? 4 : type == CoreType::MAT3 ? 3 : 2;
+    scalarType = CoreType::FLOAT;
+    componentCount = columns * columns;
+  }
   for (u32 c = 0; c < componentCount && fieldCount < maxFields; c++) {
     fieldTypes[fieldCount] = scalarType;
     fieldTypeHashes[fieldCount] = 0;
@@ -611,6 +526,280 @@ inline u32 IRLowering::GetEnumPayloadFieldCount(CoreType type, u32 typeHash) {
   AppendEnumPayloadLayout(type, typeHash, fieldTypes, fieldTypeHashes,
                           fieldCount, 64);
   return fieldCount;
+}
+
+inline CoreType IRLowering::EnumPayloadSlotType(u32 enumStructHash, u32 slot) {
+  auto it = structTypeMap.find(enumStructHash);
+  if (it == structTypeMap.end()) return CoreType::INVALID;
+  const IRProgram::StructTypeInfo &info = program.structTypes[it->second];
+  if (1 + slot >= info.fieldCount) return CoreType::INVALID;
+  return static_cast<CoreType>(program.structFieldTypes[info.fieldOffset + 1 + slot]);
+}
+
+inline u16 IRLowering::EnumPayloadToSlots(NodeRef node, u16 reg, CoreType type,
+                                          u32 enumStructHash, u32 slot) {
+  CoreType component = GetScalarComponentType(type);
+  if (type == CoreType::CUSTOM || type == CoreType::ENUM ||
+      component == CoreType::FLOAT ||
+      EnumPayloadSlotType(enumStructHash, slot) != CoreType::FLOAT) {
+    return reg;
+  }
+  u16 bits = AllocateRegister();
+  if (component == CoreType::BOOL) {
+    // Bool vectors are stored one component at a time (see the enum
+    // constructor), so only a scalar reaches here.
+    SetRegisterType(bits, CoreType::FLOAT);
+    builder.EmitInstruction(OP_SELECT, bits, builder.EmitConstant(0.0f),
+                            builder.EmitConstant(1.0f), reg);
+    return bits;
+  }
+  SetRegisterType(bits, GetVectorType(CoreType::FLOAT, GetVectorDimension(type)));
+  builder.EmitInstruction(OP_BITCAST, bits, reg);
+  return bits;
+}
+
+inline u16 IRLowering::ReadEnumPayloadSlot(u16 receiver, u32 slot, CoreType type) {
+  CoreType storage = EnumPayloadSlotType(program.registerStructTypes[receiver], slot);
+  bool bits = storage == CoreType::FLOAT && type != CoreType::FLOAT &&
+              (type == CoreType::INT || type == CoreType::UINT || type == CoreType::BOOL);
+  u16 field = AllocateRegister();
+  SetRegisterType(field, bits ? CoreType::FLOAT : type);
+  builder.EmitInstruction(OP_ENUM_FIELD, field, receiver, EmitConstantInt(slot));
+  if (!bits) return field;
+  u16 value = AllocateRegister();
+  SetRegisterType(value, type);
+  if (type == CoreType::BOOL) {
+    builder.EmitInstruction(OP_FNE, value, field, builder.EmitConstant(0.0f));
+  } else {
+    builder.EmitInstruction(OP_BITCAST, value, field);
+  }
+  return value;
+}
+
+inline void IRLowering::ComputeStd140Structs() {
+  std140Structs = {};
+  if (!symbols) return;
+  PoolArray<u32> pending;
+  for (u32 r = 0; r < symbols->resources.count; r++) {
+    const ResourceData &resource = symbols->resources[r];
+    if (resource.type == ResourceBinding::UniformBuffer && resource.structTypeHash != 0)
+      pending.Push(pool, resource.structTypeHash);
+  }
+  // Every struct a uniform reaches.
+  while (!pending.Empty()) {
+    u32 hash = pending.Back();
+    pending.Pop();
+    if (std140Structs.Contains(hash)) continue;
+    // A sum enum is stored as a struct of its tag and payload slots.
+    const EnumData *enumData = SymbolTable::ResolveEnumDataByHash(symbols, hash);
+    if (enumData && (enumData->flags & EnumData::IS_SUM_TYPE)) {
+      std140Structs.Push(pool, hash);
+      for (u32 v = 0; v < enumData->variants.count; v++) {
+        const EnumData::Variant &variant = enumData->variants[v];
+        for (u32 t = 0; t < variant.associatedTypeHashes.count; t++) {
+          if (variant.associatedTypeHashes[t] != 0)
+            pending.Push(pool, variant.associatedTypeHashes[t]);
+        }
+      }
+      continue;
+    }
+    StructData *data = LookupStructDataByHash(hash);
+    if (!data || std140Structs.Contains(data->name.nameHash)) continue;
+    std140Structs.Push(pool, data->name.nameHash);
+    for (u32 f = 0; f < data->fields.count; f++) {
+      if (data->fields[f].type.coreType == CoreType::CUSTOM)
+        pending.Push(pool, data->fields[f].type.customTypeHash);
+    }
+  }
+}
+
+inline void IRLowering::FieldLayout(CoreType type, u32 typeHash, bool std140,
+                                    u32 *size, u32 *align) {
+  if (type == CoreType::CUSTOM && typeHash != 0) {
+    u32 nested = LookupOrRegisterStructType(typeHash);
+    auto it = structTypeMap.find(nested != 0 ? nested : typeHash);
+    if (it != structTypeMap.end()) {
+      const IRProgram::StructTypeInfo &info = program.structTypes[it->second];
+      *size = info.totalSize;
+      *align = info.alignment;
+      return;
+    }
+  }
+  if (mask(type) & TypeMasks::MATRIX_TYPES) {
+    // Columns are vectors: a mat2 column is 8-byte aligned in std430.
+    u32 columns = type == CoreType::MAT4 ? 4 : type == CoreType::MAT3 ? 3 : 2;
+    u32 stride = std140 || columns > 2 ? 16 : 8;
+    *size = columns * stride;
+    *align = stride;
+    return;
+  }
+  *size = GetTypeSize(type);
+  *align = GetTypeAlignment(type);
+}
+
+inline void IRLowering::LayoutStructType(u32 structIdx) {
+  const u32 fieldCount = program.structTypes[structIdx].fieldCount;
+  const u32 firstField = program.structTypes[structIdx].fieldOffset;
+  bool std140 = std140Structs.Contains(program.structTypes[structIdx].nameHash);
+  // Register nested structs first; one laid out with std140 makes this one
+  // std140 too.
+  for (u32 f = 0; f < fieldCount && firstField + f < program.structFieldCapacity; f++) {
+    u32 field = firstField + f;
+    if (program.structFieldTypes[field] != static_cast<u16>(CoreType::CUSTOM)) continue;
+    u32 nested = LookupOrRegisterStructType(program.structFieldTypeHashes[field]);
+    auto it = structTypeMap.find(nested);
+    if (it != structTypeMap.end() && program.structTypes[it->second].std140) std140 = true;
+  }
+  u32 offset = 0;
+  u32 structAlign = 4;
+  for (u32 f = 0; f < fieldCount && firstField + f < program.structFieldCapacity; f++) {
+    u32 field = firstField + f;
+    u32 size = 0;
+    u32 align = 4;
+    FieldLayout(static_cast<CoreType>(program.structFieldTypes[field]),
+                program.structFieldTypeHashes[field], std140, &size, &align);
+    u32 stride = 0;
+    if (program.structFieldArraySizes[field] != 0) {
+      // std140 rounds an array's element alignment and stride up to 16.
+      if (std140 && align < 16) align = 16;
+      stride = (size + align - 1) & ~(align - 1);
+      size = stride * program.structFieldArraySizes[field];
+    }
+    offset = (offset + align - 1) & ~(align - 1);
+    program.structFieldByteOffsets[field] = offset;
+    program.structFieldArrayStrides[field] = stride;
+    offset += size;
+    if (align > structAlign) structAlign = align;
+  }
+  if (std140 && structAlign < 16) structAlign = 16;
+  IRProgram::StructTypeInfo &info = program.structTypes[structIdx];
+  info.alignment = structAlign;
+  info.std140 = std140 ? 1 : 0;
+  info.totalSize = (offset + structAlign - 1) & ~(structAlign - 1);
+}
+
+inline u32 IRLowering::FindEmptyStruct(u32 typeHash, u32 depth) {
+  StructData *data = typeHash != 0 && depth < 32 ? LookupStructDataByHash(typeHash) : nullptr;
+  if (!data) return 0;
+  if (data->fields.count == 0) return typeHash;
+  for (u32 i = 0; i < data->fields.count; i++) {
+    const StructData::Field &field = data->fields[i];
+    if (field.type.coreType != CoreType::CUSTOM) continue;
+    if (u32 empty = FindEmptyStruct(field.type.customTypeHash, depth + 1)) return empty;
+  }
+  return 0;
+}
+
+inline bool IRLowering::FlattenEnumPayload(
+    NodeRef node, u16 value, CoreType type, u32 typeHash,
+    PoolArray<PayloadScalar> &scalars) {
+  if (type == CoreType::CUSTOM && typeHash != 0 && !IsSumEnumTypeHash(typeHash)) {
+    u32 structHash = LookupOrRegisterStructType(typeHash);
+    auto it = structTypeMap.find(structHash);
+    if (it == structTypeMap.end()) return true;
+    const IRProgram::StructTypeInfo info = program.structTypes[it->second];
+    for (u32 f = 0; f < info.fieldCount; f++) {
+      u32 slot = info.fieldOffset + f;
+      if (program.structFieldArraySizes[slot] != 0) {
+        ReportErrorAt(node, "Error: an enum payload struct can't have array "
+                            "fields; wrap the array in a separate variant\n");
+        return false;
+      }
+      CoreType fieldType = static_cast<CoreType>(program.structFieldTypes[slot]);
+      u32 fieldHash = program.structFieldTypeHashes[slot];
+      u16 field = AllocateRegister();
+      SetRegisterType(field, fieldType);
+      if (fieldType == CoreType::CUSTOM) {
+        u32 fieldStruct = LookupOrRegisterStructType(fieldHash);
+        program.registerStructTypes[field] = fieldStruct != 0 ? fieldStruct : fieldHash;
+      }
+      builder.EmitInstruction(OP_STRUCT_EXTRACT, field, value, static_cast<u16>(f));
+      program.metadata[builder.currentInstruction - 1] = structHash;
+      if (!FlattenEnumPayload(node, field, fieldType, fieldHash, scalars)) return false;
+    }
+    return true;
+  }
+  if (mask(type) & TypeMasks::MATRIX_TYPES) {
+    u32 columns = type == CoreType::MAT4 ? 4 : type == CoreType::MAT3 ? 3 : 2;
+    CoreType columnType = GetVectorType(CoreType::FLOAT, columns);
+    for (u32 c = 0; c < columns; c++) {
+      u16 column = AllocateRegister();
+      SetRegisterType(column, columnType);
+      builder.EmitInstruction(OP_ARRAY_LOAD, column, value, EmitConstantInt(c));
+      FlattenEnumPayload(node, column, columnType, 0, scalars);
+    }
+    return true;
+  }
+  u32 width = GetVectorDimension(type);
+  if (width > 1 && type != CoreType::CUSTOM && type != CoreType::ENUM) {
+    CoreType component = GetScalarComponentType(type);
+    for (u32 c = 0; c < width; c++) {
+      u16 scalar = AllocateRegister();
+      SetRegisterType(scalar, component);
+      builder.EmitInstruction(OP_VEC_EXTRACT, scalar, value, static_cast<u16>(c));
+      scalars.Push(pool, {scalar, component});
+    }
+    return true;
+  }
+  scalars.Push(pool, {value, type});
+  return true;
+}
+
+inline u16 IRLowering::ReadEnumPayloadValue(u16 receiver, u32 *slot, CoreType type,
+                                            u32 typeHash) {
+  if (type == CoreType::CUSTOM && typeHash != 0 && !IsSumEnumTypeHash(typeHash)) {
+    u32 structHash = LookupOrRegisterStructType(typeHash);
+    auto it = structTypeMap.find(structHash);
+    u16 current = AllocateRegister();
+    SetRegisterType(current, CoreType::CUSTOM);
+    program.registerStructTypes[current] = structHash;
+    AddUndefRegister(current, CoreType::CUSTOM);
+    if (it == structTypeMap.end()) return current;
+    const IRProgram::StructTypeInfo info = program.structTypes[it->second];
+    for (u32 f = 0; f < info.fieldCount; f++) {
+      u32 fieldSlot = info.fieldOffset + f;
+      u16 field = ReadEnumPayloadValue(
+          receiver, slot, static_cast<CoreType>(program.structFieldTypes[fieldSlot]),
+          program.structFieldTypeHashes[fieldSlot]);
+      u16 next = AllocateRegister();
+      SetRegisterType(next, CoreType::CUSTOM);
+      program.registerStructTypes[next] = structHash;
+      builder.EmitInstruction(OP_STRUCT_INSERT, next, current, static_cast<u16>(f), field);
+      program.metadata[builder.currentInstruction - 1] = structHash;
+      current = next;
+    }
+    return current;
+  }
+  if (type == CoreType::CUSTOM || type == CoreType::ENUM) {
+    // A nested sum enum is one aggregate slot.
+    u16 value = AllocateRegister();
+    SetRegisterType(value, type);
+    u32 structHash = LookupOrRegisterStructType(typeHash);
+    program.registerStructTypes[value] = structHash != 0 ? structHash : typeHash;
+    builder.EmitInstruction(OP_ENUM_FIELD, value, receiver, EmitConstantInt((*slot)++));
+    return value;
+  }
+  if (mask(type) & TypeMasks::MATRIX_TYPES) {
+    u32 columns = type == CoreType::MAT4 ? 4 : type == CoreType::MAT3 ? 3 : 2;
+    u16 parts[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+    for (u32 c = 0; c < columns; c++)
+      parts[c] = ReadEnumPayloadValue(receiver, slot, GetVectorType(CoreType::FLOAT, columns), 0);
+    u16 value = AllocateRegister();
+    SetRegisterType(value, type);
+    builder.EmitInstruction(OP_MAT_CONSTRUCT, value, parts[0], parts[1], parts[2], parts[3]);
+    program.metadata[builder.currentInstruction - 1] = columns;
+    return value;
+  }
+  u32 width = GetVectorDimension(type);
+  if (width < 2) return ReadEnumPayloadSlot(receiver, (*slot)++, type);
+  u16 parts[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+  for (u32 c = 0; c < width; c++)
+    parts[c] = ReadEnumPayloadSlot(receiver, (*slot)++, GetScalarComponentType(type));
+  u16 value = AllocateRegister();
+  SetRegisterType(value, type);
+  builder.EmitInstruction(OP_VEC_CONSTRUCT, value, parts[0], parts[1], parts[2], parts[3]);
+  program.metadata[builder.currentInstruction - 1] = width;
+  return value;
 }
 
 inline u32 IRLowering::RegisterEnumAsStructType(u32 enumNameHash, u32 enumIndex) {
@@ -670,6 +859,36 @@ inline u32 IRLowering::RegisterEnumAsStructType(u32 enumNameHash, u32 enumIndex)
     }
   }
 
+  // A non-float payload field that shares a slot with another type is stored
+  // entirely as float bits, so it is written and read back with one bitcast
+  // (see EnumPayloadToSlots). Widening one field can widen a slot another
+  // field shares, so repeat until nothing changes.
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (u32 v = 0; v < enumData.variants.count; v++) {
+      const EnumData::Variant &variant = enumData.variants[v];
+      u32 slot = 0;
+      for (u32 t = 0; t < variant.associatedTypes.count; t++) {
+        CoreType type = variant.associatedTypes[t];
+        u32 hash = t < variant.associatedTypeHashes.count
+                       ? variant.associatedTypeHashes[t] : 0;
+        u32 count = GetEnumPayloadFieldCount(type, hash);
+        bool shared = false;
+        if (type != CoreType::CUSTOM && type != CoreType::ENUM &&
+            GetScalarComponentType(type) != CoreType::FLOAT) {
+          for (u32 i = slot; i < slot + count && i < MAX_ENUM_PAYLOAD_FIELDS; i++)
+            shared |= payloadFieldTypes[i] == CoreType::FLOAT;
+        }
+        for (u32 i = slot; shared && i < slot + count && i < MAX_ENUM_PAYLOAD_FIELDS; i++) {
+          changed |= payloadFieldTypes[i] != CoreType::FLOAT;
+          payloadFieldTypes[i] = CoreType::FLOAT;
+          payloadFieldTypeHashes[i] = 0;
+        }
+        slot += count;
+      }
+    }
+  }
+
   u32 totalFields = 1 + maxPayloadFieldCount; // tag + payload fields
 
   u32 structIdx = program.structTypeCount++;
@@ -692,13 +911,10 @@ inline u32 IRLowering::RegisterEnumAsStructType(u32 enumNameHash, u32 enumIndex)
   }
 
   // Field 0: tag (int)
-  u32 currentOffset = 0;
   program.structFieldTypes[fieldOffset] = static_cast<u16>(CoreType::INT);
   program.structFieldNameHashes[fieldOffset] = Utils::HashStr("tag");
   program.structFieldTypeHashes[fieldOffset] = 0;
   program.structFieldArraySizes[fieldOffset] = 0;
-  program.structFieldByteOffsets[fieldOffset] = currentOffset;
-  currentOffset += 4; // int is 4 bytes
 
   // Fields 1..N: payload storage
   for (u32 i = 0; i < maxPayloadFieldCount; i++) {
@@ -715,24 +931,9 @@ inline u32 IRLowering::RegisterEnumAsStructType(u32 enumNameHash, u32 enumIndex)
         (fieldType == CoreType::CUSTOM) ? fieldTypeHash : 0;
     program.structFieldArraySizes[fIdx] = 0;
 
-    u32 fieldSize = GetTypeSize(fieldType);
-    u32 alignment = GetTypeAlignment(fieldType);
-    if (fieldType == CoreType::CUSTOM && fieldTypeHash != 0) {
-      u32 nestedHash = LookupOrRegisterStructType(fieldTypeHash);
-      auto nestedIt =
-          structTypeMap.find(nestedHash != 0 ? nestedHash : fieldTypeHash);
-      if (nestedIt != structTypeMap.end()) {
-        fieldSize = program.structTypes[nestedIt->second].totalSize;
-        alignment = 16;
-      }
-    }
-
-    currentOffset = (currentOffset + alignment - 1) & ~(alignment - 1);
-    program.structFieldByteOffsets[fIdx] = currentOffset;
-    currentOffset += fieldSize;
   }
 
-  info.totalSize = currentOffset;
+  LayoutStructType(structIdx);
   return enumNameHash;
 }
 
@@ -934,6 +1135,25 @@ inline bool TryFoldArrayIndex(AST* ast, NodeRef ref, s64* value, bool* isUnsigne
   if (*isUnsigned) *value = static_cast<u32>(*value);
   else if (*value < INT32_MIN || *value > INT32_MAX) return false;
   return true;
+}
+
+inline bool IRLowering::CheckConstComponentIndex(u16 indexReg, NodeRef indexExpr,
+                                                 CoreType containerType) {
+  bool matrix = (mask(containerType) & TypeMasks::MATRIX_TYPES) != 0;
+  u32 length = containerType == CoreType::MAT4 ? 4 :
+               containerType == CoreType::MAT3 ? 3 :
+               containerType == CoreType::MAT2 ? 2 : GetVectorDimension(containerType);
+  if (length < 2) return true;
+  s64 index;
+  if (!TryGetConstIndex(indexReg, indexExpr, &index)) return true;
+  if (index >= 0 && index < static_cast<s64>(length)) return true;
+  char msg[192];
+  snprintf(msg, sizeof(msg),
+           "Error: index %lld is out of bounds for %s, which has %u %s\n",
+           static_cast<long long>(index), SourceTypeName(containerType).c_str(),
+           length, matrix ? "columns" : "components");
+  ReportErrorAt(indexExpr, msg);
+  return false;
 }
 
 // Reports an error when a constant index into a local array of known length
@@ -1178,9 +1398,59 @@ inline std::string IRLowering::SourceTypeName(CoreType type) {
 // vector: each takes an explicit swizzle or constructor. Reports the mismatch
 // at `node` and returns false; matrices and aggregates are checked elsewhere.
 inline bool IRLowering::CheckStoreShape(NodeRef node, u16 valueReg,
-                                        CoreType targetType) {
+                                        CoreType targetType,
+                                        u32 targetStructHash) {
   CoreType sourceType = GetRegisterType(valueReg);
+  if (sourceType == CoreType::CUSTOM && targetType == CoreType::CUSTOM &&
+      targetStructHash != 0 && IR::IsRegister(valueReg) &&
+      valueReg < program.registerCount) {
+    u32 sourceStructHash = program.registerStructTypes[valueReg];
+    if (sourceStructHash != 0 && sourceStructHash != targetStructHash) {
+      u32 source = LookupOrRegisterStructType(sourceStructHash);
+      u32 target = LookupOrRegisterStructType(targetStructHash);
+      if (source != 0 && target != 0 && source != target) {
+        std::string message = "Error: cannot assign a value of struct " +
+                              ReverseLookup::GetString(source) + " to struct " +
+                              ReverseLookup::GetString(target) + "\n";
+        ReportErrorAt(node, message.c_str());
+        return false;
+      }
+    }
+  }
   if (sourceType == targetType) return true;
+  if ((mask(targetType) & TypeMasks::MATRIX_TYPES) &&
+      (mask(sourceType) & (TypeMasks::SCALAR_TYPES | TypeMasks::VECTOR_TYPES |
+                           TypeMasks::BOOL_VECTORS))) {
+    std::string message = "Error: cannot implicitly convert " +
+                           SourceTypeName(sourceType) + " to " +
+                           SourceTypeName(targetType) + "; use " +
+                           SourceTypeName(targetType) + "(...) to build a matrix\n";
+    ReportErrorAt(node, message.c_str());
+    return false;
+  }
+  if ((mask(sourceType) & TypeMasks::MATRIX_TYPES) &&
+      (mask(targetType) & TypeMasks::MATRIX_TYPES)) {
+    std::string message = "Error: cannot implicitly convert " +
+                           SourceTypeName(sourceType) + " to " +
+                           SourceTypeName(targetType) +
+                           "; matrix sizes must match\n";
+    ReportErrorAt(node, message.c_str());
+    return false;
+  }
+  // A bool and a number don't convert implicitly either way; the store
+  // failed SPIR-V validation.
+  if ((sourceType == CoreType::BOOL) != (targetType == CoreType::BOOL) &&
+      (mask(sourceType) & TypeMasks::SCALAR_TYPES) &&
+      (mask(targetType) & TypeMasks::SCALAR_TYPES)) {
+    std::string source = SourceTypeName(sourceType);
+    std::string target = SourceTypeName(targetType);
+    std::string message =
+        "Error: cannot implicitly convert " + source + " to " + target +
+        (targetType == CoreType::BOOL ? "; compare instead, such as value != 0\n"
+                                      : "; convert with " + target + "(value)\n");
+    ReportErrorAt(node, message.c_str());
+    return false;
+  }
   constexpr TypeMask vectors = TypeMasks::VECTOR_TYPES | TypeMasks::BOOL_VECTORS;
   constexpr TypeMask values = vectors | TypeMasks::SCALAR_TYPES;
   bool sourceVector = (mask(sourceType) & vectors) != 0;

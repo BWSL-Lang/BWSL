@@ -323,7 +323,9 @@ ERROR_CASE_TESTS = {
     "swizzle_out_of_range_expression.bwsl": "component 'z' ('b') is out of range for FLOAT2, which has 2 components",
     "swizzle_store_out_of_range.bwsl": "component 'z' ('b') is out of range for FLOAT2, which has 2 components",
     "ternary_branch_type_mismatch.bwsl": "ternary arms have different types (float3 and float2)",
-    "bool_assigned_to_float.bwsl": "SPIR-V validation failed",
+    "bool_assigned_to_float.bwsl": "cannot implicitly convert bool to float; convert with float(value)",
+    "bool_stored_to_int_buffer.bwsl": "cannot implicitly convert bool to int; convert with int(value)",
+    "int_assigned_to_bool.bwsl": "cannot implicitly convert int to bool; compare instead, such as value != 0",
     "unknown_struct_field.bwsl": "Unknown field 'missing'",
     "shared_in_fragment.bwsl": "shared variables are only allowed in compute shaders",
     "struct_unknown_field_type.bwsl": "Unknown field type 'Missing'",
@@ -459,6 +461,31 @@ ERROR_CASE_TESTS = {
     "remaining_duplicate_struct.bwsl": "Duplicate struct declaration",
     "remaining_duplicate_case.bwsl": "Duplicate switch case value",
     "remaining_duplicate_default.bwsl": "Duplicate switch default case",
+    "uniform_field_assignment.bwsl": "resources.params is read-only",
+    "pointer_variable_to_shared.bwsl": "a pointer variable can't point to",
+    "enum_payload_shape.bwsl": "cannot implicitly convert float3 to float",
+    "store_to_texture.bwsl": "store() writes to a storage image",
+    "storage_vector_index_out_of_bounds.bwsl": "index 2 is out of bounds for float2, which has 2 components",
+    "vector_index_out_of_bounds.bwsl": "index 3 is out of bounds for mat2, which has 2 columns",
+    "struct_store_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
+    "struct_constructor_argument_count.bwsl": "struct A constructor expects 2 argument(s), got 1",
+    "enum_payload_matrix_mismatch.bwsl": "cannot implicitly convert mat3 to mat2; matrix sizes must match",
+    "enum_payload_too_large.bwsl": "an enum variant's payload can hold at most 64 scalars",
+    "eval_method_recursion.bwsl": "recursion is not supported",
+    "vector_to_matrix.bwsl": "cannot implicitly convert float2 to mat2",
+    "struct_array_member_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
+    "empty_struct_in_buffer.bwsl": "resources.particles holds struct Empty, which has no fields",
+    "struct_assignment_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
+    "storage_struct_field_type_mismatch.bwsl": "cannot assign a value of struct B to struct A",
+    "matrix_size_mismatch.bwsl": "cannot implicitly convert mat3 to mat2",
+    "enum_payload_struct_mismatch.bwsl": "cannot assign a value of struct B to struct A",
+    "pointer_store_to_copy.bwsl": "the pointer points to a temporary copy",
+    "pointer_store_to_copy_in_loop.bwsl": "the pointer points to a temporary copy",
+    "pointer_store_to_uniform.bwsl": "the pointer points to a resource",
+    "inline_depth_exceeded.bwsl": "calls are nested more than 64 deep here",
+    "pointer_loop_conditional_reassign.bwsl": "this write through a pointer would be lost",
+    "pointer_loop_skip_back_edge.bwsl": "this write through a pointer would be lost",
+    "pointer_loop_increment_after_skip.bwsl": "this write through a pointer would be lost",
 }
 
 ERROR_CASE_MODULE_DIRS = {
@@ -472,6 +499,21 @@ ERROR_CASE_EXTRA_EXPECTATIONS = {
     "varying_type_conflict.bwsl": ["varying_type_conflict.bwsl:15:"],
     # At the second pass's name, not the end of its block.
     "duplicate_pass_name.bwsl": ["duplicate_pass_name.bwsl:14:"],
+    # Both the vector and the matrix index are reported.
+    "vector_index_out_of_bounds.bwsl": ["index 2 is out of bounds for float2, which has 2 components"],
+    # At the call that goes one level too deep.
+    "inline_depth_exceeded.bwsl": ["inline_depth_exceeded.bwsl:67:"],
+    # At the write the branch or the `skip` makes lost.
+    "pointer_loop_conditional_reassign.bwsl": ["pointer_loop_conditional_reassign.bwsl:16:"],
+    "pointer_loop_skip_back_edge.bwsl": ["pointer_loop_skip_back_edge.bwsl:12:"],
+    "pointer_loop_increment_after_skip.bwsl": ["pointer_loop_increment_after_skip.bwsl:13:"],
+    # Each store path reports at its own line.
+    "struct_store_type_mismatch.bwsl": [
+        "struct_store_type_mismatch.bwsl:9:",
+        "struct_store_type_mismatch.bwsl:21:",
+        "struct_store_type_mismatch.bwsl:22:",
+        "struct_store_type_mismatch.bwsl:23:",
+    ],
     "imported_module_diagnostic_file.bwsl": [
         "diagnostic_module_file_modules/Common.bwsl",
         "float4 transformations[9];",
@@ -3980,6 +4022,12 @@ def main() -> int:
     constprop_passed, constprop_failed = run_constant_propagation_tests(bwslc)
     passed += constprop_passed
     failed += constprop_failed
+
+    import hlsl_cbuffer_tests
+    hlsl_cbuffer_tests.DXC = DXC
+    cbuffer_passed, cbuffer_failed = hlsl_cbuffer_tests.run_hlsl_cbuffer_tests(bwslc)
+    passed += cbuffer_passed
+    failed += cbuffer_failed
 
     from p1_regression_tests import run_p1_regression_tests
     p1_passed, p1_failed = run_p1_regression_tests(bwslc, output_dir / "p1_validation")

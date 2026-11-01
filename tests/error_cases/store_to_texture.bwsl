@@ -1,0 +1,11 @@
+// Error case: store() needs a storage image. A sampled texture was accepted
+// and emitted as a storage image.
+pipeline WrongAcceptStoreToTexture {
+    resources { tex: texture2D }
+    pass "Compute" {
+        use resources { tex }
+        compute "Main" [1, 1, 1] {
+            store(resources.tex, int2(0, 0), float4(1.0));
+        }
+    }
+}

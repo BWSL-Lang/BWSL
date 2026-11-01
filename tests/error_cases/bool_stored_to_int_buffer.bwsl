@@ -1,0 +1,11 @@
+// Error case: a comparison stored into a buffer<int> element. A bool doesn't
+// convert to a number implicitly; it failed SPIR-V validation.
+pipeline BoolStoredToIntBuffer {
+    resources { counts: buffer<int> }
+    pass "Main" {
+        use resources { counts }
+        compute "Main" [1, 1, 1] {
+            resources.counts[0] = resources.counts[1] > 0;
+        }
+    }
+}

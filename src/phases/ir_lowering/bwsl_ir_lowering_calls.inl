@@ -132,15 +132,14 @@ inline OverloadTypeMask IRLowering::ArgumentOverloadMask(NodeRef argument, u16 r
 inline void IRLowering::BindPointerParameter(const FunctionCallData &call,
                                              const FunctionDeclData &function,
                                              u32 index, u16 arg) {
-  auto problem = pointerProblems.find(arg);
-  if (problem != pointerProblems.end()) {
-    ReportPointerArgumentProblem(
-        index < call.arguments.count ? call.arguments[index] : NodeRef::Null(),
-        function.name.nameHash, index, problem->second);
-  } else if (!pointerLoops.empty()) {
-    pointerLoops.back().arguments.push_back(
-        {arg, index < call.arguments.count ? call.arguments[index] : NodeRef::Null(),
-         function.name.nameHash, index});
+  NodeRef argument = index < call.arguments.count ? call.arguments[index] : NodeRef::Null();
+  if (InPointerLoop()) {
+    // Checked when the loop ends, against every target it can hold.
+    pointerEvents.Push(pool, {PointerEvent::ARGUMENT, false, arg, 0,
+                              pointerEventArguments.count, NodeRef::Null()});
+    pointerEventArguments.Push(pool, {arg, argument, function.name.nameHash, index});
+  } else if (auto problem = pointerProblems.find(arg); problem != pointerProblems.end()) {
+    ReportPointerArgumentProblem(argument, function.name.nameHash, index, problem->second);
   }
   // The copy keeps the pointer's target, so writes through it reach the
   // caller's variable, and two parameters given the same address alias.
@@ -180,6 +179,43 @@ inline void IRLowering::ReportPointerArgumentProblem(NodeRef argument,
   snprintf(msg, sizeof(msg), "Error: pointer argument %u of '%s' %s\n",
            index + 1, ReverseLookup::GetString(functionNameHash).c_str(), reason);
   ReportErrorAt(argument, msg);
+}
+
+inline void IRLowering::ReportPointerStoreProblem(NodeRef target,
+                                                  PointerProblem problem) {
+  if (target.IsValid() && !reportedPointerArguments.insert(target.packed).second)
+    return;
+  const char *reason = "";
+  switch (problem) {
+  case PointerProblem::NON_LOCAL:
+    reason = "a resource, stage input or output, or shared memory";
+    break;
+  case PointerProblem::TEMPORARY:
+    reason = "a temporary copy (a vector component, matrix column or "
+             "computed value)";
+    break;
+  case PointerProblem::WHOLE_ARRAY:
+    reason = "a whole array";
+    break;
+  }
+  char msg[256];
+  snprintf(msg, sizeof(msg),
+           "Error: this write through a pointer would be lost: the pointer "
+           "points to %s; assign to the place directly\n", reason);
+  ReportErrorAt(target, msg);
+}
+
+inline void IRLowering::ReportNonLocalPointerVariable(u16 source) {
+  for (u32 i = 0; i < nonLocalAddresses.count; i++) {
+    NonLocalAddress &address = nonLocalAddresses[i];
+    if (address.reg != source) continue;
+    ReportErrorAt(address.node,
+                  "Error: a pointer variable can't point to a resource, stage "
+                  "input or output, or shared memory; copy the value into a "
+                  "local variable and point to that\n");
+    address.reg = 0xFFFF;
+    return;
+  }
 }
 
 inline bool IRLowering::ReportPointerArgumentMismatch(
@@ -336,45 +372,52 @@ inline void IRLowering::LowerEnumPatternBody(NodeRef pattern, u16 receiver,
         u32 width = GetEnumPayloadFieldCount(type, hash);
         if (f < arm.bindings.count && arm.bindings[f].first.nameHash != Utils::HashStr("_")) {
           u32 name = arm.bindings[f].first.nameHash;
-          u16 value = AllocateRegister();
-          SetRegisterType(value, type);
-          if (width == 1 || (type == CoreType::CUSTOM && IsSumEnumTypeHash(hash))) {
-            builder.EmitInstruction(OP_ENUM_FIELD, value, receiver, EmitConstantInt(payloadIndex));
-            if (type == CoreType::CUSTOM) {
-              u32 structHash = LookupOrRegisterStructType(hash);
-              program.registerStructTypes[value] = structHash != 0 ? structHash : hash;
-              variableStructTypes[name] = program.registerStructTypes[value];
-            }
-          } else if (type != CoreType::CUSTOM && width <= 4) {
-            u16 components[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
-            for (u32 c = 0; c < width; ++c) {
-              components[c] = AllocateRegister();
-              SetRegisterType(components[c], GetScalarComponentType(type));
-              builder.EmitInstruction(OP_ENUM_FIELD, components[c], receiver, EmitConstantInt(payloadIndex + c));
-            }
-            builder.EmitInstruction(OP_VEC_CONSTRUCT, value, components[0], components[1], components[2], components[3]);
-            program.metadata[builder.currentInstruction - 1] = width;
-          } else {
-            ReportError("Error: binding flattened struct enum payloads is not supported yet\n");
-          }
+          u32 slot = payloadIndex;
+          u16 value = ReadEnumPayloadValue(receiver, &slot, type, hash);
+          if (type == CoreType::CUSTOM) variableStructTypes[name] = program.registerStructTypes[value];
           variableRegisters[name] = value;
           constVariables.erase(name);
         }
         payloadIndex += width;
       }
     }
+    LogPointerEvent(PointerEvent::BRANCH_BEGIN);
+    LogPointerEvent(PointerEvent::ARM);
     controlDepth++;
     if (arm.body.Type() == ASTNodeType::BLOCK) {
+      // A block ending in a bare expression yields that expression.
+      const BlockData &block = ast->GetBlock(arm.body);
+      NodeRef savedImplicit = implicitReturnStatement;
+      implicitReturnStatement = NodeRef::Null();
+      if (block.statements.count > 0) {
+        NodeRef last = block.statements[block.statements.count - 1];
+        switch (last.Type()) {
+        case ASTNodeType::LITERAL:
+        case ASTNodeType::IDENTIFIER:
+        case ASTNodeType::BINARY_OP:
+        case ASTNodeType::UNARY_OP:
+        case ASTNodeType::MEMBER_ACCESS:
+        case ASTNodeType::ARRAY_ACCESS:
+        case ASTNodeType::FUNCTION_CALL:
+        case ASTNodeType::TERNARY_EXPRESSION:
+          implicitReturnStatement = last;
+          break;
+        default:
+          break;
+        }
+      }
       LowerBlock(arm.body);
+      implicitReturnStatement = savedImplicit;
     } else {
       u16 value = LowerExpression(arm.body);
-      CheckStoreShape(arm.body, value, inlineReturnType);
+      CheckStoreShape(arm.body, value, inlineReturnType, inlineReturnStructHash);
       builder.EmitInstruction(OP_STORE_REG, inlineReturnReg, value);
       SetRegisterType(inlineReturnReg, GetRegisterType(value));
       if (value < MAX_REGISTERS) program.registerStructTypes[inlineReturnReg] = program.registerStructTypes[value];
       builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg, builder.EmitConstantBool(true));
     }
     controlDepth--;
+    LogPointerEvent(PointerEvent::BRANCH_END, true);
     u32 merge = builder.currentInstruction;
     builder.EmitInstruction(OP_NOP, 0, 0);
     program.SetBranchTargets(branch, bodyStart, merge);
@@ -507,10 +550,86 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
           ReportError(msg);
           return 0;
         }
-
         // Register the enum as a struct type if not already done
         u32 enumStructHash =
             LookupOrRegisterStructType(enumData.name.nameHash);
+
+        // A payload keeps its declared shape: a vector for a scalar field
+        // would spill into the next field's storage, or be cut short. Its
+        // scalar kind converts like an assignment, and slots shared with
+        // another type hold its bits as floats.
+        const EnumData::Variant &variant = enumData.variants[variantIndex];
+        // Struct, matrix and bool vector payloads are written one scalar
+        // slot at a time, and so is a payload of more than four fields,
+        // which OP_ENUM_CONSTRUCT has no operands for.
+        bool flatten = argCount > 4;
+        for (u32 i = 0; i < argCount; i++) {
+          CoreType type = variant.associatedTypes[i];
+          u32 hash = i < variant.associatedTypeHashes.count
+                         ? variant.associatedTypeHashes[i] : 0;
+          flatten |= (mask(type) & (TypeMasks::MATRIX_TYPES | TypeMasks::BOOL_VECTORS)) != 0 ||
+                     (type == CoreType::CUSTOM && hash != 0 && !IsSumEnumTypeHash(hash));
+        }
+        u32 slot = 0;
+        for (u32 i = 0; i < argCount; i++) {
+          CoreType type = variant.associatedTypes[i];
+          u32 hash = i < variant.associatedTypeHashes.count
+                         ? variant.associatedTypeHashes[i] : 0;
+          if (!CheckStoreShape(call.arguments[i], args[i], type, hash)) {
+            SetRegisterType(dest, CoreType::INVALID);
+            return dest;
+          }
+          args[i] = ConvertRegisterToType(args[i], type);
+          if (!flatten)
+            args[i] = EnumPayloadToSlots(call.arguments[i], args[i], type,
+                                         enumStructHash, slot);
+          slot += GetEnumPayloadFieldCount(type, hash);
+        }
+
+        if (flatten) {
+          PoolArray<PayloadScalar> scalars;
+          for (u32 i = 0; i < argCount; i++) {
+            u32 hash = i < variant.associatedTypeHashes.count
+                           ? variant.associatedTypeHashes[i] : 0;
+            if (!FlattenEnumPayload(call.arguments[i], args[i],
+                                    variant.associatedTypes[i], hash, scalars)) {
+              SetRegisterType(dest, CoreType::INVALID);
+              return dest;
+            }
+          }
+          // The enum struct holds at most 64 payload slots
+          // (RegisterEnumAsStructType).
+          if (scalars.count > 64) {
+            ReportErrorAt(ref, "Error: an enum variant's payload can hold at most "
+                               "64 scalars; split it across variants\n");
+            SetRegisterType(dest, CoreType::INVALID);
+            return dest;
+          }
+          u16 current = AllocateRegister();
+          SetRegisterType(current, CoreType::CUSTOM);
+          program.registerStructTypes[current] = enumStructHash;
+          builder.EmitInstruction(OP_ENUM_CONSTRUCT, current, IR::InvalidOperand,
+                                  IR::InvalidOperand, IR::InvalidOperand,
+                                  IR::InvalidOperand);
+          program.metadata[builder.currentInstruction - 1] =
+              (variantIndex << 16) |
+              ((enumHash != 0 ? enumHash : enumData.name.nameHash) & 0xFF);
+          for (u32 s = 0; s < scalars.count; s++) {
+            u16 scalar = EnumPayloadToSlots(ref, scalars[s].reg, scalars[s].type,
+                                            enumStructHash, s);
+            u16 next = AllocateRegister();
+            SetRegisterType(next, CoreType::CUSTOM);
+            program.registerStructTypes[next] = enumStructHash;
+            builder.EmitInstruction(OP_STRUCT_INSERT, next, current,
+                                    static_cast<u16>(1 + s), scalar);
+            program.metadata[builder.currentInstruction - 1] = enumStructHash;
+            current = next;
+          }
+          builder.EmitInstruction(OP_STORE_REG, dest, current);
+          SetRegisterType(dest, CoreType::CUSTOM);
+          program.registerStructTypes[dest] = enumStructHash;
+          return dest;
+        }
 
         // Emit OP_ENUM_CONSTRUCT
         // operands[0..3] = argument values (field data)
@@ -559,7 +678,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
           }
 
           u16 methodResult = TryLowerStructMethodCall(
-              call, receiverReg, args, argCount, dest, receiverIsConst);
+              ref, call, receiverReg, args, argCount, dest, receiverIsConst);
           if (methodResult != 0xFFFF) {
             return methodResult;
           }
@@ -698,167 +817,77 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
                   variableRegisters[param.first.nameHash] = CopyArgumentValue(args[argIdx++]);
                 }
               }
-              auto baseVarRegs = variableRegisters;
-
-              // For each arm, check if tag == variantIndex, evaluate body,
-              // select
+              // Only the matching arm runs: it returns into an inline frame,
+              // as an inlined function body does.
+              if (inlineDepth >= MAX_INLINE_DEPTH) {
+                variableRegisters = savedVarRegs;
+                nodeRegisters = savedNodeRegisters;
+                return ReportInlineDepthExceeded(ref);
+              }
+              for (u32 i = 0; i < inlineStackDepth; i++) {
+                if (inlineStackPacked[i] != methodRef.packed) continue;
+                if (!recursionDiagnosed) {
+                  recursionDiagnosed = true;
+                  ReportErrorAt(ref, "Error: recursion is not supported — a function "
+                                     "calls itself (directly or through another "
+                                     "function). SPIR-V execution is stack-less; "
+                                     "rewrite the algorithm iteratively.\n");
+                }
+                variableRegisters = savedVarRegs;
+                nodeRegisters = savedNodeRegisters;
+                SetRegisterType(dest, CoreType::INVALID);
+                return dest;
+              }
               u16 resultReg = AllocateRegister();
               SetRegisterType(resultReg, method.returnType);
-
-              u16 initValue = EmitZeroConstant(method.returnType);
-              builder.EmitInstruction(OP_STORE_REG, resultReg, initValue);
-
-              u16 matchedReg = builder.EmitConstantBool(false);
-              u32 underscoreHash = Utils::HashStr("_");
-
-              for (u32 armIdx = 0; armIdx < pm.arms.count; armIdx++) {
-                NodeRef armRef = pm.arms[armIdx];
-                if (armRef.Type() != ASTNodeType::PATTERN_MATCH_ARM) {
-                  continue;
-                }
-                const PatternMatchData &arm = ast->GetPatternMatch(armRef);
-
-                u16 condReg = 0xFFFF;
-                u32 variantIdx = 0xFFFFFFFF;
-                if (!arm.isDefault) {
-                  for (u32 v = 0; v < enumData.variants.count; v++) {
-                    if (enumData.variants[v].name.nameHash ==
-                        arm.variantHash) {
-                      variantIdx = v;
-                      break;
-                    }
-                  }
-                  if (variantIdx == 0xFFFFFFFF) {
-                    continue;
-                  }
-                  u16 expectedTag = EmitConstantInt(variantIdx);
-                  condReg = AllocateRegister();
-                  builder.EmitInstruction(OP_IEQ, condReg, tagReg,
-                                          expectedTag);
-                  SetRegisterType(condReg, CoreType::BOOL);
-
-                  u16 newMatched = AllocateRegister();
-                  builder.EmitInstruction(OP_OR, newMatched, matchedReg,
-                                          condReg);
-                  SetRegisterType(newMatched, CoreType::BOOL);
-                  matchedReg = newMatched;
-                } else {
-                  u16 notMatched = AllocateRegister();
-                  builder.EmitInstruction(OP_NOT, notMatched, matchedReg);
-                  SetRegisterType(notMatched, CoreType::BOOL);
-                  condReg = notMatched;
-                }
-
-                variableRegisters = baseVarRegs;
-
-                if (variantIdx != 0xFFFFFFFF) {
-                  const EnumData::Variant &variant =
-                      enumData.variants[variantIdx];
-                  u32 payloadIndex = 0;
-                  u32 bindingIdx = 0;
-
-                  for (u32 t = 0; t < variant.associatedTypes.count; t++) {
-                    CoreType assocType = variant.associatedTypes[t];
-                    u32 assocHash = 0;
-                    if (t < variant.associatedTypeHashes.count) {
-                      assocHash = variant.associatedTypeHashes[t];
-                    }
-                    u32 componentCount =
-                        GetEnumPayloadFieldCount(assocType, assocHash);
-                    if (bindingIdx >= arm.bindings.count) {
-                      payloadIndex += componentCount;
-                      continue;
-                    }
-
-                    const auto &binding = arm.bindings[bindingIdx++];
-                    if (binding.first.nameHash == underscoreHash) {
-                      payloadIndex += componentCount;
-                      continue;
-                    }
-
-                    bool isNestedSumEnum =
-                        assocType == CoreType::CUSTOM && assocHash != 0 &&
-                        IsSumEnumTypeHash(assocHash);
-
-                    if (isNestedSumEnum) {
-                      u16 fieldReg = AllocateRegister();
-                      u16 fieldIdx = EmitConstantInt(payloadIndex);
-                      builder.EmitInstruction(OP_ENUM_FIELD, fieldReg,
-                                              selfReg, fieldIdx);
-                      SetRegisterType(fieldReg, CoreType::CUSTOM);
-                      u32 structHash = LookupOrRegisterStructType(assocHash);
-                      program.registerStructTypes[fieldReg] =
-                          structHash != 0 ? structHash : assocHash;
-                      variableRegisters[binding.first.nameHash] = fieldReg;
-                    } else if (componentCount == 1) {
-                      u16 fieldReg = AllocateRegister();
-                      u16 fieldIdx = EmitConstantInt(payloadIndex);
-                      builder.EmitInstruction(OP_ENUM_FIELD, fieldReg,
-                                              selfReg, fieldIdx);
-                      SetRegisterType(fieldReg, assocType);
-                      if (assocType == CoreType::CUSTOM && assocHash != 0) {
-                        u32 structHash = LookupOrRegisterStructType(assocHash);
-                        program.registerStructTypes[fieldReg] =
-                            structHash != 0 ? structHash : assocHash;
-                      }
-                      variableRegisters[binding.first.nameHash] = fieldReg;
-                    } else {
-                      if (assocType == CoreType::CUSTOM) {
-                        ReportError("Error: binding flattened struct enum "
-                                    "payloads is not supported yet\n");
-                        payloadIndex += componentCount;
-                        continue;
-                      }
-                      u16 components[4] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
-                      CoreType scalarType = GetScalarComponentType(assocType);
-                      for (u32 c = 0; c < componentCount && c < 4; c++) {
-                        u16 compReg = AllocateRegister();
-                        u16 compIdx = EmitConstantInt(payloadIndex + c);
-                        builder.EmitInstruction(OP_ENUM_FIELD, compReg,
-                                                selfReg, compIdx);
-                        SetRegisterType(compReg, scalarType);
-                        components[c] = compReg;
-                      }
-
-                      u16 vecReg = AllocateRegister();
-                      builder.EmitInstruction(OP_VEC_CONSTRUCT, vecReg,
-                                              components[0], components[1],
-                                              components[2], components[3]);
-                      program.metadata[builder.currentInstruction - 1] =
-                          componentCount;
-                      SetRegisterType(vecReg, assocType);
-                      variableRegisters[binding.first.nameHash] = vecReg;
-                    }
-
-                    payloadIndex += componentCount;
-                  }
-                }
-
-                u16 armResult = 0;
-                if (!arm.body.IsNull()) {
-                  u32 savedInlineModuleIndex = inlineModuleIndex;
-                  if (methodModuleIndex != 0xFFFFFFFF) {
-                    inlineModuleIndex = methodModuleIndex;
-                  }
-                  {
-                    DebugScopeGuard scope(builder, methodRef);
-                    armResult = LowerExpression(arm.body);
-                  }
-                  inlineModuleIndex = savedInlineModuleIndex;
-                }
-
-                u16 newResult = AllocateRegister();
-                builder.EmitInstruction(OP_SELECT, newResult, resultReg,
-                                        armResult, condReg);
-                SetRegisterType(newResult, method.returnType);
-                resultReg = newResult;
+              builder.EmitInstruction(OP_STORE_REG, resultReg,
+                                      EmitZeroConstant(method.returnType));
+              if (method.returnType == CoreType::CUSTOM && method.returnTypeHash != 0) {
+                u32 structHash = LookupOrRegisterStructType(method.returnTypeHash);
+                program.registerStructTypes[resultReg] =
+                    structHash != 0 ? structHash : method.returnTypeHash;
               }
+              u16 savedReturnReg = inlineReturnReg;
+              u16 savedReturnFlagReg = inlineReturnFlagReg;
+              CoreType savedReturnType = inlineReturnType;
+              u32 savedReturnStructHash = inlineReturnStructHash;
+              u32 savedReturnCounter = inlineReturnCounter;
+              u32 savedReturnFlagReads = inlineReturnFlagReads;
+              u32 savedInlineModuleIndex = inlineModuleIndex;
+              inlineReturnReg = resultReg;
+              inlineReturnType = method.returnType;
+              inlineReturnStructHash =
+                  method.returnType == CoreType::CUSTOM ? method.returnTypeHash : 0;
+              inlineReturnFlagReg = AllocateRegister();
+              SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
+              builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg,
+                                      builder.EmitConstantBool(false));
+              inlineReturnCounter = 0;
+              inlineReturnFlagReads = 0;
+              if (methodModuleIndex != 0xFFFFFFFF) inlineModuleIndex = methodModuleIndex;
+              inlineDepth++;
+              bool pushed = inlineStackDepth < MAX_INLINE_DEPTH;
+              if (pushed) inlineStackPacked[inlineStackDepth++] = methodRef.packed;
+              {
+                DebugScopeGuard scope(builder, methodRef);
+                LowerEnumPatternBody(method.body, selfReg, enumData);
+              }
+              if (pushed) inlineStackDepth--;
+              inlineDepth--;
+              inlineReturnReg = savedReturnReg;
+              inlineReturnFlagReg = savedReturnFlagReg;
+              inlineReturnType = savedReturnType;
+              inlineReturnStructHash = savedReturnStructHash;
+              inlineReturnCounter = savedReturnCounter;
+              inlineReturnFlagReads = savedReturnFlagReads;
+              inlineModuleIndex = savedInlineModuleIndex;
 
               variableRegisters = savedVarRegs;
               nodeRegisters = savedNodeRegisters;
 
               builder.EmitInstruction(OP_STORE_REG, dest, resultReg);
               SetRegisterType(dest, method.returnType);
+              if (dest < MAX_REGISTERS) program.registerStructTypes[dest] = program.registerStructTypes[resultReg];
               return dest;
             } else {
               // Non-pattern-match method body (e.g., normal method that calls
@@ -934,6 +963,17 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
         static_cast<Intrinsic>(StdLib::INTRINSICS[call.intrinsicIndex].enumIndex);
 
     OpCode op = OP_NOP;
+
+    // A sampled texture or a sampler is a handle too, but only a storage
+    // image can be written.
+    if (intrinsic == Intrinsic::STORE && argCount > 0 &&
+        GetResourceHandleType(call.arguments[0], args[0]) != CoreType::INVALID) {
+      ReportErrorAt(call.arguments[0],
+                    "Error: store() writes to a storage image; declare the "
+                    "resource as image2D\n");
+      SetRegisterType(dest, CoreType::INVALID);
+      return dest;
+    }
 
     switch (intrinsic) {
     case Intrinsic::ABS: {
@@ -1387,7 +1427,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       // A user function can intentionally use a core type word as its name
       // (for example, `double :: (int x) -> int`). Prefer a matching
       // overload before falling back to constructor/conversion semantics.
-      u16 inlinedResult = TryInlineFunction(call, args, argCount);
+      u16 inlinedResult = TryInlineFunction(ref, call, args, argCount);
       if (inlinedResult != 0xFFFF) {
         builder.EmitInstruction(OP_STORE_REG, dest, inlinedResult);
         CoreType resultType = GetRegisterType(inlinedResult);
@@ -1738,7 +1778,7 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
       }
 
       // Try to inline user function call
-      u16 inlinedResult = TryInlineFunction(call, args, argCount);
+      u16 inlinedResult = TryInlineFunction(ref, call, args, argCount);
       if (inlinedResult != 0xFFFF) {
         // Successfully inlined - copy result to dest
         builder.EmitInstruction(OP_STORE_REG, dest, inlinedResult);
@@ -1779,6 +1819,42 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
             u32 fieldCount = 0;
             if (it != structTypeMap.end()) {
               fieldCount = program.structTypes[it->second].fieldCount;
+            }
+
+            // `S(s)` with an S copies it.
+            if (argCount == 1 && GetRegisterType(args[0]) == CoreType::CUSTOM &&
+                IR::IsRegister(args[0]) &&
+                LookupOrRegisterStructType(program.registerStructTypes[args[0]]) ==
+                    structTypeHash) {
+              return args[0];
+            }
+            if (it != structTypeMap.end() && argCount != fieldCount) {
+              char msg[192];
+              snprintf(msg, sizeof(msg),
+                       "Error: struct %s constructor expects %u argument(s), "
+                       "got %u\n",
+                       ReverseLookup::GetString(structTypeHash).c_str(),
+                       fieldCount, argCount);
+              ReportErrorAt(ref, msg);
+              SetRegisterType(dest, CoreType::INVALID);
+              return dest;
+            }
+            if (it != structTypeMap.end()) {
+              const IRProgram::StructTypeInfo &info = program.structTypes[it->second];
+              for (u32 i = 0; i < argCount; i++) {
+                u32 field = info.fieldOffset + i;
+                CoreType fieldType = static_cast<CoreType>(program.structFieldTypes[field]);
+                NodeRef argument = i < call.arguments.count ? call.arguments[i] : NodeRef::Null();
+                if (program.structFieldArraySizes[field] == 0 &&
+                    !CheckStoreShape(argument, args[i], fieldType,
+                                     program.structFieldTypeHashes[field])) {
+                  SetRegisterType(dest, CoreType::INVALID);
+                  return dest;
+                }
+                if (program.structFieldArraySizes[field] == 0 &&
+                    fieldType != CoreType::CUSTOM && fieldType != CoreType::ENUM)
+                  args[i] = ConvertRegisterToType(args[i], fieldType);
+              }
             }
 
             if (argCount <= 4 && fieldCount <= 4) {
@@ -1852,7 +1928,8 @@ inline u16 IRLowering::LowerFunctionCall(NodeRef ref) {
   return dest;
 }
 
-inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
+inline u16 IRLowering::TryLowerStructMethodCall(NodeRef ref,
+                                                const FunctionCallData &call,
                                                 u16 receiverReg, u16 *args,
                                                 u32 argCount, u16 dest,
                                                 bool receiverIsConst) {
@@ -1941,7 +2018,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   }
 
   if (inlineDepth >= MAX_INLINE_DEPTH) {
-    return 0xFFFF;
+    return ReportInlineDepthExceeded(ref);
   }
 
   u32 methodModuleIndex = 0xFFFFFFFF;
@@ -2036,8 +2113,10 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   u32 savedReturnFlagReads = inlineReturnFlagReads;
   u32 savedModuleIndex = inlineModuleIndex;
 
+  u32 savedReturnStructHash = inlineReturnStructHash;
   inlineReturnReg = returnReg;
   inlineReturnType = method.returnType;
+  inlineReturnStructHash = method.returnType == CoreType::CUSTOM ? method.returnTypeHash : 0;
   inlineReturnFlagReg = AllocateRegister();
   SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
   u32 inlineFirstInstruction = builder.currentInstruction;
@@ -2059,7 +2138,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
     LowerBlock(method.body);
   } else {
     u16 exprResult = LowerExpression(method.body);
-    CheckStoreShape(method.body, exprResult, inlineReturnType);
+    CheckStoreShape(method.body, exprResult, inlineReturnType, inlineReturnStructHash);
     builder.EmitInstruction(OP_STORE_REG, returnReg, exprResult);
   }
   builder.currentScope = scope.savedScope;  // What follows is the caller's
@@ -2072,6 +2151,7 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   inlineReturnReg = savedReturnReg;
   inlineReturnFlagReg = savedReturnFlagReg;
   inlineReturnType = savedReturnType;
+  inlineReturnStructHash = savedReturnStructHash;
   inlineReturnCounter = savedReturnCounter;
   inlineReturnFlagReads = savedReturnFlagReads;
   inlineModuleIndex = savedModuleIndex;
@@ -2120,7 +2200,22 @@ inline u16 IRLowering::TryLowerStructMethodCall(const FunctionCallData &call,
   return dest;
 }
 
-inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args, u32 argCount) {
+inline u16 IRLowering::ReportInlineDepthExceeded(NodeRef ref) {
+  if (!inlineDepthDiagnosed) {
+    inlineDepthDiagnosed = true;
+    char msg[192];
+    snprintf(msg, sizeof(msg),
+             "Error: calls are nested more than %u deep here; merge some of "
+             "the functions\n",
+             MAX_INLINE_DEPTH);
+    ReportErrorAt(ref, msg);
+  }
+  u16 placeholder = AllocateRegister();
+  SetRegisterType(placeholder, CoreType::INVALID);
+  return placeholder;
+}
+
+inline u16 IRLowering::TryInlineFunction(NodeRef ref, const FunctionCallData &call, u16 *args, u32 argCount) {
   // Look up the function in the AST
   // Check if this is a module-qualified call (e.g.,
   // Globals::decompressPosition)
@@ -2355,9 +2450,8 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
     }
   }
 
-  // Check inline depth to prevent infinite recursion
   if (inlineDepth >= MAX_INLINE_DEPTH) {
-    return 0xFFFF;
+    return ReportInlineDepthExceeded(ref);
   }
 
   // Save current variable register mappings, struct types, and node register
@@ -2439,8 +2533,10 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   u32 savedReturnCounter = inlineReturnCounter;
   u32 savedReturnFlagReads = inlineReturnFlagReads;
   u32 savedModuleIndex = inlineModuleIndex;
+  u32 savedReturnStructHash = inlineReturnStructHash;
   inlineReturnReg = returnReg;
   inlineReturnType = func.returnType;
+  inlineReturnStructHash = func.returnType == CoreType::CUSTOM ? func.returnTypeHash : 0;
   inlineReturnFlagReg = AllocateRegister();
   SetRegisterType(inlineReturnFlagReg, CoreType::BOOL);
   u32 inlineFirstInstruction = builder.currentInstruction;
@@ -2480,7 +2576,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   } else {
     // Single expression body
     u16 exprResult = LowerExpression(func.body);
-    CheckStoreShape(func.body, exprResult, inlineReturnType);
+    CheckStoreShape(func.body, exprResult, inlineReturnType, inlineReturnStructHash);
     builder.EmitInstruction(OP_STORE_REG, returnReg, exprResult);
   }
   builder.currentScope = scope.savedScope;  // What follows is the caller's
@@ -2494,6 +2590,7 @@ inline u16 IRLowering::TryInlineFunction(const FunctionCallData &call, u16 *args
   inlineReturnReg = savedReturnReg;
   inlineReturnFlagReg = savedReturnFlagReg;
   inlineReturnType = savedReturnType;
+  inlineReturnStructHash = savedReturnStructHash;
   inlineReturnCounter = savedReturnCounter;
   inlineReturnFlagReads = savedReturnFlagReads;
   inlineModuleIndex = savedModuleIndex;

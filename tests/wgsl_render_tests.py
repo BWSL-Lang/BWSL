@@ -31,6 +31,13 @@ ACCEPTED = {
             fragment { discard; }
         }
     }''',
+    # An output read before any store reads zero.
+    "fragment_output_read_before_store": '''pipeline Accept {
+        pass "Draw" {
+            vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
+            fragment { float4 value = output.color; output.color = value; }
+        }
+    }''',
 }
 
 REJECTED = {
@@ -44,12 +51,6 @@ REJECTED = {
         attributes { position: float4 }
         pass "Draw" { use attributes { position }
             vertex { output.position = ddx(attributes.position); }
-        }
-    }''',
-    "fragment_output_read_before_store": '''pipeline Reject {
-        pass "Draw" {
-            vertex { output.position = float4(0.0, 0.0, 0.0, 1.0); }
-            fragment { float4 value = output.color; output.color = value; }
         }
     }''',
 }

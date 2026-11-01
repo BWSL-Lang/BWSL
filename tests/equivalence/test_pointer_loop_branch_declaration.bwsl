@@ -1,0 +1,22 @@
+// A pointer declared in a branch inside a loop starts from the target it is
+// given there. `p` points to a vector component before the loop, but only
+// ever to `a` inside it, so every write through `q` goes to `a`.
+pipeline EquivPointerLoopBranchDeclaration {
+    resources { output: buffer<float> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            float a = 1.0;
+            float3 v = float3(1.0, 2.0, 3.0);
+            float^ p = ^v.x;
+            for (int i = 0; i < 3; i++) {
+                p = ^a;
+                if (i > 0) {
+                    float^ q = p;
+                    q^ = q^ + 1.0;
+                }
+            }
+            resources.output[0] = a;
+        }
+    }
+}

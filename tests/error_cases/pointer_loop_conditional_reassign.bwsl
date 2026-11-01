@@ -1,0 +1,21 @@
+// The pointer is set to a local at the top of each iteration, but on one
+// iteration a branch points it at a vector component: that write is lost.
+pipeline PointerLoopConditionalReassign {
+    resources { output: buffer<float> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            float a = 1.0;
+            float3 v = float3(1.0, 2.0, 3.0);
+            float^ p = ^a;
+            for (int i = 0; i < 3; i++) {
+                p = ^a;
+                if (i == 1) {
+                    p = ^v.x;
+                }
+                p^ = 2.0;
+            }
+            resources.output[0] = a + v.x;
+        }
+    }
+}

@@ -1,0 +1,16 @@
+// Error case: a struct constructor with too few arguments, or given a value
+// of another struct. It failed SPIR-V validation.
+pipeline WrongAcceptStructConstructorArgumentCount {
+    struct A { float x; float y; };
+    struct B { float2 v; };
+    resources { output: buffer<float> }
+    pass "Compute" {
+        use resources { output }
+        compute "Main" [1, 1, 1] {
+            B b;
+            b.v = float2(1.0, 2.0);
+            A a = A(b);
+            resources.output[0] = a.x;
+        }
+    }
+}

@@ -6,6 +6,16 @@ namespace BWSL::IR {
 
 inline void IRLowering::LowerStatement(NodeRef ref) {
     SourceNodeGuard sourceGuard(builder, ref);
+  if (implicitReturnStatement.IsValid() && ref.packed == implicitReturnStatement.packed) {
+    // A call yields a value unless the function returns nothing.
+    u16 value = LowerExpression(ref);
+    CoreType type = GetRegisterType(value);
+    if (ref.Type() != ASTNodeType::FUNCTION_CALL ||
+        (type != CoreType::VOID && type != CoreType::INVALID)) {
+      LowerReturnValue(ref, value);
+    }
+    return;
+  }
   switch (ref.Type()) {
   case ASTNodeType::ASSIGNMENT:
     LowerAssignment(ref);
@@ -89,9 +99,12 @@ inline void IRLowering::LowerStatementsWithReturnGuard(const BlockData &block,
   inlineReturnFlagReads++;
 
   u32 falseTarget = builder.currentInstruction;
+  LogPointerEvent(PointerEvent::BRANCH_BEGIN);
+  LogPointerEvent(PointerEvent::ARM);
   controlDepth++;
   LowerStatements(block, first, true);
   controlDepth--;
+  LogPointerEvent(PointerEvent::BRANCH_END, true);
 
   u32 mergePoint = builder.currentInstruction;
   builder.EmitInstruction(OP_NOP, 0, 0);
@@ -111,6 +124,8 @@ inline void IRLowering::LowerBreak() {
     }
     return;
   }
+  if (InPointerLoop())
+    pointerEvents.Push(pool, {PointerEvent::BREAK, false, 0, 0, 0, NodeRef::Null()});
   u32 jumpIdx = builder.currentInstruction;
   builder.EmitInstruction(OP_JUMP, 0, 0);
   // Record this break for patching when loop ends
@@ -127,6 +142,8 @@ inline void IRLowering::LowerSkip() {
     ReportError("Error: 'skip' outside of a loop\n");
     return;
   }
+  if (InPointerLoop())
+    pointerEvents.Push(pool, {PointerEvent::SKIP, false, 0, 0, 0, NodeRef::Null()});
   u32 jumpIdx = builder.currentInstruction;
   builder.EmitInstruction(OP_JUMP, 0, 0);
   // Record this skip for patching when continue target is known
@@ -223,6 +240,7 @@ inline void IRLowering::LowerForCStyle(NodeRef ref) {
 
   // Continue target = start of increment
   u32 continueTarget = builder.currentInstruction;
+  LogPointerEvent(PointerEvent::CONTINUE);
 
   // Increment
   if (!forLoop.increment.IsNull()) {
@@ -385,6 +403,8 @@ inline void IRLowering::LowerForRange(NodeRef ref) {
     loopDepth--;
 
     u32 continueTarget = builder.currentInstruction;
+
+    LogPointerEvent(PointerEvent::CONTINUE);
     // The bounds only rule out wraparound while the body leaves the iterator
     // alone: an assignment or a pointer to it could move it anywhere.
     bool bodyWritesIterator = program.registerStorageInfo[iterReg] != 0;
@@ -502,6 +522,7 @@ inline void IRLowering::LowerForCollection(NodeRef ref) {
 
   // Continue target = start of increment
   u32 continueTarget = builder.currentInstruction;
+  LogPointerEvent(PointerEvent::CONTINUE);
 
   // Increment index
   builder.EmitInstruction(OP_IADD, indexReg, indexReg, EmitConstantInt(1));
@@ -576,6 +597,7 @@ inline void IRLowering::LowerLoop(NodeRef ref) {
 
     // Continue target = start of increment
     u32 continueTarget = builder.currentInstruction;
+    LogPointerEvent(PointerEvent::CONTINUE);
 
     // Increment
     builder.EmitInstruction(OP_IADD, iterReg, iterReg, EmitConstantInt(1));
@@ -641,6 +663,7 @@ inline void IRLowering::LowerLoop(NodeRef ref) {
 
     // Continue target = back-edge
     u32 continueTarget = builder.currentInstruction;
+    LogPointerEvent(PointerEvent::CONTINUE);
 
     // Jump back to loop header
     u32 backEdgeIdx = builder.currentInstruction;
@@ -929,10 +952,12 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
   u32 *caseJumps = (u32 *)alloca(caseArmCount * sizeof(u32));
 
   switchDepth++;
+  LogPointerEvent(PointerEvent::BRANCH_BEGIN);
   controlDepth++;
   for (u32 i = 0; i < caseArmCount; i++) {
     NodeRef caseRef = sw.cases[i];
     const SwitchCaseData &caseData = ast->GetSwitchCase(caseRef);
+    LogPointerEvent(PointerEvent::ARM);
 
     caseTargets[i] = builder.currentInstruction;
 
@@ -951,6 +976,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
   u32 defaultJumpIdx = 0;
   if (hasDefault) {
     const SwitchCaseData &defaultData = ast->GetSwitchCase(sw.defaultCase);
+    LogPointerEvent(PointerEvent::ARM);
     if (!defaultData.body.IsNull()) {
       LowerStatement(defaultData.body);
     }
@@ -959,6 +985,7 @@ inline void IRLowering::LowerSwitch(NodeRef ref) {
     builder.EmitInstruction(OP_JUMP, 0, 0);
   }
   controlDepth--;
+  LogPointerEvent(PointerEvent::BRANCH_END, !hasDefault);
   switchDepth--;
 
   u32 mergePoint = builder.currentInstruction;
@@ -1107,6 +1134,8 @@ inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
   u32 trueTarget = builder.currentInstruction;
 
   // Lower true branch
+  LogPointerEvent(PointerEvent::BRANCH_BEGIN);
+  LogPointerEvent(PointerEvent::ARM);
   controlDepth++;
   if (rest && restInThen) {
     lowerBranchAndRest(block.statements[1]);
@@ -1126,6 +1155,7 @@ inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
   u32 falseTarget = builder.currentInstruction;
 
   bool needMergePad = true;
+  LogPointerEvent(PointerEvent::ARM);  // The else arm, empty without one
   controlDepth++;
   if (restInElse) {
     lowerBranchAndRest(block.statements.count > 2 ? block.statements[2]
@@ -1151,6 +1181,7 @@ inline void IRLowering::LowerIfWithRest(NodeRef ref, const BlockData *rest,
     needMergePad = true;
   }
   controlDepth--;
+  LogPointerEvent(PointerEvent::BRANCH_END);
 
   // Set merge point to current instruction (NOP location if we emit one)
   u32 mergePoint = builder.currentInstruction;
@@ -1183,8 +1214,25 @@ inline void IRLowering::LowerReturn(NodeRef ref) {
   bool inlineReturn = (inlineDepth > 0 && inlineReturnReg != 0xFFFF &&
                        inlineReturnFlagReg != 0xFFFF);
   if (!ret.value.IsNull()) {
-    u16 valueReg = LowerExpression(ret.value);
-    if (inlineReturn) CheckStoreShape(ret.value, valueReg, inlineReturnType);
+    LowerReturnValue(ret.value);
+  } else {
+    if (inlineReturn) {
+      u16 trueConst = builder.EmitConstantBool(true);
+      builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg, trueConst);
+      inlineReturnCounter++;
+    } else {
+      builder.EmitInstruction(OP_RET, 0, 0);
+    }
+  }
+}
+
+inline void IRLowering::LowerReturnValue(NodeRef valueNode, u16 valueReg) {
+  bool inlineReturn = (inlineDepth > 0 && inlineReturnReg != 0xFFFF &&
+                       inlineReturnFlagReg != 0xFFFF);
+  {
+    if (valueReg == 0xFFFF) valueReg = LowerExpression(valueNode);
+    if (inlineReturn)
+      CheckStoreShape(valueNode, valueReg, inlineReturnType, inlineReturnStructHash);
 
     // If we're inlining a function, store to the return register instead of
     // emitting OP_RET
@@ -1207,14 +1255,6 @@ inline void IRLowering::LowerReturn(NodeRef ref) {
       inlineReturnCounter++;
     } else {
       builder.EmitInstruction(OP_RET, valueReg, 0);
-    }
-  } else {
-    if (inlineReturn) {
-      u16 trueConst = builder.EmitConstantBool(true);
-      builder.EmitInstruction(OP_STORE_REG, inlineReturnFlagReg, trueConst);
-      inlineReturnCounter++;
-    } else {
-      builder.EmitInstruction(OP_RET, 0, 0);
     }
   }
 }
