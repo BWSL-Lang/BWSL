@@ -599,8 +599,8 @@ bool WGSLBuilder::WriteReference(TextWriter& writer, u32 valueId) {
         return Fail("WGSL pointer has no valid access path");
     }
     if (accessor == Accessor::Field) {
-        writer.Text(".f");
-        writer.Number(values.indexOperands[valueId]);
+        writer.Text(".");
+        WriteFieldName(writer, values.indexOperands[valueId]);
     } else if (accessor == Accessor::Index) {
         writer.Text("[");
         if (!WriteOperand(writer, values.indexOperands[valueId])) {
@@ -687,8 +687,7 @@ bool WGSLBuilder::WriteStructDeclarations(TextWriter& writer) {
                     writer.Number(storageMemberSizes[info.fieldOffset + field]);
                     writer.Text(") ");
                 }
-                writer.Text("f");
-                writer.Number(field);
+                WriteFieldName(writer, field);
                 writer.Text(": ");
                 if (!WriteFullType(writer, type, structType, arrayLength)) {
                     return false;
@@ -714,8 +713,8 @@ bool WGSLBuilder::WriteStructExpression(TextWriter& writer, u32 instruction, u32
             if (!WriteOperand(writer, first)) {
                 return false;
             }
-            writer.Text(".f");
-            writer.Number(second);
+            writer.Text(".");
+            WriteFieldName(writer, second);
             if (opcode == IR::OP_STRUCT_ARRAY_EXTRACT) {
                 writer.Text("[");
                 if (!WriteOperand(writer, ir->GetOperand(instruction, 2))) {
@@ -750,8 +749,8 @@ bool WGSLBuilder::WriteStructExpression(TextWriter& writer, u32 instruction, u32
             if (!WriteOperand(writer, first)) {
                 return false;
             }
-            writer.Text(".f");
-            writer.Number(1 + ir->intConstants[IR::IntConstantIndex(second)]);
+            writer.Text(".");
+            WriteFieldName(writer, 1 + ir->intConstants[IR::IntConstantIndex(second)]);
             return true;
         case IR::OP_ENUM_CONSTRUCT:
             return WriteEnumConstruct(writer, instruction, values.structTypes[valueId]);
@@ -933,8 +932,8 @@ bool WGSLBuilder::WriteMemoryInstruction(TextWriter& writer, u32 instruction, bo
         return true;
     }
     WriteValueName(writer, valueId);
-    writer.Text(".f");
-    writer.Number(second);
+    writer.Text(".");
+    WriteFieldName(writer, second);
     const bool element = opcode == IR::OP_STRUCT_ARRAY_INSERT;
     if (element) {
         writer.Text("[");
@@ -1518,8 +1517,8 @@ bool WGSLBuilder::WriteEnumConstruct(TextWriter& writer, u32 instruction, u32 st
                     if (!WriteOperand(writer, operand)) {
                         return false;
                     }
-                    writer.Text(".f");
-                    writer.Number(member);
+                    writer.Text(".");
+                    WriteFieldName(writer, member);
                     if (item >= 0) {
                         writer.Bytes(&".x.y.z.w"[item * 2], 2);
                     }

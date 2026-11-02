@@ -177,6 +177,16 @@ void WriteValueName(TextWriter& writer, u32 id) {
     writer.Number(id);
 }
 
+// Struct members are f0, f1, ...; f16, f32 and f64 are reserved words
+// (Naga rejects them as names), so those get a trailing underscore.
+void WriteFieldName(TextWriter& writer, u32 index) {
+    writer.Text("f");
+    writer.Number(index);
+    if (index == 16 || index == 32 || index == 64) {
+        writer.Text("_");
+    }
+}
+
 void WriteResourceName(TextWriter& writer, u32 slot) {
     writer.Text("bwsl_buffer_");
     writer.Number(slot);
@@ -2271,8 +2281,8 @@ bool WGSLBuilder::WriteExpression(TextWriter& writer, u32 instruction, u32 value
             if (outputs.types[outputForSlot[first]] != static_cast<u16>(type)) {
                 return Fail("WGSL stage output load has an incompatible type");
             }
-            writer.Text("bwsl_output.f");
-            writer.Number(outputForSlot[first]);
+            writer.Text("bwsl_output.");
+            WriteFieldName(writer, outputForSlot[first]);
             return true;
         case IR::OP_STORAGE_LOAD:
             return WriteReference(writer, registerToValue[first]);
@@ -2641,8 +2651,8 @@ bool WGSLBuilder::WriteInstruction(TextWriter& writer, u32 instruction) {
     u16 destination = ir->destinations[instruction];
     if (opcode == IR::OP_STORE_OUTPUT) {
         writer.Indent();
-        writer.Text("bwsl_output.f");
-        writer.Number(outputForSlot[first]);
+        writer.Text("bwsl_output.");
+        WriteFieldName(writer, outputForSlot[first]);
         writer.Text(" = ");
         if (!WriteOperand(writer, destination)) {
             return false;
@@ -2916,8 +2926,7 @@ bool WGSLBuilder::WriteModule(TextWriter& writer) {
         for (u32 id = 0; id < outputs.count; ++id) {
             writer.Text("    ");
             WriteInterfaceAttribute(writer, outputs, id, stage == ShaderStage::Vertex);
-            writer.Text("f");
-            writer.Number(id);
+            WriteFieldName(writer, id);
             writer.Text(": ");
             WriteType(writer, static_cast<CoreType>(outputs.types[id]));
             writer.Text(",\n");

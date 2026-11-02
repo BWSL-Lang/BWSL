@@ -1,0 +1,35 @@
+// Test: WGSL struct members don't use reserved words as names
+// Tests: a struct with more than 16 fields. WGSL members are named by field
+//        index (f0, f1, ...), and f16 is a reserved word that Naga rejects,
+//        so field 16 is f16_.
+
+pipeline ReservedFieldNames {
+    attributes {
+        position: float3
+    }
+
+    struct Wide {
+        float a0; float a1; float a2; float a3; float a4; float a5;
+        float a6; float a7; float a8; float a9; float a10; float a11;
+        float a12; float a13; float a14; float a15; float a16; float a17;
+    }
+
+    resources {
+        params: Wide
+    }
+
+    pass "Main" {
+        use attributes { position }
+        use resources { params }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            Wide w = resources.params;
+            w.a16 = w.a16 * input.position.x;
+            output.color = float4(w.a0, w.a15, w.a16, w.a17);
+        }
+    }
+}

@@ -749,6 +749,7 @@ TRANSLATION_EXTRA_ARGS = {
     "interpolation_centroid": ("-gles-direct", "-wgsl"),
     "wgsl_derivative_uniformity": ("-wgsl",),
     "wgsl_derivative_uniform_flow": ("-wgsl",),
+    "wgsl_reserved_field_names": ("-wgsl",),
     "phi_variables": ("--optimizations", "phi-variables"),
     "phi_variables_output_store": ("--optimizations", "phi-variables"),
     "branch_hints_unenforced": ("--optimizations", "no-enforce-branch-hints"),
@@ -902,6 +903,13 @@ TRANSLATION_EXPECTATION_TESTS = {
         "frag": {
             "wgsl_contains": ["textureSample(", "fwidth("],
             "wgsl_not_contains": ["diagnostic("],
+        },
+    },
+    # Members are named by field index; f16 is a reserved word in WGSL.
+    "wgsl_reserved_field_names": {
+        "frag": {
+            "wgsl_contains": ["f16_: f32,", ".f16_", "f17: f32,"],
+            "wgsl_not_contains": ["f16:", ".f16;", ".f16 "],
         },
     },
     # Issue #204: texture_size has one component per native dimension.
