@@ -24,7 +24,10 @@ namespace BWSL {
 // first-level struct field, not per array element.
 struct QuadDivergenceData {
     u32* derivatives = nullptr;  // Derivative instructions in divergent control flow
-    u32* branches = nullptr;     // For each, a divergent branch that controls it
+    // For each, the branch whose condition makes it divergent: one that
+    // controls it, or, when that one tests a flag (as an inlined early
+    // return sets), the divergent branch that set the flag.
+    u32* branches = nullptr;
     u32 count = 0;
 };
 

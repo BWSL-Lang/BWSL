@@ -48,13 +48,17 @@ def run_derivative_divergence_tests(compiler: Path) -> tuple[int, int]:
             self.addCleanup(self.temp.cleanup)
             self.folder = Path(self.temp.name)
 
-        def warnings(self, fragment, declarations=""):
+        def warnings(self, fragment, declarations="", module=None):
             source = self.folder / "divergence.bwsl"
             text = PIPELINE.replace("DECLARATIONS", declarations).replace("FRAGMENT", fragment)
+            arguments = [str(compiler), str(source), "-check", "-errors-json"]
+            if module is not None:
+                (self.folder / "modules").mkdir(exist_ok=True)
+                (self.folder / "modules" / "Shading.bwsl").write_text(module, encoding="utf-8")
+                text = text.replace("pipeline Divergence {", "pipeline Divergence {\n    import Shading", 1)
+                arguments += ["-modules", str(self.folder / "modules")]
             source.write_text(text, encoding="utf-8")
-            result = subprocess.run(
-                [str(compiler), str(source), "-check", "-errors-json"],
-                capture_output=True, text=True, timeout=60)
+            result = subprocess.run(arguments, capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             report = json.loads(result.stdout)
             return [d for d in report["diagnostics"] if d["code"] == CODE]
@@ -165,6 +169,44 @@ def run_derivative_divergence_tests(compiler: Path) -> tuple[int, int]:
                 if (input.uv.x > 0.5) { c = look(input.uv) + look(input.uv * 0.5); }
                 output.color = c;''', "look :: (float2 uv) -> float4 { return sample(resources.tex, uv); }")
             self.assertEqual(len(found), 1, found)
+
+        def test_inlined_early_return_names_its_if(self):
+            # Code after an inlined function's returns is guarded by flags;
+            # the warning names the divergent `if` that returns, not the
+            # first, uniform one the guards are written for.
+            helper = """shade :: (float2 uv, float k) -> float4 {
+        if (k < 0.0) {
+            return float4(1.0);
+        }
+        if (uv.x > 0.5) {
+            if (k > 2.0) {
+                return float4(0.0);
+            }
+        }
+        return sample(resources.tex, uv);
+    }"""
+            found = self.warnings("output.color = shade(input.uv, resources.params.threshold);", helper)
+            self.assertEqual(len(found), 1, found)
+            source = (self.folder / "divergence.bwsl").read_text().splitlines()
+            line = next(i + 1 for i, text in enumerate(source) if "if (uv.x > 0.5)" in text)
+            self.assertIn(f"(the branch at line {line})", found[0]["message"])
+
+        def test_module_code_is_reported_in_its_file(self):
+            module = """module Shading {
+    clamped :: (texture2D tex, float2 uv) -> float4 {
+        if (uv.x > 0.5) {
+            return float4(0.0);
+        }
+        return sample(tex, uv);
+    }
+}
+"""
+            found = self.warnings("output.color = Shading::clamped(resources.tex, input.uv);",
+                                  module=module)
+            self.assertEqual(len(found), 1, found)
+            self.assertTrue(found[0]["file"].endswith("Shading.bwsl"), found[0])
+            self.assertEqual(found[0]["line"], 6)
+            self.assertIn("(the branch at line 3)", found[0]["message"])
 
     result = unittest.TextTestRunner(verbosity=1).run(
         unittest.defaultTestLoader.loadTestsFromTestCase(DerivativeDivergenceTests))

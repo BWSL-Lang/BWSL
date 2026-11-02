@@ -402,8 +402,10 @@ struct IRLowering {
 
   void ReportError(const char *message);
   void ReportErrorAt(NodeRef node, const char *message);
-  // A warning at the source of `node`; compilation goes on.
-  void ReportWarningAt(NodeRef node, const std::string &message, DiagnosticMessageId messageId);
+  // A warning at the source of `node`, in `file` (the compiled file when
+  // null); compilation goes on.
+  void ReportWarningAt(NodeRef node, const std::string &message, DiagnosticMessageId messageId,
+                       const char *file = nullptr);
   DiagnosticSpan SourceSpan(NodeRef node);
   const char *DiagnosticStageName() const;
   std::string DiagnosticPassName() const;

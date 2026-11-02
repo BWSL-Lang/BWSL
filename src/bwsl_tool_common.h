@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
@@ -14,6 +15,22 @@
 #include "phases/ir_lowering/bwsl_ir_lowering.h"
 
 namespace BWSL::ToolCommon {
+
+// The file an IR instruction's source is in: that of the function it was
+// inlined from, or null for the compiled file (and when unknown).
+inline const char* SourceFileOfInstruction(const IR::IRLowering& lowering, u32 instruction) {
+    const IR::IRProgram& ir = lowering.program;
+    if (!lowering.ast || !ir.sourceScopes || !ir.debugScopeFunctions || instruction >= ir.instructionCount) {
+        return nullptr;
+    }
+    const u32 scope = ir.sourceScopes[instruction];
+    if (scope == 0 || scope >= ir.debugScopeCount) {
+        return nullptr;
+    }
+    NodeRef function;
+    function.packed = ir.debugScopeFunctions[scope];
+    return lowering.ast->GetDeclarationSource(function);
+}
 
 // Warns (BWSL1302) about each derivative or implicit-LOD sample in a
 // fragment shader that runs in control flow the pixels of a 2x2 quad may
@@ -38,13 +55,22 @@ inline void WarnAboutDivergentDerivatives(IR::IRLowering& lowering, const CFG* c
         }
         reported.push_back(key);
         const u16 opcode = ir.opcodes[instruction];
+        const char* file = SourceFileOfInstruction(lowering, instruction);
         std::string message = QuadDivergence::IntrinsicName(opcode);
         message += "() runs in control flow that can differ between the pixels of a 2x2 quad";
         NodeRef branch;
         branch.packed = ir.sourceNodes ? ir.sourceNodes[found.branches[k]] : 0xFFFFFFFFu;
         const DiagnosticSpan branchSpan = lowering.SourceSpan(branch);
         if (branchSpan.HasLocation()) {
-            message += " (the branch at line " + std::to_string(branchSpan.line) + ")";
+            const char* branchFile = SourceFileOfInstruction(lowering, found.branches[k]);
+            message += " (the branch at ";
+            if (branchFile != file && branchFile != nullptr) {
+                const char* slash = strrchr(branchFile, '/');
+                message += std::string(slash ? slash + 1 : branchFile) + ":";
+            } else {
+                message += "line ";
+            }
+            message += std::to_string(branchSpan.line) + ")";
         }
         message += ", so its derivatives are undefined where they take different paths. "
                    "Compute it before the branch";
@@ -53,7 +79,7 @@ inline void WarnAboutDivergentDerivatives(IR::IRLowering& lowering, const CFG* c
         } else {
             message += ", or pass an explicit level or gradients (sample_lod, sample_grad).";
         }
-        lowering.ReportWarningAt(node, message, DiagnosticMessageId::DerivativeInDivergentControlFlow);
+        lowering.ReportWarningAt(node, message, DiagnosticMessageId::DerivativeInDivergentControlFlow, file);
     }
 }
 

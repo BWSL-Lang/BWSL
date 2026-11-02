@@ -36,6 +36,8 @@ struct DivergenceState {
     u8* divergentBranch = nullptr;    // [blockCount]
     u32* controllingBranch = nullptr; // [blockCount] instruction, NONE when not divergent
     u8* forcedPhis = nullptr;         // [phiCount] phis that choose by a divergent branch
+    u32* forcingBranches = nullptr;   // [phiCount] instruction of the branch that forced it
+    u32* singleDefinitions = nullptr; // [registerCount] defining instruction, NONE unless exactly one
     u32* regionStamp = nullptr;       // [blockCount]
     u32* worklist = nullptr;          // [blockCount + 1]
 };
@@ -514,7 +516,10 @@ void ComputeDivergentRegions(DivergenceState& state) {
                 const u32 predecessor = ir->phiOperandBlocks[k];
                 if (predecessor == branch ||
                     (predecessor < state.blockCount && state.regionStamp[predecessor] == branch)) {
-                    state.forcedPhis[phi] = 1;
+                    if (!state.forcedPhis[phi]) {
+                        state.forcedPhis[phi] = 1;
+                        state.forcingBranches[phi] = cfg->lastInst[branch];
+                    }
                     break;
                 }
             }
@@ -537,6 +542,41 @@ bool MarkDivergentBranches(DivergenceState& state) {
         }
     }
     return changed;
+}
+
+// The branch whose condition makes `branch` divergent. A branch on a value
+// a divergent branch chose (such as the flag an inlined function's early
+// return sets) names that branch instead, which is the one in the source.
+u32 FindRootBranch(const DivergenceState& state, u32 branch) {
+    const IR::IRProgram* ir = state.ir;
+    u16 condition = Operand(state, branch, 0);
+    for (u32 step = 0; step < 64 && IsRegisterOperand(state, condition); ++step) {
+        u32 phi = NONE;
+        for (u32 p = 0; p < ir->phiCount; ++p) {
+            if (ir->phiResultRegs[p] == condition) {
+                phi = p;
+                break;
+            }
+        }
+        if (phi != NONE) {
+            if (!state.forcedPhis[phi]) {
+                return branch;
+            }
+            branch = state.forcingBranches[phi];
+            condition = Operand(state, branch, 0);
+            continue;
+        }
+        const u32 definition = state.singleDefinitions[condition];
+        if (definition == NONE) {
+            return branch;
+        }
+        const u16 opcode = ir->opcodes[definition];
+        if (opcode != IR::OP_LOAD_REG && opcode != IR::OP_STORE_REG && opcode != IR::OP_NOT) {
+            return branch;
+        }
+        condition = Operand(state, definition, 0);
+    }
+    return branch;
 }
 
 } // namespace
@@ -602,16 +642,20 @@ bool QuadDivergence::FindDivergentDerivatives(QuadDivergenceData* result, const 
     state.divergentBranch = AllocateZeroed<u8>(arena, state.blockCount);
     state.controllingBranch = AllocateZeroed<u32>(arena, state.blockCount);
     state.forcedPhis = AllocateZeroed<u8>(arena, ir->phiCount);
+    state.forcingBranches = AllocateZeroed<u32>(arena, ir->phiCount);
+    state.singleDefinitions = AllocateZeroed<u32>(arena, state.registerCount);
     state.regionStamp = AllocateZeroed<u32>(arena, state.blockCount);
     state.worklist = AllocateZeroed<u32>(arena, nodeCount);
     if (!state.masks || !state.definitionCounts || !state.isPointer || !state.pointerRoots ||
         !state.pointerFields || !state.postorder || !state.reverseOrder || !state.ipdom ||
         !state.visited || !state.dfsStack || !state.dfsNext || !state.divergentBranch ||
-        !state.controllingBranch || !state.forcedPhis || !state.regionStamp || !state.worklist) {
+        !state.controllingBranch || !state.forcedPhis || !state.forcingBranches ||
+        !state.singleDefinitions || !state.regionStamp || !state.worklist) {
         return false;
     }
     for (u32 reg = 0; reg < state.registerCount; ++reg) {
         state.pointerRoots[reg] = NONE;
+        state.singleDefinitions[reg] = NONE;
     }
     for (u32 block = 0; block < state.blockCount; ++block) {
         state.controllingBranch[block] = NONE;
@@ -621,12 +665,14 @@ bool QuadDivergence::FindDivergentDerivatives(QuadDivergenceData* result, const 
         if (!IsStoreWithoutResult(ir->opcodes[i]) && IsRegisterOperand(state, destination) &&
             state.definitionCounts[destination] < 255) {
             ++state.definitionCounts[destination];
+            state.singleDefinitions[destination] = state.definitionCounts[destination] == 1 ? i : NONE;
         }
     }
     for (u32 phi = 0; phi < ir->phiCount; ++phi) {
         const u16 phiResult = ir->phiResultRegs[phi];
         if (IsRegisterOperand(state, phiResult) && state.definitionCounts[phiResult] < 255) {
             ++state.definitionCounts[phiResult];
+            state.singleDefinitions[phiResult] = NONE;
         }
     }
     ResolvePointers(state);
@@ -675,7 +721,7 @@ bool QuadDivergence::FindDivergentDerivatives(QuadDivergenceData* result, const 
         if (IsImplicitDerivative(ir->opcodes[i]) && block < state.blockCount &&
             state.controllingBranch[block] != NONE) {
             derivatives[result->count] = i;
-            branches[result->count] = state.controllingBranch[block];
+            branches[result->count] = FindRootBranch(state, state.controllingBranch[block]);
             ++result->count;
         }
     }

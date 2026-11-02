@@ -66,11 +66,12 @@ inline void IRLowering::ReportErrorAt(NodeRef node, const char *message) {
 }
 
 inline void IRLowering::ReportWarningAt(NodeRef node, const std::string &message,
-                                        DiagnosticMessageId messageId) {
+                                        DiagnosticMessageId messageId, const char *file) {
     const DiagnosticSpan span = SourceSpan(node);
     if (diagnosticStream) {
         diagnosticStream->AddRaw(DiagnosticSeverity::Warning, DiagnosticPhase::Lowering, message,
-                                 span, "", DiagnosticPassName(), DiagnosticStageName(), messageId);
+                                 span, file ? file : "", DiagnosticPassName(), DiagnosticStageName(),
+                                 messageId);
     } else if (!suppressErrorOutput) {
         if (span.HasLocation()) {
             fprintf(stderr, "warning: line %u:%u: %s\n", span.line, span.column, message.c_str());
