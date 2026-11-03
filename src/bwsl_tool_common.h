@@ -71,8 +71,12 @@ inline void WarnAboutDivergentDerivatives(IR::IRLowering& lowering, const CFG* c
             }
             message += " (the branch at ";
             if (branchFile != nullptr && (warningFile == nullptr || strcmp(branchFile, warningFile) != 0)) {
-                const char* slash = strrchr(branchFile, '/');
-                message += std::string(slash ? slash + 1 : branchFile) + ":";
+                // The file's name, after either separator (Windows paths use '\\').
+                const char* name = branchFile;
+                for (const char* c = branchFile; *c; ++c) {
+                    if (*c == '/' || *c == '\\') name = c + 1;
+                }
+                message += std::string(name) + ":";
             } else if (branchFile == nullptr && warningFile != nullptr) {
                 message += "the compiled file, line ";
             } else {
