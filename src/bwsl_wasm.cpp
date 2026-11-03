@@ -1164,6 +1164,9 @@ static std::string CompileToJson(const char* bwslSource,
 
     // Add internals if requested (must iterate passes again to get the data)
     if (emitInternals) {
+        // The stages' diagnostics are in the result already; drop the repeats.
+        DiagnosticStream internalsDiagnostics;
+        internalsDiagnostics.Init(&stageDiagnosticArena);
         json << ",\"internals\":[";
         bool firstInternal = true;
         for (u32 passIdx = 0; passIdx < pipeline.passes.count; passIdx++) {
@@ -1178,7 +1181,7 @@ static std::string CompileToJson(const char* bwslSource,
             if (isComputePass) {
                 ShaderOutput compResult = CompileShaderStage(
                     context, parser, pass, ShaderStage::Compute,
-                    renderConfig, specializedPipelineRef, nullptr, sourceBase, true
+                    renderConfig, specializedPipelineRef, nullptr, sourceBase, true, &internalsDiagnostics
                 );
                 if (compResult.success) {
                     if (!firstInternal) json << ",";
@@ -1190,7 +1193,7 @@ static std::string CompileToJson(const char* bwslSource,
             } else {
                 ShaderOutput vertResult = CompileShaderStage(
                     context, parser, pass, ShaderStage::Vertex,
-                    renderConfig, specializedPipelineRef, &passVaryings, sourceBase, true
+                    renderConfig, specializedPipelineRef, &passVaryings, sourceBase, true, &internalsDiagnostics
                 );
                 if (vertResult.success) {
                     if (!firstInternal) json << ",";
@@ -1202,7 +1205,7 @@ static std::string CompileToJson(const char* bwslSource,
 
                 ShaderOutput fragResult = CompileShaderStage(
                     context, parser, pass, ShaderStage::Fragment,
-                    renderConfig, specializedPipelineRef, &passVaryings, sourceBase, true
+                    renderConfig, specializedPipelineRef, &passVaryings, sourceBase, true, &internalsDiagnostics
                 );
                 if (fragResult.success) {
                     if (!firstInternal) json << ",";

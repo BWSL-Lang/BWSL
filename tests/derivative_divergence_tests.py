@@ -208,6 +208,24 @@ def run_derivative_divergence_tests(compiler: Path) -> tuple[int, int]:
             self.assertEqual(found[0]["line"], 6)
             self.assertIn("(the branch at line 3)", found[0]["message"])
 
+        def test_module_code_names_the_compiled_files_branch(self):
+            # The derivative is in the module, the branch in the pipeline's
+            # file: the message names that file, not just a line number.
+            module = """module Shading {
+    look :: (texture2D tex, float2 uv) -> float4 {
+        return sample(tex, uv);
+    }
+}
+"""
+            found = self.warnings("""float4 c = float4(0.0);
+                if (input.uv.x > 0.5) { c = Shading::look(resources.tex, input.uv); }
+                output.color = c;""", module=module)
+            self.assertEqual(len(found), 1, found)
+            self.assertTrue(found[0]["file"].endswith("Shading.bwsl"), found[0])
+            source = (self.folder / "divergence.bwsl").read_text().splitlines()
+            line = next(i + 1 for i, text in enumerate(source) if "if (input.uv.x > 0.5)" in text)
+            self.assertIn(f"(the branch at divergence.bwsl:{line})", found[0]["message"])
+
     result = unittest.TextTestRunner(verbosity=1).run(
         unittest.defaultTestLoader.loadTestsFromTestCase(DerivativeDivergenceTests))
     failures = len(result.failures) + len(result.errors)

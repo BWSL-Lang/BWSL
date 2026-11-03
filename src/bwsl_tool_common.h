@@ -62,11 +62,19 @@ inline void WarnAboutDivergentDerivatives(IR::IRLowering& lowering, const CFG* c
         branch.packed = ir.sourceNodes ? ir.sourceNodes[found.branches[k]] : 0xFFFFFFFFu;
         const DiagnosticSpan branchSpan = lowering.SourceSpan(branch);
         if (branchSpan.HasLocation()) {
+            // The stage's own code is in the pipeline's file.
+            const char* mainFile = lowering.ast ? lowering.ast->GetDeclarationSource(lowering.currentPipeline) : nullptr;
+            const char* warningFile = file ? file : mainFile;
             const char* branchFile = SourceFileOfInstruction(lowering, found.branches[k]);
+            if (branchFile == nullptr) {
+                branchFile = mainFile;
+            }
             message += " (the branch at ";
-            if (branchFile != file && branchFile != nullptr) {
+            if (branchFile != nullptr && (warningFile == nullptr || strcmp(branchFile, warningFile) != 0)) {
                 const char* slash = strrchr(branchFile, '/');
                 message += std::string(slash ? slash + 1 : branchFile) + ":";
+            } else if (branchFile == nullptr && warningFile != nullptr) {
+                message += "the compiled file, line ";
             } else {
                 message += "line ";
             }
