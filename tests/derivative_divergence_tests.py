@@ -68,6 +68,8 @@ def run_derivative_divergence_tests(compiler: Path) -> tuple[int, int]:
             self.assertEqual(len(found), 1, found)
             self.assertEqual(found[0]["severity"], "warning")
             self.assertEqual(found[0]["stage"], "fragment")
+            self.assertGreater(found[0].get("line", 0), 0, found[0])
+            self.assertGreater(found[0].get("column", 0), 0, found[0])
             self.assertTrue(found[0]["message"].startswith(intrinsic + "() runs in control flow"),
                             found[0]["message"])
             self.assertIn("(the branch at line", found[0]["message"])

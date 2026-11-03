@@ -557,6 +557,8 @@ private:
                 return "{0} cross-compilation failed";
             case DiagnosticMessageId::MaxUserVaryingsExceeded:
                 return "Maximum 16 user varyings exceeded";
+            case DiagnosticMessageId::DerivativeInDivergentControlFlow:
+                return "{0}() runs in control flow that can differ between the pixels of a 2x2 quad";
             case DiagnosticMessageId::ComputeGraphValidationFailed:
                 return "Compute graph validation failed: {0}";
             case DiagnosticMessageId::CompilerMemoryExhausted:

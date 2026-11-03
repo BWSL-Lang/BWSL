@@ -148,6 +148,11 @@ static void CompileOneStage(CompilationContext& context, Parser& parser,
         }
     }
     Optimization::PropagateConstants(&lowering.builder, cfgPtr);
+    if (stage == ShaderStage::Fragment) {
+        // The BWSL1302 analysis, fuzzed as bwslc runs it; its findings are dropped.
+        QuadDivergenceData divergence;
+        (void)QuadDivergence::FindDivergentDerivatives(&divergence, &lowering.program, cfgPtr, &cfgArena);
+    }
 
     // SPIR-V emit. 16 MB covers pathological fuzz inputs that emit tens of
     // thousands of IR instructions; real shaders use well under 1 MB. The

@@ -908,8 +908,8 @@ TRANSLATION_EXPECTATION_TESTS = {
     # Members are named by field index; f16 is a reserved word in WGSL.
     "wgsl_reserved_field_names": {
         "frag": {
-            "wgsl_contains": ["f16_: f32,", ".f16_", "f17: f32,"],
-            "wgsl_not_contains": ["f16:", ".f16;", ".f16 "],
+            "wgsl_contains": ["f16_: f32,", ".f16_", "f17: f32,", "f32_: f32,", ".f32_", "f64_: f32,", ".f64_"],
+            "wgsl_not_contains": ["f16:", ".f16;", ".f16 ", ".f16,", "f32:", "f64:"],
         },
     },
     # Issue #204: texture_size has one component per native dimension.
