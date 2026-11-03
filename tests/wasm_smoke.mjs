@@ -253,3 +253,24 @@ assert.equal(shadowError.errors.length, 1);
 assert.equal(shadowError.errors[0].severity, 'error');
 assert.deepEqual(shadowError.diagnostics.map(item => item.severity), ['note', 'error']);
 console.log('shadowing note stays separate from WASM errors: PASS');
+
+const divergenceSource = `pipeline Divergence {
+  resources { tex: texture2D }
+  helper :: (float value) -> float { { float value = 2.0; } return value; }
+  pass "Main" { use resources { tex }
+    vertex { output.position = float4(helper(1.0)); output.uv = float2(0.5); }
+    fragment {
+      float4 c = float4(0.0);
+      if (input.uv.x > 0.5) { c = sample(resources.tex, input.uv); }
+      output.color = c;
+    }
+  }
+}`;
+const divergence = JSON.parse(compile(divergenceSource, '', '-source-file /Divergence.bwsl'));
+assert.equal(divergence.success, true, JSON.stringify(divergence));
+assert.deepEqual(divergence.diagnostics.map(item => item.severity), ['note', 'warning']);
+const divergent = divergence.diagnostics[1];
+assert.equal(divergent.file, '/Divergence.bwsl');
+assert.equal(divergent.line, 8);
+assert.match(divergent.message, /^sample\(\) runs in control flow that can differ .*\(the branch at line 8\)/);
+console.log('BWSL1302 reaches the WASM diagnostics with the parser notes: PASS');
