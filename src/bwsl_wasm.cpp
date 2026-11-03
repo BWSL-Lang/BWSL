@@ -81,6 +81,7 @@ static constexpr bool USE_DIRECT_GLES = false;
 #include "phases/ir_generation/bwsl_ir_gen.cpp"
 #include "phases/ir_generation/bwsl_ir_analysis.cpp"
 #include "phases/control_flow/bwsl_cfg.cpp"
+#include "phases/control_flow/bwsl_quad_divergence.cpp"
 #include "phases/ssa/bwsl_ssa.cpp"
 #include "phases/optimization/bwsl_ir_edit.cpp"
 #include "phases/optimization/bwsl_cse.cpp"
@@ -513,7 +514,8 @@ static ShaderOutput CompileShaderStage(
     NodeRef pipelineRef,
     PassVaryingContext* varyingContext,
     const char* sourceBase,
-    bool captureInternals = false
+    bool captureInternals = false,
+    DiagnosticStream* diagnostics = nullptr  // Receives the stage's warnings
 ) {
     ShaderOutput output;
 
@@ -556,6 +558,7 @@ static ShaderOutput CompileShaderStage(
     lowering.currentPipeline = pipelineRef;
     lowering.currentPassData = &pass;
     lowering.currentPassVaryings = varyingContext;
+    lowering.diagnosticStream = diagnostics;
 
     lowering.LowerGlobalArrayConstants(shaderBody, pass);
     for (u32 i = 0; i < pass.consts.count; i++) {
@@ -624,6 +627,9 @@ static ShaderOutput CompileShaderStage(
     }
 
     Optimization::PropagateConstants(&lowering.builder, cfgPtr, g_optimizations);
+    if (stage == ShaderStage::Fragment) {
+        WarnAboutDivergentDerivatives(lowering, cfgPtr, &cfgArena);
+    }
 
     // Generate SPIR-V
     Memory::BWEMemoryArena spirvArena;
@@ -742,17 +748,19 @@ static ShaderOutput CompileShaderStage(
 
 // Keep parser and semantic diagnostics tied to the file that supplied the
 // token. Imported module offsets do not belong to the main source buffer.
+// A diagnostic without a file is in `source`; `defaultFile` names it.
 static std::string BuildNameDiagnosticsArrayJson(const DiagnosticStream& diagnostics,
                                                 const std::string& source,
                                                 const std::string& sourceFileName,
-                                                bool errorsOnly = false) {
+                                                bool errorsOnly = false,
+                                                const std::string& defaultFile = "") {
     std::string json = "[";
     bool first = true;
     for (u32 i = 0; i < diagnostics.Count(); i++) {
         if (errorsOnly && diagnostics.GetSeverity(i) != DiagnosticSeverity::Error) continue;
         if (!first) json += ",";
         first = false;
-        const std::string file = diagnostics.GetFile(i);
+        const std::string file = diagnostics.GetFile(i).empty() ? defaultFile : diagnostics.GetFile(i);
         json += "{\"severity\":\"" + std::string(DiagnosticStream::SeverityName(diagnostics.GetSeverity(i))) +
                 "\",\"message\":\"" + EscapeJsonString(diagnostics.FormatMessage(i)) +
                 "\",\"file\":\"" + EscapeJsonString(file) + "\"";
@@ -919,9 +927,16 @@ static std::string CompileToJson(const char* bwslSource,
     bool firstFile = true;
     std::string baseName = StemFromPath(sourceFileName);
 
-    json << "{\"success\":true,\"diagnostics\":"
-         << BuildNameDiagnosticsArrayJson(context.Diag(), source, sourceFileName)
-         << ",\"shaders\":{";
+    // The stages' own diagnostics (lowering warnings such as BWSL1302) join
+    // the parser's at the end of the result.
+    std::vector<u8> stageDiagnosticMemory(64 * 1024);
+    BWSL_Arena stageDiagnosticArena;
+    stageDiagnosticArena.Initialize(stageDiagnosticMemory.data(), stageDiagnosticMemory.size());
+    stageDiagnosticArena.EnableGrowth(stageDiagnosticMemory.size());
+    DiagnosticStream stageDiagnostics;
+    stageDiagnostics.Init(&stageDiagnosticArena);
+
+    json << "{\"success\":true,\"shaders\":{";
 
     bool firstPass = true;
     for (u32 passIdx = 0; passIdx < pipeline.passes.count; passIdx++) {
@@ -944,7 +959,8 @@ static std::string CompileToJson(const char* bwslSource,
         if (isComputePass) {
             compResult = CompileShaderStage(
                 context, parser, pass, ShaderStage::Compute,
-                renderConfig, specializedPipelineRef, nullptr, sourceBase, emitInternals
+                renderConfig, specializedPipelineRef, nullptr, sourceBase, emitInternals,
+                &stageDiagnostics
             );
             if (!compResult.success) {
                 return "{\"success\":false,\"errors\":[\"Compute shader: " + EscapeJsonString(compResult.error) + "\"]}";
@@ -953,7 +969,8 @@ static std::string CompileToJson(const char* bwslSource,
             // Compile vertex shader
             vertResult = CompileShaderStage(
                 context, parser, pass, ShaderStage::Vertex,
-                renderConfig, specializedPipelineRef, &passVaryings, sourceBase, emitInternals
+                renderConfig, specializedPipelineRef, &passVaryings, sourceBase, emitInternals,
+                &stageDiagnostics
             );
 
             if (!vertResult.success) {
@@ -963,7 +980,8 @@ static std::string CompileToJson(const char* bwslSource,
             // Compile fragment shader
             fragResult = CompileShaderStage(
                 context, parser, pass, ShaderStage::Fragment,
-                renderConfig, specializedPipelineRef, &passVaryings, sourceBase, emitInternals
+                renderConfig, specializedPipelineRef, &passVaryings, sourceBase, emitInternals,
+                &stageDiagnostics
             );
 
             if (!fragResult.success) {
@@ -1146,6 +1164,9 @@ static std::string CompileToJson(const char* bwslSource,
 
     // Add internals if requested (must iterate passes again to get the data)
     if (emitInternals) {
+        // The stages' diagnostics are in the result already; drop the repeats.
+        DiagnosticStream internalsDiagnostics;
+        internalsDiagnostics.Init(&stageDiagnosticArena);
         json << ",\"internals\":[";
         bool firstInternal = true;
         for (u32 passIdx = 0; passIdx < pipeline.passes.count; passIdx++) {
@@ -1160,7 +1181,7 @@ static std::string CompileToJson(const char* bwslSource,
             if (isComputePass) {
                 ShaderOutput compResult = CompileShaderStage(
                     context, parser, pass, ShaderStage::Compute,
-                    renderConfig, specializedPipelineRef, nullptr, sourceBase, true
+                    renderConfig, specializedPipelineRef, nullptr, sourceBase, true, &internalsDiagnostics
                 );
                 if (compResult.success) {
                     if (!firstInternal) json << ",";
@@ -1172,7 +1193,7 @@ static std::string CompileToJson(const char* bwslSource,
             } else {
                 ShaderOutput vertResult = CompileShaderStage(
                     context, parser, pass, ShaderStage::Vertex,
-                    renderConfig, specializedPipelineRef, &passVaryings, sourceBase, true
+                    renderConfig, specializedPipelineRef, &passVaryings, sourceBase, true, &internalsDiagnostics
                 );
                 if (vertResult.success) {
                     if (!firstInternal) json << ",";
@@ -1184,7 +1205,7 @@ static std::string CompileToJson(const char* bwslSource,
 
                 ShaderOutput fragResult = CompileShaderStage(
                     context, parser, pass, ShaderStage::Fragment,
-                    renderConfig, specializedPipelineRef, &passVaryings, sourceBase, true
+                    renderConfig, specializedPipelineRef, &passVaryings, sourceBase, true, &internalsDiagnostics
                 );
                 if (fragResult.success) {
                     if (!firstInternal) json << ",";
@@ -1198,7 +1219,14 @@ static std::string CompileToJson(const char* bwslSource,
         json << "]";
     }
 
-    json << "}";
+    std::string diagnostics = BuildNameDiagnosticsArrayJson(context.Diag(), source, sourceFileName);
+    const std::string stageEntries =
+        BuildNameDiagnosticsArrayJson(stageDiagnostics, source, sourceFileName, false, sourceFileName);
+    if (stageEntries.size() > 2) {
+        diagnostics.pop_back();
+        diagnostics += (diagnostics.size() > 1 ? "," : "") + stageEntries.substr(1);
+    }
+    json << ",\"diagnostics\":" << diagnostics << "}";
 
     return json.str();
 }

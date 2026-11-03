@@ -47,6 +47,7 @@
 #include "phases/ir_generation/bwsl_ir_gen.cpp"
 #include "phases/ir_generation/bwsl_ir_analysis.cpp"
 #include "phases/control_flow/bwsl_cfg.cpp"
+#include "phases/control_flow/bwsl_quad_divergence.cpp"
 #include "phases/ssa/bwsl_ssa.cpp"
 #include "phases/optimization/bwsl_ir_edit.cpp"
 #include "phases/optimization/bwsl_cse.cpp"
@@ -147,6 +148,11 @@ static void CompileOneStage(CompilationContext& context, Parser& parser,
         }
     }
     Optimization::PropagateConstants(&lowering.builder, cfgPtr);
+    if (stage == ShaderStage::Fragment) {
+        // The BWSL1302 analysis, fuzzed as bwslc runs it; its findings are dropped.
+        QuadDivergenceData divergence;
+        (void)QuadDivergence::FindDivergentDerivatives(&divergence, &lowering.program, cfgPtr, &cfgArena);
+    }
 
     // SPIR-V emit. 16 MB covers pathological fuzz inputs that emit tens of
     // thousands of IR instructions; real shaders use well under 1 MB. The

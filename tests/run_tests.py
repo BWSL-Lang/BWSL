@@ -747,6 +747,9 @@ KNOWN_TEST_STEMS: set[str] = set()
 # direct GLES backend, and "wgsl_*" keys the native WGSL backend.
 TRANSLATION_EXTRA_ARGS = {
     "interpolation_centroid": ("-gles-direct", "-wgsl"),
+    "wgsl_derivative_uniformity": ("-wgsl",),
+    "wgsl_derivative_uniform_flow": ("-wgsl",),
+    "wgsl_reserved_field_names": ("-wgsl",),
     "phi_variables": ("--optimizations", "phi-variables"),
     "phi_variables_output_store": ("--optimizations", "phi-variables"),
     "branch_hints_unenforced": ("--optimizations", "no-enforce-branch-hints"),
@@ -886,6 +889,27 @@ TRANSLATION_EXPECTATION_TESTS = {
                 "@location(2) @interpolate(linear, centroid)",
             ],
             "wgsl_not_contains": ["@location(3) @interpolate"],
+        },
+    },
+    # Implicit derivatives in control flow WGSL can't prove uniform (the
+    # BWSL semantics of every other target) turn the uniformity analysis off;
+    # straight-line code keeps it.
+    "wgsl_derivative_uniformity": {
+        "frag": {
+            "wgsl_contains": ["diagnostic(off, derivative_uniformity);", "textureSample(", "fwidth("],
+        },
+    },
+    "wgsl_derivative_uniform_flow": {
+        "frag": {
+            "wgsl_contains": ["textureSample(", "fwidth("],
+            "wgsl_not_contains": ["diagnostic("],
+        },
+    },
+    # Members are named by field index; f16 is a reserved word in WGSL.
+    "wgsl_reserved_field_names": {
+        "frag": {
+            "wgsl_contains": ["f16_: f32,", ".f16_", "f17: f32,", "f32_: f32,", ".f32_", "f64_: f32,", ".f64_"],
+            "wgsl_not_contains": ["f16:", ".f16;", ".f16 ", ".f16,", "f32:", "f64:"],
         },
     },
     # Issue #204: texture_size has one component per native dimension.
@@ -4001,6 +4025,11 @@ def main() -> int:
     inline_return_passed, inline_return_failed = run_inline_return_tests(bwslc)
     passed += inline_return_passed
     failed += inline_return_failed
+
+    from derivative_divergence_tests import run_derivative_divergence_tests
+    divergence_passed, divergence_failed = run_derivative_divergence_tests(bwslc)
+    passed += divergence_passed
+    failed += divergence_failed
 
     from logical_operator_tests import run_logical_operator_tests
     logical_passed, logical_failed = run_logical_operator_tests(bwslc)

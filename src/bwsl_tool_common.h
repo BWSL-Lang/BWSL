@@ -1,15 +1,99 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "core/bwsl_ast_soa.h"
 #include "phases/ir_generation/bwsl_ir_gen.h"
 #include "core/bwsl_render_config.h"
 #include "core/bwsl_resource_reflection.h"
+#include "phases/control_flow/bwsl_quad_divergence.h"
+#include "phases/ir_lowering/bwsl_ir_lowering.h"
 
 namespace BWSL::ToolCommon {
+
+// The file an IR instruction's source is in: that of the function it was
+// inlined from, or null for the compiled file (and when unknown).
+inline const char* SourceFileOfInstruction(const IR::IRLowering& lowering, u32 instruction) {
+    const IR::IRProgram& ir = lowering.program;
+    if (!lowering.ast || !ir.sourceScopes || !ir.debugScopeFunctions || instruction >= ir.instructionCount) {
+        return nullptr;
+    }
+    const u32 scope = ir.sourceScopes[instruction];
+    if (scope == 0 || scope >= ir.debugScopeCount) {
+        return nullptr;
+    }
+    NodeRef function;
+    function.packed = ir.debugScopeFunctions[scope];
+    return lowering.ast->GetDeclarationSource(function);
+}
+
+// Warns (BWSL1302) about each derivative or implicit-LOD sample in a
+// fragment shader that runs in control flow the pixels of a 2x2 quad may
+// take differently, once per source location.
+inline void WarnAboutDivergentDerivatives(IR::IRLowering& lowering, const CFG* cfg, BWSL_Arena* arena) {
+    if (cfg == nullptr || cfg->blockCount < 2) {
+        return;
+    }
+    const IR::IRProgram& ir = lowering.program;
+    QuadDivergenceData found;
+    if (!QuadDivergence::FindDivergentDerivatives(&found, &ir, cfg, arena)) {
+        return;
+    }
+    std::vector<u32> reported;
+    for (u32 k = 0; k < found.count; ++k) {
+        const u32 instruction = found.derivatives[k];
+        NodeRef node;
+        node.packed = ir.sourceNodes ? ir.sourceNodes[instruction] : 0xFFFFFFFFu;
+        const u32 key = node.IsValid() ? node.packed : 0xFFFFFFFFu;
+        if (std::find(reported.begin(), reported.end(), key) != reported.end()) {
+            continue;
+        }
+        reported.push_back(key);
+        const u16 opcode = ir.opcodes[instruction];
+        const char* file = SourceFileOfInstruction(lowering, instruction);
+        std::string message = QuadDivergence::IntrinsicName(opcode);
+        message += "() runs in control flow that can differ between the pixels of a 2x2 quad";
+        NodeRef branch;
+        branch.packed = ir.sourceNodes ? ir.sourceNodes[found.branches[k]] : 0xFFFFFFFFu;
+        const DiagnosticSpan branchSpan = lowering.SourceSpan(branch);
+        if (branchSpan.HasLocation()) {
+            // The stage's own code is in the pipeline's file.
+            const char* mainFile = lowering.ast ? lowering.ast->GetDeclarationSource(lowering.currentPipeline) : nullptr;
+            const char* warningFile = file ? file : mainFile;
+            const char* branchFile = SourceFileOfInstruction(lowering, found.branches[k]);
+            if (branchFile == nullptr) {
+                branchFile = mainFile;
+            }
+            message += " (the branch at ";
+            if (branchFile != nullptr && (warningFile == nullptr || strcmp(branchFile, warningFile) != 0)) {
+                // The file's name, after either separator (Windows paths use '\\').
+                const char* name = branchFile;
+                for (const char* c = branchFile; *c; ++c) {
+                    if (*c == '/' || *c == '\\') name = c + 1;
+                }
+                message += std::string(name) + ":";
+            } else if (branchFile == nullptr && warningFile != nullptr) {
+                message += "the compiled file, line ";
+            } else {
+                message += "line ";
+            }
+            message += std::to_string(branchSpan.line) + ")";
+        }
+        message += ", so its derivatives are undefined where they take different paths. "
+                   "Compute it before the branch";
+        if (opcode >= IR::OP_DDX && opcode <= IR::OP_FWIDTH_COARSE) {
+            message += ".";
+        } else {
+            message += ", or pass an explicit level or gradients (sample_lod, sample_grad).";
+        }
+        lowering.ReportWarningAt(node, message, DiagnosticMessageId::DerivativeInDivergentControlFlow, file);
+    }
+}
 
 inline const char* OpCodeToString(IR::OpCode op) {
     switch (op) {

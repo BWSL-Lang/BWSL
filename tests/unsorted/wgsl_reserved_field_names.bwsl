@@ -1,0 +1,43 @@
+// Test: WGSL struct members don't use reserved words as names
+// Tests: a struct with more than 64 fields. WGSL members are named by field
+//        index (f0, f1, ...), and f16, f32 and f64 are reserved words that
+//        Naga rejects, so those fields are f16_, f32_ and f64_.
+
+pipeline ReservedFieldNames {
+    attributes {
+        position: float3
+    }
+
+    struct Wide {
+        float a0; float a1; float a2; float a3; float a4; float a5;
+        float a6; float a7; float a8; float a9; float a10; float a11;
+        float a12; float a13; float a14; float a15; float a16; float a17;
+        float a18; float a19; float a20; float a21; float a22; float a23;
+        float a24; float a25; float a26; float a27; float a28; float a29;
+        float a30; float a31; float a32; float a33; float a34; float a35;
+        float a36; float a37; float a38; float a39; float a40; float a41;
+        float a42; float a43; float a44; float a45; float a46; float a47;
+        float a48; float a49; float a50; float a51; float a52; float a53;
+        float a54; float a55; float a56; float a57; float a58; float a59;
+        float a60; float a61; float a62; float a63; float a64; float a65;
+    }
+
+    resources {
+        params: Wide
+    }
+
+    pass "Main" {
+        use attributes { position }
+        use resources { params }
+
+        vertex {
+            output.position = float4(attributes.position, 1.0);
+        }
+
+        fragment {
+            Wide w = resources.params;
+            w.a16 = w.a16 * input.position.x;
+            output.color = float4(w.a0 + w.a32, w.a15 + w.a64, w.a16, w.a17);
+        }
+    }
+}

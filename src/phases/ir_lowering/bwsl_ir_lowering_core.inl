@@ -8,17 +8,45 @@ inline void IRLowering::ReportError(const char *message) {
   ReportErrorAt(NodeRef::Null(), message);
 }
 
+inline DiagnosticSpan IRLowering::SourceSpan(NodeRef node) {
+    DiagnosticSpan span{};
+    if (node.IsValid() && ast) {
+        u32 position = ast->GetNamePosition(node);
+        if (position == 0)
+            position = ast->FindPosition(node);
+        AST::UnpackPosition(position, span.line, span.column);
+        if (span.line != 0)
+            span.SetLocation();
+    }
+    return span;
+}
+
+inline const char *IRLowering::DiagnosticStageName() const {
+    switch (currentStage) {
+    case ShaderStage::Vertex:
+        return "vertex";
+    case ShaderStage::Fragment:
+        return "fragment";
+    case ShaderStage::Compute:
+        return "compute";
+    default:
+        return "unknown";
+    }
+}
+
+inline std::string IRLowering::DiagnosticPassName() const {
+    if (!diagnosticPassName.empty()) {
+        return diagnosticPassName;
+    }
+    if (currentPassData) {
+        return currentPassData->name.ToString(sourceBase);
+    }
+    return {};
+}
+
 inline void IRLowering::ReportErrorAt(NodeRef node, const char *message) {
     if (message) {
-        DiagnosticSpan span{};
-        if (node.IsValid() && ast) {
-            u32 position = ast->GetNamePosition(node);
-            if (position == 0)
-                position = ast->FindPosition(node);
-            AST::UnpackPosition(position, span.line, span.column);
-            if (span.line != 0)
-                span.SetLocation();
-        }
+        const DiagnosticSpan span = SourceSpan(node);
         std::string locatedMessage = message;
         if (span.HasLocation()) {
             locatedMessage = "line " + std::to_string(span.line) + ":" +
@@ -26,28 +54,8 @@ inline void IRLowering::ReportErrorAt(NodeRef node, const char *message) {
         }
         diagnostics.emplace_back(locatedMessage);
         if (diagnosticStream) {
-            const char *stageName = "unknown";
-            switch (currentStage) {
-            case ShaderStage::Vertex:
-                stageName = "vertex";
-                break;
-            case ShaderStage::Fragment:
-                stageName = "fragment";
-                break;
-            case ShaderStage::Compute:
-                stageName = "compute";
-                break;
-            default:
-                break;
-            }
-            std::string passName;
-            if (!diagnosticPassName.empty()) {
-                passName = diagnosticPassName;
-            } else if (currentPassData) {
-                passName = currentPassData->name.ToString(sourceBase);
-            }
             diagnosticStream->AddRaw(DiagnosticSeverity::Error, DiagnosticPhase::Lowering, message,
-                                     span, "", passName, stageName,
+                                     span, "", DiagnosticPassName(), DiagnosticStageName(),
                                      DiagnosticMessageId::LoweringError);
         }
         if (!suppressErrorOutput) {
@@ -55,6 +63,22 @@ inline void IRLowering::ReportErrorAt(NodeRef node, const char *message) {
         }
     }
     hadError = true;
+}
+
+inline void IRLowering::ReportWarningAt(NodeRef node, const std::string &message,
+                                        DiagnosticMessageId messageId, const char *file) {
+    const DiagnosticSpan span = SourceSpan(node);
+    if (diagnosticStream) {
+        diagnosticStream->AddRaw(DiagnosticSeverity::Warning, DiagnosticPhase::Lowering, message,
+                                 span, file ? file : "", DiagnosticPassName(), DiagnosticStageName(),
+                                 messageId);
+    } else if (!suppressErrorOutput) {
+        if (span.HasLocation()) {
+            fprintf(stderr, "warning: line %u:%u: %s\n", span.line, span.column, message.c_str());
+        } else {
+            fprintf(stderr, "warning: %s\n", message.c_str());
+        }
+    }
 }
 
 inline NamespaceKind IRLowering::AliasOwnerKind() const {

@@ -553,8 +553,11 @@ bool WGSLBuilder::PrepareTextureInstruction(u32 instruction) {
         }
     }
     if ((opcode == IR::OP_TEX_SAMPLE || opcode == IR::OP_TEX_SAMPLE_BIAS ||
-         opcode == IR::OP_TEX_SAMPLE_CMP) && stage != ShaderStage::Fragment) {
-        return Fail("WGSL implicit-LOD texture sampling requires a fragment shader");
+         opcode == IR::OP_TEX_SAMPLE_CMP)) {
+        if (stage != ShaderStage::Fragment) {
+            return Fail("WGSL implicit-LOD texture sampling requires a fragment shader");
+        }
+        NoteImplicitDerivative();
     }
     if (opcode == IR::OP_TEX_SAMPLE_LOD || opcode == IR::OP_TEX_SAMPLE_BIAS ||
         opcode == IR::OP_TEX_SAMPLE_CMP || opcode == IR::OP_TEX_FETCH) {

@@ -165,6 +165,37 @@ never change results. See
 [Statements and Control Flow](spec/05-statements-and-control-flow.md#if-statements)
 for what `@branch` does to the output.
 
+## Derivatives in Control Flow
+
+`ddx`, `ddy`, `fwidth` (and their `_fine`/`_coarse` forms) and the samples
+that pick a mip level from them (`sample`, `sample_bias`, `sample_cmp`,
+`sample_offset`, `sample_bias_offset`) compare a value across a 2x2 quad of
+pixels. They may run in any control flow. Where the quad's pixels take
+different paths, the pixels that didn't come along have no value to compare,
+and the result is undefined.
+
+The compiler warns (`BWSL1302`) where that can happen: a fragment shader
+derivative under a branch, loop or early `return` whose condition can differ
+within a quad. Such a condition depends on an interpolated varying,
+`input.position`, or anything computed from one: a texture read at such
+coordinates, a value chosen by such a branch, or memory written under one.
+Uniforms, constants and `@flat` or integer varyings are the same for every
+pixel of a primitive, and a quad never spans primitives, so branching on
+them is safe:
+
+```bwsl
+if (input.materialIndex == 2u) {         // @flat: no warning
+    color = sample(resources.tex, input.uv);
+}
+if (input.uv.x > 0.5) {                  // interpolated: BWSL1302
+    color = sample(resources.tex, input.uv);
+}
+```
+
+To fix it, compute the derivative or the sample before the branch, or pass
+an explicit level or gradients (`sample_lod`, `sample_grad`). `discard`
+doesn't count: a discarded pixel still helps its quad compute derivatives.
+
 ## Resources
 
 Pipeline shader resources are declared in a `resources` block:
